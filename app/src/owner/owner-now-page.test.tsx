@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -345,6 +345,26 @@ describe("OwnerNowPage", () => {
       "/jobs/JOB-A",
     );
     expect(screen.queryByRole("link", { name: /not-a-job/i })).not.toBeInTheDocument();
+  });
+
+  it("signals held work in red and work that needs you in blue, and leaves zero counts plain", async () => {
+    vi.mocked(loadOwnerNow).mockResolvedValue({
+      ...ownerNowModel(),
+      summary: {
+        ...ownerNowModel().summary,
+        open_incidents: 0,
+        material_exceptions: 0,
+        finance_exceptions: 0,
+      },
+    });
+    renderOwner();
+    const summary = await screen.findByLabelText("Work to check");
+    const valueOf = (label: string) =>
+      within(summary).getByText(label).closest("div")!.querySelector("dd")!;
+    expect(valueOf("Work stopped")).toHaveClass("text-danger");
+    expect(valueOf("Lead checks")).toHaveClass("text-signal-you");
+    expect(valueOf("Needs a check")).toHaveClass("text-foreground");
+    expect(valueOf("Needs a check")).not.toHaveClass("text-signal-you");
   });
 
   it("keeps long lanes scannable until the owner asks for the remaining work", async () => {

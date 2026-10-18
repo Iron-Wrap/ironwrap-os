@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const headersPath = resolve("dist/_headers");
@@ -155,6 +155,39 @@ for (const [constant, chunk] of [
   await stat(resolve(`dist${match[1]}`));
 }
 
+// The build drops the System v2 tokens nothing reads (vite.config.ts, scripts/prune-tokens.ts).
+// A token the bundle still reads but no longer declares would resolve to nothing at runtime, so
+// every `var(--token)` in the shipped files must have its declaration in the shipped stylesheets.
+const assetNames = await readdir(resolve("dist/assets"));
+const assetText = async (extension) =>
+  (
+    await Promise.all(
+      assetNames
+        .filter((name) => name.endsWith(extension))
+        .map((name) => readFile(resolve("dist/assets", name), "utf8")),
+    )
+  ).join("\n");
+const stylesheets = await assetText(".css");
+const scripts = await assetText(".js");
+const tokenNames = new Set(
+  [...(await readFile(resolve("src/styles/tokens.css"), "utf8")).matchAll(/^\s*(--[\w-]+):/gm)].map(
+    (match) => match[1],
+  ),
+);
+const declaredTokens = new Set(
+  [...stylesheets.matchAll(/(?<=[{;])(--[\w-]+):/g)].map((match) => match[1]),
+);
+const unresolvedTokens = new Set(
+  [...`${stylesheets}\n${scripts}`.matchAll(/var\((--[\w-]+)/g)]
+    .map((match) => match[1])
+    .filter((name) => tokenNames.has(name) && !declaredTokens.has(name)),
+);
+if (unresolvedTokens.size > 0) {
+  throw new Error(
+    `the bundle reads design tokens that no shipped stylesheet declares: ${[...unresolvedTokens].join(", ")}`,
+  );
+}
+
 console.log(
-  "dist contract verified: manifest, install icons, paired-device bootstrap, private crawler controls, and security headers are present",
+  "dist contract verified: manifest, install icons, paired-device bootstrap, private crawler controls, security headers and design tokens are present",
 );

@@ -15,11 +15,19 @@ data. The Worker, not the browser, enforces authority. See the canonical boundar
   navigation for `owner`, `ops`, `sales`, `production`, `accounting`, and `field`.
 - Responsive desktop/sidebar and thumb-first bottom navigation. Field controls use a 64 px target;
   general primary targets use at least 56 px.
-- Semantic light/dark tokens and accessible loading, error, and teaching empty states.
-- The owner-approved Iron Wrap identity, ported from the `iron-wrap-exteriors` reference: primer
-  ground, charcoal chrome, ink primary actions, brass only for focus and the active place, and
-  self-hosted Archivo with Martian Mono for identifiers. `src/components/ui` carries its
-  primitives: the stamped `RefTag`, glyph-and-word `Status`, `Notice` tones including on-device
+- System v2 design tokens (the Spine direction, `design/system-v2/`): one
+  `src/design-system/tokens.json`, proved for contrast and generated into `src/styles/tokens.css`
+  by `npm run tokens` (`npm run tokens:contrast` and `npm run tokens:check` run in `make check`).
+  Nine colour modes and three densities are chosen per place: the office follows the device unless
+  the person pins light or dark, the crew phone opens in sun and goes to night only by its own
+  choice, the shop reading view is dark, and the customer page follows the phone into dark or
+  increased contrast. Graphite ink on paper, red for held, blue for "needs you". The pre-v2 names
+  keep working through generated aliases for one release (`npm run tokens:aliases` lists what still
+  reads them).
+- Accessible loading, error, and teaching empty states.
+- Self-hosted Archivo with Martian Mono for identifiers (the tokens name Geist, which replaces them
+  when its faces are packaged). `src/components/ui` carries the primitives: the stamped `RefTag`
+  (its plate retires in favour of a mono code after a plain label), glyph-and-word `Status`, `Notice` tones including on-device
   `local`, `Queue`/`QueueRow`, `PageHeader`, `Segmented`, `SaveIndicator`, `Timeline`,
   `ErrorSummary`, a native-`<dialog>` `Dialog`/drawer, and the `Logo`/`BrandMark` assets in
   `public/brand`. The shell itself is not yet restyled to the reference's rail layout.

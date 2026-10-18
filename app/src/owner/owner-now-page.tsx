@@ -360,30 +360,36 @@ function RuntimeTruthPanel({
 }
 
 function DecisionSummary({ model }: { model: OwnerNowResponse }) {
+  // System v2 has two signals: red when work is held, blue when something needs you. A count of
+  // zero carries no signal, so it stays in the plain ink and does not compete with a live one.
+  const held = { tone: "text-danger", dot: "bg-danger" };
+  const needsYou = { tone: "text-signal-you", dot: "bg-signal-you" };
+  const quiet = { tone: "text-foreground", dot: "bg-border" };
+  const signal = (value: number, live: typeof held) => (value > 0 ? live : quiet);
+  const stopped = model.summary.field_blockers + model.summary.blocked_gates;
+  const checks =
+    model.summary.open_incidents +
+    model.summary.material_exceptions +
+    model.summary.finance_exceptions;
+  const leads = model.summary.untriaged_leads + model.summary.lead_triage_unknown;
   const signals = [
     {
       label: "Work stopped",
-      value: model.summary.field_blockers + model.summary.blocked_gates,
+      value: stopped,
       detail: "Crew reports and job gates",
-      tone: "text-danger",
-      dot: "bg-danger",
+      ...signal(stopped, held),
     },
     {
       label: "Needs a check",
-      value:
-        model.summary.open_incidents +
-        model.summary.material_exceptions +
-        model.summary.finance_exceptions,
+      value: checks,
       detail: "App, material, and money work",
-      tone: "text-warning",
-      dot: "bg-warning",
+      ...signal(checks, needsYou),
     },
     {
       label: "Lead checks",
-      value: model.summary.untriaged_leads + model.summary.lead_triage_unknown,
+      value: leads,
       detail: "New leads and reply proof",
-      tone: "text-info",
-      dot: "bg-info",
+      ...signal(leads, needsYou),
     },
   ];
   return (

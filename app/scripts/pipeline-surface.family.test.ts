@@ -51,10 +51,13 @@ describe("pipeline board surface family", () => {
   });
 
   it("keeps the reduced-motion rule the surface depends on in place", () => {
+    // The durations go to 0ms in the generated tokens; styles.css keeps the animation rules.
     const styles = readFileSync(resolve(appRoot, "src/styles.css"), "utf8");
+    const tokens = readFileSync(resolve(appRoot, "src/styles/tokens.css"), "utf8");
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
-    expect(styles).toMatch(/--motion-fast:\s*0ms/);
-    expect(styles).toMatch(/--motion-standard:\s*0ms/);
+    expect(tokens).toMatch(/prefers-reduced-motion:\s*reduce/);
+    expect(tokens).toMatch(/--motion-fast:\s*0ms/);
+    expect(tokens).toMatch(/--motion-standard:\s*0ms/);
   });
 
   it("anchors the move toast above the mobile bottom nav with the shared safe-area inset", () => {

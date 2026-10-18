@@ -4,7 +4,7 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
-  test("keeps the full crew name, Sun mode, and thumb actions usable on narrow phones", async ({
+  test("keeps the full crew name, the sun and night switch, and thumb actions usable on narrow phones", async ({
     page,
   }) => {
     const workerUser = "field.acceptance.with.a.long.unbroken.identifier@example.invalid";
@@ -22,7 +22,10 @@ test.describe("Field Companion PWA acceptance", () => {
     });
     await seedPairedFieldDevice(page);
     await page.reload();
-    await page.getByRole("button", { name: "Sun mode" }).click();
+    // Sun is the default, whatever the phone's own light or dark setting is.
+    await expect(page.locator(".crew")).toHaveAttribute("data-mode", "field-sun");
+    // The control names the look it switches to.
+    await expect(page.getByRole("button", { name: "Use night mode" })).toBeVisible();
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 });
       const name = page.locator(".crew-person strong");
@@ -31,7 +34,8 @@ test.describe("Field Companion PWA acceptance", () => {
       expect(await name.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );
-      await expect(page.locator(".crew")).toHaveAttribute("data-environment", "field-sun");
+      await expect(page.locator(".crew")).toHaveAttribute("data-mode", "field-sun");
+      await expect(page.locator(".crew")).toHaveAttribute("data-density", "touch");
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         width,
       );
@@ -42,7 +46,14 @@ test.describe("Field Companion PWA acceptance", () => {
       }
     }
     await page.reload();
-    await expect(page.locator(".crew")).toHaveAttribute("data-environment", "field-sun");
+    await expect(page.locator(".crew")).toHaveAttribute("data-mode", "field-sun");
+    // Night is the crew's own choice, kept across a reload, and one tap back to sun.
+    await page.getByRole("button", { name: "Use night mode" }).click();
+    await expect(page.locator(".crew")).toHaveAttribute("data-mode", "field-night");
+    await page.reload();
+    await expect(page.locator(".crew")).toHaveAttribute("data-mode", "field-night");
+    await page.getByRole("button", { name: "Use sun mode" }).click();
+    await expect(page.locator(".crew")).toHaveAttribute("data-mode", "field-sun");
     await page.goto("/jobs/JOB-ACCEPTANCE");
     const worker = page.getByText(`${workerUser} · field · required`, { exact: true });
     await expect(worker).toBeVisible();

@@ -62,7 +62,7 @@ export default [
     },
   },
   {
-    files: ["*.cjs", "*.config.js", "scripts/**/*.{mjs,cjs}"],
+    files: ["*.cjs", "*.config.js", "scripts/**/*.{mjs,cjs}", "src/design-system/*.mjs"],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },

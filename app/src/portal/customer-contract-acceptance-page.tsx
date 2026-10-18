@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { ErrorState } from "../components/ui/state-panel";
+import { useCustomerScope } from "../lib/theme";
 import { confirmCustomerContractAcceptance } from "./portal-api";
 
 type ConfirmationState = "ready" | "submitting" | "accepted" | "uncertain" | "error";
@@ -12,6 +13,7 @@ const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
 /** An email-bound confirmation page; the one-time token is scrubbed before any network request. */
 export function CustomerContractAcceptancePage() {
+  const scope = useCustomerScope();
   const [token] = useState(() => takeMagicLinkTokenFromWindow());
   const [signerName, setSignerName] = useState("");
   const [attested, setAttested] = useState(false);
@@ -20,7 +22,7 @@ export function CustomerContractAcceptancePage() {
 
   if (!token || !tokenPattern.test(token)) {
     return (
-      <main data-environment="customer" className="grid min-h-dvh place-items-center p-4">
+      <main {...scope} className="grid min-h-dvh place-items-center p-4">
         <ErrorState
           title="This link is no longer ready"
           message="Open your private project page and ask for a new email."
@@ -48,10 +50,7 @@ export function CustomerContractAcceptancePage() {
   }
 
   return (
-    <main
-      data-environment="customer"
-      className="grid min-h-dvh place-items-center bg-background p-4"
-    >
+    <main {...scope} className="grid min-h-dvh place-items-center bg-background p-4">
       <Card className="w-full max-w-xl">
         <CardHeader>
           <CardTitle>Accept your contract</CardTitle>

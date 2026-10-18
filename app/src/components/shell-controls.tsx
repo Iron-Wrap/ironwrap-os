@@ -67,10 +67,13 @@ export function PersonMenu({
   trigger,
   triggerClassName,
   menuClassName,
+  appearance = true,
 }: {
   trigger: ReactNode;
   triggerClassName?: string;
   menuClassName?: string;
+  /** False where the place sets its own colour mode and the office appearance would do nothing. */
+  appearance?: boolean;
 }) {
   const session = useSession();
   const menuId = useId();
@@ -102,26 +105,28 @@ export function PersonMenu({
             {roleLabel(session.user.role)} · {session.user.email}
           </p>
         </div>
-        <div className="px-3 pt-1 pb-3">
-          <p className="mb-2 text-sm font-semibold" id={`${menuId}-appearance`}>
-            Appearance
-          </p>
-          <Segmented variant="control" label="Appearance">
-            {themePreferences.map((preference) => (
-              <button
-                key={preference}
-                type="button"
-                aria-pressed={theme === preference}
-                onClick={() => {
-                  saveThemePreference(preference);
-                  setTheme(preference);
-                }}
-              >
-                {themeLabel[preference]}
-              </button>
-            ))}
-          </Segmented>
-        </div>
+        {appearance ? (
+          <div className="px-3 pt-1 pb-3">
+            <p className="mb-2 text-sm font-semibold" id={`${menuId}-appearance`}>
+              Appearance
+            </p>
+            <Segmented variant="control" label="Appearance">
+              {themePreferences.map((preference) => (
+                <button
+                  key={preference}
+                  type="button"
+                  aria-pressed={theme === preference}
+                  onClick={() => {
+                    saveThemePreference(preference);
+                    setTheme(preference);
+                  }}
+                >
+                  {themeLabel[preference]}
+                </button>
+              ))}
+            </Segmented>
+          </div>
+        ) : null}
         {signOutError ? (
           <p role="alert" className="px-3 pb-2 text-sm text-danger">
             {signOutError}

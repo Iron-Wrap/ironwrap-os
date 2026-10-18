@@ -34,8 +34,9 @@ One codebase serves four places, and every design decision names the place it is
 | --- | --- |
 | [`ZERO-LEARNING-GATE.md`](./ZERO-LEARNING-GATE.md) | The binding gate: first-time task success with novice testers, plain language, interaction rules, side by side with the quality bar |
 | [`system-v2/TOKENS.md`](./system-v2/TOKENS.md) | System v2 token specification: colour modes per place, density modes, type, motion, focus, the standing-seam brand tokens |
-| `system-v2/tokens.json` | The tokens in W3C Design Tokens format; the source the CSS and Figma variables are generated from |
-| `system-v2/contrast-check.mjs` | Zero-dependency contrast proof over every declared text and control pair in every colour mode: `node design/system-v2/contrast-check.mjs` |
+| [`app/src/design-system/tokens.json`](../app/src/design-system/tokens.json) | The tokens in W3C Design Tokens format; the source the CSS and Figma variables are generated from. Change a token here, then `npm run tokens` in `app/` |
+| [`app/src/design-system/contrast-check.mjs`](../app/src/design-system/contrast-check.mjs) | Zero-dependency contrast proof over every declared text and control pair in every colour mode: `npm run tokens:contrast` in `app/` |
+| [`app/scripts/build-tokens.mjs`](../app/scripts/build-tokens.mjs) | Generates `app/src/styles/tokens.css` from the tokens after the proof passes; `--check` fails when the file is out of date |
 | [`system-v2/MIGRATION.md`](./system-v2/MIGRATION.md) | Current Figma variables and CSS custom properties mapped to System v2 tokens, or retired with a reason |
 | [`system-v2/PIPELINE.md`](./system-v2/PIPELINE.md) | How tokens reach the app CSS and Figma |
 | [`system-v2/AI-PRIMITIVES.md`](./system-v2/AI-PRIMITIVES.md) | The AI team on screen: rules, delegation words, the copy table (one name per state), components, receipt fields and the contract mapping |

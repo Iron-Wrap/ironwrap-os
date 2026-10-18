@@ -29,7 +29,7 @@ export function Logo({
     />
   );
   if (surface === "dark") return art("/brand/logo-on-dark.png");
-  // Both artworks ship and CSS shows one, so a pinned appearance (`data-theme` on <html>) is
+  // Both artworks ship and CSS shows one, so a pinned appearance (`data-mode` on <html>) is
   // honoured as well as the device setting; a <picture> source can only follow the device.
   return (
     <>

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,6 +6,22 @@ import { describe, expect, it } from "vitest";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath: string) => readFileSync(resolve(root, relativePath), "utf8");
+const node = (script: string, ...args: string[]) =>
+  execFileSync(process.execPath, [resolve(root, script), ...args], { cwd: root, encoding: "utf8" });
+
+type TokenNode = { $value?: unknown; [key: string]: unknown };
+const tokenFile = JSON.parse(read("src/design-system/tokens.json")) as TokenNode;
+const tokenAt = (path: string) =>
+  path.split(".").reduce<TokenNode>((node, key) => node[key] as TokenNode, tokenFile);
+/** A token's office-light value as a lowercase hex, following aliases. */
+const officeLight = (path: string): string => {
+  const value = tokenAt(path).$value;
+  if (typeof value === "string") return officeLight(value.slice(1, -1));
+  return (value as { hex: string }).hex.toLowerCase();
+};
+const themeBlock = /@theme inline \{[\s\S]*?\n\}\n/;
+const paper = officeLight("semantic.surface.paper");
+const rail = officeLight("semantic.surface.rail");
 
 const fontFaces = (css: string) =>
   (css.match(/@font-face\s*\{[^}]+\}/g) ?? []).map((block) => {
@@ -26,8 +43,9 @@ const fontFaces = (css: string) =>
   });
 
 describe("IronWrap OS foundation family", () => {
-  it("uses the Iron Wrap identity: Archivo on primer, a charcoal spine, brass only for place", () => {
+  it("generates the System v2 tokens, proves their contrast, and keeps the shipped faces self-hosted", () => {
     const styles = read("src/styles.css");
+    const tokens = read("src/styles/tokens.css");
     const main = read("src/main.tsx");
     const html = read("index.html");
     const vite = read("vite.config.ts");
@@ -35,26 +53,19 @@ describe("IronWrap OS foundation family", () => {
     const packagedArchivo = read("node_modules/@fontsource-variable/archivo/wght.css");
     const packagedMartian = read("node_modules/@fontsource-variable/martian-mono/wght.css");
 
-    // Owner-approved values from the reference implementation's tokens.css.
-    expect(styles).toMatch(/--background:\s*#f3f4f2/i);
-    expect(styles).toMatch(/--surface:\s*#ffffff/i);
-    expect(styles).toMatch(/--foreground:\s*#15181c/i);
-    expect(styles).toMatch(/--primary:\s*#15181c/i);
-    expect(styles).toMatch(/--chrome:\s*#1b1e22/i);
-    expect(styles).toMatch(/--accent:\s*#87651c/i);
-    expect(styles).toMatch(/--focus:\s*#87651c/i);
-    expect(styles).toMatch(/--local:\s*#5a4a8b/i);
-    expect(styles).toMatch(/--tag-metal-fill:/);
-    expect(styles).toMatch(/--tag-paper-fill:/);
-    expect(styles).toMatch(/--motion-standard:\s*220ms/);
+    // tokens.css is exactly what tokens.json generates, and the generator refuses to run
+    // unless the contrast proof passes first.
+    expect(node("scripts/build-tokens.mjs", "--check")).toMatch(/tokens\.css matches tokens\.json/);
+    expect(node("src/design-system/contrast-check.mjs")).toMatch(/0 fail\./);
+    expect(styles).toMatch(/@import "tailwindcss";\s+@import "\.\/styles\/tokens\.css";/);
+    expect(tokens).toMatch(/--motion-standard:\s*220ms/);
+    expect(tokens).toMatch(/prefers-reduced-motion:\s*reduce/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
     expect(styles).not.toMatch(/Hubot|Inter Variable/);
-    expect(styles).not.toMatch(/#c81d25|#161b21|#e6e8eb/i);
-    expect(styles).not.toMatch(/#f2efe8/i);
-    expect(styles).not.toMatch(/#fffdf9/i);
 
     // Self-hosted exactly as packaged, except that no face may swap in late and shift a
     // crew phone's layout. Martian Mono sets identifiers only, so it ships latin subsets.
+    // (The tokens name Geist; the faces move when the Geist packages do.)
     const optional = (face: ReturnType<typeof fontFaces>[number]) => ({
       ...face,
       display: "optional",
@@ -66,19 +77,85 @@ describe("IronWrap OS foundation family", () => {
         .map(optional),
     ]);
     expect(main).not.toMatch(/@fontsource-variable\//);
-
-    expect(html).toMatch(/content="#1b1e22"/);
-    expect(html).toMatch(/Archivo/);
-    expect(html).toMatch(/background:\s*#f3f4f2/);
-    expect(html).not.toMatch(/Hubot|#161b21|#e6e8eb|#f5f6f4|#121611/);
-
-    expect(vite).toMatch(/theme_color:\s*"#1b1e22"/);
-    expect(vite).toMatch(/background_color:\s*"#f3f4f2"/);
-
     expect(pkg).toMatch(/@fontsource-variable\/archivo/);
     expect(pkg).toMatch(/@fontsource-variable\/martian-mono/);
     expect(pkg).not.toMatch(/@fontsource-variable\/hubot-sans/);
     expect(pkg).not.toMatch(/@fontsource-variable\/inter/);
+
+    // The boot shell, the status bar tint and the install colours are resolved tokens, not
+    // literals of their own: paper and rail in office-light.
+    const ink = officeLight("semantic.text.primary");
+    const allowed = new Set([
+      paper,
+      rail,
+      ink,
+      officeLight("semantic.text.secondary"),
+      officeLight("semantic.line.strong"),
+    ]);
+    const boot = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+    for (const [literal] of boot.matchAll(/#[0-9a-f]{6}\b/gi)) {
+      expect(allowed, `index.html boot colour ${literal}`).toContain(literal.toLowerCase());
+    }
+    expect(boot).toMatch(new RegExp(`html\\s*\\{\\s*background:\\s*${paper}`));
+    expect(html).toContain(`<meta name="theme-color" content="${rail}" />`);
+    expect(vite).toContain(`background_color: "${paper}"`);
+    expect(vite).toContain(`theme_color: "${rail}"`);
+  });
+
+  it("declares no colour or density token of its own: styles.css only reads the generated ones", () => {
+    // A token added by hand would be a second source of truth that `npm run tokens` cannot
+    // see. This is the whole list of custom properties styles.css may declare.
+    const declared = new Set(
+      [
+        ...read("src/styles.css")
+          .replace(themeBlock, "")
+          .matchAll(/^\s*(--[\w-]+):/gm),
+      ].map(([, name]) => name),
+    );
+    expect([...declared].sort()).toEqual(
+      [
+        "--crew-tabs-h",
+        "--crew-w",
+        "--environment-body-size",
+        "--environment-control-size",
+        "--environment-control-type",
+        "--header-h",
+        "--hole",
+        "--inspector-w",
+        "--rail-w",
+        "--safe-bottom-inset",
+        "--tabbar-h",
+        "--tag-edge",
+        "--tag-fill",
+        "--tag-h",
+        "--ui-control-size",
+      ].sort(),
+    );
+  });
+
+  it("maps every System v2 role to a utility named after its property", () => {
+    const styles = read("src/styles.css");
+    const theme = styles.match(themeBlock)?.[0] ?? "";
+    const roles: string[] = [];
+    const walk = (node: TokenNode, path: string[]) => {
+      for (const [key, child] of Object.entries(node)) {
+        if (key.startsWith("$")) continue;
+        if ("$value" in (child as TokenNode)) roles.push([...path, key].join("-"));
+        else walk(child as TokenNode, [...path, key]);
+      }
+    };
+    walk(tokenFile.semantic as TokenNode, []);
+    expect(roles).toHaveLength(36);
+    for (const role of roles) expect(theme).toContain(`--color-${role}: var(--${role});`);
+
+    // Every property the theme reads exists in the generated file.
+    const generated = new Set(
+      [...read("src/styles/tokens.css").matchAll(/^\s*(--[\w-]+):/gm)].map(([, name]) => name),
+    );
+    const read_ = [...theme.matchAll(/var\((--[\w-]+)\)/g)].map(([, property]) => property);
+    expect(read_.length).toBeGreaterThan(80);
+    for (const property of read_)
+      expect(generated, `${property} is not generated`).toContain(property);
   });
 
   // The three rules below were each stated in the accepted family language and
@@ -148,7 +225,7 @@ describe("IronWrap OS foundation family", () => {
     // clip-path, not the retired clip property, so an override that resets only
     // clip leaves the label clipped to nothing on a shop tablet.
     const override = read("src/styles.css").match(
-      /\.shell:has\(\[data-environment="shop"\]\) \.shell-safety-trigger > span \{[^}]*\}/,
+      /\.shell\[data-density="glove"\] \.shell-safety-trigger > span \{[^}]*\}/,
     )?.[0];
     expect(override).toMatch(/clip-path:\s*none;/);
   });
@@ -160,116 +237,5 @@ describe("IronWrap OS foundation family", () => {
     expect(button).toMatch(/const primary =\s*"bg-primary /);
     expect(button).toMatch(/accent: primary,/);
     expect(button).not.toMatch(/bg-accent/);
-  });
-
-  const tokensIn = (selector: string): Record<string, string> => {
-    const styles = read("src/styles.css");
-    const start = styles.indexOf(`${selector} {`);
-    if (start < 0) throw new Error(`Missing token scope: ${selector}`);
-    const block = styles.slice(start, styles.indexOf("}", start));
-    return Object.fromEntries(
-      [...block.matchAll(/--([\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [
-        name,
-        value?.trim(),
-      ]),
-    );
-  };
-
-  const resolveToken = (tokens: Record<string, string>, name: string): string => {
-    const value = tokens[name];
-    if (!value) throw new Error(`Missing color token: ${name}`);
-    const alias = value.match(/^var\(--([\w-]+)\)$/)?.[1];
-    return alias ? resolveToken(tokens, alias) : value;
-  };
-
-  const luminance = (hex: string) => {
-    if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error(`Expected a solid sRGB color: ${hex}`);
-    const channels = hex
-      .slice(1)
-      .match(/../g)!
-      .map((part) => {
-        const value = Number.parseInt(part, 16) / 255;
-        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-      });
-    return channels.reduce(
-      (total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index]!,
-      0,
-    );
-  };
-
-  const contrast = (tokens: Record<string, string>, foreground: string, background: string) => {
-    const a = luminance(resolveToken(tokens, foreground));
-    const b = luminance(resolveToken(tokens, background));
-    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-  };
-
-  const surfaces = [
-    "background",
-    "surface",
-    "surface-raised",
-    "surface-muted",
-    "surface-sunk",
-    "surface-hover",
-  ];
-
-  it("qualifies resting and hover control edges plus small brass text on every office ground", () => {
-    const light = tokensIn(":root");
-    const dark = { ...light, ...tokensIn(':root[data-theme="dark"]') };
-    expect(tokensIn(':root:not([data-theme="light"])')).toEqual(
-      tokensIn(':root[data-theme="dark"]'),
-    );
-    for (const [scheme, tokens] of [
-      ["light", light],
-      ["dark", dark],
-    ] as const) {
-      for (const surface of surfaces) {
-        for (const edge of ["border-control", "border-strong"]) {
-          expect(
-            contrast(tokens, edge, surface),
-            `${scheme} ${edge} on ${surface}`,
-          ).toBeGreaterThanOrEqual(3);
-        }
-        expect(
-          contrast(tokens, "accent", surface),
-          `${scheme} brass on ${surface}`,
-        ).toBeGreaterThanOrEqual(4.5);
-      }
-    }
-  });
-
-  it("keeps Sun and Shop text and status receipts at 7:1 across their scoped surfaces", () => {
-    const light = tokensIn(":root");
-    const tags = tokensIn(':is(:root, [data-environment="field-sun"], [data-environment="shop"])');
-    for (const environment of ["field-sun", "shop"]) {
-      const tokens = { ...light, ...tokensIn(`[data-environment="${environment}"]`), ...tags };
-      for (const surface of surfaces) {
-        for (const text of ["foreground", "muted", "faint", "accent"]) {
-          expect(
-            contrast(tokens, text, surface),
-            `${environment} ${text} on ${surface}`,
-          ).toBeGreaterThanOrEqual(7);
-        }
-        expect(
-          contrast(tokens, "border-control", surface),
-          `${environment} control on ${surface}`,
-        ).toBeGreaterThanOrEqual(3);
-      }
-      for (const kind of ["ok", "warning", "danger", "info", "local", "neutral"]) {
-        expect(
-          contrast(tokens, kind, `${kind}-soft`),
-          `${environment} ${kind} status`,
-        ).toBeGreaterThanOrEqual(7);
-      }
-      for (const kind of ["metal", "paper", "case", "supply", "record", "asset"]) {
-        expect(
-          contrast(tokens, `tag-${kind}-text`, `tag-${kind}-fill`),
-          `${environment} ${kind} tag`,
-        ).toBeGreaterThanOrEqual(7);
-      }
-      expect(contrast(tokens, "primary-foreground", "primary")).toBeGreaterThanOrEqual(7);
-      expect(contrast(tokens, "danger-strong-foreground", "danger-strong")).toBeGreaterThanOrEqual(
-        7,
-      );
-    }
   });
 });

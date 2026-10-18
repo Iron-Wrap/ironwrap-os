@@ -58,7 +58,32 @@ const session = {
 describe("CrewShell", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("retains the chosen Sun environment across reloads and shows the full crew name", async () => {
+  it("opens in Sun mode on a touch scope, even when the phone is set to dark", () => {
+    const darkPhone = vi.spyOn(window, "matchMedia").mockImplementation(
+      (media) =>
+        ({
+          media,
+          matches: media === "(prefers-color-scheme: dark)",
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    const { container } = render(
+      <SessionProvider session={session}>
+        <CrewShell />
+      </SessionProvider>,
+    );
+    const crew = container.querySelector(".crew");
+    expect(crew).toHaveAttribute("data-mode", "field-sun");
+    expect(crew).toHaveAttribute("data-density", "touch");
+    // In sun the control offers the other look by name.
+    expect(screen.getByRole("button", { name: "Use night mode" })).not.toHaveAttribute(
+      "aria-pressed",
+    );
+    darkPhone.mockRestore();
+  });
+
+  it("retains the crew's own night choice across reloads and shows the full crew name", async () => {
     const user = userEvent.setup();
     const first = render(
       <SessionProvider session={session}>
@@ -68,13 +93,11 @@ describe("CrewShell", () => {
     const name = screen.getByText(session.user.display_name);
     expect(name).not.toHaveClass("truncate");
     expect(name).toHaveClass("whitespace-normal");
-    expect(first.container.querySelector(".crew")).toHaveAttribute("data-environment", "field");
-    await user.click(screen.getByRole("button", { name: "Sun mode" }));
-    expect(screen.getByRole("button", { name: "Sun mode" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(first.container.querySelector(".crew")).toHaveAttribute("data-environment", "field-sun");
+    await user.click(screen.getByRole("button", { name: "Use night mode" }));
+    expect(screen.queryByRole("button", { name: "Use night mode" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use sun mode" })).toBeInTheDocument();
+    expect(first.container.querySelector(".crew")).toHaveAttribute("data-mode", "field-night");
+    expect(first.container.querySelector(".crew")).toHaveAttribute("data-density", "touch");
     first.unmount();
 
     const reloaded = render(
@@ -82,11 +105,19 @@ describe("CrewShell", () => {
         <CrewShell />
       </SessionProvider>,
     );
-    expect(reloaded.container.querySelector(".crew")).toHaveAttribute(
-      "data-environment",
-      "field-sun",
+    expect(reloaded.container.querySelector(".crew")).toHaveAttribute("data-mode", "field-night");
+    await user.click(screen.getByRole("button", { name: "Use sun mode" }));
+    expect(reloaded.container.querySelector(".crew")).toHaveAttribute("data-mode", "field-sun");
+    expect(window.localStorage.getItem("ironwrap.field.night-mode")).toBeNull();
+  });
+
+  it("ignores the Sun setting an earlier release stored, so night is only ever chosen", () => {
+    window.localStorage.setItem("ironwrap.field.sun-mode", "off");
+    const { container } = render(
+      <SessionProvider session={session}>
+        <CrewShell />
+      </SessionProvider>,
     );
-    await user.click(screen.getByRole("button", { name: "Sun mode" }));
-    expect(reloaded.container.querySelector(".crew")).toHaveAttribute("data-environment", "field");
+    expect(container.querySelector(".crew")).toHaveAttribute("data-mode", "field-sun");
   });
 });

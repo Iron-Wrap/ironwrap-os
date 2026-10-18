@@ -11,10 +11,12 @@ import {
   type NavigationItem,
   type NavigationWorkspace,
 } from "../lib/roles";
+import { scopes } from "../lib/theme";
 import { CrewShell } from "./crew-shell";
 import { groupNavigation, initials, phoneTabs, shellPlace } from "./shell-navigation";
 import { PersonMenu, SearchPalette } from "./shell-controls";
 import { useCompanyLogoUrl, useSearchPalette } from "./shell-hooks";
+import { ShopReadingContext } from "./shop-reading";
 import { SystemStatus } from "./system-status";
 import { BrandMark, Logo } from "./ui/brand";
 import { Button } from "./ui/button";
@@ -47,6 +49,7 @@ function OfficeShell() {
   const setNavOpen = (open: boolean) => setNavOpenOn(open ? href : null);
   const drawerRef = useRef<HTMLDialogElement>(null);
   const [safetyOpen, setSafetyOpen] = useState(false);
+  const [shopReading, setShopReading] = useState(false);
   const groups = groupNavigation(items);
   const place = shellPlace(items, pathname === "/now" && showDecisions ? "/approvals" : pathname);
   const tabs = phoneTabs(items);
@@ -67,7 +70,7 @@ function OfficeShell() {
     const compact = window.matchMedia("(max-width: 1100px)");
     const phone = window.matchMedia("(max-width: 720px)");
     const onResize = () => {
-      const shop = document.querySelector('.shell [data-environment="shop"]');
+      const shop = document.querySelector('.shell [data-density="glove"]');
       if (!compact.matches || (phone.matches && !shop)) setNavOpenOn(null);
     };
     compact.addEventListener("change", onResize);
@@ -80,7 +83,7 @@ function OfficeShell() {
   }, [navOpen]);
 
   return (
-    <div className="shell" data-tabs="">
+    <div className="shell" data-tabs="" {...(shopReading ? scopes.shopReading : {})}>
       <a
         href="#main-content"
         className="fixed top-4 left-4 z-[60] -translate-y-24 rounded-md bg-primary px-4 py-3 font-semibold text-primary-foreground transition-transform focus:translate-y-0"
@@ -203,7 +206,7 @@ function OfficeShell() {
               <>
                 <span
                   aria-hidden="true"
-                  className="grid size-[1.875rem] shrink-0 place-items-center rounded-full bg-chrome text-[0.75rem] font-[640] tracking-[0.02em] text-chrome-foreground"
+                  className="grid size-[1.875rem] shrink-0 place-items-center rounded-full border border-line-strong bg-chrome text-[0.75rem] font-[640] tracking-[0.02em] text-chrome-foreground"
                 >
                   {initials(name)}
                 </span>
@@ -219,7 +222,9 @@ function OfficeShell() {
         </header>
 
         <main id="main-content" tabIndex={-1} className="shell-main app-main min-w-0 space-y-5">
-          <Outlet />
+          <ShopReadingContext value={setShopReading}>
+            <Outlet />
+          </ShopReadingContext>
         </main>
       </div>
 
@@ -299,7 +304,7 @@ function NavigationRail({
             <img src={logoUrl} alt="" className="max-h-9 w-auto object-contain" />
           </span>
         ) : (
-          <Logo surface="dark" height={44} className="w-[9.5rem]" />
+          <Logo height={44} className="w-[9.5rem]" />
         )}
       </Link>
       {groups.map((group) => (

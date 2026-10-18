@@ -141,9 +141,18 @@ export async function comparableObservedSha256(
   intent: AccountingIntentRecord,
   observation: AccountingObservationRecord,
 ): Promise<string> {
-  if (!await expectationOmitsIdentity(env, intent.tenant_id, intent.intent_id)) {
-    return observation.observed_sha256;
-  }
+  return await observedSha256OnBasis(
+    observation,
+    await expectationOmitsIdentity(env, intent.tenant_id, intent.intent_id),
+  );
+}
+
+/** The same hash, for a caller that has already read which basis the expectation bound. */
+export async function observedSha256OnBasis(
+  observation: AccountingObservationRecord,
+  omitsIdentity: boolean,
+): Promise<string> {
+  if (!omitsIdentity) return observation.observed_sha256;
   let facts: Record<string, unknown>;
   try {
     const parsed = JSON.parse(observation.facts_json) as unknown;

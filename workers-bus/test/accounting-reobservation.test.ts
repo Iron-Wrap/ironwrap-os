@@ -49,7 +49,8 @@ import {
 import { readAccountingCompensationAuthorizationByException } from "../src/accounting-compensation-authorizations.ts";
 import { listAccountingObservations } from "../src/accounting-reconciliation.ts";
 import { normalizeProviderEntity } from "../src/accounting-normalizers.ts";
-import { projectAccountingIntent } from "../src/accounting-desk.ts";
+import { projectAccountingIntent, type AccountingIntentDetail } from "../src/accounting-desk.ts";
+import { expectationOmitsIdentity } from "../src/accounting-expectations.ts";
 import { recordTaxPolicySnapshot } from "../src/accounting-tax-snapshots.ts";
 import { runAccountingSweeps } from "../src/accounting-sweeps.ts";
 import {
@@ -315,6 +316,150 @@ test("the reconcile route wires its own binding when nobody hands it one", async
   assert.equal(response.status, 202, JSON.stringify(response.body));
   assert.equal((response.body.re_read as { status: string }).status, "provider_unbound");
   assert.equal(await resolveAccountingObservationBinding(env, { tenantId: TENANT }), null);
+});
+
+// ------------------------------------------------ the desk compares what the verdict compared
+
+/** What the office manager's phone loads for one intent: `GET /api/v1/accounting/intents/{id}`. */
+async function deskDetail(env: AppEnv, intentId: string): Promise<AccountingIntentDetail> {
+  const response = await call(
+    env, "accounting", "GET", `/api/v1/accounting/intents/${encodeURIComponent(intentId)}`,
+  );
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  return response.body as unknown as AccountingIntentDetail;
+}
+
+test("a reconciled create reads as matching on the desk, on the hash its verdict compared", async () => {
+  const { env } = apiTestEnv();
+  const intentId = await dispatchedInvoice(env);
+  // Every production derivation binds an identity-free expectation (contract section 0,
+  // deviation 7): the provider's `Id` is not hashed for an entity IronWrap creates.
+  assert.equal(await expectationOmitsIdentity(env, TENANT, intentId), true);
+
+  const response = await reconcileThroughRoute(env, intentId, {
+    observation: observationBinding([
+      entityRoute("Invoice", "invoice-paid-linked.json"),
+      entityRoute("Payment", "payment-full-1260.json"),
+    ]),
+  }, "idem-reconcile-hash-a");
+  assert.equal((response.body.re_read as { verdict: string }).verdict, "reconciled");
+
+  const detail = await deskDetail(env, intentId);
+  assert.equal(detail.intent.badge, "reconciled");
+  assert.equal(detail.comparison.verdict_observed_sha256, detail.comparison.expected_sha256);
+  assert.equal(detail.comparison.hashes_agree, true);
+  assert.equal(detail.comparison.observed_sha256, detail.comparison.expected_sha256);
+  // The observation keeps its full hash, `Id` included, as evidence of what the provider returned;
+  // that hash can never equal an identity-free expectation, which is why it is not what's compared.
+  assert.notEqual(detail.observations.at(-1)?.observed_sha256, detail.comparison.expected_sha256);
+});
+
+/** Re-read a dispatched create against a paid-off invoice, so it reaches `reconciled`. */
+async function reconciledCreate(env: AppEnv, idempotencyKey: string): Promise<string> {
+  const intentId = await dispatchedInvoice(env);
+  const response = await reconcileThroughRoute(env, intentId, {
+    observation: observationBinding([
+      entityRoute("Invoice", "invoice-paid-linked.json"),
+      entityRoute("Payment", "payment-full-1260.json"),
+    ]),
+  }, idempotencyKey);
+  assert.equal((response.body.re_read as { verdict: string }).verdict, "reconciled");
+  assert.equal((await deskDetail(env, intentId)).comparison.hashes_agree, true);
+  return intentId;
+}
+
+test("a create that agreed and then drifted stops matching on the desk", async () => {
+  const { env } = apiTestEnv();
+  const intentId = await reconciledCreate(env, "idem-reconcile-hash-b1");
+  // Then somebody edited the posted invoice in QuickBooks: the same entity, now totalling 1310.00.
+  const response = await reconcileThroughRoute(env, intentId, {
+    observation: observationBinding([
+      entityRoute("Invoice", "invoice-drifted-linked.json"),
+      entityRoute("Payment", "payment-full-1260.json"),
+    ]),
+  }, "idem-reconcile-hash-b2");
+  const reRead = response.body.re_read as { verdict: string; reason_code: string };
+  assert.equal(reRead.verdict, "mismatch");
+  assert.equal(reRead.reason_code, "provider_readback_drift");
+
+  const { comparison } = await deskDetail(env, intentId);
+  assert.equal(comparison.hashes_agree, false);
+  assert.notEqual(comparison.verdict_observed_sha256, comparison.expected_sha256);
+  // The verdict judged this very read, so the desk's observed hash is the one it stood on.
+  assert.equal(comparison.observed_sha256, comparison.verdict_observed_sha256);
+});
+
+test("a read back with another entity id never matches, even when every fact agrees", async () => {
+  const { env } = apiTestEnv();
+  const intentId = await dispatchedInvoice(env);
+  // The read of invoice 2001 answers with invoice 9999, and every hashed fact is ours. An
+  // identity-free hash does not name the entity, so the hashes agree; `decide` checks identity
+  // before any hash, and so must the desk.
+  const response = await reconcileThroughRoute(env, intentId, {
+    observation: observationBinding([entityRoute("Invoice", "invoice-open.json", {
+      body: {
+        Invoice: {
+          ...(quickBooksEntity("invoice-open.json", "Invoice") as Record<string, unknown>),
+          Id: "9999",
+        },
+      },
+    })]),
+  }, "idem-reconcile-hash-d");
+  assert.equal((response.body.re_read as { verdict: string }).verdict, "identity_conflict");
+
+  const detail = await deskDetail(env, intentId);
+  assert.equal(detail.intent.badge, "mismatched");
+  assert.equal(detail.comparison.observed_sha256, detail.comparison.expected_sha256);
+  assert.equal(detail.comparison.hashes_agree, false);
+  assert.deepEqual(
+    detail.comparison.fields.find((field) => field.field === "provider_entity_id"),
+    { field: "provider_entity_id", expected: INVOICE_ID, observed: "9999", agrees: false },
+  );
+});
+
+test("a create that agreed is never matched by a read from another QuickBooks company", async () => {
+  const { env } = apiTestEnv();
+  const intentId = await reconciledCreate(env, "idem-reconcile-hash-c1");
+  // Then the tenant reconnected a different company file, which happens to hold an invoice with
+  // our id and our figures. Provider ids are per company, so this is not the invoice we posted.
+  const otherRealm = "9876543210000000000";
+  const { fetcher } = fakeIntuit([{
+    path: `/v3/company/${otherRealm}/invoice/${INVOICE_ID}`,
+    body: { Invoice: quickBooksEntity("invoice-open.json", "Invoice") },
+  }]);
+  const response = await reconcileThroughRoute(env, intentId, {
+    observation: { auth: stubAuthPort({ realmId: otherRealm }), fetcher },
+  }, "idem-reconcile-hash-c2");
+  assert.equal((response.body.re_read as { verdict: string }).verdict, "identity_conflict");
+
+  const detail = await deskDetail(env, intentId);
+  // Fail closed: this read is not of the entity the effect settled on, so nothing agrees and none
+  // of its facts is put beside ours.
+  assert.equal(detail.comparison.hashes_agree, false);
+  assert.equal(detail.comparison.observed_facts, null);
+  assert.deepEqual(
+    detail.comparison.fields.find((field) => field.field === "realm_id"),
+    { field: "realm_id", expected: REALM, observed: otherRealm, agrees: false },
+  );
+  // Not hidden, though: the read is this tenant's own audit record. Its hash (the one its
+  // `identity_conflict` verdict stood on), its time and its source stay on the comparison, and it is
+  // listed with the other observations, id and amounts included.
+  const [stored] = (await listAccountingObservations(env, TENANT, { intentId })).slice(-1);
+  assert.equal(stored?.realm_id, otherRealm);
+  assert.equal(detail.comparison.observed_sha256, detail.comparison.verdict_observed_sha256);
+  assert.match(String(detail.comparison.observed_sha256), /^[0-9a-f]{64}$/);
+  assert.equal(detail.comparison.read_at, stored?.read_at);
+  assert.equal(detail.comparison.read_source, "recovery_query");
+  assert.deepEqual(detail.observations.at(-1), {
+    observation_id: stored?.observation_id,
+    entity_type: "Invoice",
+    entity_id: INVOICE_ID,
+    observed_sha256: stored?.observed_sha256,
+    total_amount_cents: 126000,
+    balance_cents: 126000,
+    read_at: stored?.read_at,
+    source: "recovery_query",
+  });
 });
 
 // ---------------------------------------------------------------- the cron reaches `reconciled`

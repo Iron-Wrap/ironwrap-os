@@ -92,7 +92,7 @@
           "max_batch_timeout": null
         }
       ],
-      "routes": []
+      "routes": [{ "pattern": "qa.ironwrapexteriors.com", "custom_domain": true }]
     },
     "production": {
       "credential_secret": "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN",

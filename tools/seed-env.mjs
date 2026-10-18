@@ -74,8 +74,8 @@ export function loadWranglerConfig(path) {
  * The production identifiers a guard checks against, all derived from the committed config:
  * the top-level Worker name, its route hostname, its D1 id, and the workers.dev hostname the
  * same Worker would resolve to (derived from any non-production environment's own
- * `*.workers.dev` origin, since the account subdomain is a fact of the Cloudflare account, not
- * of any one environment).
+ * `*.workers.dev` origin - its public origin or one of its allowed origins - since the account
+ * subdomain is a fact of the Cloudflare account, not of any one environment).
  */
 export function productionIdentifiers(config) {
   const workerName = config.name;
@@ -84,18 +84,22 @@ export function productionIdentifiers(config) {
   let workersDevHostname = null;
   for (const envConfig of Object.values(config.env ?? {})) {
     // IRO-268 groups vars into `CFG_*` objects; read them flat, as the Worker does.
-    const origin = flattenWranglerVars(envConfig?.vars ?? {}).APP_PUBLIC_ORIGIN;
-    if (typeof origin !== "string" || !origin.includes(".workers.dev")) continue;
-    try {
-      const hostname = new URL(origin).hostname;
-      const accountSubdomain = hostname.split(".").slice(1).join(".");
-      if (accountSubdomain) {
-        workersDevHostname = `${workerName}.${accountSubdomain}`;
-        break;
+    const vars = flattenWranglerVars(envConfig?.vars ?? {});
+    const origins = [vars.APP_PUBLIC_ORIGIN, ...String(vars.APP_ALLOWED_ORIGINS ?? "").split(",")];
+    for (const origin of origins) {
+      if (typeof origin !== "string" || !origin.includes(".workers.dev")) continue;
+      try {
+        const hostname = new URL(origin.trim()).hostname;
+        const accountSubdomain = hostname.split(".").slice(1).join(".");
+        if (accountSubdomain) {
+          workersDevHostname = `${workerName}.${accountSubdomain}`;
+          break;
+        }
+      } catch {
+        // not a parseable URL; keep looking
       }
-    } catch {
-      // not a parseable URL; keep looking
     }
+    if (workersDevHostname) break;
   }
   return { workerName, databaseId, routeHostname, workersDevHostname };
 }
@@ -127,7 +131,7 @@ export function assertProductionIdentifiersComplete(prod) {
   }
   if (!prod.workersDevHostname) {
     throw new SeedGuardError(
-      "no environment declares a *.workers.dev APP_PUBLIC_ORIGIN, so the production workers.dev hostname cannot be derived.",
+      "no environment declares a *.workers.dev APP_PUBLIC_ORIGIN or APP_ALLOWED_ORIGINS entry, so the production workers.dev hostname cannot be derived.",
     );
   }
 }

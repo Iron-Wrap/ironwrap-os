@@ -2,16 +2,16 @@
 // run's context snapshot and the owner's delegation, in a fixed order; the first failing check
 // decides. A model's confidence never enters: the same inputs always give the same decision.
 //
-// Order: run ceilings, registered action, owner scope, people-only, registered arguments, strict
-// arguments, citations (present, in the snapshot at the cited version, current, fresh), handoff
-// limits, then class and delegation.
+// Order: run ceilings, registered action, owner scope, people-only, the requester of an action only
+// a person may request, registered arguments, strict arguments, citations (present, in the snapshot
+// at the cited version, current, fresh), handoff limits, then class and delegation.
 
 import { catalogAction, catalogSpecialist, type Autonomy, type CatalogAction } from "./catalog.ts";
 import { registryEntry, type RegistryEntry } from "./registry.ts";
 import { validate } from "./schema.ts";
 
 export const STEP_POLICY_ID = "ironwrap.agent_step_policy";
-export const STEP_POLICY_VERSION = "2";
+export const STEP_POLICY_VERSION = "3";
 
 export interface SnapshotFact {
   fact_id: string;
@@ -66,7 +66,16 @@ export interface StepInput {
   ceilings?: StepCeilings;
   /** The registry to consult; tests pass their own. */
   registry?: (actionId: string) => RegistryEntry | null;
+  /** Who made the run's signal, for an action only a person's own request may start (face.ts `signalActor`). */
+  requester?: { type: string; authenticated: boolean } | null;
 }
+
+/**
+ * Actions prepared only on a signed-in owner's or staff member's own request through the app, never
+ * from a field worker, an outside sender's text, another specialist's handoff or any other signal
+ * (contract "Inbound text is data": an access change is prepared only on such a request).
+ */
+export const PERSON_REQUEST_ONLY: ReadonlySet<string> = new Set(["access.prepare_change"]);
 
 export type Outcome = "succeeded" | "failed" | "unknown" | "abstained";
 
@@ -110,6 +119,12 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   if (!action.owners.includes(input.specialistId)) return stop("failed", "policy_denied", "scope");
   if (action.autonomy === "H" || action.human_only) return stop("failed", "policy_denied", "scope");
   pass("scope");
+  if (PERSON_REQUEST_ONLY.has(input.actionId)) {
+    const requester = input.requester;
+    if (requester?.authenticated !== true || (requester.type !== "owner" && requester.type !== "staff"))
+      return stop("abstained", "out_of_scope", "requester");
+    pass("requester");
+  }
 
   const entry = (input.registry ?? registryEntry)(input.actionId);
   if (!entry) return stop("abstained", "policy_missing", "schema");

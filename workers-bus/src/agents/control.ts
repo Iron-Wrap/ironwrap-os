@@ -986,6 +986,8 @@ export async function escalateRunAbstention(
   now: string,
   notify: Notify | null,
 ): Promise<void> {
+  // An ask's receipts that name nobody (store.ts) stay out by their null reviewer; a stopped
+  // protective step or a safety close of an ask reaches the queue like any other run's.
   const rows = await db
     .prepare(
       `SELECT * FROM agent_run_steps WHERE tenant_id=? AND run_id=? AND action_id='exception.escalate'

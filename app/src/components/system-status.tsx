@@ -53,8 +53,21 @@ export function SystemStatus({
   const offlineDiscardsWrites =
     offlineWriteMode === "read_only" && outbox.pending === 0 && outbox.uploading === 0;
   const storageWarning = storage.checked ? storage.warning : undefined;
+  // On the crew phone, with nothing left on it, a storage or sending prompt would only raise a
+  // doubt the chip already answers; the one true state is that everything went.
+  const allSent =
+    variant === "crew" &&
+    outbox.readState === "ready" &&
+    outbox.pending === 0 &&
+    outbox.uploading === 0 &&
+    outbox.needsAttention === 0 &&
+    outbox.unclaimed === 0;
+  // Until saved work is read, the crew banner neither warns nor claims; the chip says it is checking.
+  const crewChecking = variant === "crew" && outbox.readState === "checking";
+  // Low space still blocks the next photo, so it shows even when everything went.
   const storageNeedsEscalation =
     Boolean(storageWarning) &&
+    (storageWarning === "low_storage" || (!allSent && !crewChecking)) &&
     (variant === "crew" || outbox.pending > 0 || outbox.uploading > 0 || outbox.needsAttention > 0);
   useAppOpenOutboxSync(outboxPrincipal, csrfToken, deviceProof);
   const { needRefresh, setNeedRefresh, updateServiceWorker } =
@@ -194,11 +207,15 @@ export function SystemStatus({
                                 ? "Could not check device storage. Capture still works. Send saved work soon."
                                 : needRefresh
                                   ? "A newer version of this app is ready."
-                                  : !storage.checked
-                                    ? "Checking device storage. Keep this app open while sending saved work."
-                                    : storage.persistent === true
-                                      ? "Device storage is protected. Keep this app open while sending saved work."
-                                      : "Storage protection is unavailable. Send saved work before leaving this device."}
+                                  : crewChecking
+                                    ? "Checking saved work."
+                                    : allSent
+                                      ? "Everything you took or filled in has reached the office, photos included."
+                                      : !storage.checked
+                                        ? "Checking device storage. Keep this app open while sending saved work."
+                                        : storage.persistent === true
+                                          ? "Device storage is protected. Keep this app open while sending saved work."
+                                          : "Storage protection is unavailable. Send saved work before leaving this device."}
             </p>
             {hasBannerActions ? (
               <div className="flex flex-wrap gap-2">

@@ -1577,6 +1577,68 @@ test("authority lifecycle drafts use Frappe DATETIME text for exact readback dig
   assert.equal(draft.revoked_at, "");
 });
 
+test("the Frappe authority rail refuses an internal Worker Competency and still previews an external kind", async (t) => {
+  const { publicKey } = generateKeyPairSync("ed25519");
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser: "ops@authority.example.invalid",
+    approverId: "owner@authority.example.invalid",
+    dryRunSigningKey: "s".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+  });
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    requests.push(`${init.method ?? "GET"} ${url}`);
+    throw new Error("no Frappe call is expected");
+  });
+  const record = (overrides) => ({
+    authority_record_id: "authority:synthetic:1",
+    authority_operation: "record",
+    subject_type: "Person",
+    subject_role: "Worker",
+    person_user: "worker@example.invalid",
+    authority_kind: "Worker Competency",
+    authority_scope: "synthetic field installation",
+    scope_type: "Field",
+    scope_ref: "field:synthetic",
+    issuer_name: "Synthetic issuer",
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: "issuer:synthetic:1",
+    source_version: "2026-10-01",
+    evidence_refs: [{ ref: "r2://authority/synthetic-1", sha256: "c".repeat(64) }],
+    evidence_sha256: "c".repeat(64),
+    effective_from: "2026-10-01",
+    expires_at: "2027-09-30",
+    ...overrides,
+  });
+  await assert.rejects(server._registeredTools.dry_run_authority_record.handler(record()), /authority_worker_competency_native_only/);
+  await assert.rejects(
+    server._registeredTools.request_authority_record.handler({
+      ...record(),
+      request_text: "Record a synthetic competency",
+      approved_by: "owner@authority.example.invalid",
+      run_id: "run-native-only-0001",
+      dry_run_receipt: "d".repeat(32),
+      approval_receipt: "a".repeat(32),
+    }),
+    /authority_worker_competency_native_only/,
+  );
+  assert.deepEqual(requests, []);
+  const external = JSON.parse((await server._registeredTools.dry_run_authority_record.handler(record({
+    subject_type: "Organization",
+    subject_role: "Subcontractor",
+    person_user: undefined,
+    organization: "supplier:synthetic",
+    authority_kind: "WCB Clearance",
+  }))).content[0].text);
+  assert.equal(external.would_write, false);
+  assert.equal(external.draft.authority_kind, "WCB Clearance");
+});
+
 test("external authority receipts require a configured genuine issuer signature and exact state", () => {
   const draft = {
     authority_record_id: "authority:wcb:1",

@@ -446,7 +446,7 @@ function refOnly(fact: FactRef & { data?: unknown }): FactRef {
 }
 
 /** Reads a run's facts again: canonical objects through the read models, the signal from its row. */
-function runFactReader(db: AgentDb, tenantId: string, run: RunRow, now: string) {
+export function runFactReader(db: AgentDb, tenantId: string, run: RunRow, now: string) {
   return factReader(db, OBJECT_MODELS, tenantId, runReader(run), now, async (ref) => {
     try {
       const signal = await db

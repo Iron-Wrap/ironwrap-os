@@ -180,8 +180,14 @@ export async function handleAgentTeamAppRoute(
       if (!step) return reply({error: "step_not_found"}, 404);
       if (actor.role !== "owner" && actor.role !== step.needs_reviewer_role && !(actor.role === "ops" && actor.user_id === step.needs_person_id))
         return reply({error: "forbidden"}, 403);
+      const args = JSON.parse(step.args_json);
+      // An authority command's reference and reason are personnel text, for approvers only.
+      if (step.action_id === "authority.record" && !auth.permissions.includes("authority:approve")) {
+        delete args.reference;
+        delete args.reason;
+      }
       return reply({step_id: step.step_id, version: step.version, args_sha256: step.args_sha256,
-        args: JSON.parse(step.args_json), receipt: receiptOf(step)});
+        args, receipt: receiptOf(step)});
     }
     if (url.pathname === "/api/v1/agent-team/receipts") {
       const view = (url.searchParams.get("view") ?? "needs_you") as ReceiptView;

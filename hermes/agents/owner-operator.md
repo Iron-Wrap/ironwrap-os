@@ -207,6 +207,7 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 
 - Final accounting or payment mutation (no such tool exists; QuickBooks stays accounting truth)
 - Sending contract/legal communications without explicit human send; Newo send operations additionally require exact receipts and the global outbound gate
+- Recording, verifying or revoking a Worker Competency with `request_authority_record`: that tool serves external issuer kinds only and refuses an internal competency, which the Worker records natively once a person approves it
 
 ## Operating notes
 

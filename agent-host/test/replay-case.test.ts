@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { canonicalJson, sha256 } from "../src/gateway/schema.ts";
 import { RUN_OUTPUT_SCHEMA } from "../src/host/prompt.ts";
 import type { Specialist } from "../src/host/specialists.ts";
-import { answerCall, CASE_CLOCK_MS, caseClock, caseTime, listTools, replayRun, replayTools, type ToolAnswer } from "../src/replay/case-run.ts";
+import { answerCall, CASE_CLOCK_MS, caseClock, caseTime, listTools, replayRun, replayTools, resolvedCase, type ToolAnswer } from "../src/replay/case-run.ts";
 import type { Catalog, CatalogAction, EvalCase } from "../src/replay/evals.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -134,6 +134,88 @@ test("a case clock picks the season's month, the first such weekday from the 8th
   ]) {
     assert.throws(() => caseClock({ clock: bad as never }), /clock must be/, JSON.stringify(bad));
   }
+});
+
+// The case with one more fact, an assessment whose data is given.
+const withFact = (data: unknown, extra: Partial<EvalCase> = {}): EvalCase => ({
+  ...CASE,
+  ...extra,
+  facts: [...CASE.facts, { fact_id: "authority:AU-9", kind: "internal_competency_assessment", version: 1, trust: "owned", observed_at: "-PT5M", fresh_until: "PT1H", data }],
+});
+const factData = (item: EvalCase) => replayRun(SPECIALIST, tools, item, "run_test").run.context.facts[4];
+
+test("case dates and times in fact data resolve against the case clock, a date in Edmonton", () => {
+  const item = withFact({
+    effective_from: { $case_date: "-P7D" },
+    expires_at: { $case_date: "P358D" },
+    assessed_at: { $case_time: "-PT2H" },
+    windows: [{ ends: { $case_date: "PT8H" } }, "as written"],
+    issuer_jurisdiction: "Alberta",
+  });
+  const fact = factData(item);
+  // The default clock is 14:00 in Edmonton (UTC-6): eight hours on is the same local day, though
+  // UTC has moved on to the next.
+  assert.deepEqual(fact.data, {
+    effective_from: "2026-06-30",
+    expires_at: "2027-06-30",
+    assessed_at: "2026-07-07T18:00:00.000Z",
+    windows: [{ ends: "2026-07-07" }, "as written"],
+    issuer_jurisdiction: "Alberta",
+  });
+  // The fact is hashed as the model reads it, and the action server answers from the same facts.
+  assert.equal(fact.hash, `sha256:${sha256(canonicalJson(fact.data))}`);
+  const replayed = replayRun(SPECIALIST, tools, item, "run_test");
+  assert.deepEqual(replayed.toolFile.facts, replayed.run.context.facts);
+  assert.deepEqual(item.facts[3].data, { effective_from: { $case_date: "-P7D" }, expires_at: { $case_date: "P358D" }, assessed_at: { $case_time: "-PT2H" }, windows: [{ ends: { $case_date: "PT8H" } }, "as written"], issuer_jurisdiction: "Alberta" });
+
+  // A per-case clock moves them with it. Its winter Monday is the 12th of January: at 23:30 the
+  // local day is still the 12th, and 90 days on is the 12th of April although daylight saving
+  // began in between, where adding 90 whole days to the instant would land on 00:30 of the 13th.
+  const clock = { season: "winter", weekday: "monday", local_time: "23:30" } as const;
+  const clocked = factData(withFact({ today: { $case_date: "PT0M" }, week_ago: { $case_date: "-P7D" }, spring: { $case_date: "P90D" }, now: { $case_time: "PT0M" } }, { clock }));
+  assert.deepEqual(clocked.data, { today: "2026-01-12", week_ago: "2026-01-05", spring: "2026-04-12", now: at(caseClock({ clock })) });
+  assert.equal(at(caseClock({ clock })), "2026-01-13T06:30:00.000Z");
+
+  // The scorer and the judge read the case with its expectations resolved the same way.
+  const expecting = withFact({ effective_from: { $case_date: "-P7D" } }, {
+    expected: { decision: "propose", actions: [{ action_id: "lead.qualify", args_must_include: { record: { effective_from: { $case_date: "-P7D" } } } }] },
+  });
+  const resolved = resolvedCase(expecting);
+  assert.deepEqual([resolved.facts[3].data, resolved.expected.actions], [{ effective_from: "2026-06-30" }, [{ action_id: "lead.qualify", args_must_include: { record: { effective_from: "2026-06-30" } } }]]);
+  assert.equal(resolved.facts[0], expecting.facts[0]);
+  assert.deepEqual(resolvedCase(withFact({ effective_from: { $case_date: "-P7D" } }, { clock })).facts[3].data, { effective_from: "2026-01-05" });
+});
+
+test("an object with any other $ key, or a malformed duration, is refused", () => {
+  for (const bad of [
+    { $case_date: "P1W" },
+    { $case_date: "-PT2m" },
+    { $case_time: "" },
+    { $case_time: "yesterday" },
+    { $case_date: 7 },
+    { $case_date: null },
+    { $case_dates: "P1D" },
+    { $now: "PT0M" },
+    { $case_date: "P1D", note: "and a note" },
+    { note: "and a note", $case_time: "PT0M" },
+    { $case_date: "P1D", $case_time: "PT0M" },
+  ]) {
+    assert.throws(() => replayRun(SPECIALIST, tools, withFact({ visits: [{ on: bad }] }), "run_test"), /authority:AU-9 data\.visits\[0\]\.on must be exactly/, JSON.stringify(bad));
+    assert.throws(() => resolvedCase(withFact({ visits: [{ on: bad }] })), /authority:AU-9 data\.visits\[0\]\.on must be exactly/, JSON.stringify(bad));
+  }
+  const expecting = { ...CASE, expected: { decision: "propose" as const, actions: [{ action_id: "lead.qualify", args_must_include: { on: { $case_day: "P1D" } } }] } };
+  assert.throws(() => resolvedCase(expecting), /expected\.actions\[0\]\.args_must_include\.on must be exactly/);
+  // Only keys that start with `$` are markers; a `$` inside a value or a key is data.
+  assert.deepEqual(factData(withFact({ "price$": "$2.45", note: "$case_date" })).data, { "price$": "$2.45", note: "$case_date" });
+});
+
+test("a case without case dates keeps its facts, its snapshot and its prompt hash", () => {
+  // Pinned before case dates existed.
+  assert.equal(replay.run.context.snapshot_hash, "4e560cc6160da1007dc763bf7ad2a59e6906a56055d334cc8571c89ef4bf07e0");
+  replay.run.context.facts.slice(1).forEach((fact, index) => assert.equal(fact.data, CASE.facts[index].data));
+  assert.equal(resolvedCase(CASE), CASE);
+  const dated = replayRun(SPECIALIST, tools, withFact({ effective_from: { $case_date: "-P7D" } }), "run_test", 0);
+  assert.equal(sha256(dated.input.system), sha256(replay.input.system));
 });
 
 test("a case becomes the signal, context snapshot and run the Worker would open", () => {
@@ -263,4 +345,24 @@ test("the stdio action server answers MCP requests from the tool file alone", as
   assert.equal(responses[5].error.code, -32601);
   assert.equal(responses[6].result.protocolVersion, "2025-11-25");
   assert.equal(responses[7].error.code, -32700);
+});
+
+test("every shipped case resolves: its markers parse and its clock is valid", async () => {
+  const { loadEnvironment, loadSuite } = await import("../src/replay/evals.ts");
+  const environment = loadEnvironment(fileURLToPath(new URL("../..", import.meta.url)));
+  let count = 0;
+  for (const specialistId of environment.catalog.specialists.keys())
+    for (const suite of ["golden", "redteam"] as const) {
+      let cases: EvalCase[] = [];
+      try {
+        cases = loadSuite(environment, specialistId, suite);
+      } catch {
+        continue; // a specialist without that suite yet
+      }
+      for (const item of cases) {
+        assert.doesNotThrow(() => resolvedCase(item), item.id);
+        count += 1;
+      }
+    }
+  assert.ok(count > 0);
 });

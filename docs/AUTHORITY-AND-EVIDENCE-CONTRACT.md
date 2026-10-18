@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-30
+Last verified: 2026-10-18
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
@@ -197,10 +197,32 @@ Authority mutations use one governed proof chain: an authenticated Owner/Product
 one tenant-scoped D1 action, and the separately authenticated executor binds the exact command,
 authority version, evidence, and (where required) genuine issuer receipt before committing the
 versioned D1 aggregate and immutable transition atomically. It then reads the material D1 state
-back, verifies its digest and all bound fields, and only then records the terminal receipt. A
-browser session may request or observe the action but cannot mint an issuer readback or set an
-applied result. Frappe may receive a compatibility projection after the D1 commit, but a Frappe
-role, document, or readback cannot grant authority or make the D1 transition succeed. External,
+back, verifies its digest and all bound fields, and only then records the terminal receipt. An
+internal Worker Competency has no external issuer, so the Worker is its executor: an Owner or
+Production approver's command, or their approval of the compliance specialist's step, claims the
+action, appends the new version that supersedes the identity's current head, completes the action,
+and reads the stored version back in one D1 transaction. That transaction re-checks the expected
+head, and that no login the worker's reference names shares a user id, email or Frappe user with
+the approver's login. Two logins of one person that share none of those cannot be linked without a
+person-to-user record, which does not exist yet; until it does, that self-approval is not
+detected. Every change, including a verification or revocation, is a new version, never an edit,
+and none is projected to Frappe. One identity holds at most 32 versions, the bound the fence reads
+in one lineage, and its last slot is kept for a revocation. Once 31 versions exist only a
+revocation may take the last slot, so when the 31st is already a revocation, or is not verified,
+or once the 32nd revokes the competency, the identity is full: every further command
+is refused and the fence keeps refusing the work that needs it, so it fails closed. A person can
+start a new competency only as a new identity, by recording it under another scope reference such
+as the next roof job. Nothing retires a full identity so that its scope can be reused, so a
+requirement that names that scope stays refused; this is a known limit. Verification and
+revocation references and correction reasons about a colleague are personnel and safety text: only
+a reader holding `authority:approve` sees them, and a field login never does. A revocation is not terminal: a new
+assessment may supersede it, and once another approver verifies that assessment, the worker is
+admitted again. A
+browser session cannot mint an issuer readback or set an applied result: for an external kind it
+may only request or observe the action, and for an internal competency the Worker derives the
+result from the approver's command. Frappe may receive a compatibility projection after the D1
+commit, but a Frappe role, document, or readback cannot grant authority or make the D1 transition
+succeed. External,
 legal, customer, physical, and professional authority remains with the genuine actor or issuer and
 blocks release when its readback is missing, stale, contradictory, or mismatched.
 

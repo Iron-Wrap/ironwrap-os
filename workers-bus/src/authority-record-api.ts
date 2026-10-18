@@ -1,4 +1,8 @@
+import { humanGuard } from "./agents/control.ts";
+import type { AgentDb } from "./agents/store.ts";
 import { validAppCsrf } from "./app-auth.ts";
+import { competencyCommandError, type CompetencyCommand } from "./agents/registry.ts";
+import { actionWithoutPersonnelText, executeCompetencyCommand } from "./authority-record-native.ts";
 import {
   AUTHORITY_EXPIRING_DAYS,
   claimAuthorityRecordAction,
@@ -11,6 +15,19 @@ import type { AppEnv, AuthContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const AUTHORITY_WRITE_ROLES = new Set(["owner", "ops"]);
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{7,255}$/;
+const COMMAND_REFUSAL_STATUS: Record<string, number> = {
+  authority_approver_required: 403,
+  authority_self_approval_forbidden: 403,
+  session_authority_changed: 403,
+  authority_head_changed: 409,
+  authority_ambiguous: 409,
+  authority_contradictory: 409,
+  authority_transition_invalid: 409,
+  authority_version_limit_reached: 409,
+  idempotency_conflict: 409,
+  authority_readback_mismatch: 502,
+};
 
 function json(body: unknown, status = 200): Response {
   const response = new Response(JSON.stringify(body), {
@@ -79,6 +96,7 @@ export async function handleAuthorityRecordRoute(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
+  clock = () => Date.now(),
 ): Promise<Response | null> {
   const url = new URL(req.url);
 
@@ -107,7 +125,11 @@ export async function handleAuthorityRecordRoute(
     if (!actionId) return json({ error: "not_found" }, 404);
     try {
       const action = await getAuthorityRecordAction(env, auth.session.tenant_id, actionId);
-      return action ? json({ version: 1, action }) : json({ error: "not_found" }, 404);
+      if (!action) return json({ error: "not_found" }, 404);
+      return json({
+        version: 1,
+        action: auth.permissions.includes("authority:approve") ? action : actionWithoutPersonnelText(action),
+      });
     } catch {
       return json({ error: "authority_record_store_unavailable" }, 502);
     }
@@ -121,6 +143,40 @@ export async function handleAuthorityRecordRoute(
     try {
       const readbacks = await listAuthorityRecordReadbacks(env, auth.session.tenant_id, recordId);
       return json({ version: 1, authority_record_id: recordId, readbacks });
+    } catch {
+      return json({ error: "authority_record_store_unavailable" }, 502);
+    }
+  }
+
+  // An internal worker competency command: the signed-in approver's own decision, which the
+  // Worker records natively in D1 (authority-record-native.ts). External kinds are refused here.
+  if (req.method === "POST" && url.pathname === "/api/v1/authority-records/commands") {
+    if (!auth.permissions.includes("authority:approve")) return json({ error: "authority_approve_required" }, 403);
+    const csrfError = csrfFailed(req, auth);
+    if (csrfError) return csrfError;
+    const parsed = await body(req);
+    if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
+    if (!isRecord(parsed.value)) return json({ error: "authority_command_invalid" }, 400);
+    const { idempotency_key: idempotencyKey, ...command } = parsed.value;
+    if (typeof idempotencyKey !== "string" || !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      return json({ error: "authority_command_invalid" }, 400);
+    }
+    const invalid = competencyCommandError(command);
+    if (invalid) return json({ error: invalid }, invalid === "authority_command_invalid" ? 400 : 422);
+    const db = env.DB as unknown as AgentDb;
+    const tenantId = auth.session.tenant_id;
+    const now = new Date(clock()).toISOString();
+    try {
+      const result = await executeCompetencyCommand(
+        db,
+        { tenantId, command: command as unknown as CompetencyCommand, approverUserId: auth.session.user_id, idempotencyKey, now },
+        [humanGuard(db, tenantId, { user_id: auth.session.user_id, role: auth.session.role, session_hash: auth.session.session_hash }, now, false)],
+      );
+      if ("refusal" in result) return json({ error: result.refusal }, COMMAND_REFUSAL_STATUS[result.refusal] ?? 422);
+      return json(
+        { version: 1, kind: result.kind, action: result.action, readback: result.readback },
+        result.kind === "recorded" ? 201 : 200,
+      );
     } catch {
       return json({ error: "authority_record_store_unavailable" }, 502);
     }
@@ -170,7 +226,9 @@ export async function handleAuthorityRecordRoute(
         actorUserId: auth.session.user_id,
         now: new Date().toISOString(),
       });
-      return json({ version: 1, ...result }, result.kind === "claimed" ? 201 : result.kind === "conflict" ? 409 : 200);
+      // A replay or conflict returns the recorded action; its personnel text stays with approvers.
+      const action = auth.permissions.includes("authority:approve") ? result.action : actionWithoutPersonnelText(result.action);
+      return json({ version: 1, ...result, action }, result.kind === "claimed" ? 201 : result.kind === "conflict" ? 409 : 200);
     } catch {
       return json({ error: "authority_record_store_unavailable" }, 502);
     }

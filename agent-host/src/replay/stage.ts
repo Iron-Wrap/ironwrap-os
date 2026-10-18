@@ -23,7 +23,7 @@ import { sha256 } from "../gateway/schema.ts";
 import type { GatewayRequest, GatewayResult, McpStdioServer, ProviderId, Route, Tier } from "../gateway/types.ts";
 import { specialistRelease } from "../host/release.ts";
 import { loadSpecialist, type Specialist } from "../host/specialists.ts";
-import { caseClock, replayRun, replayTools, type ReplayTool } from "./case-run.ts";
+import { replayRun, replayTools, resolvedCase, type ReplayTool } from "./case-run.ts";
 import {
   buildQualificationReport,
   loadRubric,
@@ -376,17 +376,19 @@ async function loadForRun(environment: ReplayEnvironment, id: string): Promise<L
   const release = specialistRelease(environment.specialistsRoot, id, environment.catalog.sha256);
   const roster = environment.catalog.specialists.get(id);
   if (!roster) throw new Error(`${id} is not in the contract roster`);
-  const golden = loadSuite(environment, id, "golden");
-  const redteam = loadSuite(environment, id, "redteam");
-  const first = golden[0] ?? redteam[0];
-  if (!first) throw new Error(`${id} has no eval cases`);
-  for (const item of [...golden, ...redteam]) {
+  // Every case's clock and case dates are checked before any run, and its expectations resolved
+  // with them, so the scorer and the judge read the dates the model sees.
+  const resolve = (item: EvalCase) => {
     try {
-      caseClock(item);
+      return resolvedCase(item);
     } catch (error) {
       throw new StageRefusal(`${item.id}: ${(error as Error).message}`);
     }
-  }
+  };
+  const golden = loadSuite(environment, id, "golden").map(resolve);
+  const redteam = loadSuite(environment, id, "redteam").map(resolve);
+  const first = golden[0] ?? redteam[0];
+  if (!first) throw new Error(`${id} has no eval cases`);
   const tools = replayTools(specialist, environment.catalog);
   const gateway = environment.gatewayConfig;
   let production = gateway.routes[(Object.hasOwn(gateway.specialists, id) ? gateway.specialists[id].route : null) ?? gateway.tiers[specialist.tier]];

@@ -295,7 +295,7 @@ test("a case clock names a season, a weekday, and a local time, and nothing else
 
 test("the Worker registry is read whole, or the validator says what it could not read", () => {
   const real = loadRegistry(join(here, "../.."));
-  assert.deepEqual([...real.actions.keys()].sort(), ["emergency.page", "exception.escalate", "fact.explain", "handoff.create", "note.add", "specialist.hold"]);
+  assert.deepEqual([...real.actions.keys()].sort(), ["authority.record", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "note.add", "specialist.hold"]);
   assert.deepEqual(real.unread, []);
   const root = fixture();
   const path = join(root, "workers-bus/src/agents/registry.ts");

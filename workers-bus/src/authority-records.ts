@@ -1,6 +1,7 @@
 import { sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
+import { canonicalJson } from "./newo-hash.ts";
 
 export const AUTHORITY_RECORD_OPERATIONS = [
   "record",
@@ -112,7 +113,54 @@ export const AUTHORITY_VERIFICATION_METHODS = new Set([
   ...EXTERNAL_ISSUER_VERIFICATION_METHODS,
 ]);
 
-const MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS = 32;
+/** The Authority Record fields of one version's material state, in the Frappe field names. */
+export const AUTHORITY_MATERIAL_FIELDS = [
+  "authority_record_id",
+  "tenant",
+  "subject_type",
+  "subject_role",
+  "person_user",
+  "organization",
+  "authority_kind",
+  "authority_scope",
+  "scope_type",
+  "scope_ref",
+  "roof_job",
+  "scope_json",
+  "issuer_name",
+  "issuer_jurisdiction",
+  "issuer_reference",
+  "source_version",
+  "evidence_refs_json",
+  "evidence_sha256",
+  "effective_from",
+  "expires_at",
+  "version",
+  "status",
+  "verification_method",
+  "verified_at",
+  "verification_reference",
+  "verified_by",
+  "revoked_at",
+  "revocation_reference",
+  "revoked_by",
+  "supersedes",
+  "correction_reason",
+  "exception_status",
+  "exception_reason",
+  "issuer_readback_json",
+] as const;
+
+/** The state digest of one version: every material field except the issuer readback it carries. */
+export async function authorityStateDigest(record: Record<string, unknown>): Promise<string> {
+  const payload = Object.fromEntries(AUTHORITY_MATERIAL_FIELDS
+    .filter((name) => name !== "issuer_readback_json")
+    .map((name) => [name, record[name] ?? ""]));
+  return await sha256Hex(canonicalJson(payload));
+}
+
+/** The most rows one lineage holds and the fence still reads; a larger lineage is ambiguous. */
+export const MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS = 32;
 const MAX_AUTHORITY_REQUIREMENTS = 20;
 const MAX_AUTHORITY_REQUIREMENTS_BYTES = 20_000;
 const AUTHORITY_REQUIREMENT_KEYS = new Set([
@@ -372,7 +420,7 @@ export async function claimAuthorityRecordAction(
   input: ClaimAuthorityRecordActionInput,
 ): Promise<ClaimAuthorityRecordActionResult> {
   validateActionInput(input);
-  const idempotencyHash = await sha256Hex(`${input.tenantId}\n${input.idempotencyKey}`);
+  const idempotencyHash = await authorityIdempotencyHash(input.tenantId, input.idempotencyKey);
   const existing = await authorityActionByIdempotency(env, input.tenantId, idempotencyHash);
   if (existing) {
     return authorityActionMatchesClaim(existing, input)
@@ -500,12 +548,32 @@ export async function getAuthorityRecordAction(
   return await authorityActionById(env, tenantId, actionId);
 }
 
-export async function recordAuthorityReadback(
+export async function getAuthorityRecordActionByIdempotency(
   env: AppEnv,
-  input: RecordAuthorityReadbackInput,
-): Promise<RecordAuthorityReadbackResult> {
-  validateReadbackInput(input);
-  const observationFingerprint = await sha256Hex(JSON.stringify({
+  tenantId: string,
+  idempotencyKey: string,
+): Promise<AuthorityRecordAction | null> {
+  if (!TENANT_ID.test(tenantId) || !IDEMPOTENCY_KEY.test(idempotencyKey)) return null;
+  return await authorityActionByIdempotency(env, tenantId, await authorityIdempotencyHash(tenantId, idempotencyKey));
+}
+
+export async function getAuthorityRecordReadback(
+  env: AppEnv,
+  tenantId: string,
+  readbackId: string,
+): Promise<AuthorityRecordReadback | null> {
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(readbackId)) return null;
+  return await authorityReadbackByIdentity(env, tenantId, readbackId);
+}
+
+/** Claims of every kind share one idempotency key space per tenant. */
+export async function authorityIdempotencyHash(tenantId: string, idempotencyKey: string): Promise<string> {
+  return await sha256Hex(`${tenantId}\n${idempotencyKey}`);
+}
+
+/** The fingerprint a readback row stores: exactly what was observed, in this field order. */
+export async function authorityReadbackFingerprint(input: RecordAuthorityReadbackInput): Promise<string> {
+  return await sha256Hex(JSON.stringify({
     action_id: input.actionId,
     authority_record_id: input.authorityRecordId,
     authority_version: input.authorityVersion,
@@ -537,25 +605,15 @@ export async function recordAuthorityReadback(
     authority_verification_method: input.authorityVerificationMethod,
     issuer_receipt_sha256: input.issuerReceiptSha256,
   }));
-  const existing = await authorityReadbackByIdentity(env, input.tenantId, input.readbackId);
-  if (existing) {
-    return existing.observation_fingerprint_sha256 === observationFingerprint
-      ? { kind: "replayed", readback: existing }
-      : { kind: "conflict", readback: existing };
-  }
-  const duplicate = await authorityReadbackByEvidence(
-    env,
-    input.tenantId,
-    input.authorityRecordId,
-    input.authorityVersion,
-    input.evidenceSha256,
-  );
-  if (duplicate) {
-    return duplicate.observation_fingerprint_sha256 === observationFingerprint
-      ? { kind: "replayed", readback: duplicate }
-      : { kind: "conflict", readback: duplicate };
-  }
-  const inserted = await env.DB.prepare(
+}
+
+/** Appends one readback row; a conflicting row makes it insert nothing, which the caller checks. */
+export function authorityReadbackInsert<T>(
+  db: { prepare(sql: string): { bind(...values: unknown[]): T } },
+  input: RecordAuthorityReadbackInput,
+  observationFingerprint: string,
+): T {
+  return db.prepare(
     `INSERT INTO authority_record_readbacks
        (readback_id, tenant_id, authority_record_id, authority_version,
         subject_type, subject_role, person_user, organization, authority_kind,
@@ -602,7 +660,34 @@ export async function recordAuthorityReadback(
     input.observedAt,
     observationFingerprint,
     input.actionId,
-  ).run();
+  );
+}
+
+export async function recordAuthorityReadback(
+  env: AppEnv,
+  input: RecordAuthorityReadbackInput,
+): Promise<RecordAuthorityReadbackResult> {
+  validateReadbackInput(input);
+  const observationFingerprint = await authorityReadbackFingerprint(input);
+  const existing = await authorityReadbackByIdentity(env, input.tenantId, input.readbackId);
+  if (existing) {
+    return existing.observation_fingerprint_sha256 === observationFingerprint
+      ? { kind: "replayed", readback: existing }
+      : { kind: "conflict", readback: existing };
+  }
+  const duplicate = await authorityReadbackByEvidence(
+    env,
+    input.tenantId,
+    input.authorityRecordId,
+    input.authorityVersion,
+    input.evidenceSha256,
+  );
+  if (duplicate) {
+    return duplicate.observation_fingerprint_sha256 === observationFingerprint
+      ? { kind: "replayed", readback: duplicate }
+      : { kind: "conflict", readback: duplicate };
+  }
+  const inserted = await authorityReadbackInsert(env.DB, input, observationFingerprint).run();
   if (d1Changes(inserted) === 1) {
     const readback = await authorityReadbackByIdentity(env, input.tenantId, input.readbackId);
     if (readback) return { kind: "recorded", readback };
@@ -748,13 +833,20 @@ export async function listCurrentAuthorityHeads(
     byRecord.set(row.authority_record_id, peers);
   }
 
-  const bySubject = new Map<string, AuthoritySubjectView>();
-  for (const peers of byRecord.values()) {
+  const records = [...byRecord.values()].map((peers) => {
     const heads = currentAuthorityHeads(peers);
     // A contradictory record has no single head, so it is reported from its newest row rather
     // than dropped: an operator who cannot see it cannot resolve it.
-    const shown = heads.rows.length > 0 ? heads.rows : peers.slice(0, 1);
+    return { heads, shown: heads.rows.length > 0 ? heads.rows : peers.slice(0, 1) };
+  });
+  // A record that another current head supersedes is history, exactly as the fence's lineage
+  // resolution treats it; every Worker-native change is such a superseding version.
+  const superseded = new Set(records.flatMap(({ shown }) =>
+    shown.flatMap((row) => row.supersedes_authority_record_id ? [row.supersedes_authority_record_id] : [])));
+  const bySubject = new Map<string, AuthoritySubjectView>();
+  for (const { heads, shown } of records) {
     for (const row of shown) {
+      if (superseded.has(row.authority_record_id)) continue;
       const denial = heads.code ?? lifecycleDenialForRow(row, { tenantId, now });
       const { verdict, daysLeft } = verdictFor(row, denial, today);
       const key = subjectKeyOf(row);
@@ -1039,7 +1131,7 @@ async function authorityReadbackByEvidence(
   ).bind(tenantId, authorityRecordId, authorityVersion, evidenceSha256).first<AuthorityRecordReadback>();
 }
 
-async function authorityReadbacksByRequirement(
+export async function authorityReadbacksByRequirement(
   env: AppEnv,
   tenantId: string,
   requirement: AuthorityRequirement,
@@ -1146,7 +1238,7 @@ async function authorityReadbacksByBinding(
   return rows.results;
 }
 
-async function authorityReadbacksBySupersedes(
+export async function authorityReadbacksBySupersedes(
   env: AppEnv,
   tenantId: string,
   supersedesAuthorityRecordId: string,
@@ -1240,7 +1332,7 @@ function validTerminalReceipt(value: unknown): value is AuthorityRecordTerminalR
     SHA256.test(String(value.reconciliationReceiptSha256 ?? ""));
 }
 
-function validateReadbackInput(input: RecordAuthorityReadbackInput): void {
+export function validateReadbackInput(input: RecordAuthorityReadbackInput): void {
   if (!TENANT_ID.test(input.tenantId) || !OPAQUE_ID.test(input.readbackId) ||
       !OPAQUE_ID.test(input.authorityRecordId) ||
       !Number.isInteger(input.authorityVersion) || input.authorityVersion < 1 ||

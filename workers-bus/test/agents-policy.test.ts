@@ -168,6 +168,46 @@ test("a non-delegable action asks first whatever the owner set, and off-until-en
   assert.deepEqual(live.reason_codes, ["policy_denied"]);
 });
 
+test("compliance proposes an internal competency record for a person's approval only", () => {
+  const compliance = { specialistId: "compliance" };
+  const command = {
+    operation: "record",
+    authority_kind: "Worker Competency",
+    subject_ref: "appu_synthetic_worker",
+    scope_type: "Field",
+    scope_ref: "field:synthetic",
+    expected_head: null,
+    record: {
+      authority_scope: "synthetic field installation",
+      roof_job: null,
+      issuer_jurisdiction: "AB-CA",
+      issuer_reference: "assessment:synthetic",
+      source_version: "rubric:1",
+      evidence_refs: [{ ref: "r2://authority/synthetic.pdf", sha256: "c".repeat(64) }],
+      effective_from: "2026-10-01",
+      expires_at: "2027-09-30",
+    },
+    reference: null,
+    reason: null,
+  };
+  // Never delegable: an owner's within-limits setting still asks the production reviewer first.
+  const proposed = evaluateStep(input({ ...compliance, actionId: "authority.record", args: command, delegation: { delegation_id: "dlg_1", setting: "within_limits" }, withinCeiling: true }));
+  assert.equal(proposed.result, "needs_approval");
+  assert.equal(proposed.permit_kind, "asks_first");
+  assert.equal(proposed.reviewer_role, "production");
+  // More reference text than the stored list holds would only fail after a person approved it.
+  // Each reference is within its own 512-character limit; together they are not.
+  const oversized = Array.from({ length: 40 }, (_, index) => ({ ref: `r2://authority/${String(index).padStart(485, "x")}`, sha256: "c".repeat(64) }));
+  assert.ok(oversized.every((entry) => entry.ref.length <= 512) && canonicalJson(oversized).length > 20_000);
+  for (const args of [
+    { ...command, authority_kind: "Permit" },
+    { ...command, record: { ...command.record, expires_at: "2026-01-01" } },
+    { ...command, record: { ...command.record, evidence_refs: oversized } },
+  ]) {
+    assert.deepEqual(evaluateStep(input({ ...compliance, actionId: "authority.record", args })).reason_codes, ["action_unregistered"]);
+  }
+});
+
 test("handoffs stop at the depth and repeat limits", () => {
   const handoff = {
     actionId: "handoff.create",

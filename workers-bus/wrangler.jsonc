@@ -584,16 +584,25 @@
       },
       "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
       "vars": {
+        // qa exists so the owner can try every merged feature on synthetic data. A feature is on
+        // here when it has no outside effect for real customers or suppliers: document
+        // generation and evidence uploads write only qa R2/D1, readiness admission writes only
+        // qa D1, and the customer page family (portal, contract acceptance, material decision)
+        // mails only the customer address on the qa record, which is synthetic or a tester's
+        // own. Still off here, each for a missing dependency: Hermes desktop (needs the desktop
+        // client), proposal publication and the four approval brokers (the brokers run through
+        // Frappe, which is being retired), Facet quote-revision prepare and Facet design ingest
+        // (no consumer in the Worker).
         "CFG_APP": {
-          "APP_DOCUMENT_GENERATION_ENABLED": "false",
+          "APP_DOCUMENT_GENERATION_ENABLED": "true",
           "APP_PRICING_CATALOG_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
-          "APP_READINESS_ADMISSION_ENABLED": "false",
-          "APP_EVIDENCE_UPLOADS_ENABLED": "false",
+          "APP_READINESS_ADMISSION_ENABLED": "true",
+          "APP_EVIDENCE_UPLOADS_ENABLED": "true",
           "APP_HERMES_DESKTOP_ENABLED": "false",
-          "APP_CUSTOMER_PORTAL_ENABLED": "false",
-          "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",
-          "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "false",
+          "APP_CUSTOMER_PORTAL_ENABLED": "true",
+          "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
+          "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
           "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
           "APP_PROPOSAL_PUBLICATION_ENABLED": "false",
           "APP_FACET_LAUNCH_ENABLED": "true",
@@ -670,6 +679,9 @@
           "NEWO_API_TIMEOUT_MS": "10000",
           "NEWO_CONTROL_RECEIPT_TTL_SECONDS": "600"
         },
+        // The public estimate form stays off in qa: it is an unauthenticated form on a public
+        // address, so on qa it would collect real people's details into an environment that holds
+        // synthetic data only, and it needs a Turnstile widget and rate-limit pepper for this host.
         "CFG_PUBLIC": {
           "PUBLIC_ESTIMATE_ENABLED": "false",
           "PUBLIC_ESTIMATE_ALLOWED_ORIGINS": "",
@@ -682,6 +694,7 @@
           "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX": "",
           "PUBLIC_ESTIMATE_RANGE_RULES_JSON": ""
         },
+        // Postiz publishes to real social accounts, and qa has no Postiz instance.
         "CFG_POSTIZ": {
           "POSTIZ_ENABLED": "false",
           "POSTIZ_EXPECTED_VERSION": "v2.23.0",
@@ -693,6 +706,8 @@
           "POSTIZ_FACET_DRAFT_OFFSET_HOURS": "168",
           "POSTIZ_FACET_DRAFT_NOT_BEFORE": ""
         },
+        // QuickBooks stays off in qa until an Intuit sandbox app exists for it (QB_CLIENT_ID,
+        // QB_CLIENT_SECRET, QB_TOKEN_ENCRYPTION_KEY); qa never connects the production company.
         "CFG_QB": {
           "QB_EXPECTED_REALM_ID": "",
           "QB_RECONCILIATION_ISSUER_USER": "",
@@ -729,10 +744,9 @@
           "SHARED_DRIVE_ID_ARCHIVE": ""
         },
         "CFG_MEASUREMENT": {
-          // OCR is off in qa (owner decision 2026-09-29, taken to the team): one of the six flags
-          // that differ from the production top level. MEASUREMENT_OCR_API_KEY then carries no
-          // required value, but it stays in the secret-name inventory the release preflight demands
-          // on the qa Worker.
+          // OCR is off in qa (owner decision 2026-09-29, taken to the team), unlike the production
+          // top level. MEASUREMENT_OCR_API_KEY then carries no required value, but it stays in the
+          // secret-name inventory the release preflight demands on the qa Worker.
           "MEASUREMENT_OCR_ENABLED": "false",
           "MEASUREMENT_OCR_MODEL": "claude-opus-5-5"
         },
@@ -743,10 +757,17 @@
           "BACKUP_ALERT_EMAIL": "sergeyap@mindburn.org",
           "FROM_EMAIL": "sergeyap@mindburn.org",
           "EFFECT_RUNTIME_ENABLED": "true",
+          // Stage automations mail the tenant's automation recipients. Keep this off until qa's
+          // recipients (Settings, Automations, Recipients) name only test mailboxes; before the
+          // first recipient record exists, the legacy PIPELINE_AUTOMATION_RECIPIENTS_JSON secret
+          // is the fallback, and its qa value is not known to be test-only.
           "PIPELINE_AUTOMATION_ENABLED": "false",
           "JOBNIMBUS_ENABLED": "false",
           "OMNIROUTE_URL": "",
           "OPERATING_AUTOMATION_USER": "ironwrap-worker",
+          // qa prices nothing yet: pricing comes only from a reviewed D1 catalog activation, and
+          // APP_PRICING_CATALOG_ENABLED stays off in qa until the catalog cutover is accepted.
+          // Proposal documents need Google Drive, and the qa Google key only sends mail.
           "ESTIMATOR_PRICE_LIST_JSON": "",
           "PROPOSAL_TEMPLATE_DOC_ID": "",
           "DEDUP_WINDOW_HOURS": "72",

@@ -280,6 +280,26 @@ export function syntheticLeads(count) {
   });
 }
 
+/**
+ * The one synthetic /ingest/estimate submission. The operating core takes services as a list of
+ * strings (smallJsonArray in workers-bus/src/operating-core.ts) and answers a terminal 422 to
+ * objects. The -001 key was spent on that rejected object shape, and a replay re-materializes the
+ * stored payload, so the corrected shape carries a new key.
+ */
+export function syntheticEstimate() {
+  return {
+    idempotencyKey: "synth-seed-est-002",
+    body: {
+      project_key: "synth-seed-proj-001",
+      name: "Synthetic Seed Estimate",
+      email: "synth-seed-est-001@example.invalid",
+      phone: "+1-780-555-0199",
+      address: "199 Example Ave, Edmonton, AB",
+      services: ["Metal roofing"],
+    },
+  };
+}
+
 function firstNonEmpty(...values) {
   for (const value of values) {
     if (typeof value === "string" && value.trim() !== "") return value;
@@ -738,21 +758,15 @@ async function main() {
     }
     steps.website_leads = mergeIntakeOutcomes(outcomes);
 
+    const estimate = syntheticEstimate();
     const { response: estimateResponse, body: estimateBody } = await fetchJson(`${target.baseUrl}/ingest/estimate`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${ingestToken}`,
         "content-type": "application/json",
-        "idempotency-key": "synth-seed-est-001",
+        "idempotency-key": estimate.idempotencyKey,
       },
-      body: JSON.stringify({
-        project_key: "synth-seed-proj-001",
-        name: "Synthetic Seed Estimate",
-        email: "synth-seed-est-001@example.invalid",
-        phone: "+1-780-555-0199",
-        address: "199 Example Ave, Edmonton, AB",
-        services: [{ service: "metal_roofing", quantity: 20, unit: "squares" }],
-      }),
+      body: JSON.stringify(estimate.body),
     });
     steps.estimate_intake = intakeOutcome({
       status: estimateResponse.status,

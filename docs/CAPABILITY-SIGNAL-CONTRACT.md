@@ -219,7 +219,8 @@ than guessing in either direction.
 The separate Integrations readiness evaluator reads immutable declarations; it is not the
 per-request capability signal above. `POST /api/v1/integrations/manifests` and
 `POST /api/v1/integrations/profiles` admit those declarations only when
-`APP_READINESS_ADMISSION_ENABLED=true`. The checked-in production, QA and local values are false.
+`APP_READINESS_ADMISSION_ENABLED=true`. The checked-in production and local values are false;
+QA's is true so the owner can try the declarations on synthetic data.
 An active owner or operations app session must match the current D1 role and supply CSRF. Tenant,
 approver and approval time come from the server. A client supplies a stable record ID, the next
 version and its expected predecessor; the D1 insert tests the head in the same statement.

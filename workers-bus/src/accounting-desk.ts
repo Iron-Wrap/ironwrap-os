@@ -20,6 +20,7 @@ import {
   listAccountingExceptions,
   type AccountingExceptionRecord,
 } from "./accounting-exceptions.ts";
+import { expectationOmitsIdentity, observedSha256OnBasis } from "./accounting-expectations.ts";
 import {
   listAccountingIntents,
   readAccountingIntent,
@@ -402,15 +403,22 @@ export async function readAccountingIntentDetail(
   const intent = await readAccountingIntent(env, tenantId, intentId);
   if (!intent) return null;
 
-  const [events, reconciliations, observations, taxBindings, exceptions] = await Promise.all([
-    listAccountingIntentEvents(env, tenantId, intentId),
-    listAccountingReconciliations(env, tenantId, intentId),
-    listAccountingObservations(env, tenantId, { intentId }),
-    listAccountingIntentTaxBindings(env, tenantId, intentId),
-    listAccountingExceptions(env, tenantId, { intentId }),
-  ]);
+  const [events, reconciliations, observations, taxBindings, exceptions, omitsIdentity] =
+    await Promise.all([
+      listAccountingIntentEvents(env, tenantId, intentId),
+      listAccountingReconciliations(env, tenantId, intentId),
+      listAccountingObservations(env, tenantId, { intentId }),
+      listAccountingIntentTaxBindings(env, tenantId, intentId),
+      listAccountingExceptions(env, tenantId, { intentId }),
+      expectationOmitsIdentity(env, tenantId, intentId),
+    ]);
 
   const current = observations.at(-1) ?? null;
+  // Hashed on the basis the intent bound its expectation on (contract section 0, deviation 7),
+  // which is the hash a verdict on this read compares.
+  const comparedSha256 = current === null
+    ? null
+    : await observedSha256OnBasis(current, omitsIdentity);
   return {
     intent: projectAccountingIntent(intent, now),
     basis: parseJson(intent.basis_json),
@@ -435,7 +443,7 @@ export async function readAccountingIntentDetail(
       provider_submitted_at: intent.provider_submitted_at,
       provider_reconciled_at: intent.provider_reconciled_at,
     },
-    comparison: compareFacts(intent, current ?? null),
+    comparison: compareFacts(intent, current, comparedSha256),
     events,
     reconciliations: reconciliations.map((row) => ({
       reconciliation_id: row.reconciliation_id,
@@ -648,7 +656,12 @@ function queueCount(
 export interface AccountingComparison {
   /** The authoritative verdict: section 5.1 defines agreement as one hash equalling the other. */
   expected_sha256: string;
-  /** The hash of the most recent authenticated read - what QuickBooks says right now. */
+  /**
+   * The hash of the most recent authenticated read - what QuickBooks says right now - taken on the
+   * basis the expectation was bound on (`comparableObservedSha256`), so without `Id` for an
+   * identity-free expectation. That is the hash a verdict compares; the observation's own full
+   * hash stays in `observations`.
+   */
   observed_sha256: string | null;
   /**
    * The hash the last recorded verdict stood on. It lags `observed_sha256` between a read and the
@@ -685,12 +698,19 @@ export interface AccountingComparison {
  * The observation is read in the shape `recordAccountingObservation` stores: `facts_json` is the
  * bare fact set and the realm is its own column. A read from another realm fails closed - provider
  * ids are per company, so only the realm row is filled and no other fact is compared.
+ *
+ * The hashes agree only for a read of the entity the effect settled on - the intent's realm,
+ * entity type and entity id - which is what `decide` checks before it looks at any hash. An
+ * identity-free hash does not name the entity, so on its own it would agree for another invoice
+ * that happens to carry the same facts.
  */
 function compareFacts(
   intent: AccountingIntentRecord,
   observation: { realm_id: string; facts_json: string; entity_id: string; entity_type: string;
     read_at: string; source: string; observed_sha256: string; total_amount_cents: number | null;
     balance_cents: number | null } | null,
+  /** `observation` hashed on the expectation's basis by `observedSha256OnBasis`. */
+  comparedSha256: string | null,
 ): AccountingComparison {
   const comparable =
     observation !== null && observation.realm_id === intent.realm_id ? observation : null;
@@ -711,10 +731,12 @@ function compareFacts(
 
   return {
     expected_sha256: intent.expected_sha256,
-    observed_sha256: observation?.observed_sha256 ?? null,
+    observed_sha256: comparedSha256,
     verdict_observed_sha256: intent.observed_sha256,
     hashes_agree: comparable !== null
-      && comparable.observed_sha256 === intent.expected_sha256,
+      && comparable.entity_type === intent.provider_entity_type
+      && comparable.entity_id === intent.provider_entity_id
+      && comparedSha256 === intent.expected_sha256,
     awaiting_readback: observation === null,
     fields,
     observed_facts: observedFacts,

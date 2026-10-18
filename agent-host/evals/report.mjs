@@ -1,9 +1,13 @@
-// Builds the qualification report (ironwrap.eval-qualification-report.v1) from scored suites. Pure:
-// the runner supplies each specialist's scored repetitions and usage, `evaluateSuite` applies the
-// pass bar, and this module adds the verdict, the evidence so far, the pilot gate, and the totals.
+// Builds the qualification report (ironwrap.eval-qualification-report.v1) from scored suites. The
+// runner supplies each specialist's scored repetitions and usage, `evaluateSuite` applies the pass
+// bar, and this module adds the verdict, the evidence so far, the pilot gate, and the totals. Each
+// scored row carries the release the runner hashed when it loaded the specialist
+// (agent-host/src/host/release.ts, the one definition), and the report lists the qualification rows
+// the owner records.
 // A suite is scored only when every case holds exactly repetitions 1..N; anything else is
 // `incomplete` (a paused stage or a data error), never `qualified` or `not_qualified`.
 
+import { releaseSha256 } from "../src/host/release.ts";
 import { aggregateViolations } from "./history.mjs";
 import { evaluateSuite } from "./score.mjs";
 
@@ -93,7 +97,9 @@ function row(entry, stage, routes) {
     wave: entry.wave,
     tier: entry.tier,
     route: entry.route ?? null,
-    production_route: onProductionRoute(entry, routes),
+    // The runner knows the production route (the auditor's audit route, a gateway override); the
+    // tier route is the fallback.
+    production_route: typeof entry.production_route === "boolean" ? entry.production_route : onProductionRoute(entry, routes),
     model: entry.model,
     judge_model: entry.judge_model,
     prompt_sha256: entry.prompt_sha256,
@@ -177,7 +183,9 @@ function pilotGate(rows, config, quota, routes) {
 // cost per run. Quota per route is read around each model batch and shared out by gateway cost
 // within the batch, so it is approximate.
 function comparison(pairs, batches, config) {
-  const routed = pairs.filter(({ row: line }) => line.route);
+  // The runner marks comparison runs; a production row that names its route (the auditor's audit
+  // route, an override) is not one.
+  const routed = pairs.filter(({ row: line, entry }) => (typeof entry.compared === "boolean" ? entry.compared : Boolean(line.route)));
   if (routed.length === 0) return null;
   const spec = config?.stages?.find((stage) => stage?.id === "pilot")?.model_comparison ?? {};
   const batchCost = new Map();
@@ -237,8 +245,36 @@ function comparison(pairs, batches, config) {
   return [...bySpecialist].map(([specialist, lines]) => ({ specialist_id: specialist, routes: lines.sort(order).map((line, index) => ({ rank: index + 1, ...line })) }));
 }
 
+const scored = (line) => ["qualified", "not_qualified"].includes(line.verdict);
+
+// The release the runner hashed at load time, checked against its own hashes; a scored row of a wave
+// without one cannot be recorded, so the report refuses it.
+function releaseOf(entry, stage, line, source) {
+  const release = entry.release ?? null;
+  if (release && releaseSha256(release) !== release.release_sha256) throw new Error(`${entry.specialist_id}: release_sha256 does not match its release`);
+  if (release && release.specialist_id !== entry.specialist_id) throw new Error(`${entry.specialist_id}: carries the release of ${release.specialist_id}`);
+  if (release && source?.catalog_sha256 && release.catalog_sha256 !== source.catalog_sha256) throw new Error(`${entry.specialist_id}: release is for another catalog than the run's`);
+  if (!release && stage !== "pilot" && scored(line)) {
+    throw new Error(`${entry.specialist_id} was scored without its release; the runner passes the release it loaded`);
+  }
+  return release;
+}
+
+// One row per scored (specialist, route): what the owner records as a qualification (with the
+// SHA-256 of the written report file as report_sha256). The route is the one the run took.
+function qualificationsOf(rows, specialists, routes) {
+  return rows.filter(scored).map((line) => {
+    const route = specialists[rows.indexOf(line)].route ?? routes?.[line.tier];
+    if (!["provider", "model", "effort"].every((key) => typeof route?.[key] === "string")) throw new Error(`${line.specialist_id}: no complete route to record its qualification on`);
+    return { specialist_id: line.specialist_id, provider: route.provider, model: route.model, effort: route.effort, release_sha256: line.release.release_sha256, passed: line.verdict === "qualified" };
+  });
+}
+
 export function buildQualificationReport({ runId, stage, source, routes, judge, quota = null, batches = null, config = null, history = {}, specialists }) {
-  const rows = specialists.map((entry) => withHistory(row(entry, stage, routes), history?.[entry.specialist_id]));
+  const rows = specialists.map((entry) => {
+    const line = withHistory(row(entry, stage, routes), history?.[entry.specialist_id]);
+    return { ...line, release: releaseOf(entry, stage, line, source) };
+  });
   const totals = Object.fromEntries(USAGE_FIELDS.map((field) => [field, rows.reduce((sum, entry) => sum + entry.usage[field], 0)]));
   totals.cache_hit_ratio = ratio(totals.cached_input_tokens, totals.input_tokens);
   for (const verdict of ["qualified", "not_qualified", "incomplete"]) totals[verdict] = rows.filter((entry) => entry.verdict === verdict).length;
@@ -252,6 +288,7 @@ export function buildQualificationReport({ runId, stage, source, routes, judge, 
     quota,
     gate: stage === "pilot" ? pilotGate(rows, config, quota, routes) : null,
     comparison: stage === "pilot" ? comparison(rows.map((line, index) => ({ row: line, entry: specialists[index] })), batches, config) : null,
+    qualifications: stage === "pilot" ? null : qualificationsOf(rows, specialists, routes),
     specialists: rows,
     batches,
     totals,
@@ -315,6 +352,12 @@ export function renderMarkdown(report) {
         `${fixed(entry.result?.golden_mean)} (${entry.pass_bar.golden_mean}) | ${fixed(entry.result?.redteam_mean)} (${entry.pass_bar.redteam_mean}) | ` +
         `${entry.catastrophes_so_far.length} | ${entry.history?.verdict ?? "-"} | ${entry.verdict} | ${fixed(entry.usage.cost_usd + entry.usage.judge_cost_usd, 2)} |`,
     );
+  }
+  if (report.qualifications?.length) {
+    lines.push("", "## Qualifications to record", "", "| Specialist | Provider | Model | Effort | Release | Passed |", "|---|---|---|---|---|---|");
+    for (const line of report.qualifications) {
+      lines.push(`| ${line.specialist_id} | ${line.provider ?? "-"} | ${line.model ?? "-"} | ${line.effort ?? "-"} | \`${line.release_sha256.slice(0, 12)}\` | ${line.passed ? "yes" : "no"} |`);
+    }
   }
   for (const entry of report.specialists.filter((candidate) => !["qualified", "pilot"].includes(candidate.verdict))) {
     lines.push("", `## ${entry.specialist_id}: ${entry.verdict}`, "");

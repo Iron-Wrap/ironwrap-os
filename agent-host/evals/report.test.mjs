@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { releaseSha256 } from "../src/host/release.ts";
 import { buildQualificationReport, renderMarkdown } from "./report.mjs";
 
 const RUBRIC = {
@@ -9,6 +10,17 @@ const RUBRIC = {
 };
 const ids = (id, suite, count) => Array.from({ length: count }, (_, index) => `${id}.${suite}.${String(index + 1).padStart(3, "0")}`);
 const rep = (repetition, score, decision = 1, catastrophes = []) => ({ repetition, score, dimensions: { decision }, catastrophes });
+
+const ROUTES = {
+  routine: { provider: "codex", model: "gpt-6.1-sol", effort: "medium" },
+  hard: { provider: "codex", model: "gpt-6-astra", effort: "high" },
+  audit: { provider: "claude", model: "claude-opus-5-5", effort: "high" },
+};
+// The release the runner hashed at load time (synthetic hashes).
+function releaseFor(id) {
+  const release = { specialist_id: id, playbook_sha256: "a".repeat(64), allowlist_sha256: "b".repeat(64), common_sha256: "c".repeat(64), catalog_sha256: "d".repeat(64) };
+  return { ...release, release_sha256: releaseSha256(release) };
+}
 
 function suite(id, { reps = 3, weak = null } = {}) {
   const expectedIds = { golden: ids(id, "golden", 20), redteam: ids(id, "redteam", 10) };
@@ -28,6 +40,7 @@ function suite(id, { reps = 3, weak = null } = {}) {
     expectedIds,
     cases,
     usage: { runs: 90, judge_calls: 90, cost_usd: 4.5, judge_cost_usd: 2.4 },
+    release: releaseFor(id),
   };
 }
 
@@ -35,7 +48,8 @@ test("verdicts separate a pass, a scored failure, and a paused suite", () => {
   const report = buildQualificationReport({
     runId: "q1",
     stage: "wave1",
-    source: { main_sha: "abc", catalog_sha256: "cat" },
+    routes: ROUTES,
+    source: { main_sha: "abc", catalog_sha256: "d".repeat(64) },
     specialists: [suite("orchestrator"), suite("estimator", { weak: "estimator.redteam.004" }), suite("lead_concierge", { reps: 2 })],
   });
   assert.equal(report.schema_version, "ironwrap.eval-qualification-report.v1");
@@ -53,10 +67,38 @@ test("verdicts separate a pass, a scored failure, and a paused suite", () => {
   );
 });
 
+test("qualification rows carry the route the run took and the release hashed at load time", () => {
+  const input = { runId: "q1", stage: "wave1", source: { main_sha: "abc", catalog_sha256: "d".repeat(64) }, routes: ROUTES, specialists: [suite("orchestrator"), suite("estimator", { weak: "estimator.redteam.004" }), suite("lead_concierge", { reps: 2 })] };
+  const report = buildQualificationReport(input);
+  assert.deepEqual(report.specialists[0].release, releaseFor("orchestrator"));
+  assert.deepEqual(report.qualifications, [
+    { specialist_id: "orchestrator", provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: releaseFor("orchestrator").release_sha256, passed: true },
+    { specialist_id: "estimator", provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: releaseFor("estimator").release_sha256, passed: false },
+  ], "an incomplete suite records nothing");
+  assert.match(renderMarkdown(report), /## Qualifications to record[\s\S]*\| orchestrator \| codex \| gpt-6\.1-sol \| medium \| `[0-9a-f]{12}` \| yes \|/);
+  assert.equal(buildQualificationReport({ ...input, stage: "pilot" }).qualifications, null);
+  // A row that ran off its tier route (the auditor's audit route) records that route.
+  const audit = { ...suite("independent_auditor"), tier: "audit", route: { provider: "codex", model: "gpt-6-astra", effort: "high" }, production_route: true, compared: false };
+  const audited = buildQualificationReport({ ...input, specialists: [audit] });
+  assert.deepEqual([audited.qualifications[0].provider, audited.qualifications[0].model, audited.specialists[0].production_route], ["codex", "gpt-6-astra", true]);
+});
+
+test("a scored wave row needs its release and a complete route; a release must match its hashes", () => {
+  const base = { runId: "q1", stage: "wave1", routes: ROUTES };
+  const bare = { ...suite("orchestrator"), release: undefined };
+  assert.throws(() => buildQualificationReport({ ...base, specialists: [bare] }), /orchestrator was scored without its release/);
+  assert.equal(buildQualificationReport({ ...base, specialists: [{ ...suite("lead_concierge", { reps: 2 }), release: undefined }] }).specialists[0].verdict, "incomplete", "an incomplete suite needs no release");
+  const forged = { ...suite("orchestrator"), release: { ...releaseFor("orchestrator"), playbook_sha256: "e".repeat(64) } };
+  assert.throws(() => buildQualificationReport({ ...base, specialists: [forged] }), /release_sha256 does not match its release/);
+  assert.throws(() => buildQualificationReport({ ...base, routes: { hard: ROUTES.hard }, specialists: [suite("orchestrator")] }), /no complete route to record its qualification on/);
+  assert.throws(() => buildQualificationReport({ ...base, specialists: [{ ...suite("orchestrator"), release: releaseFor("estimator") }] }), /orchestrator: carries the release of estimator/);
+  assert.throws(() => buildQualificationReport({ ...base, source: { catalog_sha256: "f".repeat(64) }, specialists: [suite("orchestrator")] }), /release is for another catalog than the run's/);
+});
+
 test("building the report leaves the runner's results untouched", () => {
   const entry = suite("orchestrator");
   const before = JSON.stringify(entry.cases);
-  buildQualificationReport({ runId: "q1", stage: "wave1", specialists: [entry] });
+  buildQualificationReport({ runId: "q1", stage: "wave1", routes: ROUTES, specialists: [entry] });
   assert.equal(JSON.stringify(entry.cases), before);
 });
 
@@ -64,7 +106,8 @@ test("markdown names every specialist and explains what did not qualify", () => 
   const report = buildQualificationReport({
     runId: "q1",
     stage: "wave1",
-    source: { main_sha: "abc", catalog_sha256: "cat" },
+    routes: ROUTES,
+    source: { main_sha: "abc", catalog_sha256: "d".repeat(64) },
     specialists: [suite("orchestrator"), suite("estimator", { weak: "estimator.redteam.004" }), suite("lead_concierge", { reps: 2 })],
   });
   const markdown = renderMarkdown(report);
@@ -79,7 +122,7 @@ test("duplicate or out-of-range repetition indices are incomplete with a data er
   for (const entry of duplicated.cases) entry.repetitions = [rep(1, 1), rep(1, 1), rep(1, 1)];
   const surplus = suite("estimator");
   surplus.cases[0].repetitions.push(rep(4, 1));
-  const report = buildQualificationReport({ runId: "q1", stage: "wave1", specialists: [duplicated, surplus] });
+  const report = buildQualificationReport({ runId: "q1", stage: "wave1", routes: ROUTES, specialists: [duplicated, surplus] });
   assert.deepEqual(report.specialists.map((entry) => entry.verdict), ["incomplete", "incomplete"]);
   assert.ok(report.specialists[0].data_errors.includes("orchestrator.golden.001: repeated repetition index"));
   assert.ok(report.specialists[1].data_errors.includes("estimator.golden.001: repetition index outside 1..3"));
@@ -89,7 +132,7 @@ test("an incomplete suite still shows its catastrophes and NaN scores among the 
   const entry = suite("lead_concierge", { reps: 2 });
   entry.cases[0].repetitions[0].catastrophes = [{ id: "quotes_price" }];
   entry.cases[1].repetitions[0] = { repetition: 1, score: Number.NaN, dimensions: {}, catastrophes: [] };
-  const report = buildQualificationReport({ runId: "q1", stage: "wave1", specialists: [entry] });
+  const report = buildQualificationReport({ runId: "q1", stage: "wave1", routes: ROUTES, specialists: [entry] });
   const [row] = report.specialists;
   assert.equal(row.verdict, "incomplete");
   assert.equal(row.missing_repetitions, 30);
@@ -220,14 +263,14 @@ test("a missed gating history bar fails an otherwise qualified suite; advisory b
     bars: [{ metric: "converted_dropped.rate", max: 0.02, gating, value: null, status: "missed" }],
   });
   const lead = () => ({ ...suite("lead_concierge"), specialist_id: "lead_concierge" });
-  const missed = buildQualificationReport({ runId: "q1", stage: "wave1", history: { lead_concierge: history(true) }, specialists: [lead()] });
+  const missed = buildQualificationReport({ runId: "q1", stage: "wave1", routes: ROUTES, history: { lead_concierge: history(true) }, specialists: [lead()] });
   assert.equal(missed.specialists[0].verdict, "not_qualified");
   assert.ok(missed.specialists[0].result.failures.includes("history: converted_dropped.rate missed its bar (-..0.02)"));
-  const advisory = buildQualificationReport({ runId: "q1", stage: "wave1", history: { lead_concierge: history(false) }, specialists: [lead()] });
+  const advisory = buildQualificationReport({ runId: "q1", stage: "wave1", routes: ROUTES, history: { lead_concierge: history(false) }, specialists: [lead()] });
   assert.equal(advisory.specialists[0].verdict, "qualified");
   assert.match(renderMarkdown(advisory), /\| 0 \| advisory \| qualified \|/);
   assert.throws(
-    () => buildQualificationReport({ runId: "q1", stage: "wave1", history: { lead_concierge: { ...history(false), metrics: { leaked: "a name" } } }, specialists: [lead()] }),
+    () => buildQualificationReport({ runId: "q1", stage: "wave1", routes: ROUTES, history: { lead_concierge: { ...history(false), metrics: { leaked: "a name" } } }, specialists: [lead()] }),
     /not aggregate-only/,
   );
 });

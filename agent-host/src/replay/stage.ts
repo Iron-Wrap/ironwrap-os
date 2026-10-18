@@ -21,6 +21,7 @@ import { AUDITOR, parseRoute, proposerRoutes } from "../gateway/config.ts";
 import { ProviderGateway, type GatewayOptions } from "../gateway/gateway.ts";
 import { sha256 } from "../gateway/schema.ts";
 import type { GatewayRequest, GatewayResult, McpStdioServer, ProviderId, Route, Tier } from "../gateway/types.ts";
+import { specialistRelease } from "../host/release.ts";
 import { loadSpecialist, type Specialist } from "../host/specialists.ts";
 import { caseClock, replayRun, replayTools, type ReplayTool } from "./case-run.ts";
 import {
@@ -132,6 +133,8 @@ interface Loaded {
   production: Route;
   /** The auditor's runs name the family whose work they review; null for every other specialist. */
   reviews: ProviderId | null;
+  /** The release hashed when the specialist was loaded, so a later edit never names the release that ran. */
+  release: ReturnType<typeof specialistRelease>;
 }
 
 /** One report row: a specialist on one route, over its cases and repetitions. */
@@ -370,6 +373,7 @@ export async function replayCase(options: ReplayOptions): Promise<ReplayResult> 
 
 async function loadForRun(environment: ReplayEnvironment, id: string): Promise<Loaded> {
   const specialist = await loadSpecialist(environment.specialistsRoot, id);
+  const release = specialistRelease(environment.specialistsRoot, id, environment.catalog.sha256);
   const roster = environment.catalog.specialists.get(id);
   if (!roster) throw new Error(`${id} is not in the contract roster`);
   const golden = loadSuite(environment, id, "golden");
@@ -411,6 +415,7 @@ async function loadForRun(environment: ReplayEnvironment, id: string): Promise<L
     scoring: { allowlist: { actions: specialist.allowlist }, catalog: { actions: [...environment.catalog.actions.values()] }, actionCatastrophes: environment.actionCatastrophes ?? { actions: {} } },
     production,
     reviews,
+    release,
   };
 }
 
@@ -768,6 +773,7 @@ function stageReport(
 ): QualificationReport {
   const { config, gatewayConfig } = environment;
   const calls = readLines<CallLine>(callsPath);
+  const tierRoute = (tier: Tier) => gatewayConfig.routes[gatewayConfig.tiers[tier]];
   const specialists = groups.flatMap((group) =>
     group.rows.map((row) => {
       const { loaded, route } = row;
@@ -781,7 +787,12 @@ function stageReport(
         specialist_id: loaded.id,
         wave: loaded.wave,
         tier: loaded.specialist.tier,
-        ...(row.compared ? { route } : {}),
+        // A row records its route whenever it is not its tier's route (a comparison, the auditor's
+        // audit route, a gateway override), and whether that route is the production one.
+        ...(row.compared || routeKey(route) !== routeKey(tierRoute(loaded.specialist.tier)) ? { route } : {}),
+        production_route: routeKey(route) === routeKey(loaded.production),
+        compared: row.compared,
+        release: loaded.release,
         model: route.model,
         judge_model: (route.provider === "claude" ? config.judge.for_claude_proposers : config.judge.default).model,
         prompt_sha256: loaded.promptSha,
@@ -792,7 +803,6 @@ function stageReport(
       };
     }),
   );
-  const tierRoute = (tier: Tier) => gatewayConfig.routes[gatewayConfig.tiers[tier]];
   const reading = (before: MeterReading | null, after: MeterReading | null) => (provider: ProviderId) => ({
     used_pct_before: before?.[provider] ?? null,
     used_pct_after: after?.[provider] ?? null,

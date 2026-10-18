@@ -1006,6 +1006,11 @@ export interface ViewSpecCatalogAction {
   readonly side_effect_class: SideEffectClass;
   /** The canonical object the action's transition acts on. */
   readonly aggregate: string;
+  /**
+   * False when the contract gave this action a class, effect or delegation value this module does
+   * not know (a newer contract): the action stays in the catalog but no view may offer it.
+   */
+  readonly recognized?: boolean;
 }
 export interface ViewSpecCatalogSpecialist {
   readonly specialist_id: string;
@@ -1053,7 +1058,13 @@ const OWNER_CONTROLS: readonly string[] = [
  */
 const RUN_ONLY_ACTIONS: readonly string[] = ["exception.escalate", "owner.interrupt"];
 
-/** Builds the catalog from the contract's machine-readable JSON and its SHA-256. Throws on a malformed catalog. */
+/**
+ * Builds the catalog from the contract's machine-readable JSON and its SHA-256. The Worker builds
+ * it when its module loads, so a newer contract must not stop it: unknown fields are ignored, and
+ * an action with a value this module does not know is kept as unrecognized (never offered in a
+ * view). Only a catalog that is not one (no actions or specialists array, an action without an id,
+ * a specialist without a name) throws.
+ */
 export function catalogFromContractJson(json: string, sha256: string): ViewSpecCatalog {
   if (!SHA256_HEX.test(sha256)) throw new TypeError("catalog sha256 must be 64 hex digits");
   const parsed: unknown = JSON.parse(json);
@@ -1061,17 +1072,36 @@ export function catalogFromContractJson(json: string, sha256: string): ViewSpecC
     throw new TypeError("not an AI team contract catalog");
   }
   const actions = parsed.actions.map((raw: unknown, index: number): ViewSpecCatalogAction => {
-    if (!isCatalogAction(raw)) throw new TypeError(`catalog action ${index} is malformed`);
+    if (!isRecord(raw) || typeof raw.action_id !== "string") {
+      throw new TypeError(`catalog action ${index} has no action_id`);
+    }
+    if (isCatalogAction(raw)) {
+      return {
+        action_id: raw.action_id,
+        owners: [...raw.owners],
+        autonomy: raw.autonomy,
+        human_only: raw.human_only,
+        delegable: raw.delegable,
+        protective: raw.protective,
+        default_delegation: raw.default_delegation,
+        side_effect_class: raw.side_effect_class,
+        aggregate: raw.aggregate,
+      };
+    }
+    // Fail closed for this action only: people only, nothing delegable, never offered.
     return {
       action_id: raw.action_id,
-      owners: [...raw.owners],
-      autonomy: raw.autonomy,
-      human_only: raw.human_only,
-      delegable: raw.delegable,
-      protective: raw.protective,
-      default_delegation: raw.default_delegation,
-      side_effect_class: raw.side_effect_class,
-      aggregate: raw.aggregate,
+      owners: Array.isArray(raw.owners)
+        ? raw.owners.filter((owner: unknown): owner is string => typeof owner === "string")
+        : [],
+      autonomy: "H",
+      human_only: true,
+      delegable: false,
+      protective: false,
+      default_delegation: null,
+      side_effect_class: "safety",
+      aggregate: typeof raw.aggregate === "string" ? raw.aggregate : "",
+      recognized: false,
     };
   });
   const specialists = parsed.specialists.map(
@@ -1081,7 +1111,13 @@ export function catalogFromContractJson(json: string, sha256: string): ViewSpecC
       return { specialist_id: raw.specialist_id, display_name: raw.display_name };
     },
   );
-  return deepFreeze({ sha256, actions, specialists });
+  // A repeated id would let one entry shadow another: every copy fails closed.
+  const seen = new Map<string, number>();
+  for (const action of actions) seen.set(action.action_id, (seen.get(action.action_id) ?? 0) + 1);
+  const unique = actions.map((action) =>
+    (seen.get(action.action_id) ?? 0) > 1 ? { ...action, recognized: false } : action,
+  );
+  return deepFreeze({ sha256, actions: unique, specialists });
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -1117,6 +1153,7 @@ export type ActionRequestKind = "act" | "prepare_for_approval";
  * outside the company (launch rule).
  */
 export function actionRequestKind(action: ViewSpecCatalogAction): ActionRequestKind | null {
+  if (action.recognized === false) return null;
   if (action.owners.length === 0 || action.human_only || action.autonomy === "H") return null;
   if (action.autonomy === "A0" || OWNER_CONTROLS.includes(action.aggregate)) return null;
   if (RUN_ONLY_ACTIONS.includes(action.action_id)) return null;
@@ -1240,8 +1277,19 @@ export const VIEW_SPEC_ISSUE_CODES = deepFreeze([
   "versus_not_a_criterion",
   "place_not_allowed",
   "validator_failed",
+  "action_not_recognized",
 ] as const);
-export type ViewSpecIssueCode = (typeof VIEW_SPEC_ISSUE_CODES)[number];
+/**
+ * Codes the Worker adds when it checks a spec against the face run that produced it (the
+ * validator cannot see the run): a cited source the run's snapshot does not hold at that version
+ * and hash, and a spec that names another run.
+ */
+export const VIEW_SPEC_RUN_ISSUE_CODES = deepFreeze([
+  "source_not_in_snapshot",
+  "run_mismatch",
+] as const);
+export type ViewSpecIssueCode =
+  (typeof VIEW_SPEC_ISSUE_CODES)[number] | (typeof VIEW_SPEC_RUN_ISSUE_CODES)[number];
 
 export interface ViewSpecIssue {
   readonly code: ViewSpecIssueCode;
@@ -2117,27 +2165,46 @@ function action(ctx: Ctx, raw: unknown, path: string): void {
   } else {
     const entry = ctx.catalog.actions.get(id) as ViewSpecCatalogAction;
     const at = `${path}/action_id`;
-    if (entry.owners.length === 0) issue(ctx, "action_not_owned", at, "no specialist owns it");
-    if (entry.autonomy === "H" || entry.human_only) {
-      issue(ctx, "action_people_only", at, "people only: reach it through a link to its decision");
-    } else if (entry.autonomy === "A0") {
-      issue(ctx, "action_read_only", at, "a read is not an action a person presses");
-    } else if (OWNER_CONTROLS.includes(entry.aggregate)) {
-      issue(ctx, "action_owner_control", at, "the AI team's own controls change only in Settings");
-    } else if (RUN_ONLY_ACTIONS.includes(entry.action_id)) {
+    if (entry.recognized === false) {
       issue(
         ctx,
-        "action_run_only",
+        "action_not_recognized",
         at,
-        "a specialist's run takes this step; a view shows its receipt",
+        "the contract gives this action terms a view cannot offer",
       );
-    } else if (entry.autonomy !== "A3" && OUTSIDE_EFFECTS.includes(entry.side_effect_class)) {
-      issue(
-        ctx,
-        "action_outside_effect",
-        at,
-        "an effect outside the company asks first: offer an A3 request",
-      );
+    } else {
+      if (entry.owners.length === 0) issue(ctx, "action_not_owned", at, "no specialist owns it");
+      if (entry.autonomy === "H" || entry.human_only) {
+        issue(
+          ctx,
+          "action_people_only",
+          at,
+          "people only: reach it through a link to its decision",
+        );
+      } else if (entry.autonomy === "A0") {
+        issue(ctx, "action_read_only", at, "a read is not an action a person presses");
+      } else if (OWNER_CONTROLS.includes(entry.aggregate)) {
+        issue(
+          ctx,
+          "action_owner_control",
+          at,
+          "the AI team's own controls change only in Settings",
+        );
+      } else if (RUN_ONLY_ACTIONS.includes(entry.action_id)) {
+        issue(
+          ctx,
+          "action_run_only",
+          at,
+          "a specialist's run takes this step; a view shows its receipt",
+        );
+      } else if (entry.autonomy !== "A3" && OUTSIDE_EFFECTS.includes(entry.side_effect_class)) {
+        issue(
+          ctx,
+          "action_outside_effect",
+          at,
+          "an effect outside the company asks first: offer an A3 request",
+        );
+      }
     }
     request = actionRequestKind(entry);
   }

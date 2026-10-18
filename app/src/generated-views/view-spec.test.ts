@@ -20,6 +20,7 @@ import {
   READ_MODELS,
   TEMPLATES,
   VIEW_SPEC_ISSUE_CODES,
+  VIEW_SPEC_RUN_ISSUE_CODES,
   actionRequestKind,
   catalogFromContractJson,
   validateViewSpec,
@@ -38,6 +39,16 @@ import {
 type Spec = any;
 
 const catalog = catalogFromContractJson(CATALOG_JSON, CATALOG_SHA256);
+/** The real contract as a newer one might read: an unknown field and one action with an unknown class. */
+const futureCatalog = (() => {
+  const contract = JSON.parse(CATALOG_JSON) as { actions: Record<string, unknown>[] };
+  contract.actions = contract.actions.map((action) =>
+    action.action_id === "followup.pause"
+      ? { ...action, autonomy: "A4", shadow_mode: "new" }
+      : { ...action, shadow_mode: "new" },
+  );
+  return catalogFromContractJson(JSON.stringify(contract), CATALOG_SHA256);
+})();
 const ALL = everythingAvailable(READ_MODELS);
 const HASH = `sha256:${"a".repeat(64)}`;
 const SOURCE = { fact_id: "job/job-example-0001", version: 4, hash: HASH };
@@ -308,6 +319,17 @@ const THROWING_REGISTRY = new Proxy(
 ) as unknown as ReadModelRegistry;
 
 const CASES: [ViewSpecIssueCode, string, () => unknown, string, Place?][] = [
+  [
+    "action_not_recognized",
+    "an action a newer contract gives a class this module does not know",
+    () => ({
+      spec: edit(list(), (draft) => {
+        draft.actions = [{ ...noteAction("Pause the follow-up"), action_id: "followup.pause" }];
+      }),
+      catalog: futureCatalog,
+    }),
+    "/actions/0/action_id",
+  ],
   ["not_json", "text that is not JSON", () => "{", ""],
   [
     "literal_has_number_words",
@@ -1489,12 +1511,12 @@ describe("callers", () => {
     expect(codes).toContain("unknown_read_model");
   });
 
-  it("refuses a catalog action without its class when the catalog is built", () => {
+  it("keeps a catalog action without its class, but never offers it", () => {
     const parsed = JSON.parse(CATALOG_JSON) as { actions: Record<string, unknown>[] };
     delete parsed.actions[0]?.autonomy;
-    expect(() => catalogFromContractJson(JSON.stringify(parsed), CATALOG_SHA256)).toThrow(
-      TypeError,
-    );
+    const built = catalogFromContractJson(JSON.stringify(parsed), CATALOG_SHA256);
+    expect(built.actions[0]?.recognized).toBe(false);
+    expect(actionRequestKind(built.actions[0]!)).toBeNull();
   });
 
   it("cites at most as many facts, and as long, as the Worker's run and receipt paths take", () => {
@@ -1716,5 +1738,57 @@ describe("read models served today", () => {
       expect(values.length, `${name} ${path}`).toBeGreaterThan(0);
       for (const value of values) expect(conforms(descriptor, value), `${name} ${path}`).toBe(true);
     }
+  });
+});
+
+describe("reading the contract catalog", () => {
+  it("recognizes every action of the shipped contract", () => {
+    // A typo in docs/AI-TEAM-CONTRACT.md would otherwise demote an action without a sound.
+    expect(catalog.actions.filter((action) => action.recognized === false)).toEqual([]);
+  });
+
+  it("fails every copy of a repeated action id closed", () => {
+    const contract = JSON.parse(CATALOG_JSON) as { actions: Record<string, unknown>[] };
+    const note = contract.actions.find((action) => action.action_id === "note.add")!;
+    contract.actions.unshift({ ...note, autonomy: "A4" });
+    const built = catalogFromContractJson(JSON.stringify(contract), CATALOG_SHA256);
+    const copies = built.actions.filter((action) => action.action_id === "note.add");
+    expect(copies.map((action) => action.recognized)).toEqual([false, false]);
+  });
+
+  it("refuses an unrecognized action with that one action code", () => {
+    const issues = issuesFor({
+      spec: edit(list(), (draft) => {
+        draft.actions = [{ ...noteAction("Pause the follow-up"), action_id: "followup.pause" }];
+      }),
+      catalog: futureCatalog,
+    }).filter((issue) => issue.code.startsWith("action_") || issue.code === "unknown_action");
+    expect(issues.map((issue) => issue.code)).toEqual(["action_not_recognized"]);
+  });
+
+  it("keeps working on a newer contract: unknown fields ignored, unknown terms never offered", () => {
+    const paused = futureCatalog.actions.find((action) => action.action_id === "followup.pause");
+    expect(paused?.recognized).toBe(false);
+    expect(actionRequestKind(paused!)).toBeNull();
+    expect(futureCatalog.actions.length).toBe(catalog.actions.length);
+    const note = futureCatalog.actions.find((action) => action.action_id === "note.add");
+    expect(note?.recognized).toBeUndefined();
+  });
+
+  it("throws only on a catalog that is not one", () => {
+    expect(() =>
+      catalogFromContractJson(JSON.stringify({ actions: [] }), CATALOG_SHA256),
+    ).toThrow();
+    expect(() =>
+      catalogFromContractJson(
+        JSON.stringify({ actions: [{ owners: [] }], specialists: [] }),
+        CATALOG_SHA256,
+      ),
+    ).toThrow();
+  });
+
+  it("names the codes the Worker adds from the face run", () => {
+    expect([...VIEW_SPEC_RUN_ISSUE_CODES]).toEqual(["source_not_in_snapshot", "run_mismatch"]);
+    for (const code of VIEW_SPEC_RUN_ISSUE_CODES) expect(VIEW_SPEC_ISSUE_CODES).not.toContain(code);
   });
 });

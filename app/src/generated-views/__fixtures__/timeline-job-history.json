@@ -1,0 +1,191 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_history_iw1038",
+  "run_id": "run_face_history_iw1038",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "timeline",
+  "title": "What happened on this job",
+  "data": [
+    {
+      "id": "job",
+      "read_model": "job_record",
+      "params": {
+        "job": "IW-1038"
+      },
+      "sources": [
+        {
+          "fact_id": "job/IW-1038",
+          "version": 41,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "read_model": "job_history",
+      "params": {
+        "job": "IW-1038",
+        "page_size": 10
+      },
+      "sources": [
+        {
+          "fact_id": "history/IW-1038",
+          "version": 58,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "decisions",
+      "read_model": "decisions",
+      "params": {
+        "job": "IW-1038",
+        "open": true
+      },
+      "sources": [
+        {
+          "fact_id": "decisions/IW-1038",
+          "version": 6,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "heading": [
+      {
+        "kind": "record_heading",
+        "name": {
+          "bind": "job",
+          "path": "/address"
+        },
+        "identity": [
+          {
+            "bind": "job",
+            "path": "/job_code"
+          },
+          {
+            "bind": "job",
+            "path": "/customer_name"
+          }
+        ],
+        "kind_words": "Job history"
+      }
+    ],
+    "status": [
+      {
+        "kind": "status_line",
+        "counts": [
+          {
+            "value": {
+              "bind": "history",
+              "path": "/count_shown"
+            },
+            "one": "event",
+            "other": "events",
+            "zero": "Nothing has happened on this job yet"
+          },
+          {
+            "value": {
+              "bind": "history",
+              "path": "/count_ai"
+            },
+            "one": "by the AI team",
+            "other": "by the AI team",
+            "zero": null
+          },
+          {
+            "value": {
+              "bind": "history",
+              "path": "/count_people"
+            },
+            "one": "by people",
+            "other": "by people",
+            "zero": null
+          }
+        ]
+      }
+    ],
+    "filters": [
+      {
+        "kind": "filter_bar",
+        "filters": [
+          {
+            "label": "People",
+            "field": {
+              "field": "actor_kind"
+            },
+            "equals": "person"
+          },
+          {
+            "label": "AI team",
+            "field": {
+              "field": "actor_kind"
+            },
+            "equals": "ai"
+          }
+        ]
+      }
+    ],
+    "body": [
+      {
+        "kind": "timeline",
+        "heading": null,
+        "items": {
+          "bind": "history",
+          "path": "/items"
+        },
+        "when": {
+          "field": "when"
+        },
+        "actor": {
+          "field": "actor"
+        },
+        "actor_kind": {
+          "field": "actor_kind"
+        },
+        "what": {
+          "field": "what"
+        },
+        "detail": {
+          "field": "detail"
+        },
+        "link": {
+          "field": "receipt_link"
+        }
+      }
+    ],
+    "side": [
+      {
+        "kind": "decision_links",
+        "heading": "Still waiting on this job",
+        "decisions": {
+          "bind": "decisions",
+          "path": "/items"
+        },
+        "primary": false
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "Nothing has happened on this job yet. See the job record.",
+        "link": 0,
+        "action": null
+      }
+    ]
+  },
+  "actions": [],
+  "links": [
+    {
+      "surface": "job_record",
+      "id": {
+        "bind": "job",
+        "path": "/job_id"
+      },
+      "label": "See job record",
+      "primary": false
+    }
+  ]
+}

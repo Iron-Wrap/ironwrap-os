@@ -1,0 +1,292 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_job_iw1038",
+  "run_id": "run_face_job_iw1038",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "record",
+  "title": "Job record",
+  "data": [
+    {
+      "id": "job",
+      "read_model": "job_record",
+      "params": {
+        "job": "IW-1038"
+      },
+      "sources": [
+        {
+          "fact_id": "job/IW-1038",
+          "version": 41,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "lane",
+      "read_model": "receipts",
+      "params": {
+        "job": "IW-1038",
+        "open_or_since": "P1D"
+      },
+      "sources": [
+        {
+          "fact_id": "run/run_ws_1038",
+          "version": 1,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "run/run_reply_1038",
+          "version": 1,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "run/run_co_1038",
+          "version": 2,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "run/run_pay_1038",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "read_model": "job_history",
+      "params": {
+        "job": "IW-1038",
+        "page_size": 10
+      },
+      "sources": [
+        {
+          "fact_id": "history/IW-1038",
+          "version": 58,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "money",
+      "read_model": "job_commercial_context",
+      "params": {
+        "job": "IW-1038"
+      },
+      "sources": [
+        {
+          "fact_id": "contract/IW-1038",
+          "version": 3,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "quickbooks/readback/IW-1038",
+          "version": 9,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "approvals",
+      "read_model": "approvals",
+      "params": {
+        "job": "IW-1038"
+      },
+      "sources": [
+        {
+          "fact_id": "approval/IW-1038",
+          "version": 2,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "heading": [
+      {
+        "kind": "record_heading",
+        "name": {
+          "bind": "job",
+          "path": "/address"
+        },
+        "identity": [
+          {
+            "bind": "job",
+            "path": "/job_code"
+          },
+          {
+            "bind": "job",
+            "path": "/customer_name"
+          }
+        ],
+        "kind_words": "Job record"
+      }
+    ],
+    "summary": [
+      {
+        "kind": "summary_cells",
+        "cells": {
+          "bind": "job",
+          "path": "/summary/cells"
+        },
+        "title": {
+          "field": "title"
+        },
+        "lines": {
+          "field": "lines"
+        },
+        "state": {
+          "field": "state"
+        },
+        "sources": {
+          "field": "sources"
+        }
+      }
+    ],
+    "body": [
+      {
+        "kind": "agent_lane",
+        "heading": "AI team on this job",
+        "receipts": {
+          "bind": "lane",
+          "path": "/items"
+        },
+        "primary": true
+      },
+      {
+        "kind": "timeline",
+        "heading": "Timeline",
+        "items": {
+          "bind": "history",
+          "path": "/items"
+        },
+        "when": {
+          "field": "when"
+        },
+        "actor": {
+          "field": "actor"
+        },
+        "actor_kind": {
+          "field": "actor_kind"
+        },
+        "what": {
+          "field": "what"
+        },
+        "detail": {
+          "field": "detail"
+        },
+        "link": {
+          "field": "receipt_link"
+        }
+      },
+      {
+        "kind": "table",
+        "heading": "Money on this job",
+        "rows": {
+          "bind": "money",
+          "path": "/rows"
+        },
+        "columns": [
+          {
+            "label": "Item",
+            "field": {
+              "field": "label"
+            }
+          },
+          {
+            "label": "What it is",
+            "field": {
+              "field": "explanation"
+            }
+          },
+          {
+            "label": "Amount",
+            "field": {
+              "field": "amount"
+            }
+          },
+          {
+            "label": "Where this came from",
+            "field": {
+              "field": "sources"
+            }
+          }
+        ],
+        "total": null
+      },
+      {
+        "kind": "text",
+        "words": "Nothing proposed is added to these figures."
+      }
+    ],
+    "side": [
+      {
+        "kind": "approvals",
+        "heading": "Who approved this",
+        "approvals": {
+          "bind": "approvals",
+          "path": "/items"
+        }
+      },
+      {
+        "kind": "key_values",
+        "heading": null,
+        "rows": [
+          {
+            "label": "Address",
+            "value": {
+              "bind": "job",
+              "path": "/address"
+            }
+          },
+          {
+            "label": "Customer",
+            "value": {
+              "bind": "job",
+              "path": "/customer_name"
+            }
+          },
+          {
+            "label": "Phone",
+            "value": {
+              "bind": "job",
+              "path": "/customer_phone"
+            }
+          },
+          {
+            "label": "Crew",
+            "value": {
+              "bind": "job",
+              "path": "/crew_names"
+            }
+          }
+        ]
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "Nothing has happened on this job yet. See all decisions on Decisions.",
+        "link": 1,
+        "action": null
+      }
+    ]
+  },
+  "actions": [],
+  "links": [
+    {
+      "surface": "view",
+      "id": {
+        "bind": "job",
+        "path": "/property_id"
+      },
+      "label": "See property record",
+      "primary": false
+    },
+    {
+      "surface": "decisions",
+      "id": null,
+      "label": "See all decisions",
+      "primary": false
+    }
+  ]
+}

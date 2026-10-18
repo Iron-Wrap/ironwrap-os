@@ -1,0 +1,246 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_panels_iw1041",
+  "run_id": "run_face_panels_iw1041",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "comparison",
+  "title": "Supplier quotes for the panels",
+  "data": [
+    {
+      "id": "quotes",
+      "read_model": "supplier_quotes",
+      "params": {
+        "job": "IW-1041",
+        "item": "standing_seam_panel_charcoal"
+      },
+      "sources": [
+        {
+          "fact_id": "supplier_quote/WS-2291",
+          "version": 1,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "supplier_quote/vicwest_IW-1041",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "job",
+      "read_model": "job_record",
+      "params": {
+        "job": "IW-1041"
+      },
+      "sources": [
+        {
+          "fact_id": "job/IW-1041",
+          "version": 19,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "decision",
+      "read_model": "decisions",
+      "params": {
+        "job": "IW-1041",
+        "action_id": "purchase_order.place"
+      },
+      "sources": [
+        {
+          "fact_id": "run/run_po_1041",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "heading": [
+      {
+        "kind": "record_heading",
+        "name": {
+          "bind": "job",
+          "path": "/purchase_title"
+        },
+        "identity": [
+          {
+            "bind": "job",
+            "path": "/job_code"
+          },
+          {
+            "bind": "quotes",
+            "path": "/shortage_words"
+          }
+        ],
+        "kind_words": "Supplier quotes"
+      }
+    ],
+    "status": [
+      {
+        "kind": "status_line",
+        "counts": [
+          {
+            "value": {
+              "bind": "quotes",
+              "path": "/count"
+            },
+            "one": "quote compared",
+            "other": "quotes compared",
+            "zero": "No quote is in yet"
+          },
+          {
+            "value": {
+              "bind": "quotes",
+              "path": "/count_proposed"
+            },
+            "one": "proposed",
+            "other": "proposed",
+            "zero": null
+          },
+          {
+            "value": {
+              "bind": "decision",
+              "path": "/count_needs_viewer"
+            },
+            "one": "needs you",
+            "other": "need you",
+            "zero": null
+          }
+        ]
+      }
+    ],
+    "body": [
+      {
+        "kind": "comparison_columns",
+        "heading": "Landed cost for the sheets",
+        "options": {
+          "bind": "quotes",
+          "path": "/options"
+        },
+        "name": {
+          "field": "supplier_name"
+        },
+        "proposed": {
+          "field": "proposed"
+        },
+        "criteria": [
+          {
+            "label": "Panel",
+            "field": {
+              "field": "product"
+            }
+          },
+          {
+            "label": "Price a sheet",
+            "field": {
+              "field": "unit_price"
+            }
+          },
+          {
+            "label": "Price for all sheets",
+            "field": {
+              "field": "sheets_price"
+            }
+          },
+          {
+            "label": "Freight",
+            "field": {
+              "field": "freight"
+            }
+          },
+          {
+            "label": "Landed cost",
+            "field": {
+              "field": "landed_cost"
+            }
+          },
+          {
+            "label": "Arrives",
+            "field": {
+              "field": "arrives"
+            }
+          }
+        ],
+        "versus": {
+          "field": "landed_cost"
+        }
+      },
+      {
+        "kind": "decision_links",
+        "heading": null,
+        "decisions": {
+          "bind": "decision",
+          "path": "/items"
+        },
+        "primary": true
+      }
+    ],
+    "side": [
+      {
+        "kind": "key_values",
+        "heading": "Needed for",
+        "rows": [
+          {
+            "label": "Job",
+            "value": {
+              "bind": "job",
+              "path": "/job_code"
+            }
+          },
+          {
+            "label": "Customer",
+            "value": {
+              "bind": "job",
+              "path": "/customer_and_address"
+            }
+          },
+          {
+            "label": "Needed by",
+            "value": {
+              "bind": "quotes",
+              "path": "/needed_by"
+            }
+          },
+          {
+            "label": "On hand",
+            "value": {
+              "bind": "quotes",
+              "path": "/on_hand"
+            }
+          },
+          {
+            "label": "The job today",
+            "value": {
+              "bind": "job",
+              "path": "/state_words"
+            }
+          }
+        ]
+      },
+      {
+        "kind": "text",
+        "words": "Before tax. Landed cost is the price plus freight."
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "Only one quote is in. Compare suppliers yourself on the supplier table.",
+        "link": 0,
+        "action": null
+      }
+    ]
+  },
+  "actions": [],
+  "links": [
+    {
+      "surface": "manual",
+      "id": "supplier_table",
+      "label": "Compare suppliers myself",
+      "primary": false
+    }
+  ]
+}

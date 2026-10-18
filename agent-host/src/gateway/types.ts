@@ -202,7 +202,7 @@ export function zeroUsage(): Usage {
 export function classifyText(text: string): ProviderErrorKind {
   // Codex's exact refusal of a model for the ChatGPT sign-in's plan; nothing looser.
   if (/model is not supported when using codex with a chatgpt account/i.test(text)) return "plan";
-  if (/\b429\b|rate.?limit|too many requests|usage limit/i.test(text)) return "rate_limit";
+  if (/\b429\b|rate.?limit|too many requests|\b(?:usage|session|weekly|daily|monthly|hourly) limit\b/i.test(text)) return "rate_limit";
   if (/\b40[13]\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in again|token (?:expired|invalid|revoked)|refresh token/i.test(text)) {
     return "auth";
   }
@@ -210,4 +210,60 @@ export function classifyText(text: string): ProviderErrorKind {
     return "transient";
   }
   return "fatal";
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+const MAX_RESET_MS = 31 * 24 * 60 * 60_000;
+
+/**
+ * When a subscription limit lifts, from text like "resets 5:30am (Europe/Sofia)" or "resets Oct 24
+ * at 8am (Europe/Sofia)": the next such local time in that zone. A wall time that occurs twice (the
+ * hour summer time ends) resolves to its later instant, and one that does not exist to the instant
+ * after the gap, so a retry never comes early. Undefined when the text names no time zone, does not
+ * parse, names an impossible date or lies in the past or more than 31 days ahead, so the caller
+ * keeps its own backoff.
+ */
+export function limitResetMs(text: string, nowMs: number): number | undefined {
+  const match = /resets\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*\(([A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)*)\)/i.exec(text);
+  if (!match) return undefined;
+  const [, monthName, dayText, yearText, hourText, minuteText, meridiem, zone] = match;
+  let hour = Number(hourText);
+  const minute = minuteText === undefined ? 0 : Number(minuteText);
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return undefined;
+    hour = (hour % 12) + (meridiem.toLowerCase() === "pm" ? 12 : 0);
+  }
+  if (hour > 23 || minute > 59) return undefined;
+  let local: Intl.DateTimeFormat;
+  try {
+    local = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" });
+  } catch {
+    return undefined;
+  }
+  const parts = (ms: number) => Object.fromEntries(local.formatToParts(ms).map((part) => [part.type, Number(part.value)])) as Record<string, number>;
+  const offsetAt = (ms: number) => {
+    const p = parts(ms);
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - ms;
+  };
+  // The UTC instant of a local wall time in the zone: every offset the zone uses around that day,
+  // keeping the latest instant that shows that wall time (or the latest at all, inside a gap).
+  const instant = (year: number, month: number, day: number) => {
+    const wall = Date.UTC(year, month - 1, day, hour, minute);
+    const candidates = [wall - 86_400_000, wall, wall + 86_400_000].map((probe) => wall - offsetAt(probe));
+    const shown = candidates.filter((ms) => offsetAt(ms) + ms === wall);
+    return Math.max(...(shown.length > 0 ? shown : candidates));
+  };
+  const within = (ms: number) => (ms > nowMs && ms - nowMs <= MAX_RESET_MS ? ms : undefined);
+  const today = parts(nowMs);
+  if (monthName === undefined) {
+    const at = instant(today.year, today.month, today.day);
+    return within(at > nowMs ? at : instant(today.year, today.month, today.day + 1));
+  }
+  const month = MONTHS.indexOf(monthName.toLowerCase()) + 1;
+  const day = Number(dayText);
+  const real = (year: number) => month > 0 && new Date(Date.UTC(year, month - 1, day)).getUTCDate() === day;
+  if (yearText !== undefined) return real(Number(yearText)) ? within(instant(Number(yearText), month, day)) : undefined;
+  const year = real(today.year) && instant(today.year, month, day) > nowMs ? today.year : today.year + 1;
+  return real(year) ? within(instant(year, month, day)) : undefined;
 }

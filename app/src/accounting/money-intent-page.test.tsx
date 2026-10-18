@@ -20,6 +20,7 @@ import {
   detailResponse,
   intentRow,
   mismatchedDetail,
+  overpaidLinkedInvoice,
 } from "./money-fixtures";
 
 vi.mock("./money-api", () => ({
@@ -120,6 +121,96 @@ describe("money intent detail", () => {
     expect(comparison).toHaveTextContent("The numbers do not match");
     expect(comparison).toHaveTextContent("Total amount");
     expect(comparison).toHaveTextContent("1500.00");
+  });
+
+  it("does not call an over-paid invoice a match when only its own figures agree", async () => {
+    // The invoice's own facts match ours (its hash agrees), but linked payments exceed it, so the
+    // server's verdict is a mismatch.
+    const total = overpaidLinkedInvoice.Invoice.TotalAmt.toFixed(2);
+    const mismatched = mismatchedDetail();
+    vi.mocked(loadAccountingIntent).mockResolvedValue({
+      ...mismatched,
+      comparison: {
+        ...mismatched.comparison,
+        observed_sha256: mismatched.comparison.expected_sha256,
+        hashes_agree: true,
+        fields: [{ field: "total_amount", expected: total, observed: total, agrees: true }],
+        observed_facts: overpaidLinkedInvoice,
+      },
+    });
+    renderIntent();
+
+    const comparison = await screen.findByRole("region", {
+      name: "IronWrap and QuickBooks",
+    });
+    expect(comparison).toHaveTextContent("The numbers do not match");
+    expect(comparison).not.toHaveTextContent("The numbers match");
+  });
+
+  it("keeps saying the numbers do not match while the over-payment is being reversed", async () => {
+    // After the owner authorizes the credit memo the badge reads Compensated, but the latest
+    // verdict is still the mismatch the over-payment produced.
+    const total = overpaidLinkedInvoice.Invoice.TotalAmt.toFixed(2);
+    const mismatched = mismatchedDetail();
+    vi.mocked(loadAccountingIntent).mockResolvedValue({
+      ...mismatched,
+      intent: { ...mismatched.intent, state: "compensating", badge: "compensated" },
+      comparison: {
+        ...mismatched.comparison,
+        observed_sha256: mismatched.comparison.expected_sha256,
+        hashes_agree: true,
+        fields: [{ field: "total_amount", expected: total, observed: total, agrees: true }],
+      },
+      reconciliations: [
+        {
+          reconciliation_id: "recon-overpaid-1",
+          verdict: "mismatch",
+          reason_code: "provider_overpayment",
+          settled_amount: null,
+          expected_sha256: mismatched.comparison.expected_sha256,
+          observed_sha256: mismatched.comparison.expected_sha256,
+          decided_at: "2026-08-19T22:10:00.000Z",
+        },
+      ],
+    });
+    renderIntent();
+
+    const comparison = await screen.findByRole("region", {
+      name: "IronWrap and QuickBooks",
+    });
+    expect(comparison).toHaveTextContent("The numbers do not match");
+  });
+
+  it("says the numbers match when QuickBooks agrees and the verdict is reconciled", async () => {
+    const mismatched = mismatchedDetail();
+    vi.mocked(loadAccountingIntent).mockResolvedValue({
+      ...mismatched,
+      intent: { ...mismatched.intent, state: "reconciled", badge: "reconciled" },
+      comparison: {
+        ...mismatched.comparison,
+        observed_sha256: mismatched.comparison.expected_sha256,
+        hashes_agree: true,
+        fields: [{ field: "total_amount", expected: "1260.00", observed: "1260.00", agrees: true }],
+      },
+      reconciliations: [
+        {
+          reconciliation_id: "recon-ok-1",
+          verdict: "reconciled",
+          reason_code: null,
+          settled_amount: "1260.00",
+          expected_sha256: mismatched.comparison.expected_sha256,
+          observed_sha256: mismatched.comparison.expected_sha256,
+          decided_at: "2026-08-19T22:10:00.000Z",
+        },
+      ],
+      exceptions: [],
+    });
+    renderIntent();
+
+    const comparison = await screen.findByRole("region", {
+      name: "IronWrap and QuickBooks",
+    });
+    expect(comparison).toHaveTextContent("The numbers match");
   });
 
   it("offers approve and reject on a candidate, and sends the version it read", async () => {

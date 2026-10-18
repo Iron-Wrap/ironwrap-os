@@ -1,11 +1,5 @@
-import { csrfTokenFor, sessionHashFor, validAppCsrf } from "./app-auth.ts";
-import { findActiveSession } from "./app-auth-store.ts";
-import {
-  appUserIdentities,
-  type AppEnv,
-  type AppRole,
-  type AuthContext,
-} from "./app-types.ts";
+import { personCookieSession, validAppCsrf } from "./app-auth.ts";
+import { appUserIdentities, type AppEnv, type AuthContext } from "./app-types.ts";
 import {
   FieldActionError,
   listJobEvidenceItemsFromD1,
@@ -44,7 +38,6 @@ const WORK_PACKAGE_ID = /^[A-Za-z0-9._:-]{1,140}$/;
 const STOP_EVENT_ID = /^[A-Za-z0-9._:-]{8,140}$/;
 const EVIDENCE_ID = /^evi_[0-9a-f]{32}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,140}$/;
-const SESSION_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const RELEASE_COLUMNS = `release_id, tenant_id, device_action_id, request_sha256, work_package_id,
        work_package_version, job_id, stop_event_id, stop_device_action_id, stop_actor_user_id,
        stop_reporter_user_id, restored_status, released_by_user_id, released_by_role,
@@ -93,12 +86,6 @@ interface StopEvent {
   actor_user_id: string;
   occurred_at: string;
   payload_json: string;
-}
-
-export interface PersonSession {
-  userId: string;
-  role: AppRole;
-  identities: string[];
 }
 
 class StopReleaseRefusal extends Error {
@@ -184,7 +171,7 @@ async function recordStopRelease(
   auth: AuthContext,
   workPackageId: string,
 ): Promise<Response> {
-  const person = await personSession(env, auth);
+  const person = await personCookieSession(env, auth);
   if (!person)
     throw new StopReleaseRefusal("work_package_stop_release_person_required", 403);
   if (!RESPONSE_AUTHORITY_ROLES.has(person.role))
@@ -293,30 +280,6 @@ async function recordStopRelease(
   const stored = await releaseByDeviceAction(env, tenantId, deviceActionId);
   if (!stored) throw new Error("work_package_stop_release_readback_missing");
   return json(releaseResponse(stored));
-}
-
-/**
- * The caller is a person only when the request carries the cookie session a sign-in created: a
- * well-formed token whose keyed hash is this session's hash, the CSRF token derived from that same
- * token, and a live session row for the same user. A desktop connector, an agent host, a service
- * token or the effect runtime never holds one. The role is the user's role right now.
- */
-export async function personSession(
-  env: AppEnv,
-  auth: AuthContext,
-): Promise<PersonSession | null> {
-  const token = auth.rawSessionToken;
-  if (!SESSION_TOKEN.test(token)) return null;
-  if ((await sessionHashFor(env, token)) !== auth.session.session_hash) return null;
-  if ((await csrfTokenFor(env, token)) !== auth.csrfToken) return null;
-  const live = await findActiveSession(
-    env,
-    auth.session.session_hash,
-    auth.session.tenant_id,
-    new Date().toISOString(),
-  );
-  if (!live || live.user_id !== auth.session.user_id) return null;
-  return { userId: live.user_id, role: live.role, identities: appUserIdentities(live) };
 }
 
 function parseStopReleaseRequest(value: unknown): StopReleaseRequest {

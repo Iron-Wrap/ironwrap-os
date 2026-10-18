@@ -205,6 +205,7 @@ import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
 } from "./measurement-intake-store.ts";
+import { handleNewoHandoffResolutionRoute } from "./newo-handoff-resolution.ts";
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
 import { buildOwnerRuntimeReadModel } from "./operations.ts";
 import {
@@ -1922,6 +1923,12 @@ export async function handleAuthenticatedRoute(
     } catch {
       return privateAppJson({ error: "integration_admission_store_unavailable" }, 502);
     }
+  }
+  // Resolving a failed Newo handoff is people-only: the sub-router admits only a person's own
+  // cookie session in the owner or ops role (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md).
+  if (url.pathname.startsWith("/api/v1/newo/operations/handoffs/")) {
+    const resolutionResponse = await handleNewoHandoffResolutionRoute(req, env, auth);
+    if (resolutionResponse) return resolutionResponse;
   }
   if (req.method === "GET" && url.pathname === "/api/v1/newo/operations") {
     if (!officeRole(auth))

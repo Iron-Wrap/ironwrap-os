@@ -2275,10 +2275,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0202 the fact-version ledger.
     // 0146 adds private report evidence and review; 0147 adds governed pricing revisions and pins.
     // 0145 adds the person-owned stop release record that alone lifts a crew stop.
-    // 0150 adds the append-only field item resolution ledger. 0152 requires the evidence that
-    // releases a crew stop to be captured after the stop.
+    // 0150 adds the append-only field item resolution ledger. 0151 adds the person-owned
+    // resolution of a failed Newo handoff. 0152 requires the evidence that releases a crew stop
+    // to be captured after the stop.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 131);
+    assert.equal(migrations.length, 132);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2426,7 +2427,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 273, indexes: 372, triggers: 740 },
+      { tables: 274, indexes: 372, triggers: 744 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -2956,6 +2957,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       [
         "newo_control_actions",
         "newo_event_receipts",
+        "newo_handoff_resolutions",
         "newo_reconciliation_runs",
         "newo_sessions",
         "newo_slot_reservations",

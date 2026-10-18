@@ -255,3 +255,7 @@ the same amount is an identity conflict for `accounting`, never a match.
   untrusted, never bank details or links; needs_from_you "Verify by calling the number on file."
 - Drafts ask for approval; a non-English draft carries a reviewer-language translation.
 - Abstention: the missing trigger or authority and its reason code.
+- People-only steps go by their catalog names: changing a payee's bank details
+  (`payee.change_details`), lifting a payment freeze (`payee.unfreeze`), issuing a refund or credit
+  (`refund.issue`), writing off an unpaid balance (`write_off.record`), and submitting a filing
+  (`filing.submit`).

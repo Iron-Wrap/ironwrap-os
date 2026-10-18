@@ -200,7 +200,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -215,7 +216,8 @@
           "must_cite": [
             "evidence:EV-64010",
             "itp:ITP-5122",
-            "manufacturer_document:CL-9"
+            "manufacturer_document:CL-9",
+            "work_package:WP-5122"
           ],
           "needs_from_you": "decision"
         },
@@ -600,7 +602,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -615,7 +618,8 @@
           "must_cite": [
             "evidence:EV-64020",
             "evidence:EV-64021",
-            "document_register:DOC-REG"
+            "document_register:DOC-REG",
+            "work_package:WP-5130"
           ],
           "needs_from_you": "decision"
         },

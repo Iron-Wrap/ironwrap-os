@@ -917,7 +917,7 @@ function sessionAllowedActions(role: AppUserRecord["role"]): string[] {
     ];
   }
   return [
-    ...(role === "owner" || role === "ops" ? ["manual_measurement.record"] : []),
+    ...(role === "owner" || role === "ops" ? ["pricing_catalog.create", "pricing_catalog.approve_activate", "manual_measurement.record", "measurement_report.upload", "measurement_report.transcribe", "measurement_report.review"] : []),
     "session.logout",
     "today.read",
     "job.read",

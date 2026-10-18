@@ -1122,6 +1122,45 @@ test("R2 PUT success is not accepted when the post-write HEAD checksum is wrong"
   assert.equal(heads, 2);
 });
 
+test("R2 create refuses a different object written between HEAD and PUT", async () => {
+  const requested = "a".repeat(64);
+  const competing = "b".repeat(64);
+  let heads = 0;
+  let storedChecksum: string | null = null;
+  const bucket = {
+    head: async () => {
+      heads += 1;
+      if (heads === 1) return null;
+      return {
+        size: 3,
+        customMetadata: { sha256: storedChecksum },
+        checksums: {
+          sha256: Uint8Array.from({ length: 32 }, () => 0xbb).buffer,
+        },
+      };
+    },
+    put: async (_key: string, _body: Blob, options: { onlyIf: Headers }) => {
+      assert.ok(options.onlyIf instanceof Headers);
+      assert.equal(options.onlyIf.get("If-None-Match"), "*");
+      storedChecksum = competing; // Another writer wins the absent-only create.
+      return null;
+    },
+  } as unknown as R2Bucket;
+  await assert.rejects(
+    r2ObjectStore(bucket).ensure(
+      "field/key",
+      new Blob(["abc"]),
+      "image/jpeg",
+      requested,
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "immutable_object_conflict",
+  );
+  assert.equal(storedChecksum, competing);
+  assert.equal(heads, 2);
+});
+
 function multipartRequest(mimeType: string, count: number): Request {
   const form = new FormData();
   const attachments = Array.from({ length: count }, (_, index) => {

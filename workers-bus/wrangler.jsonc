@@ -124,6 +124,7 @@
   "vars": {
     "CFG_APP": {
       "APP_DOCUMENT_GENERATION_ENABLED": "false",
+      "APP_PRICING_CATALOG_ENABLED": "false",
       // Authenticated PWA surfaces. Turning this on adds three hard readiness requirements:
       // APP_PUBLIC_ORIGIN, a matching APP_ALLOWED_ORIGINS entry, and an APP_AUTH_PEPPER
       // secret of at least 32 characters. Magic-link email goes through Gmail in production
@@ -303,7 +304,7 @@
       "JOBNIMBUS_ENABLED": "false",
       "OMNIROUTE_URL": "",
       "OPERATING_AUTOMATION_USER": "ironwrap-worker",
-      // Tenant pricing for the estimator's computed estimate; empty disables pricing.
+      // Optional draft source. Only a reviewed D1 catalog activation authorizes pricing.
       "ESTIMATOR_PRICE_LIST_JSON": "",
       // Google Doc template id for proposal generation; empty disables the action.
       "PROPOSAL_TEMPLATE_DOC_ID": "",
@@ -365,6 +366,7 @@
       "vars": {
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
+          "APP_PRICING_CATALOG_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
           "APP_READINESS_ADMISSION_ENABLED": "false",
           "APP_EVIDENCE_UPLOADS_ENABLED": "false",
@@ -584,6 +586,7 @@
       "vars": {
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
+          "APP_PRICING_CATALOG_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
           "APP_READINESS_ADMISSION_ENABLED": "false",
           "APP_EVIDENCE_UPLOADS_ENABLED": "false",

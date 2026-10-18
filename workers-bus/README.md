@@ -287,6 +287,10 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/api/v1/owner/measurement-intake-exceptions?limit=50` | owner/ops session | compact unmatched/retryable measurement queue; browser projection excludes R2 keys, hashes, leases, Frappe ids, and provider error text, while safe Google Drive links and a server-derived manual/scheduled/blocked/exhausted recovery disposition remain available for operator review |
 | GET | `/api/v1/sales` | owner/ops session | bounded office Lead Envelope, estimate, quote, and communication-record review DTO; raw payloads and commercial-policy internals are excluded |
 | GET | `/api/v1/estimator/jobs/:id` | owner/ops session | bounded source-review DTO: server-recomputed retained geometry, persisted metric/takeoff source refs, explicit measurement-to-takeoff and quote-to-proposal linkage, captured quote snapshot/revision comparison, and quote-attributed change-order review; no raw key/XML/report URL/evidence JSON or mutation path |
+| GET | `/api/v1/pricing/catalog` | session with `estimator:read` | private tenant catalog history, active revision and server-issued allowed actions; `revision_cursor` and `activation_before` page immutable history |
+| POST | `/api/v1/pricing/catalog/revisions` | owner/ops session with `pricing:manage`, CSRF and Idempotency-Key | save a bounded candidate snapshot; `source: "environment"` reads configured JSON as a draft only |
+| POST | `/api/v1/pricing/catalog/activations` | owner/ops session with `pricing:manage`, CSRF and Idempotency-Key | approve a reviewed revision by exact SHA-256 and expected head version; one immutable receipt advances the tenant head |
+
 | GET | `/api/v1/approvals` | owner/ops session | browser-safe approval inbox with server-issued capability names; never returns receipts, raw args, or broker output |
 | GET | `/api/v1/approvals/:id` | owner/ops session | one current approval DTO; re-evaluates pending expiry |
 | POST | `/api/v1/approvals/lead-triage` | owner/ops session + CSRF + idempotency key | fixed local-triage preparation path; not a generic tool proxy |
@@ -305,6 +309,51 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | POST | `/api/v1/proposal-publication-approvals/:id/approve` | configured owner + CSRF + recent session + idempotency key | releases the proposal to a customer link through its own broker; ambiguity is reconciliation-only and never republishes |
 | POST | `/api/v1/proposal-publication-approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection of a prepared publication; invokes no broker |
 | POST | `/api/v1/proposal-publication-approvals/:id/reconcile` | configured owner + CSRF + recent session | one immutable reconciliation append for an uncertain publication |
+
+The pricing catalog is disabled in every checked-in environment by
+`APP_PRICING_CATALOG_ENABLED=false`; its API returns 404 while disabled. Native
+imports then retain the existing `ESTIMATOR_PRICE_LIST_JSON` behavior. Enable the
+catalog only after its Figma-derived owner interface and QA cutover are accepted.
+When enabled, a new import uses only the active, reviewed D1 catalog revision;
+environment JSON is a candidate source for an explicit owner draft, never an
+implicit approval. Previously imported estimates continue to read their own
+verified, frozen pricing snapshot across activation changes and flag rollback.
+Catalog reads and new imports refuse a restored head that is missing or behind retained
+activation history. An internal catalog approval does not verify supplier availability or an
+external price, publish a quote, record customer consent, or authorize a purchase.
+
+### Private measurement report contract
+
+Source-present in `src/job-measurement-report-api.ts`, its store and read model, and D1 migration
+`0146_job_measurement_reports.sql`. Authenticated owner and operations staff can upload an exact
+PDF, recover an interrupted R2 write, record candidate facts, and review those facts through
+immutable receipts. Sales staff can read the report without adjudicating it. Backup and restore
+inventory includes the report bytes' D1 links, events, heads, receipts, indexes, and guards.
+Report reads and new review commands refuse retained history with a missing or older head.
+Transcription and review retain their own report and job lineage; neither promotes report
+observations or C3 field observations to accepted geometry, cut truth, or quote approval.
+The strict response fixture lives in `test/` until the Figma-derived screen defines its app
+consumer. Focused local tests use synthetic PDF bytes and controlled D1/R2 adapters; hosted CI, deployed
+storage recovery, final Figma-derived UI, and business acceptance remain open.
+
+The owner-only `GET /api/v1/privacy/measurement-reports` lists governed PDFs across jobs with
+tenant-scoped keyset paging (`before`, `limit` 1–50). `GET
+/api/v1/privacy/measurement-reports/:report_id/audit` returns the immutable file metadata and
+checks the exact R2 bytes, distinguishing intact, missing, mismatched and unavailable objects.
+It also distinguishes an interrupted upload with staged bytes from one with no bytes. Both
+responses are private and no-store. This is a read-only inventory, not a retention or disposal
+workflow. The older OCR intake's content-addressed `raw/measurement-reports/` objects are a
+separate class whose tenant and reference scope must be reconciled before subject disposal.
+`current_job_customer_id` is a locator for review, not proof of whose data a PDF contains.
+
+The same owner-only boundary offers `GET /api/v1/privacy/measurement-intakes` with tenant-scoped
+keyset paging and `GET /api/v1/privacy/measurement-intakes/:receipt_id/audit`. The detail verifies
+the exact RAW intake, fetched report and OCR-result bytes against their recorded SHA-256 values,
+and locates recorded Drive/Frappe copies. Migration `0103` added a nullable tenant ID to intake
+receipts. The route excludes old receipts that still have no attributable tenant; an operator
+must reconcile those separately without guessing an owner. A report object can be referenced by
+several receipts, including across tenants, because its key is content-addressed. These reads
+authorize no purge and do not prove a PDF's subject from the current job association.
 
 ### File evidence contract
 

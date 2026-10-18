@@ -1,3 +1,16 @@
+import {
+  activateCatalogRevision,
+  createCatalogRevision,
+  resolveFrozenCatalogPricing,
+  resolveFrozenLegacyPricing,
+} from "../src/pricing-catalog.ts";
+import { catalogList } from "./pricing-catalog-fixture.ts";
+import { buildEstimatorWorkbenchReadModel } from "../src/app-read-models.ts";
+import { auth } from "./pipeline-board-fixture.ts";
+import { backup } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -65,9 +78,11 @@ const NATIVE_MEASUREMENT_EVIDENCE = {
 } as const;
 
 class SqliteD1 {
-  readonly raw = new DatabaseSync(":memory:");
+  readonly raw: DatabaseSync;
 
-  constructor() {
+  constructor(path = ":memory:") {
+    this.raw = new DatabaseSync(path);
+    if (path !== ":memory:") return;
     this.raw.exec("PRAGMA foreign_keys = ON");
     const directory = new URL("../migrations/", import.meta.url);
     for (const file of readdirSync(directory)
@@ -76,6 +91,19 @@ class SqliteD1 {
       this.raw.exec(readFileSync(new URL(file, directory), "utf8"));
     }
     seed(this.raw);
+  }
+
+  async batch(statements: SqliteStatement[]) {
+    this.raw.exec("BEGIN IMMEDIATE");
+    try {
+      const result = [];
+      for (const s of statements) result.push(await s.run());
+      this.raw.exec("COMMIT");
+      return result;
+    } catch (e) {
+      this.raw.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   prepare(sql: string) {
@@ -160,6 +188,450 @@ function input(
     ...overrides,
   };
 }
+
+test("legacy native pricing stays frozen when catalog cutover changes the environment", async () => {
+  const database = new SqliteD1();
+  const source = JSON.stringify({
+    job_number: JOB_NUMBER,
+    source_xml:
+      '<APPLICAD_EXPORT><POINT id="P1" data="0,0,0"/><POINT id="P2" data="10,0,0"/><POINT id="P3" data="10,10,0"/><POINT id="P4" data="0,10,0"/><LINE id="L1" path="P1,P2" type="EAVE" length="10"/><LINE id="L2" path="P2,P3" type="RIDGE" length="10"/><LINE id="L3" path="P3,P4" type="EAVE" length="10"/><LINE id="L4" path="P4,P1" type="EAVE" length="10"/><POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" mat="Metal"/></APPLICAD_EXPORT>',
+  });
+  const rawKey = `raw/measurements/${"a".repeat(64)}.json`;
+  database.raw
+    .prepare("UPDATE measurement_intake_receipts SET payload_hash=? WHERE receipt_id=?")
+    .run(await sha256Hex(source), RECEIPT_ID);
+  const runtime = {
+    DB: database as never,
+    ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(catalogList()),
+    RAW: {
+      get: async (key: string) =>
+        key === rawKey
+          ? { size: new TextEncoder().encode(source).length, text: async () => source }
+          : null,
+    },
+  } as unknown as AppEnv;
+  try {
+    const first = await importEstimatorEvidenceFromNativeSources(
+      runtime,
+      {
+        tenantId: TENANT,
+        roofJobId: JOB_ID,
+        measurementReceiptId: RECEIPT_ID,
+        revisionNumber: 1,
+        importedByUserId: OWNER_ID,
+        idempotencyKey: "pricing:legacy:import",
+      },
+      NOW,
+    );
+    const originalRule = JSON.parse(first.revision.payload_json).pricing_authority;
+    assert.match(originalRule.source_ref, /^native-owner-import:/);
+    assert.equal(originalRule.catalog_revision_id, undefined);
+    await assert.rejects(() =>
+      resolveFrozenLegacyPricing(
+        TENANT,
+        { ...originalRule, pricing_policy_snapshot_sha256: "f".repeat(64) },
+        first.revision.created_at,
+      ),
+    );
+    const before = await buildEstimatorWorkbenchReadModel(runtime, auth("owner"), JOB_ID, NOW);
+    assert.ok(before);
+    const original = before.measurements.selected!.computed_estimate;
+    assert.equal(original.state, "priced");
+    assert.ok(original.total);
+
+    runtime.ESTIMATOR_PRICE_LIST_JSON = "broken later environment";
+    runtime.APP_PRICING_CATALOG_ENABLED = "true";
+    const after = await buildEstimatorWorkbenchReadModel(
+      runtime,
+      auth("owner"),
+      JOB_ID,
+      new Date(NOW.getTime() + 1000),
+    );
+    assert.ok(after);
+    assert.deepEqual(after.measurements.selected!.computed_estimate, original);
+    assert.equal(
+      (database.raw.prepare("SELECT count(*) n FROM estimator_pricing_catalog_pins").get() as {n:number}).n,
+      0,
+    );
+
+    const next = await importEstimatorEvidenceFromNativeSources(
+      runtime,
+      {
+        tenantId: TENANT,
+        roofJobId: JOB_ID,
+        measurementReceiptId: RECEIPT_ID,
+        revisionNumber: 2,
+        supersedesEstimatorRevisionId: first.revision.estimator_revision_id,
+        correctionReason: "New catalog cutover import",
+        importedByUserId: OWNER_ID,
+        idempotencyKey: "pricing:catalog:unconfigured",
+      },
+      new Date(NOW.getTime() + 2000),
+    );
+    assert.equal(JSON.parse(next.revision.payload_json).pricing_authority, null);
+  } finally {
+    database.raw.close();
+  }
+});
+
+test("catalog A remains frozen through B activation and A expiry; new imports pin B, lost A response replays, and database restore retains every pin", async () => {
+  const database = new SqliteD1(),
+    directory = mkdtempSync(join(tmpdir(), "ironwrap-pricing-"));
+  const source = JSON.stringify({
+    job_number: JOB_NUMBER,
+    source_xml:
+      '<APPLICAD_EXPORT><POINT id="P1" data="0,0,0"/><POINT id="P2" data="10,0,0"/><POINT id="P3" data="10,10,0"/><POINT id="P4" data="0,10,0"/><LINE id="L1" path="P1,P2" type="EAVE" length="10"/><LINE id="L2" path="P2,P3" type="RIDGE" length="10"/><LINE id="L3" path="P3,P4" type="EAVE" length="10"/><LINE id="L4" path="P4,P1" type="EAVE" length="10"/><POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" mat="Metal"/></APPLICAD_EXPORT>',
+  });
+  const rawKey = `raw/measurements/${"a".repeat(64)}.json`;
+  database.raw
+    .prepare(
+      "UPDATE measurement_intake_receipts SET payload_hash=? WHERE receipt_id=?",
+    )
+    .run(await sha256Hex(source), RECEIPT_ID);
+  const runtime = {
+    DB: database as never,
+    APP_PRICING_CATALOG_ENABLED: "true",
+    RAW: {
+      get: async (k: string) =>
+        k === rawKey
+          ? {
+              size: new TextEncoder().encode(source).length,
+              text: async () => source,
+            }
+          : null,
+    },
+  } as unknown as AppEnv;
+  const actor = { tenantId: TENANT, userId: OWNER_ID, role: "owner" };
+  const instant = (delta: number) => new Date(NOW.getTime() + delta);
+  const listA = catalogList();
+  listA.approvedPolicy.expiresAt = instant(2000).toISOString();
+  try {
+    Object.assign(runtime,{ESTIMATOR_PRICE_LIST_JSON:JSON.stringify(listA)});
+    const unpriced=await importEstimatorEvidenceFromNativeSources(runtime,{tenantId:TENANT,roofJobId:JOB_ID,measurementReceiptId:RECEIPT_ID,revisionNumber:1,importedByUserId:OWNER_ID,idempotencyKey:"pricing:test:import-unpriced"},NOW);
+    assert.equal(JSON.parse(unpriced.revision.payload_json).pricing_authority,null);
+    const a = await createCatalogRevision(
+      runtime,
+      actor,
+      { label: "Synthetic A", price_list: listA },
+      "pricing:test:create-A",
+      NOW,
+    );
+    const approvedA = await activateCatalogRevision(
+      runtime,
+      actor,
+      {
+        revision_id: a.revision.revision_id,
+        reviewed_sha256: a.revision.snapshot_sha256,
+        expected_version: 0,
+      },
+      "pricing:test:approve-A",
+      NOW,
+    );
+    const stillUnpriced=await buildEstimatorWorkbenchReadModel(runtime,auth("owner"),JOB_ID,NOW);
+    assert.ok(stillUnpriced);assert.equal(stillUnpriced.measurements.selected!.computed_estimate.state,"unconfigured");
+    const req = {
+      tenantId: TENANT,
+      roofJobId: JOB_ID,
+      measurementReceiptId: RECEIPT_ID,
+      revisionNumber: 2,
+      supersedesEstimatorRevisionId: unpriced.revision.estimator_revision_id,
+      correctionReason: "Import the explicitly approved catalog",
+      importedByUserId: OWNER_ID,
+      idempotencyKey: "pricing:test:import-A",
+    };
+    const importedA = await importEstimatorEvidenceFromNativeSources(
+      runtime,
+      req,
+      instant(1000),
+    );
+    const authorityA = await resolveNativeEstimatorAuthority(
+      runtime,
+      TENANT,
+      JOB_ID,
+      instant(1000),
+    );
+    assert.equal(authorityA.state, "current");
+    const previewA = await buildEstimatorWorkbenchReadModel(
+      runtime,
+      auth("owner"),
+      JOB_ID,
+      instant(1000),
+    );
+    assert.ok(previewA);
+    assert.equal(
+      previewA.measurements.selected!.computed_estimate.state,
+      "priced",
+    );
+    const frozenPayload = importedA.revision.payload_json,
+      frozenDigest = importedA.revision.payload_sha256;
+    const b = await createCatalogRevision(
+      runtime,
+      actor,
+      { label: "Synthetic B", price_list: catalogList(2, 250) },
+      "pricing:test:create-B",
+      instant(3000),
+    );
+    await activateCatalogRevision(
+      runtime,
+      actor,
+      {
+        revision_id: b.revision.revision_id,
+        reviewed_sha256: b.revision.snapshot_sha256,
+        expected_version: 1,
+      },
+      "pricing:test:approve-B",
+      instant(3000),
+    );
+    const savedA = await buildEstimatorWorkbenchReadModel(
+      runtime,
+      auth("owner"),
+      JOB_ID,
+      instant(4000),
+    );
+    assert.ok(savedA);
+    assert.deepEqual(
+      savedA.measurements.selected!.computed_estimate,
+      previewA.measurements.selected!.computed_estimate,
+    );
+    runtime.APP_PRICING_CATALOG_ENABLED = "false";
+    const rollbackView = await buildEstimatorWorkbenchReadModel(
+      runtime,
+      auth("owner"),
+      JOB_ID,
+      instant(4000),
+    );
+    assert.ok(rollbackView);
+    assert.deepEqual(
+      rollbackView.measurements.selected!.computed_estimate,
+      previewA.measurements.selected!.computed_estimate,
+    );
+    runtime.APP_PRICING_CATALOG_ENABLED = "true";
+    const replay = await importEstimatorEvidenceFromNativeSources(
+      runtime,
+      req,
+      instant(4000),
+    );
+    assert.equal(replay.kind, "replayed");
+    assert.equal(replay.revision.payload_json, frozenPayload);
+    assert.equal(replay.revision.payload_sha256, frozenDigest);
+    assert.equal(
+      JSON.parse(replay.revision.payload_json).pricing_authority
+        .catalog_activation_id,
+      approvedA.activation.activation_id,
+    );
+    const restoredPath = join(directory, "catalog.sqlite");
+    await backup(database.raw, restoredPath);
+    const restored = new SqliteD1(restoredPath),
+      restoredEnv = { ...runtime, DB: restored as never };
+    try {
+      const restoredA = await buildEstimatorWorkbenchReadModel(
+        restoredEnv,
+        auth("owner"),
+        JOB_ID,
+        instant(4000),
+      );
+      assert.ok(restoredA);
+      assert.deepEqual(
+        restoredA.measurements.selected!.computed_estimate,
+        previewA.measurements.selected!.computed_estimate,
+      );
+      const pin = restored.raw
+        .prepare("SELECT * FROM estimator_pricing_catalog_pins")
+        .all();
+      assert.equal(pin.length, 1);
+      assert.deepEqual(
+        pin,
+        database.raw
+          .prepare("SELECT * FROM estimator_pricing_catalog_pins")
+          .all(),
+      );
+      assert.deepEqual(
+        restored.raw.prepare("PRAGMA foreign_key_check").all(),
+        [],
+      );
+    } finally {
+      restored.raw.close();
+    }
+    const importedB = await importEstimatorEvidenceFromNativeSources(
+      runtime,
+      {
+        ...req,
+        revisionNumber: 3,
+        supersedesEstimatorRevisionId: importedA.revision.estimator_revision_id,
+        correctionReason: "Review the new catalog",
+        idempotencyKey: "pricing:test:import-B",
+      },
+      instant(4000),
+    );
+    const ruleB = JSON.parse(importedB.revision.payload_json).pricing_authority;
+    assert.equal(ruleB.catalog_revision_id, b.revision.revision_id);
+    assert.equal(
+      ruleB.pricing_policy_snapshot_sha256,
+      b.revision.snapshot_sha256,
+    );
+    const previewB = await buildEstimatorWorkbenchReadModel(
+      runtime,
+      auth("owner"),
+      JOB_ID,
+      instant(4000),
+    );
+    assert.ok(previewB);
+    assert.notEqual(
+      previewB.measurements.selected!.computed_estimate.total,
+      previewA.measurements.selected!.computed_estimate.total,
+    );
+    const originalRule = JSON.parse(frozenPayload).pricing_authority;
+    await assert.rejects(() =>
+      resolveFrozenCatalogPricing(
+        runtime,
+        TENANT,
+        { ...originalRule, pricing_policy_snapshot_sha256: "e".repeat(64) },
+        importedA.revision.estimator_revision_id,
+      ),
+    );
+    for (const table of ["estimator_pricing_catalog_pins"]) {
+      assert.throws(
+        () => database.raw.exec(`DELETE FROM ${table}`),
+        /pricing_catalog_immutable/,
+      );
+      assert.throws(
+        () =>
+          database.raw.exec(
+            `UPDATE ${table} SET priced_at='2035-01-01T00:00:00.000Z'`,
+          ),
+        /pricing_catalog_immutable/,
+      );
+    }
+    assert.equal(
+      (
+        database.raw
+          .prepare("SELECT count(*) n FROM estimator_pricing_catalog_pins")
+          .get() as { n: number }
+      ).n,
+      2,
+    );
+    // Switching the active head between price selection and the D1 insert must
+    // roll back the entire new estimator revision and its pin.
+    const c = await createCatalogRevision(
+      runtime,
+      actor,
+      { label: "Synthetic C", price_list: catalogList(3, 400) },
+      "pricing:test:create-C",
+      instant(5000),
+    );
+    const originalPrepare = database.prepare.bind(database);
+    let switchHead = true;
+    database.prepare = (sql: string) => {
+      const statement = originalPrepare(sql),
+        originalBind = statement.bind.bind(statement);
+      statement.bind = (...args: unknown[]) => {
+        const bound = originalBind(...args),
+          originalRun = bound.run.bind(bound);
+        if (sql.startsWith("INSERT INTO estimator_evidence_revisions"))
+          bound.run = async () => {
+            if (switchHead) {
+              switchHead = false;
+              await activateCatalogRevision(
+                runtime,
+                actor,
+                {
+                  revision_id: c.revision.revision_id,
+                  reviewed_sha256: c.revision.snapshot_sha256,
+                  expected_version: 2,
+                },
+                "pricing:test:approve-C",
+                instant(6000),
+              );
+            }
+            return originalRun();
+          };
+        return bound;
+      };
+      return statement;
+    };
+    await assert.rejects(
+      () =>
+        importEstimatorEvidenceFromNativeSources(
+          runtime,
+          {
+            ...req,
+            revisionNumber: 4,
+            supersedesEstimatorRevisionId:
+              importedB.revision.estimator_revision_id,
+            correctionReason: "Synthetic concurrent pricing selection",
+            idempotencyKey: "pricing:test:import-stale",
+          },
+          instant(6000),
+        ),
+      /pricing_catalog_import_drift/,
+    );
+    assert.equal(
+      (
+        database.raw
+          .prepare("SELECT count(*) n FROM estimator_evidence_revisions")
+          .get() as { n: number }
+      ).n,
+      3,
+    );
+    assert.equal(
+      (
+        database.raw
+          .prepare("SELECT count(*) n FROM estimator_pricing_catalog_pins")
+          .get() as { n: number }
+      ).n,
+      2,
+    );
+    database.prepare = originalPrepare;
+    // Missing rates remain a hard import stop rather than a zero-price quote.
+    const incomplete = catalogList(4);
+    delete (incomplete.trims as Record<string, unknown>).eave_drip;
+    const bad = await createCatalogRevision(
+      runtime,
+      actor,
+      { label: "Synthetic incomplete", price_list: incomplete },
+      "pricing:test:create-incomplete",
+      instant(7000),
+    );
+    await activateCatalogRevision(
+      runtime,
+      actor,
+      {
+        revision_id: bad.revision.revision_id,
+        reviewed_sha256: bad.revision.snapshot_sha256,
+        expected_version: 3,
+      },
+      "pricing:test:approve-incomplete",
+      instant(7000),
+    );
+    await assert.rejects(
+      () =>
+        importEstimatorEvidenceFromNativeSources(
+          runtime,
+          {
+            ...req,
+            revisionNumber: 4,
+            supersedesEstimatorRevisionId:
+              importedB.revision.estimator_revision_id,
+            correctionReason: "Synthetic missing rate",
+            idempotencyKey: "pricing:test:import-missing-rate",
+          },
+          instant(8000),
+        ),
+      /explicit rate/,
+    );
+    assert.equal(
+      (
+        database.raw
+          .prepare("SELECT count(*) n FROM estimator_evidence_revisions")
+          .get() as { n: number }
+      ).n,
+      3,
+    );
+  } finally {
+    database.raw.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("Estimator authority records, replays, and corrects one exact native evidence head", async () => {
   const db = new SqliteD1();
@@ -674,9 +1146,9 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     );
     // Pinned through 0200, including privacy, crew-stop guards, durable writer claims and the AI team tables,
     // durable office intake receipts, and manual measurement history.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=257/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=370/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=678/);
+    assert.match(contract, /REQUIRED_TABLE_COUNT=265/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=376/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=712/);
   }
 });
 

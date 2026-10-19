@@ -163,7 +163,7 @@ export async function unqualifiedSince(db: AgentDb, tenantId: string, specialist
 }
 
 /** Longer than any run lives before it closes: its wall time plus the cron's grace, with room to spare. */
-const RUN_LIFETIME_BOUND_MS = 2 * 86_400_000;
+export const RUN_LIFETIME_BOUND_MS = 2 * 86_400_000;
 
 /** An action can be shadowed when it is the specialist's own, has an effect to stand in for, and is not protective or people-only. */
 export function shadowable(specialistId: string, actionId: string): boolean {
@@ -755,7 +755,11 @@ export async function previewablePairs(db: AgentDb, tenantId: string, bar = CAND
  * that specialist): the setting, practice, the counted window and the bar, the qualification it
  * relies on, the decision history, failed readbacks, and the most proposals in any rolling hour, day
  * or week over the 30 days up to its latest proposal, which is where a ceiling's count comes from.
- * Null for an id that names no pair whose autonomy can be earned.
+ * Null for an id that names no pair whose autonomy can be earned. Its value moves with every
+ * proposal of the pair, so a step that cites it may meet `fact_stale` and stop; the watch's run
+ * also cites its immutable signal, whose digest carries each pair's bar result.
+ * ponytail: several of its reads scan the tenant's steps (no index on specialist and action); add
+ * `agent_run_steps (tenant_id, specialist_id, action_id, created_at)` if the review runs slow.
  */
 export async function delegationRecord(db: AgentDb, tenantId: string, id: string): Promise<Record<string, unknown> | null> {
   const split = id.indexOf(":");
@@ -778,13 +782,17 @@ export async function delegationRecord(db: AgentDb, tenantId: string, id: string
         .bind(tenantId, specialistId, model.provider, model.model, model.effort, model.effort, model.release)
         .first<{ qualification_id: string; provider: string; model: string; effort: string; passed: number }>()
     : null;
-  const counts = await db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = ? AND action_id = ?
-        AND json_extract(permit_json, '$.delegation_id') IS NOT NULL AND (outcome = 'unknown' OR reason_code = 'readback_mismatch')`,
-    )
-    .bind(tenantId, specialistId, actionId)
-    .first<{ n: number }>();
+  // Steps under the current setting that ended unknown or with a readback mismatch: the same steps
+  // that make a within-limits setting fall back (control.ts currentDelegation).
+  const counts = current
+    ? await db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM agent_run_steps WHERE tenant_id = ? AND json_extract(permit_json, '$.delegation_id') = ?
+            AND (outcome = 'unknown' OR reason_code = 'readback_mismatch')`,
+        )
+        .bind(tenantId, current.delegation_id)
+        .first<{ n: number }>()
+    : null;
   const proposed = await db
     .prepare(
       `SELECT at FROM (
@@ -809,7 +817,16 @@ export async function delegationRecord(db: AgentDb, tenantId: string, id: string
   return {
     specialist_id: specialistId,
     action_id: actionId,
-    setting: { setting, fallback: current?.fallback ?? false, ceiling: current?.ceiling ?? null },
+    setting: {
+      setting,
+      fallback: current?.fallback ?? false,
+      ceiling: current?.ceiling ?? null,
+      // The stored revision a within-limits permit names as its `delegation_id`; null with no row.
+      setting_id: current?.delegation_id ?? null,
+      revision: current?.revision ?? null,
+      set_by: current?.set_by ?? null,
+      set_at: current?.set_at ?? null,
+    },
     practice: { shadow: practice.shadow, stopped: practice.stopped, ...preview.practice },
     release_sha256: preview.release_sha256,
     policy_version: Number(STEP_POLICY_VERSION),

@@ -108,6 +108,9 @@ export async function currentDelegation(
       ceiling: Ceiling | null;
       revision: number;
       fallback: boolean;
+      set_at: string;
+      /** `person:<user id>`, or the system writer (`system:auto_demotion`). */
+      set_by: string;
     })
   | null
 > {
@@ -126,6 +129,7 @@ export async function currentDelegation(
       catalog_version: string;
       policy_version: string;
       set_at: string;
+      set_by_user_id: string;
     }>();
   if (!row) return null;
   const hold = await db
@@ -158,6 +162,8 @@ export async function currentDelegation(
     ceiling: row.ceiling_json ? JSON.parse(row.ceiling_json) : null,
     revision: row.revision,
     fallback,
+    set_at: row.set_at,
+    set_by: row.set_by_user_id.startsWith("system:") ? row.set_by_user_id : `person:${row.set_by_user_id}`,
   };
 }
 

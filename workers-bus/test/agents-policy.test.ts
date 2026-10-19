@@ -513,3 +513,18 @@ test("the settings map form is for action arguments only: the strict output dial
   for (const [actionId, entry] of Object.entries(REGISTRY))
     if (entry && actionId !== "settings.propose_change") assert.doesNotThrow(() => assertStrictSchema(entry.args), actionId);
 });
+
+test("a prepared people-only act names the person who performs it, under a hold too", () => {
+  const prepared = (specialistId: string, actionId: string, held: boolean) =>
+    evaluateStep(input({ specialistId, actionId, args: { note: "Synthetic." }, specialistState: { paused: false, held }, registry: registry({ [actionId]: ANY_ARGS }) }));
+  // The access change answers a staff ask (its own rule), as a draft and under a hold.
+  assert.deepEqual([prepare(PAIRING).reviewer_role, prepare(PAIRING, { specialistState: { paused: false, held: true } }).reviewer_role], ["owner", "owner"]);
+  for (const [specialistId, actionId, person] of [
+    ["orchestrator", "delegation.propose_change", "owner"],
+    ["billing_reconciliation", "payee.unfreeze_prepare", "owner"],
+    ["field_safety", "safety_stop.release_prepare", "production"],
+  ] as const) {
+    assert.equal(prepared(specialistId, actionId, false).reviewer_role, person, `${actionId} draft`);
+    assert.equal(prepared(specialistId, actionId, true).reviewer_role, person, `${actionId} under a hold`);
+  }
+});

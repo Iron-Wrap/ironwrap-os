@@ -1996,6 +1996,14 @@ test("a within-limits setting falls back once a run of the specialist ends witho
   const refused = await s.close((await s.run()).run_id, closeV3({ qualification_ref: null }));
   assert.deepEqual([refused.status, refused.body.terminal], [200, "abstained"]);
   assert.deepEqual(await delegation(), ["asks_first", true]);
+  // The pair's record shows the fallback, the stored revision behind it and who set it.
+  const { delegationRecord } = await import("../src/agents/shadow.ts");
+  const fallen = (await delegationRecord(s.db, TENANT, "lead_concierge:note.add")) as any;
+  assert.deepEqual(
+    [fallen.setting.setting, fallen.setting.fallback, fallen.setting.ceiling, fallen.setting.revision, fallen.setting.set_by, fallen.failed_readback],
+    ["asks_first", true, ceiling, 2, "person:appu_test_owner", 0],
+  );
+  assert.equal(fallen.setting.setting_id, (await currentDelegation(s.db, TENANT, "lead_concierge", "note.add"))?.delegation_id);
   // Another specialist's run without a qualified route never touches this one's setting.
   s.tick(1_000);
   assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: 2 }), "owner", "deleg-release-3")).status, 200);
@@ -2232,7 +2240,7 @@ test("the face reads each listed pair's delegation record, and a pair it already
   ]);
   assert.deepEqual(
     [record.data.setting, record.data.policy_version, record.data.window.match_rate, record.data.bar.meets, record.data.qualified?.qualification_id, record.data.most_proposed_in],
-    [{ setting: "within_limits", fallback: false, ceiling: null }, 5, 0.98, true, qualified.body.qualification_id, { hour: 50, day: 50, week: 50 }],
+    [{ setting: "within_limits", fallback: false, ceiling: null, setting_id: null, revision: null, set_by: null, set_at: null }, 5, 0.98, true, qualified.body.qualification_id, { hour: 50, day: 50, week: 50 }],
   );
   // Once the face proposes it, the next review lists it as awaiting the owner, not as a candidate.
   const proposed = (await s.propose({ run_id: opened.run_id, signal_id: signal.signal_id }, "delegation.propose_change", proposal())).body;
@@ -2244,6 +2252,20 @@ test("the face reads each listed pair's delegation record, and a pair it already
   assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "answer-proposal")).status, 200);
   assert.equal(((await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now())).digest as any).awaiting_owner.length, 0);
   // Any other id names no record.
-  for (const id of ["lead_concierge", "lead_concierge:consent.record", "synthetic_nobody:note.add"])
+  for (const id of ["lead_concierge", "lead_concierge:consent.record", "synthetic_nobody:note.add", "lead_concierge:note.add:extra", ":note.add"])
     assert.equal(await (await import("../src/agents/read-models.ts")).OBJECT_MODELS.delegation.read(s.db, TENANT, id), null, id);
+});
+
+test("only the owner's and ops' views read a delegation record, and the release-fallback read covers any run's life", async () => {
+  const { viewFor } = await import("../src/agents/memory.ts");
+  const { OBJECT_MODELS } = await import("../src/agents/read-models.ts");
+  const { RUN_LIFETIME_BOUND_MS } = await import("../src/agents/shadow.ts");
+  const { EXPIRY_GRACE_MS } = await import("../src/agents/store.ts");
+  const { DEFAULT_CEILINGS } = await import("../src/agents/policy.ts");
+  assert.deepEqual(
+    [{ role: "owner" }, { role: "ops" }, { role: "sales" }, "orchestrator", "independent_auditor", "lead_concierge"].map((reader) => viewFor(OBJECT_MODELS, reader, "delegation") !== null),
+    [true, true, false, true, true, false],
+  );
+  // A run closes within its wall time plus the cron's grace; the read looks back further than that.
+  assert.ok(RUN_LIFETIME_BOUND_MS > DEFAULT_CEILINGS.wallTimeMs + EXPIRY_GRACE_MS + 3_600_000);
 });

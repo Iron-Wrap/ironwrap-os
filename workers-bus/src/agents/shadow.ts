@@ -144,19 +144,26 @@ async function practiceStopped(db: AgentDb, tenantId: string, specialistId: stri
  * route a current passed qualification names, or the Worker refused a close on one. Its release
  * (playbook, prompt, tier or model) changed without passing qualification (contract "Delegation"
  * item 7), so a within-limits setting falls back and practice runs stop.
- * ponytail: scans the specialist's runs closed since the setting; add an index or a recorded marker
- * if it shows in step latency.
+ * ponytail: reads the tenant's runs started since the setting; add an index or a recorded marker if
+ * it shows in step latency.
  */
 export async function unqualifiedSince(db: AgentDb, tenantId: string, specialistId: string, since: string): Promise<boolean> {
+  // A run that ended after `since` started at most a run's lifetime before it: its wall time and the
+  // cron's grace (store.ts EXPIRY_GRACE_MS) are well inside two days. The bound keeps the read a range
+  // on the tenant's closed runs by start time (idx_agent_runs_tenant_state).
+  const started = new Date(Date.parse(since) - RUN_LIFETIME_BOUND_MS).toISOString();
   const row = await db
     .prepare(
-      `SELECT 1 AS found FROM agent_runs WHERE tenant_id = ? AND state = 'closed' AND specialist_id = ? AND ended_at >= ?
+      `SELECT 1 AS found FROM agent_runs WHERE tenant_id = ? AND state = 'closed' AND started_at >= ? AND specialist_id = ? AND ended_at >= ?
         AND 'no_qualified_route' IN (json_extract(close_json, '$.reason'), json_extract(close_json, '$.refused.reason')) LIMIT 1`,
     )
-    .bind(tenantId, specialistId, since)
+    .bind(tenantId, started, specialistId, since)
     .first();
   return row !== null;
 }
+
+/** Longer than any run lives before it closes: its wall time plus the cron's grace, with room to spare. */
+const RUN_LIFETIME_BOUND_MS = 2 * 86_400_000;
 
 /** An action can be shadowed when it is the specialist's own, has an effect to stand in for, and is not protective or people-only. */
 export function shadowable(specialistId: string, actionId: string): boolean {
@@ -259,17 +266,6 @@ export function signalActions(signal: { kind: string; specialist_id: string; wat
   if (signal.kind === "watch" && signal.watch_id)
     return CATALOG.watches.find((watch) => watch.watch_id === signal.watch_id && watch.owner === signal.specialist_id)?.proposes ?? [];
   return [];
-}
-
-/**
- * Whether a step is diverted into shadow: only an action the owner shadowed for this specialist,
- * never a protective one. The run's mode is a budget hint for the host and diverts nothing: it
- * comes from the signal, which another specialist's handoff can choose.
- */
-export async function divertsToShadow(db: AgentDb, tenantId: string, run: { specialist_id: string }, actionId: string): Promise<boolean> {
-  if (catalogAction(actionId)?.protective) return false;
-  const practice = await shadowSetting(db, tenantId, run.specialist_id, actionId);
-  return practice.shadow && !practice.stopped;
 }
 
 /** Records a shadow proposal once per step key, with the decision policy would have made. */
@@ -753,6 +749,101 @@ export async function previewablePairs(db: AgentDb, tenantId: string, bar = CAND
   return previewable;
 }
 
+/**
+ * One specialist and action's earned-autonomy record, the `delegation/<specialist>:<action>` fact
+ * the face reads and cites (contract `delegation.propose_change` reads that action's history for
+ * that specialist): the setting, practice, the counted window and the bar, the qualification it
+ * relies on, the decision history, failed readbacks, and the most proposals in any rolling hour, day
+ * or week over the 30 days up to its latest proposal, which is where a ceiling's count comes from.
+ * Null for an id that names no pair whose autonomy can be earned.
+ */
+export async function delegationRecord(db: AgentDb, tenantId: string, id: string): Promise<Record<string, unknown> | null> {
+  const split = id.indexOf(":");
+  if (split < 1) return null;
+  const specialistId = id.slice(0, split);
+  const actionId = id.slice(split + 1);
+  const preview = await delegationPreview(db, tenantId, specialistId, actionId, null);
+  if (!preview) return null;
+  const action = catalogAction(actionId)!;
+  const current = await currentDelegation(db, tenantId, specialistId, actionId);
+  const practice = await shadowSetting(db, tenantId, specialistId, actionId);
+  const model = await specialistRunsOn(db, tenantId, specialistId);
+  const qualification = model?.release
+    ? await db
+        .prepare(
+          `SELECT qualification_id, provider, model, effort, passed FROM agent_qualifications WHERE tenant_id = ? AND specialist_id = ? AND provider = ? AND model = ?
+            AND (? IS NULL OR effort = ?) AND release_sha256 = ?
+          ORDER BY recorded_at DESC, rowid DESC LIMIT 1`,
+        )
+        .bind(tenantId, specialistId, model.provider, model.model, model.effort, model.effort, model.release)
+        .first<{ qualification_id: string; provider: string; model: string; effort: string; passed: number }>()
+    : null;
+  const counts = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = ? AND action_id = ?
+        AND json_extract(permit_json, '$.delegation_id') IS NOT NULL AND (outcome = 'unknown' OR reason_code = 'readback_mismatch')`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .first<{ n: number }>();
+  const proposed = await db
+    .prepare(
+      `SELECT at FROM (
+        SELECT created_at AS at FROM agent_run_steps WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3
+        UNION ALL SELECT proposed_at AS at FROM agent_shadow_steps WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3
+      ) ORDER BY at DESC LIMIT 5000`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .all<{ at: string }>();
+  const times = (proposed.results ?? []).map((row) => Date.parse(row.at)).reverse();
+  const since = times.length > 0 ? times[times.length - 1] - 30 * 86_400_000 : 0;
+  const recent = times.filter((at) => at >= since);
+  const most = (span: number) => {
+    let best = 0;
+    for (let end = 0, start = 0; end < recent.length; end += 1) {
+      while (recent[end] - recent[start] >= span) start += 1;
+      best = Math.max(best, end - start + 1);
+    }
+    return best;
+  };
+  const setting = current?.setting ?? (action.default_delegation === "off_until_enabled" ? "off" : (action.default_delegation ?? "asks_first"));
+  return {
+    specialist_id: specialistId,
+    action_id: actionId,
+    setting: { setting, fallback: current?.fallback ?? false, ceiling: current?.ceiling ?? null },
+    practice: { shadow: practice.shadow, stopped: practice.stopped, ...preview.practice },
+    release_sha256: preview.release_sha256,
+    policy_version: Number(STEP_POLICY_VERSION),
+    window: { ...preview.window, match_rate: preview.window.match_rate === null ? null : Math.round(preview.window.match_rate * 1000) / 1000 },
+    bar: preview.bar,
+    qualified:
+      qualification?.passed === 1
+        ? { provider: qualification.provider, model: qualification.model, effort: qualification.effort, qualification_id: qualification.qualification_id }
+        : null,
+    history: preview.history,
+    failed_readback: Number(counts?.n ?? 0),
+    most_proposed_in: { hour: most(WINDOW_MS.hour), day: most(WINDOW_MS.day), week: most(WINDOW_MS.week) },
+  };
+}
+
+/**
+ * Whether the face already proposed a change for this pair that the owner has not answered: a
+ * finished `delegation.propose_change` since the pair's latest delegation or practice setting.
+ */
+export async function proposalAwaitsOwner(db: AgentDb, tenantId: string, specialistId: string, actionId: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS found FROM agent_run_steps s WHERE s.tenant_id = ?1 AND s.action_id = 'delegation.propose_change' AND s.outcome = 'succeeded'
+        AND json_extract(s.args_json, '$.specialist_id') = ?2 AND json_extract(s.args_json, '$.action_id') = ?3
+        AND s.created_at > COALESCE((SELECT MAX(set_at) FROM (
+          SELECT set_at FROM agent_delegation_settings WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3
+          UNION ALL SELECT set_at FROM agent_shadow_settings WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3)), '')
+      LIMIT 1`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .first();
+  return row !== null;
+}
+
 /** One compared decision in the bar's window, with the proposal it compared. */
 interface CountedDecision {
   verdict: Verdict;
@@ -764,8 +855,9 @@ interface CountedDecision {
 
 /**
  * The most recent compared decisions that count toward the bar, newest first: scored, of a run under
- * the current step policy and closed on the specialist's current release, whose close the Worker kept
- * (a refused close's work is not the specialist's).
+ * the current step policy and closed on the specialist's current release. A run whose close the
+ * Worker refused cannot earn autonomy, so its matches do not count; what a person or comparator did
+ * not match on it still counts against the specialist.
  */
 async function countedWindow(db: AgentDb, tenantId: string, specialistId: string, actionId: string, release: string, limit: number): Promise<CountedDecision[]> {
   const rows = await db
@@ -777,7 +869,7 @@ async function countedWindow(db: AgentDb, tenantId: string, specialistId: string
         JOIN agent_runs r ON r.run_id = COALESCE(s.run_id, h.run_id)
       WHERE a.tenant_id = ? AND a.specialist_id = ? AND a.action_id = ? AND a.verdict <> 'unscored'
         AND r.policy_version = ? AND json_extract(r.close_json, '$.model.release_sha256') = ?
-        AND json_extract(r.close_json, '$.refused') IS NULL
+        AND (json_extract(r.close_json, '$.refused') IS NULL OR a.verdict <> 'match')
       ORDER BY a.compared_at DESC, a.rowid DESC LIMIT ?`,
     )
     .bind(tenantId, specialistId, actionId, `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`, release, limit)
@@ -828,7 +920,7 @@ export async function delegationPreview(
   let wouldHaveRun: DelegationPreview["would_have_run"] = null;
   if (ceiling) {
     const ran: Array<{ at: number; matched: boolean }> = [];
-    for (const decision of [...window].reverse()) {
+    for (const decision of [...window].sort((a, b) => a.at.localeCompare(b.at) || a.row - b.row)) {
       const at = Date.parse(decision.at);
       const inWindow = ran.filter((entry) => entry.at > at - WINDOW_MS[ceiling.count.per]).length;
       if (inWindow < ceiling.count.max && stepFitsCeiling(ceiling, JSON.parse(decision.args_json))) ran.push({ at, matched: decision.verdict === "match" });

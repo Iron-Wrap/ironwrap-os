@@ -1996,8 +1996,15 @@ test("a within-limits setting falls back once a run of the specialist ends witho
   const refused = await s.close((await s.run()).run_id, closeV3({ qualification_ref: null }));
   assert.deepEqual([refused.status, refused.body.terminal], [200, "abstained"]);
   assert.deepEqual(await delegation(), ["asks_first", true]);
-  // Another specialist's unqualified run never touches this one's setting.
-  assert.equal((await currentDelegation(s.db, TENANT, "estimator", "note.add")), null);
+  // Another specialist's run without a qualified route never touches this one's setting.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: 2 }), "owner", "deleg-release-3")).status, 200);
+  assert.equal((await s.app("/specialists/estimator/delegation", setting(), "owner", "deleg-release-estimator")).status, 200);
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run("estimator")).run_id, unqualifiedClose())).status, 200);
+  const estimator = await currentDelegation(s.db, TENANT, "estimator", "note.add");
+  assert.deepEqual([estimator?.setting, estimator?.fallback], ["asks_first", true]);
+  assert.deepEqual(await delegation(), ["within_limits", false], "lead_concierge's setting stands");
 });
 
 test("a practice-only action stops practising after a catastrophe or an unqualified release, and stays practice only until the owner sets it again", async () => {
@@ -2138,7 +2145,7 @@ test("the owner's preview shows the counted decisions, the bar, the history and 
   assert.equal((await s.app("/specialists/lead_concierge/preview?action=note.add", undefined, "sales")).status, 403);
 });
 
-test("a specialist's declined proposal still counts against it; only a close the Worker refused is not its work", async () => {
+test("a specialist's declined proposal still counts against it, and a refused close can count against it but never for it", async () => {
   const s = setup(true);
   const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-declined");
   await seedCompared(s, qualified.body.qualification_id, 49, "match");
@@ -2151,9 +2158,12 @@ test("a specialist's declined proposal still counts against it; only a close the
   assert.equal((await s.close(run.run_id, closeV3({ qualification_ref: qualified.body.qualification_id }))).body.terminal, "completed");
   const window = async () => (await s.app("/specialists/lead_concierge/preview?action=note.add")).body.window;
   assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 1], "the declined proposal counts");
-  // A refused close's decisions are left out, whatever they were.
-  await seedCompared(s, null, 5, "diverge");
-  assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 1], "the refused run's decisions do not count");
+  // A refused close cannot earn autonomy: its matches are left out, while what did not match on it
+  // still counts against the specialist.
+  await seedCompared(s, null, 5, "match");
+  assert.deepEqual([(await window()).compared, (await window()).diverge, (await window()).match], [50, 1, 49], "the refused run's matches do not count");
+  await seedCompared(s, null, 2, "diverge");
+  assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 3], "the refused run's divergences do");
 });
 
 test("the weekly delegation review holds when an action meets the bar or has enough counted decisions for a preview", async () => {
@@ -2169,4 +2179,71 @@ test("the weekly delegation review holds when an action meets the bar or has eno
   await seedCompared(s, qualified.body.qualification_id, 50, "match");
   const earned = await review();
   assert.deepEqual([(earned.digest as any).delegation_candidates.map((row: { action_id: string }) => row.action_id), (earned.digest as any).previewable], [["note.add"], []]);
+});
+
+test("the preview replays the counted decisions in the order they were proposed, not compared", async () => {
+  const s = setup(true);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-order");
+  const run = await s.run();
+  const base = Date.parse(s.now());
+  // Proposed at 0, 90 and 100 minutes; compared last-first-middle.
+  for (const [id, proposedMin, comparedMin] of [["o3", 100, 200], ["o1", 0, 201], ["o2", 90, 202]] as const) {
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+        VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+      )
+      .run(`sstep_${id}`, TENANT, run.run_id, id, "0".repeat(64), new Date(base + proposedMin * 60_000).toISOString());
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+        VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`,
+      )
+      .run(`agr_${id}`, TENANT, `sstep_${id}`, new Date(base + comparedMin * 60_000).toISOString());
+  }
+  s.tick(1_000);
+  assert.equal((await s.close(run.run_id, closeV3({ qualification_ref: qualified.body.qualification_id }))).body.terminal, "completed");
+  const one = { count: { max: 1, per: "hour" }, amount: null, recipients: null };
+  const shown = (await s.app(`/specialists/lead_concierge/preview?action=note.add&ceiling=${encodeURIComponent(JSON.stringify(one))}`)).body;
+  // At 0 it runs, at 90 it runs (the first left the hour), at 100 the hour is full.
+  assert.deepEqual(shown.would_have_run, { ran: 2, ran_not_matching: 0, of: 3 });
+});
+
+test("the face reads each listed pair's delegation record, and a pair it already proposed is not listed again", async () => {
+  const s = setup(true);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-record");
+  await seedCompared(s, qualified.body.qualification_id, 49, "match");
+  await seedCompared(s, qualified.body.qualification_id, 1, "diverge");
+  const review = await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now());
+  assert.deepEqual(review.objects, [{ aggregate: "delegation", id: "lead_concierge:note.add" }]);
+  // The watch's run starts from that object and holds its record.
+  const signal = await appendSignal(
+    s.db,
+    TENANT,
+    { kind: "watch", specialist_id: "orchestrator", watch_id: "delegation_review", source: "watch_scheduler", subject: null, content: { watch_id: "delegation_review", period_key: "synthetic", objects: review.objects, digest: review.digest, summary: review.summary }, dedupe_key: "review-record" },
+    s.now(),
+  );
+  assert.ok("signal_id" in signal);
+  const opened = await s.worker.openRun({ signal_id: signal.signal_id, specialist_id: "orchestrator", host_run_key: "review-record-run" });
+  const record = opened.context.facts.find((fact: { fact_id: string }) => fact.fact_id === "delegation/lead_concierge:note.add");
+  assert.ok(record, JSON.stringify(opened.context.facts.map((fact: { fact_id: string }) => fact.fact_id)));
+  assert.deepEqual(Object.keys(record.data).sort(), [
+    "action_id", "bar", "failed_readback", "history", "most_proposed_in", "policy_version", "practice", "qualified", "release_sha256", "setting", "specialist_id", "window",
+  ]);
+  assert.deepEqual(
+    [record.data.setting, record.data.policy_version, record.data.window.match_rate, record.data.bar.meets, record.data.qualified?.qualification_id, record.data.most_proposed_in],
+    [{ setting: "within_limits", fallback: false, ceiling: null }, 5, 0.98, true, qualified.body.qualification_id, { hour: 50, day: 50, week: 50 }],
+  );
+  // Once the face proposes it, the next review lists it as awaiting the owner, not as a candidate.
+  const proposed = (await s.propose({ run_id: opened.run_id, signal_id: signal.signal_id }, "delegation.propose_change", proposal())).body;
+  assert.equal(proposed.decision, "drafted", JSON.stringify(proposed));
+  const again = await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now());
+  assert.deepEqual([(again.digest as any).delegation_candidates, (again.digest as any).awaiting_owner], [[], [{ specialist_id: "lead_concierge", action_id: "note.add" }]]);
+  // The owner answers it (here: practice only); the pair can be proposed again.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "answer-proposal")).status, 200);
+  assert.equal(((await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now())).digest as any).awaiting_owner.length, 0);
+  // Any other id names no record.
+  for (const id of ["lead_concierge", "lead_concierge:consent.record", "synthetic_nobody:note.add"])
+    assert.equal(await (await import("../src/agents/read-models.ts")).OBJECT_MODELS.delegation.read(s.db, TENANT, id), null, id);
 });

@@ -10,7 +10,7 @@
 // committed D1 event mapping.
 
 import { CATALOG, catalogSpecialist } from "./catalog.ts";
-import { delegationCandidates, previewablePairs } from "./shadow.ts";
+import { delegationCandidates, previewablePairs, proposalAwaitsOwner } from "./shadow.ts";
 import type { Notify } from "./control.ts";
 import { appendSignal, type AgentDb } from "./store.ts";
 
@@ -87,6 +87,23 @@ async function jobsChanged(db: AgentDb, tenantId: string, since: string) {
   return { total: await count(db, "SELECT COUNT(*) AS n FROM operating_roof_jobs WHERE tenant_id = ? AND updated_at >= ?", tenantId, since), ids: listed.map((row) => row.roof_job_id) };
 }
 
+/**
+ * The pairs that meet the earned-autonomy bar (minus those the face proposed and the owner has not
+ * answered), and the pairs with a full counted window that do not meet it.
+ */
+async function earnedAutonomy(db: AgentDb, tenantId: string) {
+  const all = await delegationCandidates(db, tenantId);
+  const candidates = [];
+  const awaiting = [];
+  for (const row of all) {
+    if (await proposalAwaitsOwner(db, tenantId, row.specialist_id, row.action_id)) awaiting.push({ specialist_id: row.specialist_id, action_id: row.action_id });
+    else candidates.push(row);
+  }
+  const earned = new Set(all.map((row) => `${row.specialist_id} ${row.action_id}`));
+  const previewable = (await previewablePairs(db, tenantId)).filter((row) => !earned.has(`${row.specialist_id} ${row.action_id}`));
+  return { candidates, awaiting, previewable };
+}
+
 export const WATCH_CONDITIONS: Record<string, Condition> = {
   new_leads: {
     version: "1",
@@ -143,11 +160,11 @@ export const WATCH_CONDITIONS: Record<string, Condition> = {
     version: "1",
     async evaluate(db, tenantId, since) {
       const receipts = await receiptsSince(db, tenantId, since);
-      const candidates = await delegationCandidates(db, tenantId);
+      const { candidates, previewable } = await earnedAutonomy(db, tenantId);
       return {
         holds: true,
         objects: [],
-        digest: { receipts_by_outcome: receipts, delegation_candidates: candidates },
+        digest: { receipts_by_outcome: receipts, delegation_candidates: candidates, previewable },
         summary: `${candidates.length} delegation candidates this week`,
       };
     },
@@ -157,14 +174,15 @@ export const WATCH_CONDITIONS: Record<string, Condition> = {
     // An action meets the earned-autonomy bar for a specialist, or has enough counted decisions for
     // a preview (contract "Delegation" item 13): the face may propose a change with
     // delegation.propose_change, and the owner decides it with delegation.set after the preview.
+    // A pair the face already proposed and the owner has not answered is listed apart, not again as
+    // a candidate. Each listed pair is an object, so the run reads its `delegation/…` record.
     async evaluate(db, tenantId) {
-      const candidates = await delegationCandidates(db, tenantId);
-      const earned = new Set(candidates.map((row) => `${row.specialist_id} ${row.action_id}`));
-      const previewable = (await previewablePairs(db, tenantId)).filter((row) => !earned.has(`${row.specialist_id} ${row.action_id}`));
+      const { candidates, awaiting, previewable } = await earnedAutonomy(db, tenantId);
+      const pairs = [...candidates, ...previewable].slice(0, MAX_OBJECTS);
       return {
         holds: candidates.length + previewable.length > 0,
-        objects: [],
-        digest: { delegation_candidates: candidates, previewable },
+        objects: pairs.map((row) => ({ aggregate: "delegation", id: `${row.specialist_id}:${row.action_id}` })),
+        digest: { delegation_candidates: candidates, previewable, awaiting_owner: awaiting },
         summary: `${candidates.length} actions meet the earned-autonomy bar, ${previewable.length} more have enough compared decisions for a preview`,
       };
     },

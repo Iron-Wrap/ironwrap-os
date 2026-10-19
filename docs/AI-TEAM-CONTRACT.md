@@ -717,8 +717,9 @@ them and follows these conventions:
   the same four keys as the `fields` of `lead_fact.confirm`: every key present, `null` where nothing
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
-  citations, never an argument, and only raw inbound facts (`signal/<id>`) may be cited. Its
-  arguments are not registered yet, so until they are, a step abstains (`policy_missing`).
+  citations, never an argument. Only a run started by the inbound event itself may propose it, and
+  every citation is that event (`signal/<id>`). Its arguments are not registered yet, so until
+  they are, a step abstains (`policy_missing`).
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:

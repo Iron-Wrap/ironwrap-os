@@ -170,8 +170,16 @@ test("a non-delegable action asks first whatever the owner set, and off-until-en
   assert.deepEqual(live.reason_codes, ["policy_denied"]);
 });
 
+/** A production manager's press on compliance's view, the request a competency record answers. */
+const PRESS = {
+  signal_ref: "signal/sig_1",
+  kind: "owner_request",
+  source: "request",
+  actor: { type: "staff", role: "production", ref: "person:appu_production_1", authenticated: true },
+};
+
 test("compliance proposes an internal competency record for a person's approval only", () => {
-  const compliance = { specialistId: "compliance" };
+  const compliance = { specialistId: "compliance", requester: PRESS };
   const command = {
     operation: "record",
     authority_kind: "Worker Competency",
@@ -197,6 +205,10 @@ test("compliance proposes an internal competency record for a person's approval 
   assert.equal(proposed.result, "needs_approval");
   assert.equal(proposed.permit_kind, "asks_first");
   assert.equal(proposed.reviewer_role, "production");
+  // Only a press on compliance's view: the same command answering an ask, a field worker's press or
+  // no person's request abstains before its arguments are read.
+  for (const requester of [{ ...PRESS, source: "ask" }, { ...PRESS, actor: { ...PRESS.actor, type: "worker", role: "field" } }, null])
+    assert.deepEqual(evaluateStep(input({ ...compliance, requester, actionId: "authority.record", args: command })).reason_codes, ["out_of_scope"], JSON.stringify(requester));
   // More reference text than the stored list holds would only fail after a person approved it.
   // Each reference is within its own 512-character limit; together they are not.
   const oversized = Array.from({ length: 40 }, (_, index) => ({ ref: `r2://authority/${String(index).padStart(485, "x")}`, sha256: "c".repeat(64) }));

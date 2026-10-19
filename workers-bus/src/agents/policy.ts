@@ -76,12 +76,16 @@ export interface StepInput {
 }
 
 /**
- * Actions prepared only on a signed-in owner's or staff member's own ask or request through the app,
+ * Actions proposed only on a signed-in owner's or staff member's own ask or request through the app,
  * never from a field worker, an outside sender's text or any other signal (contract "Inbound text is
- * data": an access change is prepared only on such a request). The step names that request in
- * `request_ref` and cites it; a handoff run answers the request at the root of its chain.
+ * data"). The step cites that request; a handoff run answers the request at the root of its chain.
+ * An access change is prepared on an ask or a request and names it in `request_ref`; a competency
+ * record answers only a press on compliance's view, a `request` (contract `authority.record`).
  */
-export const PERSON_REQUEST_ONLY: ReadonlySet<string> = new Set(["access.prepare_change"]);
+export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<string>; named: boolean }> = new Map([
+  ["access.prepare_change", { sources: new Set(["ask", "request"]), named: true }],
+  ["authority.record", { sources: new Set(["request"]), named: false }],
+]);
 
 export type Outcome = "succeeded" | "failed" | "unknown" | "abstained";
 
@@ -125,16 +129,17 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   if (!action.owners.includes(input.specialistId)) return stop("failed", "policy_denied", "scope");
   if (action.autonomy === "H" || action.human_only) return stop("failed", "policy_denied", "scope");
   pass("scope");
-  if (PERSON_REQUEST_ONLY.has(input.actionId)) {
+  const personRequest = PERSON_REQUEST_ONLY.get(input.actionId);
+  if (personRequest) {
     const request = input.requester;
     const person = request?.actor;
     if (
       !request ||
       request.kind !== "owner_request" ||
-      (request.source !== "ask" && request.source !== "request") ||
+      !personRequest.sources.has(request.source) ||
       person?.authenticated !== true ||
       (person.type !== "owner" && person.type !== "staff") ||
-      (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref ||
+      (personRequest.named && (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref) ||
       !input.citations.some((citation) => citation.fact_id === request.signal_ref)
     )
       return stop("abstained", "out_of_scope", "requester");

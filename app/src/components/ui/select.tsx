@@ -1,14 +1,18 @@
 import * as React from "react";
 
 import { cn } from "../../lib/cn";
+import { fieldControl } from "./field-control";
 
 export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
+  /** The crew's large select: `--control-height-primary` (64 on touch, 72 on glove). */
   field?: boolean;
   invalid?: boolean;
+  /** The options are still loading. */
+  busy?: boolean;
 }
 
 export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { className, field, invalid, ...props },
+  { className, field, invalid, busy, ...props },
   ref,
 ) {
   return (
@@ -16,11 +20,11 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(function 
       ref={ref}
       data-ui-size={field ? "field" : undefined}
       aria-invalid={invalid || undefined}
+      aria-busy={busy || undefined}
       className={cn(
-        "ui-select w-full rounded-md border border-border-control bg-surface-raised text-base text-foreground shadow-[0_1px_2px_rgb(21_24_28/0.06)] transition-[border-color,box-shadow,background-color] hover:border-border-strong disabled:cursor-not-allowed disabled:bg-surface-muted disabled:opacity-55",
-        field ? "min-h-16 px-4" : "min-h-12 px-3.5",
-        "focus-visible:border-focus focus-visible:outline-focus focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--focus)_22%,transparent)]",
-        invalid && "border-danger focus-visible:border-danger focus-visible:outline-danger",
+        "ui-select",
+        fieldControl,
+        field ? "min-h-[var(--control-height-primary)] px-4" : "min-h-[var(--control-height)] px-3",
         className,
       )}
       {...props}

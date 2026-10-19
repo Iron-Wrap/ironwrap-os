@@ -4,7 +4,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { generatedTokenNames, pruneUnreadTokens, sourceTokenReads } from "./prune-tokens";
+import {
+  generatedTokenNames,
+  pruneUnreadTokens,
+  sourceTokenReads,
+  splitThemeReads,
+} from "./prune-tokens";
 
 const names = new Set(["--surface-paper", "--text-primary", "--foreground", "--type-body-size"]);
 
@@ -93,17 +98,22 @@ describe("sourceTokenReads", () => {
   it("reads other stylesheets and scripts, and skips what only names tokens", () => {
     const src = mkdtempSync(join(tmpdir(), "ironwrap-src-"));
     dirs.push(src);
-    for (const dir of ["pages", "styles", "design-system"]) mkdirSync(join(src, dir));
+    for (const dir of ["pages", "styles", "design-system", "gallery"]) mkdirSync(join(src, dir));
     writeFileSync(join(src, "styles.css"), "@theme inline { --color-x: var(--from-theme-map); }");
     writeFileSync(join(src, "styles/tokens.css"), ":root { --generated: var(--from-generated); }");
+    writeFileSync(
+      join(src, "styles/theme.css"),
+      "@theme inline { --color-y: var(--from-mapping); }",
+    );
     writeFileSync(join(src, "design-system/tokens.json"), '"var(--from-json)"');
     writeFileSync(join(src, "pages/page.css"), ".a { color: var(--from-page-css); }");
     writeFileSync(join(src, "pages/page.tsx"), 'const c = "[color:var(--from-page-tsx)]";');
     writeFileSync(join(src, "pages/page.test.tsx"), 'expect("var(--from-test)")');
+    writeFileSync(join(src, "gallery/gallery.css"), ".g { color: var(--from-gallery); }");
     return sourceTokenReads(src).then((text) => {
       expect(text).toContain("--from-page-css");
       expect(text).toContain("--from-page-tsx");
-      for (const skipped of ["theme-map", "generated", "json", "test"]) {
+      for (const skipped of ["theme-map", "mapping", "generated", "json", "test", "gallery"]) {
         expect(text).not.toContain(`--from-${skipped}`);
       }
     });
@@ -131,5 +141,20 @@ describe("the generated file", () => {
     expect(generated).toContain("--surface-paper");
     expect(generated).toContain("--foreground");
     expect(generated).not.toContain("--tw-ring-color");
+  });
+});
+
+describe("splitThemeReads", () => {
+  it("reads the token behind each colour utility a split source names, and no other", () => {
+    const theme =
+      "@theme inline {\n  --color-signal-you-tint-edge: var(--signal-you-tint-edge);\n" +
+      "  --color-signal-you: var(--signal-you);\n  --color-muted: var(--text-secondary);\n}";
+    expect(splitThemeReads(theme, 'className="border border-signal-you-tint-edge"')).toBe(
+      "var(--signal-you-tint-edge)",
+    );
+    // A longer name is not its prefix: `signal-you-tint-edge` does not read `--signal-you`.
+    expect(splitThemeReads(theme, '"hover:text-muted phone:bg-signal-you"')).toBe(
+      "var(--signal-you)\nvar(--text-secondary)",
+    );
   });
 });

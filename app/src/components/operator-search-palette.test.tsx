@@ -129,13 +129,14 @@ describe("OperatorSearchPalette", () => {
     vi.useRealTimers();
   });
 
-  it("provides a named 44px trigger with the familiar shortcut", () => {
+  it("provides a named trigger the density sizes, with the familiar shortcut", () => {
     const onOpen = vi.fn();
     render(<OperatorSearchPaletteTrigger onOpen={onOpen} />);
     const trigger = screen.getByRole("button", { name: "Open search (Command or Control K)" });
     expect(trigger).toHaveAttribute("title", "Search (⌘K / Ctrl+K)");
     expect(trigger).toHaveAttribute("aria-keyshortcuts", "Control+K Meta+K");
-    expect(trigger).toHaveClass("size-11");
+    // A square of the density's control height: 28 on the office, 48 on touch, 72 on glove.
+    expect(trigger).toHaveClass("size-[var(--control-height)]");
     trigger.click();
     expect(onOpen).toHaveBeenCalledOnce();
   });

@@ -5,11 +5,14 @@ import test, { type TestContext } from "node:test";
 import { ProviderGateway } from "../src/gateway/gateway.ts";
 import { parseGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
 import { ProviderError, type GatewayRequest, type GatewayResult } from "../src/gateway/types.ts";
-import { CONFIG_PATH, OUTPUT_SCHEMA, fakeAdapter, outcome, qualification, shippedConfig, tempDir, type FakeAdapter } from "./helpers.ts";
+import { CONFIG_PATH, OUTPUT_SCHEMA, RELEASE, fakeAdapter, liveConfig, outcome, qualification, qualifications, shippedConfig, tempDir, type FakeAdapter } from "./helpers.ts";
 
+// A live run of a specialist the Worker qualified on every shipped route at RELEASE.
 const request = (overrides: Partial<GatewayRequest> = {}): GatewayRequest => ({
   specialist: "lead_concierge",
   tier: "routine",
+  release: RELEASE,
+  qualifications: qualifications(),
   system: "You are the lead concierge.",
   prompt: "<data>synthetic signal</data>",
   outputSchema: OUTPUT_SCHEMA,
@@ -32,10 +35,11 @@ function harness(t: TestContext, options: { config?: GatewayConfig; stateDir?: s
   const codex = fakeAdapter("codex");
   const sleeps: number[] = [];
   const clock = { now: 1_000_000_000_000 };
-  codex.credentialState = { fingerprint: "codex-credential-1", refreshedAt: clock.now };
+  // A ChatGPT business workspace sign-in claims its plan.
+  codex.credentialState = { fingerprint: "codex-credential-1", refreshedAt: clock.now, plan: "business" };
   const env: Record<string, string | undefined> = {};
   const gateway = new ProviderGateway({
-    config: options.config ?? shippedConfig(),
+    config: options.config ?? liveConfig(),
     stateDir,
     env,
     adapters: { claude, codex },
@@ -63,7 +67,7 @@ test("a routine run goes to Codex on the configured model and returns validated 
   assert.deepEqual(result.status === "ok" && result.output, { decision: "propose", note: null });
   assert.equal(result.provider, "codex");
   assert.equal(result.model, "gpt-6.1-sol");
-  assert.equal(result.authMode, "chatgpt");
+  assert.equal(result.authMode, "oauth");
   assert.equal(result.attempts, 1);
   assert.equal(result.costUsd, 0.25);
   assert.match(result.hashes.prompt, /^[0-9a-f]{64}$/);
@@ -108,7 +112,7 @@ test("unregistered specialists and borrowed tiers abstain", async (t) => {
 });
 
 test("a disabled or signed-out provider makes its specialists abstain with no fallback", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.providers.codex.enabled = false;
   const disabled = harness(t, { config });
   assert.equal(abstained(await disabled.gateway.run(request())).reason, "provider_disabled");
@@ -201,7 +205,7 @@ test("a provider that answers with another model abstains instead of passing it 
 });
 
 test("call ceilings hold across a restart", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.specialists.estimator = { calls: 2, costUsd: 30, costUsdPerCall: 3 };
   const first = harness(t, { config });
   first.codex.steps.push(outcome(), outcome());
@@ -215,7 +219,7 @@ test("call ceilings hold across a restart", async (t) => {
 });
 
 test("cost ceilings reserve the per-call ceiling so concurrent runs cannot overshoot", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.specialists.estimator = { calls: 100, costUsd: 6, costUsdPerCall: 3 };
   const h = harness(t, { config });
   let release!: () => void;
@@ -279,7 +283,7 @@ test("a caller schema outside the strict subset is a programming error", async (
 test("exhausted attempts with a rotated credential mark only the credential that was tried", async (t) => {
   const h = harness(t);
   h.codex.steps.push(new ProviderError("transient", "overloaded"), new ProviderError("transient", "overloaded"), async () => {
-    h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now };
+    h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now, plan: "business" };
     throw new ProviderError("auth", "401 token expired");
   });
   assert.equal(abstained(await h.gateway.run(request())).reason, "auth_failed");
@@ -319,7 +323,7 @@ test("a ledger that cannot be written stops spending instead of throwing or doub
 });
 
 test("a crash between reservation and settlement keeps the reservation counted", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.specialists.estimator = { calls: 100, costUsd: 6, costUsdPerCall: 3 };
   const crashed = harness(t, { config });
   const hang = new AbortController();
@@ -340,13 +344,17 @@ test("any model other than the configured one, including a refusal fallback, abs
   const audit = request({ specialist: "independent_auditor", tier: "audit" });
   h.claude.steps.push({ ...outcome(), modelsUsed: ["claude-opus-5-5", "claude-opus-5"] });
   assert.equal(abstained(await h.gateway.run(audit)).reason, "model_mismatch");
-  const config = shippedConfig();
+  const config = liveConfig();
+  config.providers.claude.models["claude-opus-5"] = config.providers.claude.models["claude-opus-5-5"];
   config.routes.claude_opus.model = "claude-opus-5";
   const shorter = harness(t, { config });
+  const qualified = { ...audit, qualifications: qualifications(config) };
   shorter.claude.steps.push({ ...outcome(), modelsUsed: ["claude-opus-5-5"] });
-  assert.equal(abstained(await shorter.gateway.run(audit)).reason, "model_mismatch");
+  assert.equal(abstained(await shorter.gateway.run(qualified)).reason, "model_mismatch");
   shorter.claude.steps.push({ ...outcome(), modelsUsed: ["claude-opus-5-20260901"] });
-  assert.equal((await shorter.gateway.run(audit)).status, "ok");
+  assert.equal((await shorter.gateway.run(qualified)).status, "ok");
+  shorter.claude.steps.push({ ...outcome(), modelsUsed: ["claude-opus-5-2026-09-01"] });
+  assert.equal((await shorter.gateway.run(qualified)).status, "ok");
 });
 
 test("an unknown tier is a programming error", async (t) => {
@@ -404,7 +412,7 @@ test("a plan that does not include the model abstains actionably and keeps the p
   assert.equal(health.providers.codex.state, "plan_lacks_model");
   assert.ok(health.alerts.includes("codex_plan_lacks_model"), JSON.stringify(health.alerts));
   // A new sign-in (auth.json changed) clears it.
-  h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now, plan: "pro" };
+  h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now, plan: "business" };
   h.codex.steps.push(outcome());
   assert.equal((await h.gateway.run(request())).status, "ok");
   assert.equal((await h.gateway.health()).ready, true);
@@ -418,7 +426,7 @@ test("a sign-in claiming a plan outside the configured plans is not ready and is
   assert.equal(health.providers.codex.plan, "free");
   assert.deepEqual(health.alerts, ["codex_plan_lacks_model"]);
   const result = abstained(await h.gateway.run(request({ tier: "hard" })));
-  assert.match(result.detail, /^codex: plan does not include model gpt-6-astra; the sign-in is on the free plan, configured plans are pro;/);
+  assert.match(result.detail, /^codex: plan does not include model gpt-6-astra; the sign-in is on the free plan, configured plans are business, enterprise, team;/);
   assert.equal(h.codex.calls.length, 0);
   // The auditor's Claude route is unaffected.
   h.claude.steps.push(outcome());
@@ -492,13 +500,14 @@ test("a credential rotated mid-run onto a plan outside the configured plans is n
 
 const programmingError = (pattern: RegExp) => (error: unknown) => error instanceof TypeError && pattern.test(error.message);
 const ledgerRecords = (file: string) => readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-const audit = (provider: string, runId = "run_0000000001") =>
-  request({ specialist: "independent_auditor", tier: "audit", reviewOf: { runId, provider: provider as "codex" | "claude" } });
-const judging = (provider: string) =>
-  request({ scope: "eval", specialist: "eval_judge", tier: "audit", reviewOf: { runId: "case_01:1", provider: provider as "codex" | "claude" } });
+const audit = (family: string, runId = "run_0000000001") => request({ specialist: "independent_auditor", tier: "audit", reviewOf: { runId, family } });
+const judging = (family: string) => {
+  const { release: _release, qualifications: _qualifications, ...rest } = request({ scope: "eval", specialist: "eval_judge", tier: "audit", reviewOf: { runId: "case_01:1", family } });
+  return rest;
+};
 
 test("a run takes its expected action's route, then its specialist's route, then its tier's", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.specialists.estimator = { tiers: ["routine", "hard"], route: "codex_astra", actions: { "estimate.price": "claude_opus" } };
   const h = harness(t, { config });
   h.claude.steps.push(outcome());
@@ -520,10 +529,10 @@ test("the auditor reviews a run on the other family's route, and runs on tiers.a
   const h = harness(t);
   h.claude.steps.push(outcome(), outcome());
   h.codex.steps.push(outcome());
-  const ofCodex = await h.gateway.run(audit("codex", "run_0000000007"));
-  assert.deepEqual([ofCodex.status, ofCodex.routeId, ofCodex.provider], ["ok", "claude_opus", "claude"]);
-  assert.deepEqual(ofCodex.reviewOf, { runId: "run_0000000007", provider: "codex" });
-  const ofClaude = await h.gateway.run(audit("claude"));
+  const ofCodex = await h.gateway.run(audit("openai", "run_0000000007"));
+  assert.deepEqual([ofCodex.status, ofCodex.routeId, ofCodex.provider, ofCodex.family], ["ok", "claude_opus", "claude", "anthropic"]);
+  assert.deepEqual(ofCodex.reviewOf, { runId: "run_0000000007", family: "openai" });
+  const ofClaude = await h.gateway.run(audit("anthropic"));
   assert.deepEqual([ofClaude.status, ofClaude.routeId, ofClaude.provider, ofClaude.model], ["ok", "codex_astra", "codex", "gpt-6-astra"]);
   assert.equal(h.codex.calls[0].effort, "high");
   const unreviewed = await h.gateway.run(request({ specialist: "independent_auditor", tier: "audit" }));
@@ -531,19 +540,21 @@ test("the auditor reviews a run on the other family's route, and runs on tiers.a
 });
 
 test("an audit with no route of another family abstains before any provider call or booking", async (t) => {
-  const config = shippedConfig();
-  // Valid: no proposer runs on Claude, so the configuration needs no Claude audit route.
-  delete config.auditRoutes.claude;
+  const config = liveConfig();
+  // Valid: no proposer runs on Claude, so the configuration needs no anthropic audit route.
+  delete config.auditRoutes.anthropic;
   const h = harness(t, { config });
-  const missing = abstained(await h.gateway.run(audit("claude", "run_0000000003")));
+  const missing = abstained(await h.gateway.run(audit("anthropic", "run_0000000003")));
   assert.equal(missing.reason, "no_independent_route");
-  assert.match(missing.detail, /no route of another family than claude may review run run_0000000003/);
+  assert.match(missing.detail, /no route of another family than anthropic may review run run_0000000003/);
   assert.deepEqual([missing.routeId, missing.provider, missing.model, missing.authMode, missing.retryAt], [null, null, null, null, undefined]);
-  assert.deepEqual(missing.reviewOf, { runId: "run_0000000003", provider: "claude" });
-  // Checked per run too: an audit route of the reviewed family that got past the configuration.
-  config.auditRoutes.codex = "codex_astra";
-  assert.equal(abstained(await h.gateway.run(audit("codex"))).reason, "no_independent_route");
-  assert.equal(abstained(await h.gateway.run(audit("gemini"))).reason, "no_independent_route");
+  assert.deepEqual(missing.reviewOf, { runId: "run_0000000003", family: "anthropic" });
+  // Checked per hop too: an audit route of the reviewed family that got past the configuration.
+  config.auditRoutes.openai = "codex_astra";
+  const same = abstained(await h.gateway.run(audit("openai")));
+  assert.deepEqual([same.reason, same.routeId, same.failover.map((hop) => [hop.routeId, hop.reason])], ["no_independent_route", null, [["codex_astra", "no_independent_route"]]]);
+  // A family the registry does not hold has no reviewer, and the v2 provider ids are no families.
+  for (const family of ["google", "claude", "codex"]) assert.equal(abstained(await h.gateway.run(audit(family))).reason, "no_independent_route", family);
   assert.equal(h.claude.calls.length + h.codex.calls.length, 0);
   assert.equal(existsSync(join(h.stateDir, "gateway-usage.jsonl")), false);
 });
@@ -565,8 +576,10 @@ test("requests for the wrong books, and eval-only fields outside eval, are progr
   );
   await assert.rejects(
     evaluation.gateway.run(request({ scope: "eval", tierRoutes: { routine: { provider: "codex", model: "gpt-7", effort: "high" } } })),
-    programmingError(/tierRoutes\.routine: codex model gpt-7 has no pricing_usd_per_mtok entry/),
+    programmingError(/tierRoutes\.routine\.model has no registry entry in \$\.providers\.codex\.models/),
   );
+  await assert.rejects(production.gateway.run(request({ data: "synthetic" })), programmingError(/data is for eval requests only/));
+  await assert.rejects(evaluation.gateway.run(request({ scope: "eval", data: "real" as never })), programmingError(/unknown eval data real/));
   await assert.rejects(
     evaluation.gateway.run(request({ scope: "eval", tierRoutes: { hard: { ...batch.routine, fallback: "x" } as never } })),
     programmingError(/tierRoutes\.hard\.fallback is not a known field/),
@@ -608,11 +621,11 @@ test("a judge runs on the judge route of the other family, books under its key a
   const h = harness(t, { qualification: block });
   h.claude.steps.push(outcome());
   h.codex.steps.push(outcome());
-  const ofCodex = await h.gateway.run(judging("codex"));
+  const ofCodex = await h.gateway.run(judging("openai"));
   assert.deepEqual([ofCodex.status, ofCodex.routeId, ofCodex.provider, ofCodex.model], ["ok", "judge.default", "claude", "claude-sonnet-5-5"]);
   assert.deepEqual([h.claude.calls[0].effort, h.claude.calls[0].maxCostUsd], ["medium", 1]);
   // A judge is no specialist, so no tier allowlist applies to it.
-  const ofClaude = await h.gateway.run({ ...judging("claude"), tier: "routine" });
+  const ofClaude = await h.gateway.run({ ...judging("anthropic"), tier: "routine" });
   assert.deepEqual([ofClaude.status, ofClaude.routeId, ofClaude.provider, ofClaude.model], ["ok", "judge.for_claude_proposers", "codex", "gpt-6.1-sol"]);
   assert.deepEqual([h.codex.calls[0].effort, h.codex.calls[0].maxCostUsd], ["high", 1]);
   assert.deepEqual([...new Set(ledgerRecords(join(h.stateDir, "gateway-usage-eval.jsonl")).map((record) => record.specialist))], ["eval:eval_judge"]);
@@ -624,14 +637,14 @@ test("a judge route of the reviewed family abstains as no_independent_route", as
   const block = qualification();
   block.judge.default = { provider: "codex", model: "gpt-6.1-sol", effort: "high" };
   const h = harness(t, { qualification: block });
-  const same = abstained(await h.gateway.run(judging("codex")));
+  const same = abstained(await h.gateway.run(judging("openai")));
   assert.deepEqual([same.reason, same.routeId, same.provider], ["no_independent_route", null, null]);
-  assert.equal(abstained(await h.gateway.run(judging("gemini"))).reason, "no_independent_route");
+  assert.equal(abstained(await h.gateway.run(judging("google"))).reason, "no_independent_route");
   assert.equal(h.codex.calls.length + h.claude.calls.length, 0);
 });
 
 test("an eval batch route replaces a proposing tier's route, ahead of action routes, and leaves the auditor alone", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.specialists.estimator = { tiers: ["routine", "hard"], route: null, actions: { "estimate.price": "codex_astra" } };
   const h = harness(t, { config, qualification: qualification() });
   h.claude.steps.push(outcome(), outcome(), outcome());
@@ -642,14 +655,14 @@ test("an eval batch route replaces a proposing tier's route, ahead of action rou
   const hard = await h.gateway.run(request({ scope: "eval", tier: "hard", tierRoutes: batch }));
   assert.deepEqual([hard.routeId, hard.model], ["codex_astra", "gpt-6-astra"]);
   // The auditor keeps its production routing in an eval batch, independence included.
-  const audited = await h.gateway.run({ ...audit("codex"), scope: "eval", tierRoutes: batch });
+  const audited = await h.gateway.run({ ...audit("openai"), scope: "eval", tierRoutes: batch });
   assert.deepEqual([audited.routeId, audited.provider], ["claude_opus", "claude"]);
   const unreviewed = await h.gateway.run(request({ scope: "eval", specialist: "independent_auditor", tier: "audit", tierRoutes: batch }));
   assert.equal(unreviewed.routeId, "claude_opus");
 });
 
 test("shadow runs spend only the shadow budget and live runs only the live one", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   // Different sizes, so a run held to the other namespace's ceiling shows.
   config.ceilings.specialists.estimator = { calls: 2, costUsd: 30, costUsdPerCall: 3 };
   config.ceilings.shadow.specialist = { calls: 1, costUsd: 3, costUsdPerCall: 0.5 };
@@ -671,7 +684,7 @@ test("shadow runs spend only the shadow budget and live runs only the live one",
 });
 
 test("team ceilings are kept per namespace in both directions", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.team = { calls: 2, costUsd: 300 };
   config.ceilings.shadow.team = { calls: 1, costUsd: 15 };
   const h = harness(t, { config });
@@ -702,7 +715,7 @@ test("ledger records without a namespace stay live, and a namespace this version
 });
 
 test("a ledger ceiling says when the oldest reservation counted against it leaves the window", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.specialists.estimator = { calls: 2, costUsd: 30, costUsdPerCall: 3 };
   config.ceilings.specialists.lead_concierge = { calls: 100, costUsd: 6, costUsdPerCall: 3 };
   const window = config.ceilings.windowHours * 3_600_000;
@@ -727,7 +740,7 @@ test("a ledger ceiling says when the oldest reservation counted against it leave
 });
 
 test("a team ceiling's retry time comes from its own namespace", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.team = { calls: 2, costUsd: 300 };
   const window = config.ceilings.windowHours * 3_600_000;
   const h = harness(t, { config });
@@ -765,7 +778,7 @@ test("abstentions that waiting cannot fix carry no retry time", async (t) => {
   results.push(await killed.gateway.run(request()));
   const h = harness(t);
   results.push(await h.gateway.run(request({ specialist: "ghost" })), await h.gateway.run(request({ tier: "audit" })));
-  const config = shippedConfig();
+  const config = liveConfig();
   config.providers.codex.enabled = false;
   results.push(await harness(t, { config }).gateway.run(request()));
   const signedOut = harness(t);
@@ -777,7 +790,7 @@ test("abstentions that waiting cannot fix carry no retry time", async (t) => {
     new ProviderError("budget", "per-call ceiling", { costUsd: 3 }),
   );
   results.push(await h.gateway.run(request()));
-  h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now };
+  h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now, plan: "business" };
   results.push(await h.gateway.run(request()), await h.gateway.run(request()));
   const cancelled = new AbortController();
   h.codex.steps.push(async () => {
@@ -802,7 +815,12 @@ test("abstentions that waiting cannot fix carry no retry time", async (t) => {
   ]);
 });
 
-const rawConfig = () => JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+/** The shipped file, with a synthetic retention confirmation on the Codex account so live runs reach it. */
+const rawConfig = () => {
+  const value = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  value.providers.codex.confirmed_retention = { confirmed_by: "owner", reference: "synthetic retention confirmation" };
+  return value;
+};
 
 test("an audit naming no run under review abstains while a proposer route shares the audit route's family", async (t) => {
   const proposersOnClaude: Array<(value: any) => void> = [
@@ -816,10 +834,10 @@ test("an audit naming no run under review abstains while a proposer route shares
     const h = harness(t, { config: parseGatewayConfig(value) });
     const unreviewed = abstained(await h.gateway.run(request({ specialist: "independent_auditor", tier: "audit" })));
     assert.deepEqual([unreviewed.reason, unreviewed.routeId, unreviewed.provider, unreviewed.retryAt], ["no_independent_route", null, null, undefined]);
-    assert.match(unreviewed.detail, /^tiers\.audit \(claude_opus\) runs on claude like proposer route claude_opus; name the run under review/);
+    assert.match(unreviewed.detail, /^tiers\.audit \(claude_opus\) runs on anthropic like proposer route claude_opus; name the run under review/);
     // Work under review still gets the route of the other family.
     h.codex.steps.push(outcome());
-    assert.equal((await h.gateway.run(audit("claude"))).routeId, "codex_astra");
+    assert.equal((await h.gateway.run(audit("anthropic"))).routeId, "codex_astra");
     assert.equal(h.claude.calls.length, 0);
   }
 });
@@ -854,7 +872,7 @@ test("a plan refusal retries at the next probe, and a sign-in on an unconfigured
 });
 
 test("prototype names as specialist, action or reviewed provider abstain or fall back, and never throw", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.specialists.estimator = { tiers: ["routine", "hard"], route: null, actions: { "estimate.price": "codex_astra" } };
   const h = harness(t, { config });
   for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
@@ -868,7 +886,7 @@ test("prototype names as specialist, action or reviewed provider abstain or fall
   const evaluation = harness(t, { qualification: qualification() });
   await assert.rejects(
     evaluation.gateway.run(request({ scope: "eval", tierRoutes: { routine: { provider: "codex", model: "toString", effort: "high" } } })),
-    programmingError(/codex model toString has no pricing_usd_per_mtok entry/),
+    programmingError(/tierRoutes\.routine\.model has no registry entry/),
   );
   assert.equal(Object.hasOwn(Object.prototype, "tiers"), false);
 });
@@ -899,7 +917,7 @@ test("an eval gateway keeps the qualification window, not the production one", a
 });
 
 test("a ledger retry time is the latest across the refusing ceilings, absent when none has a reservation to free", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.team = { calls: 2, costUsd: 300 };
   config.ceilings.specialists.estimator = { calls: 1, costUsd: 30, costUsdPerCall: 3 };
   const window = config.ceilings.windowHours * 3_600_000;
@@ -915,14 +933,14 @@ test("a ledger retry time is the latest across the refusing ceilings, absent whe
   assert.deepEqual([refused.reason, refused.retryAt], ["call_ceiling", ownOldest + window + 1]);
   assert.ok(teamOldest < ownOldest);
   // A team cost ceiling below the per-call reservation has nothing counted that could free it.
-  const tight = shippedConfig();
+  const tight = liveConfig();
   tight.ceilings.team = { calls: 6000, costUsd: 2 };
   const never = abstained(await harness(t, { config: tight }).gateway.run(request()));
   assert.deepEqual([never.reason, never.retryAt], ["cost_ceiling", undefined]);
 });
 
 test("a team cost ceiling refuses as cost_ceiling and frees with its own oldest reservation", async (t) => {
-  const config = shippedConfig();
+  const config = liveConfig();
   config.ceilings.team = { calls: 6000, costUsd: 6 };
   const window = config.ceilings.windowHours * 3_600_000;
   const h = harness(t, { config });

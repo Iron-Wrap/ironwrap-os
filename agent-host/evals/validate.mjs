@@ -829,34 +829,52 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
 
   const gateway = readJson(join(root, "agent-host/config/gateway.json"), fail);
   if (!isObject(gateway)) return;
-  const providers = Object.keys(isObject(gateway.providers) ? gateway.providers : {});
+  // Families and prices resolve through the v3 registry (providers.<id>.models.<model>). A file
+  // without the v3 schema id, as this validator's own fixtures still write, reads the v2 way: a
+  // provider id was its family and Codex prices sat in pricing_usd_per_mtok. The runtime refuses v2.
+  const v3 = gateway.schema === "ironwrap_agent_gateway_config_v3";
+  const accounts = isObject(gateway.providers) ? gateway.providers : {};
+  const providers = Object.keys(accounts);
+  const registryEntry = (route) => {
+    const models = isObject(route) && Object.hasOwn(accounts, route.provider) && isObject(accounts[route.provider]?.models) ? accounts[route.provider].models : {};
+    const entry = isObject(route) && typeof route.model === "string" && Object.hasOwn(models, route.model) ? models[route.model] : undefined;
+    return isObject(entry) && isObject(entry.efforts) && Object.hasOwn(entry.efforts, route.effort) ? entry : undefined;
+  };
+  const known = (route) => isObject(route) && providers.includes(route.provider) && typeof route.model === "string" && (!v3 || registryEntry(route) !== undefined);
+  const familyOf = (route) => (v3 ? registryEntry(route)?.family : route?.provider);
+  const unit = v3 ? "family" : "provider";
   const judges = isObject(config.judge) ? config.judge : {};
   for (const key of ["default", "for_claude_proposers"]) {
-    const judge = judges[key];
-    if (!isObject(judge) || !providers.includes(judge.provider) || typeof judge.model !== "string") {
-      bad(`judge.${key} needs a gateway provider (${providers.join(", ")}) and a model`);
-    }
+    if (!known(judges[key])) bad(`judge.${key} needs a gateway provider (${providers.join(", ")}) and a model${v3 ? " its registry lists at the judge's effort" : ""}`);
   }
-  const judgeFor = (provider) => (provider === "claude" ? judges.for_claude_proposers : judges.default);
+  // for_claude_proposers judges work proposed on the anthropic family (the claude provider in v2).
+  const judgeFor = (family) => (family === (v3 ? "anthropic" : "claude") ? judges.for_claude_proposers : judges.default);
   for (const [id, entry] of meta) {
-    // The auditor runs on audit_routes[<proposer family>], so each of those routes needs its judge.
+    // The auditor runs on audit_routes[<proposer family>], so each of those routes' families needs a
+    // judge of another family.
     const routeIds = entry.tier === "audit" && isObject(gateway.audit_routes) ? Object.values(gateway.audit_routes) : [gateway.tiers?.[entry.tier] ?? entry.tier];
-    const providers = routeIds.map((routeId) => gateway.routes?.[routeId]?.provider);
-    if (providers.length === 0 || providers.some((provider) => !provider)) {
+    const families = routeIds.map((routeId) => familyOf(gateway.routes?.[routeId]));
+    if (families.length === 0 || families.some((family) => !family)) {
       bad(`no gateway route for ${id} (tier ${entry.tier})`);
       continue;
     }
-    for (const provider of new Set(providers)) if (judgeFor(provider)?.provider === provider) bad(`${id} runs on ${provider}; its judge must run on another provider`);
+    for (const family of new Set(families)) if (familyOf(judgeFor(family)) === family) bad(`${id} runs on ${family}; its judge must run on another ${unit}`);
   }
   const prices = isObject(gateway.pricing_usd_per_mtok) ? gateway.pricing_usd_per_mtok : {};
+  // The Codex adapter books the model's price; only the Claude Agent SDK reports its own cost.
+  const priced = (route) => {
+    if (!v3) return route.provider !== "codex" || isObject(prices[route.model]);
+    const price = registryEntry(route).price;
+    return accounts[route.provider].adapter === "claude_agent_sdk" || isObject(price?.usd_per_mtok) || isObject(price?.list_usd_per_mtok);
+  };
   compareRoutes.forEach((route, index) => {
-    if (!isObject(route) || !providers.includes(route.provider) || typeof route.model !== "string" || !EFFORTS.includes(route.effort)) {
-      bad(`pilot.model_comparison.routes[${index}] needs a gateway provider, a model, and an effort (${EFFORTS.join(", ")})`);
+    if (!known(route) || !EFFORTS.includes(route.effort)) {
+      bad(`pilot.model_comparison.routes[${index}] needs a gateway provider, a model${v3 ? " its registry lists at that effort" : ""}, and an effort (${EFFORTS.join(", ")})`);
       return;
     }
-    if (judgeFor(route.provider)?.provider === route.provider) bad(`pilot.model_comparison.routes[${index}] runs on ${route.provider}; its judge must run on another provider`);
-    // The Codex adapter refuses a model without a price entry.
-    if (route.provider === "codex" && !isObject(prices[route.model])) bad(`pilot.model_comparison.routes[${index}]: ${route.model} has no pricing_usd_per_mtok entry in gateway.json`);
+    const family = familyOf(route);
+    if (familyOf(judgeFor(family)) === family) bad(`pilot.model_comparison.routes[${index}] runs on ${family}; its judge must run on another ${unit}`);
+    if (!priced(route)) bad(`pilot.model_comparison.routes[${index}]: ${route.model} has no ${v3 ? "USD price in the gateway registry" : "pricing_usd_per_mtok entry in gateway.json"}`);
   });
   const tiers = new Set([...meta.values()].map((entry) => entry.tier));
   const estimates = isObject(config.estimate_usd_per_run) ? config.estimate_usd_per_run : {};

@@ -2,15 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createClaudeAdapter, type ClaudeQuery } from "../src/gateway/claude.ts";
+import type { ClaudeAccount } from "../src/gateway/config.ts";
 import { ProviderError, classifyText, limitResetMs, type ProviderCall } from "../src/gateway/types.ts";
-import { OUTPUT_SCHEMA, shippedConfig, tempDir } from "./helpers.ts";
+import { OUTPUT_SCHEMA, entryOf, shippedConfig, tempDir } from "./helpers.ts";
 
 const TOKEN = ["synthetic", "oauth", "value"].join("-");
 const KEY = ["synthetic", "api", "value"].join("-");
+/** The shipped Claude account; each call gets a fresh copy to change. */
+const account = () => shippedConfig().providers.claude as ClaudeAccount;
 
 function call(overrides: Partial<ProviderCall> = {}): ProviderCall {
   return {
     model: "claude-opus-5-5",
+    entry: entryOf("claude", "claude-opus-5-5"),
     effort: "high",
     system: "audit instructions",
     prompt: "<data>synthetic</data>",
@@ -59,7 +63,7 @@ test("the Claude run is isolated and carries only the configured OAuth credentia
   const seen: Options[] = [];
   const stateDir = tempDir(t);
   const env = { PATH: "/usr/bin", HOME: "/home/agent", CLAUDE_CODE_OAUTH_TOKEN: TOKEN, ANTHROPIC_API_KEY: KEY, IRONWRAP_ADMIN_TOKEN: "worker" };
-  const adapter = createClaudeAdapter(shippedConfig(), stateDir, env, scripted([result()], seen));
+  const adapter = createClaudeAdapter(account(), stateDir, env, scripted([result()], seen));
   const outcome = await adapter.call(call());
   const options = seen[0];
   assert.deepEqual(options.tools, []);
@@ -86,8 +90,7 @@ test("the Claude run is isolated and carries only the configured OAuth credentia
 
 test("an API key replaces the sign-in by configuration alone", async (t) => {
   const seen: Options[] = [];
-  const config = shippedConfig();
-  config.providers.claude.auth = "api_key";
+  const config = { ...account(), credentialMode: "api_key" as const, billing: "api" as const };
   const env = { CLAUDE_CODE_OAUTH_TOKEN: TOKEN, ANTHROPIC_API_KEY: KEY };
   const adapter = createClaudeAdapter(config, tempDir(t), env, scripted([result()], seen));
   assert.equal(adapter.authMode, "api_key");
@@ -98,7 +101,7 @@ test("an API key replaces the sign-in by configuration alone", async (t) => {
 
 test("credentials are read by name on every call and fingerprinted, never returned", async (t) => {
   const env: Record<string, string | undefined> = {};
-  const adapter = createClaudeAdapter(shippedConfig(), tempDir(t), env, scripted([]));
+  const adapter = createClaudeAdapter(account(), tempDir(t), env, scripted([]));
   assert.deepEqual(await adapter.credential(), { fingerprint: null });
   await assert.rejects(adapter.call(call()), (error: ProviderError) => error.kind === "auth");
   env.CLAUDE_CODE_OAUTH_TOKEN = TOKEN;
@@ -122,7 +125,7 @@ test("allowlisted MCP tools are the only tools, and their calls are reported", a
       ],
     },
   } as unknown as SDKMessage;
-  const adapter = createClaudeAdapter(shippedConfig(), tempDir(t), env, scripted([assistant, result()], seen));
+  const adapter = createClaudeAdapter(account(), tempDir(t), env, scripted([assistant, result()], seen));
   const server = { command: "node", args: ["server.mjs"], env: { MODE: "agent" }, passEnv: ["IRONWRAP_AGENT_TOKEN"] };
   const outcome = await adapter.call(call({ tools: { server, allowed: ["lead_get", "lead_qualify"] } }));
   assert.deepEqual(seen[0].allowedTools, ["mcp__ironwrap__lead_get", "mcp__ironwrap__lead_qualify"]);
@@ -157,7 +160,7 @@ test("provider failures are classified for the gateway", async (t) => {
     ["no result at all", [], "transient"],
   ];
   for (const [name, messages, kind] of cases) {
-    const adapter = createClaudeAdapter(shippedConfig(), tempDir(t), env, scripted(messages));
+    const adapter = createClaudeAdapter(account(), tempDir(t), env, scripted(messages));
     await assert.rejects(adapter.call(call()), (error: ProviderError) => {
       assert.equal(error.kind, kind, name);
       return true;
@@ -171,7 +174,7 @@ test("a rate limit carries the reset time so the gateway can cool down", async (
     { type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt } } as unknown as SDKMessage,
     result({ is_error: true, result: "limit", structured_output: undefined }),
   ];
-  const adapter = createClaudeAdapter(shippedConfig(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted(messages));
+  const adapter = createClaudeAdapter(account(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted(messages));
   await assert.rejects(adapter.call(call()), (error: ProviderError) => {
     assert.ok(error.retryAfterMs !== undefined && error.retryAfterMs > 3_500_000);
     return true;
@@ -187,7 +190,7 @@ test("a refusal fallback to another model is reported in modelsUsed", async (t) 
     original_model: "claude-opus-5-5",
     fallback_model: "claude-opus-5",
   } as unknown as SDKMessage;
-  const adapter = createClaudeAdapter(shippedConfig(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted([fallback, result()]));
+  const adapter = createClaudeAdapter(account(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted([fallback, result()]));
   assert.deepEqual((await adapter.call(call())).modelsUsed, ["claude-opus-5-5", "claude-opus-5"]);
 });
 
@@ -203,7 +206,7 @@ test("a subscription limit that arrives only as text is a rate limit that waits 
     [inThreeDays, 2 * 86_400_000, 4 * 86_400_000],
     ["You've hit your session limit · resets 5:30am (Europe/Sofia)", 1, 86_400_000],
   ] as const) {
-    const adapter = createClaudeAdapter(shippedConfig(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted([result({ is_error: true, result: text, structured_output: undefined })]));
+    const adapter = createClaudeAdapter(account(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted([result({ is_error: true, result: text, structured_output: undefined })]));
     await assert.rejects(adapter.call(call()), (error: ProviderError) => {
       assert.equal(error.kind, "rate_limit", text);
       assert.ok(error.retryAfterMs !== undefined && error.retryAfterMs >= minMs && error.retryAfterMs <= maxMs, `${text}: ${error.retryAfterMs}`);
@@ -217,7 +220,7 @@ test("a subscription limit that arrives only as text is a rate limit that waits 
   const thrown: ClaudeQuery = async function* () {
     throw new Error("Claude Code returned an error result: You've hit your limit · resets 3pm (Europe/Sofia)");
   };
-  await assert.rejects(createClaudeAdapter(shippedConfig(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, thrown).call(call()), (error: ProviderError) => {
+  await assert.rejects(createClaudeAdapter(account(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, thrown).call(call()), (error: ProviderError) => {
     assert.equal(error.kind, "rate_limit");
     assert.ok(error.retryAfterMs !== undefined && error.retryAfterMs > 0 && error.retryAfterMs <= 86_400_000);
     return true;
@@ -227,7 +230,7 @@ test("a subscription limit that arrives only as text is a rate limit that waits 
     yield { type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: Math.floor(Date.now() / 1000) + 3600 } } as unknown as SDKMessage;
     throw new Error(`You've hit your weekly limit · resets ${sofiaDate(Date.now() + 3 * 86_400_000)} at 8am (Europe/Sofia)`);
   };
-  await assert.rejects(createClaudeAdapter(shippedConfig(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, eventThenCrash).call(call()), (error: ProviderError) => {
+  await assert.rejects(createClaudeAdapter(account(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, eventThenCrash).call(call()), (error: ProviderError) => {
     assert.equal(error.kind, "rate_limit");
     assert.ok(error.retryAfterMs !== undefined && error.retryAfterMs > 3_500_000 && error.retryAfterMs <= 3_600_000, String(error.retryAfterMs));
     return true;
@@ -238,7 +241,7 @@ test("a subscription limit that arrives only as text is a rate limit that waits 
     { type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt } } as unknown as SDKMessage,
     result({ is_error: true, result: `You've hit your weekly limit · resets ${sofiaDate(Date.now() + 3 * 86_400_000)} at 8am (Europe/Sofia)`, structured_output: undefined }),
   ];
-  await assert.rejects(createClaudeAdapter(shippedConfig(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted(both)).call(call()), (error: ProviderError) => {
+  await assert.rejects(createClaudeAdapter(account(), tempDir(t), { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, scripted(both)).call(call()), (error: ProviderError) => {
     assert.ok(error.retryAfterMs !== undefined && error.retryAfterMs > 3_500_000 && error.retryAfterMs <= 3_600_000);
     return true;
   });

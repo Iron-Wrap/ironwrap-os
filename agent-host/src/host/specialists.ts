@@ -35,6 +35,8 @@ export interface Specialist {
   common: string;
   playbook: string;
   allowlist: AllowlistEntry[];
+  /** The contract catalog revision the allowlist pins, part of the release; null when it pins none. */
+  catalogSha256: string | null;
 }
 
 export class SpecialistLoadError extends Error {
@@ -70,7 +72,7 @@ export async function loadSpecialist(root: string, id: string): Promise<Speciali
     fail(`playbook headings must be exactly: ${PLAYBOOK_HEADINGS.join(", ")}`);
   }
 
-  let allowlist: { schema_version?: unknown; specialist_id?: unknown; actions?: unknown };
+  let allowlist: { schema_version?: unknown; specialist_id?: unknown; catalog_sha256?: unknown; actions?: unknown };
   try {
     allowlist = JSON.parse(rawAllowlist);
   } catch {
@@ -93,5 +95,6 @@ export async function loadSpecialist(root: string, id: string): Promise<Speciali
       purpose: typeof entry.purpose === "string" ? entry.purpose : "",
     });
   }
-  return { id, displayName: title, tier: tier as Tier, common, playbook, allowlist: entries };
+  const catalogSha256 = typeof allowlist.catalog_sha256 === "string" && /^[0-9a-f]{64}$/.test(allowlist.catalog_sha256) ? allowlist.catalog_sha256 : null;
+  return { id, displayName: title, tier: tier as Tier, common, playbook, allowlist: entries, catalogSha256 };
 }

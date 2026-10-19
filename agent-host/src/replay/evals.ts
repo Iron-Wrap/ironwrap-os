@@ -3,7 +3,7 @@
 // and take the types declared here.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { loadGatewayConfig, type GatewayConfig } from "../gateway/config.ts";
 import type { ProviderId, Route } from "../gateway/types.ts";
 import type { AllowlistEntry } from "../host/specialists.ts";
@@ -77,8 +77,10 @@ export interface StageConfig {
 /** evals/qualification.v1.json; its ledger and judge blocks are parsed strictly by the eval gateway. */
 export interface QualificationConfig {
   repetitions: number;
+  /** `for_claude_proposers` judges work proposed on the anthropic family, `default` every other family's. */
   judge: { instructions: string; default: Route; for_claude_proposers: Route; max_attempts: number };
   ledger: { judge_key: string; per_stage: boolean };
+  /** Calls in flight per provider id; a provider it does not name gets no calls. */
   concurrency: Record<ProviderId, number>;
   gateway_reasons: Record<"pause" | "stop" | "score", string[]>;
   stages: StageConfig[];
@@ -174,7 +176,11 @@ export interface ReplayEnvironment {
   actionCatastrophes: unknown | null;
 }
 
-export function loadEnvironment(repoRoot: string): ReplayEnvironment {
+/**
+ * `gatewayConfigPath` is `AGENT_HOST_GATEWAY_CONFIG` as the host reads it, relative to the package:
+ * qualifying on personal sign-ins takes the configuration that labels them (config/gateway.consumer.json).
+ */
+export function loadEnvironment(repoRoot: string, gatewayConfigPath?: string): ReplayEnvironment {
   const agentHost = join(repoRoot, "agent-host");
   const evalsRoot = join(agentHost, "evals");
   const config = readJson(join(evalsRoot, "qualification.v1.json")) as QualificationConfig;
@@ -186,7 +192,7 @@ export function loadEnvironment(repoRoot: string): ReplayEnvironment {
     evalsRoot,
     catalog,
     config,
-    gatewayConfig: loadGatewayConfig(join(agentHost, "config", "gateway.json")),
+    gatewayConfig: loadGatewayConfig(resolve(agentHost, gatewayConfigPath?.trim() || "config/gateway.json")),
     judgeInstructions: readFileSync(join(repoRoot, config.judge.instructions), "utf8"),
     catastrophes: readJson(join(evalsRoot, "catastrophes.v1.json")),
     // Written at catalog binding (evals/README.md); stage.ts refuses a wave without it.

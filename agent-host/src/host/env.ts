@@ -5,6 +5,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { DataClass } from "../gateway/compliance.ts";
 import { parseWorkerUrl } from "./worker.ts";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -55,6 +56,12 @@ export interface HostEnv {
   specialistsRoot: string;
   actionServerPath: string;
   hostId: string;
+  /**
+   * `AGENT_HOST_DATA_CLASS`: what the Worker holds. `business` (the default) keeps live and shadow
+   * runs to qualified routes on accounts whose terms allow them; `synthetic`, for a QA or dev host
+   * on seed data, runs every Worker run as a synthetic run. Any other value refuses to start.
+   */
+  dataClass: DataClass;
 }
 
 export function hostEnv(env: Record<string, string | undefined>): HostEnv {
@@ -84,7 +91,14 @@ export function hostEnv(env: Record<string, string | undefined>): HostEnv {
     specialistsRoot: path(env.AGENT_HOST_SPECIALISTS_DIR, "specialists"),
     actionServerPath: path(env.AGENT_HOST_ACTION_SERVER, "../mcp/ironwrap-bus-mcp/src/agent-server.mjs"),
     hostId: env.AGENT_HOST_ID?.trim() || hostname(),
+    dataClass: dataClass(env.AGENT_HOST_DATA_CLASS),
   };
+}
+
+function dataClass(raw: string | undefined): DataClass {
+  const value = raw?.trim() || "business";
+  if (value !== "business" && value !== "synthetic") throw new Error(`AGENT_HOST_DATA_CLASS must be business or synthetic, got ${value.slice(0, 40)}`);
+  return value;
 }
 
 function path(raw: string | undefined, fallback: string): string {

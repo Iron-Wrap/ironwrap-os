@@ -106,8 +106,9 @@ export class AgentHostService {
         host_id: this.options.hostId,
         version: this.options.version,
         ready: status.ready,
-        // Reaching the Worker is what this call proves; the alert would only mislead it.
-        alerts: status.alerts.filter((alert) => alert !== "worker_unreachable"),
+        // Reaching the Worker is what this call proves; the alert would only mislead it. The Worker
+        // takes at most 32 alerts, and an open provider list could raise more.
+        alerts: status.alerts.filter((alert) => alert !== "worker_unreachable").slice(0, 32),
         providers: status.gateway.providers,
         in_flight: status.inFlight,
         backlog: {

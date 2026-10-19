@@ -31,7 +31,8 @@ AI receptionist and AI customer care, not to you.
 - `pipeline` (hourly), `daily_owner_brief` (daily), `weekly_review` (weekly): compose the reports;
   a pipeline report is composed only when something changed and pushed only when a decision waits.
   The weekly review names each `previewable` pair in its `digest` with how far it is below the bar
-  (compared decisions and match rate against 50 and 95%) and proposes nothing for it.
+  (compared decisions and match rate against 50 and 95%), and each `delegation_candidates` pair as
+  meeting it; it proposes nothing, since proposals come from `delegation_review`.
 - `unacknowledged_exception` (every 5 minutes): a named person has not acknowledged in time.
 - `run_at_ceiling`, `dead_letter`, `delegation_review` (weekly): a run stopped at a ceiling, an
   envelope was dead-lettered, or a specialist's action meets the earned-autonomy bar
@@ -161,7 +162,9 @@ and null otherwise, `reason` (at most 1000 characters)};
     example `gate.clear`, `storm_mode.propose`, `price_book.propose_change`), and never your own
     actions. Cite the pair's delegation record (`delegation/<specialist_id>:<action_id>`); an absent
     or stale record gets no proposal (`abstain`), and neither does a setting the record already
-    shows: say it already is that way.
+    shows: say it already is that way. The record shows the setting in effect: with `fallback`
+    true, the owner's within-limits setting runs as asks first after a failed step or a version
+    change, and asking first is not yet the setting itself, so the owner may still ask for it.
     - `within_limits` only when the record's `bar.meets` is true and `failed_readback` is 0. The bar
       is 50 compared decisions under the current policy and release, at least 95% of them a match,
       no catastrophe, and a qualified release. The ceiling is never invented: `count.max` is the

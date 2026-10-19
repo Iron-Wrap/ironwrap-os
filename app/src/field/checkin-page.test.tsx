@@ -199,7 +199,9 @@ describe("CheckInPage", () => {
     expect(screen.getByText(/1 of 12 items/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Remove roof-edge.jpg" }));
     expect(screen.getByText(/No files added/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Continue to review" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("button", { name: "Continue to review" })).toHaveClass(
+      "min-h-[var(--control-height-primary)]",
+    );
     photoInput.focus();
     expect(photoInput).toHaveFocus();
     expect(photoInput.closest("label")).toHaveClass("focus-within:outline");

@@ -276,7 +276,8 @@ describe("owner configuration route and state matrix", () => {
     const user = userEvent.setup();
     renderWithSession(<PipelineConfigurationPage />, sessionFor("owner"));
     const moveSecondUp = await screen.findByRole("button", { name: "Move Second up" });
-    expect(moveSecondUp.className).toContain("min-h-11");
+    // The density control height: 48 on touch, 72 on glove.
+    expect(moveSecondUp.className).toContain("min-h-[var(--control-height)]");
     expect(document.querySelectorAll(".flex-wrap").length).toBeGreaterThan(0);
     await user.click(moveSecondUp);
     await waitFor(() => expect(reorderAdminPipelines).toHaveBeenCalledOnce());
@@ -555,7 +556,8 @@ describe("owner configuration route and state matrix", () => {
     renderWithSession(<SchemaFieldsConfigurationPage />, sessionFor("owner"));
 
     const moveColourUp = await screen.findByRole("button", { name: "Move Colour up" });
-    expect(moveColourUp.className).toContain("min-h-11");
+    // The density control height: 48 on touch, 72 on glove.
+    expect(moveColourUp.className).toContain("min-h-[var(--control-height)]");
     expect(
       screen
         .getAllByRole("button", { name: /^Move .+ up$/ })

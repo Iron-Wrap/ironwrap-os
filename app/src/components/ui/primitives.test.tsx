@@ -49,8 +49,8 @@ describe("Iron Wrap primitives", () => {
       </Button>,
     );
     const button = screen.getByRole("button", { name: "Assign" });
-    // The office recipe stays dense. CSS enlarges this element's real box on touch.
-    expect(button).toHaveClass("ui-button", "min-h-8");
+    // The density sizes the real box: 24 on the office, 48 on touch, 72 on glove.
+    expect(button).toHaveClass("ui-button", "min-h-[var(--control-height-small)]");
     expect(button).toHaveAttribute("data-ui-size", "small");
     expect(button.className).not.toContain("after:");
     await userEvent.tab();
@@ -167,6 +167,12 @@ describe("Iron Wrap primitives", () => {
       "stopped",
       "neutral",
       "retired",
+      "you",
+      "done",
+      "working",
+      "proposed",
+      "unknown",
+      "undone",
     ];
     const { container } = render(
       <>

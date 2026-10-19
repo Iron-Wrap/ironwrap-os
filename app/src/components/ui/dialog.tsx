@@ -61,7 +61,7 @@ export function Dialog({
         "bg-surface p-0 text-foreground shadow-[var(--shadow-floating)] backdrop:bg-scrim",
         drawer
           ? "fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-none w-[min(26.25rem,100vw)] max-w-none open:flex open:flex-col"
-          : "m-auto max-h-[calc(100dvh-3rem)] w-[min(32.5rem,calc(100vw-2rem))] rounded-[0.875rem]",
+          : "m-auto max-h-[calc(100dvh-3rem)] w-[min(32.5rem,calc(100vw-2rem))] rounded-[var(--radius-sheet)]",
         className,
       )}
     >
@@ -72,7 +72,11 @@ export function Dialog({
         )}
       >
         <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="text-[1.0625rem] leading-snug font-semibold">
+          <h2
+            id={titleId}
+            // Important: the global heading leading in styles.css is unlayered.
+            className="text-[length:var(--type-title-size)] leading-[var(--type-title-line-height)]! font-semibold tracking-[var(--type-title-tracking)]"
+          >
             {title}
           </h2>
           {description ? (

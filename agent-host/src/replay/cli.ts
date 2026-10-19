@@ -66,7 +66,7 @@ async function main([command, ...args]: string[]): Promise<number> {
   // local sign-in is read before the arguments, the stage and the eval tree are accepted.
   let environment: ReplayEnvironment;
   try {
-    environment = loadEnvironment(ROOT);
+    environment = loadEnvironment(ROOT, process.env.AGENT_HOST_GATEWAY_CONFIG);
   } catch (error) {
     return refuse(`cannot load the eval tree: ${firstLine(error)}`);
   }

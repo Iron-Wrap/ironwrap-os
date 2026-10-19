@@ -225,12 +225,12 @@ function dataBlock(prompt: string) {
 /** Fake Claude and Codex adapters: specialist runs answered per case, judge calls by `JUDGE` system text. */
 function team(cases: EvalCase[], script: Script = {}) {
   const byText = new Map(cases.map((item) => [(item.signal.content as { text: string }).text, item]));
-  const inFlight = { claude: 0, codex: 0 };
-  const maxInFlight = { claude: 0, codex: 0 };
+  const inFlight: Record<ProviderId, number> = { claude: 0, codex: 0 };
+  const maxInFlight: Record<ProviderId, number> = { claude: 0, codex: 0 };
   const model = (id: ProviderId): Model => {
     const adapter: Model = {
       id,
-      authMode: id === "claude" ? "oauth" : "chatgpt",
+      authMode: "oauth",
       calls: [],
       credentialState: { fingerprint: `${id}-synthetic` },
       async credential() {
@@ -416,7 +416,7 @@ test("the auditor reviews the proposers' family on its audit route, and proposer
 
   const mixed = fixture(t, { id: AUDITOR, golden: 2, gateway: (config) => void (config.specialists[ID].route = "claude_opus") });
   const idle = team(mixed.cases);
-  await assert.rejects(stage(mixed, idle, "wave1", "start"), (error) => error instanceof StageRefusal && /proposer routes run on codex and claude/.test(error.message));
+  await assert.rejects(stage(mixed, idle, "wave1", "start"), (error) => error instanceof StageRefusal && /proposer routes run on openai and anthropic/.test(error.message));
   assert.equal(idle.claude.calls.length + idle.codex.calls.length, 0);
   assert.equal(existsSync(join(mixed.output, "wave1", "state.json")), false);
 });
@@ -516,6 +516,8 @@ test("each stage books on its own eval ledger and the production ledger is never
   assert.equal(readFileSync(pilotLedger, "utf8"), before);
   for (const path of [pilotLedger, waveLedger]) {
     assert.deepEqual([...new Set(lines(path).map((entry) => entry.specialist))].sort(), ["eval:eval_judge", "eval:lead_concierge"]);
+    // Golden and red-team cases are synthetic data, never business history.
+    assert.deepEqual([...new Set(lines(path).map((entry) => entry.runClass))], ["synthetic"]);
   }
   const files = readdirSync(f.output, { recursive: true }).map(String);
   assert.deepEqual(files.filter((path) => path.endsWith("gateway-usage.jsonl")), []);

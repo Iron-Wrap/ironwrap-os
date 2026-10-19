@@ -8,7 +8,10 @@ export function Card({
 }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   return (
     <div
-      className={cn("rounded-lg border border-border bg-surface-raised", className)}
+      className={cn(
+        "rounded-[var(--radius-card)] border border-border bg-surface-raised",
+        className,
+      )}
       {...props}
     />
   );

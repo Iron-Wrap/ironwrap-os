@@ -490,7 +490,7 @@
   --type-caption-mono-tracking: 0em;
 }
 
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 720px) {
   :root:not([data-density]) {
     --target-min: 48px;
     --control-height-small: 48px;

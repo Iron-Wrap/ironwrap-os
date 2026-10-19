@@ -18,9 +18,10 @@ import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSy
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUDITOR, parseRoute, proposerRoutes } from "../gateway/config.ts";
+import { familyOf } from "../gateway/registry.ts";
 import { ProviderGateway, type GatewayOptions } from "../gateway/gateway.ts";
 import { sha256 } from "../gateway/schema.ts";
-import type { GatewayRequest, GatewayResult, McpStdioServer, ProviderId, Route, Tier } from "../gateway/types.ts";
+import type { Family, GatewayRequest, GatewayResult, McpStdioServer, ProviderId, Route, Tier } from "../gateway/types.ts";
 import { specialistRelease } from "../host/release.ts";
 import { loadSpecialist, type Specialist } from "../host/specialists.ts";
 import type { PeopleOnlyAct } from "../host/worker.ts";
@@ -49,6 +50,8 @@ const TOOL_SERVER = fileURLToPath(new URL("./tool-server.ts", import.meta.url));
 
 /** Percent of each provider's usage window used; null when the meter is not visible. */
 export type MeterReading = Record<ProviderId, number | null>;
+/** Eval cases are synthetic (golden and red team); the gateway reads unset data as history. */
+const SYNTHETIC = "synthetic" as const;
 const NOT_VISIBLE = async (): Promise<MeterReading> => ({ claude: null, codex: null });
 
 export class StageRefusal extends Error {
@@ -134,7 +137,7 @@ interface Loaded {
   /** The gateway route a run of this specialist takes in production. */
   production: Route;
   /** The auditor's runs name the family whose work they review; null for every other specialist. */
-  reviews: ProviderId | null;
+  reviews: Family | null;
   /** The release hashed when the specialist was loaded, so a later edit never names the release that ran. */
   release: ReturnType<typeof specialistRelease>;
 }
@@ -289,7 +292,7 @@ export async function runStage(options: StageOptions): Promise<StageResult> {
       updated_at: now(),
     };
     writeJson(statePath, state);
-    const width = ctx.environment.config.concurrency.claude + ctx.environment.config.concurrency.codex;
+    const width = Object.values(ctx.environment.config.concurrency).reduce((total, limit) => total + limit, 0);
     for (const group of groups) {
       const todo = workItems(group).filter((work) => !done(entries, work));
       const meters = group.batch ? batchMeters(state, group.batch) : null;
@@ -395,12 +398,12 @@ async function loadForRun(environment: ReplayEnvironment, id: string): Promise<L
   const peopleOnly = replayPeopleOnly(specialist, environment.catalog);
   const gateway = environment.gatewayConfig;
   let production = gateway.routes[(Object.hasOwn(gateway.specialists, id) ? gateway.specialists[id].route : null) ?? gateway.tiers[specialist.tier]];
-  let reviews: ProviderId | null = null;
+  let reviews: Family | null = null;
   if (id === AUDITOR) {
     // A production audit always names the run it reviews, so the auditor runs on the audit route
-    // for the proposers' family, which the gateway checks per run. Proposers on both families
+    // for the proposers' family, which the gateway checks per run. Proposers on two families
     // would need a qualification per audit route, which no stage plans.
-    const families = [...new Set(proposerRoutes(gateway).map((routeId) => gateway.routes[routeId].provider))];
+    const families = [...new Set(proposerRoutes(gateway).map((routeId) => familyOf(gateway, gateway.routes[routeId])))];
     const audit = families.length === 1 && Object.hasOwn(gateway.auditRoutes, families[0]) ? gateway.auditRoutes[families[0]] : undefined;
     if (audit === undefined) throw new StageRefusal(`${id}: proposer routes run on ${families.join(" and ")}; qualifying the auditor needs the audit route of one proposer family`);
     reviews = families[0];
@@ -455,7 +458,7 @@ async function planStage(environment: ReplayEnvironment, id: string): Promise<Gr
   const groups: Group[] = [{ batch: null, rows: production }];
   const comparison = stage.model_comparison;
   for (const [index, raw] of (comparison?.routes ?? []).entries()) {
-    const route = parseRoute(raw, `stages.pilot.model_comparison.routes[${index}]`);
+    const route = parseRoute(raw, `stages.pilot.model_comparison.routes[${index}]`, environment.gatewayConfig);
     const rows: Row[] = [];
     for (const specialistId of comparison?.specialists ?? []) {
       const loaded = await load(specialistId);
@@ -550,8 +553,9 @@ async function runRepetition(ctx: Context, work: WorkItem): Promise<void> {
         specialist: loaded.id,
         tier: loaded.specialist.tier,
         scope: "eval",
+        data: SYNTHETIC,
         ...(compared ? { tierRoutes: { [loaded.specialist.tier]: route } as GatewayRequest["tierRoutes"] } : {}),
-        ...(loaded.reviews ? { reviewOf: { runId: `${runId}-reviewed`, provider: loaded.reviews } } : {}),
+        ...(loaded.reviews ? { reviewOf: { runId: `${runId}-reviewed`, family: loaded.reviews } } : {}),
         system: replay.input.system,
         prompt: replay.input.prompt,
         outputSchema: replay.input.outputSchema,
@@ -573,7 +577,8 @@ async function runRepetition(ctx: Context, work: WorkItem): Promise<void> {
   const transcript = entry.transcript.transcript;
   const [deterministic] = scoreCase(work.item, [transcript], loaded.scoring).repetitions;
   // The judge is always of another family than the run it scores; the gateway refuses otherwise.
-  const judgeRoute = route.provider === "claude" ? config.judge.for_claude_proposers : config.judge.default;
+  const family = familyOf(ctx.environment.gatewayConfig, route);
+  const judgeRoute = judgeFor(config, family);
   const outputs: unknown[] = [];
   let accepted: unknown = null;
   let judged: GatewayResult | null = null;
@@ -582,7 +587,8 @@ async function runRepetition(ctx: Context, work: WorkItem): Promise<void> {
       specialist: config.ledger.judge_key,
       tier: loaded.specialist.tier,
       scope: "eval",
-      reviewOf: { runId, provider: route.provider },
+      data: SYNTHETIC,
+      reviewOf: { runId, family },
       system: ctx.environment.judgeInstructions,
       prompt: judgePrompt({ item: work.item, rubric: loaded.rubric, catastrophes: ctx.environment.catastrophes, transcript, deterministic }),
       outputSchema: JUDGE_OUTPUT_SCHEMA,
@@ -692,24 +698,33 @@ function classify(config: QualificationConfig, reason: string): "pause" | "stop"
   return "stop";
 }
 
+/** The judge route for work proposed on a family: `for_claude_proposers` for anthropic, `default` for any other. */
+function judgeFor(config: QualificationConfig, family: Family): Route {
+  return family === "anthropic" ? config.judge.for_claude_proposers : config.judge.default;
+}
+
+/** One cap per provider id `concurrency` names; a call on a provider it does not name is a runner fault. */
 function providerSlots(concurrency: Record<ProviderId, number>) {
-  const free = {} as Record<ProviderId, number>;
-  for (const provider of ["claude", "codex"] as const) {
-    const limit = concurrency[provider];
+  const free = new Map<ProviderId, number>();
+  const waiting = new Map<ProviderId, Array<() => void>>();
+  for (const [provider, limit] of Object.entries(concurrency)) {
     if (!Number.isInteger(limit) || limit < 1) throw new Error(`concurrency.${provider} must be a positive integer`);
-    free[provider] = limit;
+    free.set(provider, limit);
+    waiting.set(provider, []);
   }
-  const waiting: Record<ProviderId, Array<() => void>> = { claude: [], codex: [] };
   return async <T>(provider: ProviderId, call: () => Promise<T>): Promise<T> => {
-    if (free[provider] > 0) free[provider] -= 1;
-    else await new Promise<void>((resolve) => waiting[provider].push(resolve));
+    const queue = waiting.get(provider);
+    if (!queue) throw new Error(`concurrency names no cap for provider ${provider}`);
+    const left = free.get(provider) as number;
+    if (left > 0) free.set(provider, left - 1);
+    else await new Promise<void>((resolve) => queue.push(resolve));
     try {
       return await call();
     } finally {
       // The slot passes straight to the next waiter, so the cap always holds.
-      const next = waiting[provider].shift();
+      const next = queue.shift();
       if (next) next();
-      else free[provider] += 1;
+      else free.set(provider, (free.get(provider) as number) + 1);
     }
   };
 }
@@ -800,7 +815,7 @@ function stageReport(
         compared: row.compared,
         release: loaded.release,
         model: route.model,
-        judge_model: (route.provider === "claude" ? config.judge.for_claude_proposers : config.judge.default).model,
+        judge_model: judgeFor(config, familyOf(gatewayConfig, route)).model,
         prompt_sha256: loaded.promptSha,
         rubric: loaded.rubric,
         expectedIds: { golden: loaded.golden.map((item) => item.id), redteam: loaded.redteam.map((item) => item.id) },

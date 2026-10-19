@@ -59,7 +59,7 @@ export function Notice({
   return (
     <section
       className={cn(
-        "grid grid-cols-[1.125rem_minmax(0,1fr)] gap-x-3 gap-y-0.5 rounded-[0.625rem] px-4 py-3.5 text-foreground",
+        "grid grid-cols-[1.125rem_minmax(0,1fr)] gap-x-3 gap-y-0.5 rounded-[var(--radius-card)] px-4 py-3.5 text-foreground",
         presentation.className,
       )}
       role={tone === "danger" ? "alert" : "status"}

@@ -1382,9 +1382,9 @@ const NUMBER_WORDS =
 
 /**
  * Z2 of design/ZERO-LEARNING-GATE.md and ZL-1 of TEMPLATES.md. The first block mirrors `BANNED` in
- * app/scripts/plain-language.family.test.ts term for term, and a guard test runs that file's own
- * examples against this list; the rest are the names a view may not give the AI team, and its
- * class codes.
+ * app/scripts/plain-language.family.test.ts term for term (its "action class" is the class code
+ * entry below), and a guard test runs that file's own examples against this list; the rest are the
+ * names a view may not give the AI team, and its class codes.
  */
 const BANNED_TERMS: readonly (readonly [string, RegExp])[] = [
   ["work package", /\bwork[ -]?packages?\b/i],
@@ -1420,6 +1420,8 @@ const BANNED_TERMS: readonly (readonly [string, RegExp])[] = [
   ["Worker", /\bWorker\b/],
   ["BFF", /\bBFF\b/],
   ["version label", /\bv(?:\d+|\{x\})(?![\w{])|\bversion (?:\d|\{x\})/i],
+  ["run id", /\brun[ _-]?ids?\b/i],
+  ["hash", /(?<![-_])\bhash(?:es)?\b(?![-_])/i],
   ["Assistant", /\bassistants?\b/i],
   ["agent", /\bagents?\b/i],
   ["HELM", /\bHELM\b/],

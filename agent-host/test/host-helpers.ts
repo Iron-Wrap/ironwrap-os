@@ -97,6 +97,7 @@ export function okResult(request: GatewayRequest, output: unknown = RUN_OUTPUT):
     modelsUsed: [],
     authMode: "oauth",
     family: "openai",
+    effort: "medium",
     adapter: "codex",
     billing: "subscription",
     route: "primary",

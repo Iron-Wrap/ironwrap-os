@@ -179,6 +179,11 @@ export interface WorkerClientOptions {
   baseUrl: string;
   token: string;
   timeoutMs: number;
+  /**
+   * Opening a run builds (or, on resume, re-reads) its context snapshot on the Worker, which takes
+   * far longer than a poll for a watch with many subjects. Defaults to `timeoutMs`.
+   */
+  openTimeoutMs?: number;
   fetch?: typeof fetch;
 }
 
@@ -186,12 +191,14 @@ export class WorkerClient {
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly timeoutMs: number;
+  private readonly openTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: WorkerClientOptions) {
     this.baseUrl = options.baseUrl;
     this.token = options.token;
     this.timeoutMs = options.timeoutMs;
+    this.openTimeoutMs = options.openTimeoutMs ?? options.timeoutMs;
     this.fetchImpl = options.fetch ?? fetch;
   }
 
@@ -202,7 +209,7 @@ export class WorkerClient {
   }
 
   openRun(body: { signal_id: string; specialist_id: string; host_run_key: string }): Promise<OpenedRun> {
-    return this.request("POST", "/api/v1/agents/runs", body);
+    return this.request("POST", "/api/v1/agents/runs", body, this.openTimeoutMs);
   }
 
   closeRun(runId: string, body: RunClose): Promise<{ run_id: string; terminal: string }> {
@@ -213,18 +220,26 @@ export class WorkerClient {
     return this.request("POST", "/api/v1/agents/host/heartbeat", body);
   }
 
-  private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-    const response = await this.fetchImpl(this.baseUrl + path, {
-      method,
-      redirect: "error",
-      signal: AbortSignal.timeout(this.timeoutMs),
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        accept: "application/json",
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+  private async request<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs = this.timeoutMs): Promise<T> {
+    const route = `${method} ${path.split("?")[0]}`;
+    let response: Response;
+    try {
+      response = await this.fetchImpl(this.baseUrl + path, {
+        method,
+        redirect: "error",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          accept: "application/json",
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (error) {
+      // Name the call: a bare "aborted due to timeout" in the log cannot say which route is slow.
+      if (error instanceof Error && error.name === "TimeoutError") throw new WorkerError(0, "timeout", `${route} timed out after ${timeoutMs} ms`);
+      throw new WorkerError(0, "network", `${route} failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
+    }
     const text = await response.text();
     let parsed: unknown = null;
     try {

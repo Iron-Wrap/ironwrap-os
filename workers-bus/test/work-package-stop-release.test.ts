@@ -803,6 +803,9 @@ function insertReleaseRow(env: TestEnv, row: Record<string, unknown>, verb = "IN
 /** A supersession of the given version, attempted inside a transaction that is always rolled back. */
 function attemptSupersession(env: TestEnv, packet: NativeWorkPackageDefinition): string {
   const sqlite = env.DB.sqlite;
+  // One clock read: the row must carry created_at = occurred_at, and two reads straddle a
+  // millisecond tick often enough to fail the CHECK under a loaded test run.
+  const occurredAt = new Date().toISOString();
   sqlite.exec("BEGIN");
   try {
     sqlite
@@ -821,7 +824,7 @@ function attemptSupersession(env: TestEnv, packet: NativeWorkPackageDefinition):
         packet.version + 1, packet.jobId, packet.assignmentId, packet.workObjectType,
         packet.workObjectId, packet.physicalContextType, packet.physicalContextId, USERS.owner.id,
         "IronWrap Owner", "Synthetic correction", "work-packages/direct-supersede.json",
-        new Date().toISOString(), new Date().toISOString());
+        occurredAt, occurredAt);
     return packageStatus(env, packet.workPackageId, packet.version, packet.tenantId);
   } finally {
     sqlite.exec("ROLLBACK");

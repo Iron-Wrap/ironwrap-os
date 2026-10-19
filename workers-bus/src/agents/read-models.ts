@@ -17,6 +17,7 @@ import { listCurrentJobMeasurements } from "../measurement-intake-store.ts";
 import { canonicalJson, sha256Hex } from "../newo-hash.ts";
 import type { ObjectModel, ObjectRead } from "./memory.ts";
 import type { AgentDb } from "./store.ts";
+import { delegationRecord } from "./shadow.ts";
 
 /** The role-screen readers take the Worker environment; they read only its D1 binding. */
 const envOf = (db: AgentDb) => ({ DB: db }) as unknown as AppEnv;
@@ -412,6 +413,16 @@ const moneyItem: ObjectModel = {
   },
 };
 
+const delegation: ObjectModel = {
+  // One specialist and action's earned-autonomy record, as the owner's AI team settings read it
+  // (shadow.ts delegationRecord); the id is `<specialist_id>:<action_id>`.
+  views: [{ permission: "owner:read", pointers: null }],
+  async read(db, tenantId, id) {
+    const record = await delegationRecord(db, tenantId, id);
+    return record ? { data: record, links: [] } : null;
+  },
+};
+
 export const OBJECT_MODELS: Record<string, ObjectModel> = {
   job,
   customer,
@@ -422,4 +433,5 @@ export const OBJECT_MODELS: Record<string, ObjectModel> = {
   crew,
   inventory_position: inventoryPosition,
   money_item: moneyItem,
+  delegation,
 };

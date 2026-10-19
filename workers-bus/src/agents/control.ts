@@ -11,8 +11,8 @@ import { competencyApproverRefusal, planCompetencyCommand } from "../authority-r
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist } from "./catalog.ts";
 import { citedFacts } from "./memory.ts";
 import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSetting } from "./policy.ts";
-import { competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
-import { afterCatastrophe, decisionAgreement, shadowSetting } from "./shadow.ts";
+import { CEILING_SCHEMA, competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
+import { afterCatastrophe, decisionAgreement, shadowSetting, unqualifiedSince } from "./shadow.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 import {
   changesOf,
@@ -92,39 +92,7 @@ export interface Ceiling {
   recipients: string[] | null;
 }
 
-const CEILING_SCHEMA: JsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["count", "amount", "recipients"],
-  properties: {
-    count: {
-      type: "object",
-      additionalProperties: false,
-      required: ["max", "per"],
-      properties: {
-        max: { type: "integer", minimum: 1, maximum: 10_000 },
-        per: { type: "string", enum: ["hour", "day", "week"] },
-      },
-    },
-    amount: {
-      type: ["object", "null"],
-      additionalProperties: false,
-      required: ["max_minor", "currency"],
-      properties: {
-        max_minor: { type: "integer", minimum: 0 },
-        currency: { type: "string", pattern: "^[A-Z]{3}$" },
-      },
-    },
-    recipients: {
-      type: ["array", "null"],
-      maxItems: 200,
-      uniqueItems: true,
-      items: { type: "string", minLength: 1, maxLength: 200 },
-    },
-  },
-};
-
-const WINDOW_MS = {
+export const WINDOW_MS = {
   hour: 3_600_000,
   day: 86_400_000,
   week: 604_800_000,
@@ -140,6 +108,9 @@ export async function currentDelegation(
       ceiling: Ceiling | null;
       revision: number;
       fallback: boolean;
+      set_at: string;
+      /** `person:<user id>`, or the system writer (`system:auto_demotion`). */
+      set_by: string;
     })
   | null
 > {
@@ -157,6 +128,8 @@ export async function currentDelegation(
       control_revision: number;
       catalog_version: string;
       policy_version: string;
+      set_at: string;
+      set_by_user_id: string;
     }>();
   if (!row) return null;
   const hold = await db
@@ -174,18 +147,23 @@ export async function currentDelegation(
     )
     .bind(tenantId, row.setting_id)
     .first<{ step_id: string }>();
+  // Each trigger holds until the owner sets the action again (contract "Delegation" item 7); a
+  // release that changed without passing qualification counts from the setting's own time.
   const fallback =
     row.setting === "within_limits" &&
     (row.control_revision < Number(hold?.revision ?? 0) ||
       row.catalog_version !== CATALOG_VERSION ||
       row.policy_version !== POLICY_VERSION ||
-      failed !== null);
+      failed !== null ||
+      (await unqualifiedSince(db, tenantId, specialistId, row.set_at)));
   return {
     delegation_id: row.setting_id,
     setting: fallback ? "asks_first" : row.setting,
     ceiling: row.ceiling_json ? JSON.parse(row.ceiling_json) : null,
     revision: row.revision,
     fallback,
+    set_at: row.set_at,
+    set_by: row.set_by_user_id.startsWith("system:") ? row.set_by_user_id : `person:${row.set_by_user_id}`,
   };
 }
 
@@ -210,6 +188,11 @@ export async function withinCeiling(
     .bind(tenantId, specialistId, actionId, since)
     .first<{ n: number }>();
   if (Number(used?.n ?? 0) >= ceiling.count.max) return false;
+  return stepFitsCeiling(ceiling, args);
+}
+
+/** Whether one step's amount and recipient fit a ceiling; its count per window is checked apart. */
+export function stepFitsCeiling(ceiling: Ceiling, args: unknown): boolean {
   const value = (args ?? {}) as {
     amount_minor?: unknown;
     currency?: unknown;
@@ -403,23 +386,6 @@ export async function delegationOverview(db: AgentDb, tenantId: string, speciali
   for (const action of catalogActionsFor(specialistId)) {
     if ((action.autonomy !== "A2" && action.autonomy !== "A3") || action.human_only) continue;
     const current = await currentDelegation(db, tenantId, specialistId, action.action_id);
-    const history = await db
-      .prepare(
-        `SELECT
-           COUNT(*) AS proposed,
-           SUM(CASE WHEN d.decision = 'approve' THEN 1 ELSE 0 END) AS approved,
-           SUM(CASE WHEN d.decision = 'decline' THEN 1 ELSE 0 END) AS declined,
-           SUM(CASE WHEN d.decision = 'do_it_myself' THEN 1 ELSE 0 END) AS done_by_person
-         FROM agent_run_steps s LEFT JOIN agent_step_decisions d ON d.step_id = s.step_id
-         WHERE s.tenant_id = ? AND s.specialist_id = ? AND s.action_id = ?`,
-      )
-      .bind(tenantId, specialistId, action.action_id)
-      .first<{
-        proposed: number;
-        approved: number | null;
-        declined: number | null;
-        done_by_person: number | null;
-      }>();
     actions.push({
       action_id: action.action_id,
       autonomy: action.autonomy,
@@ -435,12 +401,7 @@ export async function delegationOverview(db: AgentDb, tenantId: string, speciali
             fallback: current.fallback,
           }
         : null,
-      history: {
-        proposed: Number(history?.proposed ?? 0),
-        approved: Number(history?.approved ?? 0),
-        declined: Number(history?.declined ?? 0),
-        done_by_person: Number(history?.done_by_person ?? 0),
-      },
+      history: await decisionHistory(db, tenantId, specialistId, action.action_id),
       machine_path_proven: registryEntry(action.action_id)?.machinePermitProven ?? false,
       // Shadow is the fourth delegation value, kept in its own revisions (migration 0203).
       shadow: await shadowSetting(db, tenantId, specialistId, action.action_id),
@@ -450,6 +411,28 @@ export async function delegationOverview(db: AgentDb, tenantId: string, speciali
     specialist_id: specialistId,
     control: await specialistControl(db, tenantId, specialistId),
     actions,
+  };
+}
+
+/** One action's proposals for one specialist and how people decided them. */
+export async function decisionHistory(db: AgentDb, tenantId: string, specialistId: string, actionId: string) {
+  const history = await db
+    .prepare(
+      `SELECT
+         COUNT(*) AS proposed,
+         SUM(CASE WHEN d.decision = 'approve' THEN 1 ELSE 0 END) AS approved,
+         SUM(CASE WHEN d.decision = 'decline' THEN 1 ELSE 0 END) AS declined,
+         SUM(CASE WHEN d.decision = 'do_it_myself' THEN 1 ELSE 0 END) AS done_by_person
+       FROM agent_run_steps s LEFT JOIN agent_step_decisions d ON d.step_id = s.step_id
+       WHERE s.tenant_id = ? AND s.specialist_id = ? AND s.action_id = ?`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .first<{ proposed: number; approved: number | null; declined: number | null; done_by_person: number | null }>();
+  return {
+    proposed: Number(history?.proposed ?? 0),
+    approved: Number(history?.approved ?? 0),
+    declined: Number(history?.declined ?? 0),
+    done_by_person: Number(history?.done_by_person ?? 0),
   };
 }
 

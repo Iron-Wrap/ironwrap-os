@@ -6,13 +6,18 @@
 //   sign in -> sales desk (policy visible?) -> office lead for the customer tester (no mail)
 //   -> triage qualified -> approved quote -> proposal -> publication (prepare, synthetic effect
 //   claim and settle, record) -> customer portal link (written to output/, never printed)
-//   -> the accounting tester as an app user -> sign out
+//   -> the accounting tester as an app user -> one synthetic crew with two synthetic field members
+//   (the governed roster route, #454) -> sign out
 //
 // Every write reads the job's commercial context first and only does what is still missing, with
 // idempotency keys under synth-seed-qa:, so a second run creates nothing. Customer acceptance, the
 // deposit and its approval stay with people. The seed refuses to run anywhere but qa, refuses any
 // route outside its allowlist, and refuses any identity other than example.invalid and the two
 // named testers.
+//
+// The job is not scheduled to the crew: POST /api/v1/jobs/:id/schedule needs all six production
+// gates cleared, the deposit gate stays with people, and on qa the gate clearance route has no
+// writer (it goes through Frappe, which qa runs without).
 //
 // Usage (QA_SEED_MAGIC_LINK_TOKEN from tools/qa-seed-owner.mjs, EFFECT_RUNTIME_TOKEN, both from the
 // release env file, never on the command line):
@@ -54,6 +59,16 @@ const ALLOWED_ROUTES = [
   /^POST \/api\/v1\/customer-portal\/links$/,
   /^GET \/api\/v1\/admin\/app-users$/,
   /^POST \/api\/v1\/admin\/app-users$/,
+  /^GET \/api\/v1\/admin\/crews$/,
+  /^POST \/api\/v1\/admin\/crews$/,
+  /^POST \/api\/v1\/admin\/crews\/[^/]+\/members$/,
+];
+
+/** The crew and its members are fixed, so the roster route's natural keys make a rerun a replay. */
+export const SEED_CREW = { crew_id: `${KEY_PREFIX}:crew:1`, display_name: "Synthetic QA Crew (synth-seed)" };
+export const SEED_CREW_MEMBERS = [
+  { email: "qa-crew-lead@example.invalid", display_name: "QA Crew Lead (synthetic)" },
+  { email: "qa-crew-hand@example.invalid", display_name: "QA Crew Hand (synthetic)" },
 ];
 
 export class SeedRefusal extends Error {
@@ -507,16 +522,86 @@ export async function runJourney({
     }
     done("accounting_tester", !listed);
 
+    const crew = await seedCrew(api, people.users ?? [], done);
+
     return {
       lead_id: leadId,
       roof_job_id: roofJobId,
       offer_state: "published",
+      crew,
       created: steps.filter((step) => step.created).length,
       steps,
     };
   } finally {
     await api.signOut();
   }
+}
+
+/**
+ * One synthetic crew with two synthetic field users on it, through the governed roster route. The
+ * route admits only active field users and is idempotent by crew id, user id and expected version,
+ * so each write happens once; a crew or member someone changed since is refused, never overwritten.
+ */
+async function seedCrew(api, users, done) {
+  const userIds = [];
+  let usersCreated = false;
+  for (const member of SEED_CREW_MEMBERS) {
+    const email = assertSeedIdentity(member.email, []);
+    const existing = users.find((user) => String(user.email).toLowerCase() === email);
+    if (existing && (existing.role !== "field" || !existing.active))
+      throw new SeedRefusal("crew_member_user_changed", email);
+    const user =
+      existing ??
+      expectStatus(
+        "crew_member_user",
+        await api.call("POST", "/api/v1/admin/app-users", {
+          body: { tenant_id: TENANT, email, display_name: member.display_name, role: "field", active: true },
+        }),
+        200,
+      ).user;
+    usersCreated ||= !existing;
+    userIds.push(user.user_id);
+  }
+  done("crew_member_users", usersCreated);
+
+  const rosterCrew = async () =>
+    (expectStatus("crews", await api.call("GET", "/api/v1/admin/crews"), 200).crews ?? []).find(
+      (row) => row.crew_id === SEED_CREW.crew_id,
+    );
+  const current = await rosterCrew();
+  if (current && (current.status !== "Active" || current.display_name !== SEED_CREW.display_name))
+    throw new SeedRefusal("crew_changed", SEED_CREW.crew_id);
+  if (!current) {
+    expectStatus(
+      "crew",
+      await api.call("POST", "/api/v1/admin/crews", { body: { ...SEED_CREW, status: "Active", expected_version: null } }),
+      201,
+    );
+  }
+  done("crew", !current);
+
+  let membersCreated = false;
+  for (const userId of userIds) {
+    const membership = (current?.members ?? []).find((row) => row.user_id === userId);
+    if (membership && !membership.active) throw new SeedRefusal("crew_member_changed", SEED_CREW.crew_id);
+    if (membership) continue;
+    expectStatus(
+      "crew_member",
+      await api.call("POST", `/api/v1/admin/crews/${encodeURIComponent(SEED_CREW.crew_id)}/members`, {
+        body: { user_id: userId, active: true, expected_version: null },
+      }),
+      201,
+    );
+    membersCreated = true;
+  }
+  done("crew_members", membersCreated);
+
+  const after = await rosterCrew();
+  return {
+    crew_id: SEED_CREW.crew_id,
+    status: after?.status ?? null,
+    active_members: (after?.members ?? []).filter((row) => row.active && userIds.includes(row.user_id)).length,
+  };
 }
 
 function writePrivate(path, value) {

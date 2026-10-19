@@ -568,6 +568,60 @@ export async function recordQualification(
   return { qualification_id: qualificationId };
 }
 
+/** One qualification row as the host's gateway matches a route against it. */
+export interface QualificationHint {
+  qualification_id: string;
+  provider: string;
+  model: string;
+  effort: string;
+  release_sha256: string;
+}
+
+/** A row recorded after `q` for the same specialist, provider, model, effort and release (`l` is the later row). */
+const LATER_FOR_KEY = `SELECT 1 FROM agent_qualifications l WHERE l.tenant_id = q.tenant_id AND l.specialist_id = q.specialist_id
+  AND l.provider = q.provider AND l.model = q.model AND l.effort = q.effort AND l.release_sha256 = q.release_sha256
+  AND (l.recorded_at > q.recorded_at OR (l.recorded_at = q.recorded_at AND l.rowid > q.rowid))`;
+
+/**
+ * The specialist's current qualifications, which a run's open sends the host: for each provider,
+ * model, effort and release, the latest row, and only while it passed. Newest first; at most 100,
+ * which leaves room for many releases of every route the specialist runs on.
+ */
+export async function currentQualifications(db: AgentDb, tenantId: string, specialistId: string): Promise<QualificationHint[]> {
+  const rows = await db
+    .prepare(
+      `SELECT q.qualification_id, q.provider, q.model, q.effort, q.release_sha256 FROM agent_qualifications q
+      WHERE q.tenant_id = ? AND q.specialist_id = ? AND q.passed = 1 AND NOT EXISTS (${LATER_FOR_KEY})
+      ORDER BY q.recorded_at DESC, q.rowid DESC LIMIT 100`,
+    )
+    .bind(tenantId, specialistId)
+    .all<QualificationHint>();
+  return rows.results ?? [];
+}
+
+/**
+ * Whether a close may rely on the qualification it names: a passed row of this tenant and
+ * specialist for the provider, model and release the close ran on, with no failure recorded for its
+ * key since. The close names no effort; the row's own effort is the one its route matched.
+ */
+export async function qualificationHolds(
+  db: AgentDb,
+  tenantId: string,
+  specialistId: string,
+  close: { qualification_ref: string | null; provider: string; model: string; release_sha256: string | null },
+): Promise<boolean> {
+  if (close.qualification_ref === null || close.release_sha256 === null) return false;
+  const row = await db
+    .prepare(
+      `SELECT q.qualification_id FROM agent_qualifications q
+      WHERE q.tenant_id = ? AND q.qualification_id = ? AND q.specialist_id = ? AND q.passed = 1
+        AND q.provider = ? AND q.model = ? AND q.release_sha256 = ? AND NOT EXISTS (${LATER_FOR_KEY} AND l.passed = 0)`,
+    )
+    .bind(tenantId, close.qualification_ref, specialistId, close.provider, close.model, close.release_sha256)
+    .first<{ qualification_id: string }>();
+  return row !== null;
+}
+
 export interface DelegationCandidate {
   specialist_id: string;
   action_id: string;
@@ -581,8 +635,8 @@ export interface DelegationCandidate {
 
 /**
  * Actions the owner could delegate further: the most recent comparisons meet the bar, none of
- * them was a catastrophe, the latest qualification for the model the specialist actually runs on
- * (its most recent closed run) passed, and the action can be delegated at all. People-only and
+ * them was a catastrophe, the latest qualification for what the specialist actually runs on (its
+ * most recent closed run) passed, and the action can be delegated at all. People-only and
  * never-delegable actions are never candidates.
  */
 export async function delegationCandidates(db: AgentDb, tenantId: string, bar = CANDIDATE_BAR): Promise<DelegationCandidate[]> {
@@ -591,9 +645,7 @@ export async function delegationCandidates(db: AgentDb, tenantId: string, bar = 
     .bind(tenantId)
     .all<{ specialist_id: string; action_id: string }>();
   const candidates: DelegationCandidate[] = [];
-  // The provider and model each specialist runs on, from its most recent closed run with a model.
-  // Effort and release are recorded with each qualification and matched once closes report them.
-  const runsOn = new Map<string, { provider: string; model: string } | null>();
+  const runsOn = new Map<string, RunsOn | null>();
   for (const pair of pairs.results ?? []) {
     const action = catalogAction(pair.action_id);
     if (!action || action.autonomy === "H" || action.human_only || !action.delegable || action.protective) continue;
@@ -618,26 +670,16 @@ export async function delegationCandidates(db: AgentDb, tenantId: string, bar = 
     if (Number(flagged?.n ?? 0) > 0) continue;
     const matchRate = window.filter((row) => row.verdict === "match").length / window.length;
     if (matchRate < bar.matchRate) continue;
-    if (!runsOn.has(pair.specialist_id))
-      runsOn.set(
-        pair.specialist_id,
-        await db
-          .prepare(
-            `SELECT json_extract(close_json, '$.model.provider') AS provider, json_extract(close_json, '$.model.model') AS model FROM agent_runs
-            WHERE tenant_id = ? AND specialist_id = ? AND state = 'closed' AND json_extract(close_json, '$.model.model') IS NOT NULL
-            ORDER BY ended_at DESC, rowid DESC LIMIT 1`,
-          )
-          .bind(tenantId, pair.specialist_id)
-          .first<{ provider: string; model: string }>(),
-      );
+    if (!runsOn.has(pair.specialist_id)) runsOn.set(pair.specialist_id, await specialistRunsOn(db, tenantId, pair.specialist_id));
     const model = runsOn.get(pair.specialist_id);
     if (!model) continue;
     const qualification = await db
       .prepare(
         `SELECT qualification_id, provider, model, passed FROM agent_qualifications WHERE tenant_id = ? AND specialist_id = ? AND provider = ? AND model = ?
+          AND (? IS NULL OR effort = ?) AND (? IS NULL OR release_sha256 = ?)
         ORDER BY recorded_at DESC, rowid DESC LIMIT 1`,
       )
-      .bind(tenantId, pair.specialist_id, model.provider, model.model)
+      .bind(tenantId, pair.specialist_id, model.provider, model.model, model.effort, model.effort, model.release, model.release)
       .first<{ qualification_id: string; provider: string; model: string; passed: number }>();
     if (qualification?.passed !== 1) continue;
     const current = (await currentDelegation(db, tenantId, pair.specialist_id, pair.action_id))?.setting ?? action.default_delegation ?? "asks_first";
@@ -646,4 +688,39 @@ export async function delegationCandidates(db: AgentDb, tenantId: string, bar = 
     candidates.push({ specialist_id: pair.specialist_id, action_id: pair.action_id, compared: window.length, match_rate: matchRate, qualification_id: qualification.qualification_id, provider: qualification.provider, model: qualification.model, current_setting: current });
   }
   return candidates;
+}
+
+/** What a specialist runs on: a provider and model, with the effort and release when its close shows them. */
+interface RunsOn {
+  provider: string;
+  model: string;
+  effort: string | null;
+  release: string | null;
+}
+
+/**
+ * The provider and model of the specialist's most recent closed run with a model. A v3 close also
+ * records its release, and the qualification it relied on records the route's effort; a legacy
+ * close shows neither, so its qualification matches on provider and model alone.
+ */
+async function specialistRunsOn(db: AgentDb, tenantId: string, specialistId: string): Promise<RunsOn | null> {
+  const close = await db
+    .prepare(
+      `SELECT json_extract(close_json, '$.model.provider') AS provider, json_extract(close_json, '$.model.model') AS model,
+        json_extract(close_json, '$.model.release_sha256') AS release, json_extract(close_json, '$.model.qualification_ref') AS ref FROM agent_runs
+      WHERE tenant_id = ? AND specialist_id = ? AND state = 'closed' AND json_extract(close_json, '$.model.model') IS NOT NULL
+      ORDER BY ended_at DESC, rowid DESC LIMIT 1`,
+    )
+    .bind(tenantId, specialistId)
+    .first<{ provider: string; model: string; release: string | null; ref: string | null }>();
+  if (!close) return null;
+  // Only a reference to this specialist's own row for the same provider, model and release names the effort.
+  const relied =
+    close.ref === null || close.release === null
+      ? null
+      : await db
+          .prepare("SELECT effort FROM agent_qualifications WHERE tenant_id = ? AND specialist_id = ? AND qualification_id = ? AND provider = ? AND model = ? AND release_sha256 = ?")
+          .bind(tenantId, specialistId, close.ref, close.provider, close.model, close.release)
+          .first<{ effort: string }>();
+  return { provider: close.provider, model: close.model, effort: relied?.effort ?? null, release: close.release };
 }

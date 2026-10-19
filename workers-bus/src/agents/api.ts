@@ -43,12 +43,21 @@ import {
   recordHeartbeat,
   runTools,
   type AgentDb,
+  type DataClass,
  withheldClose } from "./store.ts";
 
 export interface AgentEnv {
   DB: unknown;
   AGENT_HOST_TOKEN?: string;
   APP_TENANT_ID?: string;
+  /** What data this Worker holds: `business` (the default) or `synthetic` (a QA or dev Worker on seed data). */
+  AGENT_DATA_CLASS?: string;
+}
+
+/** The Worker's data class, as the agent host reads its own: unset is business, and any value but the two is none. */
+export function agentDataClass(raw: string | undefined): DataClass | null {
+  const value = raw?.trim() || "business";
+  return value === "business" || value === "synthetic" ? value : null;
 }
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -61,6 +70,9 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
   if (!(await tokenMatches(req, env.AGENT_HOST_TOKEN))) return reply({ error: "unauthorized" }, 401);
   const tenantId = operatingTenantId(env.APP_TENANT_ID);
   if (!tenantId) return reply({ error: "tenant_not_configured" }, 503);
+  // A misspelt data class stops the host API rather than reading as either class.
+  const dataClass = agentDataClass(env.AGENT_DATA_CLASS);
+  if (!dataClass) return reply({ error: "data_class_not_configured" }, 503);
   const db = env.DB as AgentDb;
   const url = new URL(req.url);
   const path = url.pathname;
@@ -128,7 +140,7 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
       if (run.state === "closed") {
         // An exact retry matches the close as recorded (an ask run's view checked), with or without
         // a paused specialist's drafts withheld, so the retry still reaches the escalation below.
-        const recorded = recordedClose(run, body);
+        const recorded = recordedClose(run, body, dataClass);
         if (run.close_json !== canonicalJson(recorded) && run.close_json !== canonicalJson(withheldClose(recorded)))
           return reply({error: "run_closed"}, 409);
         await escalateRunAbstention(db, tenantId, run, iso(), null);
@@ -136,7 +148,7 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
         if (run.result === "completed") await deliverRunReport(db, tenantId, run, JSON.parse(run.close_json ?? "null"), notify, iso());
         return reply({run_id: run.run_id, terminal: run.result});
       }
-      const closed = await closeRun(db, tenantId, run, body, RUN_OUTPUT_SCHEMA, iso());
+      const closed = await closeRun(db, tenantId, run, body, RUN_OUTPUT_SCHEMA, iso(), dataClass);
       if ("error" in closed) return reply({ error: closed.error }, closed.status);
       await escalateRunAbstention(db, tenantId, run, iso(), null);
       if (closed.result === "completed") await deliverRunReport(db, tenantId, run, body, notify, iso());

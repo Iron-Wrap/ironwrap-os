@@ -261,9 +261,11 @@ recorded unscored, never counted as agreement. A decline or take-over can flag T
 action, writes an asks-first setting as `system:auto_demotion`, the one automatic delegation change.
 A candidate needs at least the last 50 compared agreements at a 95 % match rate, none of them a
 catastrophe, a passed latest qualification for the provider and model the specialist actually runs
-on (its most recent closed run), and a delegable A2/A3 action that
+on (its most recent closed run), at that run's release and the effort of the qualification it relied
+on when its close shows them, and a delegable A2/A3 action that
 does not already act within limits. An auditor's review that comes back from the reviewed run's own
-provider family closes abstained.
+model family, from a family the Worker cannot name, or past a failover hop on another account or
+model closes abstained.
 
 Pause and auditor hold remain independent. Either makes non-protective actions ask first; pause
 also stops drafting. An off or revoked action stays off. Protective exceptions and holds remain

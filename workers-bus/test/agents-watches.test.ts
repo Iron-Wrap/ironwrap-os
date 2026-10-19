@@ -454,11 +454,22 @@ test("import_failed_items lists each recent import run with failed items and the
         source_row_count: 40,
         failed_items: 4,
         source_keys: ["contact:a", "contact:b"],
+        source_keys_total: 2,
+        keyless_failed: 1,
       },
     ],
     total: 1,
   });
   assert.equal(outcome.summary, "1 import run has failed items");
-  // Nothing new since the last firing: it does not hold.
-  assert.equal((await WATCH_CONDITIONS.import_failed_items.evaluate(db as never, TENANT, "2026-03-02T09:50:00.000Z", "2026-03-02T10:00:00.000Z")).holds, false);
+  // The next firing's window starts where this one ended: the same run is not listed again.
+  assert.equal((await WATCH_CONDITIONS.import_failed_items.evaluate(db as never, TENANT, "2026-03-02T10:00:00.000Z", "2026-03-02T11:00:00.000Z")).holds, false);
+  // An import that started just before a firing is still writing its issues: that firing leaves it,
+  // and the next one, once it has settled, lists it with every failed item.
+  run("import_run_late_001", "2026-03-02T11:58:00.000Z");
+  failed("import_run_late_001", "contact:c");
+  const during = await WATCH_CONDITIONS.import_failed_items.evaluate(db as never, TENANT, "2026-03-02T11:00:00.000Z", "2026-03-02T12:00:00.000Z");
+  assert.equal(during.holds, false);
+  failed("import_run_late_001", "contact:d");
+  const settled = await WATCH_CONDITIONS.import_failed_items.evaluate(db as never, TENANT, "2026-03-02T12:00:00.000Z", "2026-03-02T13:00:00.000Z");
+  assert.deepEqual((settled.digest as any).import_runs.map((entry: { import_run_id: string; source_keys: string[] }) => [entry.import_run_id, entry.source_keys]), [["import_run_late_001", ["contact:c", "contact:d"]]]);
 });

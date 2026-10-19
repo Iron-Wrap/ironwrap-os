@@ -96,7 +96,7 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
 
   // A Worker that sends any routing field also accepts them back in the close.
   const routed = ["review_of", "expected_action_id", "mode"].some((field) => Object.hasOwn(run, field));
-  const closeV3 = typeof run.close_model === "number" && run.close_model >= HOST_CLOSE_MODEL;
+  const closeV3 = Number.isInteger(run.close_model) && (run.close_model as number) >= HOST_CLOSE_MODEL;
   const reviewed = run.review_of ?? null;
   const reviewOf = reviewed ? { runId: reviewed.run_id, family: reviewedFamily(reviewed) } : null;
   const action = run.expected_action_id ?? null;

@@ -99,7 +99,8 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
 /**
  * Actions that propose from the inbound a run answers and cite only that inbound (contract
  * `lead_fact.propose`: raw inbound receipts only, never conversation text or another record): the
- * run's own signal, or the root of its handoff chain, is an inbound event, and every citation is it.
+ * run answers an inbound event, and every citation is that event's signal fact. A handoff run's
+ * snapshot does not hold an event at the root of its chain, so a handoff run cannot propose one.
  */
 export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
 

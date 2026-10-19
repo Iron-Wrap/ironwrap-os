@@ -239,8 +239,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   the decision's own transaction, with an owned-store readback on its receipt. Every other
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
-  step to the reviewer to do by hand, and `lead_fact.propose` has no registered arguments yet, so
-  its steps abstain. The app has no import screen, so the Retry a person would use for an import
+  step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event
+  the run answers and may cite only that event (`signal/<id>`); the host offers it once the
+  receptionist's allowlist names it. The app has no import screen, so the Retry a person would use for an import
   run's failed items is not built yet. A prepared access change (`access.prepare_change`) still
   closes as finished work under Done for you; its place in the owner's Needs you is not built yet.
   Every signal carries the actor the Worker writes: no inbound

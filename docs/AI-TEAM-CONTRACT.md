@@ -1103,11 +1103,12 @@ removed field) raises `close_model` by one. This is a review rule, not a check: 
 tighten a block in place under its current number. A Worker accepts its current `close_model` and
 the one before it, so a Worker deployed ahead of its host keeps accepting the older shape: today's
 Worker takes the `close_model` 3 block, the routed block of a gateway config v2 host (`route_id`,
-`review_of` and `mode`) and the legacy block, and refuses an unknown field in any of them
-(`workers-bus/test/agents-control.test.ts`, "a host on gateway config v2 closes with its route,
-review and mode; unknown model fields are still refused"). Deploy the Worker first, then the host.
-Only a `close_model` 3 block records the effort, run class, qualification, release and data class,
-so only its live or shadow output is held to a qualification (see "Qualification").
+`review_of` and `mode`) and the legacy block, and refuses an unknown field in any of them. Two
+tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
+with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
+to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
+host. Only a `close_model` 3 block records the effort, run class, qualification, release and data
+class, so only its live or shadow output is held to a qualification (see "Qualification").
 
 ## Shared memory
 
@@ -1589,8 +1590,9 @@ run that would violate this. When no route of another family is available, the a
 never runs on the proposer's family. The Worker checks again when an audit closes: the audit's
 family, and the family of every hop it passed over, must be known and other than the family the
 reviewed run recorded. A hop, or a reviewed run, whose family the Worker cannot name fails closed:
-the audit abstains (`provider_unavailable`) and keeps no output. A reviewed run that recorded no
-model, such as one that expired, has no output to be independent of and is not checked.
+the audit abstains (`provider_unavailable`, unless its output raised an emergency, a safety event
+or suspected injection, which stays the reason) and keeps no output. A reviewed run that is
+missing, still open or recorded no model, such as one that expired, is not checked.
 
 ### Credentials
 

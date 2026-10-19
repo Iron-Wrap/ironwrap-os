@@ -709,7 +709,9 @@ describe("JobPage", () => {
       "href",
       "/check-in/JOB-1",
     );
-    expect(screen.getByRole("link", { name: "Add blocker proof" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("link", { name: "Add blocker proof" })).toHaveClass(
+      "min-h-[var(--control-height-primary)]",
+    );
     expect(screen.getByRole("link", { name: "Add blocker proof" })).not.toHaveClass("fixed");
     expect(screen.queryByText("Gate owner: Production dispatch")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Proof obligations" })).not.toBeInTheDocument();

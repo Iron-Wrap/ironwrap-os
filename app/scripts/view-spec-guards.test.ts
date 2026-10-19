@@ -57,7 +57,7 @@ describe("literal words in a view spec", () => {
   const between = (from: string, to: string) =>
     source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
   const TERM =
-    /term\(\s*"([^"]+)",\s*\/(?:\\.|[^/\\\n])+\/[a-z]*,\s*(?:"[^"]*"|systemOnly),\s*(\[[^\]]*\]),\s*(\[[^\]]*\])/g;
+    /term\(\s*"([^"]+)",\s*\/(?:\\.|[^/\\\n])+\/[a-z]*,\s*(?:"[^"]*"|systemOnly|IRW_R8),\s*(\[[^\]]*\]),\s*(\[[^\]]*\])/g;
   const terms = (block: string) =>
     [...block.matchAll(TERM)].map(([, name, hits, misses]) => ({
       name: name as string,
@@ -80,7 +80,14 @@ describe("literal words in a view spec", () => {
     const calls = (from: string, to: string) => between(from, to).match(/\bterm\(/g)?.length ?? 0;
     expect(banned.length).toBe(calls("const BANNED", "const AGENTS"));
     expect(banned.length).toBeGreaterThan(30);
-    expect(agents.map((term) => term.name)).toEqual(["HELM", "Hermes", "Newo", "Postiz", "agent"]);
+    expect(agents.map((term) => term.name)).toEqual([
+      "Assistant",
+      "HELM",
+      "Hermes",
+      "Newo",
+      "Postiz",
+      "agent",
+    ]);
   });
 
   it("refuses every banned term and agent name of the plain-language guard", () => {

@@ -1,0 +1,41 @@
+/*
+ * The AI parts' own stylesheet (src/components/ai). styles.css keeps these modules out of its
+ * sources, and type.ts, which every AI part imports, imports this file, so Vite splits it into
+ * the lazy chunk of the first screen that renders one: the render-blocking stylesheet never
+ * carries their utilities. It reads Tailwind's theme and the app's mapping (styles/theme.css) by
+ * reference, which emits none of that CSS again; the tokens it reads ship in styles.css.
+ */
+@reference "tailwindcss";
+@reference "../../styles/theme.css";
+
+/* Only these modules, without their tests; the build leaves out every utility styles.css already
+   has (scripts/split-stylesheet.ts), so a utility never comes twice. */
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./";
+@source not "./*.test.*";
+
+/*
+ * The phone layout of the AI parts (src/components/ai): labels above values, full-width
+ * actions, one target per row. It applies in touch and glove density, on a coarse pointer or in
+ * a window 720px wide or narrower (where an element with no density scope is touch), and in a
+ * container narrower than 30rem.
+ */
+@custom-variant phone {
+  &:where([data-density="touch"] *, [data-density="glove"] *) {
+    @slot;
+  }
+  @media (pointer: coarse), (max-width: 720px) {
+    @slot;
+  }
+  @container (max-width: 30rem) {
+    @slot;
+  }
+}
+
+/*
+ * A row whose whole box is one target (an AI receipt row) draws its ink focus ring inside the
+ * row, so a list's rounded edge never clips it.
+ */
+.ai-row-target:focus-visible {
+  outline-offset: -2px;
+}

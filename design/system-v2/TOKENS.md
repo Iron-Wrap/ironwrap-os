@@ -42,7 +42,7 @@ Colour mode and density are chosen independently; only these combinations exist:
 | Place | Colour modes | Density | How the mode is chosen |
 | --- | --- | --- | --- |
 | Office desktop | `office-light`, `office-dark` | `office` | Follows the device (`prefers-color-scheme`) unless the person pins light or dark in the person menu |
-| Office on a phone or tablet | `office-light`, `office-dark` | `touch` | Same colour rule; density becomes `touch` on `pointer: coarse` |
+| Office on a phone, a tablet or a narrow window | `office-light`, `office-dark` | `touch` | Same colour rule; density becomes `touch` on `pointer: coarse` or in a window 720px wide or narrower |
 | Crew phone | `field-sun` (default), `field-night` | `touch` | Sun by default. Night only by the crew's own toggle, never by the phone's dark setting (a phone left in dark mode would be unreadable on a roof at noon) |
 | Shop tablet or kiosk | `shop-dark` (default), `shop-light` | `glove` | Dark by default. Light ("bright bay") is a per-device kiosk setting |
 | Customer phone or browser | `customer-light` (default), `customer-dark`, `customer-sun` | `touch` | Light by default. Dark when the phone is set to dark (`prefers-color-scheme: dark`). Sun when the phone asks for more contrast (`prefers-contrast: more`), which wins over dark |

@@ -26,6 +26,10 @@ test.describe("Operator command palette acceptance", () => {
       name: "Search jobs, leads, customers, or workspaces",
     });
     await expect(input).toBeFocused();
+    // The query reads at the palette's 17px and the borderless field never fills on hover.
+    await expect(input).toHaveCSS("font-size", "17px");
+    await input.hover();
+    await expect(input).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await input.fill("no");
     await expect(page.getByRole("option", { name: /Now/ })).toBeVisible();
     // Destinations are local now; the debounced server search follows them.

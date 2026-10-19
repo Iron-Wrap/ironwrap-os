@@ -120,8 +120,12 @@ const declare = (entries, mode, head = []) =>
     .map(([name, value]) => `  ${name}: ${value};`)
     .join("\n");
 const rule = (selector, body) => `${selector} {\n${body}\n}`;
-const media = (query, selector, body) =>
-  `@media (${query}) {\n${rule(selector, body).replace(/^(?=.)/gm, "  ")}\n}`;
+// One query or a list of them, which the media rule joins with commas (any of them matches).
+const media = (queries, selector, body) =>
+  `@media ${[queries]
+    .flat()
+    .map((query) => `(${query})`)
+    .join(", ")} {\n${rule(selector, body).replace(/^(?=.)/gm, "  ")}\n}`;
 
 // A mode is dark when its paper is.
 const scheme = (mode) =>
@@ -148,7 +152,12 @@ const sections = [
   media("prefers-color-scheme: dark", ":root:not([data-mode])", colourBody(system.dark)),
   ...otherColours.map((mode) => rule(`[data-mode="${mode}"]`, colourBody(mode))),
   rule(`:root, [data-density="${defaultDensity}"]`, densityBody(defaultDensity)),
-  media("pointer: coarse", ":root:not([data-density])", densityBody(system.coarse)),
+  // A coarse pointer, or an office window 720px wide or narrower, is touch.
+  media(
+    ["pointer: coarse", "max-width: 720px"],
+    ":root:not([data-density])",
+    densityBody(system.coarse),
+  ),
   ...otherDensities.map((mode) => rule(`[data-density="${mode}"]`, densityBody(mode))),
   rule(":root", declare(constants)),
   media("prefers-reduced-motion: reduce", ":root", still.map((n) => `  ${n}: 0ms;`).join("\n")),

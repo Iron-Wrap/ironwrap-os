@@ -109,7 +109,7 @@ class SqliteD1 {
   }
 }
 
-function setup(fullSchema = false) {
+function setup(fullSchema = false, workerVars: Record<string, string> = {}) {
   const db = new SqliteD1(fullSchema);
   let clock = 1_000_000;
   const now = () => new Date(clock).toISOString();
@@ -162,7 +162,7 @@ function setup(fullSchema = false) {
       permissions: [],
     });
   }
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN };
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, ...workerVars };
   const parseResponse = async (response: Response) => ({
     status: response.status,
     body: (await response.json()) as any,
@@ -1425,7 +1425,8 @@ test("an audit that came back from the reviewed run's own family is not accepted
   const output = { decision: "propose", escalate_to: null, reason_code: null, reason: "Synthetic.", receipts: [], drafts: [], final_text: "Done." };
   assert.equal((await s.close(reviewed.run_id, close(output, "codex"))).status, 200);
   const audit = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
-  assert.deepEqual((audit as { review_of?: unknown }).review_of, { run_id: reviewed.run_id, provider: "codex" });
+  // A legacy close names its provider; the hint adds the family that provider stands for.
+  assert.deepEqual((audit as { review_of?: unknown }).review_of, { run_id: reviewed.run_id, provider: "codex", family: "openai" });
   assert.equal((await s.close(audit.run_id, close(output, "codex"))).body.terminal, "abstained");
   const fair = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
   assert.equal((await s.close(fair.run_id, close(output, "claude"))).body.terminal, "completed");
@@ -1661,4 +1662,250 @@ test("a qualification replays on its key and conflicts on any changed field; the
           .run(`qal_raw_${provider}${effort}`, TENANT, provider, effort, release, "a".repeat(64), owner, s.now(), `raw-${provider}-${effort}-${release[0]}`),
       /CHECK constraint failed/,
     );
+});
+
+// --- R3 gateway v3: run-open qualifications, the v3 close, independence and qualification at close ---
+
+/** The v3 close of agent-host/src/host/runner.ts `closeBodyV3`, for one synthetic routine run. */
+const CLOSE_V3 = JSON.parse(readFileSync(new URL("./fixtures/agent-close-v3.json", import.meta.url), "utf8"));
+const closeV3 = (model: Record<string, unknown> = {}, body: Record<string, unknown> = {}) => ({ ...CLOSE_V3, ...body, model: { ...CLOSE_V3.model, ...model } });
+/** The owner records one qualification (passed unless it says otherwise) and gets its id back. */
+async function qualify(s: ReturnType<typeof setup>, row: Record<string, unknown>, key: string): Promise<string> {
+  const recorded = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64), ...row }, "owner", key);
+  assert.equal(recorded.status, 200, JSON.stringify(recorded.body));
+  return recorded.body.qualification_id;
+}
+/** The reason code of the receipt a run's close left, or null when it left none. */
+const closeReason = (s: ReturnType<typeof setup>, runId: string): string | null =>
+  s.scalar("SELECT reason_code r FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'", runId)?.r ?? null;
+/** The v3 model block of an audit on the shipped Claude route. */
+const OPUS_AUDIT = { provider: "claude", adapter: "claude_agent_sdk", family: "anthropic", model: "claude-opus-5-5", models_used: ["claude-opus-5-5"], tier: "audit", route_id: "claude_opus", compliance_ref: "ai.anthropic.claude-commercial" };
+
+test("a run's open sends the specialist's current qualifications, the latest row per key and only while it passed", async () => {
+  const s = setup();
+  const sol = await qualify(s, {}, "hint-sol");
+  await qualify(s, { effort: "high" }, "hint-high-pass");
+  await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "hint-high-fail");
+  await qualify(s, { release_sha256: "f".repeat(64), passed: false }, "hint-release-fail");
+  const release = await qualify(s, { release_sha256: "f".repeat(64), report_sha256: "c".repeat(64) }, "hint-release-pass");
+  await qualify(s, { provider: "claude", model: "claude-opus-5-5", effort: "high" }, "hint-opus-1");
+  const opus = await qualify(s, { provider: "claude", model: "claude-opus-5-5", effort: "high", report_sha256: "d".repeat(64) }, "hint-opus-2");
+  await qualify(s, { specialist_id: "estimator" }, "hint-other-specialist");
+  const run = (await s.run()) as Record<string, any>;
+  assert.equal(run.close_model, 3);
+  // Newest first: a key failed last is left out, a key passed after a failure is in, a key passed
+  // twice sends its newest row, and another specialist's rows are not this run's.
+  assert.deepEqual(run.qualifications, [
+    { qualification_id: opus, provider: "claude", model: "claude-opus-5-5", effort: "high", release_sha256: "e".repeat(64) },
+    { qualification_id: release, provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: "f".repeat(64) },
+    { qualification_id: sol, provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: "e".repeat(64) },
+  ]);
+  assert.deepEqual(((await s.run("estimator")) as Record<string, any>).qualifications.map((row: { effort: string }) => row.effort), ["medium"]);
+  assert.deepEqual(((await s.run("market_analyst")) as Record<string, any>).qualifications, []);
+});
+
+test("an audit's open names the reviewed run's family: a v3 close's own, a legacy provider's, or none it cannot name", async () => {
+  const s = setup();
+  const reviewOf = async (model: Record<string, unknown>, legacy = false) => {
+    const reviewed = await s.run();
+    const body = legacy ? { ...CLOSE_V3, model } : closeV3(model);
+    assert.equal((await s.close(reviewed.run_id, body)).status, 200);
+    const audit = (await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } })) as Record<string, any>;
+    return { ...audit.review_of, run_id: audit.review_of.run_id === reviewed.run_id };
+  };
+  assert.deepEqual(await reviewOf({ provider: "vertex", adapter: "vertex", family: "google", model: "gemini-3.8-flash", models_used: [] }), { run_id: true, provider: "vertex", family: "google" });
+  const legacy = (provider: string) => ({ provider, model: "synthetic-model", models_used: [], auth_mode: "oauth", tier: "routine" });
+  assert.deepEqual(await reviewOf(legacy("claude"), true), { run_id: true, provider: "claude", family: "anthropic" });
+  assert.deepEqual(await reviewOf(legacy("gemini"), true), { run_id: true, provider: "gemini" });
+});
+
+test("a v3 close is held to its strict block, and legacy and routed blocks still close", async () => {
+  const s = setup();
+  const ref = await qualify(s, {}, "shape-sol");
+  const closed = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref }));
+  assert.deepEqual([closed.status, closed.body.terminal], [200, "completed"]);
+  const hop = { route_id: "codex_sol_low", provider: "codex", model: "gpt-6.1-sol", reason: "rate_limited", retry_at: 1_000_500.5 };
+  const threeHops = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref, route: "declared_fallback", failover: [hop, { ...hop, retry_at: null }, hop] }));
+  assert.deepEqual([threeHops.status, threeHops.body.terminal], [200, "completed"]);
+  const { run_class: _runClass, ...missing } = CLOSE_V3.model;
+  for (const [label, model] of [
+    ["four failover hops", { failover: [hop, hop, hop, hop] }],
+    ["a hop with a field of its own", { failover: [{ ...hop, family: "openai" }] }],
+    ["a hop on a provider id with capitals", { failover: [{ ...hop, provider: "Codex" }] }],
+    ["a release hash one short", { release_sha256: "e".repeat(63) }],
+    ["an upper-case configuration hash", { gateway_config_sha256: "E".repeat(64) }],
+    ["a provider id with capitals", { provider: "Codex" }],
+    ["a provider id too long", { provider: `p${"a".repeat(31)}` }],
+    ["a family too long", { family: `f${"a".repeat(32)}` }],
+    ["an adapter outside the contract", { adapter: "omniroute" }],
+    ["a run class outside the register", { run_class: "practice" }],
+    ["a review naming no family", { review_of: { run_id: "run_x", provider: "codex" } }],
+    ["a field of its own", { extra: true }],
+  ] as const)
+    assert.equal((await s.close((await s.run()).run_id, closeV3(model)).then((r) => r.status)), 422, label);
+  assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: missing })).status, 422, "a block without its run class");
+  // A routed block that names a family is held to the v3 block, which it does not meet.
+  const routed = { provider: "codex", model: "gpt-6.1-sol", models_used: ["gpt-6.1-sol"], auth_mode: "chatgpt", tier: "routine", route_id: "codex_sol", review_of: null, mode: "live" };
+  assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: { ...routed, family: "openai" } })).status, 422);
+  // An older host's blocks carry no run class and no qualification, and close as before.
+  const { route_id: _route, review_of: _review, mode: _mode, ...legacy } = routed;
+  for (const model of [routed, legacy]) assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model })).body.terminal, "completed");
+  // Only a v3 close records the Worker's data class next to its run class.
+  const stored = s.db.raw.prepare("SELECT close_json FROM agent_runs WHERE state = 'closed' ORDER BY rowid").all() as Array<{ close_json: string }>;
+  assert.deepEqual(stored.map((row) => JSON.parse(row.close_json).data_class ?? null), ["business", "business", null, null]);
+});
+
+test("a synthetic run closes only on a Worker that holds synthetic data, and an eval run on none", async () => {
+  const business = setup();
+  const run = await business.run();
+  const consumer = { qualification_ref: null, compliance_ref: "ai.openai.chatgpt-consumer" };
+  const refused = await business.close(run.run_id, closeV3({ ...consumer, run_class: "synthetic" }));
+  assert.deepEqual([refused.status, refused.body.error], [422, "run_class_refused"]);
+  const abstained = { status: "abstained", reason: "rate_limited", detail: "Synthetic.", output: null };
+  assert.equal((await business.close(run.run_id, closeV3({ ...consumer, run_class: "synthetic" }, abstained))).body.error, "run_class_refused");
+  assert.equal((await business.close(run.run_id, closeV3({ ...consumer, run_class: "eval_history" }))).body.error, "run_class_refused");
+  assert.equal(business.scalar("SELECT state FROM agent_runs WHERE run_id = ?", run.run_id).state, "open", "a refused close records nothing");
+  assert.equal((await setup(false, { AGENT_DATA_CLASS: "business" }).close(run.run_id, {})).status, 404, "an explicit business class serves as the default does");
+
+  const synthetic = setup(false, { AGENT_DATA_CLASS: " synthetic " });
+  const qa = await synthetic.run();
+  const body = closeV3({ ...consumer, run_class: "synthetic" });
+  const closed = await synthetic.close(qa.run_id, body);
+  assert.deepEqual([closed.status, closed.body.terminal], [200, "completed"], "a synthetic run relies on no qualification");
+  const stored = JSON.parse(synthetic.scalar("SELECT close_json c FROM agent_runs WHERE run_id = ?", qa.run_id).c);
+  assert.deepEqual([stored.data_class, stored.model.run_class, stored.model.compliance_ref], ["synthetic", "synthetic", "ai.openai.chatgpt-consumer"]);
+  assert.equal((await synthetic.close(qa.run_id, body)).status, 200, "the exact retry replays");
+  assert.equal((await synthetic.close((await synthetic.run()).run_id, closeV3({ ...consumer, run_class: "eval_history" }))).body.error, "run_class_refused");
+  // A live run on a synthetic Worker still needs a qualification the Worker holds.
+  const live = await synthetic.run();
+  assert.equal((await synthetic.close(live.run_id, closeV3({ qualification_ref: null }))).body.terminal, "abstained");
+  assert.equal(closeReason(synthetic, live.run_id), "no_qualified_route");
+  // A data class that is neither stops the host API instead of reading as either.
+  const misspelt = await setup(false, { AGENT_DATA_CLASS: "Synthetic" }).close("run_x", body);
+  assert.deepEqual([misspelt.status, misspelt.body.error], [503, "data_class_not_configured"]);
+});
+
+test("a live or shadow close keeps its output only on a qualification the Worker holds for its route and release", async () => {
+  const s = setup();
+  const ref = await qualify(s, {}, "ref-sol-pass");
+  const closeWith = async (model: Record<string, unknown>, body: Record<string, unknown> = {}) => {
+    const run = await s.run();
+    const closed = await s.close(run.run_id, closeV3(model, body));
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    return [closed.body.terminal, closeReason(s, run.run_id)];
+  };
+  const kept = ["completed", null];
+  const refused = ["abstained", "no_qualified_route"];
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), kept);
+  assert.deepEqual(await closeWith({ qualification_ref: ref, mode: "shadow", run_class: "shadow" }), kept);
+  for (const [label, model] of [
+    ["another provider", { provider: "openai", adapter: "openai_compatible", auth_mode: "api_key", billing: "api" }],
+    ["another model", { model: "gpt-6-astra", models_used: ["gpt-6-astra"] }],
+    ["another release", { release_sha256: "f".repeat(64) }],
+    ["no release", { release_sha256: null }],
+    ["no reference", { qualification_ref: null }],
+    ["a reference the Worker never recorded", { qualification_ref: "qal_00000000-0000-4000-8000-000000000000" }],
+    ["a shadow run with no reference", { qualification_ref: null, mode: "shadow", run_class: "shadow" }],
+  ] as const)
+    assert.deepEqual(await closeWith({ qualification_ref: ref, ...model }), refused, label);
+  // Another specialist's row for the same route and release is not this specialist's.
+  assert.deepEqual(await closeWith({ qualification_ref: await qualify(s, { specialist_id: "estimator" }, "ref-estimator") }), refused);
+  // A failure at another effort of the same route and release is another key, so the reference holds.
+  await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "ref-high-fail");
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), kept);
+  // A failure recorded later for its own key ends it, even though the row itself passed; the failed
+  // row is no reference, and a new passed row is.
+  const failed = await qualify(s, { passed: false, report_sha256: "c".repeat(64) }, "ref-sol-fail");
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), refused);
+  assert.deepEqual(await closeWith({ qualification_ref: failed }), refused);
+  const again = await qualify(s, { report_sha256: "d".repeat(64) }, "ref-sol-again");
+  assert.deepEqual(await closeWith({ qualification_ref: again }), kept);
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), refused, "the failure still sits between the old row and now");
+  // The check only ever stops output: an abstention keeps its own reason.
+  assert.deepEqual(await closeWith({ qualification_ref: null }, { status: "abstained", reason: "rate_limited", detail: "Synthetic.", output: null }), ["abstained", "provider_unavailable"]);
+});
+
+test("an audit closes completed only off the reviewed run's family, on the hop it ran and every hop it passed over", async () => {
+  const s = setup();
+  const reviewed = await s.run();
+  assert.equal((await s.close(reviewed.run_id, closeV3({ qualification_ref: await qualify(s, {}, "audit-reviewed") }))).body.terminal, "completed");
+  const opus = await qualify(s, { specialist_id: "independent_auditor", provider: "claude", model: "claude-opus-5-5", effort: "high" }, "audit-opus");
+  const audit = async (model: Record<string, unknown>, reviewedRun = reviewed.run_id) => {
+    const run = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewedRun } });
+    const closed = await s.close(run.run_id, closeV3({ ...OPUS_AUDIT, qualification_ref: opus, review_of: { run_id: reviewedRun, family: "openai" }, ...model }));
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    return [closed.body.terminal, closeReason(s, run.run_id)];
+  };
+  const kept = ["completed", null];
+  const notIndependent = ["abstained", "provider_unavailable"];
+  assert.deepEqual(await audit({}), kept);
+  // A hop on the close's own provider and model is of the close's family.
+  const opusHop = { route_id: "claude_opus_max", provider: "claude", model: "claude-opus-5-5", reason: "rate_limited", retry_at: null };
+  assert.deepEqual(await audit({ route: "declared_fallback", failover: [opusHop] }), kept);
+  // A hop the audit passed over on the reviewed run's account and model ran on its family.
+  const proposerHop = { route_id: "codex_astra", provider: "codex", model: "gpt-6.1-sol", reason: "provider_error", retry_at: null };
+  assert.deepEqual(await audit({ route: "declared_fallback", failover: [opusHop, proposerHop] }), notIndependent);
+  // A hop on another account names no family the Worker can check, so the audit fails closed even
+  // when the model is the same: a declared cross-account audit fallback waits for hop families.
+  const vertex = await qualify(s, { specialist_id: "independent_auditor", provider: "vertex", model: "claude-opus-5-5", effort: "high" }, "audit-vertex");
+  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex, route: "declared_fallback", route_id: "opus_vertex", failover: [{ ...opusHop, route_id: "claude_opus" }] }), notIndependent);
+  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex }), kept);
+  // The audit's own family the same as the reviewed run's.
+  const astra = await qualify(s, { specialist_id: "independent_auditor", model: "gpt-6-astra", effort: "high" }, "audit-astra");
+  assert.deepEqual(await audit({ provider: "codex", adapter: "codex", family: "openai", model: "gpt-6-astra", models_used: [], route_id: "codex_astra", qualification_ref: astra }), notIndependent);
+  // A legacy reviewed run's provider maps to its family, and a legacy audit's too.
+  const legacy = await s.run();
+  const legacyModel = (provider: string) => ({ provider, model: "synthetic-model", models_used: [], auth_mode: "oauth", tier: "audit" });
+  assert.equal((await s.close(legacy.run_id, { ...CLOSE_V3, model: legacyModel("codex") })).body.terminal, "completed");
+  assert.deepEqual(await audit({}, legacy.run_id), kept);
+  assert.deepEqual(await audit({ provider: "codex", adapter: "codex", family: "openai", model: "gpt-6-astra", models_used: [], route_id: "codex_astra", qualification_ref: astra }, legacy.run_id), notIndependent);
+  const legacyAudit = async (provider: string, reviewedRun: string) => {
+    const run = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewedRun } });
+    return (await s.close(run.run_id, { ...CLOSE_V3, model: legacyModel(provider) })).body.terminal;
+  };
+  assert.deepEqual([await legacyAudit("claude", reviewed.run_id), await legacyAudit("codex", reviewed.run_id)], ["completed", "abstained"]);
+  // A reviewed run whose family cannot be named cannot be audited independently.
+  const unknown = await s.run();
+  assert.equal((await s.close(unknown.run_id, { ...CLOSE_V3, model: legacyModel("gemini") })).body.terminal, "completed");
+  assert.deepEqual(await audit({}, unknown.run_id), notIndependent);
+  assert.equal(await legacyAudit("claude", unknown.run_id), "abstained");
+});
+
+test("the candidate bar needs the qualification for the effort and release the specialist runs on", async () => {
+  const s = setup(true);
+  const seeded = await s.run();
+  for (let index = 0; index < 50; index += 1) {
+    const id = `sstep_effort_${index}`;
+    s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, seeded.run_id, id, "0".repeat(64), s.now());
+    s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, id, new Date(Date.parse(s.now()) + index).toISOString());
+  }
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { qualification_id: string }) => row.qualification_id);
+  const runsOnV3 = async (model: Record<string, unknown>) => {
+    s.tick(1000);
+    assert.equal((await s.close((await s.run()).run_id, closeV3(model))).status, 200);
+  };
+  const medium = await qualify(s, {}, "bar-medium");
+  await qualify(s, { effort: "high" }, "bar-high");
+  await runsOnV3({ qualification_ref: medium });
+  assert.deepEqual(await candidates(), [medium]);
+  // The latest row for the model is a failure at another effort: the route the specialist runs on still holds.
+  s.tick(1000);
+  await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "bar-high-fail");
+  assert.deepEqual(await candidates(), [medium]);
+  s.tick(1000);
+  await qualify(s, { passed: false, report_sha256: "c".repeat(64) }, "bar-medium-fail");
+  assert.deepEqual(await candidates(), [], "its own effort failed");
+  // A new release needs its own qualification; the earlier release's rows do not carry over.
+  const release = await qualify(s, { release_sha256: "f".repeat(64), report_sha256: "d".repeat(64) }, "bar-release");
+  await runsOnV3({ qualification_ref: release, release_sha256: "f".repeat(64) });
+  assert.deepEqual(await candidates(), [release]);
+  s.tick(1000);
+  await qualify(s, { release_sha256: "f".repeat(64), passed: false, report_sha256: "e".repeat(64) }, "bar-release-fail");
+  assert.deepEqual(await candidates(), []);
+  // A close that relied on no qualification shows no effort, so the bar holds its release alone.
+  const high = await qualify(s, { release_sha256: "f".repeat(64), effort: "high", report_sha256: "f".repeat(64) }, "bar-release-high");
+  await runsOnV3({ qualification_ref: null, release_sha256: "f".repeat(64) });
+  assert.deepEqual(await candidates(), [high]);
+  await runsOnV3({ qualification_ref: null, release_sha256: "1".repeat(64) });
+  assert.deepEqual(await candidates(), [], "no row at that release");
 });

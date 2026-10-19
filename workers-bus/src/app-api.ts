@@ -4764,7 +4764,6 @@ async function prepareCommercialProposalPublication(
         env,
         auth.session.tenant_id,
         input.proposalPackId,
-        input.publicationVersion,
         now,
       );
       if (outstanding) {
@@ -4895,18 +4894,17 @@ async function settleCommercialProposalPublication(
       permit.actor_type !== expectedActorType ||
       permit.actor_id !== auth.session.user_id
     ) {
-      // A delivery a person confirmed by hand is recorded by any person in the commercial set: the
-      // send already ran, and whoever prepared it may not be the one who checked with the customer.
-      const handConfirmed = input.externalEffectId
+      // Recording a send that already ran is readback: any person in the commercial set may record
+      // a succeeded effect bound to this permit, so a preparer who left or changed role strands
+      // nothing.
+      const ran = input.externalEffectId
         ? await env.DB.prepare(
-          `SELECT 1 AS found FROM proposal_delivery_confirmations confirmation
-             JOIN external_effects effect
-               ON effect.effect_id = confirmation.effect_id AND effect.tenant_id = confirmation.tenant_id
-            WHERE confirmation.tenant_id = ? AND confirmation.effect_id = ?
-              AND confirmation.outcome = 'delivered' AND effect.authority_ref = ?`,
+          `SELECT 1 AS found FROM external_effects
+            WHERE tenant_id = ? AND effect_id = ? AND state = 'succeeded' AND authority_ref = ?`,
         ).bind(auth.session.tenant_id, input.externalEffectId, permit.permit_id).first()
         : null;
-      const person = handConfirmed ? await personCookieSession(env, auth) : null;
+      // A caller whose person session cannot be established is not a person; refuse, never fail.
+      const person = ran ? await personCookieSession(env, auth).catch(() => null) : null;
       if (!person || !["owner", "ops", "sales"].includes(person.role)) {
         return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
       }

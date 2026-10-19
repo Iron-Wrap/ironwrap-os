@@ -2,7 +2,7 @@
 // else: it reads signals, opens and closes coordination runs, and reports its health. Every
 // decision about an action belongs to the Worker; the host only transports.
 
-import type { JsonSchema, ProviderId } from "../gateway/types.ts";
+import type { Family, JsonSchema, ProviderId } from "../gateway/types.ts";
 
 export type SignalKind = "event" | "watch" | "owner_request" | "handoff";
 
@@ -60,12 +60,24 @@ export interface OpenedRun {
   };
   tools: RunTool[];
   // Routing fields; a Worker that predates them omits all three, and missing reads as null/live.
-  /** The run whose work this run reviews, and the family that proposed it. */
-  review_of?: { run_id: string; provider: ProviderId } | null;
+  /**
+   * The run whose work this run reviews: the provider id that ran it and, from a Worker on the v3
+   * close model, its family. A legacy hint's provider maps to its family (claude: anthropic,
+   * codex: openai).
+   */
+  review_of?: { run_id: string; provider?: ProviderId; family?: Family } | null;
   /** The single catalog action the run is expected to take. */
   expected_action_id?: string | null;
   /** A shadow run spends the shadow budget, never the live ceilings. */
   mode?: "live" | "shadow";
+  /**
+   * The specialist's current owner-recorded qualifications (`agent_qualifications`): for each
+   * provider, model, effort and release, the latest row, sent only while it passed. Live and shadow
+   * runs take only a route one of them names; without them those runs abstain `no_qualified_route`.
+   */
+  qualifications?: Array<{ qualification_id: string; provider: ProviderId; model: string; effort: string; release_sha256: string }>;
+  /** 3 when the Worker accepts the v3 close model block; any other value gets the legacy close. */
+  close_model?: number;
   /**
    * Output this run may return beyond the run output schema. Only a face run answering a person's
    * ask carries `view`: the strict schema of a view spec, merged in as a nullable property.
@@ -89,26 +101,56 @@ export interface RunClose {
   detail: string | null;
   output: unknown;
   /**
-   * Null when no model ran (the specialist could not load, or no route of another family could
-   * review the work). `route_id`, `review_of` and `mode` go only to a Worker that sent the routing
-   * fields: an older one refuses unknown close fields.
+   * Null when no route was resolved (the specialist could not load, or no route of another family
+   * could review the work). `route_id`, `review_of` and `mode` go only to a Worker that sent the
+   * routing fields, and the v3 block only to one that advertises `close_model: 3`: an older Worker
+   * refuses unknown close fields.
    */
-  model: {
-    provider: string;
-    model: string;
-    models_used: string[];
-    auth_mode: string;
-    tier: string;
-    route_id?: string;
-    review_of?: { run_id: string; provider: string } | null;
-    mode?: "live" | "shadow";
-  } | null;
+  model: LegacyCloseModel | CloseModelV3 | null;
   hashes: { system: string; prompt: string; schema: string } | null;
   usage: { input_tokens: number; cached_input_tokens: number; output_tokens: number };
   cost_usd: number;
   attempts: number;
   duration_ms: number;
   tool_calls: Array<{ tool: string; arguments: unknown }>;
+}
+
+export interface LegacyCloseModel {
+  provider: string;
+  model: string;
+  models_used: string[];
+  auth_mode: string;
+  tier: string;
+  route_id?: string;
+  review_of?: { run_id: string; provider: string } | null;
+  mode?: "live" | "shadow";
+}
+
+/** The close model block of gateway config v3 (R3 design section 6). */
+export interface CloseModelV3 {
+  provider: string;
+  adapter: string;
+  family: string;
+  model: string;
+  models_used: string[];
+  /** The account's credential mode. */
+  auth_mode: string;
+  billing: string;
+  tier: string;
+  route_id: string;
+  route: "primary" | "declared_fallback";
+  /** Every hop the run passed over or failed on, in order (at most three). */
+  failover: Array<{ route_id: string; provider: string; model: string; reason: string; retry_at: number | null }>;
+  /** The Worker's `qualification_id` the route matched; null on a synthetic run. */
+  qualification_ref: string | null;
+  release_sha256: string | null;
+  gateway_config_sha256: string;
+  review_of: { run_id: string; family: string } | null;
+  mode: "live" | "shadow";
+  /** The account's docs/COMPLIANCE-REGISTER.md ref and the run class it served. */
+  compliance_ref: string | null;
+  run_class: string;
+  risk_acceptance: { ref: string; run_class: string; reason: string } | null;
 }
 
 export interface Heartbeat {

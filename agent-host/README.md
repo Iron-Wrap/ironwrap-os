@@ -14,34 +14,117 @@ the specialist track.
 
 ## Provider gateway
 
-`src/gateway/` is one interface over Claude (Claude Agent SDK) and Codex (Codex SDK).
-`ProviderGateway.run(request)` returns either a schema-valid output or an abstention with a stable
-reason. It never throws for a provider failure and never switches provider or model to rescue a
-call: when a provider is unavailable, the specialists routed to it abstain and say why.
+`src/gateway/` is one interface over the tenant's provider accounts, each behind its adapter: the
+Claude Agent SDK (`claude_agent_sdk`) or the Codex SDK (`codex`). `ProviderGateway.run(request)`
+returns either a schema-valid output or an abstention with a stable reason. It never throws for a
+provider failure and never switches provider or model to rescue a call, except along the route's
+declared fallback chain (below); when no hop can serve a run, the specialist abstains and says why.
 
-Routing lives in [`config/gateway.json`](config/gateway.json) (`ironwrap_agent_gateway_config_v2`).
-`routes` names each provider, model and effort once, and `tiers` maps each runtime tier to a route:
+Routing lives in [`config/gateway.json`](config/gateway.json) (`ironwrap_agent_gateway_config_v3`),
+one file per host and so per tenant (`AGENT_HOST_GATEWAY_CONFIG` selects another). `providers` holds
+the accounts; `routes` names each account, model and effort once, with its `fallback`; `tiers` maps
+each runtime tier to a route:
 
-| Tier | Route | Provider and model | Used by |
+| Tier | Route | Account and model | Used by |
 |---|---|---|---|
-| `routine` | `codex_sol` | Codex `gpt-6.1-sol` | every proposing specialist |
-| `hard` | `codex_astra` | Codex `gpt-6-astra` | the same specialists, for pricing anomalies, fraud and disputes |
-| `audit` | `claude_opus` | Claude `claude-opus-5-5` | `independent_auditor`, for a run that reviews no other run |
+| `routine` | `codex_sol` | `codex`: `gpt-6.1-sol` | every proposing specialist |
+| `hard` | `codex_astra` | `codex`: `gpt-6-astra` | the same specialists, for pricing anomalies, fraud and disputes |
+| `audit` | `claude_opus` | `claude`: `claude-opus-5-5` | `independent_auditor`, for a run that reviews no other run |
 
 A run takes the route of its expected action (`specialists.<id>.actions`), else its specialist's
 (`specialists.<id>.route`), else its tier's. `specialists.<id>.tiers` stays the allowlist, and only
-the auditor may use `audit`; the auditor takes no route of its own.
+the auditor may use `audit`; the auditor takes no route of its own. A v2 file is refused with the
+command that converts it: `node src/gateway/upgrade-config.ts v2.json > v3.json` keeps every route,
+tier, ceiling and specialist, maps `claude` to the `anthropic` family and `codex` to `openai`, and
+writes nulls for what v2 never held (context windows, output limits, compliance refs), which an
+operator fills from provider docs before the file parses.
 
-Audit independence is per run. A run that reviews another names it in `reviewOf` (run id and the
-provider that proposed it), and the auditor then runs on `audit_routes.<that provider>`:
-`claude_opus` for Codex work, `codex_astra` for Claude work. The configuration refuses an audit
-route on the family it audits and needs one for every family a proposer route uses, so a proposer
-may run on Claude. The gateway checks again per run: with no route of another family it abstains
-with `no_independent_route`, before any provider call or ceiling booking and without a fallback.
-An audit that names no run under review uses `tiers.audit` only while no proposer route is on that
-route's family; otherwise it abstains the same way.
-Models, effort, ceilings and retry are configuration; dropping the auditor to another Claude model
-needs no code change.
+### Capability registry
+
+Each account holds the models it serves (`providers.<id>.models.<model>`), because the same model
+has other capabilities, limits and prices behind another account. An entry names the model's
+`family` (the authority for independence), `tools`, `json_schema` (`native` or `validated`),
+`context_tokens`, `max_output_tokens`, the `efforts` it takes, its `price` (`usd_per_mtok` on an API
+account; on a subscription, the `subscription` and an optional `list_usd_per_mtok`, which the Codex
+adapter books), and `rate_limits` per minute (null for none). Every figure is either cited in
+`sources` with the provider doc and the date it was read, or listed in `unverified`; a live run
+refuses an entry with an unverified figure. A route on a model or effort the registry does not hold
+fails the load: unregistered models are never routed. Before any booking a hop must fit the run: a
+run with tools needs `tools`, and the estimated input (characters / 3) plus `max_output_tokens`
+must fit `context_tokens`.
+
+### Families and audit independence
+
+Audit independence is per run and per family. A run that reviews another names it in `reviewOf`
+(run id and the family that proposed it), and the auditor runs on `audit_routes.<that family>`:
+`claude_opus` for `openai` work, `codex_astra` for `anthropic` work. The configuration refuses an
+audit route whose chain reaches the family it audits and needs one for every family a proposer
+route (or its fallback) uses, so a proposer may run on Claude. The gateway checks again on every
+hop: a hop of the reviewed family is skipped, and with none left the run abstains with
+`no_independent_route`, before any provider call or ceiling booking. Work on a family the registry
+does not hold has no reviewer. An audit that names no run under review uses `tiers.audit` only
+while no proposer route is on that route's family; otherwise it abstains the same way. The v2
+provider ids `claude` and `codex` are never family names; the Worker's legacy review hint
+(`review_of.provider`) maps to its family the same way the converter does.
+
+### Declared failover
+
+`routes.<id>.fallback` names the next route to try, or null. A chain is at most two fallbacks
+deep, acyclic and of one family, and `retry.max_attempts` times its hops stays within the ten
+attempts the Worker counts on a run. Only production runs follow a chain; shadow and eval runs keep
+their primary route, so their measurements stay on one model. Before any booking every hop is
+screened, in this order: a hop of the reviewed family is skipped; a live or shadow run needs a
+qualification for the hop (below), and every run a hop that fits it, else the primary abstains
+`no_qualified_route` without failing over and a fallback is skipped; then the account must be one
+the run may use, enabled and on terms that serve the run's class (`provider_disabled`), not cooling
+down or at its rate window (`rate_limited`), with a present, unrejected credential on a plan that
+includes the model. Only `rate_limited`, `provider_error`, `auth_failed`, `credential_missing` and
+`provider_disabled` move on to the next hop; `invalid_output`, `model_mismatch`, the ceilings,
+`ledger_unavailable`, `aborted` and the kill switch end the run, because failing over then would
+switch models to rescue output or budget. The kill switch, a cancellation and the rate window are
+checked again before every attempt, retries and later hops included, so a run engaged by `KILL`
+mid-chain books nothing more. With every hop spent the run abstains with the primary's
+reason and the earliest `retryAt` any hop named. Every result lists the hops it passed over or
+failed on (`failover`), says whether its route is the `primary` or a `declared_fallback`, and
+carries the configuration's SHA-256.
+
+### Qualification gate
+
+A live or shadow run takes only a hop the owner qualified: the Worker sends the specialist's current
+qualifications with the run (`qualifications`, from `agent_qualifications`), and one must name the
+hop's provider, model and effort at the specialist's release, the `release_sha256` of
+`src/host/release.ts` that the host hashes from the specialist's files on disk. The matching
+`qualification_id` is recorded on the run. Eval runs and runs on a synthetic host need none.
+
+The Worker does not send qualifications yet (that is the Worker change of R3), so until it does every
+live and shadow run on a business host abstains `no_qualified_route` before any provider call. That
+fail-closed outcome is intended: no specialist acts in production on a route nobody qualified. Keep
+the QA host's unit stopped, or run it with `AGENT_HOST_DATA_CLASS=synthetic`, until wave-1
+qualifications are recorded.
+
+### Provider terms per run class
+
+Every account names its row of [`docs/COMPLIANCE-REGISTER.md`](../docs/COMPLIANCE-REGISTER.md) in
+`compliance_ref`, and `src/gateway/compliance.ts` holds the register as code: which adapter and
+credential mode each ref is, and which run classes it serves. A run's class is `live` or `shadow`
+from its scope, `eval_history` or `synthetic` from an eval request's `data` (unset reads as
+history), and `synthetic` for every run on a host whose `AGENT_HOST_DATA_CLASS` is `synthetic`.
+
+| Ref | Serves |
+|---|---|
+| `ai.anthropic.api`, `ai.anthropic.claude-commercial`, `ai.openai.api` | every class |
+| `ai.openai.chatgpt-commercial` | every class; live and shadow only once the owner's `confirmed_retention` is recorded on the account and the sign-in claims a plan (one of `chatgpt_plans`) |
+| `ai.anthropic.claude-consumer`, `ai.openai.chatgpt-consumer` | `synthetic` only; `eval_history` under an owner risk acceptance; never live or shadow |
+
+An account with no ref, or whose ref does not serve the run's class, is `provider_disabled` for that
+run before anything is booked. `owner_risk_acceptances` may hold one entry per consumer ref, with
+`run_class: "eval_history"` and `accepted_by: "owner"` only; the acceptance is recorded on the run
+and in the ledger. The shipped configuration names the commercial refs (Claude Team or Enterprise,
+ChatGPT Business or Enterprise, whose plan claims go in `chatgpt_plans`; a personal plan claim is
+refused there). [`config/gateway.consumer.json`](config/gateway.consumer.json) is the same file with
+the consumer refs and the `pro` plan, for a QA or dev host on synthetic data and for qualification
+runs on the owner's personal sign-ins; a test keeps it equal to the shipped file apart from those
+labels.
 
 ### Shadow and eval books
 
@@ -57,24 +140,25 @@ needs no code change.
   the production file, under `eval:` keys against that block's team, specialist and judge
   ceilings, and treats a request of any other scope as a programming error; a production gateway
   refuses `eval` the same way. A judge request names `judge_key` as its specialist and the run it
-  scores in `reviewOf`. It skips the tier allowlist and runs on `judge.default` for Codex work or
-  `judge.for_claude_proposers` for Claude work, abstaining with `no_independent_route` when that
-  route is of the scored run's family. `tierRoutes` replaces a proposing tier's route for one batch
-  (the stage-0 model comparison), ahead of action and specialist routes; the auditor's routing is
-  unchanged. For `per_stage`, the runner gives each stage its own state directory.
+  scores in `reviewOf`. It skips the tier allowlist and runs on `judge.for_claude_proposers` for
+  `anthropic` work or `judge.default` for any other family, abstaining with `no_independent_route`
+  when that route is of the scored run's family. `tierRoutes` replaces a proposing tier's route for
+  one batch (the stage-0 model comparison), ahead of action and specialist routes; the auditor's
+  routing is unchanged. For `per_stage`, the runner gives each stage its own state directory.
 
 ### Credentials
 
-The configuration names environment variables, never values (`*_env` keys).
+The configuration names environment variables, never values (`secrets.*_env`).
 
-| Provider | `auth` | Credential |
-|---|---|---|
-| Claude | `oauth` (default) | `CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token` |
-| Claude | `api_key` | `ANTHROPIC_API_KEY` |
-| Codex | `chatgpt` (default) | ChatGPT sign-in in `$CODEX_HOME/auth.json`, from `codex login` |
-| Codex | `api_key` | `CODEX_API_KEY` |
+| Adapter | `credential_mode` | `billing` | Credential |
+|---|---|---|---|
+| `claude_agent_sdk` | `oauth` (default) | `subscription` | `CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token` |
+| `claude_agent_sdk` | `api_key` | `api` | `ANTHROPIC_API_KEY` |
+| `codex` | `oauth` (default) | `subscription` | ChatGPT sign-in in `$CODEX_HOME/auth.json`, from `codex login` |
+| `codex` | `api_key` | `api` | `CODEX_API_KEY` |
 
-Changing `auth` swaps a provider to an API key; nothing else changes. Credentials are read on every
+Moving an account to an API key changes its `credential_mode`, `billing` (the price becomes
+`usd_per_mtok`) and `compliance_ref`; nothing else changes. Credentials are read on every
 call, so a rotated token or a refreshed `auth.json` is picked up without a restart. The Codex CLI
 refreshes `auth.json` itself, so `CODEX_HOME` must be persistent and writable by the host. A
 credential the provider rejected is not retried until it changes or `auth_probe_after_ms` passes,
@@ -84,7 +168,7 @@ the state directory.
 ### Isolation
 
 Each run gets an empty temporary working directory and a subprocess environment rebuilt from
-`PATH`, `HOME`, `LANG`, `TMPDIR` and the one credential the auth mode names. Claude runs with no
+`PATH`, `HOME`, `LANG`, `TMPDIR` and the one credential the credential mode names. Claude runs with no
 built-in tools, no filesystem settings, hooks or `CLAUDE.md`, no session persistence, and a
 gateway-owned `CLAUDE_CONFIG_DIR`. Codex runs with the shell and every optional tool disabled, a
 read-only sandbox, no network or web search, no `AGENTS.md`, and no history. The only callable
@@ -96,41 +180,48 @@ by name (`passEnv`), never placed on a command line. Output must match a strict 
 
 - Call and cost ceilings per specialist and for the team of each namespace (live, shadow, eval) over
   a rolling window, kept in the append-only `<state>/gateway-usage.jsonl`; records without a
-  namespace prefix are live. Every attempt is booked at its per-call cost ceiling
+  namespace prefix are live. Every attempt on every hop is booked at its per-call cost ceiling
   before it starts and settled to the actual cost after, so concurrent runs cannot overshoot and a
-  crash or restart cannot reset a ceiling. If the file cannot be written, the gateway refuses
-  every further run (`ledger_unavailable`). Codex cost is notional, from the configured price
-  table; Claude cost is the SDK estimate.
+  crash or restart cannot reset a ceiling; each record carries its route, `primary` or
+  `declared_fallback`, billing, run class, compliance ref and any risk acceptance. If the file
+  cannot be written, the gateway refuses every further run (`ledger_unavailable`). Codex cost is
+  notional, from the registry price (cache writes at `cache_write`); Claude cost is the SDK
+  estimate. A model with no USD figure books 0 USD and `tokens_per_call` tokens instead, so the
+  configuration then needs `tokens` ceilings on every set of books its routes reach; past one the
+  run abstains `cost_ceiling`.
 - Short rate limits and transient failures retry with jittered exponential backoff. A rate limit
-  longer than `max_delay_ms` puts the provider into a cooldown in which runs abstain without
-  calling it.
-- An abstention carries `retryAt` (epoch ms) when waiting can help: the cooldown end for
+  longer than `max_delay_ms` puts that model of the account into a cooldown in which runs skip it
+  without a call. A model's `rate_limits` are kept in memory over a sliding minute; a full window
+  is `rate_limited` until its oldest call leaves it.
+- An abstention carries `retryAt` (epoch ms) when waiting can help: the cooldown or window end for
   `rate_limited`; for a ledger `call_ceiling` or `cost_ceiling`, the latest moment at which the
   oldest reservation counted against each refusing ceiling leaves the window (a call that settles
   below its reservation can free cost room sooner); the next probe (`auth_probe_after_ms` after
   the refusal) for a model the provider refused for the sign-in's plan; now plus the attempt's
-  backoff for any other `provider_error` and for `model_mismatch`. `no_independent_route`,
-  `ledger_unavailable`, the stop reasons, a sign-in on a plan outside `chatgpt_plans` and a single
-  call stopped at its per-call cost ceiling (`cost_ceiling` from the provider) carry none.
+  backoff for any other `provider_error` and for `model_mismatch`; after a failover, the earliest
+  of its hops'. `no_independent_route`, `no_qualified_route`, `ledger_unavailable`, the stop
+  reasons, a sign-in on a plan outside `chatgpt_plans` and a single call stopped at its per-call
+  cost ceiling (`cost_ceiling` from the provider) carry none.
 - Kill switch: a `KILL` file in the state directory or `AGENT_HOST_KILL=1` stops every run before
   any provider call.
-- Models used: Claude reports them in its result, and any model other than the configured one,
-  including the CLI's own refusal fallback, is an abstention (`model_mismatch`). Codex's SDK
+- Models used: Claude reports them in its result, and any model other than the configured one
+  (a dated `-20260901` or `-2026-09-01` id and a `[1m]` suffix are the same model), including the
+  CLI's own refusal fallback, is an abstention (`model_mismatch`). Codex's SDK
   events report none; the gateway records the model the Codex CLI ran the thread's turns with,
   from its session rollout under `$CODEX_HOME/sessions` (`turn_context.model`). That is the CLI's
   own record of the model it requested, not a provider confirmation, so `model_mismatch` cannot
   catch a provider-side substitution, and an unreadable rollout records none (the smoke then fails).
   `$CODEX_HOME/sessions` keeps every prompt the CLI ran, unpruned, so it holds run data.
 - A Codex ChatGPT sign-in must be on a plan that includes the routed models. `chatgpt_plans` lists
-  those plans; a sign-in whose id token claims another plan abstains without a call
-  (`provider_error`, detail `codex: plan does not include model …`). A model the provider refused
-  for a sign-in is not called again on that sign-in until it changes or, once per
-  `auth_probe_after_ms`, a single probe succeeds.
-- `ProviderGateway.health()` reports per-provider state and alerts: `kill_switch_engaged`,
-  `ledger_unavailable`, `<provider>_credential_missing`, `<provider>_auth_failed`,
-  `<provider>_cooldown`, `codex_plan_lacks_model` (the provider is then not ready), and
-  `codex_signin_not_refreshing` when `auth.json` has not refreshed within
-  `signin_max_age_hours`.
+  those plans' claims; a sign-in whose id token claims another plan abstains without a call
+  (`provider_error`, detail `codex: plan does not include model …`, naming the claimed plan). A
+  model the provider refused for a sign-in is not called again on that sign-in until it changes or,
+  once per `auth_probe_after_ms`, a single probe succeeds.
+- `ProviderGateway.health()` reports every configured account's state and alerts:
+  `kill_switch_engaged`, `ledger_unavailable`, `<provider>_credential_missing`,
+  `<provider>_auth_failed`, `<provider>_cooldown`, `<provider>_plan_lacks_model` (the account is
+  then not ready), and `<provider>_signin_not_refreshing` when a Codex `auth.json` has not refreshed
+  within `signin_max_age_hours`. The heartbeat sends at most 32 alerts, the Worker's limit.
 
 ## Host service
 
@@ -180,7 +271,8 @@ routed provider is usable and the Worker answered a recent poll. Both bind to lo
 | `AGENT_HOST_WORKER_TOKEN` | required | Agent API token; equals the Worker secret `AGENT_HOST_TOKEN` |
 | `AGENT_HOST_PORT`, `AGENT_HOST_BIND` | `8790`, `127.0.0.1` | Health server; a non-loopback bind also needs `AGENT_HOST_BIND_PUBLIC=true` (containers only) |
 | `AGENT_HOST_POLL_MS`, `AGENT_HOST_BATCH_SIZE`, `AGENT_HOST_CONCURRENCY` | `15000`, `20`, `4` | Signal polling |
-| `AGENT_HOST_GATEWAY_CONFIG`, `AGENT_HOST_SPECIALISTS_DIR`, `AGENT_HOST_ACTION_SERVER` | package paths | Overrides for tests and images |
+| `AGENT_HOST_GATEWAY_CONFIG`, `AGENT_HOST_SPECIALISTS_DIR`, `AGENT_HOST_ACTION_SERVER` | package paths | Overrides for tests and images; a QA or dev host on personal sign-ins sets `AGENT_HOST_GATEWAY_CONFIG=config/gateway.consumer.json` |
+| `AGENT_HOST_DATA_CLASS` | `business` | What the Worker holds. `business` keeps live and shadow runs to qualified routes on accounts whose terms serve them; `synthetic`, for a QA or dev host on seed data only, runs every Worker run as a synthetic run (no qualification needed, consumer refs allowed; ceilings, independence, the kill switch and the model check still apply). Any other value refuses to start |
 
 ### Worker agent API
 
@@ -191,10 +283,10 @@ The host and the action server call only these Worker routes, with
 | Route | Caller | Contract |
 |---|---|---|
 | `GET /api/v1/agents/signals?after&limit` | host | `{signals[], next_cursor}`; a signal names its specialist, kind (`event`, `watch`, `owner_request`, `handoff`), subject and untrusted content, and `actor`: for a person's ask or request through the app, `source` is `ask` or `request` and `actor` is `{type: "owner" \| "staff" \| "worker", role, ref: "person:<user_id>", authenticated: true}` from the Worker's record (`owner` only for the owner, `worker` for a field person, `staff` for every other role); every other signal has `actor: null` |
-| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[], omitted[]}, tools[], people_only[]}` (`people_only` is `{action_id, name}` for each people-only act the specialist owns, names the run may use in receipts and never tools; a run on a handoff also has the person's ask or request at the root of its chain as fact `signal/<root_id>`, version 1, hashed over its own data (`signal_id`, `kind`, `source`, `actor`, and `content` only when the run reads as the owner), so its hash differs from the face run's `signal/<id>`, which hashes the ask's content; `facts/current` serves the face's form) with the routing hints `review_of: {run_id, provider} \| null` (when the auditor reviews another run, so the gateway picks a different family), `expected_action_id: string \| null` (the signal's single expected action) and `mode: "live" \| "shadow"` (`shadow` when every action the signal can lead to is in shadow; missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; a face run answering a person's ask also carries `output_extension: {view}`, the strict view spec schema, which the host adds to that run's output schema as a required, nullable `view` (every other run's input is unchanged); 409 when that key's run is already closed |
+| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[], omitted[]}, tools[], people_only[]}` (`people_only` is `{action_id, name}` for each people-only act the specialist owns, names the run may use in receipts and never tools; a run on a handoff also has the person's ask or request at the root of its chain as fact `signal/<root_id>`, version 1, hashed over its own data (`signal_id`, `kind`, `source`, `actor`, and `content` only when the run reads as the owner), so its hash differs from the face run's `signal/<id>`, which hashes the ask's content; `facts/current` serves the face's form) with the routing hints `review_of: {run_id, provider} \| null` (when the auditor reviews another run, so the gateway picks a different family; a Worker on the v3 close model adds `family`, and a legacy `provider` maps to its family), `expected_action_id: string \| null` (the signal's single expected action) and `mode: "live" \| "shadow"` (`shadow` when every action the signal can lead to is in shadow; missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; `qualifications: [{qualification_id, provider, model, effort, release_sha256}]`, the specialist's current passing owner records, which a live or shadow run needs (none yet: the Worker change of R3 adds them, and until then those runs abstain `no_qualified_route`); and `close_model: 3` when the Worker takes the v3 close (below). The host sends the specialist's release with the run; a face run answering a person's ask also carries `output_extension: {view}`, the strict view spec schema, which the host adds to that run's output schema as a required, nullable `view` (every other run's input is unchanged); 409 when that key's run is already closed |
 | `GET /api/v1/agents/runs/:id/tools` | action server | the run's tools: `action_id`, `tool_name`, `autonomy`, `side_effect_class`, `undo`, `description` (`<action_id> on <aggregate>: <catalog name>.`, with ` (protective)` before the full stop for a protective action), strict `args_schema` |
 | `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention; an admitted `authority.evaluate` also returns `evaluation`, the authority records as the run's reader may read them (`authority:read` and `production:read` or `jobs:read:any`); a read the reader may not make, or one that fails, abstains (`out_of_scope`, `fact_missing`) and returns `evaluation: {reason: "role_may_not_read" | "read_failed"}`; a shadowed action answers `decision: "shadowed"` with the decision policy would have made (`would_be`) and no receipt |
-| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode`; only an ask run's output may carry `view`, which the Worker checks and records as the spec or null |
+| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode`, and a run for such a Worker may use only the provider ids it records (`claude`, `codex`; another is `provider_disabled`); a Worker that advertised `close_model: 3` gets the v3 block instead: `provider`, `adapter`, `family`, `model`, `models_used`, `auth_mode` (the credential mode), `billing`, `tier`, `route_id`, `route` (`primary` or `declared_fallback`), `failover` (at most three hops with their reasons and retry times), `qualification_ref`, `release_sha256`, `gateway_config_sha256`, `review_of {run_id, family}`, `mode`, `compliance_ref`, `run_class` and `risk_acceptance`; only an ask run's output may carry `view`, which the Worker checks and records as the spec or null |
 | `POST /api/v1/agents/host/heartbeat` | host | readiness, alerts, `in_flight` and the close and dead-letter `backlog`, so a sign-in that stopped refreshing or a stalled feed reaches the owner |
 
 ### Owner controls and human decisions
@@ -320,16 +412,23 @@ the repository, and the host, the launcher and `npm run smoke` read them:
   `CODEX_HOME=~/.config/ironwrap/codex codex -c cli_auth_credentials_store=file login`; the sign-in
   must land in `auth.json` there, not in the OS keychain. A home with its own `config.toml` (such
   as a personal `~/.codex`) is refused, because its MCP servers and profiles cannot be overridden.
+- Personal (consumer) sign-ins are labelled by `config/gateway.consumer.json`: set
+  `AGENT_HOST_GATEWAY_CONFIG=config/gateway.consumer.json`, and `AGENT_HOST_DATA_CLASS=synthetic`
+  for a host whose Worker holds seed data only. The host and `npm run smoke` read both from
+  `~/.config/ironwrap/agent-host.env` too; `npm run qualify` takes `AGENT_HOST_GATEWAY_CONFIG`
+  from the command line only, because it reads no local file before the eval tree validates.
 
 ```bash
 npm ci --prefix agent-host                # with the optional CLI binaries, for live calls
 npm run smoke --prefix agent-host
 ```
 
-`npm run smoke` makes one tiny structured call per routed tier through the real gateway, plus one
-audit of Codex-proposed work that must run on Claude, and prints status, route, provider, model,
-the models used and cost; a call fails when its run reports no model used.
-It spends a few tokens of the sign-ins and never runs in CI.
+`npm run smoke` makes one tiny structured call per routed tier, plus one audit of `openai`-proposed
+work that must run on another family, and prints status, route, provider, family, model, the models
+used, the compliance ref and cost; a call fails when its run reports no model used. It runs through
+an eval gateway on synthetic data under `<state>/smoke`, so it needs no qualification and books its
+own eval ledger, never the production one (the host's `KILL` file does not stop it;
+`AGENT_HOST_KILL=1` does). It spends a few tokens of the sign-ins and never runs in CI.
 
 ## Replay and qualification runner
 
@@ -367,8 +466,13 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   instant), so cases carry no calendar dates; any other `$` key, or a malformed duration, refuses
   the stage.
 - Like every production audit, an auditor run names the run it reviews (`reviewOf`), here with the
-  one family all proposer routes use, so it runs on that family's audit route (`claude_opus` for
-  Codex work). A stage refuses to qualify the auditor while proposer routes span both families.
+  one family all proposer routes use (read from the registry), so it runs on that family's audit
+  route (`claude_opus` for `openai` work). A stage refuses to qualify the auditor while proposer
+  routes span two families.
+- Every eval request says its data is `synthetic` (golden and red-team cases), so any account the
+  configuration labels may serve it. Qualifying on personal sign-ins takes
+  `AGENT_HOST_GATEWAY_CONFIG=config/gateway.consumer.json` on the command line, the same variable
+  the host reads; the stage then runs on the same routes under the consumer refs.
 - The provider CLI reaches the stdio action server `src/replay/tool-server.ts`, which answers from
   the case alone. An A0 read returns the case facts it names. Every other call is captured, never
   executed, and answered with the Worker's deterministic decision: drafted for A1, escalated for a
@@ -379,9 +483,10 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   `<output_dir>/gateway` when `ledger.per_stage` is false), so each stage books in its own
   `gateway-usage-eval.jsonl` and the production ledger is never written. That gateway looks for its `KILL` file there as well: the
   host's `KILL` file does not stop qualification, while `AGENT_HOST_KILL=1` does.
-  `concurrency` caps the calls in flight per provider.
+  `concurrency` caps the calls in flight per provider id; a provider it does not name gets no calls.
   Each repetition is judged with `evals/judge.md` through the judge key on the other family's
-  route, and an invalid answer is asked again up to `judge.max_attempts`; `evals/score.mjs` merges
+  route (`judge.for_claude_proposers` for `anthropic` work, `judge.default` for any other family),
+  and an invalid answer is asked again up to `judge.max_attempts`; `evals/score.mjs` merges
   it and `evals/report.mjs` builds the report.
 - `gateway_reasons` decide what an abstention does. `pause` stops new work, keeps progress and
   records `retry_at`, the latest `retryAt`; an abstention without one sets
@@ -446,7 +551,10 @@ Locally-validated: `npm test` and `npm run typecheck` in this package, and
 against SQLite with D1 transaction semantics. Unbound actions abstain with `policy_missing`; the
 contract catalog alone does not implement their effects. Shared-memory read models and
 standing-watch scheduling remain open. The replay and qualification runner is tested with injected
-fakes only; no qualification stage has run on a provider. Live proof is blocked on an owner-provisioned Worker
+fakes only; no qualification stage has run on a provider. Gateway config v3 (registry, declared
+failover, the qualification gate, provider terms per run class) is tested with fake providers only;
+until the Worker sends qualifications, every live and shadow run on a business host abstains
+`no_qualified_route`. Live proof is blocked on an owner-provisioned Worker
 `AGENT_HOST_TOKEN`, Claude OAuth sign-in and a dedicated Codex ChatGPT sign-in, followed by the
 authenticated runtime journey and `npm run smoke`. No provider or QA activation is established by
 these local checks.

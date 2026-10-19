@@ -1,12 +1,25 @@
 // Provider gateway contract. A model run is an untrusted proposal: the gateway returns either a
-// schema-valid output or an abstention with a stable reason. It never switches provider or model
-// to rescue a call, and it never throws for provider failures.
+// schema-valid output or an abstention with a stable reason. It never throws for provider failures
+// and never switches provider or model to rescue a call, except along a route's declared fallback
+// chain (same family, production scope only), and it records every hop it passed over.
 
-export type ProviderId = "claude" | "codex";
+/** A provider entry in the gateway configuration: one tenant account behind one adapter. */
+export type ProviderId = string;
+/** A model family (`anthropic`, `openai`, `google`, ...); the registry entry of a model names it. */
+export type Family = string;
+export type AdapterKind = "claude_agent_sdk" | "codex";
+export type Billing = "api" | "subscription";
+export type CredentialMode = "oauth" | "api_key";
 export type Tier = "routine" | "hard" | "audit";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 /** Which books a run spends from: the live ceilings, the low shadow budget, or an eval gateway's own. */
 export type Scope = "production" | "eval" | "shadow";
+/**
+ * What data a run carries, which decides the provider accounts that may serve it
+ * (docs/COMPLIANCE-REGISTER.md "AI model providers"): live and shadow runs on business data, eval
+ * runs on real pseudonymised history, and synthetic runs (golden and red-team cases, a QA or dev host).
+ */
+export type RunClass = "live" | "shadow" | "eval_history" | "synthetic";
 
 export type JsonSchema = { [key: string]: unknown };
 
@@ -16,10 +29,71 @@ export interface Route {
   effort: Effort;
 }
 
-/** The run whose work is under review, and the model family (provider) that proposed it. */
+/** The run whose work is under review, and the model family that proposed it. */
 export interface ReviewOf {
   runId: string;
+  family: Family;
+}
+
+/** One owner-recorded qualification the Worker holds for the run's specialist (`agent_qualifications`). */
+export interface QualifiedRoute {
+  /** The Worker's `qualification_id`, recorded on the run as its `qualification_ref`. */
+  id: string;
   provider: ProviderId;
+  model: string;
+  effort: Effort;
+  /** `release_sha256` (host/release.ts) the qualification was recorded at. */
+  release: string;
+}
+
+export interface UsdPerMTok {
+  input: number;
+  cachedInput: number;
+  output: number;
+  /** Tokens written to the prompt cache; the input price when the provider lists none. */
+  cacheWrite?: number;
+}
+
+export type Figure = "context_tokens" | "max_output_tokens" | "price";
+
+/** A model's capability registry entry at one provider account (`providers.<id>.models.<model>`). */
+export interface ModelEntry {
+  family: Family;
+  tools: boolean;
+  /** `native`: the provider enforces the output schema; `validated`: only the gateway does. */
+  jsonSchema: "native" | "validated";
+  contextTokens: number;
+  maxOutputTokens: number;
+  /** The efforts the model takes, each with the request fragment it adds (none for the SDK adapters). */
+  efforts: Partial<Record<Effort, Record<string, unknown>>>;
+  /**
+   * `subscription` names the plan a subscription account is billed under, null on API billing.
+   * `usdPerMTok` is what a call books: the API price, or a subscription's list price; null when a
+   * subscription model has no USD figure (it then books tokens against token ceilings).
+   */
+  price: { subscription: string | null; usdPerMTok: UsdPerMTok | null };
+  /** In-memory limits over a sliding minute per provider and model; null is no gateway limit. */
+  rateLimits: { requestsPerMinute: number | null; inputTokensPerMinute: number | null; outputTokensPerMinute: number | null };
+  /** Figures not yet checked against provider docs; a live run refuses an entry that has any. */
+  unverified: Figure[];
+  /** Where each checked figure comes from, and when it was read. */
+  sources: Partial<Record<Figure, string>>;
+}
+
+/** An owner risk acceptance: one consumer ref may serve one more run class (COMPLIANCE-REGISTER.md "Recorded exceptions"). */
+export interface RiskAcceptance {
+  ref: string;
+  runClass: "eval_history";
+  reason: string;
+}
+
+/** A hop a run did not answer on: refused before any call, or failed after its attempts. */
+export interface FailoverHop {
+  routeId: string;
+  provider: ProviderId;
+  model: string;
+  reason: AbstainReason;
+  retryAt: number | null;
 }
 
 /** One stdio MCP server exposing the catalog actions a specialist may call. */
@@ -39,13 +113,24 @@ export interface GatewayRequest {
   action?: string;
   /**
    * The run under review. The independent auditor and an eval judge then run on a route of another
-   * family than `reviewOf.provider`, or abstain (`no_independent_route`).
+   * family than `reviewOf.family`, or abstain (`no_independent_route`).
    */
   reviewOf?: ReviewOf;
   /** Default `production`. An eval gateway takes only `eval`; a production gateway never does. */
   scope?: Scope;
   /** Eval only: one batch's route for a proposing tier (the stage-0 model comparison). */
   tierRoutes?: Partial<Record<"routine" | "hard", Route>>;
+  /** The specialist's `release_sha256` (host/release.ts); a live or shadow run's qualification names it. */
+  release?: string;
+  /**
+   * The Worker's qualifications for the specialist. A live or shadow run takes only a hop that one
+   * of them names exactly (provider, model, effort, release); eval and synthetic runs need none.
+   */
+  qualifications?: QualifiedRoute[];
+  /** Eval only: the cases' data, `synthetic` (golden, red team) or `history`; unset reads as `history`. */
+  data?: "synthetic" | "history";
+  /** The provider ids the run may use; any other hop is unavailable (`provider_disabled`). */
+  providers?: ProviderId[];
   /** Trusted instructions (playbook and contract). */
   system: string;
   /** Context snapshot and signal, already labelled as data. */
@@ -84,14 +169,16 @@ export type AbstainReason =
   | "provider_error"
   | "invalid_output"
   | "model_mismatch"
+  | "no_qualified_route"
   | "aborted";
 
 interface ResultBase {
   specialist: string;
   tier: Tier;
   /**
-   * The route the run resolved to: a `routes` id, `judge.<field>` or `tier_routes.<tier>` on an
-   * eval gateway. It, `provider`, `model` and `authMode` are null only for `no_independent_route`.
+   * The route the result describes: a `routes` id, `judge.<field>` or `tier_routes.<tier>` on an
+   * eval gateway. It, `provider`, `model`, `authMode`, `family`, `adapter` and `billing` are null
+   * only when no route was resolved (the kill switch, an unknown specialist, `no_independent_route`).
    */
   routeId: string | null;
   /** The run under review, as the request named it. */
@@ -102,9 +189,26 @@ interface ResultBase {
   /** Models the provider reported using; empty when the provider does not report them. */
   modelsUsed: string[];
   authMode: string | null;
+  family: Family | null;
+  adapter: AdapterKind | null;
+  billing: Billing | null;
+  /** `primary` or `declared_fallback`: the hop the route fields describe; null with no route. */
+  route: "primary" | "declared_fallback" | null;
+  /** The Worker qualification the hop that ran matched; null when the run needed none. */
+  qualificationRef: string | null;
+  /** Every hop the run passed over or failed on, in order; empty when the primary answered. */
+  failover: FailoverHop[];
+  runClass: RunClass;
+  /** The compliance ref of the account the route fields describe; null with no route or no ref. */
+  complianceRef: string | null;
+  /** The owner risk acceptance that let a consumer account serve this run, if one did. */
+  riskAcceptance: RiskAcceptance | null;
+  /** SHA-256 of the gateway configuration the run was routed by. */
+  gatewayConfigSha256: string;
+  /** Every attempt on every hop. */
   attempts: number;
   usage: Usage;
-  /** Notional cost: provider estimate for Claude, configured price table for Codex. */
+  /** Notional cost: the provider estimate for Claude, the registry price for Codex. */
   costUsd: number;
   durationMs: number;
   hashes: { system: string; prompt: string; schema: string };
@@ -118,11 +222,12 @@ export type GatewayResult =
       reason: AbstainReason;
       detail: string;
       /**
-       * Epoch ms before which the same run would abstain again: the cooldown end for
+       * Epoch ms before which the same run would abstain again: the cooldown or rate-window end for
        * `rate_limited`, the moment the oldest counted reservation leaves the window for a ledger
        * `call_ceiling` or `cost_ceiling`, the next probe for a model the provider refused for the
        * sign-in's plan, now plus the attempt's backoff for any other `provider_error` and for
-       * `model_mismatch`. Absent when waiting alone cannot help.
+       * `model_mismatch`. After a failover, the earliest such time of any hop. Absent when waiting
+       * alone cannot help.
        */
       retryAt?: number;
     });
@@ -160,6 +265,8 @@ export class ProviderError extends Error {
 
 export interface ProviderCall {
   model: string;
+  /** The model's registry entry at this provider account. */
+  entry: ModelEntry;
   effort: Effort;
   system: string;
   prompt: string;

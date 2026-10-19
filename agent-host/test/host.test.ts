@@ -9,6 +9,7 @@ import type { GatewayRequest, GatewayResult } from "../src/gateway/types.ts";
 import { applyLocalEnv, hostEnv } from "../src/host/env.ts";
 import { createHealthServer } from "../src/host/http.ts";
 import { RUN_OUTPUT_SCHEMA, buildRunInput } from "../src/host/prompt.ts";
+import { specialistRelease } from "../src/host/release.ts";
 import { HostStopping, closeBacklog, retryPendingCloses, retryable, runSignal, type RunnerOptions } from "../src/host/runner.ts";
 import { AgentHostService } from "../src/host/service.ts";
 import { SpecialistLoadError, loadSpecialist } from "../src/host/specialists.ts";
@@ -190,8 +191,12 @@ test("a signal becomes one run with only the tools both the Worker and the allow
   const close = worker.closed[0].body;
   assert.equal(close.status, "ok");
   assert.deepEqual(close.output, RUN_OUTPUT);
-  assert.deepEqual(close.model, { provider: "codex", model: "gpt-6.1-sol", models_used: [], auth_mode: "chatgpt", tier: "routine" });
+  assert.deepEqual(close.model, { provider: "codex", model: "gpt-6.1-sol", models_used: [], auth_mode: "oauth", tier: "routine" });
   assert.equal(close.tool_calls.length, 1);
+  // The run carries the specialist's release; a Worker without the v3 close model records only the
+  // legacy provider ids, and sends no qualifications.
+  assert.equal(requests[0].release, specialistRelease(options.specialistsRoot, "lead_concierge", "0".repeat(64)).release_sha256);
+  assert.deepEqual([requests[0].qualifications, requests[0].providers], [[], ["claude", "codex"]]);
 });
 
 test("the run under review, the expected action and a shadow mode reach the gateway, and the close records the route", async (t) => {
@@ -204,7 +209,8 @@ test("the run under review, the expected action and a shadow mode reach the gate
     authMode: "oauth",
   }));
   await runSignal(options, signal());
-  assert.deepEqual(requests[0].reviewOf, { runId: "run_0000000000", provider: "codex" });
+  // A legacy hint names the provider; its family is the v2 alias's.
+  assert.deepEqual(requests[0].reviewOf, { runId: "run_0000000000", family: "openai" });
   assert.equal(requests[0].action, "lead.qualify");
   assert.equal(requests[0].scope, "shadow");
   assert.deepEqual(worker.closed[0].body.model, {
@@ -551,6 +557,16 @@ test("host settings refuse plain HTTP, relative state and a public bind", () => 
   assert.throws(() => hostEnv({ ...base, AGENT_HOST_BIND: "0.0.0.0" }), /loopback/);
   assert.throws(() => hostEnv({ ...base, AGENT_HOST_WORKER_TOKEN: "" }), /AGENT_HOST_WORKER_TOKEN/);
   assert.equal(parseWorkerUrl("http://localhost:8787", true), "http://localhost:8787");
+});
+
+test("a host is a business host unless it says synthetic, exactly", () => {
+  const base = { AGENT_HOST_STATE_DIR: "/var/lib/agent-host", AGENT_HOST_WORKER_URL: "https://bus.example.invalid", AGENT_HOST_WORKER_TOKEN: "x" };
+  // Unset or blank fails safe: business, where consumer sign-ins never serve live or shadow runs.
+  for (const value of [undefined, "", "   "]) assert.equal(hostEnv({ ...base, AGENT_HOST_DATA_CLASS: value }).dataClass, "business", JSON.stringify(value));
+  assert.equal(hostEnv({ ...base, AGENT_HOST_DATA_CLASS: " synthetic " }).dataClass, "synthetic");
+  assert.equal(hostEnv({ ...base, AGENT_HOST_DATA_CLASS: "business" }).dataClass, "business");
+  // Anything else stops the host instead of guessing a class.
+  for (const value of ["Synthetic", "prod", "true", "qa"]) assert.throws(() => hostEnv({ ...base, AGENT_HOST_DATA_CLASS: value }), /AGENT_HOST_DATA_CLASS/, value);
 });
 
 test("local sign-ins load from an owner-only file without overriding the environment", async (t) => {

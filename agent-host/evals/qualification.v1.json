@@ -60,7 +60,8 @@
       "ledger_unavailable",
       "model_mismatch",
       "aborted",
-      "no_independent_route"
+      "no_independent_route",
+      "no_qualified_route"
     ],
     "score": [
       "invalid_output"

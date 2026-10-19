@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 133,
+      "count": 134,
       "latest": "0204_agent_watch_firings.sql"
     }
   },

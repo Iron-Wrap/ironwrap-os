@@ -244,11 +244,15 @@ test("a busy day's brief opens and resumes in few D1 round trips, with the same 
   // With each D1 round trip taking 20 ms, a call's time is its round trips run one after another.
   // Before, with 5 ms round trips: open 3351 ms, resume 534 ms. Concurrent reads keep each call
   // well under half of what its statements would take one after another.
+  // A round trip is measured here, not assumed: a loaded machine's timers run late for both.
+  const calibrating = performance.now();
+  for (let trip = 0; trip < 5; trip += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+  const perTrip = (performance.now() - calibrating) / 5;
   db.latencyMs = 20;
   const slow = await openBrief(db, signal_id, "2026-03-02T16:14:00.000Z");
   db.latencyMs = 0;
   assert.ok(!("error" in slow.opened));
-  assert.ok(slow.ms < slow.statements * 20 * 0.5, `${Math.round(slow.ms)} ms for ${slow.statements} statements`);
+  assert.ok(slow.ms < slow.statements * perTrip * 0.5, `${Math.round(slow.ms)} ms for ${slow.statements} statements at ${perTrip.toFixed(1)} ms a round trip`);
 });
 
 test("a brief whose host never closes it closes at its ceiling, on its next open or by the cron, and its report shows that", async () => {

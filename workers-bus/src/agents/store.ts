@@ -11,7 +11,7 @@ import { currentDelegation, escalateRunAbstention, specialistControl, specialist
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
-import { CANDIDATE_BAR, currentQualifications, delegationCandidates, divertsToShadow, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
+import { CANDIDATE_BAR, currentQualifications, delegationCandidates, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
@@ -560,7 +560,15 @@ async function runRequest(db: AgentDb, tenantId: string, run: RunRow): Promise<S
   const root = await rootOf(db, tenantId, await runSignalRow(db, tenantId, run));
   if (!root) return null;
   const actor = signalActor(root);
-  return { signal_ref: `signal/${root.signal_id}`, kind: root.kind, source: actor ? actorWord(root) : root.source, actor };
+  const content: unknown = JSON.parse(root.content_json);
+  const expected = typeof content === "object" && content !== null ? (content as { expected_action_id?: unknown }).expected_action_id : undefined;
+  return {
+    signal_ref: `signal/${root.signal_id}`,
+    kind: root.kind,
+    source: actor ? actorWord(root) : root.source,
+    actor,
+    expected_action_id: typeof expected === "string" ? expected : null,
+  };
 }
 
 export function runTools(run: RunRow): RunTool[] {
@@ -659,9 +667,11 @@ export async function proposeStep(
 
   const control = await specialistControl(db, tenantId, run.specialist_id);
   const delegation = await currentDelegation(db, tenantId, run.specialist_id, input.action_id);
-  // A practice-only action whose practice runs stopped neither practises nor runs: policy reads it
-  // as switched off until the owner confirms it again (shadow.ts practiceStopped).
-  const practiceStopped = (await shadowSetting(db, tenantId, run.specialist_id, input.action_id)).stopped;
+  // Read once: whether the action practises, and whether its practice stopped. A practice-only action
+  // whose practice runs stopped neither practises nor runs: policy reads it as switched off until the
+  // owner confirms it again (shadow.ts practiceStopped).
+  const practice = await shadowSetting(db, tenantId, run.specialist_id, input.action_id);
+  const practiceStopped = practice.stopped;
   const ceilingMet =
     delegation?.setting === "within_limits"
       ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
@@ -728,7 +738,8 @@ export async function proposeStep(
   // A shadowed action is decided as it would be, then recorded as a shadow step: no receipt, permit,
   // person, handoff or effect can come of it (migration 0203).
   // A step past the run's ceiling is not diverted: it abstains as a receipt that names a person.
-  if (!decision.reason_codes.includes("ceiling_reached") && (await divertsToShadow(db, tenantId, run, input.action_id))) {
+  // Only an action the owner shadowed for this specialist, never a protective one, is diverted.
+  if (!decision.reason_codes.includes("ceiling_reached") && practice.shadow && !practice.stopped && !catalogAction(input.action_id)?.protective) {
     const signal = await db
       .prepare("SELECT subject_aggregate, subject_id FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
       .bind(tenantId, run.signal_id)

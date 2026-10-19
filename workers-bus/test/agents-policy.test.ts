@@ -176,6 +176,7 @@ const PRESS = {
   kind: "owner_request",
   source: "request",
   actor: { type: "staff", role: "production", ref: "person:appu_production_1", authenticated: true },
+  expected_action_id: "authority.record",
 };
 
 test("compliance proposes an internal competency record for a person's approval only", () => {
@@ -207,7 +208,7 @@ test("compliance proposes an internal competency record for a person's approval 
   assert.equal(proposed.reviewer_role, "production");
   // Only a press on compliance's view: the same command answering an ask, a field worker's press or
   // no person's request abstains before its arguments are read.
-  for (const requester of [{ ...PRESS, source: "ask" }, { ...PRESS, actor: { ...PRESS.actor, type: "worker", role: "field" } }, null])
+  for (const requester of [{ ...PRESS, source: "ask" }, { ...PRESS, actor: { ...PRESS.actor, type: "worker", role: "field" } }, { ...PRESS, expected_action_id: "authority.evaluate" }, null])
     assert.deepEqual(evaluateStep(input({ ...compliance, requester, actionId: "authority.record", args: command })).reason_codes, ["out_of_scope"], JSON.stringify(requester));
   // More reference text than the stored list holds would only fail after a person approved it.
   // Each reference is within its own 512-character limit; together they are not.

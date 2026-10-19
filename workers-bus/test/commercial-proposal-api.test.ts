@@ -963,3 +963,117 @@ function totalChanges(database: DatabaseSync): number {
 function at(minutes: number): Date {
   return new Date(NOW.getTime() + minutes * 60_000);
 }
+
+test("a proposal is not sent again until its last send is confirmed delivered", async () => {
+  for (const outcome of ["unknown", "rejected"] as const) {
+    const db = new SqliteD1();
+    const env = commercialEnv(db);
+    try {
+      const triage = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/lead-triage-decisions", {
+          lead_id: LEAD_ID,
+          expected_lead_version: 1,
+          lifecycle_status: "qualified",
+          priority: "normal",
+          category: "replacement",
+          summary: "Qualified lead for publication.",
+          next_action: "Prepare the customer proposal.",
+        }, `resend-guard-triage-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(triage.status, 201);
+      await seedApprovedQuote(env, { alreadyQualified: true });
+      const proposal = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-revisions", proposalBody(new Date().toISOString()), `resend-guard-proposal-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(proposal.status, 201);
+      const prepareBody = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        facts_observed_at: new Date().toISOString(),
+        evidence: EVIDENCE,
+      };
+      const prepared = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `resend-guard-prepare-1-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(prepared.status, 201);
+      const { permit } = await prepared.json() as {
+        permit: { permit_id: string; policy_ref: string; policy_version: string; expires_at: string };
+      };
+      const expectedReadback = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        state: "published",
+      };
+      // The first send leaves the provider without a confirmed answer (or a settled refusal).
+      await runExternalEffect(
+        env,
+        {
+          effectId: `effect:publication:${outcome}`,
+          tenantId: TENANT,
+          actor: { type: "worker", id: OPS_ID },
+          taskId: "task:commercial-publication",
+          authority: {
+            permitRef: permit.permit_id,
+            policyRef: permit.policy_ref,
+            policyVersion: permit.policy_version,
+            tenantId: TENANT,
+            actorType: "worker",
+            actorId: OPS_ID,
+            expiresAt: permit.expires_at,
+            allowedActions: ["proposal.publish"],
+          },
+          aggregate: { type: "proposal_publication", id: "proposal-pack:commercial:api:0001", version: 1 },
+          intentId: "proposal-revision:commercial:api:0001",
+          action: "proposal.publish",
+          request: expectedReadback,
+          provider: "native-commercial-publication",
+          idempotencyKey: `effect:publication:${outcome}:key`,
+          deadlineAt: new Date(Date.parse(permit.expires_at) - 1_000).toISOString(),
+          expectedReadback,
+          correlationId: "commercial-publication-correlation",
+        },
+        {
+          async dispatch() {
+            return { outcome, detailCode: `provider_${outcome}` } as never;
+          },
+          async replay() {
+            return { published: false };
+          },
+        },
+      ).catch(() => undefined);
+      const state = (db.raw.prepare(
+        "SELECT state FROM external_effects WHERE effect_id = ?",
+      ).get(`effect:publication:${outcome}`) as { state: string }).state;
+
+      const again = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `resend-guard-prepare-2-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      if (outcome === "unknown") {
+        assert.equal(again.status, 409, `a send in state ${state} is not confirmed delivered`);
+        assert.deepEqual(await again.json(), {
+          error: "proposal_delivery_unconfirmed",
+          delivery_state: state,
+          external_effect_id: `effect:publication:${outcome}`,
+          next_step: "check_delivery",
+        });
+      } else {
+        assert.equal(state, "failed");
+        assert.equal(again.status, 201, "a settled refusal did not reach the customer; a new send may go");
+      }
+    } finally {
+      db.close();
+    }
+  }
+});

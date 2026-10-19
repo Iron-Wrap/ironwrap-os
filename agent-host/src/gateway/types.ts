@@ -92,6 +92,8 @@ export interface FailoverHop {
   routeId: string;
   provider: ProviderId;
   model: string;
+  /** The family its registry entry names; null when the route has no entry. */
+  family: Family | null;
   reason: AbstainReason;
   retryAt: number | null;
 }
@@ -190,6 +192,8 @@ interface ResultBase {
   modelsUsed: string[];
   authMode: string | null;
   family: Family | null;
+  /** The effort of the route the result describes; null with no route. */
+  effort: Effort | null;
   adapter: AdapterKind | null;
   billing: Billing | null;
   /** `primary` or `declared_fallback`: the hop the route fields describe; null with no route. */

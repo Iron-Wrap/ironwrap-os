@@ -191,8 +191,13 @@ it); `failed` means attempted and did not succeed, for example a stale `INGEST_T
 routes only. It signs in as the seed owner `qa-seed@example.invalid`, then runs office lead (no
 acknowledgement mail), triage, an approved quote, a proposal, the publication (prepare, a
 `qa-synthetic-publication` effect claimed and settled through `/admin/effects/*`, record), a
-customer portal link and the accounting tester as an app user. Customer acceptance, the deposit
-and its approval stay with the two named testers. It never writes D1 directly, calls only an
+customer portal link, the accounting tester as an app user, and one crew (`synth-seed-qa:crew:1`)
+with two synthetic field users (`qa-crew-lead@example.invalid`, `qa-crew-hand@example.invalid`)
+through the roster route `/api/v1/admin/crews`. Customer acceptance, the deposit
+and its approval stay with the two named testers. The job is not scheduled to the crew: scheduling
+needs all six production gates cleared, and a gate clears today only by an office waiver or a
+reconciled deposit invoice, both people's decisions, so the seed clears no gate. It never writes
+D1 directly, calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.
 

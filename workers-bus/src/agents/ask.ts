@@ -166,8 +166,12 @@ export async function readAsk(db: AgentDb, tenantId: string, actor: HumanPrincip
       reason: stale ? "not_answered" : null,
     };
   }
+  const close = JSON.parse(run.close_json ?? "null") as { status?: unknown; reason?: unknown; output?: { final_text?: unknown; view?: unknown } | null } | null;
+  // A run the Worker closed at its wall-time ceiling (store.ts expireRun) never answered: the ask
+  // reads as it did while that run stood open past its lifetime.
+  if (close?.status === "abstained" && close.reason === "run_expired")
+    return { ask_id: askId, status: "abstained", run_id: run.run_id, answer: null, view: null, receipt: null, actions: [], reason: "not_answered" };
   const done = run.result === "completed";
-  const close = JSON.parse(run.close_json ?? "null") as { status?: unknown; output?: { final_text?: unknown; view?: unknown } | null } | null;
   const output = close?.status === "ok" ? (close.output ?? null) : null;
   // Only a completed ask shows its view; the answer receipt holds every fact the answer and view cite.
   const view = done ? (output?.view ?? null) : null;

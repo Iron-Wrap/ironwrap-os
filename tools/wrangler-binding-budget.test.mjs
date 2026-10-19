@@ -99,6 +99,14 @@ test("every environment flattens to the same key set", () => {
   for (const keys of rest) assert.deepEqual(keys, first, "an environment's flattened var set has drifted from the others");
 });
 
+// The data class decides which runs a Worker closes (workers-bus/src/agents/store.ts): only the
+// production Worker holds business data and takes live and shadow closes; local and qa hold
+// synthetic data and take synthetic closes on consumer accounts. A swapped value fails here.
+test("each environment declares the data class of the data it holds", () => {
+  const dataClass = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_DATA_CLASS]));
+  assert.deepEqual(dataClass, { production: "business", local: "synthetic", qa: "synthetic" });
+});
+
 test("the flattened key set equals the flat names declared in var-bindings.d.ts", () => {
   const flatKeys = new Set(Object.keys(flattenWranglerVars(config.vars)));
   assert.deepEqual([...flatKeys].sort(), [...declaredFlatNames].sort());

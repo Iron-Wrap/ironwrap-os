@@ -235,6 +235,11 @@ test("a busy day's brief opens and resumes in few D1 round trips, with the same 
     [[changed, null]],
   );
   assert.equal(stale.ledgerWrites, 0);
+  // A new run of the brief takes that job at its next version: one line, written in the one batch.
+  const next = await openBrief(db, signal_id, "2026-03-02T16:13:30.000Z", "brief-run-0002");
+  assert.ok(!("error" in next.opened));
+  assert.equal(next.opened.context.facts.find((fact) => fact.fact_id === changed)?.version, 2);
+  assert.deepEqual([next.ledgerWrites, next.batches], [1, 1]);
 
   // With each D1 round trip taking 20 ms, a call's time is its round trips run one after another.
   // Before, with 5 ms round trips: open 3351 ms, resume 534 ms. Concurrent reads keep each call

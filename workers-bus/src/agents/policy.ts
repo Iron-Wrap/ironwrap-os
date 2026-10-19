@@ -12,7 +12,7 @@ import { registryEntry, type RegistryEntry } from "./registry.ts";
 import { validate } from "./schema.ts";
 
 export const STEP_POLICY_ID = "ironwrap.agent_step_policy";
-export const STEP_POLICY_VERSION = "4";
+export const STEP_POLICY_VERSION = "5";
 
 export interface SnapshotFact {
   fact_id: string;

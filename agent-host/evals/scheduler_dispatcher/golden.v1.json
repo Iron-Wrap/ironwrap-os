@@ -7550,7 +7550,7 @@
         "source": "orchestrator",
         "at": "PT0M",
         "content": {
-          "text": "Authenticated request from Tom Becker (sales) through the face: 'Book Mike Ochoa's measuring visit for lead L-9012 tomorrow at 10.'"
+          "text": "Authenticated request from Lukas Becker (sales) through the face: 'Book Mike Ochoa's measuring visit for lead L-9012 tomorrow at 10.'"
         }
       },
       "facts": [
@@ -7591,7 +7591,7 @@
           "observed_at": "-PT2M",
           "fresh_until": "PT1H",
           "data": {
-            "user": "Tom Becker",
+            "user": "Lukas Becker",
             "role": "sales",
             "authenticated": true
           }
@@ -9701,7 +9701,7 @@
         "source": "orchestrator",
         "at": "PT0M",
         "content": {
-          "text": "Authenticated question from Tom Becker (sales) through the face: 'J-5420 shows crew A on day+5. Can I tell the customer they're booked?'"
+          "text": "Authenticated question from Lukas Becker (sales) through the face: 'J-5420 shows crew A on day+5. Can I tell the customer they're booked?'"
         }
       },
       "facts": [
@@ -9742,7 +9742,7 @@
           "observed_at": "-PT2M",
           "fresh_until": "PT1H",
           "data": {
-            "user": "Tom Becker",
+            "user": "Lukas Becker",
             "role": "sales",
             "authenticated": true
           }

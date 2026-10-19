@@ -47,6 +47,8 @@ export interface Rubric {
 
 export interface CatalogAction {
   action_id: string;
+  /** The action's plain name, as the Worker words its tools and people-only acts. */
+  name?: string;
   owners: string[];
   aggregate: string;
   autonomy: "A0" | "A1" | "A2" | "A3" | "H";

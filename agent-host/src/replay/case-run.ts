@@ -13,7 +13,7 @@ import { canonicalJson, sha256 } from "../gateway/schema.ts";
 import type { JsonSchema } from "../gateway/types.ts";
 import { buildRunInput, type RunInput } from "../host/prompt.ts";
 import type { Specialist } from "../host/specialists.ts";
-import type { Fact, OpenedRun, RunTool, Signal } from "../host/worker.ts";
+import type { Fact, OpenedRun, PeopleOnlyAct, RunTool, Signal } from "../host/worker.ts";
 import type { Catalog, EvalCase } from "./evals.ts";
 
 /**
@@ -152,13 +152,25 @@ export function replayTools(specialist: Specialist, catalog: Catalog): ReplayToo
       autonomy,
       side_effect_class: action.side_effect_class,
       undo: action.undo,
-      description: `${action.action_id} on ${action.aggregate}${action.protective ? " (protective)" : ""}.`,
+      description: `${action.action_id} on ${action.aggregate}: ${action.name ?? action.action_id}${action.protective ? " (protective)" : ""}.`,
       args_schema: OPEN_ARGS,
       protective: action.protective,
       requires_citations: action.requires_citations,
     });
   }
   return tools;
+}
+
+/**
+ * The people-only acts a run of the specialist may name, in catalog order, as the Worker sends them
+ * (workers-bus/src/agents/store.ts peopleOnlyFor): those it owns, and any its allowlist names,
+ * which a valid allowlist never does.
+ */
+export function replayPeopleOnly(specialist: Specialist, catalog: Catalog): PeopleOnlyAct[] {
+  const allowlisted = new Set(specialist.allowlist.map((entry) => entry.action_id));
+  return [...catalog.actions.values()]
+    .filter((action) => (action.autonomy === "H" || action.human_only) && (action.owners.includes(specialist.id) || allowlisted.has(action.action_id)))
+    .map((action) => ({ action_id: action.action_id, name: action.name ?? action.action_id }));
 }
 
 export type ReplaySignal = Signal & { actor?: unknown };
@@ -178,7 +190,14 @@ export interface ReplayRun {
   toolFile: ToolFile;
 }
 
-export function replayRun(specialist: Specialist, tools: ReplayTool[], item: EvalCase, runId: string, clockMs = caseClock(item)): ReplayRun {
+export function replayRun(
+  specialist: Specialist,
+  tools: ReplayTool[],
+  item: EvalCase,
+  runId: string,
+  clockMs = caseClock(item),
+  peopleOnly: PeopleOnlyAct[] = [],
+): ReplayRun {
   const { kind, source, watch_id, at, content, actor } = item.signal;
   const signal: ReplaySignal = {
     // A case id names its suite, which the model must not see.
@@ -213,6 +232,7 @@ export function replayRun(specialist: Specialist, tools: ReplayTool[], item: Eva
     goal: goalFor(signal),
     context: { snapshot_hash: sha256(canonicalJson(facts.map(({ fact_id, version, hash }) => ({ fact_id, version, hash })))), facts, omitted: [] },
     tools,
+    people_only: peopleOnly,
   };
   return {
     signal,

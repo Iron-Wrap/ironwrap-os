@@ -123,7 +123,15 @@ Field rules (the validator enforces them):
   the face's handoff, with no actor. Only the owner's request carries the owner's authority; a
   request from another role carries that role's, and one with no actor carries none.
   `signal.at` and every fact time are ISO 8601 durations relative to the case clock (`PT0M` is the
-  moment of the run, `-P3D` three days earlier). Cases contain no calendar dates.
+  moment of the run, `-P3D` three days earlier). Cases contain no calendar dates. Where a fact
+  value must be a date or a timestamp (for example a registry field the model copies), its data
+  holds a marker the runner resolves against the case clock before the model sees it:
+  `{ "$case_date": "-P7D" }` becomes the ISO date seven Edmonton calendar days before the case
+  clock (so a span across a daylight-saving change still lands on the right day), and
+  `{ "$case_time": "PT2H" }` the ISO timestamp two hours after it. `expected` may carry the same
+  markers, resolved the same way before scoring and judging, so an expected argument matches the
+  date the model saw. A marker is an object with that one key and a duration of at most a century,
+  only in fact data or `expected`; a marker anywhere else, or any other `$`-key, is refused.
 - `clock` (optional): `{ "season": "winter" | "spring" | "summer" | "fall", "weekday": "monday" …
   "sunday", "local_time": "HH:MM" }`, Edmonton local time. A case whose facts depend on the season,
   the day, or the time of day sets it, so the run's clock never contradicts them; the replay runner
@@ -171,11 +179,13 @@ Field rules (the validator enforces them):
 - `expected.receipt.outcome` follows one rule, matching what the replay runtime emits: `abstained`
   for `abstain` and `escalate`; for `propose`, `succeeded` when an expected action is A0 or A1 (its
   output was produced) and `null` when every expected action is A2 or A3 (the step stays open until
-  policy or a person acts); `ignore` is not constrained. `needs_from_you` is
-  `approval`, `fact`, `decision`, or `none`. A receipt may cite the run's own signal as `signal/<id>`
-  (the runtime's form) or the pseudo-fact `signal`; every other `fact_id` must be a case fact at its
-  current version. A case fact may itself have a `signal/<id>` id: the root ask of a handoff run,
-  which the Worker adds to the context. It is cited and version-checked like any case fact and never
+  policy or a person acts); `ignore` is not constrained. `needs_from_you` is `approval`, `fact`,
+  `decision`, or `none`. A receipt may cite the run's own signal as `signal/<id>` (the runtime's
+  form) or the pseudo-fact `signal`; every other `fact_id` must be a case fact at its current
+  version. A case fact may itself have a `signal/<id>` id: the root ask of a handoff run, which the
+  Worker adds to the context (kind `signal`, data `{signal_id, kind: "owner_request", source,
+  actor}` with trust `owned`; a run that reads as the owner also gets `content`, and the fact's
+  trust is then `untrusted_text`). It is cited and version-checked like any case fact and never
   stands in for the run's own signal. `must_cite` names case facts, and the pseudo-fact `signal`
   when the receipt must cite the run's own signal (for example the ask an access change answers);
   either form of the run's own signal meets it.

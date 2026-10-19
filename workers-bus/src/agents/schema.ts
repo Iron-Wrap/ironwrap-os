@@ -1,6 +1,11 @@
 // Strict JSON Schema subset for action arguments, the same dialect the agent-host gateway uses
 // for model output: every object declares `additionalProperties: false` and lists every property
 // as required (optional values carry a `null` type member). An unknown field is a violation.
+//
+// `validate` also reads one bounded map form that only action arguments use (a settings edit's
+// values by key): an object whose `additionalProperties` is the schema of every value, its keys
+// checked against `propertyNames` and counted against `minProperties` and `maxProperties`. It is
+// not part of the output dialect, so `assertStrictSchema` still refuses it.
 
 export type JsonSchema = { [key: string]: unknown };
 
@@ -100,8 +105,15 @@ export function validate(schema: JsonSchema, value: unknown, path = "$", errors:
     value.forEach((item, index) => validate(schema.items as JsonSchema, item, `${path}[${index}]`, errors));
   } else if (isPlainObject(value)) {
     const properties = (schema.properties ?? {}) as Record<string, JsonSchema>;
-    for (const key of Object.keys(value)) {
-      if (!Object.hasOwn(properties, key)) errors.push(`${path}: unknown field ${key}`);
+    const values = isPlainObject(schema.additionalProperties) ? (schema.additionalProperties as JsonSchema) : null;
+    const keys = Object.keys(value);
+    if (typeof schema.minProperties === "number" && keys.length < schema.minProperties) errors.push(`${path}: too few fields`);
+    if (typeof schema.maxProperties === "number" && keys.length > schema.maxProperties) errors.push(`${path}: too many fields`);
+    for (const key of keys) {
+      if (isPlainObject(schema.propertyNames)) validate(schema.propertyNames as JsonSchema, key, `${path}[${JSON.stringify(key)}]`, errors);
+      if (Object.hasOwn(properties, key)) continue;
+      if (values) validate(values, value[key], `${path}.${key}`, errors);
+      else errors.push(`${path}: unknown field ${key}`);
     }
     for (const key of (schema.required ?? []) as string[]) {
       if (!Object.hasOwn(value, key)) errors.push(`${path}: missing field ${key}`);

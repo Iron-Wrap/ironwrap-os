@@ -74,6 +74,31 @@ const DEFAULT_BAR = {
 const MIN_GOLDEN = 20;
 const MIN_REDTEAM = 10;
 const DURATION = /^-?P(?!$)(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+S)?)?$/;
+// Date markers the runner resolves against the case clock, in fact data before the model sees it
+// and in `expected` before scoring and judging.
+const DATE_MARKERS = new Set(["$case_date", "$case_time"]);
+
+// A marker's span stays within a century, so the runner always lands on a real ISO date.
+const MARKER_MAX_DAYS = 36600;
+function markerDuration(value) {
+  const match = typeof value === "string" ? DURATION.exec(value) : null;
+  if (!match) return false;
+  const [days, hours, minutes, seconds] = [match[1], match[3], match[4], match[5]].map((part) => Number.parseInt(part ?? "0", 10));
+  return days + hours / 24 + minutes / 1440 + seconds / 86400 <= MARKER_MAX_DAYS;
+}
+
+// Every `$`-key in a case that is not a marker the runner resolves: a one-key
+// `{ "$case_date" | "$case_time": <duration> }` object inside a fact's `data` or `expected`.
+// Arrays are objects here, so their items are walked by index.
+function dateMarkerProblems(value, resolved, path = []) {
+  if (!value || typeof value !== "object") return [];
+  const keys = Object.keys(value);
+  if (keys.some((key) => key.startsWith("$"))) {
+    const valid = resolved && keys.length === 1 && DATE_MARKERS.has(keys[0]) && markerDuration(value[keys[0]]);
+    return valid ? [] : [path.join(".") || "case"];
+  }
+  return keys.flatMap((key) => dateMarkerProblems(value[key], resolved, [...path, key]));
+}
 const LANGUAGE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 const RECEIPT_FIELDS = new Set([
   "did",
@@ -507,6 +532,19 @@ function checkCase(item, context) {
     for (const key of ["observed_at", "fresh_until"]) {
       if (fact[key] !== undefined && !DURATION.test(fact[key])) fail(`${label}: fact ${fact.fact_id} ${key} must be a duration`);
     }
+  }
+  // Fact data and `expected` may carry case-relative date markers; no other `$`-key belongs in a case.
+  const { facts, expected: expectedMarkers, ...rest } = item;
+  const markerProblems = [
+    ...(Array.isArray(facts) ? facts : []).flatMap((fact, index) => {
+      const { data, ...meta } = fact ?? {};
+      return [...dateMarkerProblems(data, true, ["facts", index, "data"]), ...dateMarkerProblems(meta, false, ["facts", index])];
+    }),
+    ...dateMarkerProblems(expectedMarkers, true, ["expected"]),
+    ...dateMarkerProblems(rest, false),
+  ];
+  for (const at of markerProblems) {
+    fail(`${label}: ${at}: a \`$\`-key is only { "$case_date" | "$case_time": <duration of at most ${MARKER_MAX_DAYS} days> } alone in an object, inside fact data or expected`);
   }
   const factIds = new Set((item.facts ?? []).map((fact) => fact.fact_id));
   if (suite === "golden" && item.attack !== null) fail(`${label}: golden cases need attack: null`);

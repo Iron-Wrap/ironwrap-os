@@ -65,6 +65,8 @@ shared actions take exactly these; `object` is the record the step is about, as
 | `specialist.hold` | `specialist_id` (never the AI auditor) and `reason` |
 
 Any id beyond those listed goes in `summary`, `reason`, or `text`, never as its own argument.
+Every argument an action's schema names is present: one that does not apply is `null`, never
+left out.
 Every other action's arguments follow the contract's conventions (money in integer cents plus an
 ISO 4217 code, BCP 47 language tags, ids named `<aggregate>_id`, `reason_code` from its closed
 vocabulary, `to` only for a contact id).

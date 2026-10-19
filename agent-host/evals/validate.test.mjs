@@ -293,9 +293,50 @@ test("a case clock names a season, a weekday, and a local time, and nothing else
   assert.match(failures, /\.002: clock must be \{ season, weekday, local_time \}/);
 });
 
+test("fact data and expected may carry case-relative date markers, and no other $-key appears in a case", () => {
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].facts[0].data = { effective_from: { $case_date: "-P7D" }, checked: [{ at: { $case_time: "-PT2H" } }] };
+    cases[1].facts[0].data = { effective_from: { $case_date: "2026-01-01" } };
+    cases[2].facts[0].data = { effective_from: { $case_date: "-P7D", note: "x" } };
+    cases[3].facts[0].data = { effective_from: { $case_day: "-P7D" } };
+    cases[4].signal.content = { text: "Due.", due: { $case_date: "P1D" } };
+    cases[5].facts[0].data = { expires_at: { $case_time: 7 } };
+    cases[6].expected.actions[0].args_must_include = { ...cases[6].expected.actions[0].args_must_include, effective_from: { $case_date: "P358D" } };
+    cases[7].expected.actions[0].args_must_include = { ...cases[7].expected.actions[0].args_must_include, effective_from: { $when: "P1D" } };
+    cases[8].tags = [{ $case_date: "P1D" }];
+    cases[9].facts[0].data = { effective_from: { $case_date: ["P1D"] } };
+    cases[10].facts[0].note = { $case_date: "P1D" };
+    cases[11].facts[0].data = { windows: [[{ $case_date: "P1D" }], [{ $case_date: "P1W" }]] };
+    cases[12].facts[0].data = { effective_from: { $case_date: "P100000000D" } };
+    cases[13].facts[0].data = { expires_at: { $case_date: "P36600D" }, starts: { $case_time: "-PT878400H" } };
+    cases[14].facts[0].data = { a: { $case_date: "P36601D" } };
+    cases[15].facts[0].data = { a: { $case_time: "PT878401H" } };
+    cases[16].facts[0].data = { a: { $case_time: "PT52704001M" } };
+    cases[17].facts[0].data = { a: { $case_time: "-PT3162240001S" } };
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: /);
+  assert.match(failures, /\.002: facts\.0\.data\.effective_from: a `\$`-key is only/);
+  assert.match(failures, /\.003: facts\.0\.data\.effective_from: a `\$`-key is only/);
+  assert.match(failures, /\.004: facts\.0\.data\.effective_from: a `\$`-key is only/);
+  assert.match(failures, /\.005: signal\.content\.due: a `\$`-key is only/);
+  assert.match(failures, /\.006: facts\.0\.data\.expires_at: a `\$`-key is only/);
+  assert.doesNotMatch(failures, /\.007: .*`\$`-key/);
+  assert.match(failures, /\.008: expected\.actions\.0\.args_must_include\.effective_from: a `\$`-key is only/);
+  assert.match(failures, /\.009: tags\.0: a `\$`-key is only/);
+  assert.match(failures, /\.010: facts\.0\.data\.effective_from: a `\$`-key is only/);
+  assert.match(failures, /\.011: facts\.0\.note: a `\$`-key is only/);
+  assert.match(failures, /\.012: facts\.0\.data\.windows\.1\.0: a `\$`-key is only/);
+  assert.doesNotMatch(failures, /\.012: facts\.0\.data\.windows\.0/);
+  assert.match(failures, /\.013: facts\.0\.data\.effective_from: a `\$`-key is only/);
+  assert.doesNotMatch(failures, /\.014: .*`\$`-key/);
+  for (const n of ["015", "016", "017", "018"]) assert.match(failures, new RegExp(`\\.${n}: facts\\.0\\.data\\.a: a \`\\$\`-key is only`));
+});
+
 test("the Worker registry is read whole, or the validator says what it could not read", () => {
   const real = loadRegistry(join(here, "../.."));
-  assert.deepEqual([...real.actions.keys()].sort(), ["authority.record", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "note.add", "specialist.hold"]);
+  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "note.add", "settings.propose_change", "specialist.hold"]);
   assert.deepEqual(real.unread, []);
   const root = fixture();
   const path = join(root, "workers-bus/src/agents/registry.ts");

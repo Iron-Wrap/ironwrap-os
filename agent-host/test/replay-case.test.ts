@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { canonicalJson, sha256 } from "../src/gateway/schema.ts";
 import { RUN_OUTPUT_SCHEMA } from "../src/host/prompt.ts";
 import type { Specialist } from "../src/host/specialists.ts";
-import { answerCall, CASE_CLOCK_MS, caseClock, caseTime, listTools, replayRun, replayTools, resolvedCase, type ToolAnswer } from "../src/replay/case-run.ts";
+import { answerCall, CASE_CLOCK_MS, caseClock, caseTime, listTools, replayPeopleOnly, replayRun, replayTools, resolvedCase, type ToolAnswer } from "../src/replay/case-run.ts";
 import type { Catalog, CatalogAction, EvalCase } from "../src/replay/evals.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -32,12 +32,13 @@ const CATALOG: Catalog = {
   specialists: new Map([["lead_concierge", { specialist_id: "lead_concierge", wave: 1 }]]),
   actions: new Map(
     [
-      action("fact.explain", "A0", { aggregate: "any" }),
-      action("lead.qualify", "A1"),
-      action("acceptance.customer_decision", "H", { human_only: true }),
-      action("exception.escalate", "A2", { protective: true }),
-      action("comms.send", "A3", { side_effect_class: "external_irreversible" }),
-      action("payee.change_details", "A3", { owners: ["billing_reconciliation"] }),
+      action("fact.explain", "A0", { aggregate: "any", name: "explaining the facts" }),
+      action("lead.qualify", "A1", { name: "qualifying an inquiry" }),
+      action("acceptance.customer_decision", "H", { human_only: true, name: "accepting or declining an offer" }),
+      action("exception.escalate", "A2", { protective: true, name: "raising an issue with a named person" }),
+      action("comms.send", "A3", { side_effect_class: "external_irreversible", name: "sending a message" }),
+      action("payee.change_details", "A3", { owners: ["billing_reconciliation"], name: "changing a payee's bank details" }),
+      action("payee.unfreeze", "H", { human_only: true, owners: [], name: "lifting a payment freeze" }),
     ].map((entry) => [entry.action_id, entry]),
   ),
 };
@@ -271,13 +272,13 @@ test("tools are the specialist's full allowlist, worded and ordered as the Worke
   assert.deepEqual(
     tools.map((tool) => [tool.action_id, tool.tool_name, tool.autonomy, tool.description]),
     [
-      ["fact.explain", "fact__explain", "A0", "fact.explain on any."],
-      ["lead.qualify", "lead__qualify", "A1", "lead.qualify on lead."],
-      ["exception.escalate", "exception__escalate", "A2", "exception.escalate on exception (protective)."],
-      ["comms.send", "comms__send", "A3", "comms.send on comms."],
+      ["fact.explain", "fact__explain", "A0", "fact.explain on any: explaining the facts."],
+      ["lead.qualify", "lead__qualify", "A1", "lead.qualify on lead: qualifying an inquiry."],
+      ["exception.escalate", "exception__escalate", "A2", "exception.escalate on exception: raising an issue with a named person (protective)."],
+      ["comms.send", "comms__send", "A3", "comms.send on comms: sending a message."],
     ],
   );
-  assert.match(replay.input.system, /- `lead__qualify` \(lead\.qualify\): lead\.qualify on lead\. Autonomy A1, side effect internal_reversible, undo none\./);
+  assert.match(replay.input.system, /- `lead__qualify` \(lead\.qualify\): lead\.qualify on lead: qualifying an inquiry\. Autonomy A1, side effect internal_reversible, undo none\./);
   const other = replayRun(SPECIALIST, tools, { ...CASE, id: "lead_concierge.golden.001", facts: [], signal: { ...CASE.signal, content: { text: "Another request" } } }, "run_other");
   assert.equal(sha256(other.input.system), sha256(replay.input.system));
   const edited = replayRun({ ...SPECIALIST, playbook: `${SPECIALIST.playbook}\nOne more rule.` }, tools, CASE, "run_test", 0);
@@ -286,6 +287,27 @@ test("tools are the specialist's full allowlist, worded and ordered as the Worke
     listTools(replay.toolFile).map((tool) => [tool.name, Object.keys(tool.inputSchema.properties), tool.inputSchema.required]),
     tools.map((tool) => [tool.tool_name, ["args", "citations"], ["args", "citations"]]),
   );
+});
+
+test("people-only acts reach the run as names in the data block, never as tools", () => {
+  const peopleOnly = replayPeopleOnly(SPECIALIST, CATALOG);
+  // Owned and people-only; the allowlisted payee change belongs to another specialist and is no name.
+  assert.deepEqual(peopleOnly, [{ action_id: "acceptance.customer_decision", name: "accepting or declining an offer" }]);
+  // One no specialist owns is named only when the allowlist names it.
+  const naming = { ...SPECIALIST, allowlist: [...SPECIALIST.allowlist, { action_id: "payee.unfreeze", autonomy: "A3" as const, purpose: "synthetic" }] };
+  assert.deepEqual(replayPeopleOnly(naming, CATALOG).map((act) => act.action_id), ["acceptance.customer_decision", "payee.unfreeze"]);
+  assert.deepEqual(replayTools(naming, CATALOG), tools);
+
+  const named = replayRun(SPECIALIST, tools, CASE, "run_test", 0, peopleOnly);
+  const nonce = /^BEGIN DATA ([0-9a-f]{24})$/m.exec(named.input.prompt)?.[1] as string;
+  const data = JSON.parse(named.input.prompt.split(`BEGIN DATA ${nonce}\n`)[1].split(`\nEND DATA ${nonce}`)[0]);
+  assert.deepEqual(Object.keys(data), ["run_id", "goal", "signal", "context_snapshot", "people_only"]);
+  assert.deepEqual(data.people_only, peopleOnly);
+  assert.deepEqual(named.run.people_only, peopleOnly);
+  // The instructions, and so the prompt hash, are the same; no tool is added.
+  assert.equal(sha256(named.input.system), sha256(replay.input.system));
+  assert.deepEqual(named.toolFile.tools, tools);
+  assert.equal(listTools(named.toolFile).some((tool) => tool.name === "acceptance__customer_decision"), false);
 });
 
 test("the Worker side serves reads from the case facts and captures every other step without running it", () => {

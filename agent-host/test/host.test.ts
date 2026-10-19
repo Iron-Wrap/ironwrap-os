@@ -124,6 +124,26 @@ test("a run without a view schema keeps today's input byte for byte", async (t) 
   assert.deepEqual(added, ['    "actor": null,']);
 });
 
+test("the Worker's people-only names join the data block after the context, as data and never as tools", async (t) => {
+  const specialist = await loadSpecialist(specialistsRoot(t), "lead_concierge");
+  const tools = [openedRun().tools[0]];
+  const peopleOnly = [{ action_id: "acceptance.customer_decision", name: "accepting or declining an offer" }];
+  const plain = buildRunInput(specialist, openedRun(), signal(), tools, "n0nce");
+  const named = buildRunInput(specialist, openedRun({ people_only: peopleOnly }), signal(), tools, "n0nce");
+  const dataOf = (prompt: string) => JSON.parse(prompt.split("BEGIN DATA n0nce\n")[1].split("\nEND DATA n0nce")[0]);
+  assert.deepEqual(Object.keys(dataOf(named.prompt)), ["run_id", "goal", "signal", "context_snapshot", "people_only"]);
+  assert.deepEqual(dataOf(named.prompt).people_only, peopleOnly);
+  assert.deepEqual({ ...dataOf(named.prompt), people_only: undefined }, { ...dataOf(plain.prompt), people_only: undefined });
+  // The names are data: the instructions, the tool list and the output schema stay as they were.
+  assert.equal(named.system, plain.system);
+  assert.equal(named.outputSchema, plain.outputSchema);
+  assert.doesNotMatch(named.system, /acceptance/);
+  // Pinned from the a43e9758… input above plus this people_only block, which a run now carries.
+  assert.equal(sha256(named.prompt), "cd8758744834adc5b019ff54f94649d876670265fecab221c9db3021034b77ff");
+  // An empty list is sent as it is: the run reads that it may name no people-only act.
+  assert.deepEqual(dataOf(buildRunInput(specialist, openedRun({ people_only: [] }), signal(), tools, "n0nce").prompt).people_only, []);
+});
+
 test("an ask run's view schema joins only that run's output schema, as a required nullable property", async (t) => {
   const specialist = await loadSpecialist(specialistsRoot(t), "lead_concierge");
   const tools = [openedRun().tools[0]];

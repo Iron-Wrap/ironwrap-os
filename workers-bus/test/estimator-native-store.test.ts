@@ -1148,7 +1148,7 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     // writer claims and the AI team tables,
     // durable office intake receipts, manual measurement history, and the 0153 gate ledger.
     assert.match(contract, /REQUIRED_TABLE_COUNT=275/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=386/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=390/);
     assert.match(contract, /REQUIRED_TRIGGER_COUNT=751/);
   }
 });

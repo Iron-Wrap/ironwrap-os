@@ -10,7 +10,7 @@ import { sweepShadow } from "./agents/shadow.ts";
 import { retryReportDeliveries, runWatches } from "./agents/watches.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
 
-import type { AgentDb } from "./agents/store.ts";
+import { expireRuns, type AgentDb } from "./agents/store.ts";
 import {
   ALLOWED_SOURCES,
   type Source,
@@ -456,6 +456,16 @@ export default {
             if (result.fired.length + result.failed.length > 0) log({ at: "agent_watches", ...result });
           }).catch((error) =>
             log({ at: "agent_watches", error: String(error) }),
+          ),
+          // A run whose host never closed it closes past its wall-time ceiling, so none stays open.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return { expired: 0, failed: 0 };
+            return await expireRuns(env.DB as unknown as AgentDb, tenantId, new Date().toISOString());
+          })().then((result) => {
+            if (result.expired + result.failed > 0) log({ at: "agent_runs_expired", ...result });
+          }).catch((error) =>
+            log({ at: "agent_runs_expired", error: String(error) }),
           ),
           // Owner reports whose delivery failed are retried after a pause, a bounded number of times.
           (async () => {

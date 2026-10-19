@@ -245,6 +245,8 @@ test("an audit fails over within its route's family and never onto the family un
   h.adapters.claude.steps.push(longLimit(), outcome());
   const result = await audit(h);
   assert.deepEqual([result.status, result.routeId, result.family, result.route, hops(result)], ["ok", "claude_sonnet", "anthropic", "declared_fallback", [["claude_opus", "rate_limited"]]]);
+  // The result names the effort of the route that answered, and the hop it passed over its family.
+  assert.deepEqual([result.effort, result.failover.map((hop) => hop.family)], ["high", ["anthropic"]]);
   assert.equal(h.adapters.claude.calls[1].model, "claude-sonnet-5-5");
   // A chain that reaches the reviewed family past the configuration skips that hop per run.
   config.fallbacks.claude_opus = "codex_astra";

@@ -457,13 +457,13 @@ export default {
           }).catch((error) =>
             log({ at: "agent_watches", error: String(error) }),
           ),
-          // A run whose host never closed it closes at its wall-time ceiling, so none stays open.
+          // A run whose host never closed it closes past its wall-time ceiling, so none stays open.
           (async () => {
             const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            if (!tenantId) return { expired: 0 };
+            if (!tenantId) return { expired: 0, failed: 0 };
             return await expireRuns(env.DB as unknown as AgentDb, tenantId, new Date().toISOString());
           })().then((result) => {
-            if (result.expired > 0) log({ at: "agent_runs_expired", ...result });
+            if (result.expired + result.failed > 0) log({ at: "agent_runs_expired", ...result });
           }).catch((error) =>
             log({ at: "agent_runs_expired", error: String(error) }),
           ),

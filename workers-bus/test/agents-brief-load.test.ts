@@ -263,21 +263,23 @@ test("a brief whose host never closes it closes at its ceiling, on its next open
   const receipt = (runId: string) => ({ ...db.raw.prepare("SELECT outcome, reason_code, needs_reviewer_role FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'").get(runId) });
 
   // The busy day's own runs were opened at 09:00 and never closed: the cron closes them first.
-  assert.deepEqual(await expireRuns(db, TENANT, FIRED), { expired: 7 });
-  // The cron closes the brief's run once its wall-time ceiling has passed, and not a moment before.
+  assert.deepEqual(await expireRuns(db, TENANT, FIRED), { expired: 7, failed: 0 });
+  // Past its wall-time ceiling the cron leaves the brief's run open for the grace, so a close still
+  // on its way lands; it closes the run once both have passed, and not a moment before.
   const today = await briefSignal(db);
   const swept = await openBrief(db, today.signal_id, "2026-03-02T16:11:00.000Z", "brief-swept");
   assert.ok(!("error" in swept.opened));
   const runId = swept.opened.run.run_id;
-  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:21:00.000Z"), { expired: 0 });
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:21:00.001Z"), { expired: 0, failed: 0 });
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T17:21:00.000Z"), { expired: 0, failed: 0 });
   assert.equal((await report(today.signal_id))?.state, "open");
-  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:21:00.001Z"), { expired: 1 });
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T17:21:00.001Z"), { expired: 1, failed: 0 });
   assert.deepEqual(await report(today.signal_id), { run_id: runId, state: "closed", result: "ceiling_reached", text: null });
   // A report's receipt names nobody: the report shows the result, so nobody is interrupted for it.
   assert.deepEqual(receipt(runId), { outcome: "abstained", reason_code: "ceiling_reached", needs_reviewer_role: null });
   assert.equal(exceptions(runId), 0);
-  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:30:00.000Z"), { expired: 0 }, "a closed run is not closed again");
-  const late = await openBrief(db, today.signal_id, "2026-03-02T16:31:00.000Z", "brief-swept");
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T17:30:00.000Z"), { expired: 0, failed: 0 }, "a closed run is not closed again");
+  const late = await openBrief(db, today.signal_id, "2026-03-02T17:31:00.000Z", "brief-swept");
   assert.deepEqual("error" in late.opened ? [late.opened.error, late.opened.status] : null, ["run_closed", 409]);
 
   // The next day's brief, opened and abandoned: its next open closes it and answers run_expired.
@@ -297,7 +299,7 @@ test("a brief whose host never closes it closes at its ceiling, on its next open
   assert.ok("signal_id" in event);
   const lead = await openRun(db, TENANT, { signal_id: event.signal_id, specialist_id: "lead_concierge", host_run_key: "brief-expiry-lead" }, "2026-03-03T17:00:00.000Z");
   assert.ok(!("error" in lead));
-  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-03T17:10:00.001Z"), { expired: 1 });
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-03T18:10:00.001Z"), { expired: 1, failed: 0 });
   assert.deepEqual(receipt(lead.run.run_id), { outcome: "abstained", reason_code: "ceiling_reached", needs_reviewer_role: "sales" });
   assert.equal(exceptions(lead.run.run_id), 1);
 });

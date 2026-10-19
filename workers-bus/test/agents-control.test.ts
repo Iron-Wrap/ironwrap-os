@@ -1763,6 +1763,11 @@ test("a v3 close is held to its strict block, and legacy and routed blocks still
     ["an adapter outside the contract", { adapter: "omniroute" }],
     ["a run class outside the register", { run_class: "practice" }],
     ["a review naming no family", { review_of: { run_id: "run_x", provider: "codex" } }],
+    ["nine models used", { models_used: Array.from({ length: 9 }, (_, n) => `gpt-6.${n}`) }],
+    ["a hop retrying before the epoch", { failover: [{ ...hop, retry_at: -1 }] }],
+    ["an auth mode outside the registry", { auth_mode: "password" }],
+    ["a billing outside the registry", { billing: "invoice" }],
+    ["a qualification ref too long", { qualification_ref: `q${"a".repeat(80)}` }],
     ["a field of its own", { extra: true }],
   ] as const)
     assert.equal((await s.close((await s.run()).run_id, closeV3(model)).then((r) => r.status)), 422, label);

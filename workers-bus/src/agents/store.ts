@@ -1453,8 +1453,10 @@ export async function closeRun(
     if (result !== "completed") reasonCode = close.output?.reason_code ?? "out_of_scope";
   }
   // Per-run independence (contract "Model routing"): an audit of another run that came back from
-  // the same model family as that run is not an audit, so it abstains instead of completing. It
-  // fails closed: the audit and the reviewed run must each name a known family, and different ones.
+  // the same model family as that run is not an audit, so it abstains instead of completing. When
+  // the reviewed run recorded a model it fails closed: the audit and the reviewed run must each name
+  // a known family, and different ones. A reviewed run that recorded no model (it closed without a
+  // model's answer, as an expired run does) has no output to be independent of, so it is not checked.
   let refusal: string | null = null;
   if (close.status === "ok" && run.specialist_id === "independent_auditor") {
     const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<SignalRow>();
@@ -1559,16 +1561,35 @@ export async function expireRun(db: AgentDb, tenantId: string, run: RunRow, now:
   return true;
 }
 
-/** Closes every open run past its wall-time ceiling (expireRun), oldest first, at most `limit` per cron tick. */
-export async function expireRuns(db: AgentDb, tenantId: string, now: string, limit = 50): Promise<{ expired: number }> {
-  const before = new Date(Date.parse(now) - DEFAULT_CEILINGS.wallTimeMs).toISOString();
+/**
+ * How long past its wall-time ceiling the cron leaves a run open: longer than the host's longest
+ * model call chain (agent-host/config/gateway.json: a route and up to three failover hops, each up
+ * to 3 attempts of 240 s with backoff, about 48 minutes), so a close still on its way lands instead
+ * of meeting `run_closed`. A run the host opens again closes at the ceiling itself (resumeRun).
+ * ponytail: a fixed margin; raise it if the gateway's retry, timeout or failover limits grow.
+ */
+export const EXPIRY_GRACE_MS = 60 * 60_000;
+
+/**
+ * Closes every open run past its wall-time ceiling and the grace (expireRun), oldest first, at most
+ * `limit` per cron tick. One run that fails to close does not stop the others.
+ */
+export async function expireRuns(db: AgentDb, tenantId: string, now: string, limit = 50): Promise<{ expired: number; failed: number }> {
+  const before = new Date(Date.parse(now) - DEFAULT_CEILINGS.wallTimeMs - EXPIRY_GRACE_MS).toISOString();
   const open = await db
     .prepare("SELECT * FROM agent_runs WHERE tenant_id = ? AND state = 'open' AND started_at < ? ORDER BY started_at ASC, run_id ASC LIMIT ?")
     .bind(tenantId, before, limit)
     .all<RunRow>();
   let expired = 0;
-  for (const run of open.results ?? []) if (await expireRun(db, tenantId, run, now)) expired += 1;
-  return { expired };
+  let failed = 0;
+  for (const run of open.results ?? []) {
+    try {
+      if (await expireRun(db, tenantId, run, now)) expired += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { expired, failed };
 }
 
 /** A close as the Worker records it before any pause: an ask run's view checked, else as received. */

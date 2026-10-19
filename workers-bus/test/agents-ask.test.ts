@@ -650,6 +650,15 @@ test("an ask no run answers in time reads abstained, not answered, without writi
   assert.deepEqual(await read(waiting), unanswered(waiting, null));
   assert.deepEqual(state(), before, "the read writes nothing");
 
+  // A run that outlives the run lifetime takes no step, yet a close still on its way lands: the ask
+  // reads what it answered.
+  const slow = await ask(t, "sales", "ask-closed-late");
+  const slowRun = await openFace(t, slow);
+  t.tick(10 * 60_000 + 1);
+  assert.deepEqual(await read(slow), unanswered(slow, slowRun.run_id));
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${slowRun.run_id}/close`, close())).status, 200);
+  assert.deepEqual([(await read(slow)).status, (await read(slow)).reason], ["done", null]);
+
   // A run that outlives the run lifetime can neither resume nor take a step: not answered either.
   const open = await ask(t, "sales", "ask-never-closed");
   const run = await openFace(t, open);

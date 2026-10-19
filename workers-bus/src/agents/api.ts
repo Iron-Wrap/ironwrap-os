@@ -7,7 +7,8 @@
 // an agent change its own delegation.
 
 import { validAppCsrf } from "../app-auth.ts";
-import { canonicalJson } from "./schema.ts";
+import { canonicalJson, validate } from "./schema.ts";
+import { CEILING_SCHEMA } from "./registry.ts";
 import { CATALOG } from "./catalog.ts";
 import {
   setDelegation,
@@ -29,8 +30,8 @@ import type { AuthContext } from "../app-types.ts";
 import { postAsk, postRequest, readAsk, readCurrentFacts, type Limited } from "./ask.ts";
 import { listHostHealth, listReceipts, receiptOf, type ReceiptView } from "./receipts.ts";
 import { RUN_OUTPUT_SCHEMA } from "./run-output.ts";
-import type { Notify } from "./control.ts";
-import { agreementStats, delegationCandidates, recordQualification, setShadow, validCatastrophes } from "./shadow.ts";
+import type { Ceiling, Notify } from "./control.ts";
+import { agreementStats, delegationCandidates, delegationPreview, recordQualification, setShadow, validCatastrophes } from "./shadow.ts";
 import { deliverRunReport, OWNER_REPORTS, ownerReports, watchStatus } from "./watches.ts";
 import {
   closeRun,
@@ -229,6 +230,20 @@ export async function handleAgentTeamAppRoute(
           display_name,
         })),
       });
+    // What the owner sees before deciding a delegation change: GET …/preview?action=<id>[&ceiling=<json>].
+    const preview = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)\/preview$/);
+    if (preview) {
+      const actionId = url.searchParams.get("action") ?? "";
+      let ceiling: unknown = null;
+      try {
+        ceiling = JSON.parse(url.searchParams.get("ceiling") ?? "null");
+      } catch {
+        return reply({ error: "invalid_query" }, 400);
+      }
+      if (!/^[a-z_]+\.[a-z_]+$/.test(actionId) || (ceiling !== null && validate(CEILING_SCHEMA, ceiling).length > 0)) return reply({ error: "invalid_query" }, 400);
+      const shown = await delegationPreview(db, tenantId, preview[1], actionId, ceiling as Ceiling | null);
+      return shown ? reply(shown) : reply({ error: "not_earnable" }, 422);
+    }
     const specialist = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)$/);
     if (specialist) {
       const overview = await delegationOverview(db, tenantId, specialist[1]);

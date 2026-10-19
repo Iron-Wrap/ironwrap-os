@@ -1438,11 +1438,11 @@ test("shadow is a delegation value: setting it shadows the action, any other set
   assert.deepEqual([shadowed.status, shadowed.body.revision], [200, 1]);
   assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "shadow", ceiling, expected_revision: 1 }), "owner", "deleg-shadow-ceiling")).status, 422);
   const overview = (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add");
-  assert.deepEqual(overview.shadow, { shadow: true, revision: 1 });
+  assert.deepEqual(overview.shadow, { shadow: true, revision: 1, stopped: false });
   // Setting asks first (delegation revision 1) also writes the shadow-off revision in the same write.
   assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 0 }), "owner", "deleg-asks-1")).status, 200);
   const after = (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add");
-  assert.deepEqual([after.shadow, after.setting.setting], [{ shadow: false, revision: 2 }, "asks_first"]);
+  assert.deepEqual([after.shadow, after.setting.setting], [{ shadow: false, revision: 2, stopped: false }, "asks_first"]);
   assert.equal((await s.propose(await s.run(), "note.add", note)).body.decision, "awaiting_approval");
 });
 
@@ -1953,4 +1953,83 @@ test("the candidate bar needs the qualification for the effort and release the s
   assert.deepEqual(await candidates(), [high]);
   await runsOnV3({ qualification_ref: null, effort: "high", release_sha256: "1".repeat(64) });
   assert.deepEqual(await candidates(), [], "no row at that release");
+});
+
+// --- Delegation fallbacks on a release without a passed qualification (contract "Delegation" item 7) ---
+
+/** A host's close of a live run that found no route a current passed qualification names. */
+const unqualifiedClose = () => ({ ...CLOSE_V3, status: "abstained", reason: "no_qualified_route", detail: "Synthetic: no qualified route.", output: null, model: { ...CLOSE_V3.model, qualification_ref: null } });
+
+test("a within-limits setting falls back once a run of the specialist ends without a qualified route, until the owner sets it again", async () => {
+  const s = setup(true);
+  const delegation = async () => {
+    const current = await currentDelegation(s.db, TENANT, "lead_concierge", "note.add");
+    return [current?.setting, current?.fallback];
+  };
+  // A run that ended without a qualified route before the owner set the action does not count.
+  const before = await s.run();
+  assert.equal((await s.close(before.run_id, closeV3({ qualification_ref: null }))).status, 200);
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting(), "owner", "deleg-release-1")).status, 200);
+  assert.deepEqual(await delegation(), ["within_limits", false]);
+  // A run of the same specialist that ran and closed fine changes nothing.
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run()).run_id, closeV3({ qualification_ref: await qualify(s, {}, "release-pass") }))).status, 200);
+  assert.deepEqual(await delegation(), ["within_limits", false]);
+  // The host found no qualified route for the specialist's changed release: the setting asks first.
+  s.tick(1_000);
+  const abstained = await s.run();
+  const closed = await s.close(abstained.run_id, unqualifiedClose());
+  assert.deepEqual([closed.status, closed.body.terminal], [200, "abstained"]);
+  assert.deepEqual(await delegation(), ["asks_first", true]);
+  // It stays back after the release passes, until the owner confirms the setting again.
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run()).run_id, closeV3({ qualification_ref: await qualify(s, {}, "release-pass-again") }))).status, 200);
+  assert.deepEqual(await delegation(), ["asks_first", true]);
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: 1 }), "owner", "deleg-release-2")).status, 200);
+  assert.deepEqual(await delegation(), ["within_limits", false]);
+  // A close the Worker refuses for a route it holds no qualification for counts the same way.
+  s.tick(1_000);
+  const refused = await s.close((await s.run()).run_id, closeV3({ qualification_ref: null }));
+  assert.deepEqual([refused.status, refused.body.terminal], [200, "abstained"]);
+  assert.deepEqual(await delegation(), ["asks_first", true]);
+  // Another specialist's unqualified run never touches this one's setting.
+  assert.equal((await currentDelegation(s.db, TENANT, "estimator", "note.add")), null);
+});
+
+test("a practice-only action stops practising after a catastrophe or an unqualified release, and stays practice only until the owner sets it again", async () => {
+  const s = setup(true);
+  const overview = async () => (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add").shadow;
+  const practise = async (text: string) => (await s.propose(await s.run(), "note.add", { ...note, text })).body;
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "practice-1")).status, 200);
+  const first = await practise("Synthetic note one.");
+  assert.equal(first.decision, "shadowed");
+  // A run of the specialist ends without a qualified route: the action neither practises nor runs.
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run()).run_id, unqualifiedClose())).status, 200);
+  const stopped = await practise("Synthetic note two.");
+  assert.deepEqual([stopped.decision, stopped.reason_codes], ["denied", ["policy_denied"]]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps WHERE action_id = 'note.add'").n, 1);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'note.add' AND needs_reviewer_role IS NOT NULL").n, 0, "no person is handed it");
+  // The run's mode is live: no action it can lead to is practising.
+  const handoff = await s.run("lead_concierge", { kind: "handoff", content: { expected_action_id: "note.add", reason: "Synthetic" } });
+  assert.equal((handoff as { mode?: string }).mode, "live");
+  assert.deepEqual(await overview(), { shadow: true, revision: 1, stopped: true });
+  // The owner confirms practice again: it practises.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody({ expected_revision: 1 }), "owner", "practice-2")).status, 200);
+  assert.deepEqual(await overview(), { shadow: true, revision: 2, stopped: false });
+  const resumed = await practise("Synthetic note three.");
+  assert.equal(resumed.decision, "shadowed");
+  // A practice step recorded as a catastrophe stops it again.
+  s.tick(1_000);
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+      VALUES ('agr_synthetic_catastrophe', ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'diverge', '["fabricates_fact"]', 'synthetic', NULL, ?)`,
+    )
+    .run(TENANT, resumed.step_id, s.now());
+  assert.deepEqual((await practise("Synthetic note four.")).reason_codes, ["policy_denied"]);
+  assert.equal((await overview()).stopped, true);
 });

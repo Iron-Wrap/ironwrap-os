@@ -12,7 +12,7 @@ import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist } from "./ca
 import { citedFacts } from "./memory.ts";
 import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSetting } from "./policy.ts";
 import { competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
-import { afterCatastrophe, decisionAgreement, shadowSetting } from "./shadow.ts";
+import { afterCatastrophe, decisionAgreement, shadowSetting, unqualifiedSince } from "./shadow.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 import {
   changesOf,
@@ -157,6 +157,7 @@ export async function currentDelegation(
       control_revision: number;
       catalog_version: string;
       policy_version: string;
+      set_at: string;
     }>();
   if (!row) return null;
   const hold = await db
@@ -174,12 +175,15 @@ export async function currentDelegation(
     )
     .bind(tenantId, row.setting_id)
     .first<{ step_id: string }>();
+  // Each trigger holds until the owner sets the action again (contract "Delegation" item 7); a
+  // release that changed without passing qualification counts from the setting's own time.
   const fallback =
     row.setting === "within_limits" &&
     (row.control_revision < Number(hold?.revision ?? 0) ||
       row.catalog_version !== CATALOG_VERSION ||
       row.policy_version !== POLICY_VERSION ||
-      failed !== null);
+      failed !== null ||
+      (await unqualifiedSince(db, tenantId, specialistId, row.set_at)));
   return {
     delegation_id: row.setting_id,
     setting: fallback ? "asks_first" : row.setting,

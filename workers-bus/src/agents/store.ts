@@ -11,7 +11,7 @@ import { currentDelegation, escalateRunAbstention, specialistControl, specialist
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
-import { currentQualifications, divertsToShadow, qualificationHolds, recordShadowStep, runMode, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
+import { currentQualifications, divertsToShadow, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
@@ -659,6 +659,9 @@ export async function proposeStep(
 
   const control = await specialistControl(db, tenantId, run.specialist_id);
   const delegation = await currentDelegation(db, tenantId, run.specialist_id, input.action_id);
+  // A practice-only action whose practice runs stopped neither practises nor runs: policy reads it
+  // as switched off until the owner confirms it again (shadow.ts practiceStopped).
+  const practiceStopped = (await shadowSetting(db, tenantId, run.specialist_id, input.action_id)).stopped;
   const ceilingMet =
     delegation?.setting === "within_limits"
       ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
@@ -674,7 +677,7 @@ export async function proposeStep(
     citations: input.citations,
     snapshot,
     currentVersions,
-    delegation,
+    delegation: practiceStopped ? { delegation_id: delegation?.delegation_id ?? "practice_stopped", setting: "off" } : delegation,
     withinCeiling: ceilingMet,
     stepsOnRun: Number(count?.steps ?? 0),
     runStartedAt: Date.parse(run.started_at),

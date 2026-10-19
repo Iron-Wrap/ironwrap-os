@@ -495,7 +495,7 @@ function checkCase(item, context) {
   // A watch firing may carry the Worker's own content, { watch_id, objects, digest, summary }. Its
   // period_key is a calendar date, so a case leaves it out.
   const content = signal.content;
-  if (signal.kind === "watch" && content && typeof content.summary === "string" && content.digest && typeof content.digest === "object") {
+  if (signal.kind === "watch" && content && typeof content.summary === "string" && content.digest && typeof content.digest === "object" && !Array.isArray(content.digest)) {
     if (content.watch_id !== signal.watch_id) fail(`${label}: a watch firing's content.watch_id is its signal's watch_id`);
     const objectsValid = Array.isArray(content.objects) && content.objects.length <= 24 &&
       content.objects.every((object) => typeof object?.aggregate === "string" && typeof object?.id === "string");

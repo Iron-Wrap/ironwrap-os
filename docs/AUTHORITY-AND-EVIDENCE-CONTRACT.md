@@ -616,6 +616,17 @@ new one can be added.
 - Every entry is a person's, made from their own cookie session. The QA seed owner identity is
   refused and never counts as a holder.
 
+Materials, Access, Weather and Safety also clear on a person's attestation (migration `0158`): one
+small typed record per gate, by an active owner or production person who is on no crew, whose only
+free text is an optional note of at most 300 characters kept in the redactable reason. Its evidence
+is 0 to 10 references to verified, stored Work Package captures of the job or, for Materials, live
+stock reservations of the job; the Worker resolves each reference and records its checksum, so a
+client never supplies a hash. Safety is its own operation set, `production.gates.safety`, carried
+today by owner and production, and it also needs the attester's current internal Worker Competency
+(`authority.record`): verified by an internal assessment, neither revoked nor superseded, in force
+today and not bound to another job. The entry names that record, D1 checks it again at insert, and
+no agent or policy ever attests Safety.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

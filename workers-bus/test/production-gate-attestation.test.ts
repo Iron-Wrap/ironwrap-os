@@ -1,0 +1,1289 @@
+// production-gate-attestation.test.ts - a person attests a gate with evidence or reverses one, and
+// the office reads the gates (migration 0158).
+//
+// The route cases drive the real routes through a person's real cookie session and the real runway
+// read into the ledger, and assert what the ledger, the gate row and the audit log hold afterwards.
+// The D1 cases write SQL straight at the database, the way a defective writer would, and prove the
+// re-created validate trigger refuses each rule the route reads first. A1's waiver and settlement
+// cases stay in production-gate-clearance(s).test.ts.
+
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+
+import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
+import {
+  permissionsForRole,
+  ROLE_PERMISSIONS,
+  type AppEnv,
+  type AppRole,
+  type AuthContext,
+} from "../src/app-types.ts";
+import {
+  parseEvidenceRefs,
+  parseProductionGateAttestation,
+  weatherRefusal,
+  type WeatherAttestation,
+} from "../src/production-gate-attestation.ts";
+import {
+  parseProductionGateReversal,
+  PRODUCTION_GATE_SAFETY_PERMISSION,
+} from "../src/production-gate-clearance.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+
+// Synthetic fixtures only: reserved example.invalid identities and run-relative times. D1 checks
+// every time rule against its own clock, so the fixtures are relative to the real one.
+const TENANT = "ironwrap";
+const PEPPER = "synthetic-gate-attestation-pepper-0123456789";
+const JOB = "job:attest:0001";
+const OTHER_JOB = "job:attest:0002";
+const SEED_CREATED_BY = "system:owner_directed_qa_seed_grant";
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const at = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+const day = (offsetDays: number) => new Date(Date.now() + offsetDays * DAY).toISOString().slice(0, 10);
+const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+const NOTE = "Panels counted on the trailer against the delivery slip.";
+
+const CLEARANCE = (gate: string, job = JOB) =>
+  `/api/v1/production/jobs/${encodeURIComponent(job)}/gates/${gate}/clearance`;
+const REVERSALS = (gate: string, job = JOB) =>
+  `/api/v1/production/jobs/${encodeURIComponent(job)}/gates/${gate}/reversals`;
+const DECISIONS = (gate: string, job = JOB) =>
+  `/api/v1/production/jobs/${encodeURIComponent(job)}/gates/${gate}/waiver-decisions`;
+const GATES = (job = JOB) => `/api/v1/production/jobs/${encodeURIComponent(job)}/gates`;
+
+const USERS = {
+  owner: { id: "appu_owner_attest_01", role: "owner", access: "owner" },
+  production: { id: "appu_production_attest", role: "ops", access: "production" },
+  crewed: { id: "appu_production_crewed", role: "ops", access: "production" },
+  ops: { id: "appu_ops_attest_0001", role: "ops", access: "ops" },
+  seed: { id: "appu_seed_owner_attest", role: "owner", access: "owner" },
+  field: { id: "appu_field_attest_001", role: "field", access: "field" },
+} as const;
+type User = (typeof USERS)[keyof typeof USERS];
+
+class TestD1 {
+  readonly sqlite = new DatabaseSync(":memory:");
+
+  prepare(sql: string) {
+    const sqlite = this.sqlite;
+    return {
+      bind(...values: unknown[]) {
+        return {
+          async all<T>() {
+            return { results: sqlite.prepare(sql).all(...(values as never[])) as T[] };
+          },
+          async first<T>() {
+            return (sqlite.prepare(sql).get(...(values as never[])) as T | undefined) ?? null;
+          },
+          async run() {
+            return { success: true, meta: { changes: Number(sqlite.prepare(sql).run(...(values as never[])).changes) } };
+          },
+        };
+      },
+    };
+  }
+
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    this.sqlite.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.sqlite.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+interface Harness {
+  env: AppEnv;
+  db: TestD1;
+  sqlite: DatabaseSync;
+}
+
+const gateId = (gate: string, job = JOB) => `gate:${job === JOB ? "attest" : "other"}:${gate.toLowerCase()}`;
+
+function insertUser(db: DatabaseSync, user: User, createdBy = "owner@example.invalid") {
+  db.prepare(
+    `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+        active, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+  ).run(
+    user.id, TENANT, `${user.id}@example.invalid`, `Synthetic ${user.access}`, user.role, user.access,
+    user.role === "field" ? `${user.id}@example.invalid` : null, createdBy, at(-DAY), at(-DAY),
+  );
+}
+
+function seedJob(db: DatabaseSync, jobId: string, suffix: string): void {
+  const now = at(-DAY);
+  const email = `attest-${suffix}@example.invalid`;
+  db.prepare(
+    `INSERT INTO envelopes
+       (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts, status,
+        created_at, updated_at)
+     VALUES (?, 'manual', 'Attest Customer', ?, '{}', ?, ?, 'reconciled', ?, ?)`,
+  ).run(`ow_gate_attest_${suffix}`, email, `raw/attest/${suffix}.json`, now, now, now);
+  db.prepare(
+    `INSERT INTO operating_leads
+       (lead_id, tenant_id, source_envelope_id, source, contact_name, contact_email,
+        lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, 'manual', 'Attest Customer', ?, 'qualified', 1, ?, ?)`,
+  ).run(`lead:attest:${suffix}`, TENANT, `ow_gate_attest_${suffix}`, email, now, now);
+  db.prepare(
+    `INSERT INTO operating_customers
+       (customer_id, tenant_id, source_envelope_id, display_name, contact_email,
+        lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, 'Attest Customer', ?, 'active', 1, ?, ?)`,
+  ).run(`customer:attest:${suffix}`, TENANT, `ow_gate_attest_${suffix}`, email, now, now);
+  db.prepare(
+    `INSERT INTO operating_roof_jobs
+       (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id, brand, job_number,
+        service_type, job_status, current_gate_state, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'ironwrap', ?, 'Roofing', 'qualified', 'blocked', 1, ?, ?)`,
+  ).run(jobId, TENANT, `lead:attest:${suffix}`, `customer:attest:${suffix}`, `ow_gate_attest_${suffix}`, `IW-ATTEST-${suffix}`, now, now);
+  for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) {
+    db.prepare(
+      `INSERT INTO operating_production_gates
+         (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, owner_user, assigned_at,
+          due_at, blocker_reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'owner@example.invalid', ?, ?, 'No active blocker', ?, ?)`,
+    ).run(gateId(gate, jobId), TENANT, jobId, `ow_gate_attest_${suffix}`, gate, now, at(7 * DAY), now, now);
+  }
+}
+
+/**
+ * The full migration chain, two jobs with six blocked gates each, and the people who touch them:
+ * an owner and a production person, a production login that is also on a crew, ops, the QA seed
+ * owner and a field worker on that crew.
+ */
+function setup(): Harness {
+  const db = new TestD1();
+  db.sqlite.exec("PRAGMA foreign_keys = ON");
+  for (const name of readdirSync(new URL("../migrations/", import.meta.url))
+    .filter((value) => /^\d{4}_.+\.sql$/.test(value))
+    .sort()) {
+    db.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+  }
+  for (const user of Object.values(USERS)) {
+    insertUser(db.sqlite, user, user === USERS.seed ? SEED_CREATED_BY : undefined);
+  }
+  seedJob(db.sqlite, JOB, "0001");
+  seedJob(db.sqlite, OTHER_JOB, "0002");
+  db.sqlite.prepare(
+    `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
+     VALUES ('crew:attest:0001', ?, 'Attest Crew', 'Active', 1, ?, ?)`,
+  ).run(TENANT, at(-DAY), at(-DAY));
+  for (const [membershipId, userId] of [
+    ["membership:attest:field", USERS.field.id],
+    ["membership:attest:crewed", USERS.crewed.id],
+  ]) {
+    db.sqlite.prepare(
+      `INSERT INTO fleet_crew_members
+         (membership_id, tenant_id, crew_id, user_id, active, version, created_at, updated_at)
+       VALUES (?, ?, 'crew:attest:0001', ?, 1, 1, ?, ?)`,
+    ).run(membershipId, TENANT, userId, at(-DAY), at(-DAY));
+  }
+  const env = {
+    DB: db as never,
+    APP_TENANT_ID: TENANT,
+    APP_AUTH_PEPPER: PEPPER,
+    APP_TIME_ZONE: "America/Edmonton",
+  } as AppEnv;
+  return { env, db, sqlite: db.sqlite };
+}
+
+/** A real cookie session, authenticated the way the router authenticates a signed-in person. */
+async function person(h: Harness, userId: string): Promise<AuthContext> {
+  const token = randomToken();
+  h.sqlite.prepare(
+    `INSERT INTO app_sessions
+       (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+  ).run(await sessionHashFor(h.env, token), userId, TENANT, at(-60_000), at(HOUR), at(-60_000), "d".repeat(64), "e".repeat(64));
+  const outcome = await authenticateAppRequest(
+    new Request("https://app.example.invalid/api/v1/session", {
+      headers: { cookie: `__Host-ironwrap_session=${token}` },
+    }),
+    h.env,
+  );
+  assert.ok(outcome.ok, "the synthetic person session authenticates");
+  return outcome.auth;
+}
+
+/** A signed-in role without a person's cookie token: a connector, an agent host, a service token. */
+function machine(role: AppRole): AuthContext {
+  return {
+    rawSessionToken: "s".repeat(43),
+    csrfToken: "csrf",
+    permissions: permissionsForRole(role),
+    session: {
+      session_hash: "a".repeat(64),
+      session_created_at: at(-60_000),
+      session_expires_at: at(HOUR),
+      revoked_at: null,
+      user_id: USERS.owner.id,
+      tenant_id: TENANT,
+      email_normalized: `${USERS.owner.id}@example.invalid`,
+      display_name: role,
+      role,
+      frappe_user_id: null,
+      active: 1,
+      created_by: "owner@example.invalid",
+      created_at: at(-DAY),
+      updated_at: at(-DAY),
+    },
+  };
+}
+
+let keyCounter = 0;
+const nextKey = () => `gate-attest-key-${(++keyCounter).toString().padStart(12, "0")}`;
+
+async function call(
+  h: Harness,
+  auth: AuthContext,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+  options: { idempotency?: string | null } = {},
+): Promise<{ status: number; body: Record<string, any> }> {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (method === "POST") {
+    headers.set("x-csrf-token", auth.csrfToken);
+    if (options.idempotency !== null) headers.set("idempotency-key", options.idempotency ?? nextKey());
+  }
+  const response = await handleAuthenticatedRoute(
+    new Request(`https://app.example.invalid${path}`, {
+      method,
+      headers,
+      ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+    }),
+    h.env,
+    auth,
+  );
+  return { status: response.status, body: (await response.json()) as Record<string, any> };
+}
+
+function gateRow(db: DatabaseSync, gate: string, job = JOB): Record<string, unknown> {
+  return {
+    ...(db.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id, cleared_by_user_id,
+              evidence_refs_json
+         FROM operating_production_gates WHERE gate_id = ?`,
+    ).get(gateId(gate, job)) as Record<string, unknown>),
+  };
+}
+
+function ledgerRows(db: DatabaseSync): Array<Record<string, any>> {
+  return db.prepare(
+    `SELECT clearance_id, gate, entry_kind, basis, to_state, from_gate_version, reverses_id,
+            actor_user_id, actor_role, attestation_json, evidence_refs_json, reason
+       FROM production_gate_clearances ORDER BY gate, from_gate_version`,
+  ).all().map((row) => ({ ...row }));
+}
+
+function auditRows(db: DatabaseSync, clearanceId: string): Array<Record<string, unknown>> {
+  return db.prepare(
+    "SELECT action, trigger, approved_by, reason, source_ids FROM audit_log WHERE run_id = ?",
+  ).all(clearanceId).map((row) => ({ ...row }));
+}
+
+let fixtureCounter = 0;
+
+interface Competency {
+  readback_id: string;
+  authority_record_id: string;
+  authority_version: number;
+  state_digest_sha256: string;
+}
+
+/** One internal Worker Competency readback, verified and in force unless a test says otherwise. */
+function insertCompetency(
+  db: DatabaseSync,
+  personUser: string,
+  overrides: Record<string, unknown> = {},
+): Competency {
+  fixtureCounter += 1;
+  const row: Record<string, unknown> = {
+    readback_id: `readback.attest.${fixtureCounter.toString().padStart(4, "0")}`,
+    tenant_id: TENANT,
+    authority_record_id: `competency_attest_${fixtureCounter.toString().padStart(4, "0")}`,
+    authority_version: 1,
+    subject_type: "Person",
+    subject_role: "Worker",
+    person_user: personUser,
+    organization: null,
+    authority_kind: "Worker Competency",
+    authority_scope: "Site hazard assessment and fall protection",
+    scope_type: "Tenant",
+    scope_ref: TENANT,
+    roof_job: null,
+    scope_json: "{}",
+    issuer_name: TENANT,
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: "internal:competency:attest",
+    issuer_source_version: "1",
+    verification_state: "verified",
+    evidence_refs_json: "[]",
+    evidence_sha256: sha(`competency-evidence:${fixtureCounter}`),
+    authority_state_digest_sha256: sha(`competency-state:${fixtureCounter}`),
+    authority_effective_from: day(-30),
+    authority_expires_at: day(365),
+    authority_revoked_at: null,
+    supersedes_authority_record_id: null,
+    authority_verification_method: "Internal Competency Assessment",
+    issuer_receipt_sha256: null,
+    observed_by_user_id: USERS.owner.id,
+    observed_at: at(-DAY),
+    observation_fingerprint_sha256: sha(`competency-fingerprint:${fixtureCounter}`),
+    action_id: null,
+    ...overrides,
+  };
+  const columns = Object.keys(row);
+  db.prepare(
+    `INSERT INTO authority_record_readbacks (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(columns.map((column) => row[column]) as never[]));
+  return {
+    readback_id: String(row.readback_id),
+    authority_record_id: String(row.authority_record_id),
+    authority_version: Number(row.authority_version),
+    state_digest_sha256: String(row.authority_state_digest_sha256),
+  };
+}
+
+/** One verified, manifested, stored Work Package capture of a job; returns its media checksum. */
+function insertCapture(
+  db: DatabaseSync,
+  evidenceId: string,
+  options: { jobId?: string; status?: "verified" | "r2_stored" } = {},
+): string {
+  const deviceActionId = `capture-${evidenceId.slice(4)}`;
+  const status = options.status ?? "verified";
+  const jobId = options.jobId ?? JOB;
+  const capturedAt = at(-2 * HOUR);
+  db.prepare(
+    `INSERT INTO field_actions (
+       device_action_id, tenant_id, user_id, job_id, assignment_id, action_kind, payload_hash,
+       status, checkin_id, manifest_key, response_json, created_at, updated_at, verified_at,
+       work_package_id, work_package_version, evidence_slot_id, evidence_requirement,
+       evidence_source, evidence_device_id, evidence_freshness, evidence_conflict_state,
+       evidence_verification, evidence_disposition, work_package_release_attempt_id,
+       work_object_type, work_object_id, physical_context_type, physical_context_id,
+       capture_started_at, capture_completed_at
+     ) VALUES (?, ?, ?, ?, ?, 'field_checkin', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?,
+               'Site photographs', 'photo', 'device-synthetic-crew', 'Current', 'None',
+               'Verified', 'Open', 'attempt-synthetic', 'Roof Job', ?, 'Roof Site', ?, ?, ?)`,
+  ).run(
+    deviceActionId, TENANT, USERS.field.id, jobId, `ASSIGN-${jobId}`, "a".repeat(64), status,
+    `checkin_${deviceActionId}`, `evidence/${deviceActionId}.json`,
+    status === "verified" ? '{"status":"verified"}' : null, capturedAt, capturedAt,
+    status === "verified" ? capturedAt : null, `wp:attest:${jobId}`, `step:${evidenceId.slice(-8)}`,
+    jobId, jobId,
+    at(-2 * HOUR - 60_000), capturedAt,
+  );
+  const checksum = sha(`media:${evidenceId}`);
+  db.prepare(
+    `INSERT INTO field_action_media
+       (device_action_id, attachment_id, evidence_id, r2_key, checksum_sha256, content_type,
+        content_length, r2_stored_at)
+     VALUES (?, ?, ?, ?, ?, 'image/jpeg', 128, ?)`,
+  ).run(deviceActionId, `attachment-${deviceActionId}`, evidenceId, `evidence/raw/${deviceActionId}.jpg`, checksum, capturedAt);
+  return checksum;
+}
+
+/**
+ * One stock reservation of a job. The position, unit and command it points at are not what a gate
+ * reads, so they are not built here: foreign keys are off for this one insert.
+ */
+function insertReservation(
+  db: DatabaseSync,
+  reservationId: string,
+  options: { jobId?: string; status?: string; version?: number } = {},
+): void {
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.prepare(
+      `INSERT INTO inventory_reservations
+         (reservation_id, tenant_id, position_id, job_id, work_package_id,
+          reserved_quantity_scaled, issued_quantity_scaled, returned_quantity_scaled, uom_id,
+          status, version, command_id, created_at, updated_at)
+       VALUES (?, ?, 'position:attest:panels', ?, NULL, 40, 0, 0, 'uom:attest:each', ?, ?,
+               'command:attest:reserve:0001', ?, ?)`,
+    ).run(reservationId, TENANT, options.jobId ?? JOB, options.status ?? "reserved", options.version ?? 1, at(-DAY), at(-DAY));
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function insertMaterialException(db: DatabaseSync, status: "open" | "contained" | "resolved"): void {
+  fixtureCounter += 1;
+  db.prepare(
+    `INSERT INTO inventory_exceptions
+       (exception_id, tenant_id, exception_type, status, aggregate_type, aggregate_id, reason_code,
+        expected_json, observed_json, evidence_refs_json, version, created_at, updated_at,
+        resolved_at)
+     VALUES (?, ?, 'shortage', ?, 'roof_job', ?, 'panel_shortage', '{}', '{}', '[]', 1, ?, ?, ?)`,
+  ).run(`exception.attest.${fixtureCounter}`, TENANT, status, JOB, at(-HOUR), at(-HOUR), status === "resolved" ? at(-HOUR) : null);
+}
+
+function insertSafetyStop(db: DatabaseSync, jobId = JOB): void {
+  fixtureCounter += 1;
+  db.prepare(
+    `INSERT INTO safety_occurrences
+       (occurrence_id, tenant_id, occurrence_kind, severity, scope_type, scope_id,
+        reported_by_user_id, reported_at, summary, report_fingerprint_sha256, created_at,
+        updated_at)
+     VALUES (?, ?, 'hazard', 'high', 'roof_job', ?, ?, ?, 'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
+  ).run(`occurrence.attest.${fixtureCounter}`, TENANT, jobId, USERS.field.id, at(-HOUR), sha(`stop:${fixtureCounter}`), at(-HOUR), at(-HOUR));
+}
+
+/** Each gate's attestation as a person sends it, built fresh so its times follow the clock. */
+const SENT = {
+  Materials: () => ({ source: "supplier_delivery", reference: "DEL-2026/0042" }),
+  Access: () => ({
+    confirmed_with: "property_manager",
+    confirmed_at: at(-2 * HOUR),
+    constraints: ["pets", "parking"],
+  }),
+  Weather: () => ({
+    window_start: at(DAY),
+    window_end: at(4 * DAY),
+    forecast_source: "weather.gc.ca",
+    forecast_observed_at: at(-3 * HOUR),
+  }),
+  Safety: () => ({
+    hazard_assessment_ref: "FLHA-2026-0042",
+    fall_protection: { plan_ref: "FPP#42" },
+    assessed_at: at(-HOUR),
+  }),
+} as const;
+type AttestedGate = keyof typeof SENT;
+
+const attest = (gate: AttestedGate, version = 1, extra: Record<string, unknown> = {}) => ({
+  basis: "person_attestation",
+  expected_gate_version: version,
+  attestation: SENT[gate](),
+  ...extra,
+});
+
+function refused(action: () => unknown, code: string): void {
+  assert.throws(action, (error: unknown) => {
+    assert.match(String((error as Error).message), new RegExp(code));
+    return true;
+  });
+}
+
+// --- Routes -----------------------------------------------------------------------------------
+
+test("a person attests Materials, Access, Weather and Safety; each entry readies its gate with one audit row", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  // The competency names the worker by email, another of the attester's login coordinates.
+  const competency = insertCompetency(h.sqlite, `${USERS.production.id}@example.invalid`);
+  const evidenceId = `evi_${"a1".repeat(16)}`;
+  const checksum = insertCapture(h.sqlite, evidenceId);
+  insertReservation(h.sqlite, "reservation.attest.0001");
+
+  const bodies = {
+    Materials: attest("Materials", 1, {
+      attestation: { ...SENT.Materials(), notes: `  ${NOTE}  ` },
+      evidence_refs: [`field-evidence://${evidenceId}`, "stock-reservation://reservation.attest.0001"],
+    }),
+    Access: attest("Access"),
+    Weather: attest("Weather"),
+    Safety: attest("Safety", 1, { evidence_refs: [`field-evidence://${evidenceId}`] }),
+  };
+  for (const [gate, body] of Object.entries(bodies)) {
+    const key = `attest-${gate.toLowerCase()}-key-00000001`;
+    const result = await call(h, production, "POST", CLEARANCE(gate), body, { idempotency: key });
+    assert.equal(result.status, 200, `${gate}: ${JSON.stringify(result.body)}`);
+    const { entry } = result.body;
+    assert.deepEqual(
+      { kind: entry.kind, basis: entry.basis, to_state: entry.to_state, from: entry.from_gate_version, role: entry.actor_role },
+      { kind: "clear", basis: "person_attestation", to_state: "ready", from: 1, role: "production" },
+      gate,
+    );
+    assert.deepEqual(result.body.gate, { name: gateId(gate), gate, roof_job: JOB, state: "ready", version: 2 });
+    assert.equal(result.body.replayed, false);
+    assert.ok(!("actor_user_id" in entry), "the projection names a role, not a person");
+    assert.deepEqual(gateRow(h.sqlite, gate), {
+      state: "ready",
+      version: 2,
+      clearance_basis: null,
+      clearance_decision_id: entry.id,
+      cleared_by_user_id: USERS.production.id,
+      evidence_refs_json: JSON.stringify(entry.evidence_refs),
+    });
+    assert.deepEqual(auditRows(h.sqlite, entry.id), [{
+      action: "clear:person_attestation",
+      trigger: "person",
+      approved_by: USERS.production.id,
+      reason: null,
+      source_ids: `job:${JOB},gate:${gate},from_version:1,to_state:ready`,
+    }]);
+    // An exact replay answers as the first request did and appends nothing.
+    const replay = await call(h, production, "POST", CLEARANCE(gate), body, { idempotency: key });
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replay.body, { ...result.body, replayed: true });
+  }
+
+  const [materials, access, safety, weather] = ["Materials", "Access", "Safety", "Weather"]
+    .map((gate) => ledgerRows(h.sqlite).find((row) => row.gate === gate)!);
+  // The note is the only free text and lives in the redactable reason, trimmed; the structured
+  // attestation never carries it.
+  assert.equal(materials.reason, NOTE);
+  assert.deepEqual(JSON.parse(materials.attestation_json), SENT.Materials());
+  // The client sent ids; the Worker resolved each one and took its checksum.
+  const evidence = JSON.parse(materials.evidence_refs_json) as Array<Record<string, unknown>>;
+  assert.deepEqual(evidence[0], { ref: `field-evidence://${evidenceId}`, sha256: checksum });
+  assert.equal(evidence[1]!.ref, "stock-reservation://reservation.attest.0001");
+  assert.equal(evidence[1]!.version, 1);
+  assert.match(String(evidence[1]!.sha256), /^[0-9a-f]{64}$/);
+  // An empty constraint list and an absent one are the same fact, stored once, sorted.
+  assert.deepEqual(JSON.parse(access.attestation_json).constraints, ["parking", "pets"]);
+  assert.equal(JSON.parse(weather.attestation_json).forecast_source, "weather.gc.ca");
+  // Safety names the attester's current competency, bound by the Worker.
+  assert.deepEqual(JSON.parse(safety.attestation_json).competency, competency);
+  assert.equal(ledgerRows(h.sqlite).length, 4);
+  assert.equal(
+    (h.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE automation = 'production_gate_clearance'").get() as { n: number }).n,
+    4,
+  );
+});
+
+test("an attestation is idempotent, version-checked and refused on a gate that is not blocked", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const body = attest("Access");
+  const first = await call(h, production, "POST", CLEARANCE("Access"), body, { idempotency: "attest-access-replay-00001" });
+  assert.equal(first.status, 200);
+  const changed = await call(h, production, "POST", CLEARANCE("Access"), attest("Access", 1, {
+    attestation: { ...SENT.Access(), confirmed_with: "customer" },
+  }), { idempotency: "attest-access-replay-00001" });
+  assert.deepEqual([changed.status, changed.body.error], [409, "production_gate_clearance_replay_conflict"]);
+  const again = await call(h, production, "POST", CLEARANCE("Access"), attest("Access", 2));
+  assert.deepEqual([again.status, again.body.error], [409, "production_gate_already_cleared"]);
+  const stale = await call(h, production, "POST", CLEARANCE("Weather"), attest("Weather", 2));
+  assert.deepEqual([stale.status, stale.body.error], [409, "production_gate_version_conflict"]);
+  assert.equal(ledgerRows(h.sqlite).length, 1);
+});
+
+test("only Materials, Safety, Access and Weather are attested, in exactly their typed shape", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  for (const gate of ["Deposit", "Crew"]) {
+    const result = await call(h, owner, "POST", CLEARANCE(gate), attest("Materials"));
+    assert.deepEqual([result.status, result.body.error], [409, "production_gate_not_attestable"], gate);
+  }
+  const completion = await call(h, owner, "POST", CLEARANCE("Completion"), attest("Materials"));
+  assert.deepEqual([completion.status, completion.body.error], [400, "invalid_production_gate_clearance"]);
+  for (const body of [
+    attest("Materials", 1, { reason: "A reason is not part of an attestation." }),
+    attest("Materials", 1, { attestation: { ...SENT.Materials(), description: "free text" } }),
+    attest("Materials", 1, { attestation: { source: "found_on_site", reference: "DEL-1" } }),
+    attest("Materials", 1, { attestation: { source: "supplier_delivery", reference: "the panels came on Tuesday" } }),
+    attest("Materials", 1, { attestation: { ...SENT.Materials(), notes: "x".repeat(301) } }),
+    attest("Materials", 1, { expected_gate_version: "1" }),
+    attest("Materials", 1, { evidence_refs: ["https://example.invalid/photo.jpg"] }),
+    { basis: "person_attestation", attestation: SENT.Materials() },
+  ]) {
+    const result = await call(h, owner, "POST", CLEARANCE("Materials"), body);
+    assert.deepEqual([result.status, result.body.error], [400, "production_gate_attestation_invalid"], JSON.stringify(body));
+  }
+  const future = await call(h, owner, "POST", CLEARANCE("Access"), attest("Access", 1, {
+    attestation: { ...SENT.Access(), confirmed_at: at(HOUR) },
+  }));
+  assert.deepEqual([future.status, future.body.error], [400, "production_gate_attestation_invalid"]);
+  const ops = await person(h, USERS.ops.id);
+  const forbidden = await call(h, ops, "POST", CLEARANCE("Materials"), attest("Materials"));
+  assert.deepEqual([forbidden.status, forbidden.body.error], [403, "production_gate_clearance_forbidden"]);
+  const elsewhere = await call(h, owner, "POST", CLEARANCE("Materials", "job:not-on-runway"), attest("Materials"));
+  assert.deepEqual([elsewhere.status, elsewhere.body.error], [409, "production_gate_job_not_on_runway"]);
+  assert.deepEqual(ledgerRows(h.sqlite), []);
+});
+
+test("a crew member and the QA seed owner are refused, and an agent or connector session never attests or reverses", async () => {
+  const h = setup();
+  const crewed = await person(h, USERS.crewed.id);
+  const onCrew = await call(h, crewed, "POST", CLEARANCE("Materials"), attest("Materials"));
+  assert.deepEqual([onCrew.status, onCrew.body.error], [403, "production_gate_attester_on_crew"]);
+  const seed = await person(h, USERS.seed.id);
+  const seeded = await call(h, seed, "POST", CLEARANCE("Access"), attest("Access"));
+  assert.deepEqual([seeded.status, seeded.body.error], [403, "production_gate_clearance_seed_identity_refused"]);
+  for (const path of [CLEARANCE("Weather"), REVERSALS("Weather")]) {
+    const body = path.endsWith("clearance")
+      ? attest("Weather")
+      : { expected_gate_version: 1, reverses_id: `pgc_${"0".repeat(40)}`, reason: "An agent may never reverse a gate." };
+    const agent = await call(h, machine("owner"), "POST", path, body);
+    assert.deepEqual([agent.status, agent.body.error], [403, "person_session_required"], path);
+  }
+  assert.deepEqual(ledgerRows(h.sqlite), []);
+  for (const gate of ["Materials", "Access", "Weather"]) {
+    assert.deepEqual({ state: gateRow(h.sqlite, gate).state, version: gateRow(h.sqlite, gate).version }, { state: "blocked", version: 1 });
+  }
+});
+
+test("Safety needs the attester's current competency and no active stop on the job", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const refusedWith = async (code: string, status = 403) => {
+    const result = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+    assert.deepEqual([result.status, result.body.error], [status, code]);
+  };
+  // No record at all, then records that are not current for this person and this job.
+  await refusedWith("production_gate_competency_required");
+  insertCompetency(h.sqlite, USERS.production.id, { authority_expires_at: day(-1) });
+  insertCompetency(h.sqlite, USERS.production.id, { roof_job: OTHER_JOB, scope_type: "Roof Job", scope_ref: OTHER_JOB });
+  insertCompetency(h.sqlite, USERS.production.id, { verification_state: "unavailable", authority_verification_method: null });
+  insertCompetency(h.sqlite, USERS.owner.id);
+  const superseded = insertCompetency(h.sqlite, USERS.production.id);
+  insertCompetency(h.sqlite, USERS.production.id, {
+    authority_version: 2,
+    supersedes_authority_record_id: superseded.authority_record_id,
+    verification_state: "revoked",
+    authority_revoked_at: at(-HOUR).replace(/\.\d{3}Z$/, "Z"),
+  });
+  await refusedWith("production_gate_competency_required");
+
+  insertCompetency(h.sqlite, USERS.production.id, { roof_job: JOB, scope_type: "Roof Job", scope_ref: JOB });
+  insertSafetyStop(h.sqlite);
+  await refusedWith("production_gate_safety_stop_active", 409);
+  // A stop on another job does not hold this one.
+  const h2 = setup();
+  const production2 = await person(h2, USERS.production.id);
+  const current2 = insertCompetency(h2.sqlite, USERS.production.id, { roof_job: JOB, scope_type: "Roof Job", scope_ref: JOB });
+  insertSafetyStop(h2.sqlite, OTHER_JOB);
+  const cleared = await call(h2, production2, "POST", CLEARANCE("Safety"), attest("Safety", 1, {
+    attestation: { ...SENT.Safety(), fall_protection: { no_exposure_at_3m: true } },
+  }));
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+  assert.deepEqual(cleared.body.entry.attestation.competency, current2);
+  assert.deepEqual(cleared.body.entry.attestation.fall_protection, { no_exposure_at_3m: true });
+  assert.equal(gateRow(h.sqlite, "Safety").state, "blocked");
+  // Safety is never waived, whoever asks.
+  const owner = await person(h2, USERS.owner.id);
+  const waiver = await call(h2, owner, "POST", CLEARANCE("Safety"), {
+    basis: "office_waiver",
+    reason: "Nobody may waive the safety gate, not even the owner.",
+  });
+  assert.deepEqual([waiver.status, waiver.body.error], [409, "production_gate_not_waivable"]);
+});
+
+test("Materials is refused over an open or contained inventory exception", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  insertMaterialException(h.sqlite, "resolved");
+  insertMaterialException(h.sqlite, "contained");
+  const result = await call(h, production, "POST", CLEARANCE("Materials"), attest("Materials"));
+  assert.deepEqual([result.status, result.body.error], [409, "production_gate_material_exception_open"]);
+  assert.equal(gateRow(h.sqlite, "Materials").state, "blocked");
+});
+
+test("Weather needs a window of at most 14 days that has not ended, on a forecast at most 72 hours old", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const weather = (attestation: Record<string, unknown>) =>
+    call(h, production, "POST", CLEARANCE("Weather"), attest("Weather", 1, { attestation: { ...SENT.Weather(), ...attestation } }));
+  for (const [attestation, code] of [
+    [{ window_start: at(DAY), window_end: at(16 * DAY) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(-3 * DAY), window_end: at(12 * DAY) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(-3 * DAY), window_end: at(-DAY) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(4 * DAY), window_end: at(DAY) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(12 * DAY), window_end: at(15 * DAY) }, "production_gate_weather_window_invalid"],
+    [{ forecast_observed_at: at(-73 * HOUR) }, "production_gate_forecast_stale"],
+  ] as const) {
+    const result = await weather(attestation);
+    assert.deepEqual([result.status, result.body.error], [409, code], JSON.stringify(attestation));
+  }
+  assert.deepEqual(ledgerRows(h.sqlite), []);
+  const ok = await weather({ window_start: at(-HOUR), window_end: at(13 * DAY) });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+});
+
+test("evidence is resolved against the job by the Worker, and a reference it cannot resolve is refused", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  insertCapture(h.sqlite, `evi_${"b2".repeat(16)}`, { jobId: OTHER_JOB });
+  insertCapture(h.sqlite, `evi_${"c3".repeat(16)}`, { status: "r2_stored" });
+  insertReservation(h.sqlite, "reservation.attest.released", { status: "released" });
+  insertReservation(h.sqlite, "reservation.attest.other-job", { jobId: OTHER_JOB });
+  insertReservation(h.sqlite, "reservation.attest.0002");
+  for (const [gate, refs] of [
+    ["Materials", [`field-evidence://evi_${"d4".repeat(16)}`]],
+    ["Materials", [`field-evidence://evi_${"b2".repeat(16)}`]],
+    ["Materials", [`field-evidence://evi_${"c3".repeat(16)}`]],
+    ["Materials", ["stock-reservation://reservation.attest.released"]],
+    ["Materials", ["stock-reservation://reservation.attest.other-job"]],
+    ["Access", ["stock-reservation://reservation.attest.0002"]],
+  ] as const) {
+    const result = await call(h, production, "POST", CLEARANCE(gate), attest(gate, 1, { evidence_refs: refs }));
+    assert.deepEqual([result.status, result.body.error], [409, "production_gate_evidence_invalid"], refs[0]);
+  }
+  const tooMany = Array.from({ length: 11 }, (_, index) => `field-evidence://evi_${index.toString(16).padStart(32, "0")}`);
+  const many = await call(h, production, "POST", CLEARANCE("Materials"), attest("Materials", 1, { evidence_refs: tooMany }));
+  assert.deepEqual([many.status, many.body.error], [400, "production_gate_attestation_invalid"]);
+  assert.deepEqual(ledgerRows(h.sqlite), []);
+});
+
+test("a reversal returns the gate to blocked, deletes nothing, and writes one audit row", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const owner = await person(h, USERS.owner.id);
+  const attested = await call(h, production, "POST", CLEARANCE("Materials"), attest("Materials"));
+  const attestationId = attested.body.entry.id as string;
+  const reason = "Supplier recalled the delivered panels for a coating defect.";
+  const body = { expected_gate_version: 2, reverses_id: attestationId, reason };
+  const reversed = await call(h, owner, "POST", REVERSALS("Materials"), body, { idempotency: "gate-reversal-key-000000001" });
+  assert.equal(reversed.status, 200, JSON.stringify(reversed.body));
+  assert.deepEqual(
+    {
+      kind: reversed.body.entry.kind,
+      basis: reversed.body.entry.basis,
+      to_state: reversed.body.entry.to_state,
+      reverses_id: reversed.body.entry.reverses_id,
+      reason: reversed.body.entry.reason,
+      role: reversed.body.entry.actor_role,
+    },
+    { kind: "reverse", basis: "person_reversal", to_state: "blocked", reverses_id: attestationId, reason, role: "owner" },
+  );
+  assert.deepEqual(reversed.body.gate, { name: gateId("Materials"), gate: "Materials", roof_job: JOB, state: "blocked", version: 3 });
+  assert.deepEqual(gateRow(h.sqlite, "Materials"), {
+    state: "blocked",
+    version: 3,
+    clearance_basis: null,
+    clearance_decision_id: null,
+    cleared_by_user_id: null,
+    evidence_refs_json: null,
+  });
+  assert.deepEqual(auditRows(h.sqlite, reversed.body.entry.id), [{
+    action: "reverse:person_reversal",
+    trigger: "person",
+    approved_by: USERS.owner.id,
+    reason: null,
+    source_ids: `job:${JOB},gate:Materials,from_version:2,to_state:blocked`,
+  }]);
+  assert.deepEqual(ledgerRows(h.sqlite).map((row) => row.entry_kind), ["clear", "reverse"]);
+  const replay = await call(h, owner, "POST", REVERSALS("Materials"), body, { idempotency: "gate-reversal-key-000000001" });
+  assert.deepEqual(replay.body, { ...reversed.body, replayed: true });
+
+  // A blocked gate has nothing to reverse, and only the entry holding the state can be reversed.
+  const nothing = await call(h, owner, "POST", REVERSALS("Materials"), { ...body, expected_gate_version: 3 });
+  assert.deepEqual([nothing.status, nothing.body.error], [409, "production_gate_not_cleared"]);
+  const reattested = await call(h, production, "POST", CLEARANCE("Materials"), attest("Materials", 3));
+  assert.equal(reattested.status, 200);
+  const old = await call(h, production, "POST", REVERSALS("Materials"), { ...body, expected_gate_version: 4 });
+  assert.deepEqual([old.status, old.body.error], [409, "production_gate_reversal_target_invalid"]);
+  const stale = await call(h, production, "POST", REVERSALS("Materials"), {
+    expected_gate_version: 3, reverses_id: reattested.body.entry.id, reason,
+  });
+  assert.deepEqual([stale.status, stale.body.error], [409, "production_gate_version_conflict"]);
+  const ops = await person(h, USERS.ops.id);
+  const forbidden = await call(h, ops, "POST", REVERSALS("Materials"), {
+    expected_gate_version: 4, reverses_id: reattested.body.entry.id, reason,
+  });
+  assert.deepEqual([forbidden.status, forbidden.body.error], [403, "production_gate_reversal_forbidden"]);
+  const seed = await person(h, USERS.seed.id);
+  const seeded = await call(h, seed, "POST", REVERSALS("Materials"), {
+    expected_gate_version: 4, reverses_id: reattested.body.entry.id, reason,
+  });
+  assert.deepEqual([seeded.status, seeded.body.error], [403, "production_gate_clearance_seed_identity_refused"]);
+  for (const bad of [
+    { expected_gate_version: 4, reverses_id: reattested.body.entry.id },
+    { expected_gate_version: 4, reverses_id: reattested.body.entry.id, reason: "short" },
+    { expected_gate_version: 4, reverses_id: "pgc_short", reason },
+    { expected_gate_version: 4, reverses_id: reattested.body.entry.id, reason, extra: true },
+  ]) {
+    const result = await call(h, production, "POST", REVERSALS("Materials"), bad);
+    assert.deepEqual([result.status, result.body.error], [400, "invalid_production_gate_reversal"]);
+  }
+  assert.equal(gateRow(h.sqlite, "Materials").state, "ready");
+});
+
+test("a person never reverses a contract that needs no deposit", async () => {
+  const h = setup();
+  // A2's policy entry is not appendable here yet, so the fixture records it the way a backfill would.
+  recordLegacyGateStates(h.sqlite, {
+    tenantId: TENANT,
+    roofJobId: JOB,
+    gates: ["Deposit"],
+    state: "complete",
+    basis: "contract_no_deposit",
+  });
+  const [deposit] = ledgerRows(h.sqlite);
+  const owner = await person(h, USERS.owner.id);
+  const result = await call(h, owner, "POST", REVERSALS("Deposit"), {
+    expected_gate_version: 2,
+    reverses_id: deposit!.clearance_id,
+    reason: "The owner tries to put the deposit back on a no-deposit contract.",
+  });
+  assert.deepEqual([result.status, result.body.error], [409, "production_gate_not_reversible"]);
+  assert.deepEqual({ state: gateRow(h.sqlite, "Deposit").state, entries: ledgerRows(h.sqlite).length }, { state: "complete", entries: 1 });
+});
+
+test("the office reads every gate with its entries and the request ids a waiver decision answers", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const owner = await person(h, USERS.owner.id);
+  const waiver = (gate: string) => call(h, production, "POST", CLEARANCE(gate), {
+    basis: "office_waiver",
+    reason: `Production asks the owner to waive ${gate} for this job.`,
+  });
+  assert.equal((await waiver("Materials")).body.error, "production_gate_waiver_requested");
+  assert.equal((await waiver("Access")).body.error, "production_gate_waiver_requested");
+  const [accessRequest, materialsRequest] = ledgerRows(h.sqlite);
+
+  const read = await call(h, owner, "GET", GATES());
+  assert.equal(read.status, 200);
+  assert.equal(read.body.roof_job, JOB);
+  assert.deepEqual(read.body.gates.map((gate: { gate: string }) => gate.gate), ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]);
+  const materials = read.body.gates.find((gate: { gate: string }) => gate.gate === "Materials");
+  assert.deepEqual(materials.open_waiver_requests, [{
+    request_id: materialsRequest!.clearance_id,
+    requested_by: USERS.production.id,
+    requested_by_role: "production",
+    from_gate_version: 1,
+    reason: "Production asks the owner to waive Materials for this job.",
+    reason_redacted: false,
+    created_at: materials.entries[0].created_at,
+  }]);
+  assert.deepEqual(
+    { state: materials.state, version: materials.version, complete: materials.ledger_complete, kinds: materials.entries.map((entry: { kind: string }) => entry.kind) },
+    { state: "blocked", version: 2, complete: true, kinds: ["waiver_request"] },
+  );
+
+  // The owner answers the request by the id the read gave.
+  const decided = await call(h, owner, "POST", DECISIONS("Materials"), {
+    request_id: materials.open_waiver_requests[0].request_id,
+    expected_gate_version: materials.version,
+    decision: "approve",
+    reason: "Owner approves: the shop holds every panel for this job.",
+  });
+  assert.equal(decided.status, 200, JSON.stringify(decided.body));
+  // Access is attested while its request is undecided: a request is open only while it can be
+  // decided, that is while the gate is blocked.
+  const attested = await call(h, production, "POST", CLEARANCE("Access"), attest("Access", 2, {
+    attestation: { ...SENT.Access(), notes: "Side gate code given by the property manager." },
+  }));
+  assert.equal(attested.status, 200, JSON.stringify(attested.body));
+
+  const after = await call(h, owner, "GET", GATES());
+  const byGate = Object.fromEntries(after.body.gates.map((gate: { gate: string }) => [gate.gate, gate]));
+  assert.deepEqual(byGate.Materials.open_waiver_requests, []);
+  assert.deepEqual(byGate.Materials.entries.map((entry: { kind: string }) => entry.kind), ["waiver_request", "waiver_decision"]);
+  assert.equal(byGate.Materials.entries[1].request_id, materialsRequest!.clearance_id);
+  assert.equal(byGate.Materials.state, "waived");
+  assert.deepEqual(byGate.Access.open_waiver_requests, []);
+  const accessAttestation = byGate.Access.entries.at(-1);
+  assert.deepEqual(
+    { kind: accessAttestation.kind, attestation: accessAttestation.attestation, reason: accessAttestation.reason, evidence: accessAttestation.evidence_refs },
+    {
+      kind: "clear",
+      attestation: JSON.parse(ledgerRows(h.sqlite).find((row) => row.entry_kind === "clear")!.attestation_json),
+      reason: "Side gate code given by the property manager.",
+      evidence: [],
+    },
+  );
+  // Reversing the attestation makes the old Access request decidable again.
+  const reversed = await call(h, owner, "POST", REVERSALS("Access"), {
+    expected_gate_version: 3,
+    reverses_id: accessAttestation.id,
+    reason: "The property manager withdrew site access for the week.",
+  });
+  assert.equal(reversed.status, 200);
+  const reopened = await call(h, owner, "GET", GATES());
+  const access = reopened.body.gates.find((gate: { gate: string }) => gate.gate === "Access");
+  assert.deepEqual(access.open_waiver_requests.map((request: { request_id: string }) => request.request_id), [accessRequest!.clearance_id]);
+
+  // Office roles read it; others are refused. An agent may read gates, never move one.
+  assert.equal((await call(h, await person(h, USERS.ops.id), "GET", GATES())).status, 200);
+  assert.equal((await call(h, machine("owner"), "GET", GATES())).status, 200);
+  for (const role of ["sales", "accounting", "field"] as const) {
+    const refusedRead = await call(h, machine(role), "GET", GATES());
+    assert.deepEqual([refusedRead.status, refusedRead.body.error], [403, "office_role_required"], role);
+  }
+  const missing = await call(h, owner, "GET", GATES("job:attest:missing"));
+  assert.deepEqual([missing.status, missing.body.error], [404, "production_gate_job_not_found"]);
+});
+
+// --- D1 ---------------------------------------------------------------------------------------
+
+let entryCounter = 0;
+
+/** Append one entry with direct SQL, defaulting to production's valid Materials attestation. */
+function append(db: DatabaseSync, overrides: Record<string, unknown> = {}): string {
+  entryCounter += 1;
+  const gate = String(overrides.gate ?? "Materials");
+  const current = db.prepare("SELECT version FROM operating_production_gates WHERE gate_id = ?")
+    .get(gateId(gate)) as { version: number };
+  const row: Record<string, unknown> = {
+    clearance_id: `pgc_${(0xa0000 + entryCounter).toString(16).padStart(40, "0")}`,
+    tenant_id: TENANT,
+    gate_id: gateId(gate),
+    roof_job_id: JOB,
+    gate,
+    entry_kind: "clear",
+    basis: "person_attestation",
+    to_state: "ready",
+    from_gate_version: current.version,
+    actor_kind: "person",
+    actor_user_id: USERS.production.id,
+    actor_role: "production",
+    attestation_json: gate in SENT ? JSON.stringify(SENT[gate as AttestedGate]()) : null,
+    evidence_refs_json: "[]",
+    request_sha256: sha(`request:${entryCounter}`),
+    idempotency_key_hash: sha(`key:${entryCounter}`),
+    created_at: at(0),
+    ...overrides,
+  };
+  const columns = Object.keys(row);
+  db.prepare(
+    `INSERT INTO production_gate_clearances (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(columns.map((column) => row[column]) as never[]));
+  return String(row.clearance_id);
+}
+
+const stored = (gate: AttestedGate, changes: Record<string, unknown>) =>
+  JSON.stringify({ ...SENT[gate](), ...changes });
+const safetyStored = (competency: Competency, changes: Record<string, unknown> = {}) =>
+  JSON.stringify({ ...SENT.Safety(), competency, ...changes });
+const reversal = (gate: string, reversesId: string, changes: Record<string, unknown> = {}) => ({
+  gate,
+  entry_kind: "reverse",
+  basis: "person_reversal",
+  to_state: "blocked",
+  reverses_id: reversesId,
+  attestation_json: null,
+  evidence_refs_json: null,
+  reason: "Synthetic reversal reason for repository proof only.",
+  ...changes,
+});
+
+test("D1 admits an attestation only from an owner or production person on no crew, and only on its four gates", () => {
+  const { sqlite: db } = setup();
+  refused(() => append(db, { gate: "Deposit", attestation_json: stored("Materials", {}) }), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, { gate: "Crew", attestation_json: stored("Materials", {}) }), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, { to_state: "complete" }), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, { actor_kind: "policy" }), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, { gate: "Safety", actor_kind: "policy" }), "production_gate_safety_person_only");
+  refused(() => append(db, { self_approval: 1, self_approval_basis: "only_holder" }), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, { reverses_id: `pgc_${"0".repeat(40)}` }), "production_gate_clearance_basis_invalid");
+  refused(
+    () => append(db, { entry_kind: "waiver_request", basis: "office_waiver", to_state: "blocked", reason: "A waiver request with an attestation attached." }),
+    "production_gate_clearance_basis_invalid",
+  );
+  refused(() => append(db, { actor_user_id: USERS.ops.id, actor_role: "ops" }), "production_gate_clearance_actor_invalid");
+  refused(() => append(db, { actor_user_id: USERS.seed.id, actor_role: "owner" }), "production_gate_clearance_seed_identity_refused");
+  refused(() => append(db, { actor_user_id: USERS.crewed.id }), "production_gate_attester_on_crew");
+  // A crew login that shares a coordinate with the attester's login is the same person on a crew.
+  db.prepare("UPDATE app_users SET frappe_user_id = ? WHERE user_id = ?")
+    .run(`${USERS.production.id}@example.invalid`, USERS.field.id);
+  refused(() => append(db), "production_gate_attester_on_crew");
+  db.prepare("UPDATE fleet_crew_members SET active = 0, version = version + 1 WHERE user_id = ?").run(USERS.field.id);
+  append(db);
+  assert.equal(gateRow(db, "Materials").state, "ready");
+  assert.equal(ledgerRows(db).length, 1);
+});
+
+test("D1 holds each gate to its typed attestation with no free text but a short note", () => {
+  const { sqlite: db } = setup();
+  const invalid = "production_gate_attestation_invalid";
+  // Well formed but naming no record: a Safety case fails on its shape, not on the competency.
+  const named: Competency = {
+    readback_id: "readback.attest.none",
+    authority_record_id: "competency_attest_none",
+    authority_version: 1,
+    state_digest_sha256: sha("no record"),
+  };
+  refused(() => append(db, { gate: "Safety", attestation_json: safetyStored(named) }), "production_gate_competency_required");
+  for (const overrides of [
+    { attestation_json: null },
+    { reason: "x".repeat(301) },
+    { attestation_json: stored("Materials", { description: "Panels arrived and look fine." }) },
+    { attestation_json: stored("Materials", { source: "found_on_site" }) },
+    { attestation_json: stored("Materials", { reference: "delivered last Tuesday" }) },
+    { attestation_json: JSON.stringify({ source: "none_needed" }) },
+    { gate: "Access", attestation_json: stored("Access", { confirmed_at: at(HOUR) }) },
+    { gate: "Access", attestation_json: stored("Access", { constraints: ["pets", "pets"] }) },
+    { gate: "Access", attestation_json: stored("Access", { constraints: ["a locked gate"] }) },
+    { gate: "Access", attestation_json: stored("Access", { constraints: [] }) },
+    { gate: "Access", attestation_json: stored("Access", { confirmed_with: "neighbour" }) },
+    { gate: "Weather", attestation_json: stored("Weather", { window_start: at(DAY).replace(/\.\d{3}Z$/, "Z") }) },
+    { gate: "Weather", attestation_json: stored("Weather", { forecast_source: "The Weather Network" }) },
+    { gate: "Weather", attestation_json: stored("Weather", { forecast_observed_at: at(HOUR) }) },
+    { gate: "Safety", attestation_json: stored("Safety", {}) },
+    { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { plan_ref: "FPP-1", no_exposure_at_3m: true } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { no_exposure_at_3m: false } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { plan_ref: "a plan in the truck" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { assessed_at: "2026-02-30T10:00:00.000Z" }) },
+    { gate: "Safety", attestation_json: safetyStored({ ...named, authority_version: "1" } as never) },
+    { gate: "Safety", attestation_json: safetyStored({ ...named, issued_by: "x" } as never) },
+  ]) {
+    refused(() => append(db, overrides), invalid);
+  }
+  // Exactly 300 code points is a note; 301 is not, whatever their byte length.
+  append(db, { reason: "é".repeat(300) });
+  assert.equal(ledgerRows(db).length, 1);
+});
+
+test("D1 resolves each evidence reference against the job: a stored capture or, on Materials, a live reservation", () => {
+  const { sqlite: db } = setup();
+  const invalid = "production_gate_evidence_invalid";
+  const ownId = `evi_${"e5".repeat(16)}`;
+  const checksum = insertCapture(db, ownId);
+  const otherId = `evi_${"f6".repeat(16)}`;
+  const otherChecksum = insertCapture(db, otherId, { jobId: OTHER_JOB });
+  insertReservation(db, "reservation.attest.0003");
+  insertReservation(db, "reservation.attest.0004", { status: "released" });
+  const capture = { ref: `field-evidence://${ownId}`, sha256: checksum };
+  const reservation = { ref: "stock-reservation://reservation.attest.0003", sha256: sha("reservation"), version: 1 };
+  // Eleven distinct stored captures: each one alone is good evidence, eleven are one too many.
+  const eleven = Array.from({ length: 11 }, (_, index) => {
+    const id = `evi_${(0xe000 + index).toString(16).padStart(32, "0")}`;
+    return { ref: `field-evidence://${id}`, sha256: insertCapture(db, id) };
+  });
+  for (const [gate, refs] of [
+    ["Materials", null],
+    ["Materials", {}],
+    ["Materials", [{ ...capture, sha256: sha("forged") }]],
+    ["Materials", [{ ref: `field-evidence://${otherId}`, sha256: otherChecksum }]],
+    ["Materials", [{ ...capture, note: "extra" }]],
+    ["Materials", [capture, capture]],
+    ["Materials", eleven],
+    ["Materials", [{ ...reservation, version: 2 }]],
+    ["Materials", [{ ...reservation, ref: "stock-reservation://reservation.attest.0004" }]],
+    ["Materials", [{ ...reservation, sha256: "not-a-digest" }]],
+    ["Access", [reservation]],
+  ] as const) {
+    refused(() => append(db, { gate, evidence_refs_json: refs === null ? null : JSON.stringify(refs) }), invalid);
+  }
+  append(db, { evidence_refs_json: JSON.stringify([capture, reservation]) });
+  append(db, { gate: "Access", evidence_refs_json: JSON.stringify(eleven.slice(0, 10)) });
+  assert.deepEqual(ledgerRows(db).map((row) => row.gate), ["Access", "Materials"]);
+});
+
+test("D1 refuses Materials over an open or contained exception and Safety without a current competency or during a stop", () => {
+  const { sqlite: db } = setup();
+  insertMaterialException(db, "resolved");
+  append(db);
+  let held = db;
+  for (const status of ["open", "contained"] as const) {
+    held = setup().sqlite;
+    insertMaterialException(held, status);
+    refused(() => append(held), "production_gate_material_exception_open");
+  }
+
+  const required = "production_gate_competency_required";
+  const own = insertCompetency(db, USERS.production.id);
+  const owners = insertCompetency(db, USERS.owner.id);
+  const expired = insertCompetency(db, USERS.production.id, { authority_expires_at: day(-1) });
+  const future = insertCompetency(db, USERS.production.id, { authority_effective_from: day(2) });
+  const otherJob = insertCompetency(db, USERS.production.id, { roof_job: OTHER_JOB, scope_type: "Roof Job", scope_ref: OTHER_JOB });
+  const unverified = insertCompetency(db, USERS.production.id, { verification_state: "unavailable", authority_verification_method: null });
+  const external = insertCompetency(db, USERS.production.id, { authority_verification_method: "Signed Issuer Record" });
+  const revoked = insertCompetency(db, USERS.production.id);
+  insertCompetency(db, USERS.production.id, {
+    authority_version: 2,
+    supersedes_authority_record_id: revoked.authority_record_id,
+    verification_state: "revoked",
+    authority_revoked_at: at(-HOUR).replace(/\.\d{3}Z$/, "Z"),
+  });
+  const contradicted = insertCompetency(db, USERS.production.id);
+  insertCompetency(db, USERS.production.id, {
+    authority_record_id: contradicted.authority_record_id,
+    authority_state_digest_sha256: sha("a contradicting copy"),
+  });
+  for (const competency of [owners, expired, future, otherJob, unverified, external, revoked, contradicted]) {
+    refused(() => append(db, { gate: "Safety", attestation_json: safetyStored(competency) }), required);
+  }
+  refused(() => append(db, { gate: "Safety", attestation_json: safetyStored({ ...own, state_digest_sha256: sha("forged") }) }), required);
+  insertSafetyStop(held);
+  const stopped = insertCompetency(held, USERS.production.id);
+  refused(() => append(held, { gate: "Safety", attestation_json: safetyStored(stopped) }), "production_gate_safety_stop_active");
+  // The owner's own current record names the owner, so the owner may attest under it.
+  append(db, { gate: "Safety", actor_user_id: USERS.owner.id, actor_role: "owner", attestation_json: safetyStored(owners) });
+  assert.equal(gateRow(db, "Safety").state, "ready");
+});
+
+test("D1 refuses a weather window over 14 days, one already over, and a forecast over 72 hours old", () => {
+  const { sqlite: db } = setup();
+  for (const [changes, code] of [
+    [{ window_start: at(DAY), window_end: at(15 * DAY + HOUR) }, "production_gate_weather_window_invalid"],
+    // Longer than 14 days although it ends inside the forecast's 14 days.
+    [{ window_start: at(-3 * DAY), window_end: at(12 * DAY) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(-2 * DAY), window_end: at(-HOUR) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(2 * DAY), window_end: at(DAY) }, "production_gate_weather_window_invalid"],
+    [{ window_start: at(10 * DAY), window_end: at(14 * DAY) }, "production_gate_weather_window_invalid"],
+    [{ forecast_observed_at: at(-73 * HOUR) }, "production_gate_forecast_stale"],
+  ] as const) {
+    refused(() => append(db, { gate: "Weather", attestation_json: stored("Weather", changes) }), code);
+  }
+  append(db, { gate: "Weather", attestation_json: stored("Weather", { window_start: at(0), window_end: at(13 * DAY) }) });
+  assert.equal(gateRow(db, "Weather").state, "ready");
+});
+
+test("D1 reverses only the entry holding a gate's state, never a no-deposit contract, and never deletes", () => {
+  const { sqlite: db } = setup();
+  refused(() => append(db, reversal("Materials", `pgc_${"0".repeat(40)}`)), "production_gate_not_cleared");
+  const first = append(db);
+  refused(() => append(db, reversal("Materials", first, { reason: null })), "production_gate_clearance_reason_required");
+  refused(() => append(db, reversal("Materials", first, { evidence_refs_json: "[]" })), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, reversal("Materials", first, { attestation_json: stored("Materials", {}) })), "production_gate_clearance_basis_invalid");
+  refused(() => append(db, reversal("Materials", first, { actor_user_id: USERS.ops.id, actor_role: "ops" })), "production_gate_clearance_actor_invalid");
+  refused(() => append(db, reversal("Materials", first, { actor_user_id: USERS.seed.id, actor_role: "owner" })), "production_gate_clearance_seed_identity_refused");
+  refused(() => append(db, reversal("Materials", first, { actor_kind: "policy" })), "production_gate_clearance_basis_invalid");
+  const reversed = append(db, reversal("Materials", first));
+  assert.deepEqual({ state: gateRow(db, "Materials").state, version: gateRow(db, "Materials").version }, { state: "blocked", version: 3 });
+  const second = append(db);
+  refused(() => append(db, reversal("Materials", first)), "production_gate_reversal_target_invalid");
+  refused(() => append(db, reversal("Materials", reversed)), "production_gate_reversal_target_invalid");
+  const access = append(db, { gate: "Access" });
+  refused(() => append(db, reversal("Materials", access)), "production_gate_reversal_target_invalid");
+  // A crew member may re-block: reversal is the safe direction and the crew rule is the attester's.
+  append(db, reversal("Materials", second, { actor_user_id: USERS.crewed.id }));
+  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB, gates: ["Deposit"], state: "complete", basis: "contract_no_deposit" });
+  const contract = ledgerRows(db).find((row) => row.basis === "contract_no_deposit")!.clearance_id;
+  refused(() => append(db, reversal("Deposit", contract, { actor_user_id: USERS.owner.id, actor_role: "owner" })), "production_gate_not_reversible");
+  refused(
+    () => db.prepare("DELETE FROM production_gate_clearances WHERE clearance_id = ?").run(first),
+    "production_gate_clearance_append_only",
+  );
+  for (const id of [first, reversed, second, access]) assert.equal(auditRows(db, id).length, 1, id);
+  assert.equal(gateRow(db, "Deposit").state, "complete");
+});
+
+test("the validate trigger after every migration still holds A1's and A3's clauses", () => {
+  const { sqlite: db } = setup();
+  const body = String((db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'production_gate_clearances_validate_insert'",
+  ).get() as { sql: string }).sql);
+  for (const clause of [
+    // A1 (0153): the legacy close, the waiver matrix, settlement, decisions and the seed refusal.
+    "production_gate_clearance_legacy_closed",
+    "production_gate_not_waivable",
+    "deposit_settlement_not_observed",
+    "production_gate_waiver_request_invalid",
+    "production_gate_waiver_already_decided",
+    "production_gate_waiver_self_approval_refused",
+    "production_gate_clearance_seed_identity_refused",
+    // A3 (0158): attestation, its evidence and gate rules, and the person reversal.
+    "'person_attestation'",
+    "'person_reversal'",
+    "production_gate_safety_person_only",
+    "production_gate_attester_on_crew",
+    "production_gate_attestation_invalid",
+    "production_gate_evidence_invalid",
+    "production_gate_material_exception_open",
+    "production_gate_safety_stop_active",
+    "production_gate_competency_required",
+    "production_gate_forecast_stale",
+    "production_gate_weather_window_invalid",
+    "production_gate_reversal_target_invalid",
+    "production_gate_not_reversible",
+  ]) {
+    assert.ok(body.includes(clause), `the final validate trigger keeps ${clause}`);
+  }
+  // A replayed key still reports itself before validation: the replace guard is the newest trigger.
+  assert.deepEqual(
+    db.prepare(
+      `SELECT name FROM sqlite_master
+        WHERE type = 'trigger' AND tbl_name = 'production_gate_clearances' AND sql LIKE '%BEFORE INSERT%'
+        ORDER BY rowid DESC LIMIT 1`,
+    ).all().map((row) => (row as { name: string }).name),
+    ["production_gate_clearances_no_insert_replace"],
+  );
+});
+
+test("`production.gates.safety` is carried by exactly the roles D1 admits to attest Safety", () => {
+  const holders = (Object.keys(ROLE_PERMISSIONS) as AppRole[])
+    .filter((role) => ROLE_PERMISSIONS[role].includes(PRODUCTION_GATE_SAFETY_PERMISSION));
+  assert.deepEqual(holders, ["owner", "production"]);
+  const { sqlite: db } = setup();
+  for (const access of ["owner", "ops", "sales", "admin", "production", "shop", "accounting"]) {
+    const userId = `appu_role_${access}_safety`;
+    db.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+          active, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, 'Synthetic role', ?, ?, NULL, 1, 'owner@example.invalid', ?, ?)`,
+    ).run(userId, TENANT, `${userId}@example.invalid`, access === "owner" ? "owner" : "ops", access, at(-DAY), at(-DAY));
+    const competency = insertCompetency(db, userId);
+    const attempt = () => append(db, { gate: "Safety", actor_user_id: userId, actor_role: access, attestation_json: safetyStored(competency), idempotency_key_hash: sha(`role:${access}`) });
+    if (holders.includes(access as AppRole)) {
+      attempt();
+      const latest = ledgerRows(db).at(-1)!;
+      append(db, reversal("Safety", latest.clearance_id, { actor_user_id: USERS.owner.id, actor_role: "owner" }));
+    } else {
+      refused(attempt, "production_gate_clearance_actor_invalid");
+    }
+  }
+});
+
+// --- Parsing ----------------------------------------------------------------------------------
+
+test("an attestation body has exactly its keys, and times, notes and constraints are canonical", () => {
+  const now = new Date();
+  const parsed = parseProductionGateAttestation("Access", {
+    basis: "person_attestation",
+    expected_gate_version: 3,
+    attestation: {
+      confirmed_with: "customer",
+      confirmed_at: "2026-01-02T03:04:05Z",
+      constraints: ["storage", "delivery"],
+      notes: "  🚧 gate code with the neighbour  ",
+    },
+    evidence_refs: ["stock-reservation://reservation.attest.0009", `field-evidence://evi_${"0".repeat(32)}`],
+  }, now);
+  assert.deepEqual(parsed, {
+    gate: "Access",
+    expectedGateVersion: 3,
+    attestation: { confirmed_with: "customer", confirmed_at: "2026-01-02T03:04:05.000Z", constraints: ["delivery", "storage"] },
+    note: "🚧 gate code with the neighbour",
+    evidenceRefs: [`field-evidence://evi_${"0".repeat(32)}`, "stock-reservation://reservation.attest.0009"],
+  });
+  // A note is counted in code points: 300 four-byte characters fit, 301 do not.
+  const noted = (notes: string) => parseProductionGateAttestation("Materials", {
+    basis: "person_attestation",
+    expected_gate_version: 1,
+    attestation: { source: "none_needed", reference: "Q-1042", notes },
+  }, now);
+  assert.equal(noted("🚧".repeat(300))?.note, "🚧".repeat(300));
+  assert.equal(noted("🚧".repeat(301)), null);
+  assert.equal(noted("carriage\rreturn"), null);
+  assert.equal(noted("   ")?.note, null);
+  assert.equal(parseEvidenceRefs(["field-evidence://evi_short"]), null);
+  assert.deepEqual(parseEvidenceRefs(undefined), []);
+  const reversalBody = { expected_gate_version: 2, reverses_id: `pgc_${"a".repeat(40)}`, reason: "Supplier recalled the panels." };
+  assert.deepEqual(parseProductionGateReversal(reversalBody), {
+    expectedGateVersion: 2,
+    reversesId: reversalBody.reverses_id,
+    reason: reversalBody.reason,
+  });
+  assert.equal(parseProductionGateReversal({ ...reversalBody, expected_gate_version: 0 }), null);
+});
+
+test("the weather rule answers stale forecasts before windows, at its exact bounds", () => {
+  const now = new Date("2026-10-20T12:00:00.000Z");
+  const shifted = (hours: number) => new Date(now.getTime() + hours * HOUR).toISOString();
+  const weather = (changes: Partial<WeatherAttestation>): WeatherAttestation => ({
+    window_start: shifted(0),
+    window_end: shifted(14 * 24),
+    forecast_source: "weather.gc.ca",
+    forecast_observed_at: shifted(0),
+    ...changes,
+  });
+  assert.equal(weatherRefusal(weather({}), now), null, "exactly 14 days on a fresh forecast");
+  assert.equal(weatherRefusal(weather({ window_end: shifted(14 * 24 + 1) }), now), "production_gate_weather_window_invalid");
+  assert.equal(weatherRefusal(weather({ forecast_observed_at: shifted(-72) }), now), "production_gate_weather_window_invalid", "ends past the forecast's 14 days");
+  assert.equal(weatherRefusal(weather({ forecast_observed_at: shifted(-72), window_end: shifted(10 * 24) }), now), null);
+  assert.equal(weatherRefusal(weather({ forecast_observed_at: shifted(-73), window_end: shifted(24) }), now), "production_gate_forecast_stale");
+});

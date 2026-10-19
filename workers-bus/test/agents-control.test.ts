@@ -1675,6 +1675,22 @@ async function qualify(s: ReturnType<typeof setup>, row: Record<string, unknown>
   assert.equal(recorded.status, 200, JSON.stringify(recorded.body));
   return recorded.body.qualification_id;
 }
+/** A passed row of another tenant for lead_concierge on the QUALIFIED route, written straight to D1. */
+function otherTenantQualification(s: ReturnType<typeof setup>): string {
+  s.db.raw
+    .prepare(
+      `INSERT OR IGNORE INTO app_users (user_id,tenant_id,email_normalized,display_name,role,access_role,frappe_user_id,active,created_by,created_at,updated_at)
+      VALUES ('appu_other_owner', 'othertenant', 'other-owner@example.invalid', 'other', 'owner', 'owner', 'other-owner@example.invalid', 1, 'seed', ?, ?)`,
+    )
+    .run(s.now(), s.now());
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_qualifications (qualification_id,tenant_id,specialist_id,provider,model,effort,release_sha256,passed,report_sha256,recorded_by_user_id,recorded_at,idempotency_key)
+      VALUES ('qal_other_tenant', 'othertenant', 'lead_concierge', 'codex', 'gpt-6.1-sol', 'medium', ?, 1, ?, 'appu_other_owner', ?, 'other-tenant-row')`,
+    )
+    .run(QUALIFIED.release_sha256, "a".repeat(64), s.now());
+  return "qal_other_tenant";
+}
 /** The reason code of the receipt a run's close left, or null when it left none. */
 const closeReason = (s: ReturnType<typeof setup>, runId: string): string | null =>
   s.scalar("SELECT reason_code r FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'", runId)?.r ?? null;
@@ -1691,10 +1707,11 @@ test("a run's open sends the specialist's current qualifications, the latest row
   await qualify(s, { provider: "claude", model: "claude-opus-5-5", effort: "high" }, "hint-opus-1");
   const opus = await qualify(s, { provider: "claude", model: "claude-opus-5-5", effort: "high", report_sha256: "d".repeat(64) }, "hint-opus-2");
   await qualify(s, { specialist_id: "estimator" }, "hint-other-specialist");
+  otherTenantQualification(s);
   const run = (await s.run()) as Record<string, any>;
   assert.equal(run.close_model, 3);
   // Newest first: a key failed last is left out, a key passed after a failure is in, a key passed
-  // twice sends its newest row, and another specialist's rows are not this run's.
+  // twice sends its newest row, and another specialist's or tenant's rows are not this run's.
   assert.deepEqual(run.qualifications, [
     { qualification_id: opus, provider: "claude", model: "claude-opus-5-5", effort: "high", release_sha256: "e".repeat(64) },
     { qualification_id: release, provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: "f".repeat(64) },
@@ -1808,8 +1825,10 @@ test("a live or shadow close keeps its output only on a qualification the Worker
     ["a shadow run with no reference", { qualification_ref: null, mode: "shadow", run_class: "shadow" }],
   ] as const)
     assert.deepEqual(await closeWith({ qualification_ref: ref, ...model }), refused, label);
-  // Another specialist's row for the same route and release is not this specialist's.
+  // Another specialist's row for the same route and release is not this specialist's, and another
+  // tenant's row is not this tenant's.
   assert.deepEqual(await closeWith({ qualification_ref: await qualify(s, { specialist_id: "estimator" }, "ref-estimator") }), refused);
+  assert.deepEqual(await closeWith({ qualification_ref: otherTenantQualification(s) }), refused);
   // A failure at another effort of the same route and release is another key, so the reference holds.
   await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "ref-high-fail");
   assert.deepEqual(await closeWith({ qualification_ref: ref }), kept);

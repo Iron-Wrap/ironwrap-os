@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { mintToken, seedOwnerSql } from "../../tools/qa-seed-owner.mjs";
-import { PROVIDER, runJourney } from "../../tools/seed-qa-journey.mjs";
+import { PROVIDER, SEED_CREW, runJourney } from "../../tools/seed-qa-journey.mjs";
 import worker from "../src/index.ts";
 import { SqliteD1, type SqliteStatement, env as baseEnv } from "./company-setup-fixture.ts";
 import { MemoryR2 } from "./onboarding-fixture.ts";
@@ -130,9 +130,13 @@ test("the seed publishes one synthetic offer through the governed routes, and a 
         ["publication", true],
         ["portal_link", true],
         ["accounting_tester", true],
+        ["crew_member_users", true],
+        ["crew", true],
+        ["crew_members", true],
       ],
     );
-    assert.equal(first.created, 7);
+    assert.equal(first.created, 10);
+    assert.deepEqual(first.crew, { crew_id: SEED_CREW.crew_id, status: "Active", active_members: 2 });
     // Nothing secret leaves the run: the summary names ids and counts only.
     assert.doesNotMatch(JSON.stringify(first), /portal#token|__Host-|csrf/);
     const link = JSON.parse(readFileSync(join(out, "portal-link.json"), "utf8"));
@@ -142,6 +146,12 @@ test("the seed publishes one synthetic offer through the governed routes, and a 
     assert.equal(h.count(`SELECT count(*) AS n FROM external_effects WHERE provider = '${PROVIDER}' AND state = 'succeeded'`), 1);
     assert.equal(h.count("SELECT count(*) AS n FROM commercial_proposal_publication_events WHERE state = 'published'"), 1);
     assert.equal(h.count("SELECT count(*) AS n FROM app_users WHERE email_normalized = 'accounting-tester@example.invalid' AND access_role = 'accounting'"), 1);
+    // The crew went through the roster route: two synthetic field users on one active crew, each
+    // write with its audit event.
+    assert.equal(h.count("SELECT count(*) AS n FROM app_users WHERE email_normalized LIKE 'qa-crew-%@example.invalid' AND access_role = 'field' AND active = 1"), 2);
+    assert.equal(h.count(`SELECT count(*) AS n FROM fleet_crews WHERE crew_id = '${SEED_CREW.crew_id}' AND status = 'Active'`), 1);
+    assert.equal(h.count(`SELECT count(*) AS n FROM fleet_crew_members WHERE crew_id = '${SEED_CREW.crew_id}' AND active = 1`), 2);
+    assert.equal(h.count("SELECT count(*) AS n FROM audit_log WHERE automation = 'crew_roster'"), 3);
     // The seed owner signed out: no live session is left behind.
     assert.equal(h.count("SELECT count(*) AS n FROM app_sessions WHERE revoked_at IS NULL"), 0);
 
@@ -151,7 +161,14 @@ test("the seed publishes one synthetic offer through the governed routes, and a 
     assert.equal(second.roof_job_id, first.roof_job_id);
     assert.equal(h.count("SELECT count(*) AS n FROM commercial_proposal_publication_events"), 1);
     assert.equal(h.count("SELECT count(*) AS n FROM commercial_quote_revisions"), 1);
-    assert.ok(h.calls.every((call) => !/acceptance|approve|quickbooks|field-evidence|evidence-uploads/.test(call)));
+    assert.equal(h.count("SELECT count(*) AS n FROM fleet_crew_members"), 2);
+    assert.equal(h.count("SELECT count(*) AS n FROM audit_log WHERE automation = 'crew_roster'"), 3);
+    assert.ok(h.calls.every((call) => !/acceptance|approve|quickbooks|field-evidence|evidence-uploads|schedule|clearance/.test(call)));
+
+    // A crew someone has since changed is refused, never overwritten.
+    h.db.raw.exec(`UPDATE fleet_crews SET status = 'Inactive', version = version + 1 WHERE crew_id = '${SEED_CREW.crew_id}'`);
+    await assert.rejects(run(h, out), { code: "crew_changed" });
+    assert.equal(h.count(`SELECT count(*) AS n FROM fleet_crews WHERE crew_id = '${SEED_CREW.crew_id}' AND status = 'Inactive'`), 1);
   } finally {
     globalThis.fetch = outbound;
   }

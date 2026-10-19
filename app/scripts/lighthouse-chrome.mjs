@@ -17,9 +17,10 @@ import { fileURLToPath } from "node:url";
  * every build at an exact version, so the measuring browser no longer depends on the Playwright
  * the e2e suites run.
  *
- * 149.0.7827.55 is the build Playwright 1.61.1 installs as `chromium-1228` (Playwright mirrors
- * Chrome for Testing), so the readings carry over unchanged. It is `chrome` rather than
- * `chrome-headless-shell` for the same reason: the harness has always launched the full browser
+ * The first pin, 149.0.7827.55, was the build Playwright 1.61.1 installs as `chromium-1228`
+ * (Playwright mirrors Chrome for Testing), so the readings carried over unchanged; the pin now
+ * follows current stable Chrome only when the bundle holds the budget on it. It is `chrome`
+ * rather than `chrome-headless-shell` because the harness has always launched the full browser
  * in its new headless mode, and the shell is a separate headless implementation that would
  * move the reading on its own.
  *

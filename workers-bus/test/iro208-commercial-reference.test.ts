@@ -1757,7 +1757,23 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(unknown.status, 409);
     assert.deepEqual(await unknown.json(), { error: "commercial_publication_effect_mismatch" });
-    const refusedPermit = await preparePublication(h, ids, "iro208-publication-prepare-refused-0001");
+    // The unknown settlement above named an effect that never ran, so its permit is still live and
+    // unused; a second live permit for the same version is refused, so the refused send uses it.
+    const secondLivePermit = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-second-live-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(secondLivePermit.status, 409);
+    assert.equal(
+      (await secondLivePermit.json() as { error: string }).error,
+      "proposal_publication_permit_outstanding",
+    );
+    const refusedPermit = unknownPermit;
     await runPublicationEffect(h, refusedPermit, ids, "effect:iro208:refused", "refused");
     const refused = await handleAuthenticatedRoute(
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: refusedPermit.permit_id, external_effect_id: "effect:iro208:refused" }, "iro208-publication-refused-0001"), h.env, auth("ops"),

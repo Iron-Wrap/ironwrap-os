@@ -1,13 +1,18 @@
 -- 0156_proposal_delivery_confirmations.sql - a person records what they found when a proposal
 -- send could not be confirmed delivered.
 --
--- A proposal is not sent again until its last send is confirmed delivered. A send whose provider
--- readback conflicted ends in the effect runtime's terminal `manual_exception`, which nothing could
--- leave, so the proposal stayed blocked for good. A person (owner, operations or sales: the
--- commercial set) now records "delivered" or "not delivered" with a short note. That one
--- append-only row is the receipt; it moves the effect to `succeeded` or `reconciled` (not executed),
--- resolves the effect's open exception, and writes one audit_log row, all in the insert's own
--- statement. Agents never write here: the route takes a person's own session.
+-- A proposal is not sent again until its last send is confirmed delivered. D1 holds that rule
+-- itself: `external_effects_proposal_publish_single_flight` refuses a new proposal.publish effect
+-- for a revision and version while an earlier send is still unconfirmed (pending, claimed, unknown,
+-- compensating, a manual exception, or succeeded but not yet recorded as the publication). A send
+-- that never started and whose deadline has passed sent nothing, so it does not block.
+--
+-- A send whose outcome is unknown, or whose provider readback conflicted (the effect runtime's
+-- terminal `manual_exception`), is settled by a person (owner, operations or sales: the commercial
+-- set) recording "delivered" or "not delivered" with a short note. That one append-only row is the
+-- receipt; it moves the effect to `succeeded` or `reconciled` (not executed), resolves the effect's
+-- open exception, and writes one audit_log row, all in the insert's own statement. Agents never
+-- write here: the route takes a person's own session.
 --
 -- `external_effect_binding_guard` (0042) is re-created under its name with exactly one change: a
 -- `manual_exception` effect may move to `succeeded` or `reconciled` only when a matching
@@ -52,7 +57,7 @@ BEFORE INSERT ON proposal_delivery_confirmations BEGIN
       SELECT 1 FROM external_effects effect
        WHERE effect.effect_id = NEW.effect_id
          AND effect.tenant_id = NEW.tenant_id
-         AND effect.state = 'manual_exception'
+         AND effect.state IN ('manual_exception', 'unknown')
          AND effect.action = 'proposal.publish'
          AND effect.aggregate_type = 'proposal_publication'
          AND effect.aggregate_id = NEW.proposal_pack_id
@@ -78,7 +83,8 @@ AFTER INSERT ON proposal_delivery_confirmations BEGIN
            ELSE 'reconciled_not_executed'
          END,
          updated_at = NEW.created_at
-   WHERE effect_id = NEW.effect_id AND tenant_id = NEW.tenant_id AND state = 'manual_exception';
+   WHERE effect_id = NEW.effect_id AND tenant_id = NEW.tenant_id
+     AND state IN ('manual_exception', 'unknown');
   SELECT RAISE(ABORT, 'proposal_delivery_confirmation_apply_failed')
     WHERE NOT EXISTS (
       SELECT 1 FROM external_effects effect
@@ -115,6 +121,104 @@ CREATE TRIGGER IF NOT EXISTS proposal_delivery_confirmations_append_only_delete
 BEFORE DELETE ON proposal_delivery_confirmations BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_confirmations_append_only');
 END;
+
+CREATE TRIGGER IF NOT EXISTS external_effects_proposal_publish_single_flight
+BEFORE INSERT ON external_effects
+WHEN NEW.action = 'proposal.publish' AND NEW.aggregate_type = 'proposal_publication'
+  AND NEW.compensates_effect_id IS NULL BEGIN
+  SELECT RAISE(ABORT, 'proposal_delivery_unconfirmed')
+    WHERE EXISTS (
+      SELECT 1 FROM external_effects prior
+       WHERE prior.tenant_id = NEW.tenant_id
+         AND prior.action = 'proposal.publish'
+         AND prior.aggregate_type = 'proposal_publication'
+         AND prior.aggregate_id = NEW.aggregate_id
+         AND prior.aggregate_version = NEW.aggregate_version
+         AND prior.intent_id = NEW.intent_id
+         AND (
+           (prior.state IN ('executing', 'reconciling', 'unknown', 'compensating', 'manual_exception'))
+           OR (prior.state IN ('proposed', 'authorized', 'retry')
+               AND julianday(prior.deadline_at) > julianday(NEW.created_at))
+           OR (prior.state = 'succeeded' AND NOT EXISTS (
+                 SELECT 1 FROM commercial_proposal_publication_events publication
+                  WHERE publication.tenant_id = prior.tenant_id
+                    AND publication.external_effect_id = prior.effect_id))
+         )
+    );
+END;
+
+-- `commercial_publication_authority_guard` (0093) is re-created under its name with one change:
+-- recording a succeeded publish effect checks the permit as of the effect's creation instead of as
+-- of the record, so a send that ran inside its permit can be recorded after the permit expires.
+DROP TRIGGER IF EXISTS commercial_publication_authority_guard;
+CREATE TRIGGER IF NOT EXISTS commercial_publication_authority_guard
+BEFORE INSERT ON commercial_proposal_publication_events
+BEGIN
+  SELECT RAISE(ABORT, 'commercial_publication_proposal_mismatch') WHERE NOT EXISTS (
+    SELECT 1 FROM commercial_proposal_revisions proposal
+     WHERE proposal.proposal_revision_id = NEW.proposal_revision_id
+       AND proposal.tenant_id = NEW.tenant_id
+       AND proposal.proposal_pack_id = NEW.proposal_pack_id
+  );
+  SELECT RAISE(ABORT, 'commercial_publication_authority_mismatch')
+   WHERE NEW.policy_permit_id IS NOT NULL AND NOT EXISTS (
+     SELECT 1
+       FROM commercial_authority_permits permit
+       JOIN external_effects effect ON effect.effect_id = NEW.external_effect_id
+      WHERE permit.permit_id = NEW.policy_permit_id
+        AND permit.tenant_id = NEW.tenant_id
+        AND permit.action = CASE NEW.state
+          WHEN 'published' THEN 'proposal.publish' ELSE 'proposal.withdraw' END
+        AND permit.aggregate_type = 'proposal_publication'
+        AND permit.aggregate_id = NEW.proposal_pack_id
+        AND permit.aggregate_version = NEW.publication_version
+        AND permit.command_fingerprint = NEW.command_fingerprint
+        AND permit.evidence_digest = NEW.evidence_digest
+        -- Readback (0156): the effect already ran under this permit, so the permit is checked as of
+        -- the effect's creation, when the send was authorized, not as of the record.
+        AND permit.issued_at <= effect.created_at
+        AND permit.expires_at > effect.created_at
+        AND permit.issued_at <= NEW.occurred_at
+        AND effect.tenant_id = NEW.tenant_id
+        AND effect.state = 'succeeded'
+        AND effect.intent_id = NEW.proposal_revision_id
+        AND effect.authority_ref = permit.permit_id
+        AND effect.policy_ref = permit.policy_id
+        AND effect.policy_version = permit.policy_version
+        AND effect.actor_type = permit.actor_type
+        AND effect.actor_id = permit.actor_id
+        AND effect.aggregate_type = 'proposal_publication'
+        AND effect.aggregate_id = NEW.proposal_pack_id
+        AND effect.aggregate_version = NEW.publication_version
+        AND effect.action = permit.action
+   );
+  SELECT RAISE(ABORT, 'commercial_publication_approval_mismatch')
+   WHERE NEW.proposal_publication_approval_id IS NOT NULL AND NOT EXISTS (
+     SELECT 1
+       FROM proposal_publication_approval_requests approval
+       JOIN commercial_proposal_revisions proposal
+         ON proposal.proposal_revision_id = NEW.proposal_revision_id
+        AND proposal.tenant_id = NEW.tenant_id
+       JOIN commercial_quote_revisions quote
+         ON quote.quote_revision_id = proposal.quote_revision_id
+        AND quote.tenant_id = NEW.tenant_id
+      WHERE NEW.state = 'published'
+        AND approval.proposal_publication_approval_id = NEW.proposal_publication_approval_id
+        AND approval.tenant_id = NEW.tenant_id
+        AND approval.proposal_evidence_pack_id = NEW.proposal_pack_id
+        AND approval.customer_quote_id = quote.customer_quote_id
+        AND approval.roof_job_id = proposal.roof_job_id
+        AND approval.args_digest = NEW.evidence_digest
+        AND approval.approved_by_user_id IS NOT NULL
+        AND (
+          approval.state = 'executed'
+          OR (approval.state = 'execution_uncertain'
+            AND approval.reconciliation_outcome = 'executed'
+            AND length(approval.reconciliation_evidence) >= 3)
+        )
+   );
+END;
+
 
 DROP TRIGGER IF EXISTS external_effect_binding_guard;
 CREATE TRIGGER external_effect_binding_guard

@@ -2427,11 +2427,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // three named indexes and six guards.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
-    // one named index and four guards, and re-creates the external effect binding guard under its
+    // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
     // name.
     assert.deepEqual(
       { ...counts },
-      { tables: 275, indexes: 377, triggers: 748 },
+      { tables: 275, indexes: 377, triggers: 749 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

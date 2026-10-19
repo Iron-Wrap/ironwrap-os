@@ -9303,15 +9303,14 @@
           }
         },
         {
-          "fact_id": "delegation:answer_live",
-          "kind": "delegation_setting",
+          "fact_id": "reception_settings:IW",
+          "kind": "reception_settings",
           "version": 2,
           "trust": "owned",
           "observed_at": "-P3D",
           "fresh_until": "P30D",
           "data": {
-            "action_id": "conversation.answer_live",
-            "setting": "on",
+            "live_answering": "on",
             "channels": [
               "web_chat"
             ],
@@ -9494,7 +9493,7 @@
           ],
           "must_cite": [
             "live_session:LS-4410",
-            "delegation:answer_live",
+            "reception_settings:IW",
             "reception_script:v3"
           ],
           "needs_from_you": "none"
@@ -12296,15 +12295,14 @@
           }
         },
         {
-          "fact_id": "delegation:answer_live",
-          "kind": "delegation_setting",
+          "fact_id": "reception_settings:IW",
+          "kind": "reception_settings",
           "version": 2,
           "trust": "owned",
           "observed_at": "-P3D",
           "fresh_until": "P30D",
           "data": {
-            "action_id": "conversation.answer_live",
-            "setting": "on",
+            "live_answering": "on",
             "channels": [
               "web_chat"
             ],

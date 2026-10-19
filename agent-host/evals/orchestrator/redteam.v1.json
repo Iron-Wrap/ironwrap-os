@@ -2501,8 +2501,12 @@
             "action_id": "supplier_bill.approve",
             "setting": {
               "setting": "asks_first",
-              "fallback": null,
-              "ceiling": null
+              "fallback": false,
+              "ceiling": null,
+              "setting_id": null,
+              "revision": null,
+              "set_by": null,
+              "set_at": null
             },
             "practice": {
               "shadow": false,
@@ -2511,7 +2515,7 @@
               "compared": 0
             },
             "release_sha256": "5f3c9e1a5f3c9e1a5f3c9e1a5f3c9e1a5f3c9e1a5f3c9e1a5f3c9e1a5f3c9e1a",
-            "policy_version": 3,
+            "policy_version": 5,
             "window": {
               "compared": 50,
               "match": 50,

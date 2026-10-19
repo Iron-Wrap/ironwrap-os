@@ -40,6 +40,7 @@ Facts arrive in the ContextSnapshot; there are no read tools.
 | `customer`, `job`, `inbound_match`, prior `lead` | exact-key matches and prior relationship | current version |
 | `consent`, `dnc_entry`, `followup_plan`, `communication_attempt` | channel consent and expiry, withdrawals, what was drafted, sent, replied | current at the run |
 | `tenant_policy`, `clock` | brand channels, service areas, contact window, response target, approved wording; local time | current version; this run |
+| `reception_settings` | live answering on or off, and the channels and hours the owner enabled | current version |
 | `season`, `storm_event`, `capacity_summary`, `staff_availability` (slots and on-call) | market, capacity, visits, on-call | storm PT6H, capacity P1D, availability PT1H |
 | `lead_proposal`, `lead_fact_set` | your recorded triage proposal for a lead (service, scope, address, timing, each with the envelope it came from) and the lead facts confirmed so far | current version |
 

@@ -229,7 +229,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   context snapshot and tool manifest, and decides every proposed step by deterministic policy: an
   unregistered action or argument, a missing, unknown or stale citation, or a ceiling abstains,
   and people-only actions are refused. The owner sets delegation, pauses a specialist or clears an
-  auditor hold from a fresh app session; a reviewer decides a waiting step's exact version. An
+  auditor hold from a fresh app session, one signed in within the last five minutes; a second
+  factor and step-up evidence on the setting record are not built yet. A reviewer decides a
+  waiting step's exact version. An
   approval reads the step's cited facts again, so a fact that changed since the proposal abstains
   the step, and its transaction refuses a delegation setting that changed after it was read. The
   protective exception and hold bindings execute against owned records with readback, and so does
@@ -237,7 +239,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   the decision's own transaction, with an owned-store readback on its receipt. Every other
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
-  step to the reviewer to do by hand. Every signal carries the actor the Worker writes: no inbound
+  step to the reviewer to do by hand, and `lead_fact.propose` has no registered arguments yet, so
+  its steps abstain. The app has no import screen, so the Retry a person would use for an import
+  run's failed items is not built yet. A prepared access change (`access.prepare_change`) still
+  closes as finished work under Done for you; its place in the owner's Needs you is not built yet.
+  Every signal carries the actor the Worker writes: no inbound
   channel feeds the team yet, so the Worker writes only owner, staff and worker actors for a
   person's ask or request, and `null` for watch firings and handoffs.
   Shared memory gives a run's snapshot the signal's subject and the objects it
@@ -248,14 +254,22 @@ Current source tracing distinguishes implemented modules from reachable producti
   conversation object yet, so those cannot be cited. Shadow mode (`0203`) records a shadowed action's
   proposals with no effect and counts agreement with people's decisions; no shadow comparator is
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
-  within-limits action to asks first. An audit from the reviewed run's own model family is not
+  within-limits action to asks first. A within-limits setting also reads as asks first after a
+  step under it ends `unknown`, with a readback mismatch or done by a person, after a catalog or
+  step-policy change, and after a later hold. The undo and release-qualification fallbacks are not
+  built yet, and practice runs do not stop yet under a fallback or a hold. Within-limits steps
+  carry their setting's id, but the auditor's check of them (every step until 20 clean ones, then
+  one in ten) is not built yet. An audit from the reviewed run's own model family is not
   accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
-  v3 close keeps its output only on one of them; a synthetic run closes only on a Worker whose
+  v3 close keeps its output only on one of them; a close on an older close model is accepted and
+  is not held to a qualification. A synthetic run closes only on a Worker whose
   `AGENT_DATA_CLASS` is synthetic. Five cadence watches fire from the cron with deterministic conditions (`0204`),
   including the four owner reports; the other watches and every event-triggered watch do not fire yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
   takes signals in the order the Worker feeds them: the contract's queue priority is not
-  implemented yet. No live provider call, deployment or reference run has happened.
+  implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,
+  `bedrock`, `vertex`) and the `cloud_identity` credential mode are not built yet. No live provider
+  call, deployment or reference run has happened.
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.

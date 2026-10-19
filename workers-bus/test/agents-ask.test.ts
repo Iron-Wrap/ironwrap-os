@@ -767,6 +767,15 @@ test("the agent host's own runner merges the view schema on an ask run and the a
     join(specialists, "orchestrator", "allowlist.json"),
     JSON.stringify({ schema_version: "ironwrap.specialist-allowlist.v1", specialist_id: "orchestrator", catalog_sha256: "0".repeat(64), actions: [{ action_id: "fact.explain", autonomy: "A0", purpose: "Explain" }] }),
   );
+  // The owner's qualification of the face on the route below, at the release the host computes.
+  const { specialistRelease } = await import("../../agent-host/src/host/release.ts");
+  const release = specialistRelease(specialists, "orchestrator", "0".repeat(64)).release_sha256;
+  t.db.raw
+    .prepare(
+      `INSERT INTO agent_qualifications (qualification_id,tenant_id,specialist_id,provider,model,effort,release_sha256,passed,report_sha256,recorded_by_user_id,recorded_at,idempotency_key)
+      VALUES ('qal_face_e2e', ?, 'orchestrator', 'codex', 'gpt-6.1-sol', 'medium', ?, 1, ?, 'appu_owner_0001', ?, 'qualify-face-e2e')`,
+    )
+    .run(TENANT, release, hex("face-report"), AT);
   const client = new WorkerClient({
     baseUrl: "https://bus.example.invalid",
     token: TOKEN,
@@ -788,12 +797,23 @@ test("the agent host's own runner merges the view schema on an ask run and the a
             output: { ...OUTPUT, view: viewSpec(data.run_id, [{ fact_id: quote.fact_id, version: quote.version, hash: quote.hash }]) },
             specialist: r.specialist,
             tier: r.tier,
+            // The v3 route fields of the shipped codex_sol route, on the Worker's qualification for it.
             routeId: "codex_sol",
             reviewOf: null,
             provider: "codex",
             model: "gpt-6.1-sol",
             modelsUsed: [],
-            authMode: "chatgpt",
+            authMode: "oauth",
+            family: "openai",
+            adapter: "codex",
+            billing: "subscription",
+            route: "primary",
+            qualificationRef: r.qualifications?.find((row) => row.provider === "codex" && row.model === "gpt-6.1-sol" && row.effort === "medium" && row.release === r.release)?.id ?? null,
+            failover: [],
+            runClass: "live",
+            complianceRef: "ai.openai.chatgpt-commercial",
+            riskAcceptance: null,
+            gatewayConfigSha256: "9".repeat(64),
             attempts: 1,
             usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1 },
             costUsd: 0,

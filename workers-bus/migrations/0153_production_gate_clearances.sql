@@ -10,7 +10,8 @@
 --     `production.gates.clear` (owner or production), and only while a reconciled deposit invoice
 --     of the same job is named in the evidence.
 --   * `waiver_request` / `office_waiver`: Deposit, Materials or Access, by a
---     `production.gates.clear` holder, with a reason. The gate stays `blocked`.
+--     `production.gates.clear` holder, with a reason, at most one open request per gate per person.
+--     The gate stays `blocked`.
 --   * `waiver_decision` / `office_waiver`: by a holder of the matching set, `money.approve` for
 --     Deposit and `production.gates.waive` for Materials and Access; today the owner carries both.
 --     An approval waives the gate and a decline leaves it blocked. The decider is never the
@@ -259,7 +260,15 @@ BEGIN
     OR NEW.actor_user_id IS NULL
     OR NEW.reverses_id IS NOT NULL
     OR NEW.reason_redacted_at IS NOT NULL
-    OR (NEW.self_approval = 1 AND NEW.actor_user_id IS NOT NEW.requested_by);
+    OR (NEW.self_approval = 1 AND NEW.actor_user_id IS NOT NEW.requested_by)
+    -- No entry admitted here carries attestation or contract facts, and a waiver carries no
+    -- structured evidence either; attestation entries widen this when they arrive.
+    OR NEW.attestation_json IS NOT NULL
+    OR NEW.policy_version IS NOT NULL
+    OR NEW.terms_hash IS NOT NULL
+    OR NEW.contract_binding_id IS NOT NULL
+    OR (NEW.entry_kind IN ('waiver_request', 'waiver_decision')
+        AND NEW.evidence_refs_json IS NOT NULL);
 
   -- Each admitted entry acts on a blocked gate.
   SELECT RAISE(ABORT, 'production_gate_already_cleared')
@@ -301,6 +310,25 @@ BEGIN
   SELECT RAISE(ABORT, 'production_gate_clearance_reason_required')
   WHERE NEW.entry_kind IN ('waiver_request', 'waiver_decision')
     AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0);
+
+  -- One open waiver request per gate per person: a second would only move the gate's version
+  -- under the owner deciding the first.
+  SELECT RAISE(ABORT, 'production_gate_waiver_request_open')
+  WHERE NEW.entry_kind = 'waiver_request'
+    AND EXISTS (
+      SELECT 1
+        FROM production_gate_clearances request
+       WHERE request.tenant_id = NEW.tenant_id
+         AND request.gate_id = NEW.gate_id
+         AND request.entry_kind = 'waiver_request'
+         AND request.actor_user_id = NEW.actor_user_id
+         AND NOT EXISTS (
+           SELECT 1
+             FROM production_gate_clearances decision
+            WHERE decision.tenant_id = request.tenant_id
+              AND decision.request_id = request.clearance_id
+         )
+    );
 
   -- A settlement is made of a reconciled deposit invoice of this job, named in the evidence.
   SELECT RAISE(ABORT, 'deposit_settlement_not_observed')

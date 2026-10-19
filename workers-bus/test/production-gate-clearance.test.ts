@@ -601,6 +601,83 @@ test("once the other owner leaves, the requester is the only holder and may appr
   assert.equal(gate(h, "Materials").state, "waived");
 });
 
+test("a waiver decision reads the caller's own runway first, like a clearance", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  await post(h, production, CLEARANCE_PATH("Materials"), WAIVER);
+  const [request] = entries(h, "Materials");
+  const owner = await person(h, USERS.owner.id);
+  const body = {
+    request_id: request!.clearance_id,
+    expected_gate_version: 2,
+    decision: "approve",
+    reason: "Owner approves: the shop holds every panel for this job.",
+  };
+  const elsewhere = await post(h, owner, DECISION_PATH("Materials", "job:not-on-runway"), body, {
+    idempotency: "gate-waiver-decision-runway-0001",
+  });
+  assert.deepEqual([elsewhere.status, elsewhere.body.error], [409, "production_gate_job_not_on_runway"]);
+  // A completed job leaves the runway, and its gates take no decision any more.
+  h.db.sqlite.prepare(
+    "UPDATE operating_roof_jobs SET job_status = 'complete', version = version + 1 WHERE roof_job_id = ?",
+  ).run(JOB_ID);
+  const closed = await post(h, owner, DECISION_PATH("Materials"), body, {
+    idempotency: "gate-waiver-decision-runway-0002",
+  });
+  assert.deepEqual([closed.status, closed.body.error], [409, "production_gate_job_not_on_runway"]);
+  assert.equal(entries(h).length, 1);
+  assert.deepEqual(
+    { state: gate(h, "Materials").state, version: gate(h, "Materials").version },
+    { state: "blocked", version: 2 },
+  );
+});
+
+test("a person holds one open waiver request per gate, answered with its id", async () => {
+  const h = setup({ secondOwner: true });
+  const production = await person(h, USERS.production.id);
+  const first = await post(h, production, CLEARANCE_PATH("Materials"), WAIVER);
+  assert.deepEqual([first.status, first.body.error], [409, "production_gate_waiver_requested"]);
+  const [request] = entries(h, "Materials");
+  // The same key replays; a new key names the open request instead of moving the gate again.
+  const replay = await post(h, production, CLEARANCE_PATH("Materials"), WAIVER);
+  assert.deepEqual(replay.body, { error: "production_gate_waiver_requested" });
+  const again = await post(h, production, CLEARANCE_PATH("Materials"), {
+    basis: "office_waiver",
+    reason: "A second reason for the same synthetic waiver request.",
+  }, { idempotency: "gate-clearance-key-0000000002" });
+  assert.equal(again.status, 409);
+  assert.deepEqual(again.body, {
+    error: "production_gate_waiver_request_open",
+    request_id: request!.clearance_id,
+  });
+  assert.equal(entries(h).length, 1);
+  assert.equal(gate(h, "Materials").version, 2);
+
+  // Another person may hold their own open request on the same gate.
+  const owner = await person(h, USERS.owner.id);
+  const ownerRequest = await post(h, owner, CLEARANCE_PATH("Materials"), WAIVER, {
+    idempotency: "gate-clearance-key-0000000003",
+  });
+  assert.deepEqual([ownerRequest.status, ownerRequest.body.error], [409, "production_gate_waiver_requested"]);
+  assert.equal(entries(h).length, 2);
+
+  // Once production's request is decided, production may ask again.
+  const secondOwner = await person(h, USERS.secondOwner.id);
+  const declined = await post(h, secondOwner, DECISION_PATH("Materials"), {
+    request_id: request!.clearance_id,
+    expected_gate_version: 3,
+    decision: "decline",
+    reason: "Declined: the panels are not at the shop yet.",
+  }, { idempotency: "gate-waiver-decision-open-00001" });
+  assert.equal(declined.status, 200);
+  const renewed = await post(h, production, CLEARANCE_PATH("Materials"), WAIVER, {
+    idempotency: "gate-clearance-key-0000000004",
+  });
+  assert.deepEqual([renewed.status, renewed.body.error], [409, "production_gate_waiver_requested"]);
+  assert.equal(entries(h).length, 4);
+  for (const entry of entries(h)) assert.equal(auditRows(h, entry.clearance_id).length, 1);
+});
+
 test("the QA seed owner is refused on every route, and never stands in as another holder", async () => {
   const h = setup();
   seedDepositIntent(h.db);

@@ -7,8 +7,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { canonicalJson } from "../src/agents/schema.ts";
-import { appendSignal, openRun, proposeStep, type BoundStatement, type RunRow } from "../src/agents/store.ts";
-import { runWatches } from "../src/agents/watches.ts";
+import { appendSignal, expireRuns, openRun, proposeStep, type BoundStatement, type RunRow } from "../src/agents/store.ts";
+import { ownerReports, runWatches } from "../src/agents/watches.ts";
 
 const TENANT = "ironwrap";
 const TZ = "America/Edmonton";
@@ -244,4 +244,51 @@ test("a busy day's brief opens and resumes in few D1 round trips, with the same 
   db.latencyMs = 0;
   assert.ok(!("error" in slow.opened));
   assert.ok(slow.ms < slow.statements * 20 * 0.5, `${Math.round(slow.ms)} ms for ${slow.statements} statements`);
+});
+
+test("a brief whose host never closes it closes at its ceiling, on its next open or by the cron, and its report shows that", async () => {
+  const db = new CountingD1();
+  await busyDay(db);
+  const report = async (signalId: string) => (await ownerReports(db, TENANT, "daily_owner_brief", 10)).find((entry) => entry.signal_id === signalId)?.run;
+  const exceptions = (runId: string) => Number(db.raw.prepare("SELECT COUNT(*) AS n FROM agent_exceptions WHERE run_id = ?").get(runId)!.n);
+  const receipt = (runId: string) => ({ ...db.raw.prepare("SELECT outcome, reason_code, needs_reviewer_role FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'").get(runId) });
+
+  // The busy day's own runs were opened at 09:00 and never closed: the cron closes them first.
+  assert.deepEqual(await expireRuns(db, TENANT, FIRED), { expired: 7 });
+  // The cron closes the brief's run once its wall-time ceiling has passed, and not a moment before.
+  const today = await briefSignal(db);
+  const swept = await openBrief(db, today.signal_id, "2026-03-02T16:11:00.000Z", "brief-swept");
+  assert.ok(!("error" in swept.opened));
+  const runId = swept.opened.run.run_id;
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:21:00.000Z"), { expired: 0 });
+  assert.equal((await report(today.signal_id))?.state, "open");
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:21:00.001Z"), { expired: 1 });
+  assert.deepEqual(await report(today.signal_id), { run_id: runId, state: "closed", result: "ceiling_reached", text: null });
+  // A report's receipt names nobody: the report shows the result, so nobody is interrupted for it.
+  assert.deepEqual(receipt(runId), { outcome: "abstained", reason_code: "ceiling_reached", needs_reviewer_role: null });
+  assert.equal(exceptions(runId), 0);
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-02T16:30:00.000Z"), { expired: 0 }, "a closed run is not closed again");
+  const late = await openBrief(db, today.signal_id, "2026-03-02T16:31:00.000Z", "brief-swept");
+  assert.deepEqual("error" in late.opened ? [late.opened.error, late.opened.status] : null, ["run_closed", 409]);
+
+  // The next day's brief, opened and abandoned: its next open closes it and answers run_expired.
+  const tomorrow = await briefSignal(db, "2026-03-03T16:10:00.000Z");
+  const opened = await openBrief(db, tomorrow.signal_id, "2026-03-03T16:11:00.000Z", "brief-resumed");
+  assert.ok(!("error" in opened.opened));
+  const expired = await openBrief(db, tomorrow.signal_id, "2026-03-03T16:21:00.001Z", "brief-resumed");
+  assert.deepEqual("error" in expired.opened ? [expired.opened.error, expired.opened.status] : null, ["run_expired", 409]);
+  assert.deepEqual(await report(tomorrow.signal_id), { run_id: opened.opened.run.run_id, state: "closed", result: "ceiling_reached", text: null });
+  assert.equal(receipt(opened.opened.run.run_id).needs_reviewer_role, null);
+
+  // Any other run that expires names its specialist's reviewer, as a ceiling close does.
+  const event = await appendSignal(db, TENANT, {
+    kind: "event", specialist_id: "lead_concierge", watch_id: null, source: "synthetic-test",
+    subject: { aggregate: "lead", id: "lead_brief_0002" }, content: { text: "Synthetic" }, dedupe_key: "brief-expiry-event",
+  }, "2026-03-03T17:00:00.000Z");
+  assert.ok("signal_id" in event);
+  const lead = await openRun(db, TENANT, { signal_id: event.signal_id, specialist_id: "lead_concierge", host_run_key: "brief-expiry-lead" }, "2026-03-03T17:00:00.000Z");
+  assert.ok(!("error" in lead));
+  assert.deepEqual(await expireRuns(db, TENANT, "2026-03-03T17:10:00.001Z"), { expired: 1 });
+  assert.deepEqual(receipt(lead.run.run_id), { outcome: "abstained", reason_code: "ceiling_reached", needs_reviewer_role: "sales" });
+  assert.equal(exceptions(lead.run.run_id), 1);
 });

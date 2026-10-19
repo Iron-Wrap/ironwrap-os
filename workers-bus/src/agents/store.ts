@@ -6,12 +6,12 @@ import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
 import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
 import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
-import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
+import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
 import { currentQualifications, divertsToShadow, qualificationHolds, recordShadowStep, runMode, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
-import { WATCH_SIGNAL_SOURCE } from "./watches.ts";
+import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -391,8 +391,11 @@ async function resumeRun(
     return { error: "run_key_conflict", status: 422 };
   }
   if (existing.state === "closed") return { error: "run_closed", status: 409 };
-  if (Date.parse(now) - Date.parse(existing.started_at) > DEFAULT_CEILINGS.wallTimeMs)
-    return {error: "run_expired", status: 409};
+  // A run past its wall-time ceiling can take no step; it closes now instead of staying open.
+  if (Date.parse(now) - Date.parse(existing.started_at) > DEFAULT_CEILINGS.wallTimeMs) {
+    await expireRun(db, tenantId, existing, now);
+    return { error: "run_expired", status: 409 };
+  }
   const resumed = await db
     .prepare("UPDATE agent_runs SET attempt = attempt + 1, attempt_started_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
     .bind(now, existing.run_id)
@@ -1503,6 +1506,64 @@ export async function closeRun(
     return { error: "run_closed", status: 409 };
   }
   return { result };
+}
+
+/** The close the Worker records for a run that outlived its wall-time ceiling with no close from its host. */
+export function expiredClose(run: RunRow, now: string) {
+  return {
+    status: "abstained",
+    reason: "run_expired",
+    detail: `No close arrived within the run's ${DEFAULT_CEILINGS.wallTimeMs / 60_000}-minute wall-time ceiling.`,
+    output: null,
+    model: null,
+    hashes: null,
+    usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
+    cost_usd: 0,
+    attempts: 0,
+    duration_ms: Math.max(0, Date.parse(now) - Date.parse(run.started_at)),
+    tool_calls: [],
+  };
+}
+
+/**
+ * Closes an open run past its wall-time ceiling as a ceiling close does: `ceiling_reached`, with its
+ * abstention receipt in the same batch, then the receipt's exception. A question's receipt names
+ * nobody, as on any close of an ask, and so does an owner report's: its report shows the result.
+ * False when the run had closed already.
+ */
+export async function expireRun(db: AgentDb, tenantId: string, run: RunRow, now: string): Promise<boolean> {
+  const ask = askRun(run) !== null;
+  const signal = await db.prepare("SELECT watch_id, source FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<{ watch_id: string | null; source: string }>();
+  const report = signal?.source === WATCH_SIGNAL_SOURCE && signal.watch_id !== null && Object.hasOwn(OWNER_REPORTS, signal.watch_id);
+  const named = await namesAPerson(db, run.run_id);
+  const statements: BoundStatement[] = [];
+  if (ask || !named) statements.push(await abstentionStep(db, tenantId, run, "ceiling_reached", now, !ask && !report));
+  statements.push(
+    db
+      .prepare("UPDATE agent_runs SET state = 'closed', result = 'ceiling_reached', close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
+      .bind(canonicalJson(expiredClose(run, now)), now, run.run_id),
+  );
+  try {
+    const results = await db.batch(statements);
+    if (changesOf(results.at(-1)) < 1) return false;
+  } catch (error) {
+    if (String(error).includes("agent_run_closed")) return false;
+    throw error;
+  }
+  await escalateRunAbstention(db, tenantId, run, now, null);
+  return true;
+}
+
+/** Closes every open run past its wall-time ceiling (expireRun), oldest first, at most `limit` per cron tick. */
+export async function expireRuns(db: AgentDb, tenantId: string, now: string, limit = 50): Promise<{ expired: number }> {
+  const before = new Date(Date.parse(now) - DEFAULT_CEILINGS.wallTimeMs).toISOString();
+  const open = await db
+    .prepare("SELECT * FROM agent_runs WHERE tenant_id = ? AND state = 'open' AND started_at < ? ORDER BY started_at ASC, run_id ASC LIMIT ?")
+    .bind(tenantId, before, limit)
+    .all<RunRow>();
+  let expired = 0;
+  for (const run of open.results ?? []) if (await expireRun(db, tenantId, run, now)) expired += 1;
+  return { expired };
 }
 
 /** A close as the Worker records it before any pause: an ask run's view checked, else as received. */

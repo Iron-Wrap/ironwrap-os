@@ -42,6 +42,7 @@ import {
   validateAppOrigin,
   validAppCsrf,
   type AppAuthRefusal,
+  personCookieSession,
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
@@ -252,6 +253,8 @@ import {
   recordCommercialProposalRevision,
   type CommercialLeadTriageRecord,
   type CommercialProposalRecord,
+  ProposalDeliveryConfirmationError,
+  recordProposalDeliveryConfirmation,
   unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
 import {
@@ -1153,6 +1156,12 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/commercial/proposal-publications"
   ) {
     return await settleCommercialProposalPublication(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-confirmations"
+  ) {
+    return await confirmProposalDeliveryByHand(req, env, auth);
   }
   if (
     req.method === "POST" &&
@@ -4604,6 +4613,64 @@ async function createCommercialQuoteRevision(
   }
 }
 
+/**
+ * A person records whether a proposal send that could not be confirmed reached the customer
+ * (0156). People only: the commercial set (owner, operations, sales) in their own session, so an
+ * agent, connector or service token can never confirm a delivery.
+ */
+async function confirmProposalDeliveryByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  const keys = isRecord(body) ? Object.keys(body) : [];
+  const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  if (
+    !isRecord(body) ||
+    keys.length !== 3 ||
+    !keys.every((name) => ["external_effect_id", "outcome", "note"].includes(name)) ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160) ||
+    (body.outcome !== "delivered" && body.outcome !== "not_delivered") ||
+    note.length < 8 || note.length > 500 || /[\u0000\r]/.test(note)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_confirmation" }, 400);
+  }
+  try {
+    const result = await recordProposalDeliveryConfirmation(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      outcome: body.outcome,
+      note,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      confirmation: result.confirmation,
+      effect: { external_effect_id: result.confirmation.effect_id, state: result.effectState },
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_confirmation_failed" }, 503);
+  }
+}
+
 async function prepareCommercialProposalPublication(
   req: Request,
   env: AppEnv,
@@ -4679,10 +4746,10 @@ async function prepareCommercialProposalPublication(
       );
       if (pending) {
         return privateAppJson({
-          error: "proposal_delivery_unconfirmed",
+          error: pending.error,
           delivery_state: pending.state,
           external_effect_id: pending.effect_id,
-          next_step: "check_delivery",
+          next_step: pending.next_step,
         }, 409);
       }
     }

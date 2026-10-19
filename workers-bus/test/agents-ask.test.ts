@@ -1135,6 +1135,23 @@ test("a question that raises an emergency still reaches a named person, while it
   }
 });
 
+test("a question answered on a route the Worker holds no qualification for abstains, yet an emergency it raised still reaches a person", async () => {
+  const t = setup();
+  // The v3 close of a live face run whose route names no qualification of the face.
+  const model = { ...JSON.parse(readFileSync(new URL("./fixtures/agent-close-v3.json", import.meta.url), "utf8")).model, qualification_ref: null };
+  const askId = await ask(t, "sales", "ask-unqualified");
+  const plain = await openFace(t, askId);
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${plain.run_id}/close`, close(OUTPUT, { model }))).body.terminal, "abstained");
+  assert.deepEqual(exceptionsOf(t, plain.run_id), [], "the asker alone sees it abstained");
+  const read = (await t.app("sales", "GET", `/ask/${askId}`)).body;
+  assert.deepEqual([read.status, read.answer, read.receipt.policy.reason_codes], ["abstained", null, ["no_qualified_route"]]);
+  const gas = await openFace(t, await ask(t, "field", "ask-unqualified-gas", askBody("I smell gas near the meter at the site.")));
+  const body = close({ ...OUTPUT, decision: "escalate", reason_code: "emergency", final_text: "Leave the area now and call 911." }, { model });
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${gas.run_id}/close`, body)).body.terminal, "abstained");
+  const opened = exceptionsOf(t, gas.run_id);
+  assert.deepEqual(opened.map((row) => [row.reviewer_role, row.reason_code]), [["owner", "emergency"]]);
+});
+
 test("a protective escalation that stops on a question opens its exception, and a safety close never opens a second", async () => {
   const t = setup();
   const escalation = { reason_code: "safety_event", route_to: "production", object: null, summary: "Synthetic gas smell on site.", urgency: "immediate" };

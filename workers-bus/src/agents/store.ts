@@ -1462,13 +1462,18 @@ export async function closeRun(
   }
   if (refusal) {
     result = "abstained";
-    reasonCode = refusal;
+    // Refused output keeps none of its work (the record drops it, below), but an emergency, a safety
+    // event or suspected injection it raised stays the reason, so it still reaches a person, on a
+    // question's run too.
+    const alarm = close.output?.reason_code ?? "";
+    reasonCode = PERSON_CODES.has(alarm) ? alarm : refusal;
   }
   const checked = ask ? recordAskClose(body, ask) : { body, verdict: null };
   // Pausing a specialist stops its drafting (contract "Delegation"): a paused specialist's run
   // closes, but its drafts are withheld from the record, counted and never kept.
   const stamped = withDataClass(checked.body, dataClass);
-  const recorded = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(stamped) : stamped;
+  const kept = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(stamped) : stamped;
+  const recorded = refusal ? refusedClose(kept, refusal) : kept;
   // The abstention receipt and the close commit together, receipt first, so a closed run never
   // lacks the receipt that names a person and no step lands after the close. A completed ask
   // closes with the face's answer receipt the same way.
@@ -1515,6 +1520,17 @@ function withoutView(output: unknown): unknown {
   if (typeof output !== "object" || output === null || Array.isArray(output)) return output;
   const { view: _view, ...rest } = output as Record<string, unknown>;
   return rest;
+}
+
+/**
+ * A close whose output the Worker refused (an audit off independence, or a route without the
+ * qualification it named): recorded without that output, so no answer, view or draft of it is read
+ * back, and with the reason.
+ */
+export function refusedClose(body: unknown, reason: string): unknown {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return body;
+  const { withheld: _withheld, ...close } = body as Record<string, unknown>;
+  return { ...close, output: null, refused: { reason } };
 }
 
 /** A close as recorded for a paused specialist: drafts removed and counted. Unchanged without drafts. */

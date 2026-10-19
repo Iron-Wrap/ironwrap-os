@@ -4,6 +4,7 @@
 
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
+import { APPLY_IN_OWN_SCREEN } from "./receipts.ts";
 import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
 import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
 import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
@@ -987,7 +988,9 @@ function stepInsert(
   const ask = decision.reviewer_role
     ? decision.result === "needs_approval"
       ? "approve_or_decline"
-      : "acknowledge_and_act"
+      : decision.permit_kind === "draft"
+        ? APPLY_IN_OWN_SCREEN
+        : "acknowledge_and_act"
     : null;
   // Sequence, budgets and the policy/control/delegation snapshot are checked in the insert.
   // A committed pause, hold or revoke cannot leave a permit from the earlier policy read. Scalar subqueries, not HAVING without GROUP BY,

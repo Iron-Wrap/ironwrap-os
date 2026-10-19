@@ -3,7 +3,8 @@
 --
 -- A proposal is not sent again until its last send is confirmed delivered. D1 holds that rule
 -- itself: `external_effects_proposal_publish_single_flight` refuses a new proposal.publish effect
--- for a revision and version while an earlier send is still unconfirmed (pending, claimed, unknown,
+-- for a proposal revision (any publication version, and with no exemption a caller could claim, a
+-- compensation included) while an earlier send is still unconfirmed (pending, claimed, unknown,
 -- compensating, a manual exception, or succeeded but not yet recorded as the publication). A send
 -- that never started and whose deadline has passed sent nothing, so it does not block.
 --
@@ -124,8 +125,7 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS external_effects_proposal_publish_single_flight
 BEFORE INSERT ON external_effects
-WHEN NEW.action = 'proposal.publish' AND NEW.aggregate_type = 'proposal_publication'
-  AND NEW.compensates_effect_id IS NULL BEGIN
+WHEN NEW.action = 'proposal.publish' AND NEW.aggregate_type = 'proposal_publication' BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_unconfirmed')
     WHERE EXISTS (
       SELECT 1 FROM external_effects prior
@@ -133,7 +133,6 @@ WHEN NEW.action = 'proposal.publish' AND NEW.aggregate_type = 'proposal_publicat
          AND prior.action = 'proposal.publish'
          AND prior.aggregate_type = 'proposal_publication'
          AND prior.aggregate_id = NEW.aggregate_id
-         AND prior.aggregate_version = NEW.aggregate_version
          AND prior.intent_id = NEW.intent_id
          AND (
            (prior.state IN ('executing', 'reconciling', 'unknown', 'compensating', 'manual_exception'))

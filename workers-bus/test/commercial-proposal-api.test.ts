@@ -1501,15 +1501,65 @@ test("D1 holds one proposal send in flight, the claim route included, and a pers
       1,
     );
 
-    // A person settles the unknown send: it did not reach the customer, so a new send may go.
+    // A caller-supplied compensation link is no exemption: a "compensation" that is itself a
+    // publish of the same revision is a second send.
+    const disguised = effectRequest(permit, "effect:single-flight:disguised");
+    const disguisedClaim = await handleExternalEffectClaim(
+      new Request("https://worker.example.com/admin/effects/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+        body: JSON.stringify({
+          effect: { ...disguised, compensatesEffectId: "effect:single-flight:unknown" },
+          authority: disguised.authority,
+        }),
+      }),
+      env,
+    );
+    assert.equal(disguisedClaim.status, 409, await disguisedClaim.clone().text());
+    assert.deepEqual(await disguisedClaim.json(), { error: "proposal_delivery_unconfirmed" });
+    assert.equal(
+      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
+      1,
+      "no second publish effect exists",
+    );
+    // The claim runs on the server's clock: a backdated `now` cannot make a lapsed deadline current.
+    const backdated = effectRequest(permit, "effect:single-flight:backdated", new Date(Date.now() - 60_000).toISOString());
+    const backdatedClaim = await handleExternalEffectClaim(
+      new Request("https://worker.example.com/admin/effects/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+        body: JSON.stringify({
+          effect: { ...backdated, now: new Date(Date.now() - 120_000).toISOString() },
+          authority: backdated.authority,
+        }),
+      }),
+      env,
+    );
+    assert.equal(backdatedClaim.status, 422, await backdatedClaim.clone().text());
+    assert.deepEqual(await backdatedClaim.json(), { error: "effect_deadline_invalid" });
+
+    // A person may say "not delivered" only once the provider's own answer can no longer be late.
     const ops = await personSession(db, env, OPS_ID, "ops");
-    const settled = await personPost(env, ops, CONFIRM_PATH, "single-flight-confirm", {
+    const tooEarly = await personPost(env, ops, CONFIRM_PATH, "single-flight-confirm-early", {
       external_effect_id: "effect:single-flight:unknown",
       outcome: "not_delivered",
       note: "No proposal in the customer's inbox or spam.",
     });
-    assert.equal(settled.status, 201, await settled.clone().text());
-    assert.equal((await settled.json() as { effect: { state: string } }).effect.state, "reconciled");
+    assert.equal(tooEarly.status, 409);
+    assert.equal((await tooEarly.json() as { error: string }).error, "proposal_delivery_answer_may_be_late");
+    const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+    const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+    const settled = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT,
+      effectId: "effect:single-flight:unknown",
+      outcome: "not_delivered",
+      note: "No proposal in the customer's inbox or spam.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "single-flight-confirm",
+      now: new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
+    });
+    assert.equal(settled.effectState, "reconciled");
     const next = await prepare("single-flight-prepare-2");
     assert.equal(next.status, 201);
   } finally {
@@ -1635,6 +1685,55 @@ test("the confirmation ledger refuses what it must, in the route and in D1", asy
       ).run(TENANT, PACK, REVISION, OPS_ID, "a".repeat(64), "b".repeat(64), new Date().toISOString()),
       /proposal_delivery_confirmation_effect_invalid/,
     );
+  } finally {
+    db.close();
+  }
+});
+
+test("single flight holds across publication versions, and any commercial person records a send that ran", async () => {
+  const { db, env, prepare, prepareBody } = await publicationReady("versions");
+  try {
+    const first = await prepare("versions-prepare-1");
+    assert.equal(first.status, 201);
+    const { permit } = await first.json() as { permit: Permit };
+    // A second version of the same pack cannot open a second live permit.
+    const otherVersion = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", { ...prepareBody(), publication_version: 2 }, "versions-prepare-v2"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(otherVersion.status, 409);
+    assert.equal((await otherVersion.json() as { error: string }).error, "proposal_publication_permit_outstanding");
+
+    await runSend(env, permit, "effect:versions:unknown", "unknown");
+    // D1 refuses a second publish of the same revision at another version too.
+    const { proposeExternalEffect } = await import("../src/effect-runtime.ts");
+    await assert.rejects(
+      proposeExternalEffect(env, {
+        ...effectRequest(permit, "effect:versions:v2"),
+        aggregate: { type: "proposal_publication", id: PACK, version: 2 },
+        authority: { permitRef: "synthetic-authority:v2-0001", policyRef: "synthetic", policyVersion: "v1" },
+      } as never),
+      { code: "effect_proposal_delivery_unconfirmed" },
+    );
+
+    // A send that succeeded is recorded by another commercial person, with no hand confirmation.
+    const { reconcileExternalEffect } = await import("../src/effect-runtime.ts");
+    await reconcileExternalEffect(env, "effect:versions:unknown", {
+      outcome: "executed",
+      evidence: { provider: "late answer: delivered" },
+    });
+    const other = await personSession(db, env, OTHER_OPS_ID, "ops");
+    const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "versions-record", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: "effect:versions:unknown",
+    });
+    assert.equal(recorded.status, 201, await recorded.clone().text());
   } finally {
     db.close();
   }

@@ -1,4 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
+import { EFFECT_ATTEMPT_LEASE_MS } from "./effect-runtime.ts";
 import {
   commercialCommandFingerprint,
   type CommercialAuthorityBinding,
@@ -362,10 +363,16 @@ export async function recordProposalDeliveryConfirmation(
   if (earlier) return earlier;
 
   const effect = await env.DB.prepare(
-    `SELECT effect_id, state, aggregate_id, intent_id FROM external_effects
+    `SELECT effect_id, state, aggregate_id, intent_id, updated_at FROM external_effects
       WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
         AND aggregate_type = 'proposal_publication'`,
-  ).bind(input.tenantId, input.effectId).first<{ effect_id: string; state: string; aggregate_id: string; intent_id: string }>();
+  ).bind(input.tenantId, input.effectId).first<{
+    effect_id: string;
+    state: string;
+    aggregate_id: string;
+    intent_id: string;
+    updated_at: string;
+  }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
   if (effect.state !== "manual_exception" && effect.state !== "unknown") {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_not_awaiting_confirmation", 409, {
@@ -373,6 +380,17 @@ export async function recordProposalDeliveryConfirmation(
     });
   }
   const createdAt = input.now ?? new Date().toISOString();
+  // A fresh unknown may only be late: "not delivered" waits until the provider's own answer could no
+  // longer arrive inside an attempt lease, so a person cannot clear the way for a second send early.
+  if (effect.state === "unknown" && input.outcome === "not_delivered") {
+    const settleableUntil = Date.parse(effect.updated_at) + EFFECT_ATTEMPT_LEASE_MS;
+    if (Date.parse(createdAt) < settleableUntil) {
+      throw new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
+        delivery_state: effect.state,
+        not_before: new Date(settleableUntil).toISOString(),
+      });
+    }
+  }
   const confirmationId = `delivery-confirmation:${keyHash.slice(0, 40)}`;
   try {
     await env.DB.prepare(
@@ -402,27 +420,26 @@ export async function recordProposalDeliveryConfirmation(
 }
 
 /**
- * A live publish permit for this proposal pack and publication version that no effect has used yet,
- * or null. Two live permits for one version could each produce a send, so a second is refused.
+ * A live publish permit for this proposal pack, at any publication version, that no effect has used
+ * yet, or null. Two live permits could each produce a send, so a second is refused.
  */
 export async function outstandingProposalPublishPermit(
   env: AppEnv,
   tenantId: string,
   proposalPackId: string,
-  publicationVersion: number,
   now = new Date(),
 ): Promise<{ permit_id: string; expires_at: string } | null> {
   return await env.DB.prepare(
     `SELECT permit.permit_id, permit.expires_at FROM commercial_authority_permits permit
       WHERE permit.tenant_id = ? AND permit.action = 'proposal.publish'
         AND permit.aggregate_type = 'proposal_publication' AND permit.aggregate_id = ?
-        AND permit.aggregate_version = ? AND julianday(permit.expires_at) > julianday(?)
+        AND julianday(permit.expires_at) > julianday(?)
         AND NOT EXISTS (
           SELECT 1 FROM external_effects effect
            WHERE effect.tenant_id = permit.tenant_id AND effect.authority_ref = permit.permit_id
         )
       ORDER BY permit.issued_at DESC LIMIT 1`,
-  ).bind(tenantId, proposalPackId, publicationVersion, now.toISOString())
+  ).bind(tenantId, proposalPackId, now.toISOString())
     .first<{ permit_id: string; expires_at: string }>();
 }
 

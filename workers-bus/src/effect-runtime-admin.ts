@@ -27,9 +27,13 @@ export async function handleExternalEffectClaim(req: Request, env: AppEnv): Prom
   if (!tenantMatches(env, effect.tenantId) || authority.tenantId !== effect.tenantId) {
     return json({ error: "effect_tenant_mismatch" }, 403);
   }
+  // The claim happens now, by the server's clock: a caller-supplied time could backdate a claim
+  // past an effect's deadline.
+  const now = new Date().toISOString();
   try {
     const proposed = await proposeExternalEffect(env, {
       ...effect,
+      now,
       authority: {
         permitRef: String(record(effect.authority)?.permitRef ?? ""),
         policyRef: String(record(effect.authority)?.policyRef ?? ""),
@@ -37,9 +41,9 @@ export async function handleExternalEffectClaim(req: Request, env: AppEnv): Prom
       },
     } as ExternalEffectRequest);
     const authorized = proposed.state === "proposed"
-      ? await authorizeExternalEffect(env, proposed.effect_id, authority, String(effect.now ?? new Date().toISOString()))
+      ? await authorizeExternalEffect(env, proposed.effect_id, authority, now)
       : proposed;
-    const claimed = await claimExternalEffect(env, authorized.effect_id, new Date(String(effect.now ?? new Date().toISOString())));
+    const claimed = await claimExternalEffect(env, authorized.effect_id, new Date(now));
     return json({ effect: claimed.effect, attempt: claimed.attempt });
   } catch (error) {
     return json({ error: effectError(error) }, effectErrorStatus(error));

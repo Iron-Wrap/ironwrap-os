@@ -1282,6 +1282,19 @@ test("an access change answers the signed-in owner's or staff member's own ask, 
     stops(await step(t, run.run_id, "access.prepare_change", { ...pairing(own.fact_id), reason: "Synthetic: not cited." }, []), `${who} ask, not cited`);
   }
 
+  // The prepared change is the owner's to apply on the Access screen: it waits in the owner's Needs
+  // you, finished for the AI team yet never among done work, and no other role's lane shows it.
+  const { run: prepared, own: preparedAsk } = await asked("sales", "ask-access-lane");
+  const draft = await step(t, prepared.run_id, "access.prepare_change", pairing(preparedAsk.fact_id), [cite(preparedAsk)]);
+  assert.deepEqual([draft.receipt.outcome, draft.receipt.needs_from_you], [
+    "succeeded",
+    { reviewer_role: "owner", person_id: "appu_owner_0001", ask: "Check this and apply it yourself in your own screen; the AI team only prepared it." },
+  ]);
+  const laneOf = async (who: Person, view: string) => ((await t.app(who, "GET", `/receipts?view=${view}`)).body.receipts as Array<{ step_id: string }>).map((entry) => entry.step_id);
+  assert.ok((await laneOf("owner", "needs_you")).includes(draft.step_id), "in the owner's Needs you");
+  assert.ok(!(await laneOf("owner", "done")).includes(draft.step_id), "not among done work");
+  assert.ok(!(await laneOf("sales", "needs_you")).includes(draft.step_id), "not in the asker's Needs you");
+
   // A handoff from a staff ask: the compliance checker answers the ask at the root of the chain, and
   // only that one: not its own handoff signal, and not another ask cited beside it.
   const ops = await asked("ops", "ask-access-ops");

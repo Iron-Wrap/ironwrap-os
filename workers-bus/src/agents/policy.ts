@@ -87,6 +87,15 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
   ["authority.record", { sources: new Set(["request"]), named: false }],
 ]);
 
+/**
+ * `A1` actions that prepare a people-only act (contract "Autonomy classes"): the draft is stored as
+ * proposed and names the person who performs the act in their own screen, so it lands in their
+ * Needs you rather than among finished work. The agent never performs the act.
+ */
+export const PREPARES_PEOPLE_ONLY: ReadonlyMap<string, { act: string; person: string }> = new Map([
+  ["access.prepare_change", { act: "access.change", person: "owner" }],
+]);
+
 export type Outcome = "succeeded" | "failed" | "unknown" | "abstained";
 
 export interface PolicyDecision {
@@ -202,7 +211,7 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   if (!action.protective && (input.specialistState.paused || input.specialistState.held))
     return allowed("asks_first", null, reviewer);
   if (action.autonomy === "A0") return allowed("none", "succeeded", null);
-  if (action.autonomy === "A1") return allowed("draft", "succeeded", null);
+  if (action.autonomy === "A1") return allowed("draft", "succeeded", PREPARES_PEOPLE_ONLY.get(input.actionId)?.person ?? null);
 
   // Protective steps never wait for approval, and keep running while a specialist is paused. Until
   // their machine path is proven they stay open for the named person to act on, never asks first.

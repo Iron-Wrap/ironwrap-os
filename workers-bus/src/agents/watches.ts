@@ -10,7 +10,7 @@
 // committed D1 event mapping.
 
 import { CATALOG, catalogSpecialist } from "./catalog.ts";
-import { delegationCandidates } from "./shadow.ts";
+import { delegationCandidates, previewablePairs } from "./shadow.ts";
 import type { Notify } from "./control.ts";
 import { appendSignal, type AgentDb } from "./store.ts";
 
@@ -149,6 +149,23 @@ export const WATCH_CONDITIONS: Record<string, Condition> = {
         objects: [],
         digest: { receipts_by_outcome: receipts, delegation_candidates: candidates },
         summary: `${candidates.length} delegation candidates this week`,
+      };
+    },
+  },
+  delegation_review: {
+    version: "1",
+    // An action meets the earned-autonomy bar for a specialist, or has enough counted decisions for
+    // a preview (contract "Delegation" item 13): the face may propose a change with
+    // delegation.propose_change, and the owner decides it with delegation.set after the preview.
+    async evaluate(db, tenantId) {
+      const candidates = await delegationCandidates(db, tenantId);
+      const earned = new Set(candidates.map((row) => `${row.specialist_id} ${row.action_id}`));
+      const previewable = (await previewablePairs(db, tenantId)).filter((row) => !earned.has(`${row.specialist_id} ${row.action_id}`));
+      return {
+        holds: candidates.length + previewable.length > 0,
+        objects: [],
+        digest: { delegation_candidates: candidates, previewable },
+        summary: `${candidates.length} actions meet the earned-autonomy bar, ${previewable.length} more have enough compared decisions for a preview`,
       };
     },
   },

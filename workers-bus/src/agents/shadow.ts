@@ -7,11 +7,15 @@
 // action. Candidates for more delegation are listed for the owner, who alone raises delegation;
 // the one automatic change is a demotion to asks first after a catastrophe.
 
-import { CATALOG, catalogAction, catalogSpecialist, CATALOG_VERSION } from "./catalog.ts";
+import { CATALOG, catalogAction, catalogSpecialist, CATALOG_VERSION, earnable } from "./catalog.ts";
 import {
   changedGuard,
   controlError,
   currentDelegation,
+  decisionHistory,
+  stepFitsCeiling,
+  WINDOW_MS,
+  type Ceiling,
   humanGuard,
   openException,
   specialistControl,
@@ -725,9 +729,37 @@ export async function delegationCandidates(
   return candidates;
 }
 
-/** An action whose autonomy can be earned: `A2` or `A3`, delegable, and neither people-only nor protective. */
-function earnable(action: NonNullable<ReturnType<typeof catalogAction>>): boolean {
-  return (action.autonomy === "A2" || action.autonomy === "A3") && !action.human_only && action.delegable && !action.protective;
+/**
+ * The specialist and action pairs with a full counted window: enough compared decisions under the
+ * current policy and release for a preview, whether or not they meet the bar.
+ */
+export async function previewablePairs(db: AgentDb, tenantId: string, bar = CANDIDATE_BAR): Promise<Array<{ specialist_id: string; action_id: string; compared: number; match_rate: number }>> {
+  const pairs = await db
+    .prepare("SELECT DISTINCT specialist_id, action_id FROM agent_agreements WHERE tenant_id = ? AND verdict <> 'unscored'")
+    .bind(tenantId)
+    .all<{ specialist_id: string; action_id: string }>();
+  const previewable = [];
+  const releases = new Map<string, string | null>();
+  for (const pair of pairs.results ?? []) {
+    const action = catalogAction(pair.action_id);
+    if (!action || !action.owners.includes(pair.specialist_id) || !earnable(action)) continue;
+    if (!releases.has(pair.specialist_id)) releases.set(pair.specialist_id, (await specialistRunsOn(db, tenantId, pair.specialist_id))?.release ?? null);
+    const release = releases.get(pair.specialist_id);
+    if (!release) continue;
+    const window = await countedWindow(db, tenantId, pair.specialist_id, pair.action_id, release, bar.compared);
+    if (window.length < bar.compared) continue;
+    previewable.push({ ...pair, compared: window.length, match_rate: window.filter((row) => row.verdict === "match").length / window.length });
+  }
+  return previewable;
+}
+
+/** One compared decision in the bar's window, with the proposal it compared. */
+interface CountedDecision {
+  verdict: Verdict;
+  row: number;
+  args_json: string;
+  /** When the specialist proposed it. */
+  at: string;
 }
 
 /**
@@ -735,28 +767,95 @@ function earnable(action: NonNullable<ReturnType<typeof catalogAction>>): boolea
  * the current step policy and closed on the specialist's current release, whose close the Worker kept
  * (a refused close's work is not the specialist's).
  */
-async function countedWindow(
-  db: AgentDb,
-  tenantId: string,
-  specialistId: string,
-  actionId: string,
-  release: string,
-  limit: number,
-): Promise<Array<{ verdict: Verdict; row: number; step_id: string | null; shadow_step_id: string | null }>> {
+async function countedWindow(db: AgentDb, tenantId: string, specialistId: string, actionId: string, release: string, limit: number): Promise<CountedDecision[]> {
   const rows = await db
     .prepare(
-      `SELECT a.verdict, a.rowid AS row, a.step_id, a.shadow_step_id FROM agent_agreements a
-        JOIN agent_runs r ON r.run_id = COALESCE(
-          (SELECT run_id FROM agent_run_steps WHERE step_id = a.step_id),
-          (SELECT run_id FROM agent_shadow_steps WHERE shadow_step_id = a.shadow_step_id))
+      `SELECT a.verdict, a.rowid AS row, COALESCE(s.args_json, h.args_json) AS args_json, COALESCE(s.created_at, h.proposed_at) AS at
+        FROM agent_agreements a
+        LEFT JOIN agent_run_steps s ON s.step_id = a.step_id
+        LEFT JOIN agent_shadow_steps h ON h.shadow_step_id = a.shadow_step_id
+        JOIN agent_runs r ON r.run_id = COALESCE(s.run_id, h.run_id)
       WHERE a.tenant_id = ? AND a.specialist_id = ? AND a.action_id = ? AND a.verdict <> 'unscored'
         AND r.policy_version = ? AND json_extract(r.close_json, '$.model.release_sha256') = ?
         AND json_extract(r.close_json, '$.refused') IS NULL
       ORDER BY a.compared_at DESC, a.rowid DESC LIMIT ?`,
     )
     .bind(tenantId, specialistId, actionId, `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`, release, limit)
-    .all<{ verdict: Verdict; row: number; step_id: string | null; shadow_step_id: string | null }>();
+    .all<CountedDecision>();
   return rows.results ?? [];
+}
+
+export interface DelegationPreview {
+  specialist_id: string;
+  action_id: string;
+  /** The release the counted decisions ran on: the specialist's current one, or null without a v3 close. */
+  release_sha256: string | null;
+  bar: { compared: number; match_rate: number; meets: boolean };
+  window: { compared: number; match: number; partial: number; diverge: number; match_rate: number | null; catastrophe: boolean };
+  history: { proposed: number; approved: number; declined: number; done_by_person: number };
+  practice: { proposed: number; compared: number };
+  /** Which of the counted decisions the ceiling would have let run, and how many of those a person or comparator did not match. */
+  would_have_run: { ran: number; ran_not_matching: number; of: number } | null;
+}
+
+/**
+ * What the owner sees before deciding a delegation change (contract "Delegation" item 4): that
+ * action's history for that specialist, its practice runs, the counted decisions and how they
+ * compared, whether it meets the earned-autonomy bar, and which of the counted decisions the
+ * ceiling would have let run, replayed in the order they were proposed. Null for an action whose
+ * autonomy the specialist cannot earn.
+ */
+export async function delegationPreview(
+  db: AgentDb,
+  tenantId: string,
+  specialistId: string,
+  actionId: string,
+  ceiling: Ceiling | null,
+  bar = CANDIDATE_BAR,
+): Promise<DelegationPreview | null> {
+  const action = catalogAction(actionId);
+  if (!action || !action.owners.includes(specialistId) || !earnable(action)) return null;
+  const release = (await specialistRunsOn(db, tenantId, specialistId))?.release ?? null;
+  const window = release ? await countedWindow(db, tenantId, specialistId, actionId, release, bar.compared) : [];
+  const count = (verdict: Verdict) => window.filter((row) => row.verdict === verdict).length;
+  const practice = await db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM agent_shadow_steps WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3) AS proposed,
+        (SELECT COUNT(*) FROM agent_agreements WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3 AND source = 'shadow' AND verdict <> 'unscored') AS compared`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .first<{ proposed: number; compared: number }>();
+  let wouldHaveRun: DelegationPreview["would_have_run"] = null;
+  if (ceiling) {
+    const ran: Array<{ at: number; matched: boolean }> = [];
+    for (const decision of [...window].reverse()) {
+      const at = Date.parse(decision.at);
+      const inWindow = ran.filter((entry) => entry.at > at - WINDOW_MS[ceiling.count.per]).length;
+      if (inWindow < ceiling.count.max && stepFitsCeiling(ceiling, JSON.parse(decision.args_json))) ran.push({ at, matched: decision.verdict === "match" });
+    }
+    wouldHaveRun = { ran: ran.length, ran_not_matching: ran.filter((entry) => !entry.matched).length, of: window.length };
+  }
+  return {
+    specialist_id: specialistId,
+    action_id: actionId,
+    release_sha256: release,
+    bar: {
+      compared: bar.compared,
+      match_rate: bar.matchRate,
+      meets: (await delegationCandidates(db, tenantId, bar, { specialist_id: specialistId, action_id: actionId })).length > 0,
+    },
+    window: {
+      compared: window.length,
+      match: count("match"),
+      partial: count("partial"),
+      diverge: count("diverge"),
+      match_rate: window.length > 0 ? count("match") / window.length : null,
+      catastrophe: await catastropheSince(db, tenantId, specialistId, actionId, window),
+    },
+    history: await decisionHistory(db, tenantId, specialistId, actionId),
+    practice: { proposed: Number(practice?.proposed ?? 0), compared: Number(practice?.compared ?? 0) },
+    would_have_run: wouldHaveRun,
+  };
 }
 
 /** A catastrophe anywhere since the window began blocks it, scored or not (a take-over is unscored), on any release. */

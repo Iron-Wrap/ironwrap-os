@@ -94,6 +94,7 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
  */
 export const PREPARES_PEOPLE_ONLY: ReadonlyMap<string, { act: string; person: string }> = new Map([
   ["access.prepare_change", { act: "access.change", person: "owner" }],
+  ["delegation.propose_change", { act: "delegation.set", person: "owner" }],
 ]);
 
 export type Outcome = "succeeded" | "failed" | "unknown" | "abstained";

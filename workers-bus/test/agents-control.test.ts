@@ -8,6 +8,7 @@ import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
 import { currentDelegation, specialistControl } from "../src/agents/control.ts";
 import { CATASTROPHE_IDS, SHADOW_COMPARE_WINDOW_MS, sweepShadow } from "../src/agents/shadow.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
+import { WATCH_CONDITIONS } from "../src/agents/watches.ts";
 import { WorkerClient } from "../../agent-host/src/host/worker.ts";
 import type { AuthContext, AppRole } from "../src/app-types.ts";
 
@@ -2068,4 +2069,104 @@ test("only decisions under the current step policy and release count toward the 
   // One more decision under the current policy and release fills the window.
   await seedCompared(s, qualified.body.qualification_id, 1, "match");
   assert.deepEqual(await candidates(), ["note.add"]);
+});
+
+// --- Earned autonomy: the face's proposal, the owner's preview and the weekly review (contract "Delegation" items 4 and 13) ---
+
+/** A delegation change the face proposes for lead_concierge's note.add. */
+const proposal = (overrides: Record<string, unknown> = {}) => ({
+  specialist_id: "lead_concierge",
+  action_id: "note.add",
+  proposed: "within_limits",
+  ceiling,
+  reason: "Synthetic: fifty compared notes, all matched.",
+  ...overrides,
+});
+
+test("the face proposes acting within limits only where the earned-autonomy bar is met, and the owner decides it in their own screen", async () => {
+  const s = setup(true);
+  const face = async () => await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+  const earned = (body: { receipt: { policy: { checks: Array<{ check: string; passed: boolean }> } } }) =>
+    body.receipt.policy.checks.find((check) => check.check === "earned_autonomy");
+  // Below the bar the proposal is refused, and nobody is handed it.
+  const below = (await s.propose(await face(), "delegation.propose_change", proposal())).body;
+  assert.deepEqual([below.decision, below.reason_codes, earned(below)], ["denied", ["policy_denied"], { check: "earned_autonomy", passed: false }]);
+  assert.equal(below.receipt.needs_from_you, null);
+  // Practice only and asks first need no bar.
+  assert.equal((await s.propose(await face(), "delegation.propose_change", proposal({ proposed: "shadow", ceiling: null }))).body.decision, "drafted");
+  // Once the action meets the bar, the proposal is a draft that waits in the owner's Needs you.
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-propose");
+  await seedCompared(s, qualified.body.qualification_id, 50, "match");
+  const met = (await s.propose(await face(), "delegation.propose_change", proposal({ reason: "Synthetic: the bar is met." }))).body;
+  assert.deepEqual([met.decision, met.receipt.outcome, earned(met)], ["drafted", "succeeded", { check: "earned_autonomy", passed: true }]);
+  assert.deepEqual([met.receipt.needs_from_you.reviewer_role, met.receipt.needs_from_you.ask], ["owner", "Check this and apply it yourself in your own screen; the AI team only prepared it."]);
+  assert.ok((await s.app("/receipts?view=needs_you")).body.receipts.some((entry: { step_id: string }) => entry.step_id === met.step_id));
+  // An action whose autonomy cannot be earned, or a ceiling that does not match the setting, is never proposed.
+  for (const [label, args] of [
+    ["a people-only action", proposal({ action_id: "delegation.set", specialist_id: "orchestrator" })],
+    ["a never-delegable action", proposal({ action_id: "consent.record" })],
+    ["a specialist that does not own the action", proposal({ specialist_id: "synthetic_nobody" })],
+    ["within limits without a ceiling", proposal({ ceiling: null })],
+    ["practice only with a ceiling", proposal({ proposed: "shadow" })],
+  ] as const) {
+    const refused = (await s.propose(await face(), "delegation.propose_change", args)).body;
+    assert.deepEqual([refused.decision, refused.reason_codes], ["abstained", ["action_unregistered"]], label);
+  }
+});
+
+test("the owner's preview shows the counted decisions, the bar, the history and what the ceiling would have let run", async () => {
+  const s = setup(true);
+  const preview = async (query: string) => await s.app(`/specialists/lead_concierge/preview?${query}`);
+  const empty = (await preview("action=note.add")).body;
+  assert.deepEqual([empty.release_sha256, empty.window.compared, empty.bar.meets, empty.would_have_run], [null, 0, false, null]);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-preview");
+  await seedCompared(s, qualified.body.qualification_id, 48, "match");
+  await seedCompared(s, qualified.body.qualification_id, 2, "diverge");
+  // The ceiling lets two run in any hour; the seeded proposals were all made within the same hour.
+  const shown = (await preview(`action=note.add&ceiling=${encodeURIComponent(JSON.stringify(ceiling))}`)).body;
+  assert.deepEqual(shown.window, { compared: 50, match: 48, partial: 0, diverge: 2, match_rate: 0.96, catastrophe: false });
+  assert.deepEqual([shown.release_sha256, shown.bar], ["e".repeat(64), { compared: 50, match_rate: 0.95, meets: true }]);
+  assert.deepEqual(shown.practice, { proposed: 50, compared: 50 });
+  assert.deepEqual(shown.would_have_run, { ran: 2, ran_not_matching: 0, of: 50 });
+  // A wider ceiling lets every one run, the two a person would not have matched among them.
+  const wide = { ...ceiling, count: { max: 100, per: "hour" } };
+  assert.deepEqual((await preview(`action=note.add&ceiling=${encodeURIComponent(JSON.stringify(wide))}`)).body.would_have_run, { ran: 50, ran_not_matching: 2, of: 50 });
+  // Only an action whose autonomy can be earned has a preview, and the query is checked.
+  assert.equal((await preview("action=consent.record")).status, 422);
+  assert.equal((await preview("action=note.add&ceiling=%7Bbad")).status, 400);
+  assert.equal((await preview(`action=note.add&ceiling=${encodeURIComponent(JSON.stringify({ count: { max: 0, per: "hour" }, amount: null, recipients: null }))}`)).status, 400);
+  assert.equal((await s.app("/specialists/lead_concierge/preview?action=note.add", undefined, "sales")).status, 403);
+});
+
+test("a specialist's declined proposal still counts against it; only a close the Worker refused is not its work", async () => {
+  const s = setup(true);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-declined");
+  await seedCompared(s, qualified.body.qualification_id, 49, "match");
+  // A real proposal on a kept run that the owner declines: a compared decision that did not match.
+  const run = await s.run();
+  const step = (await s.propose(run, "note.add", { ...note, text: "Synthetic note the owner declines." })).body;
+  const row = s.scalar("SELECT version, args_sha256 FROM agent_run_steps WHERE step_id = ?", step.step_id);
+  assert.equal((await s.app(`/steps/${step.step_id}/decision`, { decision: "decline", expected_version: row.version, expected_args_sha256: row.args_sha256 }, "owner", "decline-counted")).status, 200);
+  s.tick(1_000);
+  assert.equal((await s.close(run.run_id, closeV3({ qualification_ref: qualified.body.qualification_id }))).body.terminal, "completed");
+  const window = async () => (await s.app("/specialists/lead_concierge/preview?action=note.add")).body.window;
+  assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 1], "the declined proposal counts");
+  // A refused close's decisions are left out, whatever they were.
+  await seedCompared(s, null, 5, "diverge");
+  assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 1], "the refused run's decisions do not count");
+});
+
+test("the weekly delegation review holds when an action meets the bar or has enough counted decisions for a preview", async () => {
+  const s = setup(true);
+  const review = async () => await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now());
+  assert.equal((await review()).holds, false);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-review");
+  await seedCompared(s, qualified.body.qualification_id, 45, "match");
+  await seedCompared(s, qualified.body.qualification_id, 5, "diverge");
+  const previewOnly = await review();
+  assert.equal(previewOnly.holds, true);
+  assert.deepEqual([(previewOnly.digest as any).delegation_candidates, (previewOnly.digest as any).previewable.map((row: { action_id: string; match_rate: number }) => [row.action_id, row.match_rate])], [[], [["note.add", 0.9]]]);
+  await seedCompared(s, qualified.body.qualification_id, 50, "match");
+  const earned = await review();
+  assert.deepEqual([(earned.digest as any).delegation_candidates.map((row: { action_id: string }) => row.action_id), (earned.digest as any).previewable], [["note.add"], []]);
 });

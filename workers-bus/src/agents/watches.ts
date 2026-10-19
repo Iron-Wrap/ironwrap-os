@@ -108,6 +108,56 @@ async function earnedAutonomy(db: AgentDb, tenantId: string) {
 }
 
 export const WATCH_CONDITIONS: Record<string, Condition> = {
+  import_failed_items: {
+    version: "1",
+    // An import run recorded since the last firing with failed items: crm_import_issues rows of kind
+    // `row_error`, each by its source key. The face proposes retrying only those (import.retry_failed);
+    // there is no import-run object for the run to read, so the digest carries each run's keys.
+    async evaluate(db, tenantId, since) {
+      const FAILED = "SELECT 1 FROM crm_import_issues i WHERE i.tenant_id = r.tenant_id AND i.run_id = r.run_id AND i.kind = 'row_error'";
+      const runs = await rows<{ run_id: string; adapter: string; pipeline_key: string; source_label: string | null; created_at: string; source_row_count: number }>(
+        db,
+        `SELECT r.run_id, r.adapter, r.pipeline_key, r.source_label, r.created_at, r.source_row_count FROM crm_import_runs r
+          WHERE r.tenant_id = ? AND r.created_at >= ? AND EXISTS (${FAILED})
+          ORDER BY r.created_at DESC, r.run_id ASC LIMIT ${MAX_OBJECTS}`,
+        tenantId,
+        since,
+      );
+      const total = await count(
+        db,
+        `SELECT COUNT(*) AS n FROM crm_import_runs r WHERE r.tenant_id = ? AND r.created_at >= ? AND EXISTS (${FAILED})`,
+        tenantId,
+        since,
+      );
+      const importRuns = [];
+      for (const run of runs) {
+        const failed = await count(db, "SELECT COUNT(*) AS n FROM crm_import_issues WHERE tenant_id = ? AND run_id = ? AND kind = 'row_error'", tenantId, run.run_id);
+        const keys = await rows<{ import_key: string }>(
+          db,
+          `SELECT DISTINCT import_key FROM crm_import_issues WHERE tenant_id = ? AND run_id = ? AND kind = 'row_error' AND import_key IS NOT NULL
+            ORDER BY import_key ASC LIMIT 100`,
+          tenantId,
+          run.run_id,
+        );
+        importRuns.push({
+          import_run_id: run.run_id,
+          adapter: run.adapter,
+          pipeline_key: run.pipeline_key,
+          source_label: run.source_label,
+          recorded_at: run.created_at,
+          source_row_count: run.source_row_count,
+          failed_items: failed,
+          source_keys: keys.map((key) => key.import_key),
+        });
+      }
+      return {
+        holds: total > 0,
+        objects: [],
+        digest: { import_runs: importRuns, total },
+        summary: `${total} import ${total === 1 ? "run has" : "runs have"} failed items`,
+      };
+    },
+  },
   new_leads: {
     version: "1",
     async evaluate(db, tenantId, since) {

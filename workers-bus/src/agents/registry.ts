@@ -332,6 +332,28 @@ const IMPORT_RETRY_FAILED: RegistryEntry = {
   machinePermitProven: false,
 };
 
+// The lead's four facts as lead_concierge proposes them from the inbound it answers; null leaves a
+// fact unproposed, and at least one is set. lead_fact.confirm copies exactly these, naming this step
+// as its proposal. Policy holds its citations to that inbound (policy.ts INBOUND_ONLY).
+const LEAD_FACT_FIELDS = {
+  type: "object",
+  additionalProperties: false,
+  required: ["service", "scope", "address", "timing"],
+  properties: { service: nullable(text(200)), scope: nullable(text(2000)), address: nullable(text(600)), timing: nullable(text(600)) },
+};
+
+const LEAD_FACT_PROPOSE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["lead_id", "fields"],
+    properties: { lead_id: recordId, fields: LEAD_FACT_FIELDS },
+  },
+  argsError: (args) => (Object.values((args as { fields: Record<string, unknown> }).fields).some((value) => value !== null) ? null : "lead_fields_empty"),
+  binding: { kind: "record" },
+  machinePermitProven: false,
+};
+
 const LEAD_FACT_CONFIRM: RegistryEntry = {
   args: {
     type: "object",
@@ -341,12 +363,7 @@ const LEAD_FACT_CONFIRM: RegistryEntry = {
       lead_id: recordId,
       proposal_id: recordId,
       // Values copied from the proposal; null leaves that fact unconfirmed. At least one is set.
-      fields: {
-        type: "object",
-        additionalProperties: false,
-        required: ["service", "scope", "address", "timing"],
-        properties: { service: nullable(text(200)), scope: nullable(text(2000)), address: nullable(text(600)), timing: nullable(text(600)) },
-      },
+      fields: LEAD_FACT_FIELDS,
     },
   },
   argsError: (args) => (Object.values((args as { fields: Record<string, unknown> }).fields).some((value) => value !== null) ? null : "lead_fields_empty"),
@@ -539,7 +556,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "inquiry.classify": NOT_YET_REGISTERED,
   "inquiry.link_duplicate": NOT_YET_REGISTERED,
   "inquiry.record_triage": NOT_YET_REGISTERED,
-  "lead_fact.propose": NOT_YET_REGISTERED,
+  "lead_fact.propose": LEAD_FACT_PROPOSE,
   "lead_fact.confirm": LEAD_FACT_CONFIRM,
   "inquiry.close": NOT_YET_REGISTERED,
   "inbound.quarantine": NOT_YET_REGISTERED,

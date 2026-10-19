@@ -2270,3 +2270,16 @@ test("only the owner's and ops' views read a delegation record, and the release-
   // A run closes within its wall time plus the cron's grace; the read looks back further than that.
   assert.ok(RUN_LIFETIME_BOUND_MS > DEFAULT_CEILINGS.wallTimeMs + EXPIRY_GRACE_MS + 3_600_000);
 });
+
+test("lead_concierge proposes an inquiry's details from the inbound it answers, citing only that inbound", async () => {
+  const s = setup();
+  const run = await s.run();
+  const fields = { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: "before the first snow" };
+  const proposed = (await s.propose(run, "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body;
+  assert.deepEqual([proposed.decision, proposed.receipt.outcome, proposed.receipt.needs_from_you], ["drafted", "succeeded", null], JSON.stringify(proposed));
+  // lead_fact.confirm names this step as its proposal.
+  assert.ok(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(proposed.step_id));
+  // A run started by an owner's ask is not an inbound: the same proposal stops.
+  const asked = await s.run("lead_concierge", { kind: "owner_request", source: "ask:appu_test_owner", content: { text: "Synthetic ask" } });
+  assert.deepEqual((await s.propose(asked, "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body.reason_codes, ["out_of_scope"]);
+});

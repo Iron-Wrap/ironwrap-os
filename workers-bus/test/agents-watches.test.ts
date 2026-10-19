@@ -416,3 +416,49 @@ test("a pipeline digest carries the exact job total past its object limit", asyn
   assert.ok(!digest.jobs_changed.includes("job_totals_old"));
   assert.match(outcome.summary, /^30 jobs changed, 0 new decisions waiting, 0 waiting in all$/);
 });
+
+test("import_failed_items lists each recent import run with failed items and the source keys to retry", async () => {
+  const db = new SqliteD1();
+  const run = (id: string, at: string) =>
+    db.raw
+      .prepare(
+        `INSERT INTO crm_import_runs (run_id,tenant_id,adapter,pipeline_key,source_label,source_digest,source_row_count,report_json,created_at)
+        VALUES (?, ?, 'ghl_api', 'residential', 'Synthetic export', ?, 40, '{}', ?)`,
+      )
+      .run(id, TENANT, "a".repeat(64), at);
+  let issue = 0;
+  const failed = (runId: string, key: string | null, kind = "row_error") =>
+    db.raw
+      .prepare(`INSERT INTO crm_import_issues (issue_id,tenant_id,run_id,import_key,kind,field,detail,created_at) VALUES (?, ?, ?, ?, ?, NULL, 'Synthetic', ?)`)
+      .run(`issue_synthetic_${++issue}`, TENANT, runId, key, kind, "2026-03-02T10:00:00.000Z");
+  run("import_run_old_0001", "2026-03-02T08:00:00.000Z");
+  failed("import_run_old_0001", "contact:old");
+  run("import_run_clean_01", "2026-03-02T09:30:00.000Z");
+  failed("import_run_clean_01", "contact:capped", "stage_capped");
+  run("import_run_fail_001", "2026-03-02T09:45:00.000Z");
+  failed("import_run_fail_001", "contact:b");
+  failed("import_run_fail_001", "contact:a");
+  failed("import_run_fail_001", "contact:a");
+  failed("import_run_fail_001", null);
+  const outcome = await WATCH_CONDITIONS.import_failed_items.evaluate(db as never, TENANT, "2026-03-02T09:00:00.000Z", "2026-03-02T10:00:00.000Z");
+  assert.equal(outcome.holds, true);
+  assert.deepEqual(outcome.objects, []);
+  assert.deepEqual(outcome.digest, {
+    import_runs: [
+      {
+        import_run_id: "import_run_fail_001",
+        adapter: "ghl_api",
+        pipeline_key: "residential",
+        source_label: "Synthetic export",
+        recorded_at: "2026-03-02T09:45:00.000Z",
+        source_row_count: 40,
+        failed_items: 4,
+        source_keys: ["contact:a", "contact:b"],
+      },
+    ],
+    total: 1,
+  });
+  assert.equal(outcome.summary, "1 import run has failed items");
+  // Nothing new since the last firing: it does not hold.
+  assert.equal((await WATCH_CONDITIONS.import_failed_items.evaluate(db as never, TENANT, "2026-03-02T09:50:00.000Z", "2026-03-02T10:00:00.000Z")).holds, false);
+});

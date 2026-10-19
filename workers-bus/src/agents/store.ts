@@ -5,7 +5,7 @@
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
 import { APPLY_IN_OWN_SCREEN } from "./receipts.ts";
-import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
+import { DEFAULT_CEILINGS, evaluateStep, INBOUND_ONLY, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
 import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
 import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
@@ -677,7 +677,7 @@ export async function proposeStep(
       ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
       : false;
   // An action only a person's own request may start is checked against the request the run answers.
-  const requester = PERSON_REQUEST_ONLY.has(input.action_id) ? await runRequest(db, tenantId, run) : undefined;
+  const requester = PERSON_REQUEST_ONLY.has(input.action_id) || INBOUND_ONLY.has(input.action_id) ? await runRequest(db, tenantId, run) : undefined;
   let decision = evaluateStep({
     requester,
     specialistId: run.specialist_id,

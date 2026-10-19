@@ -182,7 +182,7 @@ export function parseUserInviteInput(
 }
 
 /**
- * The access version a person's change was decided on (0155). Required on every change to an
+ * The access version a person's change was decided on (0157). Required on every change to an
  * existing person; a stale one is refused rather than applied over someone else's decision.
  */
 export function parseExpectedAccessVersion(value: unknown): number | null {

@@ -228,7 +228,7 @@ async function call(
   path: string,
   options: { session?: Session; body?: unknown; csrf?: boolean; rawBody?: boolean } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  // A role or access change names the version it was decided on (0155). Cases about something
+  // A role or access change names the version it was decided on (0157). Cases about something
   // else send the current one, as the people list does; `rawBody` sends the body exactly.
   const accessChange = path.match(ACCESS_CHANGE_PATH);
   if (

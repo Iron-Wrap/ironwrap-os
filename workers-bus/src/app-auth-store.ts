@@ -18,7 +18,7 @@ export interface AppUserMutationAuthority {
   actorUserId: string;
   actorRole: AppRole;
   expectedTarget: AppUserRecord | null;
-  /** The audit row for this change, committed in the change's own batch (0155). */
+  /** The audit row for this change, committed in the change's own batch (0157). */
   audit?: AccessChangeAudit;
 }
 
@@ -57,7 +57,7 @@ function accessChangeAuditStatement(
   );
 }
 
-/** The access version the route authorized against; the column is NOT NULL DEFAULT 1 (0155). */
+/** The access version the route authorized against; the column is NOT NULL DEFAULT 1 (0157). */
 function expectedAccessVersion(expected: AppUserRecord): number | null {
   const version = Number(expected.access_version ?? 1);
   return Number.isInteger(version) && version >= 1 ? version : null;

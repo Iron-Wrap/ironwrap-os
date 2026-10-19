@@ -442,7 +442,7 @@ export async function handleAdminAppUserProvision(
   const authority = authorizeAppUserMutation(auth, target, validated.value.role);
   if (authority) return appJson({ error: authority.error }, authority.status);
   // A change to an existing person names the access version it was decided on; a new person has
-  // none yet (0155).
+  // none yet (0157).
   const { expected_access_version: expectedAccessVersion, ...provision } = validated.value;
   if (target && expectedAccessVersion === null) {
     return appJson({ error: "expected_access_version_required" }, 400);

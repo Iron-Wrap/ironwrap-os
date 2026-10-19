@@ -452,7 +452,7 @@ class AuthMemoryDb {
       return changed(changes);
     }
     if (sql.includes("INSERT INTO app_auth_audit")) {
-      // An access change's audit row is written only after that change wrote a row (0155).
+      // An access change's audit row is written only after that change wrote a row (0157).
       if (sql.includes("changes() = 1") && this.lastChanges !== 1) return changed(0);
       this.audits.push({ args: [...args] });
       return changed(1);

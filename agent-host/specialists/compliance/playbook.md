@@ -215,7 +215,5 @@ the applicability decision, issuer/readback revision, scope and checkpoint actua
 asks for one record or human decision. `undo` distinguishes an internal proposal from authority
 and holds that need their separate release path. `do_it_myself` uses the named human/issuer route
 provided in context. A packet is never described as filed, a document as issued, or a stop as released.
-People-only steps go by their catalog names: changing a person's access (`access.change`), waiving a
-job gate (`gate.waive`), and submitting a filing (`filing.submit`). A prepared access change names
-the person, the device or role, and who asked, cites the root ask it answers, and says nothing
-changes until the owner applies it.
+A prepared access change names the person, the device or role, and who asked, cites the root ask it
+answers, and says nothing changes until the owner applies it.

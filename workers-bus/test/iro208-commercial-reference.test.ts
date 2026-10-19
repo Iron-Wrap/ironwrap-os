@@ -13,7 +13,8 @@ import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
-import { runExternalEffect } from "../src/effect-runtime.ts";
+import { reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
+import { recordProposalDeliveryConfirmation } from "../src/commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
   deriveSuccess,
@@ -1818,7 +1819,23 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(unknown.status, 409);
     assert.deepEqual(await unknown.json(), { error: "commercial_publication_effect_mismatch" });
-    const refusedPermit = await preparePublication(h, ids, "iro208-publication-prepare-refused-0001");
+    // The unknown settlement above named an effect that never ran, so its permit is still live and
+    // unused; a second live permit for the same version is refused, so the refused send uses it.
+    const secondLivePermit = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-second-live-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(secondLivePermit.status, 409);
+    assert.equal(
+      (await secondLivePermit.json() as { error: string }).error,
+      "proposal_publication_permit_outstanding",
+    );
+    const refusedPermit = unknownPermit;
     await runPublicationEffect(h, refusedPermit, ids, "effect:iro208:refused", "refused");
     const refused = await handleAuthenticatedRoute(
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: refusedPermit.permit_id, external_effect_id: "effect:iro208:refused" }, "iro208-publication-refused-0001"), h.env, auth("ops"),
@@ -1831,6 +1848,23 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: lostPermit.permit_id, external_effect_id: "effect:iro208:lost" }, "iro208-publication-lost-0001"), h.env, auth("ops"),
     );
     assert.equal(lost.status, 409);
+    // A lost send is not confirmed delivered, so the proposal is not sent again until someone
+    // checks delivery; here the check finds it was not delivered.
+    const resendBeforeCheck = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-before-check-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(resendBeforeCheck.status, 409);
+    assert.equal((await resendBeforeCheck.json() as { error: string }).error, "proposal_delivery_unconfirmed");
+    await reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
+      outcome: "not_executed",
+      evidence: { checked: "provider has no publication for this proposal revision" },
+    });
     const mismatchPermit = await preparePublication(h, ids, "iro208-publication-prepare-mismatch-0001");
     await runPublicationEffect(h, mismatchPermit, ids, "effect:iro208:mismatch", "mismatch");
     const mismatch = await handleAuthenticatedRoute(
@@ -1838,6 +1872,33 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(mismatch.status, 409);
     assert.deepEqual(await mismatch.json(), { error: "commercial_publication_effect_mismatch" });
+    // The provider showed something other than what was sent, so delivery is not confirmed and a
+    // person must record what they found before the proposal goes again.
+    const resendAfterMismatch = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-after-mismatch-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(resendAfterMismatch.status, 409);
+    assert.equal(
+      (await resendAfterMismatch.json() as { next_step: string }).next_step,
+      "confirm_delivery_by_hand",
+    );
+    h.db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const confirmed = await recordProposalDeliveryConfirmation(h.env as never, {
+      tenantId: TENANT,
+      effectId: "effect:iro208:mismatch",
+      outcome: "not_delivered",
+      note: "Checked with the customer: no proposal reached them.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "iro208-delivery-confirmation-0001",
+    });
+    assert.equal(confirmed.effectState, "reconciled");
     const successPermit = await preparePublication(h, ids, "iro208-publication-prepare-success-0001");
     await runPublicationEffect(h, successPermit, ids, "effect:iro208:success", "success");
     const settled = await handleAuthenticatedRoute(

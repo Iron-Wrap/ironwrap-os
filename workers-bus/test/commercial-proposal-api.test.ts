@@ -963,3 +963,778 @@ function totalChanges(database: DatabaseSync): number {
 function at(minutes: number): Date {
   return new Date(NOW.getTime() + minutes * 60_000);
 }
+
+test("a proposal is not sent again until its last send is confirmed delivered", async () => {
+  for (const outcome of ["unknown", "rejected"] as const) {
+    const db = new SqliteD1();
+    const env = commercialEnv(db);
+    try {
+      const triage = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/lead-triage-decisions", {
+          lead_id: LEAD_ID,
+          expected_lead_version: 1,
+          lifecycle_status: "qualified",
+          priority: "normal",
+          category: "replacement",
+          summary: "Qualified lead for publication.",
+          next_action: "Prepare the customer proposal.",
+        }, `resend-guard-triage-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(triage.status, 201);
+      await seedApprovedQuote(env, { alreadyQualified: true });
+      const proposal = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-revisions", proposalBody(new Date().toISOString()), `resend-guard-proposal-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(proposal.status, 201);
+      const prepareBody = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        facts_observed_at: new Date().toISOString(),
+        evidence: EVIDENCE,
+      };
+      const prepared = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `resend-guard-prepare-1-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(prepared.status, 201);
+      const { permit } = await prepared.json() as {
+        permit: { permit_id: string; policy_ref: string; policy_version: string; expires_at: string };
+      };
+      const expectedReadback = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        state: "published",
+      };
+      // The first send leaves the provider without a confirmed answer (or a settled refusal).
+      await runExternalEffect(
+        env,
+        {
+          effectId: `effect:publication:${outcome}`,
+          tenantId: TENANT,
+          actor: { type: "worker", id: OPS_ID },
+          taskId: "task:commercial-publication",
+          authority: {
+            permitRef: permit.permit_id,
+            policyRef: permit.policy_ref,
+            policyVersion: permit.policy_version,
+            tenantId: TENANT,
+            actorType: "worker",
+            actorId: OPS_ID,
+            expiresAt: permit.expires_at,
+            allowedActions: ["proposal.publish"],
+          },
+          aggregate: { type: "proposal_publication", id: "proposal-pack:commercial:api:0001", version: 1 },
+          intentId: "proposal-revision:commercial:api:0001",
+          action: "proposal.publish",
+          request: expectedReadback,
+          provider: "native-commercial-publication",
+          idempotencyKey: `effect:publication:${outcome}:key`,
+          deadlineAt: new Date(Date.parse(permit.expires_at) - 1_000).toISOString(),
+          expectedReadback,
+          correlationId: "commercial-publication-correlation",
+        },
+        {
+          async dispatch() {
+            return { outcome, detailCode: `provider_${outcome}` } as never;
+          },
+          async replay() {
+            return { published: false };
+          },
+        },
+      ).catch(() => undefined);
+      const state = (db.raw.prepare(
+        "SELECT state FROM external_effects WHERE effect_id = ?",
+      ).get(`effect:publication:${outcome}`) as { state: string }).state;
+
+      const again = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `resend-guard-prepare-2-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      if (outcome === "unknown") {
+        assert.equal(again.status, 409, `a send in state ${state} is not confirmed delivered`);
+        assert.deepEqual(await again.json(), {
+          error: "proposal_delivery_unconfirmed",
+          delivery_state: state,
+          external_effect_id: `effect:publication:${outcome}`,
+          // An unknown send is settled by a person recording what they checked.
+          next_step: "confirm_delivery_by_hand",
+        });
+      } else {
+        assert.equal(state, "failed");
+        assert.equal(again.status, 201, "a settled refusal did not reach the customer; a new send may go");
+      }
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("a person records whether a proposal send that could not be confirmed reached the customer", async () => {
+  const { authenticateAppRequest, randomToken, sessionHashFor } = await import("../src/app-auth.ts");
+  for (const outcome of ["not_delivered", "delivered"] as const) {
+    const db = new SqliteD1();
+    const env = {
+      ...commercialEnv(db),
+      APP_TENANT_ID: TENANT,
+      APP_AUTH_PEPPER: "delivery-confirmation-test-pepper-0123456789abcdef",
+    } as AppEnv;
+    try {
+      const triage = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/lead-triage-decisions", {
+          lead_id: LEAD_ID,
+          expected_lead_version: 1,
+          lifecycle_status: "qualified",
+          priority: "normal",
+          category: "replacement",
+          summary: "Qualified lead for publication.",
+          next_action: "Prepare the customer proposal.",
+        }, `delivery-confirm-triage-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(triage.status, 201);
+      await seedApprovedQuote(env, { alreadyQualified: true });
+      const proposal = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-revisions", proposalBody(new Date().toISOString()), `delivery-confirm-proposal-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(proposal.status, 201);
+      const prepareBody = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        facts_observed_at: new Date().toISOString(),
+        evidence: EVIDENCE,
+      };
+      const prepared = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-1-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(prepared.status, 201);
+      const { permit } = await prepared.json() as {
+        permit: { permit_id: string; policy_ref: string; policy_version: string; expires_at: string };
+      };
+      const expectedReadback = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        state: "published",
+      };
+      const effectId = `effect:publication:conflict:${outcome}`;
+      // The provider answers, but its readback is not what was sent: a manual exception.
+      await runExternalEffect(
+        env,
+        {
+          effectId,
+          tenantId: TENANT,
+          actor: { type: "worker", id: OPS_ID },
+          taskId: "task:commercial-publication",
+          authority: {
+            permitRef: permit.permit_id,
+            policyRef: permit.policy_ref,
+            policyVersion: permit.policy_version,
+            tenantId: TENANT,
+            actorType: "worker",
+            actorId: OPS_ID,
+            expiresAt: permit.expires_at,
+            allowedActions: ["proposal.publish"],
+          },
+          aggregate: { type: "proposal_publication", id: "proposal-pack:commercial:api:0001", version: 1 },
+          intentId: "proposal-revision:commercial:api:0001",
+          action: "proposal.publish",
+          request: expectedReadback,
+          provider: "native-commercial-publication",
+          idempotencyKey: `${effectId}:key`,
+          deadlineAt: new Date(Date.parse(permit.expires_at) - 1_000).toISOString(),
+          expectedReadback,
+          correlationId: "commercial-publication-correlation",
+        },
+        {
+          async dispatch() {
+            return {
+              outcome: "accepted" as const,
+              value: { published: true },
+              providerExternalId: "provider-publication-conflict",
+              providerResponse: { id: "provider-publication-conflict" },
+              readback: {
+                status: "match" as const,
+                providerExternalId: "provider-publication-conflict",
+                observed: { ...expectedReadback, state: "withdrawn" },
+              },
+            };
+          },
+          async replay() {
+            return { published: false };
+          },
+        },
+      ).catch(() => undefined);
+      const effectState = () => (db.raw.prepare("SELECT state FROM external_effects WHERE effect_id = ?")
+        .get(effectId) as { state: string }).state;
+      assert.equal(effectState(), "manual_exception");
+
+      const blocked = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-2-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(blocked.status, 409);
+      assert.deepEqual(await blocked.json(), {
+        error: "proposal_delivery_unconfirmed",
+        delivery_state: "manual_exception",
+        external_effect_id: effectId,
+        next_step: "confirm_delivery_by_hand",
+      });
+
+      const confirmation = { external_effect_id: effectId, outcome, note: "Called the customer and checked their inbox." };
+      // A role without the commercial set, or a caller that is not a person's own session, is refused.
+      const notPerson = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/delivery-confirmations", confirmation, `delivery-confirm-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(notPerson.status, 403);
+      assert.deepEqual(await notPerson.json(), { error: "person_session_required" });
+
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const token = randomToken();
+      const now = new Date();
+      db.raw.prepare(
+        `INSERT INTO app_sessions
+          (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+           created_ip_hash, created_user_agent_hash, device_id)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+      ).run(
+        await sessionHashFor(env, token), OPS_ID, TENANT, now.toISOString(),
+        new Date(now.getTime() + 3_600_000).toISOString(), now.toISOString(), "d".repeat(64), "e".repeat(64),
+      );
+      const authenticated = await authenticateAppRequest(
+        new Request("https://app.example.com/api/v1/session", { headers: { cookie: `__Host-ironwrap_session=${token}` } }),
+        env,
+      );
+      assert.ok(authenticated.ok);
+      const person = authenticated.auth;
+      const confirm = (key: string, body: Record<string, unknown>) =>
+        handleAuthenticatedRoute(
+          new Request("https://app.example.com/api/v1/commercial/proposal-publications/delivery-confirmations", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": key,
+              "x-csrf-token": person.csrfToken,
+            },
+            body: JSON.stringify(body),
+          }),
+          env,
+          person,
+        );
+      const tooShort = await confirm(`delivery-confirm-short-${outcome}`, { ...confirmation, note: "ok" });
+      assert.equal(tooShort.status, 400);
+
+      const recorded = await confirm(`delivery-confirm-${outcome}`, confirmation);
+      assert.equal(recorded.status, 201, await recorded.clone().text());
+      const expectedState = outcome === "delivered" ? "succeeded" : "reconciled";
+      assert.equal((await recorded.json() as { effect: { state: string } }).effect.state, expectedState);
+      assert.equal(effectState(), expectedState);
+      assert.equal(
+        (db.raw.prepare("SELECT count(*) AS n FROM audit_log WHERE automation = 'proposal_delivery'").get() as { n: number }).n,
+        1,
+        "one audit row per confirmation",
+      );
+      assert.equal(
+        (db.raw.prepare("SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'")
+          .get(effectId) as { n: number }).n,
+        0,
+        "the exception the send opened is resolved by the confirmation",
+      );
+      const replay = await confirm(`delivery-confirm-${outcome}`, confirmation);
+      assert.equal(replay.status, 200);
+      assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+      const again = await confirm(`delivery-confirm-again-${outcome}`, confirmation);
+      assert.equal(again.status, 409);
+      assert.equal((await again.json() as { error: string }).error, "proposal_delivery_not_awaiting_confirmation");
+
+      const next = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-3-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      if (outcome === "not_delivered") {
+        assert.equal(next.status, 201, "not delivered: the proposal may be sent again");
+      } else {
+        // Delivered: record that send as the publication instead of sending it a second time.
+        assert.equal(next.status, 409);
+        assert.deepEqual(await next.json(), {
+          error: "proposal_delivery_not_recorded",
+          delivery_state: "succeeded",
+          external_effect_id: effectId,
+          next_step: "record_publication",
+        });
+      }
+    } finally {
+      db.close();
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Delivery guard follow-ups (review of #15): readback after a permit expires, D1 single flight,
+// expired never-started sends, a person settling an unknown send, and the confirmation ledger.
+
+const PACK = "proposal-pack:commercial:api:0001";
+const REVISION = "proposal-revision:commercial:api:0001";
+const EFFECT_TOKEN = "delivery-guard-effect-runtime-token-0123456789abcdef";
+
+async function publicationReady(tag: string) {
+  const db = new SqliteD1();
+  const env = {
+    ...commercialEnv(db),
+    APP_TENANT_ID: TENANT,
+    APP_AUTH_PEPPER: "delivery-guard-test-pepper-0123456789abcdef0123",
+    EFFECT_RUNTIME_ENABLED: "true",
+    EFFECT_RUNTIME_TOKEN: EFFECT_TOKEN,
+  } as AppEnv;
+  const triage = await handleAuthenticatedRoute(
+    request("/api/v1/commercial/lead-triage-decisions", {
+      lead_id: LEAD_ID,
+      expected_lead_version: 1,
+      lifecycle_status: "qualified",
+      priority: "normal",
+      category: "replacement",
+      summary: "Qualified lead for publication.",
+      next_action: "Prepare the customer proposal.",
+    }, `${tag}-triage`),
+    env,
+    auth("ops"),
+  );
+  assert.equal(triage.status, 201);
+  await seedApprovedQuote(env, { alreadyQualified: true });
+  const proposal = await handleAuthenticatedRoute(
+    request("/api/v1/commercial/proposal-revisions", proposalBody(new Date().toISOString()), `${tag}-proposal`),
+    env,
+    auth("ops"),
+  );
+  assert.equal(proposal.status, 201);
+  const prepareBody = (factsObservedAt = new Date().toISOString()) => ({
+    proposal_revision_id: REVISION,
+    proposal_pack_id: PACK,
+    publication_version: 1,
+    previous_state: "draft",
+    state: "published",
+    facts_observed_at: factsObservedAt,
+    evidence: EVIDENCE,
+  });
+  const prepare = (key: string, factsObservedAt?: string) =>
+    handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", prepareBody(factsObservedAt), key),
+      env,
+      auth("ops"),
+    );
+  return { db, env, prepare, prepareBody };
+}
+
+type Permit = { permit_id: string; policy_ref: string; policy_version: string; expires_at: string };
+
+const READBACK = { proposal_revision_id: REVISION, proposal_pack_id: PACK, publication_version: 1, state: "published" };
+
+function effectRequest(permit: Permit, effectId: string, deadlineAt?: string) {
+  return {
+    effectId,
+    tenantId: TENANT,
+    actor: { type: "worker" as const, id: OPS_ID },
+    taskId: "task:commercial-publication",
+    authority: {
+      permitRef: permit.permit_id,
+      policyRef: permit.policy_ref,
+      policyVersion: permit.policy_version,
+      tenantId: TENANT,
+      actorType: "worker" as const,
+      actorId: OPS_ID,
+      expiresAt: permit.expires_at,
+      allowedActions: ["proposal.publish"],
+    },
+    aggregate: { type: "proposal_publication", id: PACK, version: 1 },
+    intentId: REVISION,
+    action: "proposal.publish",
+    request: READBACK,
+    provider: "native-commercial-publication",
+    idempotencyKey: `${effectId}:key`,
+    deadlineAt: deadlineAt ?? new Date(Date.parse(permit.expires_at) - 1_000).toISOString(),
+    expectedReadback: READBACK,
+    correlationId: "commercial-publication-correlation",
+  };
+}
+
+async function runSend(env: AppEnv, permit: Permit, effectId: string, mode: "unknown" | "conflict" | "success") {
+  await runExternalEffect(env, effectRequest(permit, effectId), {
+    async dispatch() {
+      if (mode === "unknown") return { outcome: "unknown", detailCode: "provider_timeout" } as never;
+      return {
+        outcome: "accepted" as const,
+        value: { published: true },
+        providerExternalId: `provider:${effectId}`,
+        providerResponse: { id: `provider:${effectId}` },
+        readback: {
+          status: "match" as const,
+          providerExternalId: `provider:${effectId}`,
+          observed: mode === "conflict" ? { ...READBACK, state: "withdrawn" } : READBACK,
+        },
+      };
+    },
+    async replay() {
+      return { published: false };
+    },
+  }).catch(() => undefined);
+}
+
+async function personSession(db: SqliteD1, env: AppEnv, userId: string, role: "ops" | "owner" | "sales") {
+  const { authenticateAppRequest, randomToken, sessionHashFor } = await import("../src/app-auth.ts");
+  db.raw.prepare("UPDATE app_users SET access_role = ? WHERE user_id = ?").run(role, userId);
+  const token = randomToken();
+  const now = Date.now();
+  db.raw.prepare(
+    `INSERT INTO app_sessions
+      (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+       created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+  ).run(
+    await sessionHashFor(env, token), userId, TENANT, new Date(now - 1_000).toISOString(),
+    new Date(now + 3_600_000).toISOString(), new Date(now - 1_000).toISOString(), "d".repeat(64), "e".repeat(64),
+  );
+  const outcome = await authenticateAppRequest(
+    new Request("https://app.example.com/api/v1/session", { headers: { cookie: `__Host-ironwrap_session=${token}` } }),
+    env,
+  );
+  assert.ok(outcome.ok, "the synthetic person session authenticates");
+  return outcome.auth;
+}
+
+function personPost(env: AppEnv, person: AuthContext, path: string, key: string, body: Record<string, unknown>) {
+  return handleAuthenticatedRoute(
+    new Request(`https://app.example.com${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": key, "x-csrf-token": person.csrfToken },
+      body: JSON.stringify(body),
+    }),
+    env,
+    person,
+  );
+}
+
+const CONFIRM_PATH = "/api/v1/commercial/proposal-publications/delivery-confirmations";
+
+test("a delivery confirmed by hand is recorded after the permit expired, by another commercial person", async () => {
+  const { db, env, prepare } = await publicationReady("readback");
+  try {
+    // A permit that lives about four seconds from now (facts observed 26 seconds ago).
+    const prepared = await prepare("readback-prepare-1", new Date(Date.now() - 26_000).toISOString());
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, "effect:readback:conflict", "conflict");
+    const other = await personSession(db, env, OTHER_OPS_ID, "ops");
+    const confirmed = await personPost(env, other, CONFIRM_PATH, "readback-confirm", {
+      external_effect_id: "effect:readback:conflict",
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
+    });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    while (Date.now() <= Date.parse(permit.expires_at) + 50) await new Promise((done) => setTimeout(done, 100));
+
+    const blocked = await prepare("readback-prepare-2");
+    assert.equal(blocked.status, 409);
+    assert.equal((await blocked.json() as { next_step: string }).next_step, "record_publication");
+
+    // Recording what already ran is readback: the expired permit and a person other than the one
+    // who prepared it still record the publication.
+    const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "readback-record", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: "effect:readback:conflict",
+    });
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+    assert.equal((await recorded.json() as { publication: { state: string } }).publication.state, "published");
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 holds one proposal send in flight, the claim route included, and a person settles an unknown send", async () => {
+  const { handleExternalEffectClaim } = await import("../src/effect-runtime-admin.ts");
+  const { db, env, prepare } = await publicationReady("single-flight");
+  try {
+    const prepared = await prepare("single-flight-prepare-1");
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, "effect:single-flight:unknown", "unknown");
+
+    // The service-token claim path never passes through prepare; D1 refuses the second send itself.
+    const second = effectRequest(permit, "effect:single-flight:second");
+    const claim = await handleExternalEffectClaim(
+      new Request("https://worker.example.com/admin/effects/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+        body: JSON.stringify({ effect: second, authority: second.authority }),
+      }),
+      env,
+    );
+    assert.equal(claim.status, 409, await claim.clone().text());
+    assert.deepEqual(await claim.json(), { error: "proposal_delivery_unconfirmed" });
+    assert.equal(
+      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
+      1,
+    );
+
+    // A caller-supplied compensation link is no exemption: a "compensation" that is itself a
+    // publish of the same revision is a second send.
+    const disguised = effectRequest(permit, "effect:single-flight:disguised");
+    const disguisedClaim = await handleExternalEffectClaim(
+      new Request("https://worker.example.com/admin/effects/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+        body: JSON.stringify({
+          effect: { ...disguised, compensatesEffectId: "effect:single-flight:unknown" },
+          authority: disguised.authority,
+        }),
+      }),
+      env,
+    );
+    assert.equal(disguisedClaim.status, 409, await disguisedClaim.clone().text());
+    assert.deepEqual(await disguisedClaim.json(), { error: "proposal_delivery_unconfirmed" });
+    assert.equal(
+      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
+      1,
+      "no second publish effect exists",
+    );
+    // The claim runs on the server's clock: a backdated `now` cannot make a lapsed deadline current.
+    const backdated = effectRequest(permit, "effect:single-flight:backdated", new Date(Date.now() - 60_000).toISOString());
+    const backdatedClaim = await handleExternalEffectClaim(
+      new Request("https://worker.example.com/admin/effects/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+        body: JSON.stringify({
+          effect: { ...backdated, now: new Date(Date.now() - 120_000).toISOString() },
+          authority: backdated.authority,
+        }),
+      }),
+      env,
+    );
+    assert.equal(backdatedClaim.status, 422, await backdatedClaim.clone().text());
+    assert.deepEqual(await backdatedClaim.json(), { error: "effect_deadline_invalid" });
+
+    // A person may say "not delivered" only once the provider's own answer can no longer be late.
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const tooEarly = await personPost(env, ops, CONFIRM_PATH, "single-flight-confirm-early", {
+      external_effect_id: "effect:single-flight:unknown",
+      outcome: "not_delivered",
+      note: "No proposal in the customer's inbox or spam.",
+    });
+    assert.equal(tooEarly.status, 409);
+    assert.equal((await tooEarly.json() as { error: string }).error, "proposal_delivery_answer_may_be_late");
+    const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+    const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+    const settled = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT,
+      effectId: "effect:single-flight:unknown",
+      outcome: "not_delivered",
+      note: "No proposal in the customer's inbox or spam.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "single-flight-confirm",
+      now: new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
+    });
+    assert.equal(settled.effectState, "reconciled");
+    const next = await prepare("single-flight-prepare-2");
+    assert.equal(next.status, 201);
+  } finally {
+    db.close();
+  }
+});
+
+test("a send that never started and is past its deadline does not block, and a prepare replay returns its permit", async () => {
+  const { db, env, prepare } = await publicationReady("expired");
+  try {
+    const observedAt = new Date().toISOString();
+    const prepared = await prepare("expired-prepare-1", observedAt);
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    const replay = await prepare("expired-prepare-1", observedAt);
+    assert.ok(replay.status === 200 || replay.status === 201);
+    assert.equal((await replay.json() as { permit: Permit }).permit.permit_id, permit.permit_id);
+
+    const { proposeExternalEffect } = await import("../src/effect-runtime.ts");
+    await proposeExternalEffect(env, {
+      ...effectRequest(permit, "effect:expired:proposed", new Date(Date.now() + 300).toISOString()),
+      authority: { permitRef: permit.permit_id, policyRef: permit.policy_ref, policyVersion: permit.policy_version },
+    } as never);
+    // While its deadline is open the proposed send blocks; a replay of the original prepare does not.
+    const blocked = await prepare("expired-prepare-2");
+    assert.equal(blocked.status, 409);
+    const replayAfterEffect = await prepare("expired-prepare-1", observedAt);
+    assert.ok(replayAfterEffect.status === 200 || replayAfterEffect.status === 201);
+    assert.equal((await replayAfterEffect.json() as { permit: Permit }).permit.permit_id, permit.permit_id);
+
+    await new Promise((done) => setTimeout(done, 400));
+    const after = await prepare("expired-prepare-3");
+    assert.equal(after.status, 201, "a send past its deadline that never started sent nothing");
+    const { permit: fresh } = await after.json() as { permit: Permit };
+    await runSend(env, fresh, "effect:expired:fresh", "success");
+    assert.equal(
+      (db.raw.prepare("SELECT state FROM external_effects WHERE effect_id = 'effect:expired:fresh'").get() as { state: string }).state,
+      "succeeded",
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("the confirmation ledger refuses what it must, in the route and in D1", async () => {
+  const { db, env, prepare } = await publicationReady("ledger");
+  try {
+    const prepared = await prepare("ledger-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, "effect:ledger:conflict", "conflict");
+    const ops = await personSession(db, env, OPS_ID, "ops");
+
+    // Seven characters measured as SQLite measures them: refused as input, never as a 503.
+    const emoji = await personPost(env, ops, CONFIRM_PATH, "ledger-emoji", {
+      external_effect_id: "effect:ledger:conflict",
+      outcome: "delivered",
+      note: "abc\u{1F600}def",
+    });
+    assert.equal(emoji.status, 400);
+    assert.deepEqual(await emoji.json(), { error: "invalid_proposal_delivery_confirmation" });
+
+    // An effect that is not a proposal send is not found, on the route and in D1.
+    const { proposeExternalEffect } = await import("../src/effect-runtime.ts");
+    await proposeExternalEffect(env, {
+      ...effectRequest(permit, "effect:ledger:not-a-send"),
+      action: "synthetic.notify",
+      aggregate: { type: "synthetic_notice", id: PACK, version: 1 },
+      idempotencyKey: "effect:ledger:not-a-send:key",
+      // Not a commercial permit, so 0093's commercial binding guard does not apply to it.
+      authority: { permitRef: "synthetic-authority:not-a-send-0001", policyRef: "synthetic", policyVersion: "v1" },
+    } as never);
+    const notASend = await personPost(env, ops, CONFIRM_PATH, "ledger-not-a-send", {
+      external_effect_id: "effect:ledger:not-a-send",
+      outcome: "delivered",
+      note: "Checked with the customer by phone.",
+    });
+    assert.equal(notASend.status, 404);
+    assert.deepEqual(await notASend.json(), { error: "proposal_delivery_effect_not_found" });
+    // Another tenant's session cannot reach this tenant's send.
+    const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+    await assert.rejects(
+      recordProposalDeliveryConfirmation(env, {
+        tenantId: "other-tenant",
+        effectId: "effect:ledger:conflict",
+        outcome: "delivered",
+        note: "Checked with the customer by phone.",
+        actorUserId: OPS_ID,
+        actorRole: "ops",
+        idempotencyKey: "ledger-cross-tenant",
+      }),
+      { code: "proposal_delivery_effect_not_found" },
+    );
+
+    // D1 itself: no exit from the exception without a confirmation, and the ledger is append-only.
+    assert.throws(
+      () => db.raw.prepare(
+        "UPDATE external_effects SET state = 'succeeded', updated_at = ? WHERE effect_id = 'effect:ledger:conflict'",
+      ).run(new Date().toISOString()),
+      /external_effect_terminal/,
+    );
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "ledger-confirm", {
+      external_effect_id: "effect:ledger:conflict",
+      outcome: "not_delivered",
+      note: "The customer has not received anything.",
+    });
+    assert.equal(confirmed.status, 201);
+    assert.throws(
+      () => db.raw.prepare("UPDATE proposal_delivery_confirmations SET note = 'changed note text'").run(),
+      /proposal_delivery_confirmations_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM proposal_delivery_confirmations").run(),
+      /proposal_delivery_confirmations_append_only/,
+    );
+    // A non-publish effect cannot carry a confirmation row, even inserted directly.
+    assert.throws(
+      () => db.raw.prepare(
+        `INSERT INTO proposal_delivery_confirmations
+           (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+            confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+         VALUES ('delivery-confirmation:direct-0001', ?, 'effect:ledger:not-a-send', ?, ?, 'delivered',
+                 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+      ).run(TENANT, PACK, REVISION, OPS_ID, "a".repeat(64), "b".repeat(64), new Date().toISOString()),
+      /proposal_delivery_confirmation_effect_invalid/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("single flight holds across publication versions, and any commercial person records a send that ran", async () => {
+  const { db, env, prepare, prepareBody } = await publicationReady("versions");
+  try {
+    const first = await prepare("versions-prepare-1");
+    assert.equal(first.status, 201);
+    const { permit } = await first.json() as { permit: Permit };
+    // A second version of the same pack cannot open a second live permit.
+    const otherVersion = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", { ...prepareBody(), publication_version: 2 }, "versions-prepare-v2"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(otherVersion.status, 409);
+    assert.equal((await otherVersion.json() as { error: string }).error, "proposal_publication_permit_outstanding");
+
+    await runSend(env, permit, "effect:versions:unknown", "unknown");
+    // D1 refuses a second publish of the same revision at another version too.
+    const { proposeExternalEffect } = await import("../src/effect-runtime.ts");
+    await assert.rejects(
+      proposeExternalEffect(env, {
+        ...effectRequest(permit, "effect:versions:v2"),
+        aggregate: { type: "proposal_publication", id: PACK, version: 2 },
+        authority: { permitRef: "synthetic-authority:v2-0001", policyRef: "synthetic", policyVersion: "v1" },
+      } as never),
+      { code: "effect_proposal_delivery_unconfirmed" },
+    );
+
+    // A send that succeeded is recorded by another commercial person, with no hand confirmation.
+    const { reconcileExternalEffect } = await import("../src/effect-runtime.ts");
+    await reconcileExternalEffect(env, "effect:versions:unknown", {
+      outcome: "executed",
+      evidence: { provider: "late answer: delivered" },
+    });
+    const other = await personSession(db, env, OTHER_OPS_ID, "ops");
+    const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "versions-record", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: "effect:versions:unknown",
+    });
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+  } finally {
+    db.close();
+  }
+});

@@ -608,8 +608,9 @@ new one can be added.
   job, stored as an immutable receipt that the entry names.
 - A waiver is the owner's decision. A person holding `production.gates.clear` (owner, production)
   requests one on Deposit, Materials or Access
-  (`POST /api/v1/production/jobs/{job}/gates/{gate}/clearance`). A holder of the matching set
-  decides it (`.../waiver-decisions`): `money.approve` for Deposit, `production.gates.waive` for
+  (`POST /api/v1/production/jobs/{job}/gates/{gate}/clearance`), holding at most one open request
+  per gate. A holder of the matching set decides it (`.../waiver-decisions`, for a job on their own
+  production runway): `money.approve` for Deposit, `production.gates.waive` for
   Materials and Access, both carried by the owner today. The decider is never the requester, except
   that the only active holder may approve their own item with a reason, recorded as a
   self-approval (`only_holder`). Safety and Weather are never waivable, and Crew has no waiver.

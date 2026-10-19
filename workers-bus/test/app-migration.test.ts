@@ -2280,9 +2280,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // to be captured after the stop. 0153 moves production gate clearance onto an append-only
     // ledger whose apply trigger is the only writer of a gate row. 0154 adds four tenant-scoped
     // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
-    // proposal revision checks.
+    // proposal revision checks. 0156 lets a person record whether an unconfirmed proposal send
+    // reached the customer.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 134);
+    assert.equal(migrations.length, 135);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2429,10 +2430,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
     // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
-    // 0154 adds four named indexes.
+    // 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger, one named
+    // index, four guards and the proposal publish single-flight guard, and re-creates the external
+    // effect binding guard under its name.
     assert.deepEqual(
       { ...counts },
-      { tables: 275, indexes: 377, triggers: 751 },
+      { tables: 276, indexes: 378, triggers: 756 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

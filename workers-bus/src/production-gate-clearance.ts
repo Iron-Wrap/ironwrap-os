@@ -14,13 +14,16 @@
 //     * `office_waiver` (Deposit, Materials, Access): a waiver is the owner's decision. From a
 //       person who may not decide it (production, or an owner while another owner is active) it
 //       is a `waiver_request`, answered 409 `production_gate_waiver_requested`; another holder
-//       decides it on the route below. From the only active holder of the deciding set it is a
-//       self-approved `waiver_decision` (owner ruling D-08) and the gate is waived. Safety and
-//       Weather are never waivable and Crew has no waiver: 409 `production_gate_not_waivable`.
+//       decides it on the route below. A person holds at most one open request per gate, since
+//       each request moves the gate's version: a further one is answered 409
+//       `production_gate_waiver_request_open` with the open request's id. From the only active
+//       holder of the deciding set it is a self-approved `waiver_decision` (owner ruling D-08)
+//       and the gate is waived. Safety and Weather are never waivable and Crew has no waiver:
+//       409 `production_gate_not_waivable`.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
-//     the deciding set answers a waiver request. The requester never decides their own request
-//     while another holder is active.
+//     the deciding set answers a waiver request on a job of their own runway. The requester never
+//     decides their own request while another holder is active.
 //
 // Both routes are people-only: the CSRF token, then the person's own cookie session, then the
 // operation set of their live role. Agents, connectors, service tokens and the effect runtime
@@ -121,6 +124,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_not_waivable: 409,
   deposit_settlement_not_observed: 409,
   production_gate_waiver_request_invalid: 409,
+  production_gate_waiver_request_open: 409,
   production_gate_waiver_already_decided: 409,
   production_gate_waiver_self_approval_refused: 409,
   production_gate_clearance_gate_invalid: 409,
@@ -430,6 +434,48 @@ async function otherWaiverDeciders(
   return Number(row?.holders ?? 0);
 }
 
+/**
+ * The caller's own runway read, in the caller's own tenant. A job reference is never taken on
+ * trust (ELEC-112 finding 3), and the runway is exactly the set the scheduling fence consults, so
+ * a job this read cannot see has no gate this session may clear or decide.
+ */
+async function assertOnRunway(env: AppEnv, auth: AuthContext, roofJobId: string): Promise<void> {
+  let onRunway: boolean;
+  try {
+    const runway = await buildProductionRunwayReadModel(env, auth);
+    onRunway = runway.jobs.some((candidate) => candidate.id === roofJobId);
+  } catch {
+    throw refusal("production_runway_unavailable", 502);
+  }
+  if (!onRunway) throw refusal("production_gate_job_not_on_runway", 409);
+}
+
+/** This person's undecided waiver request on this gate, as D1 counts it. */
+async function openWaiverRequest(
+  env: AppEnv,
+  tenantId: string,
+  gateId: string,
+  userId: string,
+): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `SELECT request.clearance_id
+       FROM production_gate_clearances request
+      WHERE request.tenant_id = ? AND request.gate_id = ? AND request.entry_kind = 'waiver_request'
+        AND request.actor_user_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM production_gate_clearances decision
+           WHERE decision.tenant_id = request.tenant_id AND decision.request_id = request.clearance_id
+        )
+      ORDER BY request.from_gate_version DESC
+      LIMIT 1`,
+  ).bind(tenantId, gateId, userId).first<{ clearance_id: string }>();
+  return row?.clearance_id ?? null;
+}
+
+function openRequestResponse(requestId: string): Response {
+  return json({ error: "production_gate_waiver_request_open", request_id: requestId }, 409);
+}
+
 function replayOf(existing: LedgerRow, requestSha256: string): LedgerRow {
   if (existing.request_sha256 !== requestSha256) {
     throw refusal("production_gate_clearance_replay_conflict", 409);
@@ -552,17 +598,7 @@ export async function handleProductionGateClearance(
     );
     if (!input) throw refusal("invalid_production_gate_clearance", 400);
 
-    // The caller's own runway read, in the caller's own tenant. A job reference is never taken
-    // on trust (ELEC-112 finding 3), and the runway is exactly the set the scheduling fence
-    // consults, so a job this read cannot see has no gate this session may clear.
-    let onRunway: boolean;
-    try {
-      const runway = await buildProductionRunwayReadModel(env, auth);
-      onRunway = runway.jobs.some((candidate) => candidate.id === input.roofJobId);
-    } catch {
-      throw refusal("production_runway_unavailable", 502);
-    }
-    if (!onRunway) throw refusal("production_gate_job_not_on_runway", 409);
+    await assertOnRunway(env, auth, input.roofJobId);
     if (input.basis === "office_waiver" && !isWaivableProductionGate(input.gate)) {
       throw refusal("production_gate_not_waivable", 409);
     }
@@ -612,15 +648,28 @@ export async function handleProductionGateClearance(
           reason: input.reason,
         };
     }
-    const appended = await appendEntry(env, {
-      tenantId,
-      gate: current,
-      person,
-      idempotency,
-      requestSha256,
-      entry,
-    });
-    return clearanceResponse(current, appended.row, appended.replayed);
+    if (entry.entry_kind === "waiver_request") {
+      const open = await openWaiverRequest(env, tenantId, current.gate_id, person.userId);
+      if (open) return openRequestResponse(open);
+    }
+    try {
+      const appended = await appendEntry(env, {
+        tenantId,
+        gate: current,
+        person,
+        idempotency,
+        requestSha256,
+        entry,
+      });
+      return clearanceResponse(current, appended.row, appended.replayed);
+    } catch (error) {
+      const open = error instanceof ProductionGateClearanceError &&
+          error.code === "production_gate_waiver_request_open"
+        ? await openWaiverRequest(env, tenantId, current.gate_id, person.userId)
+        : null;
+      if (open) return openRequestResponse(open);
+      throw error;
+    }
   } catch (error) {
     return refusalResponse(error);
   }
@@ -732,6 +781,7 @@ export async function handleProductionGateWaiverDecision(
     const idempotency = await idempotencyFor(req, tenantId);
     const input = parseProductionGateWaiverDecision(await readJsonBody(req));
     if (!input) throw refusal("invalid_production_gate_waiver_decision", 400);
+    await assertOnRunway(env, auth, roofJobId);
 
     const current = await readGate(env, tenantId, roofJobId, gate);
     if (!current) throw refusal("production_gate_record_unavailable", 409);

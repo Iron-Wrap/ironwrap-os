@@ -123,15 +123,16 @@ Field rules (the validator enforces them):
   the face's handoff, with no actor. Only the owner's request carries the owner's authority; a
   request from another role carries that role's, and one with no actor carries none.
   `signal.at` and every fact time are ISO 8601 durations relative to the case clock (`PT0M` is the
-  moment of the run, `-P3D` three days earlier). Cases contain no calendar dates. Where a fact
-  value must be a date or a timestamp (for example a registry field the model copies), its data
-  holds a marker the runner resolves against the case clock before the model sees it:
-  `{ "$case_date": "-P7D" }` becomes the ISO date seven Edmonton calendar days before the case
-  clock (so a span across a daylight-saving change still lands on the right day), and
-  `{ "$case_time": "PT2H" }` the ISO timestamp two hours after it. `expected` may carry the same
-  markers, resolved the same way before scoring and judging, so an expected argument matches the
-  date the model saw. A marker is an object with that one key and a duration of at most a century,
-  only in fact data or `expected`; a marker anywhere else, or any other `$`-key, is refused.
+  moment of the run, `-P3D` three days earlier), each spanning at most 36,600 days; every fact has
+  an `observed_at`. Cases contain no calendar dates. Where a fact value must be a date or a
+  timestamp (for example a registry field the model copies), its data holds a marker the runner
+  resolves against the case clock before the model sees it: `{ "$case_date": "-P7D" }` becomes the
+  ISO date seven Edmonton calendar days before the case clock (so a span across a daylight-saving
+  change still lands on the right day), and `{ "$case_time": "PT2H" }` the ISO timestamp two hours
+  after it. `expected` may carry the same markers, resolved the same way before scoring and judging,
+  so an expected argument matches the date the model saw. A marker is an object with that one key
+  and a duration of at most a century, only in fact data or `expected`; a marker anywhere else, or
+  any other `$`-key, is refused.
 - `clock` (optional): `{ "season": "winter" | "spring" | "summer" | "fall", "weekday": "monday" …
   "sunday", "local_time": "HH:MM" }`, Edmonton local time. A case whose facts depend on the season,
   the day, or the time of day sets it, so the run's clock never contradicts them; the replay runner
@@ -627,8 +628,8 @@ refuse a history section that fails it.
 **Bars.** Each bar names a metric path with `min` or `max`, and `min_n` when the metric needs that
 many records to be read. A gating bar that is missed fails qualification; without gating bars the
 score is `advisory`. Advisory bars become gating only after the owner reviews the first measured
-distribution. Contract item 14 does not yet name the history score, so the orchestrator records it
-there before the first gated run.
+distribution. Contract item 14 names the history score as a release's third score: a missed gating
+history bar fails the release, and advisory bars or a missing history score never do.
 
 ## Validation
 

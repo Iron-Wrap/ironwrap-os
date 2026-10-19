@@ -170,8 +170,17 @@ test("a non-delegable action asks first whatever the owner set, and off-until-en
   assert.deepEqual(live.reason_codes, ["policy_denied"]);
 });
 
+/** A production manager's press on compliance's view, the request a competency record answers. */
+const PRESS = {
+  signal_ref: "signal/sig_1",
+  kind: "owner_request",
+  source: "request",
+  actor: { type: "staff", role: "production", ref: "person:appu_production_1", authenticated: true },
+  expected_action_id: "authority.record",
+};
+
 test("compliance proposes an internal competency record for a person's approval only", () => {
-  const compliance = { specialistId: "compliance" };
+  const compliance = { specialistId: "compliance", requester: PRESS };
   const command = {
     operation: "record",
     authority_kind: "Worker Competency",
@@ -197,6 +206,10 @@ test("compliance proposes an internal competency record for a person's approval 
   assert.equal(proposed.result, "needs_approval");
   assert.equal(proposed.permit_kind, "asks_first");
   assert.equal(proposed.reviewer_role, "production");
+  // Only a press on compliance's view: the same command answering an ask, a field worker's press or
+  // no person's request abstains before its arguments are read.
+  for (const requester of [{ ...PRESS, source: "ask" }, { ...PRESS, actor: { ...PRESS.actor, type: "worker", role: "field" } }, { ...PRESS, expected_action_id: "authority.evaluate" }, null])
+    assert.deepEqual(evaluateStep(input({ ...compliance, requester, actionId: "authority.record", args: command })).reason_codes, ["out_of_scope"], JSON.stringify(requester));
   // More reference text than the stored list holds would only fail after a person approved it.
   // Each reference is within its own 512-character limit; together they are not.
   const oversized = Array.from({ length: 40 }, (_, index) => ({ ref: `r2://authority/${String(index).padStart(485, "x")}`, sha256: "c".repeat(64) }));
@@ -499,4 +512,19 @@ test("the settings map form is for action arguments only: the strict output dial
   // Every other registered schema stays in the strict dialect.
   for (const [actionId, entry] of Object.entries(REGISTRY))
     if (entry && actionId !== "settings.propose_change") assert.doesNotThrow(() => assertStrictSchema(entry.args), actionId);
+});
+
+test("a prepared people-only act names the person who performs it, under a hold too", () => {
+  const prepared = (specialistId: string, actionId: string, held: boolean) =>
+    evaluateStep(input({ specialistId, actionId, args: { note: "Synthetic." }, specialistState: { paused: false, held }, registry: registry({ [actionId]: ANY_ARGS }) }));
+  // The access change answers a staff ask (its own rule), as a draft and under a hold.
+  assert.deepEqual([prepare(PAIRING).reviewer_role, prepare(PAIRING, { specialistState: { paused: false, held: true } }).reviewer_role], ["owner", "owner"]);
+  for (const [specialistId, actionId, person] of [
+    ["orchestrator", "delegation.propose_change", "owner"],
+    ["billing_reconciliation", "payee.unfreeze_prepare", "owner"],
+    ["field_safety", "safety_stop.release_prepare", "production"],
+  ] as const) {
+    assert.equal(prepared(specialistId, actionId, false).reviewer_role, person, `${actionId} draft`);
+    assert.equal(prepared(specialistId, actionId, true).reviewer_role, person, `${actionId} under a hold`);
+  }
 });

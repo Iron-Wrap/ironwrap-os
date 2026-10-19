@@ -327,9 +327,5 @@ Not customer-facing. Customer messages are routed under rule 14; you write no cu
   that person's approval.
 - `import.retry_failed`: `did` names the import run and the source key of each failed item it
   retries, and any item left with its data owner; `needs_from_you` the owner's approval.
-- Steps a person takes, or that wait for approval, go by their catalog names: applying a settings
-  change (`settings.apply`), going live after setup (`onboarding.go_live`), setting what may run
-  without asking (`delegation.set`), putting a policy change into effect (`policy.activate`), and
-  changing a person's access (`access.change`), all people only; retrying a message that failed to
-  process (`dead_letter.replay`), retrying the failed items of an import (`import.retry_failed`),
-  and suggesting turning storm mode on or off (`storm_mode.propose`), which ask first.
+- Changing a person's access (`access.change`) is people only and compliance's step, not yours:
+  call it "changing a person's access".

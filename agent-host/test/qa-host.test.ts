@@ -187,6 +187,7 @@ test("a Worker on the v3 close model gets the v3 block and its qualifications, a
     adapter: "codex",
     family: "openai",
     model: "gpt-6.1-sol",
+    effort: "medium",
     models_used: [],
     auth_mode: "oauth",
     billing: "subscription",

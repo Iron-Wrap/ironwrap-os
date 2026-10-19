@@ -99,7 +99,7 @@ test("a rate-limited primary fails over to its declared fallback, which answers;
     [result.routeId, result.provider, result.family, result.route, result.qualificationRef, result.attempts, result.complianceRef, result.runClass],
     ["backup_sol", "codex_backup", "openai", "declared_fallback", "q-backup_sol", 2, "ai.openai.chatgpt-commercial", "live"],
   );
-  assert.deepEqual(result.failover, [{ routeId: "codex_sol", provider: "codex", model: "gpt-6.1-sol", reason: "rate_limited", retryAt: h.clock.now + 3_600_000 }]);
+  assert.deepEqual(result.failover, [{ routeId: "codex_sol", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retryAt: h.clock.now + 3_600_000 }]);
   assert.equal(result.gatewayConfigSha256, config.sha256);
   assert.deepEqual(
     ledger(h).map((record) => [record.routeId, record.route, record.provider, record.outcome, record.billing, record.runClass, record.complianceRef]),
@@ -245,6 +245,8 @@ test("an audit fails over within its route's family and never onto the family un
   h.adapters.claude.steps.push(longLimit(), outcome());
   const result = await audit(h);
   assert.deepEqual([result.status, result.routeId, result.family, result.route, hops(result)], ["ok", "claude_sonnet", "anthropic", "declared_fallback", [["claude_opus", "rate_limited"]]]);
+  // The result names the effort of the route that answered, and the hop it passed over its family.
+  assert.deepEqual([result.effort, result.failover.map((hop) => hop.family)], ["high", ["anthropic"]]);
   assert.equal(h.adapters.claude.calls[1].model, "claude-sonnet-5-5");
   // A chain that reaches the reviewed family past the configuration skips that hop per run.
   config.fallbacks.claude_opus = "codex_astra";

@@ -304,24 +304,27 @@ function closeBody(result: GatewayResult, mode: "live" | "shadow" | null, review
 
 /** The close for a Worker on the v3 close model (`close_model: 3`). */
 function closeBodyV3(result: GatewayResult, mode: "live" | "shadow", release: string | undefined): RunClose {
-  const { provider, model, authMode, routeId, family, adapter, billing, route } = result;
+  const { provider, model, authMode, routeId, family, effort, adapter, billing, route } = result;
   return {
     ...closeCommon(result),
     model:
-      provider === null || model === null || authMode === null || routeId === null || family === null || adapter === null || billing === null || route === null
+      provider === null || model === null || authMode === null || routeId === null || family === null || effort === null || adapter === null || billing === null || route === null
         ? null
         : {
             provider,
             adapter,
             family,
             model,
+            effort,
             models_used: result.modelsUsed,
             auth_mode: authMode,
             billing,
             tier: result.tier,
             route_id: routeId,
             route,
-            failover: result.failover.slice(0, 3).map((hop) => ({ route_id: hop.routeId, provider: hop.provider, model: hop.model, reason: hop.reason, retry_at: hop.retryAt })),
+            failover: result.failover
+              .slice(0, 3)
+              .map((hop) => ({ route_id: hop.routeId, provider: hop.provider, model: hop.model, family: hop.family, reason: hop.reason, retry_at: hop.retryAt })),
             qualification_ref: result.qualificationRef,
             release_sha256: release ?? null,
             gateway_config_sha256: result.gatewayConfigSha256,

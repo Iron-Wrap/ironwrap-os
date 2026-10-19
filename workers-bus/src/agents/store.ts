@@ -6,12 +6,12 @@ import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
 import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
 import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
-import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
+import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
-import { divertsToShadow, recordShadowStep, runMode, signalActions, type ShadowStepRow } from "./shadow.ts";
-import { WATCH_SIGNAL_SOURCE } from "./watches.ts";
+import { currentQualifications, divertsToShadow, qualificationHolds, recordShadowStep, runMode, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
+import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -77,13 +77,23 @@ export interface RunRow {
   mode?: "live" | "shadow";
 }
 
-/** What the host needs to route a run: its mode, its one expected action and the run it reviews. */
+/**
+ * What the host needs to route a run: its mode, its one expected action, the run it reviews and the
+ * specialist's current qualifications. `close_model: 3` says this Worker takes the v3 close model
+ * block; an older host reads neither, nor `review_of.family`, and closes as it always has.
+ */
 export interface RunHints {
   mode: "live" | "shadow";
   expected_action_id: string | null;
-  review_of: { run_id: string; provider: string } | null;
+  /** The reviewed run's provider id and, when it is known, its model family. */
+  review_of: { run_id: string; provider: string; family?: string } | null;
+  qualifications: QualificationHint[];
+  close_model: 3;
   output_extension?: { view: JsonSchema };
 }
+
+/** What data a Worker holds (`AGENT_DATA_CLASS`): `business`, or `synthetic` on a QA or dev Worker's seed data. */
+export type DataClass = "business" | "synthetic";
 
 export interface StepRow {
   step_id: string;
@@ -381,8 +391,11 @@ async function resumeRun(
     return { error: "run_key_conflict", status: 422 };
   }
   if (existing.state === "closed") return { error: "run_closed", status: 409 };
-  if (Date.parse(now) - Date.parse(existing.started_at) > DEFAULT_CEILINGS.wallTimeMs)
-    return {error: "run_expired", status: 409};
+  // A run past its wall-time ceiling can take no step; it closes now instead of staying open.
+  if (Date.parse(now) - Date.parse(existing.started_at) > DEFAULT_CEILINGS.wallTimeMs) {
+    await expireRun(db, tenantId, existing, now);
+    return { error: "run_expired", status: 409 };
+  }
   const resumed = await db
     .prepare("UPDATE agent_runs SET attempt = attempt + 1, attempt_started_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
     .bind(now, existing.run_id)
@@ -402,29 +415,40 @@ async function resumeRun(
 
 /**
  * Routing hints for the host, all from Worker records: the run's mode; the single action the
- * signal expects (a handoff's, or a watch that proposes one action); and, for the auditor's review
- * of another run, that run and the provider family that ran it, so the gateway can pick a
- * reviewer of a different family (contract "Model routing").
+ * signal expects (a handoff's, or a watch that proposes one action); for the auditor's review of
+ * another run, that run, its provider and the model family that ran it, so the gateway can pick a
+ * reviewer of a different family (contract "Model routing"); and the qualifications the
+ * specialist's live and shadow routes must match (contract "Qualification").
  */
 async function runHints(db: AgentDb, tenantId: string, run: RunRow, signal: SignalRow | null): Promise<RunHints> {
   const actions = signal ? signalActions(signal) : [];
+  const reviewed = signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null;
   return {
     mode: run.mode ?? "live",
     expected_action_id: actions.length === 1 ? actions[0] : null,
-    review_of: signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null,
+    // A family this Worker cannot name is left out; the host then finds no route to review it with.
+    review_of: reviewed && { run_id: reviewed.run_id, provider: reviewed.provider, ...(reviewed.family === null ? {} : { family: reviewed.family }) },
+    qualifications: await currentQualifications(db, tenantId, run.specialist_id),
+    close_model: 3,
     // Only an ask run may return a view, so only its open carries the view schema (face.ts).
     ...(askRun(run) ? { output_extension: { view: VIEW_SCHEMA } } : {}),
   };
 }
 
-async function reviewedRun(db: AgentDb, tenantId: string, specialistId: string, signal: SignalRow): Promise<RunHints["review_of"]> {
+/** The run an audit reviews, with the provider and family its close recorded (null when unknown). */
+async function reviewedRun(
+  db: AgentDb,
+  tenantId: string,
+  specialistId: string,
+  signal: SignalRow,
+): Promise<{ run_id: string; provider: string; family: string | null } | null> {
   if (specialistId !== "independent_auditor" || signal.subject_aggregate !== "coordination_run" || !signal.subject_id) return null;
   const reviewed = await db
     .prepare("SELECT run_id, close_json FROM agent_runs WHERE tenant_id = ? AND run_id = ?")
     .bind(tenantId, signal.subject_id)
     .first<{ run_id: string; close_json: string | null }>();
-  const provider = reviewed?.close_json ? (JSON.parse(reviewed.close_json) as { model?: { provider?: unknown } | null }).model?.provider : undefined;
-  return reviewed && typeof provider === "string" ? { run_id: reviewed.run_id, provider } : null;
+  const model = reviewed?.close_json ? (JSON.parse(reviewed.close_json) as { model?: { provider?: unknown } | null }).model : undefined;
+  return reviewed && typeof model?.provider === "string" ? { run_id: reviewed.run_id, provider: model.provider, family: familyOf(model) } : null;
 }
 
 export async function getRun(db: AgentDb, tenantId: string, runId: string): Promise<RunRow | null> {
@@ -1242,9 +1266,133 @@ const MODEL_ROUTED_SCHEMA: JsonSchema = {
   },
 };
 
-export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";
+const PROVIDER_ID = { type: "string", pattern: "^[a-z][a-z0-9_]{1,30}$" };
+const FAMILY = { type: "string", pattern: "^[a-z][a-z0-9_]{1,31}$" };
+const MODEL_ID = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" };
+const ROUTE_ID = { type: "string", pattern: "^[a-z][a-z0-9_]{1,40}$" };
+/** As agent_qualifications holds it (migration 0203). */
+const EFFORT = { type: "string", pattern: "^[a-z][a-z0-9_]{0,15}$" };
+const HEX64 = "^[0-9a-f]{64}$";
+const COMPLIANCE_REF = "^[a-z][a-z0-9._-]{1,63}$";
+/** The run classes that decide which provider accounts may serve a run (docs/COMPLIANCE-REGISTER.md "AI model providers"). */
+const RUN_CLASSES = ["live", "shadow", "eval_history", "synthetic"];
 
-const PROVIDER_FAMILIES = new Set(["claude", "codex"]);
+/**
+ * The close model block of a host on gateway config v3, sent once the open advertised
+ * `close_model: 3` (agent-host/src/host/worker.ts `CloseModelV3`): the account (`provider`) and its
+ * adapter, the model's family, the route and the hops it passed over, the qualification it relied
+ * on, the specialist's release, the gateway configuration and the provider terms it ran under.
+ */
+const MODEL_V3_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "provider", "adapter", "family", "model", "effort", "models_used", "auth_mode", "billing", "tier", "route_id", "route", "failover",
+    "qualification_ref", "release_sha256", "gateway_config_sha256", "review_of", "mode", "compliance_ref", "run_class", "risk_acceptance",
+  ],
+  properties: {
+    provider: PROVIDER_ID,
+    adapter: { type: "string", enum: ["openai_compatible", "anthropic_messages", "gemini", "bedrock", "vertex", "claude_agent_sdk", "codex"] },
+    family: FAMILY,
+    model: MODEL_ID,
+    /** The effort of the route that answered, which its qualification names. */
+    effort: EFFORT,
+    models_used: MODEL_PROPERTIES.models_used,
+    /** The account's credential mode. */
+    auth_mode: { type: "string", enum: ["api_key", "oauth", "cloud_identity"] },
+    billing: { type: "string", enum: ["api", "subscription"] },
+    tier: { type: "string", enum: ["routine", "hard", "audit"] },
+    route_id: ROUTE_ID,
+    route: { type: "string", enum: ["primary", "declared_fallback"] },
+    failover: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["route_id", "provider", "model", "family", "reason", "retry_at"],
+        properties: {
+          route_id: ROUTE_ID,
+          provider: PROVIDER_ID,
+          model: MODEL_ID,
+          /** The family of the hop's registry entry; null when the route had none. */
+          family: { type: ["string", "null"], pattern: FAMILY.pattern },
+          reason: { type: "string", pattern: "^[a-z][a-z_]{1,63}$" },
+          retry_at: { type: ["number", "null"], minimum: 0 },
+        },
+      },
+    },
+    qualification_ref: { type: ["string", "null"], pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$" },
+    release_sha256: { type: ["string", "null"], pattern: HEX64 },
+    gateway_config_sha256: { type: "string", pattern: HEX64 },
+    review_of: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["run_id", "family"],
+      properties: { run_id: { type: "string", maxLength: 80 }, family: FAMILY },
+    },
+    mode: { type: "string", enum: ["live", "shadow"] },
+    compliance_ref: { type: ["string", "null"], pattern: COMPLIANCE_REF },
+    run_class: { type: "string", enum: RUN_CLASSES },
+    risk_acceptance: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["ref", "run_class", "reason"],
+      properties: { ref: { type: "string", pattern: COMPLIANCE_REF }, run_class: { type: "string", enum: RUN_CLASSES }, reason: { type: "string", maxLength: 500 } },
+    },
+  },
+};
+
+/** A v3 close model block as validated, with the fields the Worker reads. */
+interface ModelV3 {
+  provider: string;
+  family: string;
+  model: string;
+  effort: string;
+  failover: Array<{ provider: string; model: string; family: string | null }>;
+  qualification_ref: string | null;
+  release_sha256: string | null;
+  run_class: string;
+}
+
+/** The v3 block of a validated close, or null for a legacy or routed block or none (`family` is v3's alone). */
+function modelV3(model: unknown): ModelV3 | null {
+  return typeof model === "object" && model !== null && Object.hasOwn(model, "family") ? (model as ModelV3) : null;
+}
+
+/** The run classes a close may carry here: eval runs never close on a Worker, and synthetic ones only on synthetic data. */
+const CLOSE_RUN_CLASSES: Record<DataClass, ReadonlySet<string>> = {
+  business: new Set(["live", "shadow"]),
+  synthetic: new Set(["live", "shadow", "synthetic"]),
+};
+
+/**
+ * The family each provider id of a gateway config v2 host stands for, which a legacy or routed
+ * close names in place of a family. No v3 family takes either name (agent-host registry.ts).
+ */
+const LEGACY_FAMILIES: Readonly<Record<string, string>> = { claude: "anthropic", codex: "openai" };
+
+/** A close model block's family: a v3 block's own, a legacy provider's, or null when it names none. */
+function familyOf(model: unknown): string | null {
+  if (typeof model !== "object" || model === null) return null;
+  const v3 = modelV3(model);
+  if (v3) return v3.family;
+  const provider = (model as { provider?: unknown }).provider;
+  return typeof provider === "string" && Object.hasOwn(LEGACY_FAMILIES, provider) ? LEGACY_FAMILIES[provider] : null;
+}
+
+/**
+ * Whether an audit ran off the reviewed run's family: its own family is known and another, and so
+ * is the family of every hop a v3 close passed over. A hop that names no family fails closed.
+ */
+function independentOf(model: unknown, reviewedFamily: string | null): boolean {
+  const family = familyOf(model);
+  if (reviewedFamily === null || family === null || family === reviewedFamily) return false;
+  const v3 = modelV3(model);
+  return !v3 || v3.failover.every((hop) => hop.family !== null && hop.family !== reviewedFamily);
+}
+
+export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";
 
 const GATEWAY_REASON_TO_CODE: Record<string, string> = {
   kill_switch: "provider_unavailable",
@@ -1274,6 +1422,7 @@ export async function closeRun(
   body: unknown,
   runOutputSchema: JsonSchema,
   now: string,
+  dataClass: DataClass = "business",
 ): Promise<{ result: RunResult } | StoreError> {
   if (run.state === "closed") return { error: "run_closed", status: 409 };
   if (!closeShapeValid(body)) return { error: "invalid_close", status: 422 };
@@ -1281,6 +1430,7 @@ export async function closeRun(
     status: "ok" | "abstained";
     reason: string | null;
     output: { decision?: string; reason_code?: string | null } | null;
+    model: unknown;
   };
   // Only an ask run may carry a view; the view is checked apart from the run output (face.ts), so
   // on any other run a `view` is an unknown field.
@@ -1288,6 +1438,10 @@ export async function closeRun(
   if (close.status === "ok" && (close.output === null || validate(runOutputSchema, ask ? withoutView(close.output) : close.output).length > 0)) {
     return { error: "invalid_close", status: 422 };
   }
+  // A synthetic run needs no qualification and may run on consumer accounts, so it closes only on a
+  // Worker that holds synthetic data; an eval run never closes on a Worker. Refused, never recorded.
+  const v3 = modelV3(close.model);
+  if (v3 && !CLOSE_RUN_CLASSES[dataClass].has(v3.run_class)) return { error: "run_class_refused", status: 422 };
   let result: RunResult;
   let reasonCode: string | null = null;
   if (close.status === "abstained") {
@@ -1299,21 +1453,37 @@ export async function closeRun(
     if (result !== "completed") reasonCode = close.output?.reason_code ?? "out_of_scope";
   }
   // Per-run independence (contract "Model routing"): an audit of another run that came back from
-  // the same provider family as that run is not an audit, so it abstains instead of completing.
+  // the same model family as that run is not an audit, so it abstains instead of completing. When
+  // the reviewed run recorded a model it fails closed: the audit and the reviewed run must each name
+  // a known family, and different ones. A reviewed run that recorded no model (it closed without a
+  // model's answer, as an expired run does) has no output to be independent of, so it is not checked.
+  let refusal: string | null = null;
   if (close.status === "ok" && run.specialist_id === "independent_auditor") {
     const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<SignalRow>();
     const reviewed = signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null;
-    const provider = (body as { model?: { provider?: unknown } | null }).model?.provider;
-    // Fails closed: the audit must name a known family, and a different one from the reviewed run.
-    if (reviewed && (typeof provider !== "string" || !PROVIDER_FAMILIES.has(provider) || provider === reviewed.provider)) {
-      result = "abstained";
-      reasonCode = "provider_unavailable";
-    }
+    if (reviewed && !independentOf(close.model, reviewed.family)) refusal = "provider_unavailable";
+  }
+  // A live or shadow run relies on its route's qualification (contract "Qualification"): output that
+  // came from a route without a current passed qualification of the specialist is not the
+  // specialist's work, so the run abstains. A synthetic run needs none; an abstention is left as it is.
+  if (close.status === "ok" && refusal === null && v3 && (v3.run_class === "live" || v3.run_class === "shadow")) {
+    const holds = await qualificationHolds(db, tenantId, run.specialist_id, v3);
+    if (!holds) refusal = "no_qualified_route";
+  }
+  if (refusal) {
+    result = "abstained";
+    // Refused output keeps none of its work (the record drops it, below), but an emergency, a safety
+    // event or suspected injection it raised stays the reason, so it still reaches a person, on a
+    // question's run too.
+    const alarm = close.output?.reason_code ?? "";
+    reasonCode = PERSON_CODES.has(alarm) ? alarm : refusal;
   }
   const checked = ask ? recordAskClose(body, ask) : { body, verdict: null };
   // Pausing a specialist stops its drafting (contract "Delegation"): a paused specialist's run
   // closes, but its drafts are withheld from the record, counted and never kept.
-  const recorded = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(checked.body) : checked.body;
+  const stamped = withDataClass(checked.body, dataClass);
+  const kept = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(stamped) : stamped;
+  const recorded = refusal ? refusedClose(kept, refusal) : kept;
   // The abstention receipt and the close commit together, receipt first, so a closed run never
   // lacks the receipt that names a person and no step lands after the close. A completed ask
   // closes with the face's answer receipt the same way.
@@ -1345,16 +1515,109 @@ export async function closeRun(
   return { result };
 }
 
+/** The close the Worker records for a run that outlived its wall-time ceiling with no close from its host. */
+export function expiredClose(run: RunRow, now: string) {
+  return {
+    status: "abstained",
+    reason: "run_expired",
+    detail: `No close arrived within the run's ${DEFAULT_CEILINGS.wallTimeMs / 60_000}-minute wall-time ceiling.`,
+    output: null,
+    model: null,
+    hashes: null,
+    usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
+    cost_usd: 0,
+    attempts: 0,
+    duration_ms: Math.max(0, Date.parse(now) - Date.parse(run.started_at)),
+    tool_calls: [],
+  };
+}
+
+/**
+ * Closes an open run past its wall-time ceiling as a ceiling close does: `ceiling_reached`, with its
+ * abstention receipt in the same batch, then the receipt's exception. A question's receipt names
+ * nobody, as on any close of an ask, and so does an owner report's: its report shows the result.
+ * False when the run had closed already.
+ */
+export async function expireRun(db: AgentDb, tenantId: string, run: RunRow, now: string): Promise<boolean> {
+  const ask = askRun(run) !== null;
+  const signal = await db.prepare("SELECT watch_id, source FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<{ watch_id: string | null; source: string }>();
+  const report = signal?.source === WATCH_SIGNAL_SOURCE && signal.watch_id !== null && Object.hasOwn(OWNER_REPORTS, signal.watch_id);
+  const named = await namesAPerson(db, run.run_id);
+  const statements: BoundStatement[] = [];
+  if (ask || !named) statements.push(await abstentionStep(db, tenantId, run, "ceiling_reached", now, !ask && !report));
+  statements.push(
+    db
+      .prepare("UPDATE agent_runs SET state = 'closed', result = 'ceiling_reached', close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
+      .bind(canonicalJson(expiredClose(run, now)), now, run.run_id),
+  );
+  try {
+    const results = await db.batch(statements);
+    if (changesOf(results.at(-1)) < 1) return false;
+  } catch (error) {
+    if (String(error).includes("agent_run_closed")) return false;
+    throw error;
+  }
+  await escalateRunAbstention(db, tenantId, run, now, null);
+  return true;
+}
+
+/**
+ * How long past its wall-time ceiling the cron leaves a run open: longer than the host's longest
+ * model call chain (agent-host/config/gateway.json: a route and up to three failover hops, each up
+ * to 3 attempts of 240 s with backoff, about 48 minutes), so a close still on its way lands instead
+ * of meeting `run_closed`. A run the host opens again closes at the ceiling itself (resumeRun).
+ * ponytail: a fixed margin; raise it if the gateway's retry, timeout or failover limits grow.
+ */
+export const EXPIRY_GRACE_MS = 60 * 60_000;
+
+/**
+ * Closes every open run past its wall-time ceiling and the grace (expireRun), oldest first, at most
+ * `limit` per cron tick. One run that fails to close does not stop the others.
+ */
+export async function expireRuns(db: AgentDb, tenantId: string, now: string, limit = 50): Promise<{ expired: number; failed: number }> {
+  const before = new Date(Date.parse(now) - DEFAULT_CEILINGS.wallTimeMs - EXPIRY_GRACE_MS).toISOString();
+  const open = await db
+    .prepare("SELECT * FROM agent_runs WHERE tenant_id = ? AND state = 'open' AND started_at < ? ORDER BY started_at ASC, run_id ASC LIMIT ?")
+    .bind(tenantId, before, limit)
+    .all<RunRow>();
+  let expired = 0;
+  let failed = 0;
+  for (const run of open.results ?? []) {
+    try {
+      if (await expireRun(db, tenantId, run, now)) expired += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { expired, failed };
+}
+
 /** A close as the Worker records it before any pause: an ask run's view checked, else as received. */
-export function recordedClose(run: RunRow, body: unknown): unknown {
+export function recordedClose(run: RunRow, body: unknown, dataClass: DataClass = "business"): unknown {
   const ask = askRun(run);
-  return ask ? recordAskClose(body, ask).body : body;
+  return withDataClass(ask ? recordAskClose(body, ask).body : body, dataClass);
+}
+
+/** A v3 close also records the data class of the Worker it closed on, beside the run class in its model block. */
+function withDataClass(body: unknown, dataClass: DataClass): unknown {
+  return modelV3((body as { model?: unknown } | null)?.model) ? { ...(body as Record<string, unknown>), data_class: dataClass } : body;
 }
 
 function withoutView(output: unknown): unknown {
   if (typeof output !== "object" || output === null || Array.isArray(output)) return output;
   const { view: _view, ...rest } = output as Record<string, unknown>;
   return rest;
+}
+
+/**
+ * A close whose output the Worker refused (an audit off independence, or a route without the
+ * qualification it named): recorded without that output, so no answer, view or draft of it is read
+ * back, and with the reason.
+ */
+export function refusedClose(body: unknown, reason: string): unknown {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return body;
+  const { withheld: _withheld, ...close } = body as Record<string, unknown>;
+  return { ...close, output: null, refused: { reason } };
 }
 
 /** A close as recorded for a paused specialist: drafts removed and counted. Unchanged without drafts. */
@@ -1479,8 +1742,10 @@ function closeShapeValid(body: unknown): boolean {
   if (canonicalJson(calls).length > 65_536) return false;
   const model = value.model;
   if (model !== null) {
-    const routed = typeof model === "object" && !Array.isArray(model) && Object.hasOwn(model as object, "route_id");
-    if (validate(routed ? MODEL_ROUTED_SCHEMA : MODEL_SCHEMA, model).length > 0) return false;
+    // A v3 block is the one with a family; a routed one (gateway config v2) has a route but none.
+    const block = typeof model === "object" && !Array.isArray(model) ? (model as object) : null;
+    const schema = block && Object.hasOwn(block, "family") ? MODEL_V3_SCHEMA : block && Object.hasOwn(block, "route_id") ? MODEL_ROUTED_SCHEMA : MODEL_SCHEMA;
+    if (validate(schema, model).length > 0) return false;
   }
   return validate(CLOSE_SCHEMA, { ...value, output: null, tool_calls: null, model: null }).length === 0;
 }

@@ -16,8 +16,8 @@
 // named testers.
 //
 // The job is not scheduled to the crew: POST /api/v1/jobs/:id/schedule needs all six production
-// gates cleared, the deposit gate stays with people, and on qa the gate clearance route has no
-// writer (it goes through Frappe, which qa runs without).
+// gates cleared, and today a gate clears only by an office waiver or a reconciled deposit invoice,
+// both people's decisions, so the seed clears no gate.
 //
 // Usage (QA_SEED_MAGIC_LINK_TOKEN from tools/qa-seed-owner.mjs, EFFECT_RUNTIME_TOKEN, both from the
 // release env file, never on the command line):

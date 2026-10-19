@@ -122,6 +122,10 @@ Field rules (the validator enforces them):
   `request` belong to no other kind. Crew free text typed into Ask reaches another specialist as
   the face's handoff, with no actor. Only the owner's request carries the owner's authority; a
   request from another role carries that role's, and one with no actor carries none.
+  `signal.content` holds `text` or a `request`. A watch firing may instead carry the Worker's own
+  content, `{ "watch_id", "objects", "digest", "summary" }`: `watch_id` is the signal's, `objects`
+  are at most 24 `{ "aggregate", "id" }`, and the Worker's `period_key` is left out because it is a
+  calendar date.
   `signal.at` and every fact time are ISO 8601 durations relative to the case clock (`PT0M` is the
   moment of the run, `-P3D` three days earlier). Cases contain no calendar dates. Where a fact
   value must be a date or a timestamp (for example a registry field the model copies), its data

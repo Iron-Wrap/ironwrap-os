@@ -390,6 +390,29 @@ test("signal actors follow the Worker's shape; an owner_request names the signed
   assert.match(failures, /\.017: a handoff signal has no actor/);
 });
 
+test("a watch signal may carry the Worker's firing content instead of text", () => {
+  const content = { watch_id: "new_inbound", objects: [{ aggregate: "lead", id: "L-1" }], digest: { leads: ["L-1"] }, summary: "1 new lead" };
+  const watch = (overrides) => ({ kind: "watch", source: "scheduler", watch_id: "new_inbound", at: "PT0M", content: { ...content, ...overrides } });
+  const signals = [
+    watch({}),
+    watch({ watch_id: "pipeline" }),
+    watch({ objects: [{ aggregate: "lead" }] }),
+    watch({ objects: Array.from({ length: 25 }, (_, n) => ({ aggregate: "lead", id: `L-${n}` })) }),
+    watch({ period_key: "P7D" }),
+    { ...watch({}), kind: "event", source: "web_form" },
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    signals.forEach((entry, index) => (cases[index].signal = entry));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: /);
+  assert.match(failures, /\.002: a watch firing's content\.watch_id is its signal's watch_id/);
+  for (const n of ["003", "004"]) assert.match(failures, new RegExp(`\\.${n}: a watch firing's objects are at most 24 \\{ aggregate, id \\}`));
+  assert.match(failures, /\.005: a watch firing's period_key is a calendar date; leave it out/);
+  assert.match(failures, /\.006: signal\.content needs text or request, or a watch firing's digest and summary/);
+});
+
 test("structural mode without the contract still checks shape", () => {
   const result = validate(fixture({ withCatalog: false }));
   assert.deepEqual(result.failures, []);

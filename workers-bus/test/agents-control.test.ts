@@ -1367,41 +1367,60 @@ test("shadow steps nobody compares are recorded unscored once their window passe
   assert.equal(s.scalar("SELECT verdict v, comparator c FROM agent_agreements").v, "unscored");
 });
 
+/**
+ * Seeds `count` compared practice decisions of one action on a fresh run of lead_concierge, then
+ * closes that run on the qualified v3 route, so they count toward the bar: a run under the current
+ * step policy, closed on the specialist's current release.
+ */
+async function seedCompared(
+  s: ReturnType<typeof setup>,
+  qualificationId: string | null,
+  count: number,
+  verdict: string,
+  { catastrophes = "[]", action = "note.add", model = {} }: { catastrophes?: string; action?: string; model?: Record<string, unknown> } = {},
+) {
+  const run = await s.run();
+  for (let index = 0; index < count; index += 1) {
+    const n = s.scalar("SELECT COUNT(*) n FROM agent_agreements").n + 1;
+    const id = `sstep_seed_${n}`;
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+        VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+      )
+      .run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+        VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`,
+      )
+      .run(`agr_${id}`, TENANT, action, id, verdict, catastrophes, new Date(Date.parse(s.now()) + n).toISOString());
+  }
+  s.tick(1_000);
+  const closed = await s.close(run.run_id, closeV3({ ...model, qualification_ref: qualificationId }));
+  // Without a qualification the Worker refuses the close's output; it still records the model block.
+  assert.deepEqual([closed.status, closed.body.terminal], [200, qualificationId ? "completed" : "abstained"]);
+  return run;
+}
+
 test("a delegation candidate needs the recent bar, no catastrophe, a passed qualification and a delegable action", async () => {
   const s = setup(true);
-  const run = await s.run();
-  const seed = (count: number, verdict: string, catastrophes = "[]") => {
-    for (let index = 0; index < count; index += 1) {
-      const id = `sstep_seed_${verdict}_${s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps").n}`;
-      s.db.raw
-        .prepare(
-          `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
-         VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
-        )
-        .run(id, TENANT, run.run_id, id, "0".repeat(64), s.now());
-      s.db.raw
-        .prepare(
-          `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
-         VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`,
-        )
-        .run(`agr_${id}`, TENANT, id, verdict, catastrophes, new Date(Date.parse(s.now()) + s.scalar("SELECT COUNT(*) n FROM agent_agreements").n).toISOString());
-    }
-  };
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { specialist_id: string; action_id: string }) => `${row.specialist_id} ${row.action_id}`);
-  await runsOn(s);
-  seed(48, "match");
-  seed(1, "diverge", '["fabricates_fact"]');
-  seed(1, "match");
   const qualify = (passed: boolean, key: string) =>
-    s.app("/qualifications", { ...QUALIFIED, passed, report_sha256: "a".repeat(64) }, "owner", key);
-  assert.equal((await qualify(true, "qualify-1")).status, 200);
+    s.app("/qualifications", { ...QUALIFIED, passed, report_sha256: passed ? "a".repeat(64) : "b".repeat(64) }, "owner", key);
+  const passed = await qualify(true, "qualify-1");
+  assert.equal(passed.status, 200);
+  await seedCompared(s, passed.body.qualification_id, 48, "match");
+  await seedCompared(s, passed.body.qualification_id, 1, "diverge", { catastrophes: '["fabricates_fact"]' });
+  await seedCompared(s, passed.body.qualification_id, 1, "match");
   // A catastrophe inside the recent window blocks it.
   assert.deepEqual(await candidates(), []);
   // Fifty newer clean comparisons push it out of the window: old wins and old losses both age out.
-  seed(50, "match");
+  await seedCompared(s, passed.body.qualification_id, 50, "match");
   assert.deepEqual(await candidates(), ["lead_concierge note.add"]);
   // A later failed qualification blocks it again; ops cannot record one.
   assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: false, report_sha256: "b".repeat(64) }, "ops", "qualify-ops")).status, 403);
+  s.tick(1_000);
   assert.equal((await qualify(false, "qualify-2")).status, 200);
   assert.deepEqual(await candidates(), []);
 });
@@ -1493,30 +1512,23 @@ test("shadow steps count toward the run's step ceiling, and the step past it is 
 
 test("a catastrophe on a take-over blocks candidacy, unscored rows never count as compared, and the bar is 95 %", async () => {
   const s = setup(true);
-  const run = await s.run();
-  let n = 0;
-  const seed = (count: number, verdict: string, catastrophes = "[]", action = "note.add") => {
-    for (let index = 0; index < count; index += 1) {
-      const id = `sstep_bar_${++n}`;
-      s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
-      s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, action, id, verdict, catastrophes, new Date(Date.parse(s.now()) + n).toISOString());
-    }
-  };
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
-  await runsOn(s);
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "c".repeat(64) }, "owner", "qualify-bar")).status, 200);
-  seed(60, "unscored");
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "c".repeat(64) }, "owner", "qualify-bar");
+  assert.equal(qualified.status, 200);
+  const seed = (count: number, verdict: string, catastrophes = "[]", action = "note.add") =>
+    seedCompared(s, qualified.body.qualification_id, count, verdict, { catastrophes, action });
+  await seed(60, "unscored");
   assert.deepEqual(await candidates(), [], "unscored rows are not comparisons");
-  seed(47, "match");
-  seed(3, "diverge");
+  await seed(47, "match");
+  await seed(3, "diverge");
   assert.deepEqual(await candidates(), [], "94 % is below the bar");
-  seed(50, "match");
+  await seed(50, "match");
   assert.deepEqual(await candidates(), ["note.add"]);
-  seed(1, "unscored", '["fabricates_fact"]');
+  await seed(1, "unscored", '["fabricates_fact"]');
   assert.deepEqual(await candidates(), [], "a flagged take-over blocks it");
   // Never-delegable and protective actions never become candidates, however good their record.
-  seed(60, "match", "[]", "exception.escalate");
-  seed(60, "match", "[]", "inquiry.classify");
+  await seed(60, "match", "[]", "exception.escalate");
+  await seed(60, "match", "[]", "inquiry.classify");
   assert.deepEqual(await candidates(), []);
 });
 
@@ -1561,25 +1573,17 @@ test("an audit closes completed only from a known family different from the revi
 
 test("candidates need the full window and a delegable action; stats count only compared rows", async () => {
   const s = setup(true);
-  const run = await s.run();
-  let n = 0;
-  const seed = (count: number, verdict: string, action = "note.add") => {
-    for (let index = 0; index < count; index += 1) {
-      const id = `sstep_win_${++n}`;
-      s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
-      s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, action, id, verdict, new Date(Date.parse(s.now()) + n).toISOString());
-    }
-  };
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "d".repeat(64) }, "owner", "qualify-win")).status, 200);
-  seed(49, "match");
-  seed(5, "unscored");
-  seed(60, "match", "consent.record");
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "d".repeat(64) }, "owner", "qualify-win");
+  assert.equal(qualified.status, 200);
+  const seed = (count: number, verdict: string, action = "note.add") => seedCompared(s, qualified.body.qualification_id, count, verdict, { action });
+  await seed(49, "match");
+  await seed(5, "unscored");
+  await seed(60, "match", "consent.record");
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
-  await runsOn(s);
   assert.deepEqual(await candidates(), [], "49 compared is one short of the window; consent.record is never delegable");
   const note = (await s.app("/shadow?action=note.add")).body.agreement[0];
   assert.deepEqual([note.compared, note.counts.unscored, note.match_rate], [49, 5, 1]);
-  seed(1, "match");
+  await seed(1, "match");
   assert.deepEqual(await candidates(), ["note.add"]);
 });
 
@@ -1612,24 +1616,23 @@ test("a catastrophe follow-through that keeps failing never blocks the rest of t
 
 test("the candidate bar uses the qualification for the model the specialist actually runs on", async () => {
   const s = setup(true);
-  const run = await s.run();
-  for (let index = 0; index < 50; index += 1) {
-    const id = `sstep_model_${index}`;
-    s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, id, "0".repeat(64), s.now());
-    s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, id, new Date(Date.parse(s.now()) + index).toISOString());
-  }
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { model: string }) => row.model);
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, model: "gpt-6-astra", effort: "high", passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-astra")).status, 200);
-  assert.deepEqual(await candidates(), [], "no closed run yet, so no model it runs on");
-  await runsOn(s, "gpt-6.1-sol");
-  assert.deepEqual(await candidates(), [], "a passed qualification on another model does not count");
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "b".repeat(64) }, "owner", "qualify-sol")).status, 200);
+  const sol = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "b".repeat(64) }, "owner", "qualify-sol");
+  await seedCompared(s, sol.body.qualification_id, 50, "match");
   assert.deepEqual(await candidates(), ["gpt-6.1-sol"]);
-  s.tick(60_000);
-  await runsOn(s, "gpt-6-astra");
+  // The specialist moves to another model on the same release: the bar follows it, and a passed
+  // qualification on the model it left does not count.
+  const runsOn = async (model: Record<string, unknown>) => {
+    s.tick(60_000);
+    assert.equal((await s.close((await s.run()).run_id, closeV3(model))).status, 200);
+  };
+  const astra = { model: "gpt-6-astra", models_used: ["gpt-6-astra"], effort: "high" };
+  await runsOn({ ...astra, qualification_ref: null });
+  assert.deepEqual(await candidates(), [], "no qualification on the model it moved to");
+  const astraPassed = await s.app("/qualifications", { ...QUALIFIED, model: "gpt-6-astra", effort: "high", passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-astra");
+  await runsOn({ ...astra, qualification_ref: astraPassed.body.qualification_id });
   assert.deepEqual(await candidates(), ["gpt-6-astra"], "the bar follows the model the specialist moved to");
-  s.tick(60_000);
-  await runsOn(s, "gpt-6-astra", "openai");
+  await runsOn({ ...astra, provider: "openai", adapter: "openai_compatible", qualification_ref: null });
   assert.deepEqual(await candidates(), [], "the same model through another provider needs its own qualification");
   // Every key is required, and an invalid one is refused.
   for (const [field, value, code] of [["provider", "Codex", "invalid_provider"], ["effort", "", "invalid_effort"], ["release_sha256", "x", "invalid_release_hash"]] as const)
@@ -1918,12 +1921,6 @@ test("an audit closes completed only off the reviewed run's family, on the hop i
 
 test("the candidate bar needs the qualification for the effort and release the specialist runs on", async () => {
   const s = setup(true);
-  const seeded = await s.run();
-  for (let index = 0; index < 50; index += 1) {
-    const id = `sstep_effort_${index}`;
-    s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, seeded.run_id, id, "0".repeat(64), s.now());
-    s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, id, new Date(Date.parse(s.now()) + index).toISOString());
-  }
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { qualification_id: string }) => row.qualification_id);
   const runsOnV3 = async (model: Record<string, unknown>) => {
     s.tick(1000);
@@ -1931,7 +1928,7 @@ test("the candidate bar needs the qualification for the effort and release the s
   };
   const medium = await qualify(s, {}, "bar-medium");
   await qualify(s, { effort: "high" }, "bar-high");
-  await runsOnV3({ qualification_ref: medium });
+  await seedCompared(s, medium, 50, "match");
   assert.deepEqual(await candidates(), [medium]);
   // The latest row for the model is a failure at another effort: the route the specialist runs on still holds.
   s.tick(1000);
@@ -1940,16 +1937,20 @@ test("the candidate bar needs the qualification for the effort and release the s
   s.tick(1000);
   await qualify(s, { passed: false, report_sha256: "c".repeat(64) }, "bar-medium-fail");
   assert.deepEqual(await candidates(), [], "its own effort failed");
-  // A new release needs its own qualification; the earlier release's rows do not carry over.
-  const release = await qualify(s, { release_sha256: "f".repeat(64), report_sha256: "d".repeat(64) }, "bar-release");
-  await runsOnV3({ qualification_ref: release, release_sha256: "f".repeat(64) });
+  // A new release counts only its own decisions and needs its own qualification: neither the earlier
+  // release's decisions nor its rows carry over.
+  const newRelease = { release_sha256: "f".repeat(64) };
+  const release = await qualify(s, { ...newRelease, report_sha256: "d".repeat(64) }, "bar-release");
+  await runsOnV3({ qualification_ref: release, ...newRelease });
+  assert.deepEqual(await candidates(), [], "the earlier release's decisions do not count");
+  await seedCompared(s, release, 50, "match", { model: newRelease });
   assert.deepEqual(await candidates(), [release]);
   s.tick(1000);
-  await qualify(s, { release_sha256: "f".repeat(64), passed: false, report_sha256: "e".repeat(64) }, "bar-release-fail");
+  await qualify(s, { ...newRelease, passed: false, report_sha256: "e".repeat(64) }, "bar-release-fail");
   assert.deepEqual(await candidates(), []);
   // The specialist moves to the high effort at that release: the bar follows the effort its close names.
-  const high = await qualify(s, { release_sha256: "f".repeat(64), effort: "high", report_sha256: "f".repeat(64) }, "bar-release-high");
-  await runsOnV3({ qualification_ref: high, effort: "high", release_sha256: "f".repeat(64) });
+  const high = await qualify(s, { ...newRelease, effort: "high", report_sha256: "f".repeat(64) }, "bar-release-high");
+  await runsOnV3({ qualification_ref: high, effort: "high", ...newRelease });
   assert.deepEqual(await candidates(), [high]);
   await runsOnV3({ qualification_ref: null, effort: "high", release_sha256: "1".repeat(64) });
   assert.deepEqual(await candidates(), [], "no row at that release");
@@ -2032,4 +2033,39 @@ test("a practice-only action stops practising after a catastrophe or an unqualif
     .run(TENANT, resumed.step_id, s.now());
   assert.deepEqual((await practise("Synthetic note four.")).reason_codes, ["policy_denied"]);
   assert.equal((await overview()).stopped, true);
+});
+
+test("only decisions under the current step policy and release count toward the bar, and a refused close's never do", async () => {
+  const s = setup(true);
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-policy");
+  await seedCompared(s, qualified.body.qualification_id, 49, "match");
+  // A run the Worker refused for a route without its qualification keeps its model block, not its work.
+  await seedCompared(s, null, 1, "match");
+  assert.deepEqual(await candidates(), [], "the refused run's decision does not count");
+  // A run opened under an earlier step policy: its decisions do not count either.
+  s.tick(1_000);
+  const current = await s.run();
+  s.db.raw.exec("CREATE TEMP TABLE old_run AS SELECT * FROM agent_runs WHERE 0");
+  s.db.raw.prepare("INSERT INTO old_run SELECT * FROM agent_runs WHERE run_id = ?").run(current.run_id);
+  s.db.raw.exec(`UPDATE old_run SET run_id = 'run_old_policy', host_run_key = 'host-old-policy', policy_version = 'ironwrap.step-policy@3'`);
+  s.db.raw.exec("INSERT INTO agent_runs SELECT * FROM old_run");
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+      VALUES ('sstep_old_policy', ?, 'run_old_policy', 'lead_concierge', 'note.add', 'old', '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+    )
+    .run(TENANT, "0".repeat(64), s.now());
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+      VALUES ('agr_old_policy', ?, 'shadow', 'lead_concierge', 'note.add', 'sstep_old_policy', NULL, 'match', '[]', 'synthetic@1', NULL, ?)`,
+    )
+    .run(TENANT, s.now());
+  const kept = s.scalar("SELECT close_json c FROM agent_runs WHERE state = 'closed' AND json_extract(close_json, '$.refused') IS NULL ORDER BY rowid DESC LIMIT 1").c;
+  s.db.raw.prepare("UPDATE agent_runs SET state = 'closed', result = 'completed', close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = 'run_old_policy'").run(kept, s.now());
+  assert.deepEqual(await candidates(), [], "the earlier policy's decision does not count");
+  // One more decision under the current policy and release fills the window.
+  await seedCompared(s, qualified.body.qualification_id, 1, "match");
+  assert.deepEqual(await candidates(), ["note.add"]);
 });

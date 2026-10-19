@@ -707,7 +707,7 @@ test("parallel handoffs reserve only two slots for one pair and object", async (
   );
 });
 
-test("an expired run cannot resume and its original lifetime still blocks new steps", async () => {
+test("an expired run cannot resume: it closes at its ceiling, and its original lifetime still blocks new steps", async () => {
   const { db, call, tick } = setup(TOKEN, true);
   const id = await signal(db);
   const opening = {
@@ -738,12 +738,23 @@ test("an expired run cannot resume and its original lifetime still blocks new st
       .get(run.run_id),
     beforeExpiry,
   );
+  // It closed at its wall-time ceiling as a ceiling close does: ceiling_reached, with a receipt
+  // naming the specialist's reviewer, so it never stays open.
+  assert.deepEqual(
+    { ...db.raw.prepare("SELECT state, result, json_extract(close_json, '$.reason') AS reason FROM agent_runs WHERE run_id=?").get(run.run_id) },
+    { state: "closed", result: "ceiling_reached", reason: "run_expired" },
+  );
+  assert.deepEqual(
+    { ...db.raw.prepare("SELECT outcome, reason_code, needs_reviewer_role FROM agent_run_steps WHERE run_id=? AND action_id='exception.escalate'").get(run.run_id) },
+    { outcome: "abstained", reason_code: "ceiling_reached", needs_reviewer_role: "sales" },
+  );
   const response = await call(
     "POST",
     `/api/v1/agents/runs/${run.run_id}/steps`,
     { ...explain(`signal/${id}`), step_key: stepKey("after-expiry") },
   );
-  assert.deepEqual(response.body.reason_codes, ["ceiling_reached"]);
+  assert.deepEqual([response.status, response.body.error], [409, "run_closed"]);
+  assert.equal((await call("POST", "/api/v1/agents/runs", opening)).body.error, "run_closed");
 });
 
 test("a losing concurrent step key must retain the exact ordered citations", async () => {

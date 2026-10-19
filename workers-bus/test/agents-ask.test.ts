@@ -657,10 +657,12 @@ test("an ask no run answers in time reads abstained, not answered, without writi
   assert.equal((await read(open)).status, "pending");
   t.tick(1);
   assert.deepEqual(await read(open), unanswered(open, run.run_id));
+  // The next open closes it at its ceiling; it still reads not answered, and a late close is refused.
   assert.equal((await openFace(t, open)).error, "run_expired");
-  // A close that still lands is what the ask then reads.
-  assert.equal((await t.host("POST", `/api/v1/agents/runs/${run.run_id}/close`, close())).status, 200);
-  assert.deepEqual([(await read(open)).status, (await read(open)).reason], ["done", null]);
+  assert.equal((t.db.raw.prepare("SELECT result FROM agent_runs WHERE run_id = ?").get(run.run_id) as { result: string }).result, "ceiling_reached");
+  assert.deepEqual(await read(open), unanswered(open, run.run_id));
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${run.run_id}/close`, close())).status, 409);
+  assert.deepEqual(await read(open), unanswered(open, run.run_id));
 });
 
 test("facts/current returns versions and hashes, never values, as the viewer's role reads them", async () => {

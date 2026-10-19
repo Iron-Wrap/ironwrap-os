@@ -268,6 +268,44 @@ export function buildLeadTriageCommand(input: RecordLeadTriageInput): Readonly<R
   });
 }
 
+/**
+ * External effect states in which a proposal send has started but its delivery is not confirmed:
+ * proposed, claimed (authorized, executing, reconciling, retry) or unknown. A delivery check
+ * (`reconcileExternalEffect`) settles an unknown send as succeeded or as reconciled-not-executed.
+ * `manual_exception` and `compensating` are already owned by a person and are not this gate.
+ */
+export const UNCONFIRMED_PROPOSAL_DELIVERY_STATES = [
+  "proposed",
+  "authorized",
+  "executing",
+  "reconciling",
+  "retry",
+  "unknown",
+] as const;
+
+/**
+ * The newest send of this proposal revision whose delivery is not confirmed, or null. A proposal is
+ * not sent again until its last send is confirmed delivered, on the manual and the AI path alike,
+ * because both prepare publication through this check.
+ */
+export async function unconfirmedProposalDelivery(
+  env: AppEnv,
+  tenantId: string,
+  proposalPackId: string,
+  proposalRevisionId: string,
+): Promise<{ effect_id: string; state: string } | null> {
+  const states = UNCONFIRMED_PROPOSAL_DELIVERY_STATES;
+  return await env.DB.prepare(
+    `SELECT effect_id, state FROM external_effects
+      WHERE tenant_id = ? AND aggregate_type = 'proposal_publication' AND aggregate_id = ?
+        AND intent_id = ? AND action = 'proposal.publish'
+        AND state IN (${states.map(() => "?").join(", ")})
+      ORDER BY created_at DESC, effect_id DESC
+      LIMIT 1`,
+  ).bind(tenantId, proposalPackId, proposalRevisionId, ...states)
+    .first<{ effect_id: string; state: string }>();
+}
+
 export async function recordLeadTriageDecision(
   env: AppEnv,
   input: RecordLeadTriageInput,

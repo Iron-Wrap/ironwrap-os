@@ -252,6 +252,7 @@ import {
   recordCommercialProposalRevision,
   type CommercialLeadTriageRecord,
   type CommercialProposalRecord,
+  unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
@@ -4666,6 +4667,24 @@ async function prepareCommercialProposalPublication(
     if (!proposal) return privateAppJson({ error: "commercial_publication_proposal_missing" }, 404);
     if (proposal.quote_status !== "approved") {
       return privateAppJson({ error: "commercial_publication_quote_not_approved" }, 409);
+    }
+    // A proposal is not sent again until its last send is confirmed delivered: a second send
+    // while the first is pending or unknown could reach the customer twice.
+    if (input.state === "published") {
+      const pending = await unconfirmedProposalDelivery(
+        env,
+        auth.session.tenant_id,
+        input.proposalPackId,
+        input.proposalRevisionId,
+      );
+      if (pending) {
+        return privateAppJson({
+          error: "proposal_delivery_unconfirmed",
+          delivery_state: pending.state,
+          external_effect_id: pending.effect_id,
+          next_step: "check_delivery",
+        }, 409);
+      }
     }
     if (proposal.job_status === "cancelled" || proposal.customer_status === "archived") {
       return privateAppJson({ error: "commercial_job_not_active" }, 409);

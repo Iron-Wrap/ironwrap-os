@@ -12,7 +12,7 @@ import worker from "../src/index.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
-import { runExternalEffect } from "../src/effect-runtime.ts";
+import { reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
 import {
   beginCommercialDepositDerivationRequest,
   deriveSuccess,
@@ -1769,6 +1769,23 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: lostPermit.permit_id, external_effect_id: "effect:iro208:lost" }, "iro208-publication-lost-0001"), h.env, auth("ops"),
     );
     assert.equal(lost.status, 409);
+    // A lost send is not confirmed delivered, so the proposal is not sent again until someone
+    // checks delivery; here the check finds it was not delivered.
+    const resendBeforeCheck = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-before-check-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(resendBeforeCheck.status, 409);
+    assert.equal((await resendBeforeCheck.json() as { error: string }).error, "proposal_delivery_unconfirmed");
+    await reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
+      outcome: "not_executed",
+      evidence: { checked: "provider has no publication for this proposal revision" },
+    });
     const mismatchPermit = await preparePublication(h, ids, "iro208-publication-prepare-mismatch-0001");
     await runPublicationEffect(h, mismatchPermit, ids, "effect:iro208:mismatch", "mismatch");
     const mismatch = await handleAuthenticatedRoute(

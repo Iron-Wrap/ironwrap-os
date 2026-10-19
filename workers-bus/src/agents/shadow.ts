@@ -109,12 +109,49 @@ export async function shadowSetting(
   tenantId: string,
   specialistId: string,
   actionId: string,
-): Promise<{ shadow: boolean; revision: number }> {
+): Promise<{ shadow: boolean; revision: number; stopped: boolean }> {
   const row = await db
-    .prepare("SELECT shadow, revision FROM agent_shadow_settings WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? ORDER BY revision DESC LIMIT 1")
+    .prepare("SELECT shadow, revision, set_at FROM agent_shadow_settings WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? ORDER BY revision DESC LIMIT 1")
     .bind(tenantId, specialistId, actionId)
-    .first<{ shadow: number; revision: number }>();
-  return { shadow: row?.shadow === 1, revision: row?.revision ?? 0 };
+    .first<{ shadow: number; revision: number; set_at: string }>();
+  const shadow = row?.shadow === 1;
+  return { shadow, revision: row?.revision ?? 0, stopped: shadow && (await practiceStopped(db, tenantId, specialistId, actionId, row!.set_at)) };
+}
+
+/**
+ * Whether a practice-only setting's practice runs stopped (contract "Delegation" item 7): since the
+ * owner set it, a practice step of that action was recorded as a catastrophe, or a run of the
+ * specialist ended without a qualified route. The setting stays practice only, and the action
+ * neither practises nor runs, until the owner confirms it again.
+ */
+async function practiceStopped(db: AgentDb, tenantId: string, specialistId: string, actionId: string, since: string): Promise<boolean> {
+  const catastrophe = await db
+    .prepare(
+      `SELECT 1 AS found FROM agent_agreements WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? AND compared_at >= ?
+        AND catastrophes_json <> '[]' LIMIT 1`,
+    )
+    .bind(tenantId, specialistId, actionId, since)
+    .first();
+  return catastrophe !== null || (await unqualifiedSince(db, tenantId, specialistId, since));
+}
+
+/**
+ * Whether a run of the specialist ended without a qualified route since `since`: the host found no
+ * route a current passed qualification names, or the Worker refused a close on one. Its release
+ * (playbook, prompt, tier or model) changed without passing qualification (contract "Delegation"
+ * item 7), so a within-limits setting falls back and practice runs stop.
+ * ponytail: scans the specialist's runs closed since the setting; add an index or a recorded marker
+ * if it shows in step latency.
+ */
+export async function unqualifiedSince(db: AgentDb, tenantId: string, specialistId: string, since: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS found FROM agent_runs WHERE tenant_id = ? AND state = 'closed' AND specialist_id = ? AND ended_at >= ?
+        AND 'no_qualified_route' IN (json_extract(close_json, '$.reason'), json_extract(close_json, '$.refused.reason')) LIMIT 1`,
+    )
+    .bind(tenantId, specialistId, since)
+    .first();
+  return row !== null;
 }
 
 /** An action can be shadowed when it is the specialist's own, has an effect to stand in for, and is not protective or people-only. */
@@ -201,7 +238,10 @@ export async function setShadow(
  */
 export async function runMode(db: AgentDb, tenantId: string, specialistId: string, candidates: string[]): Promise<"live" | "shadow"> {
   if (candidates.length === 0) return "live";
-  for (const actionId of candidates) if (!(await shadowSetting(db, tenantId, specialistId, actionId)).shadow) return "live";
+  for (const actionId of candidates) {
+    const practice = await shadowSetting(db, tenantId, specialistId, actionId);
+    if (!practice.shadow || practice.stopped) return "live";
+  }
   return "shadow";
 }
 
@@ -224,7 +264,8 @@ export function signalActions(signal: { kind: string; specialist_id: string; wat
  */
 export async function divertsToShadow(db: AgentDb, tenantId: string, run: { specialist_id: string }, actionId: string): Promise<boolean> {
   if (catalogAction(actionId)?.protective) return false;
-  return (await shadowSetting(db, tenantId, run.specialist_id, actionId)).shadow;
+  const practice = await shadowSetting(db, tenantId, run.specialist_id, actionId);
+  return practice.shadow && !practice.stopped;
 }
 
 /** Records a shadow proposal once per step key, with the decision policy would have made. */

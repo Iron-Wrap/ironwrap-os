@@ -80,6 +80,12 @@ export interface CommercialAuthorityExpectation {
   customerQuoteId?: string;
   proposalPackId?: string;
   now: string;
+  /**
+   * Recording the outcome of an effect that already ran under this permit is readback, not a new
+   * authorization: the permit is checked as of the effect's creation (when the send was
+   * authorized), and a later policy change does not stop the record of what already happened.
+   */
+  readbackOfEffectCreatedAt?: string;
 }
 
 export interface ResolvedCommercialAuthority {
@@ -220,6 +226,17 @@ export async function admitCommercialPermit(
   return { kind: d1Changes(result) === 1 ? "created" : "replayed", permit: stored };
 }
 
+/** The permit an earlier request with this idempotency key was admitted as, if any. */
+export async function commercialPermitForKey(
+  env: AppEnv,
+  tenantId: string,
+  idempotencyKey: string,
+): Promise<CommercialPermitRecord | null> {
+  const idempotencyKeyHash = await sha256Hex(idempotencyKey);
+  const permitId = `commercial-permit:${await sha256Hex(`${tenantId}:${idempotencyKeyHash}`)}`;
+  return await getCommercialPermit(env, tenantId, permitId, idempotencyKeyHash);
+}
+
 export async function getCommercialPermit(
   env: AppEnv,
   tenantId: string,
@@ -288,6 +305,21 @@ export async function resolveCommercialAuthority(
       permit.command_fingerprint !== expected.commandFingerprint ||
       permit.amount_cents !== (expected.amountCents ?? null)
     ) fail("commercial_permit_binding_mismatch");
+    if (expected.readbackOfEffectCreatedAt !== undefined) {
+      const effectAt = Date.parse(expected.readbackOfEffectCreatedAt);
+      if (!Number.isFinite(effectAt)) fail("commercial_clock_invalid");
+      if (Date.parse(permit.issued_at) > effectAt) fail("commercial_permit_not_yet_valid");
+      if (Date.parse(permit.expires_at) <= effectAt) fail("commercial_permit_expired");
+      return {
+        kind: "policy_permit",
+        authorityRef: permit.permit_id,
+        actorType: permit.actor_type,
+        actorId: permit.actor_id,
+        evidenceDigest: permit.evidence_digest,
+        policyPermitId: permit.permit_id,
+        approvalRequestId: null,
+      };
+    }
     if (
       currentPolicy.status !== "active" || currentPolicy.tenant_id !== expected.tenantId ||
       currentPolicy.policy_id !== permit.policy_id || currentPolicy.policy_version !== permit.policy_version ||

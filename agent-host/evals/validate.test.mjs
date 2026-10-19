@@ -189,7 +189,7 @@ test("accepts catalog-bound reasons, routes, recipients and owned handoff action
   ]);
   const path = join(root, `agent-host/evals/${ID}/golden.v1.json`);
   const data = JSON.parse(readFileSync(path, "utf8"));
-  data.cases[4].facts.push({ fact_id: "contact:CONTACT-001", kind: "canonical_contact", version: 1, trust: "owned", data: { contact_id: "CONTACT-001" } });
+  data.cases[4].facts.push({ fact_id: "contact:CONTACT-001", kind: "canonical_contact", version: 1, trust: "owned", observed_at: "-PT1M", data: { contact_id: "CONTACT-001" } });
   writeFileSync(path, JSON.stringify(data));
   assert.deepEqual(validate(root).failures, []);
 });
@@ -334,9 +334,38 @@ test("fact data and expected may carry case-relative date markers, and no other 
   for (const n of ["015", "016", "017", "018"]) assert.match(failures, new RegExp(`\\.${n}: facts\\.0\\.data\\.a: a \`\\$\`-key is only`));
 });
 
+test("signal and fact times span at most a century, checked from both sides", () => {
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].signal.at = "-P36600D";
+    Object.assign(cases[0].facts[0], { observed_at: "-PT878400H", fresh_until: "P36600D" });
+    cases[1].signal.at = "-P36601D";
+    cases[2].facts[0].observed_at = "-PT878401H";
+    cases[3].facts[0].fresh_until = "PT52704001M";
+    cases[4].facts[0].observed_at = "-PT3162240001S";
+    Object.assign(cases[5].facts[0], { observed_at: "-PT52704000M", fresh_until: "-PT3162240000S" });
+    cases[5].signal.at = "-P36599DT23H59M60S";
+    cases[6].signal.at = "P36600DT1H";
+    cases[7].facts[0].fresh_until = "PT878400H1M";
+    delete cases[8].signal.at;
+    delete cases[9].facts[0].observed_at;
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: (signal\.at|fact )/);
+  assert.match(failures, /\.002: signal\.at must be a relative ISO 8601 duration of at most 36600 days/);
+  assert.match(failures, /\.003: fact lead:L-1 observed_at must be a duration of at most 36600 days/);
+  assert.match(failures, /\.004: fact lead:L-1 fresh_until must be a duration of at most 36600 days/);
+  assert.match(failures, /\.005: fact lead:L-1 observed_at must be a duration of at most 36600 days/);
+  assert.doesNotMatch(failures, /\.006: (signal\.at|fact )/);
+  assert.match(failures, /\.007: signal\.at must be/);
+  assert.match(failures, /\.008: fact lead:L-1 fresh_until must be/);
+  assert.match(failures, /\.009: signal\.at must be/);
+  assert.match(failures, /\.010: fact lead:L-1 observed_at must be/);
+});
+
 test("the Worker registry is read whole, or the validator says what it could not read", () => {
   const real = loadRegistry(join(here, "../.."));
-  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "note.add", "settings.propose_change", "specialist.hold"]);
+  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "delegation.propose_change", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "note.add", "settings.propose_change", "specialist.hold"]);
   assert.deepEqual(real.unread, []);
   const root = fixture();
   const path = join(root, "workers-bus/src/agents/registry.ts");
@@ -797,7 +826,7 @@ test("history config: output-only sources, privacy coverage, builder parameters,
 });
 
 test("must_cite may name the run's own signal; any other entry must be a case fact, a signal/<id> root ask included", () => {
-  const rootAsk = { fact_id: "signal/SIG-2", kind: "signal", version: 1, trust: "owned", data: { signal_id: "SIG-2", kind: "owner_request", source: "ask" } };
+  const rootAsk = { fact_id: "signal/SIG-2", kind: "signal", version: 1, trust: "owned", observed_at: "-PT1M", data: { signal_id: "SIG-2", kind: "owner_request", source: "ask" } };
   const golden = suiteFile("golden", 20, (cases) => {
     cases[0].expected.receipt.must_cite.push("signal");
     cases[1].expected.receipt.must_cite.push("signal/sig-1");
@@ -822,8 +851,8 @@ test("a case that prepares a release or an acceptance forbids both people-only a
       { action_id: "completion.draft_packet", autonomy: "A1", purpose: "Draft the packet" },
     ],
   };
-  const workPackage = { fact_id: "work_package:WP-1", kind: "work_package", version: 2, trust: "owned", data: { assigned_workers: [{ worker_id: "W-1" }] } };
-  const firstPiece = { fact_id: "first_piece_record:FP-1", kind: "first_piece_record", version: 1, trust: "owned", data: { operator: "P-2" } };
+  const workPackage = { fact_id: "work_package:WP-1", kind: "work_package", version: 2, trust: "owned", observed_at: "-PT1M", data: { assigned_workers: [{ worker_id: "W-1" }] } };
+  const firstPiece = { fact_id: "first_piece_record:FP-1", kind: "first_piece_record", version: 1, trust: "owned", observed_at: "-PT1M", data: { operator: "P-2" } };
   const golden = suiteFile("golden", 20, (cases) => {
     const prepare = (index, actionId, facts, { forbidden = ["hold_point.release", "completion.accept"], cite = facts.map((fact) => fact.fact_id) } = {}) => {
       cases[index].facts.push(...facts);

@@ -1167,14 +1167,19 @@ test("the validate trigger after every migration still holds A1's and A3's claus
     "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'production_gate_clearances_validate_insert'",
   ).get() as { sql: string }).sql);
   for (const clause of [
-    // A1 (0153): the legacy close, the waiver matrix, settlement, decisions and the seed refusal.
+    // A1 (0153): the legacy close, the waiver matrix, settlement, decisions, the bound on open
+    // requests, no contract facts on a person entry, and the seed refusal.
     "production_gate_clearance_legacy_closed",
     "production_gate_not_waivable",
     "deposit_settlement_not_observed",
     "production_gate_waiver_request_invalid",
+    "production_gate_waiver_request_open",
     "production_gate_waiver_already_decided",
     "production_gate_waiver_self_approval_refused",
     "production_gate_clearance_seed_identity_refused",
+    "NEW.policy_version IS NOT NULL",
+    "NEW.terms_hash IS NOT NULL",
+    "NEW.contract_binding_id IS NOT NULL",
     // A3 (0158): attestation, its evidence and gate rules, and the person reversal.
     "'person_attestation'",
     "'person_reversal'",

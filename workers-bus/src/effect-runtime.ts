@@ -182,6 +182,12 @@ function assertNoUploadEvidenceRefs(refs: readonly string[] | undefined): void {
   }
 }
 
+/**
+ * How long one attempt holds its lease. A provider answer that is merely late still arrives inside
+ * it, so an `unknown` outcome younger than this may yet be settled by the provider itself.
+ */
+export const EFFECT_ATTEMPT_LEASE_MS = 2 * 60_000;
+
 export function effectLedgerAvailable(env: unknown): boolean {
   const db = (env as { DB?: { prepare?: (sql: string) => { bind?: (...args: unknown[]) => unknown } } })?.DB;
   if (typeof db?.prepare !== "function") return false;
@@ -362,9 +368,15 @@ export async function proposeExternalEffect(
         state, attempt_count, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(...values).run();
-  } catch {
+  } catch (error) {
     const existing = await getExternalEffectByIdempotency(env, input.tenantId, input.idempotencyKey);
-    if (!existing) throw new EffectRuntimeError("effect_proposal_failed");
+    if (!existing) {
+      // D1 refused a second proposal send while the last one is unconfirmed (0156); keep the cause.
+      if (error instanceof Error && error.message.includes("proposal_delivery_unconfirmed")) {
+        throw new EffectRuntimeError("effect_proposal_delivery_unconfirmed");
+      }
+      throw new EffectRuntimeError("effect_proposal_failed");
+    }
     if (existing.envelope_hash !== envelopeHash) throw new EffectRuntimeError("effect_idempotency_conflict");
     return existing;
   }
@@ -486,7 +498,7 @@ export async function executeExternalEffect<T = unknown>(
     }
   }
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
-  const leaseExpiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
+  const leaseExpiresAt = new Date(now.getTime() + EFFECT_ATTEMPT_LEASE_MS).toISOString();
   await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
   effect = (await getExternalEffect(env, effectId))!;
   let attempt = await getExternalEffectAttempt(env, attemptId);
@@ -557,7 +569,7 @@ export async function claimExternalEffect(
   const attemptNumber = effect.attempt_count + 1;
   if (attemptNumber > effect.retry_limit + 1) throw new EffectRuntimeError("effect_retry_exhausted");
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
-  const leaseExpiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
+  const leaseExpiresAt = new Date(now.getTime() + EFFECT_ATTEMPT_LEASE_MS).toISOString();
   await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
   const claimed = await getExternalEffect(env, effectId);
   const attempt = await getExternalEffectAttempt(env, attemptId);

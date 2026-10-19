@@ -1,9 +1,10 @@
 -- 0158_production_gate_attestations.sql - a person attests a gate with evidence, or reverses one.
 --
 -- 0153 admitted settlement and waiver entries only. This migration re-creates the ledger's validate
--- trigger under its name with every 0153 rule kept for the entries 0153 admits; only its refusal of
--- any `reverses_id` and its blocked-gate rule now make room for a reversal. The matrix gains two
--- person entries:
+-- trigger under its name with every 0153 rule kept for the entries 0153 admits, including at most
+-- one open waiver request per gate per person and no contract facts on any entry. Only 0153's
+-- refusal of any `reverses_id` and of any `attestation_json`, and its blocked-gate rule, now
+-- make room for the two person entries the matrix gains:
 --   * `clear` / `person_attestation`: Materials, Safety, Access or Weather, to `ready`, by an active
 --     owner or production user who is not an active member of any crew under any login coordinate
 --     they carry (user id, email or Frappe user). Each gate has one small typed shape in
@@ -61,8 +62,7 @@ BEGIN
   SELECT RAISE(ABORT, 'production_gate_safety_person_only')
   WHERE NEW.gate = 'Safety' AND NEW.entry_kind = 'clear' AND NEW.actor_kind IS NOT 'person';
 
-  -- The basis x gate matrix this ledger admits, all of it person entries. A structured attestation
-  -- belongs only to an attestation, and a reversal carries no evidence of its own.
+  -- The basis x gate matrix this ledger admits, all of it person entries.
   SELECT RAISE(ABORT, 'production_gate_clearance_basis_invalid')
   WHERE NOT (
       (NEW.entry_kind = 'clear' AND NEW.basis = 'deposit_settlement'
@@ -78,15 +78,21 @@ BEGIN
         AND NEW.to_state IN ('waived', 'blocked') AND NEW.requested_by IS NOT NULL)
       OR (NEW.entry_kind = 'reverse' AND NEW.basis = 'person_reversal'
         AND NEW.to_state = 'blocked' AND NEW.reverses_id IS NOT NULL
-        AND NEW.request_id IS NULL AND NEW.requested_by IS NULL
-        AND NEW.evidence_refs_json IS NULL)
+        AND NEW.request_id IS NULL AND NEW.requested_by IS NULL)
     )
     OR NEW.actor_kind IS NOT 'person'
     OR NEW.actor_user_id IS NULL
     OR (NEW.reverses_id IS NOT NULL AND NEW.entry_kind != 'reverse')
-    OR (NEW.attestation_json IS NOT NULL AND NEW.basis != 'person_attestation')
     OR NEW.reason_redacted_at IS NOT NULL
-    OR (NEW.self_approval = 1 AND NEW.actor_user_id IS NOT NEW.requested_by);
+    OR (NEW.self_approval = 1 AND NEW.actor_user_id IS NOT NEW.requested_by)
+    -- No entry admitted here carries contract facts, only an attestation carries a structured
+    -- attestation, and neither a waiver nor a reversal carries structured evidence of its own.
+    OR (NEW.attestation_json IS NOT NULL AND NEW.basis != 'person_attestation')
+    OR NEW.policy_version IS NOT NULL
+    OR NEW.terms_hash IS NOT NULL
+    OR NEW.contract_binding_id IS NOT NULL
+    OR (NEW.entry_kind IN ('waiver_request', 'waiver_decision', 'reverse')
+        AND NEW.evidence_refs_json IS NOT NULL);
 
   -- A clear, a waiver request or a waiver decision acts on a blocked gate, and a reversal on a gate
   -- that is not blocked.
@@ -142,6 +148,25 @@ BEGIN
   SELECT RAISE(ABORT, 'production_gate_clearance_reason_required')
   WHERE NEW.entry_kind IN ('waiver_request', 'waiver_decision', 'reverse')
     AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0);
+
+  -- One open waiver request per gate per person: a second would only move the gate's version
+  -- under the owner deciding the first.
+  SELECT RAISE(ABORT, 'production_gate_waiver_request_open')
+  WHERE NEW.entry_kind = 'waiver_request'
+    AND EXISTS (
+      SELECT 1
+        FROM production_gate_clearances request
+       WHERE request.tenant_id = NEW.tenant_id
+         AND request.gate_id = NEW.gate_id
+         AND request.entry_kind = 'waiver_request'
+         AND request.actor_user_id = NEW.actor_user_id
+         AND NOT EXISTS (
+           SELECT 1
+             FROM production_gate_clearances decision
+            WHERE decision.tenant_id = request.tenant_id
+              AND decision.request_id = request.clearance_id
+         )
+    );
 
   -- An attester is on no crew: no active crew membership names a login that shares the attester's
   -- user id, email or Frappe user.

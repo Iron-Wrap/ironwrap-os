@@ -510,6 +510,65 @@ test("a decider is never the requester, unless the only active holder approves t
   assert.notEqual(declined, approved);
 });
 
+test("a person holds one open waiver request per gate, and a decision closes it", () => {
+  const db = ledger();
+  const first = append(db);
+  refused(
+    () => append(db, { reason: "A second synthetic request on the same gate." }),
+    "production_gate_waiver_request_open",
+  );
+  // Another person, or another gate, is not held by it.
+  append(db, { actor_user_id: OWNER, actor_role: "owner" });
+  append(db, { gate: "Access" });
+  append(db, {
+    entry_kind: "waiver_decision",
+    request_id: first,
+    requested_by: PRODUCTION,
+    actor_user_id: OWNER,
+    actor_role: "owner",
+  });
+  append(db);
+  assert.equal(
+    (db.prepare(
+      `SELECT COUNT(*) AS n FROM production_gate_clearances
+        WHERE gate = 'Materials' AND entry_kind = 'waiver_request' AND actor_user_id = ?`,
+    ).get(PRODUCTION) as { n: number }).n,
+    2,
+  );
+});
+
+test("waiver entries carry no attestation, contract or evidence fields", () => {
+  const db = ledger();
+  for (const field of [
+    { attestation_json: '{"note":"synthetic"}' },
+    { policy_version: "ironwrap.synthetic.v1" },
+    { terms_hash: "a".repeat(64) },
+    { contract_binding_id: "binding:synthetic:0001" },
+    { evidence_refs_json: '{"r2_key":"production-gate-clearance/v1/x.json"}' },
+  ]) {
+    refused(() => append(db, field), "production_gate_clearance_basis_invalid");
+    refused(() => append(db, { ...selfApproval("Access"), ...field }), "production_gate_clearance_basis_invalid");
+  }
+  // A settlement names its receipt and carries no attestation or contract facts either.
+  const intentId = seedReconciledDeposit(db);
+  refused(
+    () => append(db, {
+      gate: "Deposit",
+      entry_kind: "clear",
+      basis: "deposit_settlement",
+      to_state: "complete",
+      reason: null,
+      evidence_refs_json: JSON.stringify({ money_intent_id: intentId }),
+      attestation_json: '{"note":"synthetic"}',
+    }),
+    "production_gate_clearance_basis_invalid",
+  );
+  assert.equal(
+    (db.prepare("SELECT COUNT(*) AS n FROM production_gate_clearances").get() as { n: number }).n,
+    0,
+  );
+});
+
 test("the QA seed owner is refused on every person entry", () => {
   const db = ledger();
   const intentId = seedReconciledDeposit(db);

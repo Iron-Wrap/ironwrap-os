@@ -224,7 +224,7 @@ control.
 hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
 whole team is paused. `delegable: false` with asks_first (17 actions, for example storm_mode.propose,
 inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
-Contract version: catalog sha `a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852` (16 specialists,
+Contract version: catalog sha `86ae29d7af105098e5214bbe754af3f19c0f1611e0687d0b58574a8deac80ab4` (16 specialists,
 162 actions, 115 watches; every action has a plain `name`); a copy for builders
 is `output/figma-v2/ai-kit/AI-TEAM-CONTRACT.md` and `contract.json`.
 

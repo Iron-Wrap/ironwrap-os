@@ -241,8 +241,12 @@ Current source tracing distinguishes implemented modules from reachable producti
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
   step to the reviewer to do by hand, and `lead_fact.propose` has no registered arguments yet, so
   its steps abstain. The app has no import screen, so the Retry a person would use for an import
-  run's failed items is not built yet. A prepared access change (`access.prepare_change`) still
-  closes as finished work under Done for you; its place in the owner's Needs you is not built yet.
+  run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
+  `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
+  too, and never under Done for you; closing that draft when the matching act lands or a newer
+  draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.
+  `authority.record` answers only a press on compliance's view for that action, and
+  `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: no inbound
   channel feeds the team yet, so the Worker writes only owner, staff and worker actors for a
   person's ask or request, and `null` for watch firings and handoffs.
@@ -256,15 +260,25 @@ Current source tracing distinguishes implemented modules from reachable producti
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
   within-limits action to asks first. A within-limits setting also reads as asks first after a
   step under it ends `unknown`, with a readback mismatch or done by a person, after a catalog or
-  step-policy change, and after a later hold. The undo and release-qualification fallbacks are not
-  built yet, and practice runs do not stop yet under a fallback or a hold. Within-limits steps
+  step-policy change (the step policy is at version 5), after a later hold, and after a run of the
+  specialist ends without a qualified route; that run, or a catastrophe on the action, also stops
+  a practice-only action's practice runs until the owner confirms it again. The undo fallback is
+  not built yet, and practice runs do not stop under a hold yet. The earned-autonomy window counts
+  scored decisions of runs under the current step policy and the specialist's current release,
+  never a refused run's matches, and a catastrophe since the window began blocks the bar.
+  `delegation.propose_change` is registered: a proposal to act within limits below the bar is
+  refused, the owner's preview is `GET /api/v1/agent-team/specialists/:id/preview`, and each pair
+  is the fact `delegation/<specialist>:<action>`. Within-limits steps
   carry their setting's id, but the auditor's check of them (every step until 20 clean ones, then
   one in ten) is not built yet. An audit from the reviewed run's own model family is not
   accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
   v3 close keeps its output only on one of them; a close on an older close model is accepted and
-  is not held to a qualification. A synthetic run closes only on a Worker whose
-  `AGENT_DATA_CLASS` is synthetic. Five cadence watches fire from the cron with deterministic conditions (`0204`),
-  including the four owner reports; the other watches and every event-triggered watch do not fire yet.
+  is not held to a qualification. The host sends the v3 close only when the Worker names close
+  model 3 exactly, so the host half of the close-model rule (send the newest shape no newer than
+  the Worker's) is not built yet. A synthetic run closes only on a Worker whose
+  `AGENT_DATA_CLASS` is synthetic. Six cadence watches fire from the cron with deterministic
+  conditions (`0204`), the four owner reports and `delegation_review` among them; the other watches
+  and every event-triggered watch do not fire yet, and nothing emits `injection.flagged` yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
   takes signals in the order the Worker feeds them: the contract's queue priority is not
   implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,

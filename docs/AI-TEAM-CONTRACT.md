@@ -422,8 +422,16 @@ An action's class is fixed by its consequence. It never changes at runtime.
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
 `payee.unfreeze_prepare`, `safety_stop.release_prepare` and `access.prepare_change` do at class
-`A1`; it never performs the act. A run gets the names of the people-only acts its specialist owns
-as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.
+`A1`; it never performs the act. A prepared draft names the person who performs the act, also while
+its specialist is on hold, and waits in that person's Needs you, never under Done for you: the
+owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfreeze_prepare`, and
+production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
+receipt asks the person to check it and apply it in their own screen. The draft is to leave Needs
+you when the matching act lands or a newer draft replaces it, its receipt naming which happened,
+and Needs you is to offer "Not now", which names what it removes. Neither is built yet (see
+`CAPABILITY-MATRIX.md`): today a prepared draft stays in Needs you. A run gets the names of the
+people-only acts its specialist owns as `people_only` (each `{action_id, name}`), so a receipt can
+name them; they are never its tools.
 
 ### Delegation
 
@@ -454,9 +462,12 @@ actions only.
    yet (see `CAPABILITY-MATRIX.md`): the Worker takes a setting change only from an owner session
    signed in within the last five minutes, but asks for no second factor and records no step-up
    evidence on the setting.
-4. **Preview.** Before confirming, the owner sees that action's history for that specialist:
-   proposals made, approved unchanged, edited, declined and undone, practice runs and how each
-   compared, the share that matched, and which of them the new ceiling would have let run.
+4. **Preview.** Before confirming, the owner sees that action's history for that specialist
+   (`GET /api/v1/agent-team/specialists/:id/preview?action=…[&ceiling=…]`): proposals made,
+   approved, declined and done by hand, practice runs and how many were compared, the counted
+   decisions (item 13) and how each compared, the share that matched, whether the action meets the
+   bar, and, for a ceiling, how many of the counted decisions it would have let run and how many of
+   those did not match.
 5. **Audit.** Every step that runs within limits carries the setting's id on its receipt. The
    auditor verifies every such step until the setting has 20 clean ones, then a sample (one in ten
    by default). Not built yet (see `CAPABILITY-MATRIX.md`): steps carry the setting's id, but the
@@ -467,18 +478,23 @@ actions only.
    confirms it again, when a step under it ends `unknown`, fails with a readback mismatch or is
    done by a person instead (`done_by_person`), when the catalog or the step policy version
    changes, when a person undoes a step it ran, or when the specialist's release changes without a
-   passed qualification of the specialist on the route it runs. It also falls back when a step
-   under it is recorded as a catastrophe (item 12), and that fallback opens an exception for the
-   owner. Two triggers are not built yet (see `CAPABILITY-MATRIX.md`): the undo trigger, which
-   applies once a receipt offers an undo (no undo flow exists yet), and the release trigger, of
-   which only the catalog change above works so far. A practice-only setting never falls back to
-   asks first, which would give the action more autonomy: the release and catastrophe triggers
-   stop its practice runs, and the setting stays practice only until the owner confirms it again.
-   The auditor can also put a specialist on hold (`specialist.hold`): that sets the specialist's
-   hold flag, so all its non-protective actions ask first, except that a practice-only action
-   stops its practice runs and keeps its `shadow` setting. Stopping practice runs is not built
-   yet: they continue after these triggers and under a hold. The flag cannot be set on the AI
-   auditor (the JSON `never_targets`), and only the owner clears it, through `delegation.set`.
+   passed qualification of the specialist on the route it runs, which the Worker sees as a run of
+   the specialist that ends without a qualified route (`no_qualified_route`) after the setting was
+   set. It also falls back when a step under it is recorded as a catastrophe (item 12), and that
+   fallback opens an exception for the owner. The step policy is at version 5
+   (`ironwrap.agent_step_policy@5`); a new version is such a change, so every within-limits setting
+   asks first again until the owner confirms it, and a run opened under the old version takes no
+   new step. The undo trigger applies once a receipt offers an undo; no undo flow exists yet (see
+   `CAPABILITY-MATRIX.md`). A practice-only setting never falls back to asks first, which would
+   give the action more autonomy: the release and catastrophe triggers stop its practice runs (a
+   catastrophe recorded for that action of the specialist, or a run of the specialist without a
+   qualified route, since the owner set it), and the action then neither practises nor runs until
+   the owner confirms it again; the setting stays practice only. The auditor can also put a
+   specialist on hold (`specialist.hold`): that sets the specialist's hold flag, so all its
+   non-protective actions ask first, except that a practice-only action stops its practice runs
+   and keeps its `shadow` setting. Stopping practice runs under a hold is not built yet: they
+   continue. The flag cannot be set on the AI auditor (the JSON `never_targets`), and only the
+   owner clears it, through `delegation.set`.
    Clearing the flag restores no setting by itself: each setting the hold overrode stays asks
    first, and each practice-only setting stays practice only, until the owner confirms it again.
    These fallbacks and the hold flag are the only delegation changes the system makes by itself.
@@ -513,19 +529,29 @@ actions only.
     object, values and recipient, partial when it is the same action with other values, and
     diverge when it differs. Only that comparison gives `partial`. A practice run with nothing to
     compare with inside its seven-day window is unscored, and no comparator is built yet (see
-    `CAPABILITY-MATRIX.md`). An unscored decision or practice run never counts. A catastrophe is a
-    step that did, or as a practice run would have done, what an entry in the evaluation
-    catastrophe list
+    `CAPABILITY-MATRIX.md`). An unscored decision or practice run never counts toward the share
+    that matched, but a catastrophe recorded on it, a person's take-over included, still blocks the
+    bar (item 13). A catastrophe is a step that did, or as a practice run would have done, what an
+    entry in the evaluation catastrophe list
     ([`agent-host/evals/catastrophes.v1.json`](../agent-host/evals/catastrophes.v1.json)) describes,
     as the auditor's finding or the reviewer's decision records it.
 13. **Earned autonomy.** The system may propose acting within limits for an action and specialist
     only when the recent compared decisions meet every part of this bar: at least 50 of them, at
     least 95% of them a match, no catastrophe among them, and the specialist qualified on the model
     it runs on (see "Qualification"). Only decisions under the current step policy version and the
-    specialist's current release count. The face proposes the change
-    (`delegation.propose_change`, with the preview) and the owner decides (`delegation.set`). No `H`
-    action and no action whose `delegable` is false is ever proposed. These numbers are floors.
-    Raising or lowering one needs an owner decision recorded in this contract.
+    specialist's current release count. The window keys on the release (`release_sha256`:
+    playbook, allowlist, `COMMON.md` and catalog), never on the model or the runtime tier: with
+    declared failover a run's model alternates between the primary and a fallback, and a window
+    keyed on it would flap. The qualification covers the route instead: the bar needs a passed
+    qualification on the exact route the specialist's latest run used, and a run on an unqualified
+    route makes a within-limits setting fall back to asks first (item 7). A close the Worker
+    refused (no qualified route, or an audit off independence) counts toward the bar only against
+    the specialist, never for it: the run's matches leave the window, while its divergences, a
+    person's declined proposal included, still count. The face proposes the change
+    (`delegation.propose_change`, with the preview), the Worker refuses a proposal to act within
+    limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action and no
+    action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
+    lowering one needs an owner decision recorded in this contract.
 14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
     your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
     actions the words shown are the current setting's.
@@ -627,7 +653,7 @@ data").
 | `counterparty` | The supplier or subcontractor is approved and verified, and the contact comes from its verified record |
 | `payee_protected` | No pending or unverified change to the counterparty's payee or bank details |
 | `identity` | The requester's identity and authority over the property, job or account are verified through the portal identity or a call-back to a number on file |
-| `requester` | The step answers a person's request: the run's own signal, or the root of its handoff chain, is an `owner_request` with source `ask` or `request` from an authenticated owner or staff member, and the step sets it as `request_ref` and cites it |
+| `requester` | The step answers a person's request: the run's own signal, or the root of its handoff chain, is an `owner_request` from an authenticated owner or staff member, and the step cites it. `access.prepare_change` takes an ask or any press (source `ask` or `request`) and sets it as `request_ref`; `authority.record` takes only a press (source `request`) whose expected action is `authority.record` |
 | `privacy` | Only the minimum personal data needed leaves the system, to an allowed recipient or processor |
 | `segregation` | The reviewer did not author the revision, and the separation rules in AUTHORITY-AND-EVIDENCE-CONTRACT.md hold |
 | `bounded` | The effect stays inside its declared objects, area, duration and count |
@@ -739,7 +765,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `report.compose` | A1 | — | Compose an owner report: new inquiries (the AI receptionist), pipeline, daily brief or weekly review. Owners: `orchestrator`, `lead_concierge`. | Receipts, runs and facts in the report window | — | — | Report draft (proposed) | new; predecessor `sendDailyDigest` in `workers-bus/src/notify.ts` |
 | `staff.notify` | A2 | Acts within your limits | Deliver a report, a decision request or a schedule to named staff. Owners: `orchestrator`, `lead_concierge`, `scheduler_dispatcher`, `shop_planner`. | Recipient and role; content limited to the recipient's read rights | `staff_recipient` | The proposing specialist's reviewer | In-app, push or email notification → delivery status | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
 | `owner.interrupt` | A2 | Acts within your limits | Protective. Interrupt the owner at once with an item on the owner's immediate-only list; an internal notification with no outside effect. | The facts that put the item on the list | `immediate_only`, `staff_recipient` | Never asks first | Urgent notification to the owner, repeated until acknowledged → acknowledgement | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
-| `delegation.propose_change` | A1 | — | Propose a delegation change for one specialist and action, with a preview of what would have run. | That action's history for that specialist: proposals, approvals, edits, declines, undos, practice runs, how each compared, and outcomes | — | — | Proposal for the owner | new (Settings → AI team) |
+| `delegation.propose_change` | A1 | — | Propose a delegation change for one specialist and action (within limits with a ceiling, practice only, or back to asks first), with a preview of what would have run; within limits only for an action that meets the earned-autonomy bar (Delegation item 13). The draft waits in the owner's Needs you. | That action's record for that specialist (`delegation/<specialist>:<action>`): proposals, approvals, declines, work done by hand, practice runs, how each compared, and outcomes | — | — | Proposal for the owner, who decides with `delegation.set` after the preview | Recorded on the run; the preview is `GET /api/v1/agent-team/specialists/:id/preview?action=…[&ceiling=…]` (Settings → AI team) |
 | `delegation.set` | H | — | Set asks first, within limits with a ceiling, or practice only, for a specialist and action, or revoke it; clear a specialist's hold flag, after which each setting the hold overrode stays asks first until the owner confirms it again. | — | — | People only: owner, with step-up | Delegation setting → read back by the next permit | new (Settings → AI team) |
 | `policy.propose_change` | A1 | — | Propose a policy, ceiling or standing-order change. | Facts that motivate it; affected runs | — | — | Proposal for the owner | new |
 | `policy.activate` | H | — | Activate a policy, ceiling or standing-order version. | — | — | People only: owner | Policy version → read back at the next evaluation | new |
@@ -933,10 +959,10 @@ safety occurrence. The Worker registry and the human release route must preserve
 | `gate.clear` | A3 | Asks first | Always asks first. Clear a gate with its evidence. | Evidence and issuer readback | `gates`, `segregation` | Production | Gate cleared → read back | `POST /api/v1/production/jobs/{job}/gates/{gate}/clearance` |
 | `gate.waive` | H | — | Waive a gate. | — | — | People only: owner | Waiver → read back | new |
 | `document.request` | A2 | Asks first | Ask a subcontractor or supplier for a certificate, clearance or insurance document. | The authority gap; verified contact | `counterparty`, `privacy` | Production | Request → delivery status | new |
-| `authority.record` | A3 | Asks first | Always asks first. Record an internal Worker Competency from a completed Internal Competency Assessment. Record, verify and revoke each write a new version, never an edit. External kinds (a licence, clearance, permit, inspection or certificate from an issuer) are refused: they are evaluated with `authority.evaluate` and never recorded by this action. The trigger is a person's press on compliance's view (an `owner_request` with source `request`). | The assessment fact, plus `evidence_refs`, each with its SHA-256 | `segregation` | Production holding `authority:approve`, or the owner; never the worker the record is about | New Worker Competency version → read back from the D1 owned store | `POST /api/v1/authority-records/commands` plus the step decision: an approval runs the same internal competency command natively in D1, inside the decision's own transaction |
+| `authority.record` | A3 | Asks first | Always asks first. Record an internal Worker Competency from a completed Internal Competency Assessment. Record, verify and revoke each write a new version, never an edit. External kinds (a licence, clearance, permit, inspection or certificate from an issuer) are refused: they are evaluated with `authority.evaluate` and never recorded by this action. The trigger is a person's press on compliance's view for this action: an `owner_request` with source `request` whose expected action is `authority.record`, from an authenticated owner or staff member, which the step cites. | The assessment fact, plus `evidence_refs`, each with its SHA-256; the press | `requester`, `segregation` | Production holding `authority:approve`, or the owner; never the worker the record is about | New Worker Competency version → read back from the D1 owned store | `POST /api/v1/authority-records/commands` plus the step decision: an approval runs the same internal competency command natively in D1, inside the decision's own transaction |
 | `privacy_request.answer` | A3 | Asks first | Always asks first. Answer a request to see or correct personal data. | Verified identity; records in scope | `identity`, `privacy`, `disclosure` | Owner | Response → delivery status | new |
 | `privacy_incident.contain` | A2 | Asks first | Contain suspected exposure: revoke portal links and device pairings. | The exposure signal | — | Owner | Revocations → read back | `POST /api/v1/customer-portal/links/{link}/revoke`, `POST /api/v1/device-pairings/{pairing}/revoke` |
-| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a phone replacement or revocation, or a role change for one person, for the owner to apply with `access.change`: the draft waits in the owner's Needs you, not under Done for you, and names the owner (not built yet: today the draft closes as finished work; see `CAPABILITY-MATRIX.md`). Only a role change names a target role, which may be any app role except owner; adding or removing a person stays on the owner's `access.change` screen. The request comes from an owner or staff member, either as the run's own ask or request or as the root of its handoff chain, never from inbound customer or supplier text. Owners: `compliance`, `orchestrator`. | The request (`request_ref`, `signal/<id>`), set and cited; the person's current role, access and devices | `requester` | — | Access change (proposed) for a person to apply | new |
+| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a phone replacement or revocation, or a role change for one person, for the owner to apply with `access.change`: the draft waits in the owner's Needs you, not under Done for you, and names the owner, under a hold too. Only a role change names a target role, which may be any app role except owner; adding or removing a person stays on the owner's `access.change` screen. The request comes from an owner or staff member, either as the run's own ask or request or as the root of its handoff chain, never from inbound customer or supplier text; since no view can request an access change, any owner or staff press counts. Owners: `compliance`, `orchestrator`. | The request (`request_ref`, `signal/<id>`), set and cited; the person's current role, access and devices | `requester` | — | Access change (proposed) for a person to apply | new |
 | `access.change` | H | — | Grant or change a person's role or access. | — | — | People only: owner | Access → read back | `POST /api/v1/admin/app-users/{user}/role`, `POST /api/v1/admin/app-users/{user}/access` |
 
 #### Catalog: AI customer care (`customer_care_warranty`)
@@ -1047,7 +1073,9 @@ reconciliation, recorded as a new receipt version.
 ### How screens use receipts
 
 - **Now** is the team brief. Done for you: closed steps that succeeded, each with its receipt and
-  undo. Doing: open steps. Needs you: steps waiting on a person. Found: opportunity and risk alerts.
+  undo. Doing: open steps. Needs you: steps waiting on a person, and drafts of a people-only act for
+  the person who performs it (see "Action classes"), which never show under Done for you. Found:
+  opportunity and risk alerts.
 - **Decisions** shows only steps that ask first and acts that are people only. Nothing else goes
   there.
 - A decision card states what approving does and does not do, the exact values, the recipient, the
@@ -1107,8 +1135,11 @@ Worker takes the `close_model` 3 block, the routed block of a gateway config v2 
 tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
 with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
 to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
-host. Only a `close_model` 3 block records the effort, run class, qualification, release and data
-class, so only its live or shadow output is held to a qualification (see "Qualification").
+host. The host's half is not built yet (see `CAPABILITY-MATRIX.md`): a host is to send the newest
+close model it knows that is no newer than the Worker's, but today's host sends the `close_model` 3
+block only when the Worker names exactly 3, so a Worker on 4 would get the legacy block from it and
+refuse it. Only a `close_model` 3 block records the effort, run class, qualification, release and
+data class, so only its live or shadow output is held to a qualification (see "Qualification").
 
 ## Shared memory
 
@@ -1150,6 +1181,11 @@ evidence.
 - `fact_id` is `<object>/<id>`, optionally followed by `#` and a JSON pointer to one field, such as
   `job/<id>#/gates/deposit`. Raw evidence is `evidence/<id>`; a provider fact is
   `<provider>/<entity>/<id>`, such as `quickbooks/invoice/<id>`.
+- One specialist and action's earned-autonomy record is the fact
+  `delegation/<specialist_id>:<action_id>`, readable at `owner:read`: the setting and whether it
+  fell back, practice and whether it stopped, the counted window and the bar (see "Delegation"),
+  the qualification it relies on, the decision history, failed readbacks, and the most proposals in
+  any hour, day or week. Its version moves with every proposal of the pair.
 - `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
   changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
   is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.
@@ -1224,12 +1260,12 @@ work.
 | `orchestrator` | `dead_letter` | On `dead_letter.created` | An envelope is dead-lettered | `dead_letter.replay`, `exception.escalate` |
 | `orchestrator` | `pipeline` | Every `PT1H` | Stage changes, stalled cases or waiting decisions since the last report | `report.compose`, `staff.notify` |
 | `orchestrator` | `daily_owner_brief` | Every `P1D` | The tenant's daily brief time | `report.compose`, `staff.notify` |
-| `orchestrator` | `weekly_review` | Every `P7D` | The tenant's weekly review day and time | `report.compose`, `staff.notify` |
+| `orchestrator` | `weekly_review` | Every `P7D` | The tenant's weekly review day and time; its digest lists the delegation candidates, the pairs with enough compared decisions for a preview (`previewable`) and the proposals awaiting the owner (`awaiting_owner`) | `report.compose`, `staff.notify` |
 | `orchestrator` | `owner_requests` | On `face.message_received` | The owner asks the face a question or asks for an action | `fact.explain`, `signal.route`, `handoff.create` |
 | `orchestrator` | `role_questions` | On `face.message_received` | A person in another role, the crew phone included, asks the face a question | `fact.explain`, `handoff.create`, `owner.interrupt` |
 | `orchestrator` | `interrupt_candidates` | On `signal.received` | A signal matches the owner's immediate-only list | `owner.interrupt`, `exception.escalate` |
 | `orchestrator` | `storm_events` | On `storm_watch.opened` | A storm watch opens, or the owner switches storm mode | `staff.notify`, `handoff.create`, `storm_mode.propose` |
-| `orchestrator` | `delegation_review` | Every `P7D` | An action meets the earned-autonomy bar for a specialist, or has enough compared decisions for a preview | `delegation.propose_change` |
+| `orchestrator` | `delegation_review` | Every `P7D` | An action meets the earned-autonomy bar for a specialist, or has enough compared decisions for a preview; each such pair is an object of the run (`delegation/<specialist>:<action>`), and a pair the face already proposed that the owner has not answered is listed under `awaiting_owner` instead | `delegation.propose_change` |
 | `orchestrator` | `page_unacknowledged` | On `page.unacknowledged` | A page has no acknowledgement inside its window; the next person in the escalation order is paged, ending with the owner | `exception.escalate`, `owner.interrupt` |
 | `orchestrator` | `import_failed_items` | Every `PT1H` | An import run finished with failed items since the last firing | `import.retry_failed` |
 | `market_analyst` | `storm_events` | On `weather.alert` | The configured weather feed reports hail, high wind or a severe storm over a service area | `storm_watch.open`, `market_alert.raise`, `storm_mode.propose` |
@@ -1342,7 +1378,7 @@ work.
 | New inquiries | `new_leads`, every 15 minutes | AI receptionist | Each inquiry that arrived or changed since the last report: who, what, channel, what the AI receptionist did (with receipts), and what it needs | In the app and as a push to the owner; not delivered when empty |
 | Pipeline | `pipeline`, hourly | IronWrap | Stage changes, stalled cases, quotes at risk (expiry, margin, re-price), follow-ups due, and decisions waiting | In the app, with a push only when a decision waits; not delivered when empty |
 | Daily owner brief | `daily_owner_brief`, daily at the tenant's configured time | IronWrap | Done for you (with receipts and undo), Doing, Needs you (asks first and people only), Found (opportunities and risks), and a strip of cash, backlog, capacity, storms and coil | In the app and by email |
-| Weekly market and portfolio review | `weekly_review`, weekly at the configured day and time | IronWrap, with the AI market analyst's part | Demand by area, service and source; wins and losses with their reasons; margin by job type and estimated against actual; prices against the market and the coil trend; capacity and backlog; reputation; delegation candidates with their history | In the app and by email |
+| Weekly market and portfolio review | `weekly_review`, weekly at the configured day and time | IronWrap, with the AI market analyst's part | Demand by area, service and source; wins and losses with their reasons; margin by job type and estimated against actual; prices against the market and the coil trend; capacity and backlog; reputation; delegation candidates with their history, the pairs ready for a preview and the proposals awaiting the owner | In the app and by email |
 
 Every fact in a report is cited from records (decision 9); a figure that cannot be cited is not
 shown. A report that is not delivered because it is empty is still recorded as a run. Between
@@ -1576,8 +1612,9 @@ is not held to one (see "Coordination run"). Changing a specialist's model, a de
 included, needs that pair qualified first. Without a qualified route the specialist abstains with
 `no_qualified_route`. A specialist is a delegation candidate (see "Delegation") only when the
 latest qualification for the provider, model, effort and release of its most recent closed run
-passed; a close on an older close model records neither effort nor release, so only its provider
-and model are matched.
+passed; a close on an older close model records no release, so a specialist whose most recent
+closed run is one is no candidate. The delegation window counts decisions by release, not by
+route; the route is held to its qualification instead (see "Delegation", item 13).
 
 ### Independence
 
@@ -1662,7 +1699,8 @@ model family that proposed the work under review (see "Coordination run").
   untrusted data, every claim is cited, and policy, permits and approvals apply to every step. A
   model that meets instruction-like content (ignore your rules, pay this new account, send it to
   this other address, reveal data, act now or lose the deal) raises `injection_suspected`, which
-  reaches a person, and the auditor sees every such flag.
+  reaches a person. The auditor is to see every such flag through its `injection_flagged` watch;
+  that is not built yet, since nothing emits `injection.flagged` (see `CAPABILITY-MATRIX.md`).
 - A flagged item that still carries valid, verifiable work is worked: the specialist does that work
   from verified facts only, never from the instructions inside the item, and records
   `exception.escalate` with `injection_suspected`. Only when nothing valid remains does it

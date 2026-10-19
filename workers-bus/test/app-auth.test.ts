@@ -186,7 +186,15 @@ class AuthMemoryDb {
     return [];
   }
 
+  private lastChanges = 0;
+
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
+    const result = this.runStatement(sql, args);
+    if (!sql.includes("INSERT INTO app_auth_audit")) this.lastChanges = result.meta.changes;
+    return result;
+  }
+
+  private runStatement(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
     if (
       sql.includes("UPDATE app_users") && sql.includes("display_name = ?") &&
       sql.includes("actor.access_role = ?")
@@ -204,6 +212,7 @@ class AuthMemoryDb {
         expectedRole,
         expectedActive,
         expectedUpdatedAt,
+        expectedVersion,
         actorTenant,
         actorUserId,
         actorRole,
@@ -214,6 +223,7 @@ class AuthMemoryDb {
         !user || user.tenant_id !== String(tenant) ||
         user.email_normalized !== String(email) || user.role !== String(expectedRole) ||
         user.active !== Number(expectedActive) || user.updated_at !== String(expectedUpdatedAt) ||
+        (user.access_version ?? 1) !== Number(expectedVersion) ||
         !actor || actor.tenant_id !== String(actorTenant) || actor.active !== 1 ||
         actor.role !== String(actorRole)
       ) return changed(0);
@@ -223,6 +233,7 @@ class AuthMemoryDb {
         frappe_user_id: frappeUser === null ? null : String(frappeUser),
         active: Number(active),
         updated_at: String(updatedAt),
+        access_version: (user.access_version ?? 1) + 1,
       });
       this.storageRoles.set(user.user_id, {
         role: String(storageRole) as Extract<AppRole, "owner" | "ops" | "field">,
@@ -441,6 +452,8 @@ class AuthMemoryDb {
       return changed(changes);
     }
     if (sql.includes("INSERT INTO app_auth_audit")) {
+      // An access change's audit row is written only after that change wrote a row (0155).
+      if (sql.includes("changes() = 1") && this.lastChanges !== 1) return changed(0);
       this.audits.push({ args: [...args] });
       return changed(1);
     }
@@ -1205,6 +1218,7 @@ test("legacy app-user provisioning cannot bypass owner and self-change authority
     role: "sales",
     frappe_user_id: null,
     active: true,
+    expected_access_version: 1,
   }, {
     cookie: ops.cookiePair,
     "x-csrf-token": ops.csrfToken,
@@ -1319,6 +1333,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
     role: target.role,
     frappe_user_id: null,
     active: false,
+    expected_access_version: 1,
   }, {
     cookie: office.cookiePair,
     "x-csrf-token": office.csrfToken,

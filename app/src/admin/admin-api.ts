@@ -103,7 +103,14 @@ export async function listAppUsers(fetcher: typeof fetch = fetch) {
 
 export async function provisionAppUser(
   session: AuthenticatedSession,
-  input: { email: string; displayName: string; role: AppRole; active: boolean },
+  input: {
+    email: string;
+    displayName: string;
+    role: AppRole;
+    active: boolean;
+    /** The version the person's access carried when this change was decided; none for a new person. */
+    expectedAccessVersion?: number;
+  },
   fetcher: typeof fetch = fetch,
 ) {
   return await apiRequest({
@@ -116,6 +123,9 @@ export async function provisionAppUser(
       role: input.role,
       frappe_user_id: null,
       active: input.active,
+      ...(input.expectedAccessVersion === undefined
+        ? {}
+        : { expected_access_version: input.expectedAccessVersion }),
     },
     schema: appUserMutationResponseSchema,
     csrfToken: session.csrf_token,

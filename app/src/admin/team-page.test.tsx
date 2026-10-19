@@ -26,6 +26,7 @@ function users(
       display_name: row.email?.split("@")[0] ?? `Person ${index}`,
       role: row.role ?? "sales",
       active: row.active ?? true,
+      access_version: 1,
       updated_at: "2026-08-22T12:00:00.000Z",
       is_self: row.is_self ?? false,
     })),
@@ -112,6 +113,28 @@ describe("TeamPage", () => {
     await user.click(screen.getByRole("button", { name: "Remove access" }));
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledOnce());
     expect(vi.mocked(provisionAppUser).mock.calls[0]![1]!.active).toBe(false);
+    expect(vi.mocked(provisionAppUser).mock.calls[0]![1]!.expectedAccessVersion).toBe(1);
+  });
+
+  it("reloads the list when someone else changed that person's access first", async () => {
+    vi.mocked(listAppUsers).mockResolvedValue(
+      users({ email: "sam@freshco.example", role: "sales" }) as never,
+    );
+    vi.mocked(provisionAppUser).mockRejectedValue(
+      new ApiError({
+        status: 409,
+        code: "access_version_conflict",
+        message: "access_version_conflict",
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithSession(<TeamPage />, sessionFor("owner"));
+
+    await screen.findByRole("heading", { name: "Who has access" });
+    expect(listAppUsers).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Remove access" }));
+    await user.click(screen.getByRole("button", { name: "Remove access" }));
+    await waitFor(() => expect(listAppUsers).toHaveBeenCalledTimes(2));
   });
 
   it("offers access back to someone who was removed", async () => {

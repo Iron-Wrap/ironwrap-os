@@ -153,6 +153,7 @@ function appUserProjection(
     display_name: user.display_name,
     role: user.role,
     active: user.active === 1,
+    access_version: Number(user.access_version ?? 1),
     updated_at: user.updated_at,
     /** The signed-in owner must not be able to lock themselves out of their own tenant. */
     is_self: user.user_id === auth.session.user_id,
@@ -180,26 +181,68 @@ export function parseUserInviteInput(
   return { ok: true, value: { email, displayName, role: value.role } };
 }
 
+/**
+ * The access version a person's change was decided on (0155). Required on every change to an
+ * existing person; a stale one is refused rather than applied over someone else's decision.
+ */
+export function parseExpectedAccessVersion(value: unknown): number | null {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) < 1_000_000_000
+    ? (value as number)
+    : null;
+}
+
 export function parseRoleChange(
   value: unknown,
-): { ok: true; value: { role: AppRole } } | { ok: false; error: string } {
+):
+  | { ok: true; value: { role: AppRole; expectedAccessVersion: number } }
+  | { ok: false; error: string } {
   if (!isRecord(value)) return { ok: false, error: "invalid_body" };
-  if (Object.keys(value).some((key) => key !== "role")) {
+  if (Object.keys(value).some((key) => key !== "role" && key !== "expected_access_version")) {
     return { ok: false, error: "unexpected_field" };
   }
   if (!authStore.isAppRole(value.role)) return { ok: false, error: "invalid_role" };
-  return { ok: true, value: { role: value.role } };
+  const expectedAccessVersion = parseExpectedAccessVersion(value.expected_access_version);
+  if (expectedAccessVersion === null) {
+    return { ok: false, error: "expected_access_version_required" };
+  }
+  return { ok: true, value: { role: value.role, expectedAccessVersion } };
 }
 
 export function parseAccessChange(
   value: unknown,
-): { ok: true; value: { active: boolean } } | { ok: false; error: string } {
+):
+  | { ok: true; value: { active: boolean; expectedAccessVersion: number } }
+  | { ok: false; error: string } {
   if (!isRecord(value)) return { ok: false, error: "invalid_body" };
-  if (Object.keys(value).some((key) => key !== "active")) {
+  if (Object.keys(value).some((key) => key !== "active" && key !== "expected_access_version")) {
     return { ok: false, error: "unexpected_field" };
   }
   if (typeof value.active !== "boolean") return { ok: false, error: "invalid_active" };
-  return { ok: true, value: { active: value.active } };
+  const expectedAccessVersion = parseExpectedAccessVersion(value.expected_access_version);
+  if (expectedAccessVersion === null) {
+    return { ok: false, error: "expected_access_version_required" };
+  }
+  return { ok: true, value: { active: value.active, expectedAccessVersion } };
+}
+
+/** A change decided on an older access version than the person now carries. */
+export const ACCESS_VERSION_CONFLICT: RouteFailure = {
+  ok: false,
+  error: "access_version_conflict",
+  status: 409,
+};
+
+/** After a refused write: a moved access version is the conflict, anything else a state change. */
+async function accessWriteFailure(
+  env: AppEnv,
+  auth: AuthContext,
+  userId: string,
+  expectedAccessVersion: number,
+): Promise<RouteFailure> {
+  const current = await authStore.findAppUserById(env, auth.session.tenant_id, userId);
+  return current && Number(current.access_version ?? 1) !== expectedAccessVersion
+    ? ACCESS_VERSION_CONFLICT
+    : { ok: false, error: "app_user_state_changed", status: 409 };
 }
 
 export function parseInviteAcceptance(
@@ -605,6 +648,9 @@ export async function changeAppUserRole(
   const user = target.user;
   const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
   if (authority) return authority;
+  if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
+    return ACCESS_VERSION_CONFLICT;
+  }
   if (user.role === parsed.value.role) {
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
   }
@@ -618,17 +664,17 @@ export async function changeAppUserRole(
       actorUserId: auth.session.user_id,
       actorRole: auth.session.role,
       expectedTarget: user,
+      audit: {
+        event: "user_role_change",
+        outcome: "changed",
+        request: await authRequestContext(req, env),
+        detailCode: `${user.role}->${parsed.value.role}:${auth.session.user_id}`,
+      },
     },
   });
-  if (!updated) return { ok: false, error: "app_user_state_changed", status: 409 };
-  await authStore.recordAuthAudit(env, {
-    tenantId: auth.session.tenant_id,
-    userId: updated.user_id,
-    event: "user_role_change",
-    outcome: "changed",
-    request: await authRequestContext(req, env),
-    detailCode: `${user.role}->${updated.role}:${auth.session.user_id}`,
-  });
+  if (!updated) {
+    return await accessWriteFailure(env, auth, user.user_id, parsed.value.expectedAccessVersion);
+  }
   return {
     ok: true,
     body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },
@@ -663,6 +709,9 @@ export async function changeAppUserAccess(
   const user = target.user;
   const authority = authorizeAppUserMutation(auth, user, user.role);
   if (authority) return authority;
+  if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
+    return ACCESS_VERSION_CONFLICT;
+  }
   if ((user.active === 1) === parsed.value.active) {
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
   }
@@ -677,17 +726,17 @@ export async function changeAppUserAccess(
       actorUserId: auth.session.user_id,
       actorRole: auth.session.role,
       expectedTarget: user,
+      audit: {
+        event: "user_access_change",
+        outcome: parsed.value.active ? "restored" : "removed",
+        request: await authRequestContext(req, env),
+        detailCode: `${user.role}:${auth.session.user_id}`,
+      },
     },
   });
-  if (!updated) return { ok: false, error: "app_user_state_changed", status: 409 };
-  await authStore.recordAuthAudit(env, {
-    tenantId: auth.session.tenant_id,
-    userId: updated.user_id,
-    event: "user_access_change",
-    outcome: parsed.value.active ? "restored" : "removed",
-    request: await authRequestContext(req, env),
-    detailCode: `${updated.role}:${auth.session.user_id}`,
-  });
+  if (!updated) {
+    return await accessWriteFailure(env, auth, user.user_id, parsed.value.expectedAccessVersion);
+  }
   return {
     ok: true,
     body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },

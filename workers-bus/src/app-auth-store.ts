@@ -18,6 +18,49 @@ export interface AppUserMutationAuthority {
   actorUserId: string;
   actorRole: AppRole;
   expectedTarget: AppUserRecord | null;
+  /** The audit row for this change, committed in the change's own batch (0155). */
+  audit?: AccessChangeAudit;
+}
+
+export interface AccessChangeAudit {
+  event: string;
+  outcome: string;
+  request: AuthRequestContext;
+  detailCode: string;
+}
+
+/**
+ * The audit row of a role or access change. It sits directly after the change in one batch and is
+ * written only when that change itself wrote a row (`changes() = 1`), so a lost race leaves neither
+ * the change nor an audit claiming it.
+ */
+function accessChangeAuditStatement(
+  env: Env,
+  tenantId: string,
+  userId: string,
+  audit: AccessChangeAudit,
+) {
+  return env.DB.prepare(
+    `INSERT INTO app_auth_audit
+       (created_at, tenant_id, user_id, event, outcome, ip_hash, user_agent_hash, detail_code)
+     SELECT ?,?,?,?,?,?,?,?
+      WHERE changes() = 1`,
+  ).bind(
+    nowIso(),
+    tenantId,
+    userId,
+    audit.event.slice(0, 64),
+    audit.outcome.slice(0, 64),
+    audit.request.ip_hash,
+    audit.request.user_agent_hash,
+    audit.detailCode.slice(0, 120),
+  );
+}
+
+/** The access version the route authorized against; the column is NOT NULL DEFAULT 1 (0155). */
+function expectedAccessVersion(expected: AppUserRecord): number | null {
+  const version = Number(expected.access_version ?? 1);
+  return Number.isInteger(version) && version >= 1 ? version : null;
 }
 
 export async function findActiveUser(
@@ -27,7 +70,7 @@ export async function findActiveUser(
 ): Promise<AppUserRecord | null> {
   return await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND email_normalized = ? AND active = 1
@@ -42,7 +85,7 @@ export async function findAppUserByEmail(
 ): Promise<AppUserRecord | null> {
   return await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND email_normalized = ?
@@ -57,7 +100,7 @@ export async function findActiveUserById(
 ): Promise<AppUserRecord | null> {
   return await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND user_id = ? AND active = 1
@@ -91,7 +134,7 @@ export async function listAppUsers(
 ): Promise<AppUserRecord[]> {
   const result = await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ?
@@ -113,7 +156,7 @@ export async function findAppUserById(
 ): Promise<AppUserRecord | null> {
   return await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND user_id = ?
@@ -145,11 +188,13 @@ export async function setAppUserAccessRole(
   if (
     !expected || expected.tenant_id !== input.tenantId || expected.user_id !== input.userId
   ) return null;
-  const result = await env.DB.prepare(
+  const version = expectedAccessVersion(expected);
+  if (version === null) return null;
+  const mutation = env.DB.prepare(
     `UPDATE app_users
-        SET access_role = ?, role = ?, updated_at = ?
+        SET access_role = ?, role = ?, updated_at = ?, access_version = access_version + 1
       WHERE tenant_id = ? AND user_id = ?
-        AND access_role = ? AND active = ? AND updated_at = ?
+        AND access_role = ? AND active = ? AND updated_at = ? AND access_version = ?
         AND EXISTS (
           SELECT 1 FROM app_users AS actor
            WHERE actor.tenant_id = ? AND actor.user_id = ?
@@ -164,10 +209,18 @@ export async function setAppUserAccessRole(
     expected.role,
     expected.active,
     expected.updated_at,
+    version,
     input.tenantId,
     input.authority.actorUserId,
     input.authority.actorRole,
-  ).run();
+  );
+  const audit = input.authority.audit;
+  const result = audit
+    ? (await env.DB.batch([
+      mutation,
+      accessChangeAuditStatement(env, input.tenantId, input.userId, audit),
+    ]))[0]
+    : await mutation.run();
   if (d1Changes(result) !== 1) return null;
   return await findAppUserById(env, input.tenantId, input.userId);
 }
@@ -191,11 +244,13 @@ export async function setAppUserActive(
   if (
     !expected || expected.tenant_id !== input.tenantId || expected.user_id !== input.userId
   ) return null;
+  const version = expectedAccessVersion(expected);
+  if (version === null) return null;
   const mutationUpdatedAt = authorityMutationTimestamp(input.now);
   const mutation = env.DB.prepare(
-    `UPDATE app_users SET active = ?, updated_at = ?
+    `UPDATE app_users SET active = ?, updated_at = ?, access_version = access_version + 1
       WHERE tenant_id = ? AND user_id = ?
-        AND access_role = ? AND active = ? AND updated_at = ?
+        AND access_role = ? AND active = ? AND updated_at = ? AND access_version = ?
         AND EXISTS (
           SELECT 1 FROM app_users AS actor
            WHERE actor.tenant_id = ? AND actor.user_id = ?
@@ -209,15 +264,20 @@ export async function setAppUserActive(
     expected.role,
     expected.active,
     expected.updated_at,
+    version,
     input.tenantId,
     input.authority.actorUserId,
     input.authority.actorRole,
   );
-  const result = input.active
+  const audit = input.authority.audit
+    ? [accessChangeAuditStatement(env, input.tenantId, input.userId, input.authority.audit)]
+    : [];
+  const result = input.active && audit.length === 0
     ? await mutation.run()
     : (await env.DB.batch([
       mutation,
-      ...deactivationCleanupStatements(env, {
+      ...audit,
+      ...(input.active ? [] : deactivationCleanupStatements(env, {
         tenantId: input.tenantId,
         userId: input.userId,
         emailNormalized: expected.email_normalized,
@@ -225,7 +285,7 @@ export async function setAppUserActive(
         mutationUpdatedAt,
         revokedAt: input.now,
         revokedByUserId: input.authority.actorUserId,
-      }),
+      })),
     ]))[0];
   if (d1Changes(result) !== 1) return null;
   return await findAppUserById(env, input.tenantId, input.userId);
@@ -255,12 +315,14 @@ export async function upsertAppUserWithAuthority(
       expected.tenant_id !== input.tenant_id ||
       expected.email_normalized !== input.email_normalized
     ) return null;
+    const version = expectedAccessVersion(expected);
+    if (version === null) return null;
     const mutation = env.DB.prepare(
       `UPDATE app_users
           SET display_name = ?, role = ?, access_role = ?, frappe_user_id = ?,
-              active = ?, updated_at = ?
+              active = ?, updated_at = ?, access_version = access_version + 1
         WHERE tenant_id = ? AND email_normalized = ? AND user_id = ?
-          AND access_role = ? AND active = ? AND updated_at = ?
+          AND access_role = ? AND active = ? AND updated_at = ? AND access_version = ?
           AND EXISTS (
             SELECT 1 FROM app_users AS actor
              WHERE actor.tenant_id = ? AND actor.user_id = ?
@@ -279,15 +341,20 @@ export async function upsertAppUserWithAuthority(
       expected.role,
       expected.active,
       expected.updated_at,
+      version,
       input.tenant_id,
       authority.actorUserId,
       authority.actorRole,
     );
-    const result = input.active
+    const audit = authority.audit
+      ? [accessChangeAuditStatement(env, input.tenant_id, expected.user_id, authority.audit)]
+      : [];
+    const result = input.active && audit.length === 0
       ? await mutation.run()
       : (await env.DB.batch([
         mutation,
-        ...deactivationCleanupStatements(env, {
+        ...audit,
+        ...(input.active ? [] : deactivationCleanupStatements(env, {
           tenantId: input.tenant_id,
           userId: expected.user_id,
           emailNormalized: input.email_normalized,
@@ -295,7 +362,7 @@ export async function upsertAppUserWithAuthority(
           mutationUpdatedAt,
           revokedAt: now,
           revokedByUserId: authority.actorUserId,
-        }),
+        })),
       ]))[0];
     changed = d1Changes(result);
   } else {
@@ -326,11 +393,15 @@ export async function upsertAppUserWithAuthority(
       authority.actorUserId,
       authority.actorRole,
     );
-    const result = input.active
+    const audit = authority.audit
+      ? [accessChangeAuditStatement(env, input.tenant_id, candidateId, authority.audit)]
+      : [];
+    const result = input.active && audit.length === 0
       ? await mutation.run()
       : (await env.DB.batch([
         mutation,
-        ...deactivationCleanupStatements(env, {
+        ...audit,
+        ...(input.active ? [] : deactivationCleanupStatements(env, {
           tenantId: input.tenant_id,
           userId: candidateId,
           emailNormalized: input.email_normalized,
@@ -338,7 +409,7 @@ export async function upsertAppUserWithAuthority(
           mutationUpdatedAt,
           revokedAt: now,
           revokedByUserId: authority.actorUserId,
-        }),
+        })),
       ]))[0];
     changed = d1Changes(result);
   }
@@ -351,7 +422,7 @@ export async function upsertAppUserWithAuthority(
   if (!row && !expected) {
     row = await env.DB.prepare(
       `SELECT user_id, tenant_id, email_normalized, display_name,
-              access_role AS role, frappe_user_id,
+              access_role AS role, access_version, frappe_user_id,
               active, created_by, created_at, updated_at
          FROM app_users AS target
         WHERE target.tenant_id = ? AND target.email_normalized = ?
@@ -411,7 +482,7 @@ export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Pro
 
   const row = await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users WHERE tenant_id = ? AND email_normalized = ? LIMIT 1`,
   ).bind(input.tenant_id, input.email_normalized).first<AppUserRecord>();
@@ -463,7 +534,7 @@ export async function bootstrapFirstOwnerAppUser(
   if (d1Changes(result) !== 1) return null;
   return await env.DB.prepare(
     `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, frappe_user_id,
+            access_role AS role, access_version, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users WHERE tenant_id = ? AND email_normalized = ? LIMIT 1`,
   ).bind(input.tenant_id, input.email_normalized).first<AppUserRecord>();

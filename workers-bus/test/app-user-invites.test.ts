@@ -212,12 +212,46 @@ interface Session {
   csrf: string;
 }
 
+/** The access version a person carries now, as the office list would have shown it. */
+function accessVersionOf(h: Harness, userId: string): number {
+  const row = h.db.raw.prepare(
+    "SELECT access_version FROM app_users WHERE tenant_id = ? AND user_id = ?",
+  ).get(TENANT, userId) as { access_version: number } | undefined;
+  return Number(row?.access_version ?? 1);
+}
+
+const ACCESS_CHANGE_PATH = /^\/api\/v1\/admin\/app-users\/([^/]+)\/(role|access)$/;
+
 async function call(
   h: Harness,
   method: "GET" | "POST",
   path: string,
-  options: { session?: Session; body?: unknown; csrf?: boolean } = {},
+  options: { session?: Session; body?: unknown; csrf?: boolean; rawBody?: boolean } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  // A role or access change names the version it was decided on (0155). Cases about something
+  // else send the current one, as the people list does; `rawBody` sends the body exactly.
+  const accessChange = path.match(ACCESS_CHANGE_PATH);
+  if (
+    accessChange && !options.rawBody && options.body && typeof options.body === "object" &&
+    !("expected_access_version" in options.body)
+  ) {
+    options = {
+      ...options,
+      body: { ...options.body, expected_access_version: accessVersionOf(h, decodeURIComponent(accessChange[1]!)) },
+    };
+  }
+  if (
+    method === "POST" && path === APP_USERS && !options.rawBody && options.body &&
+    typeof options.body === "object" && !("expected_access_version" in options.body)
+  ) {
+    const email = String((options.body as Record<string, unknown>).email ?? "").toLowerCase();
+    const existing = h.db.raw.prepare(
+      "SELECT access_version FROM app_users WHERE tenant_id = ? AND email_normalized = ?",
+    ).get(TENANT, email) as { access_version: number } | undefined;
+    if (existing) {
+      options = { ...options, body: { ...options.body, expected_access_version: existing.access_version } };
+    }
+  }
   const headers = new Headers({ origin: ORIGIN });
   if (options.session) {
     headers.set("cookie", options.session.cookie);
@@ -1354,5 +1388,113 @@ test("every act on an invitation lands in the auth audit with its actor", async 
     events.at(-1)!.user_id,
     String(userRow(h, "audited@example.invalid")!.user_id),
     "and the acceptance names the account it created",
+  );
+});
+
+test("a role or access change applies only against the access version it was decided on", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const mate = await addUser(h.env, "versioned@example.invalid", "sales", "Versioned Mate");
+  const auditCount = (event: string) =>
+    scalar(
+      h,
+      "SELECT count(*) AS value FROM app_auth_audit WHERE event = ? AND user_id = ?",
+      event,
+      mate.user_id,
+    );
+
+  const listed = await call(h, "GET", APP_USERS, { session });
+  const listedMate = (listed.body.users as Array<Record<string, unknown>>)
+    .find((user) => user.user_id === mate.user_id)!;
+  assert.equal(listedMate.access_version, 1, "the people list carries the version a change names");
+
+  const missing = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production" },
+    rawBody: true,
+  });
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.error, "expected_access_version_required");
+
+  const promoted = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production", expected_access_version: 1 },
+  });
+  assert.equal(promoted.status, 200);
+  assert.equal((promoted.body.user as Record<string, unknown>).access_version, 2);
+  assert.equal(auditCount("user_role_change"), 1, "one audit row, committed with the change");
+
+  // A second decision made on the same screen, before the first landed, is refused, not applied.
+  const stale = await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+    session,
+    body: { active: false, expected_access_version: 1 },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "access_version_conflict");
+  assert.equal(userRow(h, "versioned@example.invalid")!.active, 1);
+  assert.equal(auditCount("user_access_change"), 0, "a refused change writes no audit row");
+
+  const removed = await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+    session,
+    body: { active: false, expected_access_version: 2 },
+  });
+  assert.equal(removed.status, 200);
+  assert.equal((removed.body.user as Record<string, unknown>).access_version, 3);
+  assert.equal(auditCount("user_access_change"), 1);
+});
+
+test("provisioning names the access version for an existing person and none for a new one", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  await addUser(h.env, "existing@example.invalid", "sales", "Existing Person");
+  const body = (email: string, extra: Record<string, unknown> = {}) => ({
+    tenant_id: TENANT,
+    email,
+    display_name: "Some Person",
+    role: "production",
+    frappe_user_id: null,
+    active: true,
+    ...extra,
+  });
+
+  const noVersion = await call(h, "POST", APP_USERS, {
+    session,
+    body: body("existing@example.invalid"),
+    rawBody: true,
+  });
+  assert.equal(noVersion.status, 400);
+  assert.equal(noVersion.body.error, "expected_access_version_required");
+  const stale = await call(h, "POST", APP_USERS, {
+    session,
+    body: body("existing@example.invalid", { expected_access_version: 7 }),
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "access_version_conflict");
+  const changed = await call(h, "POST", APP_USERS, {
+    session,
+    body: body("existing@example.invalid", { expected_access_version: 1 }),
+  });
+  assert.equal(changed.status, 200);
+  assert.equal((changed.body.user as Record<string, unknown>).access_version, 2);
+
+  const ghost = await call(h, "POST", APP_USERS, {
+    session,
+    body: body("brand-new@example.invalid", { expected_access_version: 1 }),
+  });
+  assert.equal(ghost.status, 409, "a version for a person who does not exist yet is stale too");
+  assert.equal(ghost.body.error, "access_version_conflict");
+  const created = await call(h, "POST", APP_USERS, {
+    session,
+    body: body("brand-new@example.invalid"),
+  });
+  assert.equal(created.status, 200);
+  assert.equal((created.body.user as Record<string, unknown>).access_version, 1);
+  assert.equal(
+    scalar(
+      h,
+      "SELECT count(*) AS value FROM app_auth_audit WHERE event = 'user_provision' AND user_id = ?",
+      String((created.body.user as Record<string, unknown>).user_id),
+    ),
+    1,
   );
 });

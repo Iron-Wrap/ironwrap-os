@@ -110,11 +110,12 @@ export function parseProvisionAppUser(
   env: AppEnv,
 ): {
   ok: true;
-  value: Omit<ProvisionAppUserInput, "provisioned_by">;
+  value: Omit<ProvisionAppUserInput, "provisioned_by"> & { expected_access_version: number | null };
 } | { ok: false; error: string } {
   if (!isRecord(value)) return { ok: false, error: "invalid_body" };
   const allowed = new Set([
     "tenant_id", "email", "display_name", "role", "frappe_user_id", "active",
+    "expected_access_version",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return { ok: false, error: "unexpected_field" };
 
@@ -136,6 +137,17 @@ export function parseProvisionAppUser(
   if (value.frappe_user_id !== null && value.frappe_user_id !== undefined && !frappeUserId) {
     return { ok: false, error: "invalid_frappe_user_id" };
   }
+  // Required when the person already exists, absent for a new one; the route decides which (0155).
+  const expectedAccessVersion = value.expected_access_version === null ||
+      value.expected_access_version === undefined
+    ? null
+    : Number.isInteger(value.expected_access_version) &&
+        (value.expected_access_version as number) >= 1
+    ? (value.expected_access_version as number)
+    : undefined;
+  if (expectedAccessVersion === undefined) {
+    return { ok: false, error: "invalid_expected_access_version" };
+  }
   return {
     ok: true,
     value: {
@@ -145,6 +157,7 @@ export function parseProvisionAppUser(
       role,
       frappe_user_id: frappeUserId,
       active,
+      expected_access_version: expectedAccessVersion,
     },
   };
 }
@@ -190,17 +203,23 @@ export async function provisionAppUser(
   authority?: authStore.AppUserMutationAuthority,
 ): Promise<AppUserRecord | null> {
   const request = await authRequestContext(req, env);
-  const user = authority
-    ? await authStore.upsertAppUserWithAuthority(env, input, authority)
-    : await authStore.upsertAppUser(env, input);
-  if (!user) return null;
-  await authStore.recordAuthAudit(env, {
-    tenantId: user.tenant_id,
-    userId: user.user_id,
+  const audit = {
     event: "user_provision",
     outcome: input.active ? "active" : "inactive",
     request,
     detailCode: `${input.role}:${input.provisioned_by}`,
+  };
+  // An authorized change commits its audit row in the same batch (0155); the unauthenticated
+  // upsert keeps the audit it always wrote after the fact.
+  if (authority) {
+    return await authStore.upsertAppUserWithAuthority(env, input, { ...authority, audit });
+  }
+  const user = await authStore.upsertAppUser(env, input);
+  if (!user) return null;
+  await authStore.recordAuthAudit(env, {
+    tenantId: user.tenant_id,
+    userId: user.user_id,
+    ...audit,
   });
   return user;
 }

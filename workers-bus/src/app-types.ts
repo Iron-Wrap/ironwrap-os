@@ -195,6 +195,8 @@ export interface AppUserRecord {
   email_normalized: string;
   display_name: string;
   role: AppRole;
+  /** Bumped by every role or access change; present on reads that manage people (0155). */
+  access_version?: number;
   frappe_user_id: string | null;
   active: number;
   created_by: string;

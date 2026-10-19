@@ -2296,6 +2296,7 @@ const onboardingDefaults = () => ({
       display_name: "Ada Owner",
       role: "owner",
       active: true,
+      access_version: 1,
       updated_at: "2026-08-22T12:00:00.000Z",
       is_self: true,
     },
@@ -2637,12 +2638,24 @@ async function routeOnboarding(request, requestUrl, method) {
         return { status: 400, body: { error: "invalid_email" } };
       }
       const existing = onboardingState.users.find((user) => user.email === email);
+      // The Worker's 0155 rule: an existing person's change names their access version.
+      const expected = body.expected_access_version;
+      if (existing && expected === undefined) {
+        return { status: 400, body: { error: "expected_access_version_required" } };
+      }
+      if (
+        (existing && expected !== existing.access_version) ||
+        (!existing && expected !== undefined)
+      ) {
+        return { status: 409, body: { error: "access_version_conflict" } };
+      }
       const next = {
         user_id: existing?.user_id ?? `appu_${onboardingState.users.length}`,
         email,
         display_name: String(body.display_name ?? ""),
         role: String(body.role ?? "sales"),
         active: body.active !== false,
+        access_version: existing ? existing.access_version + 1 : 1,
         updated_at: "2026-08-22T12:32:00.000Z",
         is_self: existing?.is_self ?? false,
       };

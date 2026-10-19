@@ -113,6 +113,8 @@ export const appUserSchema = z.object({
   display_name: z.string().min(1),
   role: z.enum(appRoles),
   active: z.boolean(),
+  /** Every role or access change names the version it was decided on. */
+  access_version: z.number().int().min(1),
   updated_at: z.string(),
   is_self: z.boolean(),
 });

@@ -33,7 +33,8 @@ const INVITE_COLUMNS = `invite_id, tenant_id, email_normalized, display_name, ac
        accepted_at, accepted_user_id, revoked_at, revoked_by_user_id, revoked_reason`;
 
 const USER_COLUMNS = `user_id, tenant_id, email_normalized, display_name,
-       access_role AS role, frappe_user_id, active, created_by, created_at, updated_at`;
+       access_role AS role, access_version, frappe_user_id, active, created_by, created_at,
+       updated_at`;
 
 /**
  * Issue one invitation, superseding whatever was open for the same mailbox.

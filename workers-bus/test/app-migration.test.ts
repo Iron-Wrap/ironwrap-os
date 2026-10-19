@@ -2277,9 +2277,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0145 adds the person-owned stop release record that alone lifts a crew stop.
     // 0150 adds the append-only field item resolution ledger. 0151 adds the person-owned
     // resolution of a failed Newo handoff. 0152 requires the evidence that releases a crew stop
-    // to be captured after the stop.
+    // to be captured after the stop. 0155 adds a version to a person's access, so a role or access
+    // change applies only against the version it was decided on.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 132);
+    assert.equal(migrations.length, 133);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),

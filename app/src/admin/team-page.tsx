@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { ApiError } from "../lib/api";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -223,10 +224,16 @@ function TeamRow({ user, onChanged }: { user: AppUser; onChanged: () => void }) 
         displayName: user.display_name,
         role: input.role,
         active: input.active,
+        expectedAccessVersion: user.access_version,
       }),
     onSuccess: () => {
       setConfirming(false);
       onChanged();
+    },
+    // Someone else changed this person's access first: reload the list so the next try names
+    // the version that is current now.
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "access_version_conflict") onChanged();
     },
   });
 

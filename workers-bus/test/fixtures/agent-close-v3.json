@@ -16,6 +16,7 @@
     "adapter": "codex",
     "family": "openai",
     "model": "gpt-6.1-sol",
+    "effort": "medium",
     "models_used": ["gpt-6.1-sol"],
     "auth_mode": "oauth",
     "billing": "subscription",

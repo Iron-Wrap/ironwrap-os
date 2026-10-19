@@ -537,8 +537,8 @@ test("the host's runner and gateway close a v3 run on the owner's qualification,
   assert.deepEqual([kept.status, kept.result, kept.reason], ["ok", "completed", null]);
   const { model } = kept.close;
   assert.deepEqual(
-    [model.provider, model.family, model.route_id, model.qualification_ref, model.release_sha256, model.run_class, model.compliance_ref, kept.close.data_class],
-    ["codex", "openai", "codex_sol", qualified, release, "live", "ai.openai.chatgpt-commercial", "business"],
+    [model.provider, model.family, model.route_id, model.effort, model.qualification_ref, model.release_sha256, model.run_class, model.compliance_ref, kept.close.data_class],
+    ["codex", "openai", "codex_sol", "medium", qualified, release, "live", "ai.openai.chatgpt-commercial", "business"],
   );
   assert.deepEqual(calls.map((call) => [call.model, call.effort]), [["gpt-6.1-sol", "medium"]]);
   // The v3 close fixture the Worker's tests use has exactly the keys this host sends.
@@ -588,6 +588,7 @@ function onCodexSol(r: { qualifications?: Array<{ id: string; provider: string; 
     modelsUsed: [],
     authMode: "oauth",
     family: "openai",
+    effort: "medium" as const,
     adapter: "codex" as const,
     billing: "subscription" as const,
     route: "primary" as const,

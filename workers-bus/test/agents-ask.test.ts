@@ -805,6 +805,7 @@ test("the agent host's own runner merges the view schema on an ask run and the a
             modelsUsed: [],
             authMode: "oauth",
             family: "openai",
+            effort: "medium",
             adapter: "codex",
             billing: "subscription",
             route: "primary",

@@ -1270,6 +1270,8 @@ const PROVIDER_ID = { type: "string", pattern: "^[a-z][a-z0-9_]{1,30}$" };
 const FAMILY = { type: "string", pattern: "^[a-z][a-z0-9_]{1,31}$" };
 const MODEL_ID = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" };
 const ROUTE_ID = { type: "string", pattern: "^[a-z][a-z0-9_]{1,40}$" };
+/** As agent_qualifications holds it (migration 0203). */
+const EFFORT = { type: "string", pattern: "^[a-z][a-z0-9_]{0,15}$" };
 const HEX64 = "^[0-9a-f]{64}$";
 const COMPLIANCE_REF = "^[a-z][a-z0-9._-]{1,63}$";
 /** The run classes that decide which provider accounts may serve a run (docs/COMPLIANCE-REGISTER.md "AI model providers"). */
@@ -1285,7 +1287,7 @@ const MODEL_V3_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
-    "provider", "adapter", "family", "model", "models_used", "auth_mode", "billing", "tier", "route_id", "route", "failover",
+    "provider", "adapter", "family", "model", "effort", "models_used", "auth_mode", "billing", "tier", "route_id", "route", "failover",
     "qualification_ref", "release_sha256", "gateway_config_sha256", "review_of", "mode", "compliance_ref", "run_class", "risk_acceptance",
   ],
   properties: {
@@ -1293,6 +1295,8 @@ const MODEL_V3_SCHEMA: JsonSchema = {
     adapter: { type: "string", enum: ["openai_compatible", "anthropic_messages", "gemini", "bedrock", "vertex", "claude_agent_sdk", "codex"] },
     family: FAMILY,
     model: MODEL_ID,
+    /** The effort of the route that answered, which its qualification names. */
+    effort: EFFORT,
     models_used: MODEL_PROPERTIES.models_used,
     /** The account's credential mode. */
     auth_mode: { type: "string", enum: ["api_key", "oauth", "cloud_identity"] },
@@ -1306,11 +1310,13 @@ const MODEL_V3_SCHEMA: JsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["route_id", "provider", "model", "reason", "retry_at"],
+        required: ["route_id", "provider", "model", "family", "reason", "retry_at"],
         properties: {
           route_id: ROUTE_ID,
           provider: PROVIDER_ID,
           model: MODEL_ID,
+          /** The family of the hop's registry entry; null when the route had none. */
+          family: { type: ["string", "null"], pattern: FAMILY.pattern },
           reason: { type: "string", pattern: "^[a-z][a-z_]{1,63}$" },
           retry_at: { type: ["number", "null"], minimum: 0 },
         },
@@ -1342,7 +1348,8 @@ interface ModelV3 {
   provider: string;
   family: string;
   model: string;
-  failover: Array<{ provider: string; model: string }>;
+  effort: string;
+  failover: Array<{ provider: string; model: string; family: string | null }>;
   qualification_ref: string | null;
   release_sha256: string | null;
   run_class: string;
@@ -1376,15 +1383,13 @@ function familyOf(model: unknown): string | null {
 
 /**
  * Whether an audit ran off the reviewed run's family: its own family is known and another, and so
- * is every hop a v3 close passed over. A hop records no family: one on the close's own provider and
- * model has the close's, and any other cannot be shown to be off the reviewed family, so it fails
- * closed.
+ * is the family of every hop a v3 close passed over. A hop that names no family fails closed.
  */
 function independentOf(model: unknown, reviewedFamily: string | null): boolean {
   const family = familyOf(model);
   if (reviewedFamily === null || family === null || family === reviewedFamily) return false;
   const v3 = modelV3(model);
-  return !v3 || v3.failover.every((hop) => hop.provider === v3.provider && hop.model === v3.model);
+  return !v3 || v3.failover.every((hop) => hop.family !== null && hop.family !== reviewedFamily);
 }
 
 export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";

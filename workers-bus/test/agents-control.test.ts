@@ -1695,7 +1695,7 @@ function otherTenantQualification(s: ReturnType<typeof setup>): string {
 const closeReason = (s: ReturnType<typeof setup>, runId: string): string | null =>
   s.scalar("SELECT reason_code r FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'", runId)?.r ?? null;
 /** The v3 model block of an audit on the shipped Claude route. */
-const OPUS_AUDIT = { provider: "claude", adapter: "claude_agent_sdk", family: "anthropic", model: "claude-opus-5-5", models_used: ["claude-opus-5-5"], tier: "audit", route_id: "claude_opus", compliance_ref: "ai.anthropic.claude-commercial" };
+const OPUS_AUDIT = { provider: "claude", adapter: "claude_agent_sdk", family: "anthropic", model: "claude-opus-5-5", effort: "high", models_used: ["claude-opus-5-5"], tier: "audit", route_id: "claude_opus", compliance_ref: "ai.anthropic.claude-commercial" };
 
 test("a run's open sends the specialist's current qualifications, the latest row per key and only while it passed", async () => {
   const s = setup();
@@ -1741,14 +1741,20 @@ test("a v3 close is held to its strict block, and legacy and routed blocks still
   const ref = await qualify(s, {}, "shape-sol");
   const closed = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref }));
   assert.deepEqual([closed.status, closed.body.terminal], [200, "completed"]);
-  const hop = { route_id: "codex_sol_low", provider: "codex", model: "gpt-6.1-sol", reason: "rate_limited", retry_at: 1_000_500.5 };
-  const threeHops = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref, route: "declared_fallback", failover: [hop, { ...hop, retry_at: null }, hop] }));
+  const hop = { route_id: "codex_sol_low", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retry_at: 1_000_500.5 };
+  // A hop whose route lost its registry entry names no family; outside an audit that changes nothing.
+  const threeHops = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref, route: "declared_fallback", failover: [hop, { ...hop, family: null, retry_at: null }, hop] }));
   assert.deepEqual([threeHops.status, threeHops.body.terminal], [200, "completed"]);
   const { run_class: _runClass, ...missing } = CLOSE_V3.model;
+  const { effort: _effort, ...effortless } = CLOSE_V3.model;
+  const { family: _family, ...hopWithoutFamily } = hop;
   for (const [label, model] of [
     ["four failover hops", { failover: [hop, hop, hop, hop] }],
-    ["a hop with a field of its own", { failover: [{ ...hop, family: "openai" }] }],
+    ["a hop with a field of its own", { failover: [{ ...hop, effort: "medium" }] }],
+    ["a hop without its family", { failover: [hopWithoutFamily] }],
+    ["a hop family with capitals", { failover: [{ ...hop, family: "OpenAI" }] }],
     ["a hop on a provider id with capitals", { failover: [{ ...hop, provider: "Codex" }] }],
+    ["an effort outside the qualification format", { effort: "High" }],
     ["a release hash one short", { release_sha256: "e".repeat(63) }],
     ["an upper-case configuration hash", { gateway_config_sha256: "E".repeat(64) }],
     ["a provider id with capitals", { provider: "Codex" }],
@@ -1761,6 +1767,7 @@ test("a v3 close is held to its strict block, and legacy and routed blocks still
   ] as const)
     assert.equal((await s.close((await s.run()).run_id, closeV3(model)).then((r) => r.status)), 422, label);
   assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: missing })).status, 422, "a block without its run class");
+  assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: effortless })).status, 422, "a block without its effort");
   // A routed block that names a family is held to the v3 block, which it does not meet.
   const routed = { provider: "codex", model: "gpt-6.1-sol", models_used: ["gpt-6.1-sol"], auth_mode: "chatgpt", tier: "routine", route_id: "codex_sol", review_of: null, mode: "live" };
   assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: { ...routed, family: "openai" } })).status, 422);
@@ -1818,6 +1825,7 @@ test("a live or shadow close keeps its output only on a qualification the Worker
   for (const [label, model] of [
     ["another provider", { provider: "openai", adapter: "openai_compatible", auth_mode: "api_key", billing: "api" }],
     ["another model", { model: "gpt-6-astra", models_used: ["gpt-6-astra"] }],
+    ["another effort", { effort: "high" }],
     ["another release", { release_sha256: "f".repeat(64) }],
     ["no release", { release_sha256: null }],
     ["no reference", { qualification_ref: null }],
@@ -1868,17 +1876,17 @@ test("an audit closes completed only off the reviewed run's family, on the hop i
   const kept = ["completed", null];
   const notIndependent = ["abstained", "provider_unavailable"];
   assert.deepEqual(await audit({}), kept);
-  // A hop on the close's own provider and model is of the close's family.
-  const opusHop = { route_id: "claude_opus_max", provider: "claude", model: "claude-opus-5-5", reason: "rate_limited", retry_at: null };
-  assert.deepEqual(await audit({ route: "declared_fallback", failover: [opusHop] }), kept);
-  // A hop the audit passed over on the reviewed run's account and model ran on its family.
-  const proposerHop = { route_id: "codex_astra", provider: "codex", model: "gpt-6.1-sol", reason: "provider_error", retry_at: null };
-  assert.deepEqual(await audit({ route: "declared_fallback", failover: [opusHop, proposerHop] }), notIndependent);
-  // A hop on another account names no family the Worker can check, so the audit fails closed even
-  // when the model is the same: a declared cross-account audit fallback waits for hop families.
+  // Every hop the audit passed over names its family. A hop off the reviewed run's family passes,
+  // on another account too: the declared fallback from Anthropic's API to Vertex is one family.
+  const opusHop = { route_id: "claude_opus", provider: "claude", model: "claude-opus-5-5", family: "anthropic", reason: "rate_limited", retry_at: null };
   const vertex = await qualify(s, { specialist_id: "independent_auditor", provider: "vertex", model: "claude-opus-5-5", effort: "high" }, "audit-vertex");
-  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex, route: "declared_fallback", route_id: "opus_vertex", failover: [{ ...opusHop, route_id: "claude_opus" }] }), notIndependent);
-  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex }), kept);
+  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex, route: "declared_fallback", route_id: "opus_vertex", failover: [opusHop] }), kept);
+  assert.deepEqual(await audit({ route: "declared_fallback", failover: [{ ...opusHop, provider: "gemini", model: "gemini-3.8-flash", family: "google" }] }), kept);
+  // A hop of the reviewed run's family ran the audit on the proposer's family; a hop that names no
+  // family cannot be shown to be off it. Either way the audit is not accepted.
+  const proposerHop = { route_id: "codex_astra", provider: "codex", model: "gpt-6-astra", family: "openai", reason: "provider_error", retry_at: null };
+  assert.deepEqual(await audit({ route: "declared_fallback", failover: [opusHop, proposerHop] }), notIndependent);
+  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex, route: "declared_fallback", route_id: "opus_vertex", failover: [{ ...opusHop, family: null }] }), notIndependent);
   // The audit's own family the same as the reviewed run's.
   const astra = await qualify(s, { specialist_id: "independent_auditor", model: "gpt-6-astra", effort: "high" }, "audit-astra");
   assert.deepEqual(await audit({ provider: "codex", adapter: "codex", family: "openai", model: "gpt-6-astra", models_used: [], route_id: "codex_astra", qualification_ref: astra }), notIndependent);
@@ -1934,10 +1942,10 @@ test("the candidate bar needs the qualification for the effort and release the s
   s.tick(1000);
   await qualify(s, { release_sha256: "f".repeat(64), passed: false, report_sha256: "e".repeat(64) }, "bar-release-fail");
   assert.deepEqual(await candidates(), []);
-  // A close that relied on no qualification shows no effort, so the bar holds its release alone.
+  // The specialist moves to the high effort at that release: the bar follows the effort its close names.
   const high = await qualify(s, { release_sha256: "f".repeat(64), effort: "high", report_sha256: "f".repeat(64) }, "bar-release-high");
-  await runsOnV3({ qualification_ref: null, release_sha256: "f".repeat(64) });
+  await runsOnV3({ qualification_ref: high, effort: "high", release_sha256: "f".repeat(64) });
   assert.deepEqual(await candidates(), [high]);
-  await runsOnV3({ qualification_ref: null, release_sha256: "1".repeat(64) });
+  await runsOnV3({ qualification_ref: null, effort: "high", release_sha256: "1".repeat(64) });
   assert.deepEqual(await candidates(), [], "no row at that release");
 });

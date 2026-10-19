@@ -28,6 +28,12 @@ import {
 import { runExternalEffect } from "../src/effect-runtime.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 import { reconcileCustomerContractAcceptanceAttempts } from "../src/customer-contract-acceptance.ts";
+import { buildProductionRunwayReadModel } from "../src/app-read-models.ts";
+import {
+  recordContractDepositGate,
+  sweepContractDepositGates,
+} from "../src/deposit-policy.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
 /**
@@ -75,6 +81,10 @@ interface NativeChain {
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
   throwNextBatchAfterCommit = false;
+  /** Runs right before the next batch, as a writer that committed just ahead of it. */
+  beforeNextBatch: (() => void) | null = null;
+  /** Fails the next gate ledger append, as an unavailable D1 would. */
+  failNextLedgerAppend = false;
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
@@ -88,10 +98,17 @@ class SqliteD1 {
   }
 
   prepare(sql: string) {
+    if (this.failNextLedgerAppend && sql.includes("INSERT INTO production_gate_clearances")) {
+      this.failNextLedgerAppend = false;
+      throw new Error("simulated_d1_unavailable");
+    }
     return new SqliteStatement(this.raw, this.raw.prepare(sql));
   }
 
   async batch(statements: SqliteStatement[]): Promise<unknown[]> {
+    const before = this.beforeNextBatch;
+    this.beforeNextBatch = null;
+    before?.();
     this.raw.exec("BEGIN IMMEDIATE");
     try {
       const results = [];
@@ -247,9 +264,19 @@ class MemoryR2 {
 async function setup(
   options: {
     contracts?: 0 | 1 | 2;
+    /** The contract's terms; 25% deposit unless a case says otherwise. */
+    terms?: Record<string, unknown>;
+    /** The owner's deposit-policy revision, or null for none: OD-01, the 0155 default. */
+    depositPolicy?: "md13_deposit" | "od01_payment_on_completion" | null;
   } = {},
 ) {
   const db = new SqliteD1();
+  // These contracts carry a 25% deposit, so the tenant takes deposits (MD-13) unless a case says
+  // otherwise: since 0155 a tenant with no revision is OD-01 and refuses a deposit contract.
+  const depositPolicy = options.depositPolicy === undefined ? "md13_deposit" : options.depositPolicy;
+  if (depositPolicy) {
+    recordDepositPolicy(db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: depositPolicy });
+  }
   const raw = new MemoryR2();
   const sentEmails: string[] = [];
   const fetchUrls: string[] = [];
@@ -283,8 +310,9 @@ async function setup(
   };
 
   const contracts = options.contracts ?? 1;
-  const chain = contracts > 0 ? await seedNativeContract(env, "primary") : null;
-  if (contracts === 2) await seedNativeContract(env, "alternate");
+  const terms = options.terms ?? TERMS;
+  const chain = contracts > 0 ? await seedNativeContract(env, "primary", terms) : null;
+  if (contracts === 2) await seedNativeContract(env, "alternate", terms);
   return {
     db,
     raw,
@@ -354,6 +382,7 @@ function testEnv(
 async function seedNativeContract(
   env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string },
   suffix: string,
+  terms: Record<string, unknown> = TERMS,
 ): Promise<NativeChain> {
   const base = new Date(Date.now() - 60_000);
   const quoteId = `customer-quote:acceptance:${suffix}`;
@@ -370,7 +399,7 @@ async function seedNativeContract(
     status: "approved",
     currency: "CAD",
     validUntil: QUOTE_VALID_UNTIL,
-    terms: TERMS,
+    terms,
     evidence: EVIDENCE,
     lines: [
       {
@@ -415,7 +444,7 @@ async function seedNativeContract(
     customerId: CUSTOMER_ID,
     title: "Complete roof replacement proposal",
     summary: "Approved scope, price, schedule assumptions, and warranty.",
-    terms: TERMS,
+    terms,
     contentRef: `r2://commercial/proposals/${suffix}.pdf`,
     contentHash: "b".repeat(64),
     evidence: EVIDENCE,
@@ -600,9 +629,9 @@ function seedOperatingCore(db: DatabaseSync): void {
   const now = new Date(Date.now() - 120_000).toISOString();
   db.prepare(
     `INSERT INTO app_users
-     (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+     (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
       active, created_by, created_at, updated_at)
-     VALUES (?, ?, 'owner@example.invalid', 'Owner', 'owner', NULL, 1, 'test-seed', ?, ?)`,
+     VALUES (?, ?, 'owner@example.invalid', 'Owner', 'owner', 'owner', NULL, 1, 'test-seed', ?, ?)`,
   ).run(OWNER_ID, TENANT, now, now);
   db.prepare(
     `INSERT INTO envelopes
@@ -1511,6 +1540,720 @@ test("acceptance readiness uses native bindings without BFF or Frappe read confi
 
     const ready = await issueChallenge(h.env, portalToken);
     assert.equal(ready.status, 200, await ready.clone().text());
+  } finally {
+    h.restore();
+  }
+});
+
+// ------------------------------------------------------------------------------------------------
+// OD-01 payment on completion and the MD-13 branch (migration 0155): the tenant's deposit policy
+// decides which contract may be signed, and a contract with no deposit clears the Deposit gate by
+// policy after the acceptance has committed.
+
+const OD01_TERMS = {
+  deposit_percent: 0,
+  payment_schedule: ["completion"],
+  payment_terms_days: 30,
+  warranty_years: 10,
+};
+const OD01_TERMS_HASH = createHash("sha256").update(JSON.stringify(OD01_TERMS)).digest("hex");
+const ACCOUNTANT_ID = "appu_accounting_0001";
+
+type Harness = Awaited<ReturnType<typeof setup>>;
+
+/** The seven gates the operating core creates for a job, blocked at version 1. */
+function seedGates(h: Harness): void {
+  const now = new Date(Date.now() - 120_000).toISOString();
+  for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"]) {
+    h.db.raw.prepare(
+      `INSERT INTO operating_production_gates
+         (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, owner_user, assigned_at,
+          due_at, blocker_reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'worker', ?, ?, ?, ?, ?)`,
+    ).run(
+      `gate:acceptance:${gate.toLowerCase()}`, TENANT, JOB_ID, ENVELOPE_ID, gate, now, now,
+      `Awaiting ${gate.toLowerCase()} readiness proof.`, now, now,
+    );
+  }
+}
+
+/** A challenge for the current contract, then the customer's confirmation of it. */
+async function accept(h: Harness, portalToken: string, idempotencyKey: string): Promise<Response> {
+  const challenge = await issueChallenge(h.env, portalToken);
+  assert.equal(challenge.status, 200, await challenge.clone().text());
+  return await worker.fetch(
+    confirmRequest(emailChallengeToken(h.sentEmails), idempotencyKey),
+    h.env as never,
+    {} as never,
+  );
+}
+
+function depositGate(h: Harness): Record<string, unknown> {
+  return {
+    ...(h.db.raw.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id, cleared_by_user_id
+         FROM operating_production_gates
+        WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+    ).get(TENANT, JOB_ID) as Record<string, unknown>),
+  };
+}
+
+function depositEntries(h: Harness): Array<Record<string, any>> {
+  return h.db.raw.prepare(
+    `SELECT clearance_id, entry_kind, basis, to_state, from_gate_version, reverses_id, actor_kind,
+            actor_user_id, actor_role, policy_version, contract_binding_id, terms_hash, reason,
+            evidence_refs_json
+       FROM production_gate_clearances
+      WHERE tenant_id = ? AND gate = 'Deposit'
+      ORDER BY from_gate_version`,
+  ).all(TENANT).map((row) => ({ ...row }));
+}
+
+function count(h: Harness, table: string): number {
+  return Number((h.db.raw.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count);
+}
+
+function bindingFor(h: Harness, acceptanceId: string): Record<string, string> {
+  return {
+    ...(h.db.raw.prepare(
+      "SELECT * FROM commercial_acceptance_bindings WHERE acceptance_id = ?",
+    ).get(acceptanceId) as Record<string, string>),
+  };
+}
+
+let ledgerCounter = 0;
+
+/** A Deposit ledger entry written straight at D1, the way a defective writer would. */
+function appendDeposit(h: Harness, overrides: Record<string, unknown>): void {
+  ledgerCounter += 1;
+  const gate = depositGate(h);
+  const row: Record<string, unknown> = {
+    clearance_id: `pgc_${ledgerCounter.toString(16).padStart(40, "a")}`,
+    tenant_id: TENANT,
+    gate_id: "gate:acceptance:deposit",
+    roof_job_id: JOB_ID,
+    gate: "Deposit",
+    entry_kind: "clear",
+    basis: "contract_no_deposit",
+    to_state: "complete",
+    from_gate_version: gate.version,
+    actor_kind: "policy",
+    policy_version: "ironwrap.deposit-gate.v1",
+    contract_binding_id: "commercial-acceptance:not-a-signed-contract",
+    terms_hash: OD01_TERMS_HASH,
+    evidence_refs_json: "{}",
+    request_sha256: createHash("sha256").update(`request:${ledgerCounter}`).digest("hex"),
+    idempotency_key_hash: createHash("sha256").update(`direct:${ledgerCounter}`).digest("hex"),
+    created_at: new Date().toISOString(),
+    ...overrides,
+  };
+  const columns = Object.keys(row);
+  h.db.raw.prepare(
+    `INSERT INTO production_gate_clearances (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(columns.map((column) => row[column]) as never[]));
+}
+
+function refusedWith(action: () => unknown, code: string): void {
+  assert.throws(action, (error: unknown) => {
+    assert.match(String((error as Error).message), new RegExp(code));
+    return true;
+  });
+}
+
+async function jobPhase(h: Harness): Promise<Record<string, any>> {
+  const response = await handleAuthenticatedRoute(
+    authenticatedPhaseRequest(JOB_ID),
+    h.env,
+    authenticatedRouteAuth("owner"),
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+  return await response.json() as Record<string, any>;
+}
+
+/** Quote revision 2 and its proposal, published in place of the first contract. */
+async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
+  const chain = h.chain!;
+  const base = new Date(Date.now() - 20_000);
+  const quoteRevisionId = "quote-revision:acceptance:primary:2";
+  const quote: RecordCommercialQuoteInput = {
+    tenantId: TENANT,
+    quoteRevisionId,
+    customerQuoteId: chain.quoteId,
+    revisionNumber: 2,
+    roofJobId: JOB_ID,
+    customerId: CUSTOMER_ID,
+    supersedesQuoteRevisionId: chain.quoteRevisionId,
+    correctionReason: "Synthetic correction: this contract carries a deposit (MD-13).",
+    status: "approved",
+    currency: "CAD",
+    validUntil: QUOTE_VALID_UNTIL,
+    terms,
+    evidence: EVIDENCE,
+    lines: [{
+      lineId: "scope:roof",
+      sequence: 1,
+      kind: "labour",
+      description: "Install approved roofing scope",
+      quantityMicros: 1_000_000,
+      uom: "job",
+      unitPriceCents: 100_000,
+      taxCode: "GST",
+      taxCents: 5_000,
+    }],
+    authority: { kind: "policy_permit", permitId: "pending" },
+    idempotencyKey: "acceptance:quote:primary:2",
+  };
+  const preparedQuote = await prepareCommercialQuote(quote);
+  const quotePermit = await admitFor(
+    h.env,
+    "quote.revision.record",
+    { type: "customer_quote", id: chain.quoteId, version: 2 },
+    preparedQuote.command,
+    "permit:acceptance:quote:primary:2",
+    base,
+    preparedQuote.totalCents,
+  );
+  quote.authority = { kind: "policy_permit", permitId: quotePermit.permit_id };
+  await recordCommercialQuoteRevision(h.env, quote, new Date(base.getTime() + 1_000));
+
+  const proposalRevisionId = "proposal-revision:acceptance:primary:2";
+  const proposal: RecordCommercialProposalInput = {
+    tenantId: TENANT,
+    proposalRevisionId,
+    proposalPackId: chain.proposalPackId,
+    revisionNumber: 2,
+    quoteRevisionId,
+    roofJobId: JOB_ID,
+    customerId: CUSTOMER_ID,
+    supersedesProposalRevisionId: chain.proposalRevisionId,
+    title: "Corrected roof replacement proposal",
+    summary: "Corrected scope, price and payment terms.",
+    terms,
+    contentRef: "r2://commercial/proposals/primary-corrected.pdf",
+    contentHash: "d".repeat(64),
+    evidence: EVIDENCE,
+    authority: { kind: "policy_permit", permitId: "pending" },
+    idempotencyKey: "acceptance:proposal:primary:2",
+  };
+  const preparedProposal = await prepareCommercialProposal(proposal);
+  const proposalPermit = await admitFor(
+    h.env,
+    "proposal.revision.record",
+    { type: "proposal", id: chain.proposalPackId, version: 2 },
+    preparedProposal.command,
+    "permit:acceptance:proposal:primary:2",
+    new Date(base.getTime() + 2_000),
+  );
+  proposal.authority = { kind: "policy_permit", permitId: proposalPermit.permit_id };
+  await recordCommercialProposalRevision(h.env, proposal, new Date(base.getTime() + 3_000));
+
+  // The lead converted at the first acceptance, so only the correction's revision may move the
+  // publication: withdraw the pack under it, then publish it.
+  chain.quoteRevisionId = quoteRevisionId;
+  chain.proposalRevisionId = proposalRevisionId;
+  await recordPublicationTransition(h.env, chain, "withdrawn", new Date(base.getTime() + 4_000));
+  await recordPublicationTransition(
+    h.env,
+    chain,
+    "published",
+    new Date(base.getTime() + 5_000),
+    "withdrawn",
+  );
+}
+
+/** A deposit invoice of this job the money lane has reconciled. */
+function seedReconciledDeposit(h: Harness, intentId: string, providerEntityId: string): void {
+  const row: Record<string, unknown> = {
+    intent_id: intentId,
+    tenant_id: TENANT,
+    kind: "deposit_invoice",
+    roof_job_id: JOB_ID,
+    basis_json: "{}",
+    basis_sha256: createHash("sha256").update(`basis:${intentId}`).digest("hex"),
+    source_documents_json: "[]",
+    expected_sha256: "b".repeat(64),
+    tax_policy_snapshot_sha256: "e".repeat(64),
+    provider: "quickbooks",
+    realm_id: "4620816365000000000",
+    provider_entity_type: "Invoice",
+    provider_payload_json: "{}",
+    provider_payload_sha256: "c".repeat(64),
+    provider_request_id: `req:${intentId}`,
+    currency: "CAD",
+    subtotal: "250.00",
+    tax_amount: "12.50",
+    total_amount: "262.50",
+    settled_amount: "262.50",
+    authority_permit_ref: "permit:test",
+    authority_policy_ref: "policy:test",
+    authority_policy_version: "1",
+    authority_max_amount: "100000.00",
+    effect_id: `effect:${intentId}`,
+    effect_idempotency_key: `effect-key:${intentId}`,
+    state: "reconciled",
+    version: 1,
+    derived_by_actor_kind: "owner",
+    derived_by_user_id: OWNER_ID,
+    derived_at: new Date().toISOString(),
+    approved_by_user_id: ACCOUNTANT_ID,
+    approved_at: new Date().toISOString(),
+    provider_entity_id: providerEntityId,
+    observed_sha256: "b".repeat(64),
+    provider_submitted_at: new Date().toISOString(),
+    provider_reconciled_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  const columns = Object.keys(row);
+  h.db.raw.prepare(
+    `INSERT INTO accounting_intents (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(columns.map((column) => row[column]) as never[]));
+}
+
+test("an OD-01 acceptance records Deposit as not required by the contract, by policy, with no derivation", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const response = await accept(h, portalToken, "acceptance-od01-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    const accepted = await response.json() as { status: string; acceptance_id: string };
+    assert.equal(accepted.status, "accepted");
+    const binding = bindingFor(h, accepted.acceptance_id);
+    assert.equal(binding.terms_hash, OD01_TERMS_HASH);
+    // No deposit, so nothing to derive.
+    assert.equal(count(h, "commercial_deposit_derivations"), 0);
+
+    const entries = depositEntries(h);
+    assert.equal(entries.length, 1);
+    const entry = entries[0]!;
+    assert.deepEqual(
+      {
+        entry_kind: entry.entry_kind, basis: entry.basis, to_state: entry.to_state,
+        from_gate_version: entry.from_gate_version, actor_kind: entry.actor_kind,
+        actor_user_id: entry.actor_user_id, actor_role: entry.actor_role,
+        policy_version: entry.policy_version, contract_binding_id: entry.contract_binding_id,
+        terms_hash: entry.terms_hash, reason: entry.reason,
+      },
+      {
+        entry_kind: "clear", basis: "contract_no_deposit", to_state: "complete",
+        from_gate_version: 1, actor_kind: "policy", actor_user_id: null, actor_role: null,
+        policy_version: "ironwrap.deposit-gate.v1",
+        contract_binding_id: binding.acceptance_binding_id, terms_hash: OD01_TERMS_HASH, reason: null,
+      },
+    );
+    // The contract version is the evidence: binding, receipt, quote revision, terms, approver, digests.
+    const quote = h.db.raw.prepare(
+      `SELECT revision_number, evidence_digest, policy_permit_id FROM commercial_quote_revisions
+        WHERE quote_revision_id = ?`,
+    ).get(binding.quote_revision_id) as Record<string, unknown>;
+    const permit = h.db.raw.prepare(
+      "SELECT actor_type, actor_id FROM commercial_authority_permits WHERE permit_id = ?",
+    ).get(quote.policy_permit_id as string) as Record<string, unknown>;
+    const proposal = h.db.raw.prepare(
+      "SELECT evidence_digest FROM commercial_proposal_revisions WHERE proposal_revision_id = ?",
+    ).get(binding.proposal_revision_id) as Record<string, unknown>;
+    const publication = h.db.raw.prepare(
+      `SELECT publication_event_id, evidence_digest FROM commercial_proposal_publication_events
+        WHERE proposal_revision_id = ? AND state = 'published' ORDER BY publication_version DESC LIMIT 1`,
+    ).get(binding.proposal_revision_id) as Record<string, unknown>;
+    assert.deepEqual(JSON.parse(String(entry.evidence_refs_json)), {
+      basis: "contract_no_deposit",
+      policy_version: "ironwrap.deposit-gate.v1",
+      tenant_policy: { policy: "od01_payment_on_completion", version: 0 },
+      reverses: null,
+      contract: {
+        acceptance_binding_id: binding.acceptance_binding_id,
+        acceptance_id: accepted.acceptance_id,
+        receipt_hash: binding.receipt_hash,
+        accepted_at: binding.accepted_at,
+        quote_revision_id: binding.quote_revision_id,
+        customer_quote_id: h.chain!.quoteId,
+        quote_revision_number: quote.revision_number,
+        terms_hash: OD01_TERMS_HASH,
+        deposit_percent: 0,
+        payment_schedule: ["completion"],
+        quote_approval: {
+          kind: "policy_permit",
+          id: quote.policy_permit_id,
+          actor_type: permit.actor_type,
+          actor_id: permit.actor_id,
+        },
+        proposal_revision_id: binding.proposal_revision_id,
+        publication_event_id: publication.publication_event_id,
+        quote_evidence_digest: quote.evidence_digest,
+        proposal_evidence_digest: proposal.evidence_digest,
+        publication_evidence_digest: publication.evidence_digest,
+      },
+    });
+    assert.deepEqual(depositGate(h), {
+      state: "complete",
+      version: 2,
+      clearance_basis: null,
+      clearance_decision_id: entry.clearance_id,
+      cleared_by_user_id: null,
+    });
+    assert.deepEqual(
+      h.db.raw.prepare("SELECT trigger, action, approved_by FROM audit_log WHERE run_id = ?")
+        .all(entry.clearance_id).map((row) => ({ ...row })),
+      [{ trigger: "policy", action: "clear:contract_no_deposit", approved_by: null }],
+    );
+
+    // Read models: not required by the contract, not deposit_pending and not done.
+    const phase = await jobPhase(h);
+    assert.equal(phase.phase, "production_blocked");
+    assert.equal(phase.facts.commercial.deposit_requirement, "not_required_by_contract");
+    assert.equal(phase.facts.commercial.deposit_derivation, null);
+    assert.deepEqual(
+      (phase.stale_reasons as string[]).filter((reason) => reason.startsWith("commercial.deposit")),
+      [],
+    );
+    assert.ok(!(phase.stale_reasons as string[]).includes("production.gate_deposit_complete"));
+    const runway = await buildProductionRunwayReadModel(h.env, authenticatedRouteAuth("owner"));
+    const job = runway.jobs.find((candidate) => candidate.id === JOB_ID)!;
+    assert.deepEqual(
+      job.scheduling_gates.find((gate) => gate.name === "Deposit"),
+      { name: "Deposit", state: "Not required by the contract" },
+    );
+    assert.deepEqual(job.gate_summary, { expected: 6, blocked: 5, ready: 0, waived: 0, done: 0 });
+
+    // A replayed confirmation and the sweep find the entry recorded and add nothing.
+    const replay = await worker.fetch(
+      confirmRequest(emailChallengeToken(h.sentEmails), "acceptance-od01-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+    assert.deepEqual(
+      await recordContractDepositGate(h.env, {
+        tenantId: TENANT,
+        acceptanceBindingId: binding.acceptance_binding_id,
+      }),
+      { outcome: "not_applicable", reason: "deposit_gate_not_blocked" },
+    );
+    assert.equal(depositEntries(h).length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("under OD-01 a deposit contract gets no challenge: the refusal is named, with the policy and the term", async () => {
+  const h = await setup({ depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const challenge = await issueChallenge(h.env, portalToken);
+    assert.equal(challenge.status, 409);
+    assert.deepEqual(await challenge.json(), {
+      error: "deposit_terms_not_allowed_by_policy",
+      policy: "od01_payment_on_completion",
+      field: "terms.deposit_percent",
+    });
+    assert.equal(h.sentEmails.length, 0);
+    assert.equal(count(h, "customer_portal_acceptance_challenges"), 0);
+    assert.equal(count(h, "commercial_acceptance_bindings"), 0);
+    assert.deepEqual(depositGate(h).state, "blocked");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a policy change after the challenge is refused by name at confirmation, and replays the same", async () => {
+  const h = await setup();
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+    // MD-13 is turned off after the customer opened the contract.
+    recordDepositPolicy(h.db.raw, {
+      tenantId: TENANT,
+      ownerUserId: OWNER_ID,
+      policy: "od01_payment_on_completion",
+    });
+    const token = emailChallengeToken(h.sentEmails);
+    const refusal = {
+      error: "deposit_terms_not_allowed_by_policy",
+      policy: "od01_payment_on_completion",
+      field: "terms.deposit_percent",
+    };
+    const preview = await worker.fetch(previewRequest(token), h.env as never, {} as never);
+    assert.equal(preview.status, 409);
+    assert.deepEqual(await preview.json(), refusal);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const confirmed = await worker.fetch(
+        confirmRequest(token, "acceptance-policy-changed-0001"),
+        h.env as never,
+        {} as never,
+      );
+      assert.equal(confirmed.status, 409);
+      assert.deepEqual(await confirmed.json(), refusal);
+    }
+    assert.deepEqual(
+      { ...h.db.raw.prepare("SELECT state, error_code FROM customer_portal_acceptance_intents").get() as object },
+      { state: "rejected", error_code: "deposit_terms_not_allowed_by_policy" },
+    );
+    assert.equal(count(h, "commercial_acceptance_bindings"), 0);
+    assert.equal(count(h, "commercial_deposit_derivations"), 0);
+  } finally {
+    h.restore();
+  }
+});
+
+for (const [label, terms, from, to, field] of [
+  ["a deposit contract under OD-01", TERMS, "md13_deposit", "od01_payment_on_completion", "terms.deposit_percent"],
+  ["a contract with no deposit under MD-13", OD01_TERMS, "od01_payment_on_completion", "md13_deposit", "terms.deposit_percent"],
+] as const) {
+  test(`D1 aborts ${label} atomically when the policy changes under the commit, and the refusal is named`, async () => {
+    const h = await setup({ terms, depositPolicy: from });
+    try {
+      seedGates(h);
+      const portalToken = await seedPortalLink(h.db);
+      assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+      // The owner's change commits between the Worker's check and the acceptance commit.
+      h.db.beforeNextBatch = () => {
+        recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: to });
+      };
+      const confirmed = await worker.fetch(
+        confirmRequest(emailChallengeToken(h.sentEmails), "acceptance-policy-race-0001"),
+        h.env as never,
+        {} as never,
+      );
+      assert.equal(confirmed.status, 409);
+      assert.deepEqual(await confirmed.json(), {
+        error: "deposit_terms_not_allowed_by_policy",
+        policy: to,
+        field,
+      });
+      assert.equal(h.db.beforeNextBatch, null);
+      assert.equal(count(h, "commercial_acceptance_bindings"), 0);
+      assert.equal(count(h, "commercial_deposit_derivations"), 0);
+      assert.deepEqual(depositEntries(h), []);
+      assert.equal(
+        (h.db.raw.prepare("SELECT state FROM customer_portal_acceptance_intents").get() as { state: string }).state,
+        "rejected",
+      );
+    } finally {
+      h.restore();
+    }
+  });
+}
+
+test("under MD-13 a contract keeps its 1-100 deposit, enqueues its derivation, and needs no policy entry", async () => {
+  const h = await setup({ terms: { ...TERMS, deposit_percent: 100 } });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const response = await accept(h, portalToken, "acceptance-md13-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    const accepted = await response.json() as { acceptance_id: string };
+    assert.equal(
+      (h.db.raw.prepare(
+        "SELECT deposit_percent FROM commercial_deposit_derivations WHERE acceptance_id = ?",
+      ).get(accepted.acceptance_id) as { deposit_percent: number }).deposit_percent,
+      100,
+    );
+    assert.deepEqual(depositEntries(h), []);
+    assert.equal(depositGate(h).state, "blocked");
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+    const phase = await jobPhase(h);
+    assert.equal(phase.phase, "deposit_pending");
+    assert.equal(phase.facts.commercial.deposit_requirement, null);
+    // A contract with no deposit is refused by name under MD-13 before it reaches the customer.
+    const refused = await setup({ terms: OD01_TERMS });
+    try {
+      const challenge = await issueChallenge(refused.env, await seedPortalLink(refused.db));
+      assert.equal(challenge.status, 409);
+      assert.deepEqual(await challenge.json(), {
+        error: "deposit_terms_not_allowed_by_policy",
+        policy: "md13_deposit",
+        field: "terms.deposit_percent",
+      });
+    } finally {
+      refused.restore();
+    }
+  } finally {
+    h.restore();
+  }
+});
+
+test("a later contract that carries a deposit re-blocks Deposit, which then clears only on that contract's own invoice", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    h.db.raw.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+          active, created_by, created_at, updated_at)
+       VALUES (?, ?, 'accounting@example.invalid', 'Accounting', 'ops', 'accounting', NULL, 1,
+               'test-seed', ?, ?)`,
+    ).run(ACCOUNTANT_ID, TENANT, new Date().toISOString(), new Date().toISOString());
+    const portalToken = await seedPortalLink(h.db);
+    const first = await accept(h, portalToken, "acceptance-od01-first-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const noDeposit = depositEntries(h)[0]!;
+    assert.equal(noDeposit.basis, "contract_no_deposit");
+
+    // MD-13's input arrives: the owner turns OD-01 off and a corrected contract carries a deposit.
+    recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
+    await publishCorrectedContract(h, TERMS);
+    const second = await accept(h, portalToken, "acceptance-md13-second-0001");
+    assert.equal(second.status, 200, await second.clone().text());
+    const secondBinding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+
+    const entries = depositEntries(h);
+    assert.equal(entries.length, 2);
+    assert.deepEqual(
+      {
+        entry_kind: entries[1]!.entry_kind, basis: entries[1]!.basis, to_state: entries[1]!.to_state,
+        from_gate_version: entries[1]!.from_gate_version, reverses_id: entries[1]!.reverses_id,
+        actor_kind: entries[1]!.actor_kind, actor_user_id: entries[1]!.actor_user_id,
+        contract_binding_id: entries[1]!.contract_binding_id, terms_hash: entries[1]!.terms_hash,
+      },
+      {
+        entry_kind: "reverse", basis: "contract_superseded", to_state: "blocked",
+        from_gate_version: 2, reverses_id: noDeposit.clearance_id, actor_kind: "policy",
+        actor_user_id: null, contract_binding_id: secondBinding.acceptance_binding_id,
+        terms_hash: TERMS_HASH,
+      },
+    );
+    assert.deepEqual(depositGate(h), {
+      state: "blocked",
+      version: 3,
+      clearance_basis: null,
+      clearance_decision_id: null,
+      cleared_by_user_id: null,
+    });
+    assert.equal(
+      h.db.raw.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE run_id = ?").get(entries[1]!.clearance_id)!.count,
+      1,
+    );
+    const phase = await jobPhase(h);
+    assert.equal(phase.phase, "deposit_pending");
+    assert.equal(phase.facts.commercial.deposit_requirement, null);
+    // The reversal is recorded once: the sweep finds nothing left to append.
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+
+    // From then on a settlement must be the deposit invoice of the contract in force.
+    const settlement = (intentId: string) => ({
+      entry_kind: "clear",
+      basis: "deposit_settlement",
+      to_state: "complete",
+      actor_kind: "person",
+      actor_user_id: OWNER_ID,
+      actor_role: "owner",
+      policy_version: null,
+      contract_binding_id: null,
+      terms_hash: null,
+      evidence_refs_json: JSON.stringify({ money_intent_id: intentId }),
+    });
+    seedReconciledDeposit(h, "acct-intent-od01-unrelated-01", "2001");
+    refusedWith(
+      () => appendDeposit(h, settlement("acct-intent-od01-unrelated-01")),
+      "deposit_settlement_not_observed",
+    );
+    seedReconciledDeposit(h, "acct-intent-od01-contract-01", "2002");
+    h.db.raw.prepare(
+      `UPDATE commercial_deposit_derivations
+          SET state = 'derived', intent_id = ?, blocker_code = NULL, blocker_next_step = NULL,
+              version = version + 1, updated_at = ?
+        WHERE tenant_id = ? AND acceptance_binding_id = ?`,
+    ).run("acct-intent-od01-contract-01", new Date().toISOString(), TENANT, secondBinding.acceptance_binding_id);
+    appendDeposit(h, settlement("acct-intent-od01-contract-01"));
+    assert.equal(depositGate(h).state, "complete");
+  } finally {
+    h.restore();
+  }
+});
+
+test("with no signed contract Deposit stays blocked, and no person ever reverses contract_no_deposit", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    // Nothing is signed: the sweep has nothing to record, and D1 refuses an entry no contract backs.
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+    refusedWith(() => appendDeposit(h, {}), "production_gate_contract_no_deposit_not_observed");
+    // Only the policy appends it: a person entry with the same basis is outside the person matrix.
+    refusedWith(
+      () => appendDeposit(h, {
+        actor_kind: "person", actor_user_id: OWNER_ID, actor_role: "owner",
+        policy_version: null, contract_binding_id: null, terms_hash: null,
+      }),
+      "production_gate_clearance_basis_invalid",
+    );
+    assert.deepEqual(depositGate(h), {
+      state: "blocked", version: 1, clearance_basis: null, clearance_decision_id: null,
+      cleared_by_user_id: null,
+    });
+
+    const portalToken = await seedPortalLink(h.db);
+    const response = await accept(h, portalToken, "acceptance-od01-reversal-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    const binding = bindingFor(h, (await response.json() as { acceptance_id: string }).acceptance_id);
+    const noDeposit = depositEntries(h)[0]!;
+    // A person never reverses it.
+    refusedWith(
+      () => appendDeposit(h, {
+        entry_kind: "reverse", basis: "office_waiver", to_state: "blocked",
+        reverses_id: noDeposit.clearance_id, actor_kind: "person", actor_user_id: OWNER_ID,
+        actor_role: "owner", policy_version: null, contract_binding_id: null, terms_hash: null,
+        evidence_refs_json: null, reason: "Synthetic attempt to reverse a contract fact.",
+      }),
+      "production_gate_contract_no_deposit_not_reversible",
+    );
+    // The policy reverses it only for a later contract that carries a deposit.
+    refusedWith(
+      () => appendDeposit(h, {
+        entry_kind: "reverse", basis: "contract_superseded", to_state: "blocked",
+        reverses_id: noDeposit.clearance_id, contract_binding_id: binding.acceptance_binding_id,
+        terms_hash: OD01_TERMS_HASH,
+      }),
+      "production_gate_contract_superseded_not_observed",
+    );
+    assert.equal(depositGate(h).state, "complete");
+    assert.equal(depositEntries(h).length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a Deposit entry that fails after the commit never fails the acceptance, and the sweep appends it once", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextLedgerAppend = true;
+    const response = await accept(h, portalToken, "acceptance-od01-sweep-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    const accepted = await response.json() as { status: string; acceptance_id: string };
+    assert.equal(accepted.status, "accepted");
+    assert.equal(h.db.failNextLedgerAppend, false);
+    assert.equal(count(h, "commercial_acceptance_bindings"), 1);
+    assert.deepEqual(depositEntries(h), []);
+    assert.equal(depositGate(h).state, "blocked");
+    // Until the policy records it, the phase names the open fact.
+    const before = await jobPhase(h);
+    assert.equal(before.phase, "deposit_pending");
+    assert.ok((before.stale_reasons as string[]).includes("commercial.deposit_not_required_unrecorded"));
+
+    // The five-minute cron's sweep appends the missing entry, once.
+    const pending: Promise<unknown>[] = [];
+    await worker.scheduled(
+      { cron: "*/5 * * * *", scheduledTime: Date.now(), noRetry() {} } as never,
+      h.env as never,
+      { waitUntil: (promise: Promise<unknown>) => { pending.push(promise); }, passThroughOnException() {} } as never,
+    );
+    await Promise.all(pending.map((promise) => promise.catch(() => {})));
+    const entries = depositEntries(h);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]!.basis, "contract_no_deposit");
+    assert.equal(entries[0]!.contract_binding_id, bindingFor(h, accepted.acceptance_id).acceptance_binding_id);
+    assert.equal(depositGate(h).state, "complete");
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+    assert.equal(depositEntries(h).length, 1);
+    assert.equal((await jobPhase(h)).facts.commercial.deposit_requirement, "not_required_by_contract");
   } finally {
     h.restore();
   }

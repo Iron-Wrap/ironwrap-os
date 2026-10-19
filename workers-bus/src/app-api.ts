@@ -4805,8 +4805,8 @@ async function prepareCommercialProposalPublication(
       return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
     }
     // Publishing is what puts terms in front of the customer: only terms the tenant's deposit
-    // policy allows (0155). Withdrawal is always allowed.
-    if (input.state === "published") {
+    // policy allows (0155). Withdrawal is always allowed, and a replay keeps its original permit.
+    if (input.state === "published" && !replayedPermit) {
       const refusal = await depositTermsRefusal(env, auth.session.tenant_id, proposal.terms_json);
       if (refusal) return privateAppJson(refusal, 409);
     }

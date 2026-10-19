@@ -362,9 +362,15 @@ export async function proposeExternalEffect(
         state, attempt_count, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(...values).run();
-  } catch {
+  } catch (error) {
     const existing = await getExternalEffectByIdempotency(env, input.tenantId, input.idempotencyKey);
-    if (!existing) throw new EffectRuntimeError("effect_proposal_failed");
+    if (!existing) {
+      // D1 refused a second proposal send while the last one is unconfirmed (0156); keep the cause.
+      if (error instanceof Error && error.message.includes("proposal_delivery_unconfirmed")) {
+        throw new EffectRuntimeError("effect_proposal_delivery_unconfirmed");
+      }
+      throw new EffectRuntimeError("effect_proposal_failed");
+    }
     if (existing.envelope_hash !== envelopeHash) throw new EffectRuntimeError("effect_idempotency_conflict");
     return existing;
   }

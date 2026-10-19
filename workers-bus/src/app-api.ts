@@ -233,6 +233,7 @@ import {
   commercialCommandFingerprint,
   CommercialAuthorityError,
   getCommercialPermit,
+  commercialPermitForKey,
 } from "./commercial-authority.ts";
 import {
   buildLeadTriageCommand,
@@ -255,6 +256,7 @@ import {
   type CommercialProposalRecord,
   ProposalDeliveryConfirmationError,
   recordProposalDeliveryConfirmation,
+  outstandingProposalPublishPermit,
   unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
 import {
@@ -4644,7 +4646,8 @@ async function confirmProposalDeliveryByHand(
     typeof body.external_effect_id !== "string" ||
     !idText(body.external_effect_id, 16, 160) ||
     (body.outcome !== "delivered" && body.outcome !== "not_delivered") ||
-    note.length < 8 || note.length > 500 || /[\u0000\r]/.test(note)
+    // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
+    [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
   ) {
     return privateAppJson({ error: "invalid_proposal_delivery_confirmation" }, 400);
   }
@@ -4736,13 +4739,18 @@ async function prepareCommercialProposalPublication(
       return privateAppJson({ error: "commercial_publication_quote_not_approved" }, 409);
     }
     // A proposal is not sent again until its last send is confirmed delivered: a second send
-    // while the first is pending or unknown could reach the customer twice.
-    if (input.state === "published") {
+    // while the first is pending or unknown could reach the customer twice. A replay of the same
+    // request returns its original permit instead, so it is checked first.
+    const replayedPermit = input.state === "published"
+      ? await commercialPermitForKey(env, auth.session.tenant_id, requestIdempotencyKey)
+      : null;
+    if (input.state === "published" && !replayedPermit) {
       const pending = await unconfirmedProposalDelivery(
         env,
         auth.session.tenant_id,
         input.proposalPackId,
         input.proposalRevisionId,
+        now,
       );
       if (pending) {
         return privateAppJson({
@@ -4750,6 +4758,21 @@ async function prepareCommercialProposalPublication(
           delivery_state: pending.state,
           external_effect_id: pending.effect_id,
           next_step: pending.next_step,
+        }, 409);
+      }
+      const outstanding = await outstandingProposalPublishPermit(
+        env,
+        auth.session.tenant_id,
+        input.proposalPackId,
+        input.publicationVersion,
+        now,
+      );
+      if (outstanding) {
+        return privateAppJson({
+          error: "proposal_publication_permit_outstanding",
+          permit_id: outstanding.permit_id,
+          permit_expires_at: outstanding.expires_at,
+          next_step: "use_or_wait_for_permit",
         }, 409);
       }
     }
@@ -4872,7 +4895,21 @@ async function settleCommercialProposalPublication(
       permit.actor_type !== expectedActorType ||
       permit.actor_id !== auth.session.user_id
     ) {
-      return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+      // A delivery a person confirmed by hand is recorded by any person in the commercial set: the
+      // send already ran, and whoever prepared it may not be the one who checked with the customer.
+      const handConfirmed = input.externalEffectId
+        ? await env.DB.prepare(
+          `SELECT 1 AS found FROM proposal_delivery_confirmations confirmation
+             JOIN external_effects effect
+               ON effect.effect_id = confirmation.effect_id AND effect.tenant_id = confirmation.tenant_id
+            WHERE confirmation.tenant_id = ? AND confirmation.effect_id = ?
+              AND confirmation.outcome = 'delivered' AND effect.authority_ref = ?`,
+        ).bind(auth.session.tenant_id, input.externalEffectId, permit.permit_id).first()
+        : null;
+      const person = handConfirmed ? await personCookieSession(env, auth) : null;
+      if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+        return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+      }
     }
     const result = await recordCommercialProposalPublication(env, {
       tenantId: auth.session.tenant_id,

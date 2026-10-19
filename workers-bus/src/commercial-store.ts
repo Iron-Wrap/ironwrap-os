@@ -317,8 +317,9 @@ export class ProposalDeliveryConfirmationError extends Error {
 
 /**
  * A person records what they found about a proposal send that could not be confirmed (0156): one
- * append-only row whose insert moves the effect out of `manual_exception`, resolves its exception
- * and writes the audit row. The same key with the same request replays; anything else conflicts.
+ * append-only row whose insert moves an `unknown` or `manual_exception` effect to `succeeded` or
+ * `reconciled`, resolves its exception and writes the audit row. The same key with the same request
+ * replays; anything else conflicts.
  */
 export async function recordProposalDeliveryConfirmation(
   env: AppEnv,
@@ -366,7 +367,7 @@ export async function recordProposalDeliveryConfirmation(
         AND aggregate_type = 'proposal_publication'`,
   ).bind(input.tenantId, input.effectId).first<{ effect_id: string; state: string; aggregate_id: string; intent_id: string }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
-  if (effect.state !== "manual_exception") {
+  if (effect.state !== "manual_exception" && effect.state !== "unknown") {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_not_awaiting_confirmation", 409, {
       delivery_state: effect.state,
     });
@@ -401,6 +402,31 @@ export async function recordProposalDeliveryConfirmation(
 }
 
 /**
+ * A live publish permit for this proposal pack and publication version that no effect has used yet,
+ * or null. Two live permits for one version could each produce a send, so a second is refused.
+ */
+export async function outstandingProposalPublishPermit(
+  env: AppEnv,
+  tenantId: string,
+  proposalPackId: string,
+  publicationVersion: number,
+  now = new Date(),
+): Promise<{ permit_id: string; expires_at: string } | null> {
+  return await env.DB.prepare(
+    `SELECT permit.permit_id, permit.expires_at FROM commercial_authority_permits permit
+      WHERE permit.tenant_id = ? AND permit.action = 'proposal.publish'
+        AND permit.aggregate_type = 'proposal_publication' AND permit.aggregate_id = ?
+        AND permit.aggregate_version = ? AND julianday(permit.expires_at) > julianday(?)
+        AND NOT EXISTS (
+          SELECT 1 FROM external_effects effect
+           WHERE effect.tenant_id = permit.tenant_id AND effect.authority_ref = permit.permit_id
+        )
+      ORDER BY permit.issued_at DESC LIMIT 1`,
+  ).bind(tenantId, proposalPackId, publicationVersion, now.toISOString())
+    .first<{ permit_id: string; expires_at: string }>();
+}
+
+/**
  * Why this proposal revision may not be sent again yet, or null. A proposal is not sent again until
  * its last send is confirmed delivered, on the manual and the AI path alike, because both prepare
  * publication through this check:
@@ -414,23 +440,32 @@ export async function unconfirmedProposalDelivery(
   tenantId: string,
   proposalPackId: string,
   proposalRevisionId: string,
+  now = new Date(),
 ): Promise<{ error: string; effect_id: string; state: string; next_step: string } | null> {
   const states = UNCONFIRMED_PROPOSAL_DELIVERY_STATES;
+  // A send that never started (proposed, authorized, retry) and is past its deadline can no longer
+  // be claimed or executed, so it sent nothing and does not block; the D1 single-flight trigger
+  // (0156) applies the same rule.
   const pending = await env.DB.prepare(
     `SELECT effect_id, state FROM external_effects
       WHERE tenant_id = ? AND aggregate_type = 'proposal_publication' AND aggregate_id = ?
         AND intent_id = ? AND action = 'proposal.publish'
         AND state IN (${states.map(() => "?").join(", ")})
+        AND NOT (state IN ('proposed', 'authorized', 'retry')
+                 AND julianday(deadline_at) <= julianday(?))
       ORDER BY created_at DESC, effect_id DESC
       LIMIT 1`,
-  ).bind(tenantId, proposalPackId, proposalRevisionId, ...states)
+  ).bind(tenantId, proposalPackId, proposalRevisionId, ...states, now.toISOString())
     .first<{ effect_id: string; state: string }>();
   if (pending) {
     return {
       error: "proposal_delivery_unconfirmed",
       effect_id: pending.effect_id,
       state: pending.state,
-      next_step: pending.state === "manual_exception" ? "confirm_delivery_by_hand" : "check_delivery",
+      // An unknown or conflicting send is settled by a person recording what they checked.
+      next_step: pending.state === "manual_exception" || pending.state === "unknown"
+        ? "confirm_delivery_by_hand"
+        : "check_delivery",
     };
   }
   const delivered = await env.DB.prepare(
@@ -797,6 +832,14 @@ export async function recordCommercialProposalPublication(
   );
   if (quote.terms_hash !== proposal.terms_hash) fail("commercial_publication_terms_mismatch");
   const action = input.state === "published" ? "proposal.publish" : "proposal.withdraw";
+  // A succeeded effect bound to this permit already ran; recording it is readback (see
+  // `readbackOfEffectCreatedAt`), so an expired permit or a renewed policy cannot strand it.
+  const ranEffect = input.authority.kind === "policy_permit" && externalEffectId
+    ? await env.DB.prepare(
+      `SELECT created_at FROM external_effects
+        WHERE effect_id = ? AND tenant_id = ? AND state = 'succeeded' AND authority_ref = ?`,
+    ).bind(externalEffectId, input.tenantId, input.authority.permitId).first<{ created_at: string }>()
+    : null;
   const authority = await resolveCommercialAuthority(env, input.authority, {
     tenantId: input.tenantId,
     action,
@@ -806,6 +849,7 @@ export async function recordCommercialProposalPublication(
     customerQuoteId: quote.customer_quote_id,
     proposalPackId: input.proposalPackId,
     now: occurredAt,
+    ...(ranEffect ? { readbackOfEffectCreatedAt: ranEffect.created_at } : {}),
   });
   if (authority.kind === "policy_permit") {
     if (!externalEffectId) fail("commercial_publication_effect_required");

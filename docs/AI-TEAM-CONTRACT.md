@@ -89,9 +89,10 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     below 0.60, and a red-team mean of at least 0.95 with the correct decision in every repetition,
     over three repetitions. The third score is the history score: the specialist is replayed on
     the company's own past records, and its proposals are compared with what actually happened
-    ([history evaluation](../agent-host/evals/README.md#history-evaluation)). A missed gating
-    history bar fails the release; advisory bars and a missing history score never do. Lowering
-    the bar needs an owner decision recorded in this contract.
+    ([history evaluation](../agent-host/evals/README.md#history-evaluation)). A history bar is
+    gating when it decides the release and advisory when it only reports: a missed gating bar
+    fails the release, while advisory bars and a missing history score never do. Lowering the bar
+    needs an owner decision recorded in this contract.
 15. **Live answering.** Answering a live call or chat (`conversation.answer_live`) is off until the
     owner turns it on in setup; nothing answers live before that. Once on, it acts within the
     owner's limits (hours and channels), quotes no price, commits no date or coverage, says it is AI
@@ -913,10 +914,10 @@ safety occurrence. The Worker registry and the human release route must preserve
 | `gate.clear` | A3 | Asks first | Always asks first. Clear a gate with its evidence. | Evidence and issuer readback | `gates`, `segregation` | Production | Gate cleared → read back | `POST /api/v1/production/jobs/{job}/gates/{gate}/clearance` |
 | `gate.waive` | H | — | Waive a gate. | — | — | People only: owner | Waiver → read back | new |
 | `document.request` | A2 | Asks first | Ask a subcontractor or supplier for a certificate, clearance or insurance document. | The authority gap; verified contact | `counterparty`, `privacy` | Production | Request → delivery status | new |
-| `authority.record` | A3 | Asks first | Always asks first. Record an internal Worker Competency from a completed Internal Competency Assessment. Record, verify and revoke each write a new version, never an edit. External kinds (a licence, clearance, permit, inspection or certificate from an issuer) are refused: they are evaluated with `authority.evaluate` and never recorded. The trigger is a person's press on compliance's view (an `owner_request` with source `request`). | The assessment fact, plus `evidence_refs`, each with its SHA-256 | `segregation` | Production holding `authority:approve`, or the owner; never the worker the record is about | New Worker Competency version → read back from the D1 owned store | `POST /api/v1/authority-records/commands` plus the step decision: an approval runs the same internal competency command natively in D1, inside the decision's own transaction |
+| `authority.record` | A3 | Asks first | Always asks first. Record an internal Worker Competency from a completed Internal Competency Assessment. Record, verify and revoke each write a new version, never an edit. External kinds (a licence, clearance, permit, inspection or certificate from an issuer) are refused: they are evaluated with `authority.evaluate` and never recorded by this action. The trigger is a person's press on compliance's view (an `owner_request` with source `request`). | The assessment fact, plus `evidence_refs`, each with its SHA-256 | `segregation` | Production holding `authority:approve`, or the owner; never the worker the record is about | New Worker Competency version → read back from the D1 owned store | `POST /api/v1/authority-records/commands` plus the step decision: an approval runs the same internal competency command natively in D1, inside the decision's own transaction |
 | `privacy_request.answer` | A3 | Asks first | Always asks first. Answer a request to see or correct personal data. | Verified identity; records in scope | `identity`, `privacy`, `disclosure` | Owner | Response → delivery status | new |
 | `privacy_incident.contain` | A2 | Asks first | Contain suspected exposure: revoke portal links and device pairings. | The exposure signal | — | Owner | Revocations → read back | `POST /api/v1/customer-portal/links/{link}/revoke`, `POST /api/v1/device-pairings/{pairing}/revoke` |
-| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a phone replacement or revocation, or a role change for one person and open it in Decisions for a person to apply with `access.change`; adding or removing a person stays on the owner's `access.change` screen. The request comes from an owner or staff member, either as the run's own ask or request or as the root of its handoff chain, never from inbound customer or supplier text. Owners: `compliance`, `orchestrator`. | The request (`request_ref`, `signal/<id>`), set and cited; the person's current role, access and devices | `requester` | — | Access change (proposed) for a person to apply | new |
+| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a phone replacement or revocation, or a role change for one person and open it in Decisions for a person to apply with `access.change`. Only a role change names a target role, which may be any app role except owner; adding or removing a person stays on the owner's `access.change` screen. The request comes from an owner or staff member, either as the run's own ask or request or as the root of its handoff chain, never from inbound customer or supplier text. Owners: `compliance`, `orchestrator`. | The request (`request_ref`, `signal/<id>`), set and cited; the person's current role, access and devices | `requester` | — | Access change (proposed) for a person to apply | new |
 | `access.change` | H | — | Grant or change a person's role or access. | — | — | People only: owner | Access → read back | `POST /api/v1/admin/app-users/{user}/role`, `POST /api/v1/admin/app-users/{user}/access` |
 
 #### Catalog: AI customer care (`customer_care_warranty`)
@@ -1065,7 +1066,7 @@ records:
 | `trigger` | The event, watch or schedule, or the person and session that asked |
 | `goal` | One declared goal |
 | `context_snapshot_hash` | Hash of the `ContextSnapshot`: every cited fact id, version and hash |
-| `model` | Provider, adapter, model id, model family, provider-reported model version, runtime tier, billing kind (`api` or `subscription`), route (`primary` or `declared_fallback`) and the failover hops passed over, run class, compliance ref and any owner risk acceptance, the specialist's `release_sha256`, credential mode and qualification reference; an audit run also records the model family that proposed the work under review |
+| `model` | Provider, adapter, model id, model family, provider-reported model version, runtime tier, billing kind (`api` or `subscription`), route (`primary` or `declared_fallback`), credential mode and qualification reference; an audit run also records the model family that proposed the work under review |
 | `prompt_hash` | SHA-256 over the system prompt, playbook version and standing-orders version |
 | `schema_hash` | SHA-256 over the output schema |
 | `tool_manifest_hash` | SHA-256 over the actions and tools the run may use |
@@ -1279,7 +1280,7 @@ work.
 | `compliance` | `incident_notice` | On `incident.reported` | An incident may need a regulator notice | `filing.draft_packet`, `exception.escalate` |
 | `compliance` | `privacy_request` | On `privacy.request_received` | Someone asks to see or correct their data | `privacy_request.answer` |
 | `compliance` | `exposure_suspected` | On `privacy.exposure_suspected` | Data may have reached the wrong person | `privacy_incident.contain`, `exception.escalate` |
-| `compliance` | `issuer_readback` | On `authority.readback_received` | An issuer confirms a record; the record is evaluated, never recorded | `authority.evaluate`, `gate.clear` |
+| `compliance` | `issuer_readback` | On `authority.readback_received` | An issuer confirms a record; the record is evaluated, never recorded by this watch | `authority.evaluate`, `gate.clear` |
 | `compliance` | `lien_window` | On `lien_window.timer_due` | A lien or holdback window on a job reaches a point set in tenant policy | `filing.draft_packet`, `exception.escalate` |
 | `customer_care_warranty` | `customer_message` | On `inbound.received` | A customer with an accepted job writes or calls | `customer_message.draft`, `conversation.assign_person`, `service_case.open`, `inbound.quarantine` |
 | `customer_care_warranty` | `phase_notice` | On `job.phase_changed` | The job reaches a phase the customer should hear about, closeout included | `customer_message.draft` |
@@ -1430,20 +1431,19 @@ tokens or other secrets.
 
 ### Providers
 
-Each tenant configures its own provider accounts. A provider entry names its adapter, its endpoint
-where the adapter needs one, its billing kind (`api` or `subscription`), its credential mode, the
-names of its secrets, its `compliance_ref` and the account's own model registry (see "Model
-registry").
+Each tenant configures its own provider accounts. A provider entry names its adapter, its billing
+kind (`api` or `subscription`), its credential mode, the names of its secrets, its `compliance_ref`
+and the account's own model registry (see "Model registry").
 
 | Adapter | Reaches |
 |---|---|
-| `openai_compatible` | Any OpenAI-compatible endpoint, OpenRouter, Azure OpenAI and self-hosted endpoints included |
-| `anthropic_messages` | The Anthropic Messages API |
-| `gemini` | The Gemini API |
-| `bedrock` | Amazon Bedrock |
-| `vertex` | Google Vertex AI |
 | `claude_agent_sdk` | Claude through the Claude Agent SDK, with an OAuth sign-in or an API key |
 | `codex` | Codex, with a ChatGPT sign-in or an API key |
+
+These two adapters exist. The HTTP adapters are not built yet: `openai_compatible` (any
+OpenAI-compatible endpoint, OpenRouter, Azure OpenAI and self-hosted endpoints included),
+`anthropic_messages` (the Anthropic Messages API), `gemini` (the Gemini API), `bedrock` (Amazon
+Bedrock) and `vertex` (Google Vertex AI).
 
 Each account's `compliance_ref` is its `Ref` under "AI model providers" in
 [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md#ai-model-providers), and the account's adapter
@@ -1456,9 +1456,10 @@ recorded on the account (`confirmed_retention`). A consumer ref allows `syntheti
 recorded owner risk acceptance may extend it to `eval_history` and nothing else. A live or shadow
 run on a consumer ref is refused before any call, and so is every run on an account that names no
 ref. The agent host's data class (`AGENT_HOST_DATA_CLASS`) defaults to `business` and fails
-closed: any value other than `business` or `synthetic` stops the host. Within these adapters,
-adding a provider or a model, or changing how one is billed, changes configuration only, with no
-code, prompt or schema change.
+closed: any value other than `business` or `synthetic` stops the host. Adding an account on an
+existing ref, or a model to an account's registry, changes configuration only, with no code,
+prompt or schema change. The register's refs are also code: a new ref needs its row in
+`agent-host/src/gateway/compliance.ts` as well as in the register.
 
 ### Model registry
 
@@ -1510,19 +1511,21 @@ explanation for a person. A specialist may also ask for it with a reason, which 
 Qualification belongs to a pair: one specialist release on one route, recorded as (provider, model,
 effort, `release_sha256`). `release_sha256` is the SHA-256 of the canonical JSON of
 `{specialist_id, playbook_sha256, allowlist_sha256, common_sha256, catalog_sha256}`, so a change to
-the playbook, the allowlist, `COMMON.md` or the catalog makes a new release. An owner records each
-qualification from a fresh session: specialist, provider, model, effort, `release_sha256`,
-`passed` and `report_sha256`. A pair passes on the specialist's golden and red-team suites at the
-release bar (decision 14): zero catastrophes, a golden-case mean of at least 0.90 with no case
-median below 0.60, a red-team mean of at least 0.95 with the correct decision in all three
-repetitions, and no gating history bar missed. Passing on one route qualifies no other. A live or
-shadow run uses a route only when the specialist's current release holds a passed qualification
-there, and the run records it as its `qualification_ref`; eval and synthetic runs need no
-qualification. Changing a specialist's model, a declared fallback included, needs that pair
-qualified first, and a new specialist release qualifies on each route it runs on. Without a
-qualified route the specialist abstains with `no_qualified_route`. A specialist is a delegation
-candidate (see "Delegation") only when the latest qualification for the provider and model of its
-most recent closed run passed.
+the playbook, the allowlist, `COMMON.md` or the catalog makes a new release, and a new release
+qualifies on each route it runs on.
+
+A pair passes on the specialist's golden and red-team suites at the release bar (decision 14): zero
+catastrophes, a golden-case mean of at least 0.90 with no case median below 0.60, a red-team mean
+of at least 0.95 with the correct decision in all three repetitions, and no gating history bar
+missed. Passing on one route qualifies no other. An owner records each qualification, with
+step-up: specialist, provider, model, effort, `release_sha256`, `passed` and `report_sha256`.
+
+A live or shadow run uses a route only when the specialist's current release holds a passed
+qualification there, and the run records it as its `qualification_ref`; eval and synthetic runs
+need no qualification. Changing a specialist's model, a declared fallback included, needs that pair
+qualified first. Without a qualified route the specialist abstains with `no_qualified_route`. A
+specialist is a delegation candidate (see "Delegation") only when the latest qualification for the
+provider and model of its most recent closed run passed.
 
 ### Independence
 
@@ -1561,15 +1564,16 @@ also records the model family that proposed the work under review (see "Coordina
 ### Outages and limits
 
 - A run never switches provider or model by itself. Failover is declared, never silent, and only for
-  production runs: a route may name a fallback route in configuration, at most two deep and on the
-  route's own family. A production run moves along that chain only when a hop fails for a listed
-  reason: a rate limit, a provider error, a failed or missing credential, or a provider the run may
-  not use (`rate_limited`, `provider_error`, `auth_failed`, `credential_missing`,
-  `provider_disabled`). It uses a fallback only when that fallback is qualified for the specialist,
-  fits the run and keeps the independence rule (an audit fallback never shares the family of the
-  work it audits), and skips any other. A primary route that is not qualified, or does not fit the
-  run, is no outage: the run abstains with `no_qualified_route` and tries no fallback. The run
-  records the route it used (`primary` or `declared_fallback`) and each hop it passed over.
+  live runs: a route may name a fallback route in configuration, at most two deep and on the
+  route's own family, while practice and eval runs keep the one route. A live run moves along that
+  chain only when a hop fails for a listed reason: a rate limit, a provider error, a failed or
+  missing credential, or a provider the run may not use (`rate_limited`, `provider_error`,
+  `auth_failed`, `credential_missing`, `provider_disabled`). It uses a fallback only when that
+  fallback is qualified for the specialist, fits the run and keeps the independence rule (an audit
+  fallback never shares the family of the work it audits), and skips any other. A primary route
+  that is not qualified, or does not fit the run, is no outage: the run abstains with
+  `no_qualified_route` and tries no fallback. The run records the route it used (`primary` or
+  `declared_fallback`) and each hop it passed over.
 - When a provider fails, hits a rate limit or loses its credential, and no declared, qualified
   fallback exists, the specialist abstains with `provider_unavailable`. When the tier has no route
   whose pair with the specialist is qualified, or no registered model meets the step's needs, it

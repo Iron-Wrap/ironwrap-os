@@ -163,8 +163,9 @@ and null otherwise, `reason` (at most 1000 characters)};
     actions. Cite the pair's delegation record (`delegation/<specialist_id>:<action_id>`); an absent
     or stale record gets no proposal (`abstain`), and neither does a setting the record already
     shows: say it already is that way. The record shows the setting in effect: with `fallback`
-    true, the owner's within-limits setting runs as asks first after a failed step or a version
-    change, and asking first is not yet the setting itself, so the owner may still ask for it.
+    true, the owner's within-limits setting runs as asks first after a failed step, a version
+    change, or a hold, and asking first is not yet the setting itself, so the owner may still ask
+    for it.
     - `within_limits` only when the record's `bar.meets` is true and `failed_readback` is 0. The bar
       is 50 compared decisions under the current policy and release, at least 95% of them a match,
       no catastrophe, and a qualified release. The ceiling is never invented: `count.max` is the

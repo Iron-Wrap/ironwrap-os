@@ -77,6 +77,11 @@ export function catalogAction(actionId: string): CatalogAction | null {
   return ACTIONS.get(actionId) ?? null;
 }
 
+/** An action whose autonomy can be earned (contract "Delegation"): `A2` or `A3`, delegable, and neither people-only nor protective. */
+export function earnable(action: CatalogAction): boolean {
+  return (action.autonomy === "A2" || action.autonomy === "A3") && !action.human_only && action.delegable && !action.protective;
+}
+
 export function catalogSpecialist(specialistId: string): CatalogSpecialist | null {
   return SPECIALISTS.get(specialistId) ?? null;
 }

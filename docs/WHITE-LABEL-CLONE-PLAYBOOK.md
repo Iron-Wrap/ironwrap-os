@@ -342,7 +342,7 @@ recovery boundaries.
   and the tenant owner has added at least one recipient on the Recipients screen
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
-- [ ] All 132 D1 migrations through `0204_agent_watch_firings.sql` applied to the tenant database.
+- [ ] All 133 D1 migrations through `0204_agent_watch_firings.sql` applied to the tenant database.
 - [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
   unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
   an older snapshot, elapsed time or empty RAW read does not authorize clearing them.

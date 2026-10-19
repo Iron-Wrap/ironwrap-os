@@ -8,6 +8,7 @@ import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
 import { currentDelegation, specialistControl } from "../src/agents/control.ts";
 import { CATASTROPHE_IDS, SHADOW_COMPARE_WINDOW_MS, sweepShadow } from "../src/agents/shadow.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
+import { WATCH_CONDITIONS } from "../src/agents/watches.ts";
 import { WorkerClient } from "../../agent-host/src/host/worker.ts";
 import type { AuthContext, AppRole } from "../src/app-types.ts";
 
@@ -109,7 +110,7 @@ class SqliteD1 {
   }
 }
 
-function setup(fullSchema = false) {
+function setup(fullSchema = false, workerVars: Record<string, string> = {}) {
   const db = new SqliteD1(fullSchema);
   let clock = 1_000_000;
   const now = () => new Date(clock).toISOString();
@@ -162,7 +163,7 @@ function setup(fullSchema = false) {
       permissions: [],
     });
   }
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN };
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, ...workerVars };
   const parseResponse = async (response: Response) => ({
     status: response.status,
     body: (await response.json()) as any,
@@ -1367,41 +1368,60 @@ test("shadow steps nobody compares are recorded unscored once their window passe
   assert.equal(s.scalar("SELECT verdict v, comparator c FROM agent_agreements").v, "unscored");
 });
 
+/**
+ * Seeds `count` compared practice decisions of one action on a fresh run of lead_concierge, then
+ * closes that run on the qualified v3 route, so they count toward the bar: a run under the current
+ * step policy, closed on the specialist's current release.
+ */
+async function seedCompared(
+  s: ReturnType<typeof setup>,
+  qualificationId: string | null,
+  count: number,
+  verdict: string,
+  { catastrophes = "[]", action = "note.add", model = {} }: { catastrophes?: string; action?: string; model?: Record<string, unknown> } = {},
+) {
+  const run = await s.run();
+  for (let index = 0; index < count; index += 1) {
+    const n = s.scalar("SELECT COUNT(*) n FROM agent_agreements").n + 1;
+    const id = `sstep_seed_${n}`;
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+        VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+      )
+      .run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+        VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`,
+      )
+      .run(`agr_${id}`, TENANT, action, id, verdict, catastrophes, new Date(Date.parse(s.now()) + n).toISOString());
+  }
+  s.tick(1_000);
+  const closed = await s.close(run.run_id, closeV3({ ...model, qualification_ref: qualificationId }));
+  // Without a qualification the Worker refuses the close's output; it still records the model block.
+  assert.deepEqual([closed.status, closed.body.terminal], [200, qualificationId ? "completed" : "abstained"]);
+  return run;
+}
+
 test("a delegation candidate needs the recent bar, no catastrophe, a passed qualification and a delegable action", async () => {
   const s = setup(true);
-  const run = await s.run();
-  const seed = (count: number, verdict: string, catastrophes = "[]") => {
-    for (let index = 0; index < count; index += 1) {
-      const id = `sstep_seed_${verdict}_${s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps").n}`;
-      s.db.raw
-        .prepare(
-          `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
-         VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
-        )
-        .run(id, TENANT, run.run_id, id, "0".repeat(64), s.now());
-      s.db.raw
-        .prepare(
-          `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
-         VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`,
-        )
-        .run(`agr_${id}`, TENANT, id, verdict, catastrophes, new Date(Date.parse(s.now()) + s.scalar("SELECT COUNT(*) n FROM agent_agreements").n).toISOString());
-    }
-  };
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { specialist_id: string; action_id: string }) => `${row.specialist_id} ${row.action_id}`);
-  await runsOn(s);
-  seed(48, "match");
-  seed(1, "diverge", '["fabricates_fact"]');
-  seed(1, "match");
   const qualify = (passed: boolean, key: string) =>
-    s.app("/qualifications", { ...QUALIFIED, passed, report_sha256: "a".repeat(64) }, "owner", key);
-  assert.equal((await qualify(true, "qualify-1")).status, 200);
+    s.app("/qualifications", { ...QUALIFIED, passed, report_sha256: passed ? "a".repeat(64) : "b".repeat(64) }, "owner", key);
+  const passed = await qualify(true, "qualify-1");
+  assert.equal(passed.status, 200);
+  await seedCompared(s, passed.body.qualification_id, 48, "match");
+  await seedCompared(s, passed.body.qualification_id, 1, "diverge", { catastrophes: '["fabricates_fact"]' });
+  await seedCompared(s, passed.body.qualification_id, 1, "match");
   // A catastrophe inside the recent window blocks it.
   assert.deepEqual(await candidates(), []);
   // Fifty newer clean comparisons push it out of the window: old wins and old losses both age out.
-  seed(50, "match");
+  await seedCompared(s, passed.body.qualification_id, 50, "match");
   assert.deepEqual(await candidates(), ["lead_concierge note.add"]);
   // A later failed qualification blocks it again; ops cannot record one.
   assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: false, report_sha256: "b".repeat(64) }, "ops", "qualify-ops")).status, 403);
+  s.tick(1_000);
   assert.equal((await qualify(false, "qualify-2")).status, 200);
   assert.deepEqual(await candidates(), []);
 });
@@ -1425,7 +1445,8 @@ test("an audit that came back from the reviewed run's own family is not accepted
   const output = { decision: "propose", escalate_to: null, reason_code: null, reason: "Synthetic.", receipts: [], drafts: [], final_text: "Done." };
   assert.equal((await s.close(reviewed.run_id, close(output, "codex"))).status, 200);
   const audit = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
-  assert.deepEqual((audit as { review_of?: unknown }).review_of, { run_id: reviewed.run_id, provider: "codex" });
+  // A legacy close names its provider; the hint adds the family that provider stands for.
+  assert.deepEqual((audit as { review_of?: unknown }).review_of, { run_id: reviewed.run_id, provider: "codex", family: "openai" });
   assert.equal((await s.close(audit.run_id, close(output, "codex"))).body.terminal, "abstained");
   const fair = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
   assert.equal((await s.close(fair.run_id, close(output, "claude"))).body.terminal, "completed");
@@ -1437,11 +1458,11 @@ test("shadow is a delegation value: setting it shadows the action, any other set
   assert.deepEqual([shadowed.status, shadowed.body.revision], [200, 1]);
   assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "shadow", ceiling, expected_revision: 1 }), "owner", "deleg-shadow-ceiling")).status, 422);
   const overview = (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add");
-  assert.deepEqual(overview.shadow, { shadow: true, revision: 1 });
+  assert.deepEqual(overview.shadow, { shadow: true, revision: 1, stopped: false });
   // Setting asks first (delegation revision 1) also writes the shadow-off revision in the same write.
   assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 0 }), "owner", "deleg-asks-1")).status, 200);
   const after = (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add");
-  assert.deepEqual([after.shadow, after.setting.setting], [{ shadow: false, revision: 2 }, "asks_first"]);
+  assert.deepEqual([after.shadow, after.setting.setting], [{ shadow: false, revision: 2, stopped: false }, "asks_first"]);
   assert.equal((await s.propose(await s.run(), "note.add", note)).body.decision, "awaiting_approval");
 });
 
@@ -1492,30 +1513,23 @@ test("shadow steps count toward the run's step ceiling, and the step past it is 
 
 test("a catastrophe on a take-over blocks candidacy, unscored rows never count as compared, and the bar is 95 %", async () => {
   const s = setup(true);
-  const run = await s.run();
-  let n = 0;
-  const seed = (count: number, verdict: string, catastrophes = "[]", action = "note.add") => {
-    for (let index = 0; index < count; index += 1) {
-      const id = `sstep_bar_${++n}`;
-      s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
-      s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, action, id, verdict, catastrophes, new Date(Date.parse(s.now()) + n).toISOString());
-    }
-  };
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
-  await runsOn(s);
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "c".repeat(64) }, "owner", "qualify-bar")).status, 200);
-  seed(60, "unscored");
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "c".repeat(64) }, "owner", "qualify-bar");
+  assert.equal(qualified.status, 200);
+  const seed = (count: number, verdict: string, catastrophes = "[]", action = "note.add") =>
+    seedCompared(s, qualified.body.qualification_id, count, verdict, { catastrophes, action });
+  await seed(60, "unscored");
   assert.deepEqual(await candidates(), [], "unscored rows are not comparisons");
-  seed(47, "match");
-  seed(3, "diverge");
+  await seed(47, "match");
+  await seed(3, "diverge");
   assert.deepEqual(await candidates(), [], "94 % is below the bar");
-  seed(50, "match");
+  await seed(50, "match");
   assert.deepEqual(await candidates(), ["note.add"]);
-  seed(1, "unscored", '["fabricates_fact"]');
+  await seed(1, "unscored", '["fabricates_fact"]');
   assert.deepEqual(await candidates(), [], "a flagged take-over blocks it");
   // Never-delegable and protective actions never become candidates, however good their record.
-  seed(60, "match", "[]", "exception.escalate");
-  seed(60, "match", "[]", "inquiry.classify");
+  await seed(60, "match", "[]", "exception.escalate");
+  await seed(60, "match", "[]", "inquiry.classify");
   assert.deepEqual(await candidates(), []);
 });
 
@@ -1560,25 +1574,17 @@ test("an audit closes completed only from a known family different from the revi
 
 test("candidates need the full window and a delegable action; stats count only compared rows", async () => {
   const s = setup(true);
-  const run = await s.run();
-  let n = 0;
-  const seed = (count: number, verdict: string, action = "note.add") => {
-    for (let index = 0; index < count; index += 1) {
-      const id = `sstep_win_${++n}`;
-      s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
-      s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, action, id, verdict, new Date(Date.parse(s.now()) + n).toISOString());
-    }
-  };
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "d".repeat(64) }, "owner", "qualify-win")).status, 200);
-  seed(49, "match");
-  seed(5, "unscored");
-  seed(60, "match", "consent.record");
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "d".repeat(64) }, "owner", "qualify-win");
+  assert.equal(qualified.status, 200);
+  const seed = (count: number, verdict: string, action = "note.add") => seedCompared(s, qualified.body.qualification_id, count, verdict, { action });
+  await seed(49, "match");
+  await seed(5, "unscored");
+  await seed(60, "match", "consent.record");
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
-  await runsOn(s);
   assert.deepEqual(await candidates(), [], "49 compared is one short of the window; consent.record is never delegable");
   const note = (await s.app("/shadow?action=note.add")).body.agreement[0];
   assert.deepEqual([note.compared, note.counts.unscored, note.match_rate], [49, 5, 1]);
-  seed(1, "match");
+  await seed(1, "match");
   assert.deepEqual(await candidates(), ["note.add"]);
 });
 
@@ -1611,24 +1617,23 @@ test("a catastrophe follow-through that keeps failing never blocks the rest of t
 
 test("the candidate bar uses the qualification for the model the specialist actually runs on", async () => {
   const s = setup(true);
-  const run = await s.run();
-  for (let index = 0; index < 50; index += 1) {
-    const id = `sstep_model_${index}`;
-    s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, id, "0".repeat(64), s.now());
-    s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, id, new Date(Date.parse(s.now()) + index).toISOString());
-  }
   const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { model: string }) => row.model);
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, model: "gpt-6-astra", effort: "high", passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-astra")).status, 200);
-  assert.deepEqual(await candidates(), [], "no closed run yet, so no model it runs on");
-  await runsOn(s, "gpt-6.1-sol");
-  assert.deepEqual(await candidates(), [], "a passed qualification on another model does not count");
-  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "b".repeat(64) }, "owner", "qualify-sol")).status, 200);
+  const sol = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "b".repeat(64) }, "owner", "qualify-sol");
+  await seedCompared(s, sol.body.qualification_id, 50, "match");
   assert.deepEqual(await candidates(), ["gpt-6.1-sol"]);
-  s.tick(60_000);
-  await runsOn(s, "gpt-6-astra");
+  // The specialist moves to another model on the same release: the bar follows it, and a passed
+  // qualification on the model it left does not count.
+  const runsOn = async (model: Record<string, unknown>) => {
+    s.tick(60_000);
+    assert.equal((await s.close((await s.run()).run_id, closeV3(model))).status, 200);
+  };
+  const astra = { model: "gpt-6-astra", models_used: ["gpt-6-astra"], effort: "high" };
+  await runsOn({ ...astra, qualification_ref: null });
+  assert.deepEqual(await candidates(), [], "no qualification on the model it moved to");
+  const astraPassed = await s.app("/qualifications", { ...QUALIFIED, model: "gpt-6-astra", effort: "high", passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-astra");
+  await runsOn({ ...astra, qualification_ref: astraPassed.body.qualification_id });
   assert.deepEqual(await candidates(), ["gpt-6-astra"], "the bar follows the model the specialist moved to");
-  s.tick(60_000);
-  await runsOn(s, "gpt-6-astra", "openai");
+  await runsOn({ ...astra, provider: "openai", adapter: "openai_compatible", qualification_ref: null });
   assert.deepEqual(await candidates(), [], "the same model through another provider needs its own qualification");
   // Every key is required, and an invalid one is refused.
   for (const [field, value, code] of [["provider", "Codex", "invalid_provider"], ["effort", "", "invalid_effort"], ["release_sha256", "x", "invalid_release_hash"]] as const)
@@ -1661,4 +1666,606 @@ test("a qualification replays on its key and conflicts on any changed field; the
           .run(`qal_raw_${provider}${effort}`, TENANT, provider, effort, release, "a".repeat(64), owner, s.now(), `raw-${provider}-${effort}-${release[0]}`),
       /CHECK constraint failed/,
     );
+});
+
+// --- R3 gateway v3: run-open qualifications, the v3 close, independence and qualification at close ---
+
+/** The v3 close of agent-host/src/host/runner.ts `closeBodyV3`, for one synthetic routine run. */
+const CLOSE_V3 = JSON.parse(readFileSync(new URL("./fixtures/agent-close-v3.json", import.meta.url), "utf8"));
+const closeV3 = (model: Record<string, unknown> = {}, body: Record<string, unknown> = {}) => ({ ...CLOSE_V3, ...body, model: { ...CLOSE_V3.model, ...model } });
+/** The owner records one qualification (passed unless it says otherwise) and gets its id back. */
+async function qualify(s: ReturnType<typeof setup>, row: Record<string, unknown>, key: string): Promise<string> {
+  const recorded = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64), ...row }, "owner", key);
+  assert.equal(recorded.status, 200, JSON.stringify(recorded.body));
+  return recorded.body.qualification_id;
+}
+/** A passed row of another tenant for lead_concierge on the QUALIFIED route, written straight to D1. */
+function otherTenantQualification(s: ReturnType<typeof setup>): string {
+  s.db.raw
+    .prepare(
+      `INSERT OR IGNORE INTO app_users (user_id,tenant_id,email_normalized,display_name,role,access_role,frappe_user_id,active,created_by,created_at,updated_at)
+      VALUES ('appu_other_owner', 'othertenant', 'other-owner@example.invalid', 'other', 'owner', 'owner', 'other-owner@example.invalid', 1, 'seed', ?, ?)`,
+    )
+    .run(s.now(), s.now());
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_qualifications (qualification_id,tenant_id,specialist_id,provider,model,effort,release_sha256,passed,report_sha256,recorded_by_user_id,recorded_at,idempotency_key)
+      VALUES ('qal_other_tenant', 'othertenant', 'lead_concierge', 'codex', 'gpt-6.1-sol', 'medium', ?, 1, ?, 'appu_other_owner', ?, 'other-tenant-row')`,
+    )
+    .run(QUALIFIED.release_sha256, "a".repeat(64), s.now());
+  return "qal_other_tenant";
+}
+/** The reason code of the receipt a run's close left, or null when it left none. */
+const closeReason = (s: ReturnType<typeof setup>, runId: string): string | null =>
+  s.scalar("SELECT reason_code r FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'", runId)?.r ?? null;
+/** The v3 model block of an audit on the shipped Claude route. */
+const OPUS_AUDIT = { provider: "claude", adapter: "claude_agent_sdk", family: "anthropic", model: "claude-opus-5-5", effort: "high", models_used: ["claude-opus-5-5"], tier: "audit", route_id: "claude_opus", compliance_ref: "ai.anthropic.claude-commercial" };
+
+test("a run's open sends the specialist's current qualifications, the latest row per key and only while it passed", async () => {
+  const s = setup();
+  const sol = await qualify(s, {}, "hint-sol");
+  await qualify(s, { effort: "high" }, "hint-high-pass");
+  await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "hint-high-fail");
+  await qualify(s, { release_sha256: "f".repeat(64), passed: false }, "hint-release-fail");
+  const release = await qualify(s, { release_sha256: "f".repeat(64), report_sha256: "c".repeat(64) }, "hint-release-pass");
+  await qualify(s, { provider: "claude", model: "claude-opus-5-5", effort: "high" }, "hint-opus-1");
+  const opus = await qualify(s, { provider: "claude", model: "claude-opus-5-5", effort: "high", report_sha256: "d".repeat(64) }, "hint-opus-2");
+  await qualify(s, { specialist_id: "estimator" }, "hint-other-specialist");
+  otherTenantQualification(s);
+  const run = (await s.run()) as Record<string, any>;
+  assert.equal(run.close_model, 3);
+  // Newest first: a key failed last is left out, a key passed after a failure is in, a key passed
+  // twice sends its newest row, and another specialist's or tenant's rows are not this run's.
+  assert.deepEqual(run.qualifications, [
+    { qualification_id: opus, provider: "claude", model: "claude-opus-5-5", effort: "high", release_sha256: "e".repeat(64) },
+    { qualification_id: release, provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: "f".repeat(64) },
+    { qualification_id: sol, provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: "e".repeat(64) },
+  ]);
+  assert.deepEqual(((await s.run("estimator")) as Record<string, any>).qualifications.map((row: { effort: string }) => row.effort), ["medium"]);
+  assert.deepEqual(((await s.run("market_analyst")) as Record<string, any>).qualifications, []);
+});
+
+test("an audit's open names the reviewed run's family: a v3 close's own, a legacy provider's, or none it cannot name", async () => {
+  const s = setup();
+  const reviewOf = async (model: Record<string, unknown>, legacy = false) => {
+    const reviewed = await s.run();
+    const body = legacy ? { ...CLOSE_V3, model } : closeV3(model);
+    assert.equal((await s.close(reviewed.run_id, body)).status, 200);
+    const audit = (await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } })) as Record<string, any>;
+    return { ...audit.review_of, run_id: audit.review_of.run_id === reviewed.run_id };
+  };
+  assert.deepEqual(await reviewOf({ provider: "vertex", adapter: "vertex", family: "google", model: "gemini-3.8-flash", models_used: [] }), { run_id: true, provider: "vertex", family: "google" });
+  const legacy = (provider: string) => ({ provider, model: "synthetic-model", models_used: [], auth_mode: "oauth", tier: "routine" });
+  assert.deepEqual(await reviewOf(legacy("claude"), true), { run_id: true, provider: "claude", family: "anthropic" });
+  assert.deepEqual(await reviewOf(legacy("gemini"), true), { run_id: true, provider: "gemini" });
+});
+
+test("a v3 close is held to its strict block, and legacy and routed blocks still close", async () => {
+  const s = setup();
+  const ref = await qualify(s, {}, "shape-sol");
+  const closed = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref }));
+  assert.deepEqual([closed.status, closed.body.terminal], [200, "completed"]);
+  const hop = { route_id: "codex_sol_low", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retry_at: 1_000_500.5 };
+  // A hop whose route lost its registry entry names no family; outside an audit that changes nothing.
+  const threeHops = await s.close((await s.run()).run_id, closeV3({ qualification_ref: ref, route: "declared_fallback", failover: [hop, { ...hop, family: null, retry_at: null }, hop] }));
+  assert.deepEqual([threeHops.status, threeHops.body.terminal], [200, "completed"]);
+  const { run_class: _runClass, ...missing } = CLOSE_V3.model;
+  const { effort: _effort, ...effortless } = CLOSE_V3.model;
+  const { family: _family, ...hopWithoutFamily } = hop;
+  for (const [label, model] of [
+    ["four failover hops", { failover: [hop, hop, hop, hop] }],
+    ["a hop with a field of its own", { failover: [{ ...hop, effort: "medium" }] }],
+    ["a hop without its family", { failover: [hopWithoutFamily] }],
+    ["a hop family with capitals", { failover: [{ ...hop, family: "OpenAI" }] }],
+    ["a hop on a provider id with capitals", { failover: [{ ...hop, provider: "Codex" }] }],
+    ["an effort outside the qualification format", { effort: "High" }],
+    ["a release hash one short", { release_sha256: "e".repeat(63) }],
+    ["an upper-case configuration hash", { gateway_config_sha256: "E".repeat(64) }],
+    ["a provider id with capitals", { provider: "Codex" }],
+    ["a provider id too long", { provider: `p${"a".repeat(31)}` }],
+    ["a family too long", { family: `f${"a".repeat(32)}` }],
+    ["an adapter outside the contract", { adapter: "omniroute" }],
+    ["a run class outside the register", { run_class: "practice" }],
+    ["a review naming no family", { review_of: { run_id: "run_x", provider: "codex" } }],
+    ["nine models used", { models_used: Array.from({ length: 9 }, (_, n) => `gpt-6.${n}`) }],
+    ["a hop retrying before the epoch", { failover: [{ ...hop, retry_at: -1 }] }],
+    ["an auth mode outside the registry", { auth_mode: "password" }],
+    ["a billing outside the registry", { billing: "invoice" }],
+    ["a qualification ref too long", { qualification_ref: `q${"a".repeat(80)}` }],
+    ["a field of its own", { extra: true }],
+  ] as const)
+    assert.equal((await s.close((await s.run()).run_id, closeV3(model)).then((r) => r.status)), 422, label);
+  assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: missing })).status, 422, "a block without its run class");
+  assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: effortless })).status, 422, "a block without its effort");
+  // A routed block that names a family is held to the v3 block, which it does not meet.
+  const routed = { provider: "codex", model: "gpt-6.1-sol", models_used: ["gpt-6.1-sol"], auth_mode: "chatgpt", tier: "routine", route_id: "codex_sol", review_of: null, mode: "live" };
+  assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model: { ...routed, family: "openai" } })).status, 422);
+  // An older host's blocks carry no run class and no qualification, and close as before.
+  const { route_id: _route, review_of: _review, mode: _mode, ...legacy } = routed;
+  for (const model of [routed, legacy]) assert.equal((await s.close((await s.run()).run_id, { ...CLOSE_V3, model })).body.terminal, "completed");
+  // Only a v3 close records the Worker's data class next to its run class.
+  const stored = s.db.raw.prepare("SELECT close_json FROM agent_runs WHERE state = 'closed' ORDER BY rowid").all() as Array<{ close_json: string }>;
+  assert.deepEqual(stored.map((row) => JSON.parse(row.close_json).data_class ?? null), ["business", "business", null, null]);
+});
+
+test("a synthetic run closes only on a Worker that holds synthetic data, and an eval run on none", async () => {
+  const business = setup();
+  const run = await business.run();
+  const consumer = { qualification_ref: null, compliance_ref: "ai.openai.chatgpt-consumer" };
+  const refused = await business.close(run.run_id, closeV3({ ...consumer, run_class: "synthetic" }));
+  assert.deepEqual([refused.status, refused.body.error], [422, "run_class_refused"]);
+  const abstained = { status: "abstained", reason: "rate_limited", detail: "Synthetic.", output: null };
+  assert.equal((await business.close(run.run_id, closeV3({ ...consumer, run_class: "synthetic" }, abstained))).body.error, "run_class_refused");
+  assert.equal((await business.close(run.run_id, closeV3({ ...consumer, run_class: "eval_history" }))).body.error, "run_class_refused");
+  assert.equal(business.scalar("SELECT state FROM agent_runs WHERE run_id = ?", run.run_id).state, "open", "a refused close records nothing");
+  assert.equal((await setup(false, { AGENT_DATA_CLASS: "business" }).close(run.run_id, {})).status, 404, "an explicit business class serves as the default does");
+
+  const synthetic = setup(false, { AGENT_DATA_CLASS: " synthetic " });
+  const qa = await synthetic.run();
+  const body = closeV3({ ...consumer, run_class: "synthetic" });
+  const closed = await synthetic.close(qa.run_id, body);
+  assert.deepEqual([closed.status, closed.body.terminal], [200, "completed"], "a synthetic run relies on no qualification");
+  const stored = JSON.parse(synthetic.scalar("SELECT close_json c FROM agent_runs WHERE run_id = ?", qa.run_id).c);
+  assert.deepEqual([stored.data_class, stored.model.run_class, stored.model.compliance_ref], ["synthetic", "synthetic", "ai.openai.chatgpt-consumer"]);
+  assert.equal((await synthetic.close(qa.run_id, body)).status, 200, "the exact retry replays");
+  assert.equal((await synthetic.close((await synthetic.run()).run_id, closeV3({ ...consumer, run_class: "eval_history" }))).body.error, "run_class_refused");
+  // A live run on a synthetic Worker still needs a qualification the Worker holds.
+  const live = await synthetic.run();
+  assert.equal((await synthetic.close(live.run_id, closeV3({ qualification_ref: null }))).body.terminal, "abstained");
+  assert.equal(closeReason(synthetic, live.run_id), "no_qualified_route");
+  // A data class that is neither stops the host API instead of reading as either.
+  const misspelt = await setup(false, { AGENT_DATA_CLASS: "Synthetic" }).close("run_x", body);
+  assert.deepEqual([misspelt.status, misspelt.body.error], [503, "data_class_not_configured"]);
+});
+
+test("a live or shadow close keeps its output only on a qualification the Worker holds for its route and release", async () => {
+  const s = setup();
+  const ref = await qualify(s, {}, "ref-sol-pass");
+  const closeWith = async (model: Record<string, unknown>, body: Record<string, unknown> = {}) => {
+    const run = await s.run();
+    const closed = await s.close(run.run_id, closeV3(model, body));
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    return [closed.body.terminal, closeReason(s, run.run_id)];
+  };
+  const kept = ["completed", null];
+  const refused = ["abstained", "no_qualified_route"];
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), kept);
+  assert.deepEqual(await closeWith({ qualification_ref: ref, mode: "shadow", run_class: "shadow" }), kept);
+  for (const [label, model] of [
+    ["another provider", { provider: "openai", adapter: "openai_compatible", auth_mode: "api_key", billing: "api" }],
+    ["another model", { model: "gpt-6-astra", models_used: ["gpt-6-astra"] }],
+    ["another effort", { effort: "high" }],
+    ["another release", { release_sha256: "f".repeat(64) }],
+    ["no release", { release_sha256: null }],
+    ["no reference", { qualification_ref: null }],
+    ["a reference the Worker never recorded", { qualification_ref: "qal_00000000-0000-4000-8000-000000000000" }],
+    ["a shadow run with no reference", { qualification_ref: null, mode: "shadow", run_class: "shadow" }],
+  ] as const)
+    assert.deepEqual(await closeWith({ qualification_ref: ref, ...model }), refused, label);
+  // Another specialist's row for the same route and release is not this specialist's, and another
+  // tenant's row is not this tenant's.
+  assert.deepEqual(await closeWith({ qualification_ref: await qualify(s, { specialist_id: "estimator" }, "ref-estimator") }), refused);
+  assert.deepEqual(await closeWith({ qualification_ref: otherTenantQualification(s) }), refused);
+  // A failure at another effort of the same route and release is another key, so the reference holds.
+  await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "ref-high-fail");
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), kept);
+  // A failure recorded later for its own key ends it, even though the row itself passed; the failed
+  // row is no reference, and a new passed row is.
+  const failed = await qualify(s, { passed: false, report_sha256: "c".repeat(64) }, "ref-sol-fail");
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), refused);
+  assert.deepEqual(await closeWith({ qualification_ref: failed }), refused);
+  const again = await qualify(s, { report_sha256: "d".repeat(64) }, "ref-sol-again");
+  assert.deepEqual(await closeWith({ qualification_ref: again }), kept);
+  assert.deepEqual(await closeWith({ qualification_ref: ref }), refused, "the failure still sits between the old row and now");
+  // The check only ever stops output: an abstention keeps its own reason.
+  assert.deepEqual(await closeWith({ qualification_ref: null }, { status: "abstained", reason: "rate_limited", detail: "Synthetic.", output: null }), ["abstained", "provider_unavailable"]);
+  // An emergency the refused output raised stays its reason, so it reaches a person.
+  assert.deepEqual(await closeWith({ qualification_ref: null }, { output: { ...CLOSE_V3.output, decision: "escalate", escalate_to: "owner", reason_code: "emergency" } }), ["abstained", "emergency"]);
+  // Refused output is recorded without its work and with the reason; its exact retry replays.
+  const unqualified = await s.run();
+  const body = closeV3({ qualification_ref: null });
+  assert.equal((await s.close(unqualified.run_id, body)).body.terminal, "abstained");
+  const stored = JSON.parse(s.scalar("SELECT close_json c FROM agent_runs WHERE run_id = ?", unqualified.run_id).c);
+  assert.deepEqual([stored.output, stored.refused, stored.model.qualification_ref, stored.data_class], [null, { reason: "no_qualified_route" }, null, "business"]);
+  assert.equal((await s.close(unqualified.run_id, body)).status, 200, "the exact retry replays");
+  assert.equal((await s.close(unqualified.run_id, closeV3({ qualification_ref: null }, { cost_usd: 0.02 }))).status, 409);
+});
+
+test("an audit closes completed only off the reviewed run's family, on the hop it ran and every hop it passed over", async () => {
+  const s = setup();
+  const reviewed = await s.run();
+  assert.equal((await s.close(reviewed.run_id, closeV3({ qualification_ref: await qualify(s, {}, "audit-reviewed") }))).body.terminal, "completed");
+  const opus = await qualify(s, { specialist_id: "independent_auditor", provider: "claude", model: "claude-opus-5-5", effort: "high" }, "audit-opus");
+  const audit = async (model: Record<string, unknown>, reviewedRun = reviewed.run_id) => {
+    const run = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewedRun } });
+    const closed = await s.close(run.run_id, closeV3({ ...OPUS_AUDIT, qualification_ref: opus, review_of: { run_id: reviewedRun, family: "openai" }, ...model }));
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    return [closed.body.terminal, closeReason(s, run.run_id)];
+  };
+  const kept = ["completed", null];
+  const notIndependent = ["abstained", "provider_unavailable"];
+  assert.deepEqual(await audit({}), kept);
+  // Every hop the audit passed over names its family. A hop off the reviewed run's family passes,
+  // on another account too: the declared fallback from Anthropic's API to Vertex is one family.
+  const opusHop = { route_id: "claude_opus", provider: "claude", model: "claude-opus-5-5", family: "anthropic", reason: "rate_limited", retry_at: null };
+  const vertex = await qualify(s, { specialist_id: "independent_auditor", provider: "vertex", model: "claude-opus-5-5", effort: "high" }, "audit-vertex");
+  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex, route: "declared_fallback", route_id: "opus_vertex", failover: [opusHop] }), kept);
+  assert.deepEqual(await audit({ route: "declared_fallback", failover: [{ ...opusHop, provider: "gemini", model: "gemini-3.8-flash", family: "google" }] }), kept);
+  // A hop of the reviewed run's family ran the audit on the proposer's family; a hop that names no
+  // family cannot be shown to be off it. Either way the audit is not accepted.
+  const proposerHop = { route_id: "codex_astra", provider: "codex", model: "gpt-6-astra", family: "openai", reason: "provider_error", retry_at: null };
+  assert.deepEqual(await audit({ route: "declared_fallback", failover: [opusHop, proposerHop] }), notIndependent);
+  assert.deepEqual(await audit({ provider: "vertex", adapter: "vertex", qualification_ref: vertex, route: "declared_fallback", route_id: "opus_vertex", failover: [{ ...opusHop, family: null }] }), notIndependent);
+  // The audit's own family the same as the reviewed run's.
+  const astra = await qualify(s, { specialist_id: "independent_auditor", model: "gpt-6-astra", effort: "high" }, "audit-astra");
+  assert.deepEqual(await audit({ provider: "codex", adapter: "codex", family: "openai", model: "gpt-6-astra", models_used: [], route_id: "codex_astra", qualification_ref: astra }), notIndependent);
+  // A legacy reviewed run's provider maps to its family, and a legacy audit's too.
+  const legacy = await s.run();
+  const legacyModel = (provider: string) => ({ provider, model: "synthetic-model", models_used: [], auth_mode: "oauth", tier: "audit" });
+  assert.equal((await s.close(legacy.run_id, { ...CLOSE_V3, model: legacyModel("codex") })).body.terminal, "completed");
+  assert.deepEqual(await audit({}, legacy.run_id), kept);
+  assert.deepEqual(await audit({ provider: "codex", adapter: "codex", family: "openai", model: "gpt-6-astra", models_used: [], route_id: "codex_astra", qualification_ref: astra }, legacy.run_id), notIndependent);
+  const legacyAudit = async (provider: string, reviewedRun: string) => {
+    const run = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewedRun } });
+    return (await s.close(run.run_id, { ...CLOSE_V3, model: legacyModel(provider) })).body.terminal;
+  };
+  assert.deepEqual([await legacyAudit("claude", reviewed.run_id), await legacyAudit("codex", reviewed.run_id)], ["completed", "abstained"]);
+  // A reviewed run whose family cannot be named cannot be audited independently.
+  const unknown = await s.run();
+  assert.equal((await s.close(unknown.run_id, { ...CLOSE_V3, model: legacyModel("gemini") })).body.terminal, "completed");
+  assert.deepEqual(await audit({}, unknown.run_id), notIndependent);
+  assert.equal(await legacyAudit("claude", unknown.run_id), "abstained");
+  const refused = s.db.raw.prepare("SELECT close_json FROM agent_runs WHERE specialist_id = 'independent_auditor' AND result = 'abstained'").all() as Array<{ close_json: string }>;
+  assert.ok(refused.length > 0);
+  for (const row of refused) assert.deepEqual([JSON.parse(row.close_json).output, JSON.parse(row.close_json).refused], [null, { reason: "provider_unavailable" }]);
+});
+
+test("the candidate bar needs the qualification for the effort and release the specialist runs on", async () => {
+  const s = setup(true);
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { qualification_id: string }) => row.qualification_id);
+  const runsOnV3 = async (model: Record<string, unknown>) => {
+    s.tick(1000);
+    assert.equal((await s.close((await s.run()).run_id, closeV3(model))).status, 200);
+  };
+  const medium = await qualify(s, {}, "bar-medium");
+  await qualify(s, { effort: "high" }, "bar-high");
+  await seedCompared(s, medium, 50, "match");
+  assert.deepEqual(await candidates(), [medium]);
+  // The latest row for the model is a failure at another effort: the route the specialist runs on still holds.
+  s.tick(1000);
+  await qualify(s, { effort: "high", passed: false, report_sha256: "b".repeat(64) }, "bar-high-fail");
+  assert.deepEqual(await candidates(), [medium]);
+  s.tick(1000);
+  await qualify(s, { passed: false, report_sha256: "c".repeat(64) }, "bar-medium-fail");
+  assert.deepEqual(await candidates(), [], "its own effort failed");
+  // A new release counts only its own decisions and needs its own qualification: neither the earlier
+  // release's decisions nor its rows carry over.
+  const newRelease = { release_sha256: "f".repeat(64) };
+  const release = await qualify(s, { ...newRelease, report_sha256: "d".repeat(64) }, "bar-release");
+  await runsOnV3({ qualification_ref: release, ...newRelease });
+  assert.deepEqual(await candidates(), [], "the earlier release's decisions do not count");
+  await seedCompared(s, release, 50, "match", { model: newRelease });
+  assert.deepEqual(await candidates(), [release]);
+  s.tick(1000);
+  await qualify(s, { ...newRelease, passed: false, report_sha256: "e".repeat(64) }, "bar-release-fail");
+  assert.deepEqual(await candidates(), []);
+  // The specialist moves to the high effort at that release: the bar follows the effort its close names.
+  const high = await qualify(s, { ...newRelease, effort: "high", report_sha256: "f".repeat(64) }, "bar-release-high");
+  await runsOnV3({ qualification_ref: high, effort: "high", ...newRelease });
+  assert.deepEqual(await candidates(), [high]);
+  await runsOnV3({ qualification_ref: null, effort: "high", release_sha256: "1".repeat(64) });
+  assert.deepEqual(await candidates(), [], "no row at that release");
+});
+
+// --- Delegation fallbacks on a release without a passed qualification (contract "Delegation" item 7) ---
+
+/** A host's close of a live run that found no route a current passed qualification names. */
+const unqualifiedClose = () => ({ ...CLOSE_V3, status: "abstained", reason: "no_qualified_route", detail: "Synthetic: no qualified route.", output: null, model: { ...CLOSE_V3.model, qualification_ref: null } });
+
+test("a within-limits setting falls back once a run of the specialist ends without a qualified route, until the owner sets it again", async () => {
+  const s = setup(true);
+  const delegation = async () => {
+    const current = await currentDelegation(s.db, TENANT, "lead_concierge", "note.add");
+    return [current?.setting, current?.fallback];
+  };
+  // A run that ended without a qualified route before the owner set the action does not count.
+  const before = await s.run();
+  assert.equal((await s.close(before.run_id, closeV3({ qualification_ref: null }))).status, 200);
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting(), "owner", "deleg-release-1")).status, 200);
+  assert.deepEqual(await delegation(), ["within_limits", false]);
+  // A run of the same specialist that ran and closed fine changes nothing.
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run()).run_id, closeV3({ qualification_ref: await qualify(s, {}, "release-pass") }))).status, 200);
+  assert.deepEqual(await delegation(), ["within_limits", false]);
+  // The host found no qualified route for the specialist's changed release: the setting asks first.
+  s.tick(1_000);
+  const abstained = await s.run();
+  const closed = await s.close(abstained.run_id, unqualifiedClose());
+  assert.deepEqual([closed.status, closed.body.terminal], [200, "abstained"]);
+  assert.deepEqual(await delegation(), ["asks_first", true]);
+  // It stays back after the release passes, until the owner confirms the setting again.
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run()).run_id, closeV3({ qualification_ref: await qualify(s, {}, "release-pass-again") }))).status, 200);
+  assert.deepEqual(await delegation(), ["asks_first", true]);
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: 1 }), "owner", "deleg-release-2")).status, 200);
+  assert.deepEqual(await delegation(), ["within_limits", false]);
+  // A close the Worker refuses for a route it holds no qualification for counts the same way.
+  s.tick(1_000);
+  const refused = await s.close((await s.run()).run_id, closeV3({ qualification_ref: null }));
+  assert.deepEqual([refused.status, refused.body.terminal], [200, "abstained"]);
+  assert.deepEqual(await delegation(), ["asks_first", true]);
+  // The pair's record shows the fallback, the stored revision behind it and who set it.
+  const { delegationRecord } = await import("../src/agents/shadow.ts");
+  const fallen = (await delegationRecord(s.db, TENANT, "lead_concierge:note.add")) as any;
+  assert.deepEqual(
+    [fallen.setting.setting, fallen.setting.fallback, fallen.setting.ceiling, fallen.setting.revision, fallen.setting.set_by, fallen.failed_readback],
+    ["asks_first", true, ceiling, 2, "person:appu_test_owner", 0],
+  );
+  assert.equal(fallen.setting.setting_id, (await currentDelegation(s.db, TENANT, "lead_concierge", "note.add"))?.delegation_id);
+  // Another specialist's run without a qualified route never touches this one's setting.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: 2 }), "owner", "deleg-release-3")).status, 200);
+  assert.equal((await s.app("/specialists/estimator/delegation", setting(), "owner", "deleg-release-estimator")).status, 200);
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run("estimator")).run_id, unqualifiedClose())).status, 200);
+  const estimator = await currentDelegation(s.db, TENANT, "estimator", "note.add");
+  assert.deepEqual([estimator?.setting, estimator?.fallback], ["asks_first", true]);
+  assert.deepEqual(await delegation(), ["within_limits", false], "lead_concierge's setting stands");
+});
+
+test("a practice-only action stops practising after a catastrophe or an unqualified release, and stays practice only until the owner sets it again", async () => {
+  const s = setup(true);
+  const overview = async () => (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add").shadow;
+  const practise = async (text: string) => (await s.propose(await s.run(), "note.add", { ...note, text })).body;
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "practice-1")).status, 200);
+  const first = await practise("Synthetic note one.");
+  assert.equal(first.decision, "shadowed");
+  // A run of the specialist ends without a qualified route: the action neither practises nor runs.
+  s.tick(1_000);
+  assert.equal((await s.close((await s.run()).run_id, unqualifiedClose())).status, 200);
+  const stopped = await practise("Synthetic note two.");
+  assert.deepEqual([stopped.decision, stopped.reason_codes], ["denied", ["policy_denied"]]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps WHERE action_id = 'note.add'").n, 1);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'note.add' AND needs_reviewer_role IS NOT NULL").n, 0, "no person is handed it");
+  // The run's mode is live: no action it can lead to is practising.
+  const handoff = await s.run("lead_concierge", { kind: "handoff", content: { expected_action_id: "note.add", reason: "Synthetic" } });
+  assert.equal((handoff as { mode?: string }).mode, "live");
+  assert.deepEqual(await overview(), { shadow: true, revision: 1, stopped: true });
+  // The owner confirms practice again: it practises.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody({ expected_revision: 1 }), "owner", "practice-2")).status, 200);
+  assert.deepEqual(await overview(), { shadow: true, revision: 2, stopped: false });
+  const resumed = await practise("Synthetic note three.");
+  assert.equal(resumed.decision, "shadowed");
+  // A practice step recorded as a catastrophe stops it again.
+  s.tick(1_000);
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+      VALUES ('agr_synthetic_catastrophe', ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'diverge', '["fabricates_fact"]', 'synthetic', NULL, ?)`,
+    )
+    .run(TENANT, resumed.step_id, s.now());
+  assert.deepEqual((await practise("Synthetic note four.")).reason_codes, ["policy_denied"]);
+  assert.equal((await overview()).stopped, true);
+});
+
+test("only decisions under the current step policy and release count toward the bar, and a refused close's never do", async () => {
+  const s = setup(true);
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-policy");
+  await seedCompared(s, qualified.body.qualification_id, 49, "match");
+  // A run the Worker refused for a route without its qualification keeps its model block, not its work.
+  await seedCompared(s, null, 1, "match");
+  assert.deepEqual(await candidates(), [], "the refused run's decision does not count");
+  // A run opened under an earlier step policy: its decisions do not count either.
+  s.tick(1_000);
+  const current = await s.run();
+  s.db.raw.exec("CREATE TEMP TABLE old_run AS SELECT * FROM agent_runs WHERE 0");
+  s.db.raw.prepare("INSERT INTO old_run SELECT * FROM agent_runs WHERE run_id = ?").run(current.run_id);
+  s.db.raw.exec(`UPDATE old_run SET run_id = 'run_old_policy', host_run_key = 'host-old-policy', policy_version = 'ironwrap.step-policy@3'`);
+  s.db.raw.exec("INSERT INTO agent_runs SELECT * FROM old_run");
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+      VALUES ('sstep_old_policy', ?, 'run_old_policy', 'lead_concierge', 'note.add', 'old', '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+    )
+    .run(TENANT, "0".repeat(64), s.now());
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+      VALUES ('agr_old_policy', ?, 'shadow', 'lead_concierge', 'note.add', 'sstep_old_policy', NULL, 'match', '[]', 'synthetic@1', NULL, ?)`,
+    )
+    .run(TENANT, s.now());
+  const kept = s.scalar("SELECT close_json c FROM agent_runs WHERE state = 'closed' AND json_extract(close_json, '$.refused') IS NULL ORDER BY rowid DESC LIMIT 1").c;
+  s.db.raw.prepare("UPDATE agent_runs SET state = 'closed', result = 'completed', close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = 'run_old_policy'").run(kept, s.now());
+  assert.deepEqual(await candidates(), [], "the earlier policy's decision does not count");
+  // One more decision under the current policy and release fills the window.
+  await seedCompared(s, qualified.body.qualification_id, 1, "match");
+  assert.deepEqual(await candidates(), ["note.add"]);
+});
+
+// --- Earned autonomy: the face's proposal, the owner's preview and the weekly review (contract "Delegation" items 4 and 13) ---
+
+/** A delegation change the face proposes for lead_concierge's note.add. */
+const proposal = (overrides: Record<string, unknown> = {}) => ({
+  specialist_id: "lead_concierge",
+  action_id: "note.add",
+  proposed: "within_limits",
+  ceiling,
+  reason: "Synthetic: fifty compared notes, all matched.",
+  ...overrides,
+});
+
+test("the face proposes acting within limits only where the earned-autonomy bar is met, and the owner decides it in their own screen", async () => {
+  const s = setup(true);
+  const face = async () => await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+  const earned = (body: { receipt: { policy: { checks: Array<{ check: string; passed: boolean }> } } }) =>
+    body.receipt.policy.checks.find((check) => check.check === "earned_autonomy");
+  // Below the bar the proposal is refused, and nobody is handed it.
+  const below = (await s.propose(await face(), "delegation.propose_change", proposal())).body;
+  assert.deepEqual([below.decision, below.reason_codes, earned(below)], ["denied", ["policy_denied"], { check: "earned_autonomy", passed: false }]);
+  assert.equal(below.receipt.needs_from_you, null);
+  // Practice only and asks first need no bar.
+  assert.equal((await s.propose(await face(), "delegation.propose_change", proposal({ proposed: "shadow", ceiling: null }))).body.decision, "drafted");
+  // Once the action meets the bar, the proposal is a draft that waits in the owner's Needs you.
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-propose");
+  await seedCompared(s, qualified.body.qualification_id, 50, "match");
+  const met = (await s.propose(await face(), "delegation.propose_change", proposal({ reason: "Synthetic: the bar is met." }))).body;
+  assert.deepEqual([met.decision, met.receipt.outcome, earned(met)], ["drafted", "succeeded", { check: "earned_autonomy", passed: true }]);
+  assert.deepEqual([met.receipt.needs_from_you.reviewer_role, met.receipt.needs_from_you.ask], ["owner", "Check this and apply it yourself in your own screen; the AI team only prepared it."]);
+  assert.ok((await s.app("/receipts?view=needs_you")).body.receipts.some((entry: { step_id: string }) => entry.step_id === met.step_id));
+  // An action whose autonomy cannot be earned, or a ceiling that does not match the setting, is never proposed.
+  for (const [label, args] of [
+    ["a people-only action", proposal({ action_id: "delegation.set", specialist_id: "orchestrator" })],
+    ["a never-delegable action", proposal({ action_id: "consent.record" })],
+    ["a specialist that does not own the action", proposal({ specialist_id: "synthetic_nobody" })],
+    ["within limits without a ceiling", proposal({ ceiling: null })],
+    ["practice only with a ceiling", proposal({ proposed: "shadow" })],
+  ] as const) {
+    const refused = (await s.propose(await face(), "delegation.propose_change", args)).body;
+    assert.deepEqual([refused.decision, refused.reason_codes], ["abstained", ["action_unregistered"]], label);
+  }
+});
+
+test("the owner's preview shows the counted decisions, the bar, the history and what the ceiling would have let run", async () => {
+  const s = setup(true);
+  const preview = async (query: string) => await s.app(`/specialists/lead_concierge/preview?${query}`);
+  const empty = (await preview("action=note.add")).body;
+  assert.deepEqual([empty.release_sha256, empty.window.compared, empty.bar.meets, empty.would_have_run], [null, 0, false, null]);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-preview");
+  await seedCompared(s, qualified.body.qualification_id, 48, "match");
+  await seedCompared(s, qualified.body.qualification_id, 2, "diverge");
+  // The ceiling lets two run in any hour; the seeded proposals were all made within the same hour.
+  const shown = (await preview(`action=note.add&ceiling=${encodeURIComponent(JSON.stringify(ceiling))}`)).body;
+  assert.deepEqual(shown.window, { compared: 50, match: 48, partial: 0, diverge: 2, match_rate: 0.96, catastrophe: false });
+  assert.deepEqual([shown.release_sha256, shown.bar], ["e".repeat(64), { compared: 50, match_rate: 0.95, meets: true }]);
+  assert.deepEqual(shown.practice, { proposed: 50, compared: 50 });
+  assert.deepEqual(shown.would_have_run, { ran: 2, ran_not_matching: 0, of: 50 });
+  // A wider ceiling lets every one run, the two a person would not have matched among them.
+  const wide = { ...ceiling, count: { max: 100, per: "hour" } };
+  assert.deepEqual((await preview(`action=note.add&ceiling=${encodeURIComponent(JSON.stringify(wide))}`)).body.would_have_run, { ran: 50, ran_not_matching: 2, of: 50 });
+  // Only an action whose autonomy can be earned has a preview, and the query is checked.
+  assert.equal((await preview("action=consent.record")).status, 422);
+  assert.equal((await preview("action=note.add&ceiling=%7Bbad")).status, 400);
+  assert.equal((await preview(`action=note.add&ceiling=${encodeURIComponent(JSON.stringify({ count: { max: 0, per: "hour" }, amount: null, recipients: null }))}`)).status, 400);
+  assert.equal((await s.app("/specialists/lead_concierge/preview?action=note.add", undefined, "sales")).status, 403);
+});
+
+test("a specialist's declined proposal still counts against it, and a refused close can count against it but never for it", async () => {
+  const s = setup(true);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-declined");
+  await seedCompared(s, qualified.body.qualification_id, 49, "match");
+  // A real proposal on a kept run that the owner declines: a compared decision that did not match.
+  const run = await s.run();
+  const step = (await s.propose(run, "note.add", { ...note, text: "Synthetic note the owner declines." })).body;
+  const row = s.scalar("SELECT version, args_sha256 FROM agent_run_steps WHERE step_id = ?", step.step_id);
+  assert.equal((await s.app(`/steps/${step.step_id}/decision`, { decision: "decline", expected_version: row.version, expected_args_sha256: row.args_sha256 }, "owner", "decline-counted")).status, 200);
+  s.tick(1_000);
+  assert.equal((await s.close(run.run_id, closeV3({ qualification_ref: qualified.body.qualification_id }))).body.terminal, "completed");
+  const window = async () => (await s.app("/specialists/lead_concierge/preview?action=note.add")).body.window;
+  assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 1], "the declined proposal counts");
+  // A refused close cannot earn autonomy: its matches are left out, while what did not match on it
+  // still counts against the specialist.
+  await seedCompared(s, null, 5, "match");
+  assert.deepEqual([(await window()).compared, (await window()).diverge, (await window()).match], [50, 1, 49], "the refused run's matches do not count");
+  await seedCompared(s, null, 2, "diverge");
+  assert.deepEqual([(await window()).compared, (await window()).diverge], [50, 3], "the refused run's divergences do");
+});
+
+test("the weekly delegation review holds when an action meets the bar or has enough counted decisions for a preview", async () => {
+  const s = setup(true);
+  const review = async () => await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now());
+  assert.equal((await review()).holds, false);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-review");
+  await seedCompared(s, qualified.body.qualification_id, 45, "match");
+  await seedCompared(s, qualified.body.qualification_id, 5, "diverge");
+  const previewOnly = await review();
+  assert.equal(previewOnly.holds, true);
+  assert.deepEqual([(previewOnly.digest as any).delegation_candidates, (previewOnly.digest as any).previewable.map((row: { action_id: string; match_rate: number }) => [row.action_id, row.match_rate])], [[], [["note.add", 0.9]]]);
+  await seedCompared(s, qualified.body.qualification_id, 50, "match");
+  const earned = await review();
+  assert.deepEqual([(earned.digest as any).delegation_candidates.map((row: { action_id: string }) => row.action_id), (earned.digest as any).previewable], [["note.add"], []]);
+});
+
+test("the preview replays the counted decisions in the order they were proposed, not compared", async () => {
+  const s = setup(true);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-order");
+  const run = await s.run();
+  const base = Date.parse(s.now());
+  // Proposed at 0, 90 and 100 minutes; compared last-first-middle.
+  for (const [id, proposedMin, comparedMin] of [["o3", 100, 200], ["o1", 0, 201], ["o2", 90, 202]] as const) {
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+        VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+      )
+      .run(`sstep_${id}`, TENANT, run.run_id, id, "0".repeat(64), new Date(base + proposedMin * 60_000).toISOString());
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+        VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`,
+      )
+      .run(`agr_${id}`, TENANT, `sstep_${id}`, new Date(base + comparedMin * 60_000).toISOString());
+  }
+  s.tick(1_000);
+  assert.equal((await s.close(run.run_id, closeV3({ qualification_ref: qualified.body.qualification_id }))).body.terminal, "completed");
+  const one = { count: { max: 1, per: "hour" }, amount: null, recipients: null };
+  const shown = (await s.app(`/specialists/lead_concierge/preview?action=note.add&ceiling=${encodeURIComponent(JSON.stringify(one))}`)).body;
+  // At 0 it runs, at 90 it runs (the first left the hour), at 100 the hour is full.
+  assert.deepEqual(shown.would_have_run, { ran: 2, ran_not_matching: 0, of: 3 });
+});
+
+test("the face reads each listed pair's delegation record, and a pair it already proposed is not listed again", async () => {
+  const s = setup(true);
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-record");
+  await seedCompared(s, qualified.body.qualification_id, 49, "match");
+  await seedCompared(s, qualified.body.qualification_id, 1, "diverge");
+  const review = await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now());
+  assert.deepEqual(review.objects, [{ aggregate: "delegation", id: "lead_concierge:note.add" }]);
+  // The watch's run starts from that object and holds its record.
+  const signal = await appendSignal(
+    s.db,
+    TENANT,
+    { kind: "watch", specialist_id: "orchestrator", watch_id: "delegation_review", source: "watch_scheduler", subject: null, content: { watch_id: "delegation_review", period_key: "synthetic", objects: review.objects, digest: review.digest, summary: review.summary }, dedupe_key: "review-record" },
+    s.now(),
+  );
+  assert.ok("signal_id" in signal);
+  const opened = await s.worker.openRun({ signal_id: signal.signal_id, specialist_id: "orchestrator", host_run_key: "review-record-run" });
+  const record = opened.context.facts.find((fact: { fact_id: string }) => fact.fact_id === "delegation/lead_concierge:note.add");
+  assert.ok(record, JSON.stringify(opened.context.facts.map((fact: { fact_id: string }) => fact.fact_id)));
+  assert.deepEqual(Object.keys(record.data).sort(), [
+    "action_id", "bar", "failed_readback", "history", "most_proposed_in", "policy_version", "practice", "qualified", "release_sha256", "setting", "specialist_id", "window",
+  ]);
+  assert.deepEqual(
+    [record.data.setting, record.data.policy_version, record.data.window.match_rate, record.data.bar.meets, record.data.qualified?.qualification_id, record.data.most_proposed_in],
+    [{ setting: "within_limits", fallback: false, ceiling: null, setting_id: null, revision: null, set_by: null, set_at: null }, 5, 0.98, true, qualified.body.qualification_id, { hour: 50, day: 50, week: 50 }],
+  );
+  // Once the face proposes it, the next review lists it as awaiting the owner, not as a candidate.
+  const proposed = (await s.propose({ run_id: opened.run_id, signal_id: signal.signal_id }, "delegation.propose_change", proposal())).body;
+  assert.equal(proposed.decision, "drafted", JSON.stringify(proposed));
+  const again = await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now());
+  assert.deepEqual([(again.digest as any).delegation_candidates, (again.digest as any).awaiting_owner], [[], [{ specialist_id: "lead_concierge", action_id: "note.add" }]]);
+  // The owner answers it (here: practice only); the pair can be proposed again.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "answer-proposal")).status, 200);
+  assert.equal(((await WATCH_CONDITIONS.delegation_review.evaluate(s.db, TENANT, null, s.now())).digest as any).awaiting_owner.length, 0);
+  // Any other id names no record.
+  for (const id of ["lead_concierge", "lead_concierge:consent.record", "synthetic_nobody:note.add", "lead_concierge:note.add:extra", ":note.add"])
+    assert.equal(await (await import("../src/agents/read-models.ts")).OBJECT_MODELS.delegation.read(s.db, TENANT, id), null, id);
+});
+
+test("only the owner's and ops' views read a delegation record, and the release-fallback read covers any run's life", async () => {
+  const { viewFor } = await import("../src/agents/memory.ts");
+  const { OBJECT_MODELS } = await import("../src/agents/read-models.ts");
+  const { RUN_LIFETIME_BOUND_MS } = await import("../src/agents/shadow.ts");
+  const { EXPIRY_GRACE_MS } = await import("../src/agents/store.ts");
+  const { DEFAULT_CEILINGS } = await import("../src/agents/policy.ts");
+  assert.deepEqual(
+    [{ role: "owner" }, { role: "ops" }, { role: "sales" }, "orchestrator", "independent_auditor", "lead_concierge"].map((reader) => viewFor(OBJECT_MODELS, reader, "delegation") !== null),
+    [true, true, false, true, true, false],
+  );
+  // A run closes within its wall time plus the cron's grace; the read looks back further than that.
+  assert.ok(RUN_LIFETIME_BOUND_MS > DEFAULT_CEILINGS.wallTimeMs + EXPIRY_GRACE_MS + 3_600_000);
 });

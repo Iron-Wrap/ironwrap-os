@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 132,
+      "count": 133,
       "latest": "0204_agent_watch_firings.sql"
     }
   },
@@ -235,7 +235,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   protective exception and hold bindings execute against owned records with readback, and so does
   an approved `authority.record`: the internal worker competency command runs natively in D1 in
   the decision's own transaction, with an owned-store readback on its receipt. Every other
-  approved step records the decision and abstains, so no other agent step has a business effect.
+  approved step records the decision and abstains, so no other agent step has a business effect;
+  `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
+  step to the reviewer to do by hand. Every signal carries the actor the Worker writes: no inbound
+  channel feeds the team yet, so the Worker writes only owner, staff and worker actors for a
+  person's ask or request, and `null` for watch firings and handoffs.
   Shared memory gives a run's snapshot the signal's subject and the objects it
   links to (job, customer, lead, property, roof, measurement, crew, inventory position, money
   item) through the role screens' readers, as far as the specialist's reviewer role may read them,
@@ -244,11 +248,14 @@ Current source tracing distinguishes implemented modules from reachable producti
   conversation object yet, so those cannot be cited. Shadow mode (`0203`) records a shadowed action's
   proposals with no effect and counts agreement with people's decisions; no shadow comparator is
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
-  within-limits action to asks first. An audit from the reviewed run's own provider family is not
-  accepted. Five cadence watches fire from the cron with deterministic conditions (`0204`),
+  within-limits action to asks first. An audit from the reviewed run's own model family is not
+  accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
+  v3 close keeps its output only on one of them; a synthetic run closes only on a Worker whose
+  `AGENT_DATA_CLASS` is synthetic. Five cadence watches fire from the cron with deterministic conditions (`0204`),
   including the four owner reports; the other watches and every event-triggered watch do not fire yet.
-  The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
-  live provider call, deployment or reference run has happened.
+  The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
+  takes signals in the order the Worker feeds them: the contract's queue priority is not
+  implemented yet. No live provider call, deployment or reference run has happened.
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.

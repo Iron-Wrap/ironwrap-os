@@ -19,7 +19,7 @@ await mkdir(env.stateDir, { recursive: true, mode: 0o700 });
 // The provider CLIs write under HOME and CODEX_HOME; on a read-only image both live on the volume.
 for (const dir of [process.env.HOME, process.env.CODEX_HOME]) if (dir) await mkdir(dir, { recursive: true, mode: 0o700 });
 const gateway = new ProviderGateway({ config: loadGatewayConfig(env.gatewayConfigPath), stateDir: env.stateDir, env: process.env, dataClass: env.dataClass });
-const worker = new WorkerClient({ baseUrl: env.workerUrl, token: env.workerToken, timeoutMs: 15_000 });
+const worker = new WorkerClient({ baseUrl: env.workerUrl, token: env.workerToken, timeoutMs: 15_000, openTimeoutMs: 90_000 });
 const log = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
 
 const service = new AgentHostService({

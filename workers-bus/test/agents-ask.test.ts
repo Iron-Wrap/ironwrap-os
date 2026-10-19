@@ -650,6 +650,15 @@ test("an ask no run answers in time reads abstained, not answered, without writi
   assert.deepEqual(await read(waiting), unanswered(waiting, null));
   assert.deepEqual(state(), before, "the read writes nothing");
 
+  // A run that outlives the run lifetime takes no step, yet a close still on its way lands: the ask
+  // reads what it answered.
+  const slow = await ask(t, "sales", "ask-closed-late");
+  const slowRun = await openFace(t, slow);
+  t.tick(10 * 60_000 + 1);
+  assert.deepEqual(await read(slow), unanswered(slow, slowRun.run_id));
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${slowRun.run_id}/close`, close())).status, 200);
+  assert.deepEqual([(await read(slow)).status, (await read(slow)).reason], ["done", null]);
+
   // A run that outlives the run lifetime can neither resume nor take a step: not answered either.
   const open = await ask(t, "sales", "ask-never-closed");
   const run = await openFace(t, open);
@@ -657,10 +666,12 @@ test("an ask no run answers in time reads abstained, not answered, without writi
   assert.equal((await read(open)).status, "pending");
   t.tick(1);
   assert.deepEqual(await read(open), unanswered(open, run.run_id));
+  // The next open closes it at its ceiling; it still reads not answered, and a late close is refused.
   assert.equal((await openFace(t, open)).error, "run_expired");
-  // A close that still lands is what the ask then reads.
-  assert.equal((await t.host("POST", `/api/v1/agents/runs/${run.run_id}/close`, close())).status, 200);
-  assert.deepEqual([(await read(open)).status, (await read(open)).reason], ["done", null]);
+  assert.equal((t.db.raw.prepare("SELECT result FROM agent_runs WHERE run_id = ?").get(run.run_id) as { result: string }).result, "ceiling_reached");
+  assert.deepEqual(await read(open), unanswered(open, run.run_id));
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${run.run_id}/close`, close())).status, 409);
+  assert.deepEqual(await read(open), unanswered(open, run.run_id));
 });
 
 test("facts/current returns versions and hashes, never values, as the viewer's role reads them", async () => {
@@ -765,6 +776,15 @@ test("the agent host's own runner merges the view schema on an ask run and the a
     join(specialists, "orchestrator", "allowlist.json"),
     JSON.stringify({ schema_version: "ironwrap.specialist-allowlist.v1", specialist_id: "orchestrator", catalog_sha256: "0".repeat(64), actions: [{ action_id: "fact.explain", autonomy: "A0", purpose: "Explain" }] }),
   );
+  // The owner's qualification of the face on the route below, at the release the host computes.
+  const { specialistRelease } = await import("../../agent-host/src/host/release.ts");
+  const release = specialistRelease(specialists, "orchestrator", "0".repeat(64)).release_sha256;
+  t.db.raw
+    .prepare(
+      `INSERT INTO agent_qualifications (qualification_id,tenant_id,specialist_id,provider,model,effort,release_sha256,passed,report_sha256,recorded_by_user_id,recorded_at,idempotency_key)
+      VALUES ('qal_face_e2e', ?, 'orchestrator', 'codex', 'gpt-6.1-sol', 'medium', ?, 1, ?, 'appu_owner_0001', ?, 'qualify-face-e2e')`,
+    )
+    .run(TENANT, release, hex("face-report"), AT);
   const client = new WorkerClient({
     baseUrl: "https://bus.example.invalid",
     token: TOKEN,
@@ -786,12 +806,24 @@ test("the agent host's own runner merges the view schema on an ask run and the a
             output: { ...OUTPUT, view: viewSpec(data.run_id, [{ fact_id: quote.fact_id, version: quote.version, hash: quote.hash }]) },
             specialist: r.specialist,
             tier: r.tier,
+            // The v3 route fields of the shipped codex_sol route, on the Worker's qualification for it.
             routeId: "codex_sol",
             reviewOf: null,
             provider: "codex",
             model: "gpt-6.1-sol",
             modelsUsed: [],
-            authMode: "chatgpt",
+            authMode: "oauth",
+            family: "openai",
+            effort: "medium",
+            adapter: "codex",
+            billing: "subscription",
+            route: "primary",
+            qualificationRef: r.qualifications?.find((row) => row.provider === "codex" && row.model === "gpt-6.1-sol" && row.effort === "medium" && row.release === r.release)?.id ?? null,
+            failover: [],
+            runClass: "live",
+            complianceRef: "ai.openai.chatgpt-commercial",
+            riskAcceptance: null,
+            gatewayConfigSha256: "9".repeat(64),
             attempts: 1,
             usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1 },
             costUsd: 0,
@@ -1135,6 +1167,23 @@ test("a question that raises an emergency still reaches a named person, while it
   }
 });
 
+test("a question answered on a route the Worker holds no qualification for abstains, yet an emergency it raised still reaches a person", async () => {
+  const t = setup();
+  // The v3 close of a live face run whose route names no qualification of the face.
+  const model = { ...JSON.parse(readFileSync(new URL("./fixtures/agent-close-v3.json", import.meta.url), "utf8")).model, qualification_ref: null };
+  const askId = await ask(t, "sales", "ask-unqualified");
+  const plain = await openFace(t, askId);
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${plain.run_id}/close`, close(OUTPUT, { model }))).body.terminal, "abstained");
+  assert.deepEqual(exceptionsOf(t, plain.run_id), [], "the asker alone sees it abstained");
+  const read = (await t.app("sales", "GET", `/ask/${askId}`)).body;
+  assert.deepEqual([read.status, read.answer, read.receipt.policy.reason_codes], ["abstained", null, ["no_qualified_route"]]);
+  const gas = await openFace(t, await ask(t, "field", "ask-unqualified-gas", askBody("I smell gas near the meter at the site.")));
+  const body = close({ ...OUTPUT, decision: "escalate", reason_code: "emergency", final_text: "Leave the area now and call 911." }, { model });
+  assert.equal((await t.host("POST", `/api/v1/agents/runs/${gas.run_id}/close`, body)).body.terminal, "abstained");
+  const opened = exceptionsOf(t, gas.run_id);
+  assert.deepEqual(opened.map((row) => [row.reviewer_role, row.reason_code]), [["owner", "emergency"]]);
+});
+
 test("a protective escalation that stops on a question opens its exception, and a safety close never opens a second", async () => {
   const t = setup();
   const escalation = { reason_code: "safety_event", route_to: "production", object: null, summary: "Synthetic gas smell on site.", urgency: "immediate" };
@@ -1232,6 +1281,19 @@ test("an access change answers the signed-in owner's or staff member's own ask, 
     passes(await step(t, run.run_id, "access.prepare_change", pairing(own.fact_id), [cite(own)]), `${who} ask`);
     stops(await step(t, run.run_id, "access.prepare_change", { ...pairing(own.fact_id), reason: "Synthetic: not cited." }, []), `${who} ask, not cited`);
   }
+
+  // The prepared change is the owner's to apply on the Access screen: it waits in the owner's Needs
+  // you, finished for the AI team yet never among done work, and no other role's lane shows it.
+  const { run: prepared, own: preparedAsk } = await asked("sales", "ask-access-lane");
+  const draft = await step(t, prepared.run_id, "access.prepare_change", pairing(preparedAsk.fact_id), [cite(preparedAsk)]);
+  assert.deepEqual([draft.receipt.outcome, draft.receipt.needs_from_you], [
+    "succeeded",
+    { reviewer_role: "owner", person_id: "appu_owner_0001", ask: "Check this and apply it yourself in your own screen; the AI team only prepared it." },
+  ]);
+  const laneOf = async (who: Person, view: string) => ((await t.app(who, "GET", `/receipts?view=${view}`)).body.receipts as Array<{ step_id: string }>).map((entry) => entry.step_id);
+  assert.ok((await laneOf("owner", "needs_you")).includes(draft.step_id), "in the owner's Needs you");
+  assert.ok(!(await laneOf("owner", "done")).includes(draft.step_id), "not among done work");
+  assert.ok(!(await laneOf("sales", "needs_you")).includes(draft.step_id), "not in the asker's Needs you");
 
   // A handoff from a staff ask: the compliance checker answers the ask at the root of the chain, and
   // only that one: not its own handoff signal, and not another ask cited beside it.

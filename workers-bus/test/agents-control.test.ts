@@ -1842,6 +1842,16 @@ test("a live or shadow close keeps its output only on a qualification the Worker
   assert.deepEqual(await closeWith({ qualification_ref: ref }), refused, "the failure still sits between the old row and now");
   // The check only ever stops output: an abstention keeps its own reason.
   assert.deepEqual(await closeWith({ qualification_ref: null }, { status: "abstained", reason: "rate_limited", detail: "Synthetic.", output: null }), ["abstained", "provider_unavailable"]);
+  // An emergency the refused output raised stays its reason, so it reaches a person.
+  assert.deepEqual(await closeWith({ qualification_ref: null }, { output: { ...CLOSE_V3.output, decision: "escalate", escalate_to: "owner", reason_code: "emergency" } }), ["abstained", "emergency"]);
+  // Refused output is recorded without its work and with the reason; its exact retry replays.
+  const unqualified = await s.run();
+  const body = closeV3({ qualification_ref: null });
+  assert.equal((await s.close(unqualified.run_id, body)).body.terminal, "abstained");
+  const stored = JSON.parse(s.scalar("SELECT close_json c FROM agent_runs WHERE run_id = ?", unqualified.run_id).c);
+  assert.deepEqual([stored.output, stored.refused, stored.model.qualification_ref, stored.data_class], [null, { reason: "no_qualified_route" }, null, "business"]);
+  assert.equal((await s.close(unqualified.run_id, body)).status, 200, "the exact retry replays");
+  assert.equal((await s.close(unqualified.run_id, closeV3({ qualification_ref: null }, { cost_usd: 0.02 }))).status, 409);
 });
 
 test("an audit closes completed only off the reviewed run's family, on the hop it ran and every hop it passed over", async () => {
@@ -1888,6 +1898,9 @@ test("an audit closes completed only off the reviewed run's family, on the hop i
   assert.equal((await s.close(unknown.run_id, { ...CLOSE_V3, model: legacyModel("gemini") })).body.terminal, "completed");
   assert.deepEqual(await audit({}, unknown.run_id), notIndependent);
   assert.equal(await legacyAudit("claude", unknown.run_id), "abstained");
+  const refused = s.db.raw.prepare("SELECT close_json FROM agent_runs WHERE specialist_id = 'independent_auditor' AND result = 'abstained'").all() as Array<{ close_json: string }>;
+  assert.ok(refused.length > 0);
+  for (const row of refused) assert.deepEqual([JSON.parse(row.close_json).output, JSON.parse(row.close_json).refused], [null, { reason: "provider_unavailable" }]);
 });
 
 test("the candidate bar needs the qualification for the effort and release the specialist runs on", async () => {

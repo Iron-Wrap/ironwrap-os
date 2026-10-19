@@ -41,6 +41,7 @@ import {
   proposeStep,
   recordedClose,
   recordHeartbeat,
+  refusedClose,
   runTools,
   type AgentDb,
   type DataClass,
@@ -139,10 +140,12 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
       if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
       if (run.state === "closed") {
         // An exact retry matches the close as recorded (an ask run's view checked), with or without
-        // a paused specialist's drafts withheld, so the retry still reaches the escalation below.
+        // a paused specialist's drafts withheld, or without the output the Worker refused, so the
+        // retry still reaches the escalation below.
         const recorded = recordedClose(run, body, dataClass);
-        if (run.close_json !== canonicalJson(recorded) && run.close_json !== canonicalJson(withheldClose(recorded)))
-          return reply({error: "run_closed"}, 409);
+        const refused = (JSON.parse(run.close_json ?? "null") as { refused?: { reason?: unknown } } | null)?.refused?.reason;
+        const records = [recorded, withheldClose(recorded), ...(typeof refused === "string" ? [refusedClose(recorded, refused)] : [])];
+        if (!records.some((record) => run.close_json === canonicalJson(record))) return reply({error: "run_closed"}, 409);
         await escalateRunAbstention(db, tenantId, run, iso(), null);
         // A report whose delivery failed or never ran is delivered on the host's retry.
         if (run.result === "completed") await deliverRunReport(db, tenantId, run, JSON.parse(run.close_json ?? "null"), notify, iso());

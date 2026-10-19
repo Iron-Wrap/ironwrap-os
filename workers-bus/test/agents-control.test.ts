@@ -38,6 +38,7 @@ class SqliteD1 {
           "0202_agent_fact_versions.sql",
           "0203_agent_shadow_agreement.sql",
           "0204_agent_watch_firings.sql",
+          "0205_agent_step_pair_index.sql",
         ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")

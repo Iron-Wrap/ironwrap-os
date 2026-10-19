@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 132,
-      "latest": "0204_agent_watch_firings.sql"
+      "count": 133,
+      "latest": "0205_agent_step_pair_index.sql"
     }
   },
   "test_observation_policy": {

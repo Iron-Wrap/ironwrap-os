@@ -1,16 +1,22 @@
 @import "tailwindcss";
 @import "./styles/tokens.css";
+@import "./styles/theme.css";
 /* Not UI source: token names ("ring", "shadow", "blur") and test fixtures would otherwise ship
    as utilities nothing renders, in a render-blocking stylesheet. */
 @source not "./design-system";
 @source not "../scripts";
+/* The component gallery (gallery.html) is a dev page; its own class names never ship. */
+@source not "./gallery";
+/* The AI parts carry their own stylesheet (components/ai/ai.css), split into the lazy chunk of
+   the first screen that imports one, so their utilities stay out of this render-blocking one. */
+@source not "./components/ai";
 
 /*
  * IronWrap OS System v2 (design/system-v2). Colour, density, type, motion and the brand
  * geometry are generated into ./styles/tokens.css from src/design-system/tokens.json: change a
- * token there and run `npm run tokens`, never in this file. What stays here is Tailwind's
- * mapping onto those properties, the faces, and the component recipes. Status is never colour
- * alone: every status carries a glyph and words.
+ * token there and run `npm run tokens`, never in this file. Tailwind's mapping onto those
+ * properties is ./styles/theme.css; what stays here is the faces and the component recipes.
+ * Status is never colour alone: every status carries a glyph and words.
  *
  * Fonts are the wght-axis Archivo and Martian Mono subsets, self-hosted with
  * `font-display: optional` like the faces they replace. The width axis the reference
@@ -80,112 +86,6 @@
   unicode-range:
     U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-@theme inline {
-  --font-sans: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Martian Mono Variable", "Martian Mono", ui-monospace, "SF Mono", monospace;
-
-  /* The shipped utility names point at the System v2 properties, so every bg-*, text-* and
-     border-* utility keeps working with no codemod. Roles that retired (brass, ok, warning,
-     info, local) take their neutral stand-in until each screen is repainted; the stand-ins are
-     listed in design/system-v2/MIGRATION.md. `inline` makes a utility read the property on the
-     element that uses it, so a nested data-mode scope resolves its own colour. */
-  --color-background: var(--surface-paper);
-  --color-surface: var(--surface-paper);
-  --color-surface-raised: var(--surface-paper);
-  --color-surface-muted: var(--surface-rail);
-  --color-surface-sunk: var(--surface-rail);
-  --color-surface-hover: var(--surface-selected);
-  --color-foreground: var(--text-primary);
-  --color-muted: var(--text-secondary);
-  --color-faint: var(--text-tertiary);
-  --color-border: var(--line-hairline);
-  --color-border-soft: var(--line-hairline);
-  --color-border-control: var(--control-border);
-  --color-border-strong: var(--control-border);
-  --color-chrome: var(--surface-rail);
-  --color-chrome-raised: var(--surface-selected);
-  --color-chrome-active: var(--surface-pressed);
-  --color-chrome-foreground: var(--text-primary);
-  --color-chrome-muted: var(--text-tertiary);
-  --color-chrome-faint: var(--text-tertiary);
-  --color-chrome-border: var(--line-hairline);
-  --color-chrome-focus: var(--focus-ring);
-  --color-primary: var(--control-fill);
-  --color-primary-hover: var(--control-fill-pressed);
-  --color-primary-foreground: var(--control-on-fill);
-  --color-accent: var(--text-primary);
-  --color-accent-foreground: var(--control-on-fill);
-  --color-accent-soft: var(--surface-selected);
-  --color-accent-line: var(--line-strong);
-  --color-focus: var(--focus-ring);
-  --color-selected: var(--surface-selected);
-  --color-highlight: var(--surface-pressed);
-  --color-ok: var(--text-primary);
-  --color-ok-soft: var(--surface-rail);
-  --color-warning: var(--text-primary);
-  --color-warning-soft: var(--surface-rail);
-  --color-warning-line: var(--line-strong);
-  --color-danger: var(--signal-held);
-  /* Text on a held-coloured fill is paper: contrast is symmetric, and signal.held on
-     surface.paper is a pair the proof already checks in every mode. */
-  --color-danger-foreground: var(--surface-paper);
-  --color-danger-soft: var(--signal-held-tint);
-  --color-danger-line: var(--signal-held-line);
-  --color-danger-strong: var(--signal-held-fill);
-  --color-danger-strong-foreground: var(--signal-held-on-fill);
-  --color-info: var(--text-secondary);
-  --color-info-soft: var(--surface-rail);
-  --color-local: var(--text-secondary);
-  --color-local-soft: var(--surface-rail);
-  --color-neutral: var(--text-secondary);
-  --color-neutral-soft: var(--surface-rail);
-  --color-scrim: var(--overlay-scrim);
-
-  /* Every System v2 role also gets a utility named after its property: bg-signal-held-tint,
-     text-signal-you, border-control-border, bg-surface-pressed. */
-  --color-surface-paper: var(--surface-paper);
-  --color-surface-rail: var(--surface-rail);
-  --color-surface-selected: var(--surface-selected);
-  --color-surface-pressed: var(--surface-pressed);
-  --color-text-primary: var(--text-primary);
-  --color-text-secondary: var(--text-secondary);
-  --color-text-tertiary: var(--text-tertiary);
-  --color-line-hairline: var(--line-hairline);
-  --color-line-strong: var(--line-strong);
-  --color-control-border: var(--control-border);
-  --color-control-placeholder: var(--control-placeholder);
-  --color-control-fill: var(--control-fill);
-  --color-control-fill-pressed: var(--control-fill-pressed);
-  --color-control-on-fill: var(--control-on-fill);
-  --color-focus-ring: var(--focus-ring);
-  --color-signal-held: var(--signal-held);
-  --color-signal-held-tint: var(--signal-held-tint);
-  --color-signal-held-text-on-tint: var(--signal-held-text-on-tint);
-  --color-signal-held-line: var(--signal-held-line);
-  --color-signal-held-fill: var(--signal-held-fill);
-  --color-signal-held-fill-pressed: var(--signal-held-fill-pressed);
-  --color-signal-held-on-fill: var(--signal-held-on-fill);
-  --color-signal-you: var(--signal-you);
-  --color-signal-you-tint: var(--signal-you-tint);
-  --color-signal-you-tint-edge: var(--signal-you-tint-edge);
-  --color-signal-you-fill: var(--signal-you-fill);
-  --color-signal-you-fill-pressed: var(--signal-you-fill-pressed);
-  --color-signal-you-on-fill: var(--signal-you-on-fill);
-  --color-seam-open: var(--seam-open);
-  --color-seam-locked: var(--seam-locked);
-  --color-seam-pending: var(--seam-pending);
-  --color-skeleton-base: var(--skeleton-base);
-  --color-skeleton-sheen: var(--skeleton-sheen);
-  --color-overlay-plate: var(--overlay-plate);
-  --color-overlay-on-plate: var(--overlay-on-plate);
-  --color-overlay-scrim: var(--overlay-scrim);
-
-  --radius-sm: 0.375rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
 }
 
 /*
@@ -295,6 +195,22 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+/*
+ * The rule above is unlayered, so it outranks every type utility on a form control. The base
+ * controls therefore set the type role of their density here: the label for a button, the body
+ * for a field (design/system-v2/TOKENS.md, Typography).
+ */
+.ui-button {
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
+}
+
+:is(.ui-input, .ui-select, .ui-textarea) {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 button,
@@ -521,8 +437,10 @@ a.ref-tag:focus-visible {
 
 /*
  * Segmented: section tabs (underlined, `nav`), filter chips and a segmented control (both a
- * `role="group"` of `aria-pressed` buttons). Selection is brass; the current section is ink.
- * Dense pointer/keyboard chips stay 32px. Touch and environment scopes enlarge their real box.
+ * `role="group"` of `aria-pressed` buttons). The selected chip and the current tab are ink.
+ * Height, corner, edge and label size come from the density tokens, so `data-density` on any
+ * ancestor resizes them: 28 on the office, 48 on touch, 72 on glove. Hover is office only,
+ * pressed recolours, disabled recolours and never fades.
  */
 .segmented {
   display: flex;
@@ -535,15 +453,17 @@ a.ref-tag:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.4375rem;
-  min-height: 2rem;
+  min-width: var(--target-min);
+  min-height: var(--control-height);
   padding: 0 0.75rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--control-radius);
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--border-control);
-  color: var(--muted);
-  font-size: 0.84375rem;
-  font-weight: 560;
+  box-shadow: inset 0 0 0 var(--control-border-width) var(--control-border);
+  color: var(--text-secondary);
+  font-size: var(--type-label-size);
+  font-weight: 600;
+  line-height: var(--type-label-line-height);
   text-decoration: none;
   white-space: nowrap;
   transition:
@@ -552,35 +472,55 @@ a.ref-tag:focus-visible {
     box-shadow var(--motion-fast) var(--motion-ease);
 }
 
-.segmented > :is(a, button):hover {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-  color: var(--foreground);
+/* Hover leaves the selected and the disabled segments alone, so their rules need no hover twin. */
+@media (hover: hover) {
+  .segmented
+    > :is(a, button):not(
+      [aria-pressed="true"],
+      [aria-current="page"],
+      [aria-current="true"],
+      :disabled,
+      [aria-disabled="true"]
+    ):hover {
+    background: var(--surface-selected);
+    color: var(--text-primary);
+  }
 }
 
-.segmented > :is([aria-pressed="true"], [aria-current="page"], [aria-current="true"]),
-.segmented > :is([aria-pressed="true"], [aria-current="page"], [aria-current="true"]):hover {
-  background: var(--selected);
-  box-shadow: inset 0 0 0 1.5px var(--accent);
-  color: var(--foreground);
+.segmented > :is(a, button):active {
+  background: var(--surface-pressed);
+  color: var(--text-primary);
+}
+
+.segmented > :is([aria-pressed="true"], [aria-current="page"], [aria-current="true"]) {
+  background: var(--surface-selected);
+  box-shadow: inset 0 0 0 var(--control-border-width) var(--text-primary);
+  color: var(--text-primary);
+}
+
+.segmented > :is(:disabled, [aria-disabled="true"]) {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--control-border-width) var(--line-hairline);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
 }
 
 .segmented-count {
   display: inline-grid;
   place-items: center;
-  min-width: 1.25rem;
-  height: 1.125rem;
-  padding: 0 0.375rem;
+  min-width: 1.6em;
+  padding: 0 0.4em;
   border-radius: 999px;
-  background: var(--neutral-soft);
-  color: var(--muted);
-  font-size: 0.75rem;
+  background: var(--surface-rail);
+  color: var(--text-secondary);
+  font-size: var(--type-caption-size);
   font-weight: 620;
+  line-height: var(--type-caption-line-height);
 }
 
 .segmented > [aria-pressed="true"] .segmented-count {
-  background: var(--accent-soft);
-  color: var(--foreground);
+  background: var(--surface-paper);
+  color: var(--text-primary);
 }
 
 .segmented[data-variant="tabs"] {
@@ -588,119 +528,87 @@ a.ref-tag:focus-visible {
   gap: 0.125rem 1.375rem;
   overflow-x: auto;
   scrollbar-width: none;
-  box-shadow: inset 0 -1px 0 var(--border);
+  box-shadow: inset 0 -1px 0 var(--line-hairline);
 }
 
 .segmented[data-variant="tabs"] > :is(a, button) {
-  min-height: 2.75rem;
   padding: 0 1px;
   border-radius: 0;
   box-shadow: none;
-  font-size: 0.875rem;
 }
 
-.segmented[data-variant="tabs"] > :is(a, button):hover {
+@media (hover: hover) {
+  .segmented[data-variant="tabs"]
+    > :is(a, button):not(
+      [aria-pressed="true"],
+      [aria-current="page"],
+      [aria-current="true"],
+      :disabled,
+      [aria-disabled="true"]
+    ):hover {
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--control-border);
+  }
+}
+
+.segmented[data-variant="tabs"] > :is(a, button):active {
   background: transparent;
-  box-shadow: inset 0 -2px 0 var(--border-strong);
+  box-shadow: inset 0 -2px 0 var(--control-border);
+}
+
+/* The tab row scrolls sideways, which would clip a ring drawn outside the tab. */
+.segmented[data-variant="tabs"] > :is(a, button):focus-visible {
+  outline-offset: -2px;
 }
 
 .segmented[data-variant="tabs"]
-  > :is([aria-current="page"], [aria-current="true"], [aria-pressed="true"]),
-.segmented[data-variant="tabs"]
-  > :is([aria-current="page"], [aria-current="true"], [aria-pressed="true"]):hover {
+  > :is([aria-current="page"], [aria-current="true"], [aria-pressed="true"]) {
   background: transparent;
-  box-shadow: inset 0 -2px 0 var(--foreground);
-  color: var(--foreground);
+  box-shadow: inset 0 -2px 0 var(--text-primary);
+  color: var(--text-primary);
 }
 
 .segmented[data-variant="control"] {
   display: inline-flex;
   gap: 2px;
   padding: 3px;
-  border-radius: 0.625rem;
-  background: var(--surface-sunk);
-  box-shadow: inset 0 0 0 1px var(--border-control);
+  border-radius: calc(var(--control-radius) + 3px);
+  background: var(--surface-rail);
+  box-shadow: inset 0 0 0 var(--control-border-width) var(--control-border);
 }
 
 .segmented[data-variant="control"] > :is(a, button) {
-  border-radius: 0.4375rem;
   box-shadow: none;
 }
 
-.segmented[data-variant="control"] > [aria-pressed="true"],
-.segmented[data-variant="control"] > [aria-pressed="true"]:hover {
-  background: var(--surface);
-  box-shadow:
-    0 0 0 1px var(--border-control),
-    0 1px 2px rgb(21 24 28 / 0.06);
+.segmented[data-variant="control"] > [aria-pressed="true"] {
+  background: var(--surface-paper);
+  box-shadow: inset 0 0 0 var(--control-border-width) var(--text-primary);
 }
 
-/* Size floors apply to the actual element. Overlapping pseudo hit areas make adjacent
-   filter chips compete for a tap, so they are deliberately absent from these recipes. */
-.ui-button {
-  --ui-control-size: 2.75rem;
-}
-
-.ui-button[data-ui-size="small"] {
-  --ui-control-size: 2rem;
-}
-
-:is(.ui-input, .ui-select) {
-  --ui-control-size: 3rem;
-}
-
-:is(.ui-button, .ui-select)[data-ui-size="field"] {
-  --ui-control-size: 4rem;
-}
-
-.ui-textarea {
-  --ui-control-size: 6rem;
-}
-
-:is([data-density="touch"], [data-density="glove"])
-  :is(
-    .ui-button,
-    .ui-input,
-    .ui-select,
-    .ui-textarea,
-    .environment-control,
-    .segmented[data-variant] > :is(a, button)
-  ) {
+/*
+ * The base controls (Button, Input, Select, Textarea, Segmented) read the density tokens
+ * themselves. What follows keeps the pre-System-v2 floors for the shell's own controls
+ * (`environment-control`) and the type of the copy the field and shop scopes still carry.
+ * Overlapping pseudo hit areas make adjacent controls compete for a tap, so they are
+ * deliberately absent from these recipes.
+ */
+:is([data-density="touch"], [data-density="glove"]) .environment-control {
   min-width: var(--environment-control-size);
-  min-height: max(var(--ui-control-size, 0px), var(--environment-control-size));
+  min-height: var(--environment-control-size);
 }
 
-:is([data-mode^="field-"], [data-mode^="shop-"])
-  :is(
-    .ui-button,
-    .ui-input,
-    .ui-select,
-    .ui-textarea,
-    .environment-control,
-    .segmented[data-variant] > :is(a, button)
-  ) {
+:is([data-mode^="field-"], [data-mode^="shop-"]) .environment-control {
   font-size: var(--environment-control-type);
   line-height: 1.4;
 }
 
-:is([data-mode^="field-"], [data-mode^="shop-"])
-  :is(.environment-copy, .ui-status, .segmented-count) {
+:is([data-mode^="field-"], [data-mode^="shop-"]) .environment-copy {
   font-size: var(--environment-body-size);
 }
 
 :is([data-mode^="field-"], [data-mode^="shop-"]) .ui-status {
   white-space: normal;
-}
-
-:is([data-mode^="field-"], [data-mode^="shop-"]) .segmented-count {
-  min-width: calc(var(--environment-body-size) * 1.5);
-  min-height: calc(var(--environment-body-size) * 1.5);
-  height: auto;
-}
-
-:is([data-mode^="field-"], [data-mode^="shop-"]) .ui-status > svg {
-  width: 1em;
-  height: 1em;
 }
 
 /* Existing office utilities may occur inside shared field content. Raise only the small
@@ -724,10 +632,9 @@ a.ref-tag:focus-visible {
 }
 
 @media (pointer: coarse), (max-width: 720px) {
-  :is(.ui-button, .ui-input, .ui-select, .ui-textarea, .environment-control),
-  .segmented[data-variant] > :is(a, button) {
+  .environment-control {
     min-width: max(3rem, var(--environment-control-size));
-    min-height: max(var(--ui-control-size, 0px), 3rem, var(--environment-control-size));
+    min-height: max(3rem, var(--environment-control-size));
   }
 
   .ref-tag[data-interactive] {

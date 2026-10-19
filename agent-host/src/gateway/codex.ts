@@ -1,15 +1,17 @@
-// Codex through the Codex SDK. With a ChatGPT sign-in the CLI reads and refreshes
-// `$CODEX_HOME/auth.json` itself, so CODEX_HOME must be a persistent, writable directory owned by
-// the agent host. With an API key the key travels in the subprocess environment, never on argv.
-// The run is isolated: shell and every optional tool disabled, read-only sandbox, no network, no
-// web search, no AGENTS.md, no history, an empty working directory.
+// Codex through the Codex SDK, for one `codex` provider account. With a ChatGPT sign-in
+// (`credential_mode: oauth`) the CLI reads and refreshes `$CODEX_HOME/auth.json` itself, so
+// CODEX_HOME must be a persistent, writable directory owned by the agent host. With an API key the
+// key travels in the subprocess environment, never on argv. The run is isolated: shell and every
+// optional tool disabled, read-only sandbox, no network, no web search, no AGENTS.md, no history, an
+// empty working directory. Cost comes from the model's registry price.
 
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexOptions, ThreadOptions, TurnOptions, RunResult } from "@openai/codex-sdk";
-import type { GatewayConfig } from "./config.ts";
+import type { CodexAccount } from "./config.ts";
+import { costOf } from "./registry.ts";
 import { sha256 } from "./schema.ts";
 import { ProviderError, classifyText, type ProviderAdapter, type ProviderCall, type ToolCall, type Usage } from "./types.ts";
 
@@ -21,24 +23,23 @@ export type CodexFactory = (options: CodexOptions) => CodexLike;
 const MCP_SERVER = "ironwrap";
 
 export function createCodexAdapter(
-  config: GatewayConfig,
+  provider: CodexAccount,
   stateDir: string,
   env: Record<string, string | undefined>,
   factory?: CodexFactory,
 ): ProviderAdapter {
-  const provider = config.providers.codex;
+  const byKey = provider.credentialMode === "api_key";
   // The ChatGPT sign-in lives in CODEX_HOME; an API-key run only needs a private writable home.
-  const codexHome = () =>
-    env[provider.codexHomeEnv]?.trim() || (provider.auth === "api_key" ? join(stateDir, "codex-home") : null);
+  const codexHome = () => env[provider.codexHomeEnv]?.trim() || (byKey ? join(stateDir, "codex-home") : null);
   const apiKey = () => env[provider.apiKeyEnv]?.trim() || null;
 
   return {
-    id: "codex",
-    authMode: provider.auth,
+    id: provider.id,
+    authMode: provider.credentialMode,
     async credential() {
-      if (provider.auth === "api_key") {
+      if (byKey) {
         const key = apiKey();
-        return { fingerprint: key ? sha256(`codex:api_key:${key}`) : null };
+        return { fingerprint: key ? sha256(`${provider.id}:api_key:${key}`) : null };
       }
       const home = codexHome();
       if (!home) return { fingerprint: null };
@@ -60,7 +61,7 @@ export function createCodexAdapter(
         return { fingerprint: null };
       }
       return {
-        fingerprint: sha256(`codex:chatgpt:${raw}`),
+        fingerprint: sha256(`${provider.id}:chatgpt:${raw}`),
         ...(refreshedAt === undefined ? {} : { refreshedAt }),
         ...(plan === undefined ? {} : { plan }),
       };
@@ -73,12 +74,11 @@ export function createCodexAdapter(
       if (existsSync(join(home, "config.toml"))) {
         throw new ProviderError("fatal", `codex: ${provider.codexHomeEnv} holds a config.toml; give the agent host a dedicated home`);
       }
-      if (provider.auth === "api_key") await mkdir(home, { recursive: true });
-      const key = provider.auth === "api_key" ? apiKey() : null;
-      if (provider.auth === "api_key" && !key) throw new ProviderError("auth", "codex: API key is not configured");
-      // Own entries only: a model named like a prototype member (`toString`) has no price.
-      const price = Object.hasOwn(config.pricingUsdPerMTok, request.model) ? config.pricingUsdPerMTok[request.model] : undefined;
-      if (!price) throw new ProviderError("fatal", `codex: no price entry for ${request.model}`);
+      if (byKey) await mkdir(home, { recursive: true });
+      const key = byKey ? apiKey() : null;
+      if (byKey && !key) throw new ProviderError("auth", "codex: API key is not configured");
+      // Null for a subscription model with no list price, which the gateway holds to token ceilings.
+      const price = request.entry.price.usdPerMTok;
 
       const childEnv: Record<string, string> = { CODEX_HOME: home };
       for (const name of ["PATH", "HOME", "LANG", "TMPDIR", ...(request.tools?.server.passEnv ?? [])]) {
@@ -88,7 +88,7 @@ export function createCodexAdapter(
       const codexConfig: NonNullable<CodexOptions["config"]> = {
         developer_instructions: request.system,
         project_doc_max_bytes: 0,
-        forced_login_method: provider.auth === "api_key" ? "api" : "chatgpt",
+        forced_login_method: byKey ? "api" : "chatgpt",
         cli_auth_credentials_store: "file",
         history: { persistence: "none" },
         features: {
@@ -152,11 +152,7 @@ export function createCodexAdapter(
         cachedInputTokens: turn.usage?.cached_input_tokens ?? 0,
         outputTokens: turn.usage?.output_tokens ?? 0,
       };
-      const costUsd =
-        ((usage.inputTokens - usage.cachedInputTokens) * price.input +
-          usage.cachedInputTokens * price.cachedInput +
-          usage.outputTokens * price.output) /
-        1_000_000;
+      const costUsd = price === null ? 0 : costOf(price, { ...usage, cacheWriteTokens: turn.usage?.cache_write_input_tokens ?? 0 });
       const toolCalls: ToolCall[] = [];
       for (const item of turn.items) {
         if (item.type === "mcp_tool_call" && item.server === MCP_SERVER) {

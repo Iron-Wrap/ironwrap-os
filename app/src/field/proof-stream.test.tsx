@@ -25,7 +25,9 @@ describe("ProofStream states", () => {
     render(<ProofStream items={items} hasMore loadingMore={false} onLoadMore={vi.fn()} />);
     expect(screen.getByRole("feed", { name: "Job proof" })).toBeInTheDocument();
     expect(screen.getAllByRole("article").length).toBeLessThan(20);
-    expect(screen.getByRole("button", { name: "Show older proof" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("button", { name: "Show older proof" })).toHaveClass(
+      "min-h-[var(--control-height-primary)]",
+    );
   });
 
   it("renders proof provenance and tenant-local time without inventing media detail", () => {

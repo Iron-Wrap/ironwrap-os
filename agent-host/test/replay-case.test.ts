@@ -55,6 +55,7 @@ const SPECIALIST: Specialist = {
     autonomy: "A3",
     purpose: "synthetic",
   })),
+  catalogSha256: null,
 };
 
 const CASE: EvalCase = {

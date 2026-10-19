@@ -4,45 +4,64 @@ import { LoaderCircle } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "../../lib/cn";
+import { disabledLook } from "./field-control";
 
-const primary =
-  "bg-primary text-primary-foreground shadow-[0_1px_2px_rgb(21_24_28/0.06),inset_0_1px_0_rgb(255_255_255/0.08)] hover:bg-primary-hover";
+const primary = "bg-primary text-primary-foreground active:bg-control-fill-pressed";
+const you = "bg-signal-you-fill text-signal-you-on-fill active:bg-signal-you-fill-pressed";
 const secondary =
-  "bg-surface text-foreground shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.06)] hover:bg-surface-hover hover:shadow-[inset_0_0_0_1px_var(--faint),0_1px_2px_rgb(21_24_28/0.06)]";
-const quiet = "bg-transparent text-muted hover:bg-surface-hover hover:text-foreground";
+  "border-control-border bg-transparent text-text-primary hover:bg-surface-selected active:bg-surface-pressed";
+const quiet =
+  "bg-transparent text-text-primary hover:bg-surface-selected active:bg-surface-pressed";
+const held = "bg-signal-held-fill text-signal-held-on-fill active:bg-signal-held-fill-pressed";
 
 /**
- * Iron Wrap button language: one ink primary per context, a sheet-white secondary, a quiet
- * text action, and a committed stop-red danger. Brass is never a button colour; it only
- * marks focus and the active place.
+ * System v2 button (design/system-v2, Board 1). Kinds keep one meaning each: an ink `primary`
+ * per context; `you`, blue, only when it answers something waiting on the viewer; an outlined
+ * `secondary`; a `quiet` (ghost) text action; and the filled `danger` (Held) red, only for a
+ * stop. Filled kinds do not change on hover; pressed recolours to the kind's pressed role.
+ * Disabled recolours to `text.tertiary` with a hairline edge and never fades; busy keeps the
+ * kind, shows the loader and sets aria-busy. Focus is the ink outline from styles.css.
+ *
+ * Height, corner, edge width and icon come from the density tokens here, and the label type
+ * from the `.ui-button` rule in styles.css (a form control's font is set there, since an
+ * unlayered rule outranks utilities), so `data-density` on any ancestor resizes every button:
+ * `small` is `--control-height-small`,
+ * `default` and `compact` are `--control-height`, `large` and `field` are
+ * `--control-height-primary` (24 / 28 / 32 on the office, 48 / 48 / 64 on touch, 72 on glove).
  *
  * `default`, `accent`, `outline` and `ghost` predate the port and stay as aliases so every
- * existing call site takes the new look without an edit: `default` and `accent` are
- * `primary`, `outline` is `secondary`, `ghost` is `quiet`. `danger` stays filled, because a
- * stop-work, rescue or revoke control must not go pale.
+ * existing call site keeps working without an edit: `default` and `accent` are `primary`,
+ * `outline` is `secondary`, `ghost` is `quiet`; `held` names `danger` as the board does.
  */
 const buttonVariants = cva(
-  "ui-button relative inline-flex min-h-11 select-none items-center justify-center gap-2 whitespace-nowrap rounded-md border border-transparent px-4 text-sm font-semibold tracking-[-0.003em] transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--motion-fast)] active:translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:transform-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+  [
+    "ui-button relative inline-flex min-w-[var(--target-min)] select-none items-center justify-center gap-2 whitespace-nowrap",
+    "rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-transparent px-3",
+    "transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease)]",
+    "[&_svg]:size-[var(--control-icon)] [&_svg]:shrink-0",
+    disabledLook,
+  ],
   {
     variants: {
       variant: {
         primary,
+        you,
         secondary,
         quiet,
-        danger:
-          "bg-danger-strong text-danger-strong-foreground hover:bg-danger-strong/88 active:bg-danger-strong/78",
+        danger: held,
+        held,
         default: primary,
         accent: primary,
         outline: secondary,
         ghost: quiet,
       },
       size: {
-        default: "min-h-11",
-        field: "min-h-16 whitespace-normal px-4 text-base leading-5",
-        icon: "size-11 min-h-11 px-0",
-        compact: "min-h-11 px-3.5 text-sm",
-        // Dense pointer/keyboard rows stay 32px; touch and environment CSS enlarges the box.
-        small: "min-h-8 gap-1.5 px-3 text-[0.8125rem] [&_svg]:size-[0.9375rem]",
+        default: "min-h-[var(--control-height)]",
+        compact: "min-h-[var(--control-height)] px-2.5",
+        small: "min-h-[var(--control-height-small)] gap-1.5 px-2.5",
+        large: "min-h-[var(--control-height-primary)] px-4",
+        field: "min-h-[var(--control-height-primary)] whitespace-normal px-4",
+        icon: "size-[var(--control-height)] min-h-[var(--control-height)] px-0",
       },
       fullWidth: {
         true: "w-full",
@@ -75,14 +94,10 @@ export function Button({
   ...props
 }: ButtonProps): React.JSX.Element {
   const classes = cn(buttonVariants({ variant, size, fullWidth }), className);
+  const data = { "data-ui-size": size ?? "default", "data-variant": variant ?? "primary" };
   if (asChild) {
     return (
-      <Slot
-        className={classes}
-        data-ui-size={size ?? "default"}
-        aria-busy={busy || undefined}
-        {...props}
-      >
+      <Slot className={classes} {...data} aria-busy={busy || undefined} {...props}>
         {children}
       </Slot>
     );
@@ -90,7 +105,7 @@ export function Button({
   return (
     <button
       className={classes}
-      data-ui-size={size ?? "default"}
+      {...data}
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       {...props}

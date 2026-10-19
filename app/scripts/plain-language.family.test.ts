@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { parseSync, types } from "@babel/core";
 import { describe, expect, it } from "vitest";
 
+import { SPECIALISTS } from "../src/components/ai/words";
+
 /**
  * The plain-language guard: Z2 of `design/ZERO-LEARNING-GATE.md`, enforced on source.
  *
@@ -12,14 +14,20 @@ import { describe, expect, it } from "vitest";
  * This test parses the app's screens and copy modules with Babel (the parser ESLint already
  * uses), reads only strings a person can see, and checks five rules:
  *
- * - banned-term: the gate's banned words (work package, outbox, tenant, SHA, ...) and the
- *   wider jargon list of the zero-training audit (snapshot, observed, readback, JSON, v3, ...);
+ * - banned-term: the gate's banned words (work package, outbox, tenant, SHA, ...), the wider
+ *   jargon list of the zero-training audit (snapshot, observed, readback, JSON, v3, ...) and the
+ *   AI team's system facts (action classes A0 to A3 and H, run ids, hashes), which only System
+ *   details may show;
  * - unlabelled-code: an id, reference, code, digest or hash rendered with no plain label, and a
  *   literal code ("IW-1001") with no plain word right before it ("Job IW-1001");
  * - raw-error-text: an error's own `.message` used as words (show `messageFor(error)` instead;
  *   only `src/lib/plain-error.ts`, which decides what may reach a screen, reads one);
  * - machine-name: a machine key turned into words with underscores swapped for spaces;
- * - agent-name: the agent named anything but "the Assistant" (HELM, Hermes, Newo, Postiz, AI).
+ * - agent-name: the AI team named anything but its IRW-R8 names. The face is the tenant's brand
+ *   ("IronWrap", reached through "Ask IronWrap"), the team is the "AI team", and each specialist is
+ *   its "AI <job>" display name from docs/AI-TEAM-CONTRACT.md (src/components/ai/words.ts, checked
+ *   against the contract). "Assistant", HELM, Hermes, Newo, Postiz, "agent(s)" and "AI" anywhere
+ *   outside those names are banned.
  *
  * What counts as copy: JSX text; string attributes a person reads (aria-label, title,
  * placeholder, alt, label, message, ...) and every string prop of the shared state and notice
@@ -82,7 +90,7 @@ const HOW_TO_FIX: Record<CountedRule, string> = {
   "machine-name":
     "Map known keys to words with an explicit Record and hide unknown keys (see humanizeFieldName in src/field/field-formatting.ts).",
   "agent-name":
-    'On primary surfaces the agent is "the Assistant"; product names (HELM, Hermes, Newo, Postiz) and "AI" go inside <SystemDetails>.',
+    'Name the AI team the IRW-R8 way (design/system-v2/AI-PRIMITIVES.md): the face is "IronWrap" ("Ask IronWrap"), the team is the "AI team", a specialist is its display name ("AI estimator", src/components/ai/words.ts). Product names (HELM, Hermes, Newo, Postiz) go inside <SystemDetails>.',
   "allow-escape":
     "Escapes are counted so they cannot grow quietly. Fix the copy instead, or raise this file's allow-escape count by hand in the baseline so a reviewer sees it.",
 };
@@ -272,28 +280,100 @@ const BANNED: readonly Term[] = [
     ["Current request v4", "Safety plan · v{x}", "Version 2", "Review empty draft V4"],
     ["vinyl", "v-groove", "conversion 2", "version history"],
   ),
+  term(
+    "action class",
+    /\b(?:A[0-3]|[Cc]lass H)\b/,
+    "the delegation words (Reads and watches, Prepares, Acts within your limits, Asks first, People only); the class stays in System details",
+    ["Class A3", "an A2 action", "class H"],
+    ["A4 sheet", "A10", "AA", "class Hours"],
+  ),
+  term(
+    "run id",
+    /\brun[ _-]?ids?\b/i,
+    systemOnly,
+    ["Run ID", "run_id", "two run ids"],
+    ["running", "rerun", "run identity"],
+  ),
+  // Not inside a kebab or snake identifier ("csp-hash" names a build plugin, not a fact).
+  term(
+    "hash",
+    /(?<![-_])\bhash(?:es)?\b(?![-_])/i,
+    systemOnly,
+    ["Request hash", "hashes", "Hash"],
+    ["hashtag", "rehash", "hashed", "boot-style-csp-hash", "request_hash"],
+  ),
 ];
 
-/** The agent is "the Assistant" on primary surfaces (Z2); everything else is a system name. */
+/**
+ * The AI team's names on primary surfaces (IRW-R8, design/system-v2/AI-PRIMITIVES.md): "IronWrap"
+ * and "Ask IronWrap" for the face, the "AI team", and the specialists' display names. "AI" is
+ * allowed only as the start of one of those names, in the receipt panel's title, "What the AI
+ * did", and as "IronWrap's AI" when a screen says it is off or not answering (TEMPLATES 4.6,
+ * orchestrator ruling under IRW-R8d); everything else is a system name.
+ */
+const AI_NAMES = [
+  "AI team",
+  ...Object.values(SPECIALISTS)
+    .map((specialist) => specialist.name as string)
+    .filter((name) => name.startsWith("AI ")),
+];
+const AI_NAME_ENDS = AI_NAMES.map((name) => name.slice(3)).join("|");
+const AI_OUTSIDE_NAMES = new RegExp(
+  `(?<!\\bWhat the )(?<!\\bIronWrap['’]s (?=AI is (?:off|not answering)\\b))\\bAI\\b(?! (?:${AI_NAME_ENDS})\\b)|\\bWhat the AI\\b(?! (?:did|${AI_NAME_ENDS})\\b)`,
+);
+const IRW_R8 = '"IronWrap", "Ask IronWrap", "AI team" or the specialist\'s name ("AI estimator")';
 const AGENTS: readonly Term[] = [
-  term("HELM", /\bHELM\b/, "the Assistant", ["Ask HELM"], ["helm", "Helmet"]),
-  term("Hermes", /\bHermes\b/, "the Assistant", ["Hermes desktop text pilot"], ["hermes-run"]),
-  term("Newo", /\bNewo\b/, "the Assistant", ["answered by Newo"], ["new", "Newton"]),
-  term("Postiz", /\bPostiz\b/, "the Assistant", ["sent by Postiz"], ["post", "posting"]),
   term(
-    "agent",
-    /\bagents?\b/i,
-    "the Assistant",
-    ["Agent authorship", "two agents"],
-    ["agency", "reagent"],
+    "Assistant",
+    /\bassistants?\b/i,
+    IRW_R8,
+    ["Ask the Assistant", "your assistant drafted it"],
+    ["assistance", "assist", "assisted"],
   ),
-  term("AI", /\bAI\b/, "the Assistant", ["the AI drafted it"], ["Aim", "said"]),
+  term("HELM", /\bHELM\b/, IRW_R8, ["Ask HELM"], ["helm", "Helmet"]),
+  term("Hermes", /\bHermes\b/, IRW_R8, ["Hermes desktop text pilot"], ["hermes-run"]),
+  term("Newo", /\bNewo\b/, IRW_R8, ["answered by Newo"], ["new", "Newton"]),
+  term("Postiz", /\bPostiz\b/, IRW_R8, ["sent by Postiz"], ["post", "posting"]),
+  term("agent", /\bagents?\b/i, IRW_R8, ["Agent authorship", "two agents"], ["agency", "reagent"]),
+  term(
+    "AI",
+    AI_OUTSIDE_NAMES,
+    IRW_R8,
+    [
+      "the AI drafted it",
+      "AI Estimator",
+      "desktop AI client",
+      "AI teammate",
+      "What the AI does",
+      "IronWrap's AI drafted this quote",
+    ],
+    [
+      "AI estimator",
+      "the AI team",
+      "What the AI did",
+      "IronWrap's AI is off.",
+      "IronWrap’s AI is not answering since 09:40",
+      "AI customer care at Iron Wrap Exteriors",
+      "Drafted by AI market analyst",
+      "AI estimator's draft",
+      "Ask IronWrap",
+      "Aim",
+      "said",
+    ],
+  ),
 ];
 
 /** Reported only (warn tier) until a batch has cleaned its screens and promotes one. */
 const SOFT: readonly Term[] = [
   term("source", /\bsources?\b/i, "", ["Source limits"], ["resource"]),
-  term("receipt", /\breceipts?\b/i, "", ["Approval receipt"], ["receive"]),
+  // "See receipt for {object}" is the receipt link's own words (AI-PRIMITIVES, link words).
+  term(
+    "receipt",
+    /(?<!\bSee )\breceipts?\b/i,
+    "",
+    ["Approval receipt"],
+    ["receive", "See receipt for the invoice"],
+  ),
   term("evidence", /\bevidence\b/i, "", ["Evidence reference"], ["evident"]),
   term("loaded", /\bloaded\b/i, "", ["No items in this loaded list"], ["load"]),
   term("ledger", /\bledgers?\b/i, "", ["Approval ledger"], ["ledge"]),
@@ -436,6 +516,7 @@ const COPY_MODULES = [
   "src/accounting/money-contracts.ts",
   "src/admin/automation-outcome.ts",
   "src/capabilities/capability-copy.ts",
+  "src/components/ai/words.ts",
   "src/field/field-contracts.ts",
   "src/field/field-formatting.ts",
   "src/field/fleet-contracts.ts",
@@ -1000,6 +1081,7 @@ describe("IronWrap plain-language family", () => {
     expect(files.length).toBeGreaterThan(100);
     for (const path of [
       "src/components/ui/ref-tag.tsx",
+      "src/components/ai/words.ts",
       "src/field/today-page.tsx",
       "src/storage/outbox-failure.ts",
       "src/lib/plain-error.ts",
@@ -1046,6 +1128,13 @@ describe("IronWrap plain-language family", () => {
             {/* plain-language-allow: banned-term - a sample exception */}
             <p>Grant access</p>
             <code>tenant_id</code>
+            <p>Ask the Assistant</p>
+            <p>The AI drafted it</p>
+            <p>Drafted by AI estimator for the AI team. Ask IronWrap.</p>
+            <p>Delegation A3</p>
+            <p>Run ID</p>
+            <p>Request hash</p>
+            <SystemDetails><p>Run ID {item.run_id}, class A2, request hash</p></SystemDetails>
           </section>
         );
       }
@@ -1055,6 +1144,11 @@ describe("IronWrap plain-language family", () => {
     expect(summary).toEqual(
       [
         'agent-name "Hermes"',
+        'agent-name "Assistant"',
+        'agent-name "AI"',
+        'banned-term "A3"',
+        'banned-term "Run ID"',
+        'banned-term "hash"',
         'banned-term "Digest"',
         'banned-term "Outbox"',
         'banned-term "Payload"',

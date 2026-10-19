@@ -57,7 +57,9 @@ describe("IronWrap OS foundation family", () => {
     // unless the contrast proof passes first.
     expect(node("scripts/build-tokens.mjs", "--check")).toMatch(/tokens\.css matches tokens\.json/);
     expect(node("src/design-system/contrast-check.mjs")).toMatch(/0 fail\./);
-    expect(styles).toMatch(/@import "tailwindcss";\s+@import "\.\/styles\/tokens\.css";/);
+    expect(styles).toMatch(
+      /@import "tailwindcss";\s+@import "\.\/styles\/tokens\.css";\s+@import "\.\/styles\/theme\.css";/,
+    );
     expect(tokens).toMatch(/--motion-standard:\s*220ms/);
     expect(tokens).toMatch(/prefers-reduced-motion:\s*reduce/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
@@ -128,14 +130,13 @@ describe("IronWrap OS foundation family", () => {
         "--tag-edge",
         "--tag-fill",
         "--tag-h",
-        "--ui-control-size",
       ].sort(),
     );
   });
 
   it("maps every System v2 role to a utility named after its property", () => {
-    const styles = read("src/styles.css");
-    const theme = styles.match(themeBlock)?.[0] ?? "";
+    // The mapping is its own file, so the AI parts' stylesheet can read it by reference.
+    const theme = read("src/styles/theme.css").match(themeBlock)?.[0] ?? "";
     const roles: string[] = [];
     const walk = (node: TokenNode, path: string[]) => {
       for (const [key, child] of Object.entries(node)) {

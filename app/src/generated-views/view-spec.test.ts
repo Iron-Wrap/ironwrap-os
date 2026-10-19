@@ -281,7 +281,7 @@ describe("valid view specs", () => {
       draft.links.push({
         surface: "receipt",
         id: "step-example-0001",
-        label: "See receipt for the deposit invoice",
+        label: "See receipt for the final invoice",
         primary: false,
       });
     });
@@ -1167,7 +1167,7 @@ describe("adversarial specs are refused without throwing", () => {
       "Keep accepting the quote",
       "Pay the supplier",
       "Show what was paid",
-      "Mark the deposit refunded",
+      "Mark the payment refunded",
       "Write off the balance",
       "Show what was written off",
       "Hold the signed contract",

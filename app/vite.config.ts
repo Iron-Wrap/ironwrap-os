@@ -8,7 +8,13 @@ import { resolve } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 import type { Plugin } from "vite";
 
-import { generatedTokenNames, pruneUnreadTokens, sourceTokenReads } from "./scripts/prune-tokens";
+import {
+  generatedTokenNames,
+  pruneUnreadTokens,
+  sourceTokenReads,
+  splitThemeReads,
+} from "./scripts/prune-tokens";
+import { excludeCandidates, utilityClasses } from "./scripts/split-stylesheet";
 
 /**
  * Field Companion's boot is bandwidth-bound, not CPU-bound: the acceptance
@@ -190,13 +196,62 @@ function pruneUnreadTokensFromStyles(): Plugin {
     async transform(code, id) {
       if (!/[\\/]src[\\/]styles\.css(?:\?|$)/.test(id)) return null;
       const names = generatedTokenNames(await readFile(resolve("src/styles/tokens.css"), "utf8"));
+      // The AI parts' colour utilities live in their own stylesheet; the tokens they read ship here.
+      const split = splitThemeReads(
+        await readFile(resolve("src/styles/theme.css"), "utf8"),
+        await sourceTokenReads(resolve("src/components/ai")),
+      );
       return {
-        code: pruneUnreadTokens(code, names, await sourceTokenReads(resolve("src"))),
+        code: pruneUnreadTokens(code, names, `${await sourceTokenReads(resolve("src"))}\n${split}`),
         map: null,
       };
     },
   };
 }
+
+/**
+ * The AI parts' stylesheet (src/components/ai/ai.css) is a Tailwind root of its own, so styles.css
+ * stays free of their utilities and a screen loads them with its lazy chunk. Each utility must live
+ * in one stylesheet only (scripts/split-stylesheet.ts): `record` keeps the candidates Tailwind
+ * generated for styles.css, and `exclude`, which runs before Tailwind compiles ai.css, first has
+ * styles.css compiled and then names those candidates in one `@source not inline()`.
+ *
+ * ponytail: on the dev server the list is the one from ai.css's first compile; a utility added to
+ * or dropped from both places since shows twice or is missing on the gallery until the server
+ * restarts. Builds always compile both afresh.
+ */
+function splitStylesheetWithoutDuplicates(): { exclude: Plugin; record: Plugin } {
+  const shippedPath = resolve("src/styles.css");
+  const splitPath = resolve("src/components/ai/ai.css");
+  const path = (id: string) => id.split("?")[0];
+  // Vitest renders without stylesheets, so there is nothing to keep apart there.
+  const apply = () => !process.env.VITEST;
+  let shipped: Set<string> | undefined;
+  return {
+    exclude: {
+      name: "ironwrap-split-stylesheet-exclude",
+      enforce: "pre",
+      apply,
+      async transform(code, id) {
+        if (path(id) !== splitPath) return null;
+        await this.load({ id: shippedPath });
+        if (!shipped) this.error("src/styles.css was not compiled before the AI parts' stylesheet");
+        return { code: `${code}\n${excludeCandidates(shipped)}\n`, map: null };
+      },
+    },
+    record: {
+      name: "ironwrap-split-stylesheet-record",
+      enforce: "pre",
+      apply,
+      transform(code, id) {
+        if (path(id) === shippedPath) shipped = utilityClasses(code);
+        return null;
+      },
+    },
+  };
+}
+
+const splitStylesheet = splitStylesheetWithoutDuplicates();
 
 export function inlineStyleHashes(html: string): string[] {
   return [...html.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/g)].map(
@@ -210,7 +265,10 @@ export function inlineStyleHashes(html: string): string[] {
 export default defineConfig({
   plugins: [
     react(),
+    // Around Tailwind's own transform: `exclude` before it, `record` after it.
+    splitStylesheet.exclude,
     tailwindcss(),
+    splitStylesheet.record,
     pruneUnreadTokensFromStyles(),
     VitePWA({
       registerType: "prompt",
@@ -328,7 +386,10 @@ export default defineConfig({
             // paint. Those directories chunk on their own and load with their routes.
             {
               name: "app-shared",
-              test: /[\\/]src[\\/](?:auth|components|field|hooks|lib|storage)[\\/]/,
+              // components/ai is excluded: its parts import ai.css, which must load with the
+              // routes that use them. Pulled into this preloaded chunk, the stylesheet would be
+              // linked before index.css and put utilities below Preflight for the whole app.
+              test: /[\\/]src[\\/](?:auth|components(?![\\/]ai[\\/])|field|hooks|lib|storage)[\\/]/,
               minShareCount: 2,
               priority: 2,
             },

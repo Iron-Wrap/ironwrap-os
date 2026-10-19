@@ -6,16 +6,41 @@ import { loadGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts"
 import {
   ProviderError,
   type CredentialState,
+  type ModelEntry,
   type ProviderAdapter,
   type ProviderCall,
   type ProviderId,
   type ProviderOutcome,
+  type QualifiedRoute,
 } from "../src/gateway/types.ts";
 
 export const CONFIG_PATH = new URL("../config/gateway.json", import.meta.url).pathname;
+export const CONSUMER_CONFIG_PATH = new URL("../config/gateway.consumer.json", import.meta.url).pathname;
 
 export function shippedConfig(): GatewayConfig {
   return loadGatewayConfig(CONFIG_PATH);
+}
+
+/**
+ * The shipped configuration with a synthetic owner retention confirmation on the Codex account, so
+ * live and shadow runs on both accounts pass the compliance gate and reach the checks under test.
+ */
+export function liveConfig(): GatewayConfig {
+  const config = shippedConfig();
+  config.providers.codex.confirmedRetention = { confirmedBy: "owner", reference: "synthetic retention confirmation" };
+  return config;
+}
+
+/** A synthetic release_sha256 and a Worker qualification of every shipped route at it. */
+export const RELEASE = "e".repeat(64);
+
+export function qualifications(config: GatewayConfig = shippedConfig(), release = RELEASE): QualifiedRoute[] {
+  return Object.entries(config.routes).map(([id, route]) => ({ id: `q-${id}`, ...route, release }));
+}
+
+/** A model's registry entry in the shipped configuration. */
+export function entryOf(provider: ProviderId, model: string): ModelEntry {
+  return shippedConfig().providers[provider].models[model];
 }
 
 export function tempDir(t: TestContext): string {
@@ -52,7 +77,7 @@ export interface FakeAdapter extends ProviderAdapter {
   credentialState: CredentialState;
 }
 
-export function fakeAdapter(id: ProviderId, steps: Step[] = [], authMode = id === "claude" ? "oauth" : "chatgpt"): FakeAdapter {
+export function fakeAdapter(id: ProviderId, steps: Step[] = [], authMode = "oauth"): FakeAdapter {
   const adapter: FakeAdapter = {
     id,
     authMode,

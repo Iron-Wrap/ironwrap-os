@@ -1,0 +1,110 @@
+/*
+ * Tailwind's mapping onto the System v2 properties, kept apart from styles.css so a stylesheet
+ * split from it (components/ai/ai.css) can read the same utility names by reference without
+ * taking styles.css's source rules with it.
+ */
+@theme inline {
+  --font-sans: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Martian Mono Variable", "Martian Mono", ui-monospace, "SF Mono", monospace;
+
+  /* The shipped utility names point at the System v2 properties, so every bg-*, text-* and
+     border-* utility keeps working with no codemod. Roles that retired (brass, ok, warning,
+     info, local) take their neutral stand-in until each screen is repainted; the stand-ins are
+     listed in design/system-v2/MIGRATION.md. `inline` makes a utility read the property on the
+     element that uses it, so a nested data-mode scope resolves its own colour. */
+  --color-background: var(--surface-paper);
+  --color-surface: var(--surface-paper);
+  --color-surface-raised: var(--surface-paper);
+  --color-surface-muted: var(--surface-rail);
+  --color-surface-sunk: var(--surface-rail);
+  --color-surface-hover: var(--surface-selected);
+  --color-foreground: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-faint: var(--text-tertiary);
+  --color-border: var(--line-hairline);
+  --color-border-soft: var(--line-hairline);
+  --color-border-control: var(--control-border);
+  --color-border-strong: var(--control-border);
+  --color-chrome: var(--surface-rail);
+  --color-chrome-raised: var(--surface-selected);
+  --color-chrome-active: var(--surface-pressed);
+  --color-chrome-foreground: var(--text-primary);
+  --color-chrome-muted: var(--text-tertiary);
+  --color-chrome-faint: var(--text-tertiary);
+  --color-chrome-border: var(--line-hairline);
+  --color-chrome-focus: var(--focus-ring);
+  --color-primary: var(--control-fill);
+  --color-primary-hover: var(--control-fill-pressed);
+  --color-primary-foreground: var(--control-on-fill);
+  --color-accent: var(--text-primary);
+  --color-accent-foreground: var(--control-on-fill);
+  --color-accent-soft: var(--surface-selected);
+  --color-accent-line: var(--line-strong);
+  --color-focus: var(--focus-ring);
+  --color-selected: var(--surface-selected);
+  --color-highlight: var(--surface-pressed);
+  --color-ok: var(--text-primary);
+  --color-ok-soft: var(--surface-rail);
+  --color-warning: var(--text-primary);
+  --color-warning-soft: var(--surface-rail);
+  --color-warning-line: var(--line-strong);
+  --color-danger: var(--signal-held);
+  /* Text on a held-coloured fill is paper: contrast is symmetric, and signal.held on
+     surface.paper is a pair the proof already checks in every mode. */
+  --color-danger-foreground: var(--surface-paper);
+  --color-danger-soft: var(--signal-held-tint);
+  --color-danger-line: var(--signal-held-line);
+  --color-danger-strong: var(--signal-held-fill);
+  --color-danger-strong-foreground: var(--signal-held-on-fill);
+  --color-info: var(--text-secondary);
+  --color-info-soft: var(--surface-rail);
+  --color-local: var(--text-secondary);
+  --color-local-soft: var(--surface-rail);
+  --color-neutral: var(--text-secondary);
+  --color-neutral-soft: var(--surface-rail);
+  --color-scrim: var(--overlay-scrim);
+
+  /* Every System v2 role also gets a utility named after its property: bg-signal-held-tint,
+     text-signal-you, border-control-border, bg-surface-pressed. */
+  --color-surface-paper: var(--surface-paper);
+  --color-surface-rail: var(--surface-rail);
+  --color-surface-selected: var(--surface-selected);
+  --color-surface-pressed: var(--surface-pressed);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-line-hairline: var(--line-hairline);
+  --color-line-strong: var(--line-strong);
+  --color-control-border: var(--control-border);
+  --color-control-placeholder: var(--control-placeholder);
+  --color-control-fill: var(--control-fill);
+  --color-control-fill-pressed: var(--control-fill-pressed);
+  --color-control-on-fill: var(--control-on-fill);
+  --color-focus-ring: var(--focus-ring);
+  --color-signal-held: var(--signal-held);
+  --color-signal-held-tint: var(--signal-held-tint);
+  --color-signal-held-text-on-tint: var(--signal-held-text-on-tint);
+  --color-signal-held-line: var(--signal-held-line);
+  --color-signal-held-fill: var(--signal-held-fill);
+  --color-signal-held-fill-pressed: var(--signal-held-fill-pressed);
+  --color-signal-held-on-fill: var(--signal-held-on-fill);
+  --color-signal-you: var(--signal-you);
+  --color-signal-you-tint: var(--signal-you-tint);
+  --color-signal-you-tint-edge: var(--signal-you-tint-edge);
+  --color-signal-you-fill: var(--signal-you-fill);
+  --color-signal-you-fill-pressed: var(--signal-you-fill-pressed);
+  --color-signal-you-on-fill: var(--signal-you-on-fill);
+  --color-seam-open: var(--seam-open);
+  --color-seam-locked: var(--seam-locked);
+  --color-seam-pending: var(--seam-pending);
+  --color-skeleton-base: var(--skeleton-base);
+  --color-skeleton-sheen: var(--skeleton-sheen);
+  --color-overlay-plate: var(--overlay-plate);
+  --color-overlay-on-plate: var(--overlay-on-plate);
+  --color-overlay-scrim: var(--overlay-scrim);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}

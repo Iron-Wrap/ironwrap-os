@@ -7,18 +7,36 @@
 // A ledger key is a specialist id (live) or `<namespace>:<id>` (`shadow:`, `eval:`), and team totals
 // are per namespace, so shadow and eval spend never count toward the live ceilings or each other.
 // Records written before namespaces existed carry bare ids and so stay live.
+//
+// Every attempt on every hop of a run is its own reservation, carrying its route, billing, run
+// class, compliance ref and any owner risk acceptance. A model with no USD figure books 0 USD and
+// is held to token ceilings instead; records written before tokens were booked count none.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Ceiling, SpecialistCeiling } from "./config.ts";
-import type { ProviderId, Usage } from "./types.ts";
+import type { Billing, ProviderId, RiskAcceptance, RunClass, Usage } from "./types.ts";
 
 export type Namespace = "live" | "shadow" | "eval";
 
 /** A specialist id or the judge key; outside live, prefixed with its namespace. */
 const LEDGER_KEY = /^(?:(?:shadow|eval):)?[a-z][a-z0-9_]{1,63}$/;
 
-export interface UsageRecord {
+/** What one attempt is booked as, beyond its key. */
+export interface Booking {
+  provider: ProviderId;
+  model: string;
+  routeId: string;
+  route: "primary" | "declared_fallback";
+  billing: Billing;
+  /** False for a model with no USD figure: the attempt books 0 USD and is held to token ceilings. */
+  usd: boolean;
+  runClass: RunClass;
+  complianceRef: string | null;
+  riskAcceptance: RiskAcceptance | null;
+}
+
+export interface UsageRecord extends Partial<Omit<Booking, "provider" | "model" | "usd">> {
   at: number;
   reservation: string;
   /** The ledger key: the specialist id, prefixed with its namespace outside live. */
@@ -30,6 +48,8 @@ export interface UsageRecord {
   calls: number;
   /** Per-call ceiling on the reservation, actual minus that ceiling on the settlement. */
   costUsd: number;
+  /** Per-call token ceiling on the reservation (0 without one), actual minus that on the settlement. */
+  tokens?: number;
   usage: Usage;
 }
 
@@ -37,9 +57,9 @@ export interface Reservation {
   id: string;
   at: number;
   specialist: string;
-  provider: ProviderId;
-  model: string;
   costUsd: number;
+  tokens: number;
+  booking: Booking;
 }
 
 /** The ceilings one reservation is held to: its key's own and its namespace's team ceiling. */
@@ -49,6 +69,12 @@ export interface Limits {
 }
 
 export type Refusal = "call_ceiling" | "cost_ceiling" | "ledger_unavailable";
+
+interface Totals {
+  calls: number;
+  costUsd: number;
+  tokens: number;
+}
 
 export function namespaceOf(key: string): string {
   const colon = key.indexOf(":");
@@ -96,15 +122,11 @@ export class UsageLedger {
   }
 
   /**
-   * Books one call at the key's per-call cost ceiling, or names the ceiling it would break and
-   * when the oldest reservation counted against it leaves the window.
+   * Books one call at the key's per-call cost ceiling (and its per-call token ceiling, if it has
+   * one), or names the ceiling it would break and when the oldest reservation counted against it
+   * leaves the window.
    */
-  reserve(
-    key: string,
-    limits: Limits,
-    provider: ProviderId,
-    model: string,
-  ): { reservation: Reservation } | { refusal: Refusal; retryAt?: number } {
+  reserve(key: string, limits: Limits, booking: Booking): { reservation: Reservation } | { refusal: Refusal; ceiling?: "cost" | "token"; retryAt?: number } {
     if (this.degraded) return { refusal: "ledger_unavailable" };
     this.prune();
     const namespace = namespaceOf(key);
@@ -117,46 +139,48 @@ export class UsageLedger {
     if (mine.calls + 1 > own.calls) full.push(ownKey);
     if (team.calls + 1 > limits.team.calls) full.push(teamKey);
     if (full.length > 0) return { refusal: "call_ceiling", ...this.freedAt(full) };
-    if (own.costUsd - mine.costUsd < own.costUsdPerCall) full.push(ownKey);
-    if (limits.team.costUsd - team.costUsd < own.costUsdPerCall) full.push(teamKey);
-    if (full.length > 0) return { refusal: "cost_ceiling", ...this.freedAt(full) };
+    const costUsd = booking.usd ? own.costUsdPerCall : 0;
+    if (booking.usd) {
+      if (own.costUsd - mine.costUsd < costUsd) full.push(ownKey);
+      if (limits.team.costUsd - team.costUsd < costUsd) full.push(teamKey);
+      if (full.length > 0) return { refusal: "cost_ceiling", ceiling: "cost", ...this.freedAt(full) };
+    }
+    const tokens = own.tokensPerCall ?? 0;
+    if (own.tokens !== undefined && own.tokens - mine.tokens < tokens) full.push(ownKey);
+    if (limits.team.tokens !== undefined && limits.team.tokens - team.tokens < tokens) full.push(teamKey);
+    if (full.length > 0) return { refusal: "cost_ceiling", ceiling: "token", ...this.freedAt(full) };
     const at = this.now();
-    const reservation: Reservation = {
-      id: `${at}-${process.pid}-${(this.sequence += 1)}`,
-      at,
-      specialist: key,
-      provider,
-      model,
-      costUsd: own.costUsdPerCall,
-    };
+    const reservation: Reservation = { id: `${at}-${process.pid}-${(this.sequence += 1)}`, at, specialist: key, costUsd, tokens, booking };
     const booked = this.append({
       at,
       reservation: reservation.id,
       specialist: key,
-      provider,
-      model,
+      ...recordOf(booking),
       outcome: "reserved",
       calls: 1,
-      costUsd: reservation.costUsd,
+      costUsd,
+      tokens,
       usage: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
     });
     return booked ? { reservation } : { refusal: "ledger_unavailable" };
   }
 
-  /** Records the actual cost. Never throws: a write failure degrades the ledger instead. */
+  /** Records the actual cost and tokens. Never throws: a write failure degrades the ledger instead. */
   settle(reservation: Reservation, outcome: string, reportedCostUsd: number, usage: Usage): void {
     // An unusable cost figure is booked at the full reservation rather than trusted.
     const costUsd = Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0 ? reportedCostUsd : reservation.costUsd;
+    const used = usage.inputTokens + usage.outputTokens;
+    const tokens = Number.isFinite(used) && used >= 0 ? used : reservation.tokens;
     // Dated at the reservation so the pair leaves the window together.
     this.append({
       at: reservation.at,
       reservation: reservation.id,
       specialist: reservation.specialist,
-      provider: reservation.provider,
-      model: reservation.model,
+      ...recordOf(reservation.booking),
       outcome,
       calls: 0,
       costUsd: costUsd - reservation.costUsd,
+      tokens: tokens - reservation.tokens,
       usage,
     });
   }
@@ -175,7 +199,10 @@ export class UsageLedger {
       entry.costUsd += record.costUsd;
       specialists.set(record.specialist, entry);
     }
-    const team = (namespace: Namespace) => this.totals((key) => namespaceOf(key) === namespace);
+    const team = (namespace: Namespace) => {
+      const { calls, costUsd } = this.totals((key) => namespaceOf(key) === namespace);
+      return { calls, costUsd };
+    };
     return { teams: { live: team("live"), shadow: team("shadow"), eval: team("eval") }, specialists: Object.fromEntries(specialists) };
   }
 
@@ -210,21 +237,28 @@ export class UsageLedger {
     }
   }
 
-  private totals(match: (key: string) => boolean): Ceiling {
+  private totals(match: (key: string) => boolean): Totals {
     let calls = 0;
     let costUsd = 0;
+    let tokens = 0;
     for (const record of this.records) {
       if (!match(record.specialist)) continue;
       calls += record.calls;
       costUsd += record.costUsd;
+      tokens += record.tokens ?? 0;
     }
-    return { calls, costUsd };
+    return { calls, costUsd, tokens };
   }
 
   private prune(): void {
     const cutoff = this.now() - this.windowMs;
     this.records = this.records.filter((record) => record.at >= cutoff);
   }
+}
+
+function recordOf(booking: Booking): Omit<Booking, "usd"> {
+  const { usd: _usd, ...record } = booking;
+  return record;
 }
 
 function isRecord(value: unknown): value is UsageRecord {
@@ -238,6 +272,8 @@ function isRecord(value: unknown): value is UsageRecord {
     // the gateway never writes anything but a specialist id or judge key in a known namespace.
     LEDGER_KEY.test(record.specialist) &&
     (record.calls === 0 || record.calls === 1) &&
-    Number.isFinite(record.costUsd)
+    Number.isFinite(record.costUsd) &&
+    // Absent on records from before token ceilings; a present value that cannot be counted is not a record.
+    (record.tokens === undefined || Number.isFinite(record.tokens))
   );
 }

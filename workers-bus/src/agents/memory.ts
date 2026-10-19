@@ -141,6 +141,51 @@ export async function factVersion(db: AgentDb, tenantId: string, factId: string,
   throw new Error("fact_version_contended");
 }
 
+/** One canonical object's parts for a reader: each fact's id, value and hash, before any version. */
+interface ObjectParts {
+  kind: string;
+  parts: Array<{ fact_id: string; value: unknown; hash: string }>;
+  links: ObjectRead["links"];
+}
+
+/**
+ * One canonical object for this reader: the whole object, or one part per pointer its view shows.
+ * Null when the object does not exist or the reader's role may not read it; a failing read throws.
+ */
+async function readObjectParts(db: AgentDb, models: Record<string, ObjectModel>, tenantId: string, reader: Reader, kind: string, id: string): Promise<ObjectParts | null> {
+  const view = viewFor(models, reader, kind);
+  if (!view) return null;
+  const read = await models[kind].read(db, tenantId, id);
+  if (!read) return null;
+  const values: Array<[string, unknown]> =
+    view.pointers === null
+      ? [[`${kind}/${id}`, read.data]]
+      : view.pointers.map((pointer) => [`${kind}/${id}#${pointer}`, resolvePointer(read.data, pointer)]);
+  const parts: ObjectParts["parts"] = [];
+  for (const [factId, value] of values) if (value !== undefined) parts.push({ fact_id: factId, value, hash: await factHash(value) });
+  return parts.length > 0 ? { kind, parts, links: read.links } : null;
+}
+
+/** The same read, with a failure reported instead of thrown. */
+async function tryReadObjectParts(...args: Parameters<typeof readObjectParts>): Promise<ObjectParts | null | "failed"> {
+  try {
+    return await readObjectParts(...args);
+  } catch {
+    return "failed";
+  }
+}
+
+const toFact = (kind: string, part: ObjectParts["parts"][number], version: number, now: string): ContextFact => ({
+  fact_id: part.fact_id,
+  kind,
+  version,
+  hash: part.hash,
+  trust: "owned",
+  observed_at: now,
+  fresh_until: null,
+  data: part.value,
+});
+
 /**
  * One canonical object as facts for this reader: the whole object, or one fact per part its view
  * shows. Null when the object does not exist or the reader's role may not read it; a failing read
@@ -155,30 +200,11 @@ export async function readObjectFacts(
   id: string,
   now: string,
 ): Promise<{ facts: ContextFact[]; links: ObjectRead["links"] } | null> {
-  const view = viewFor(models, reader, kind);
-  if (!view) return null;
-  const read = await models[kind].read(db, tenantId, id);
+  const read = await readObjectParts(db, models, tenantId, reader, kind, id);
   if (!read) return null;
-  const parts: Array<[string, unknown]> =
-    view.pointers === null
-      ? [[`${kind}/${id}`, read.data]]
-      : view.pointers.map((pointer) => [`${kind}/${id}#${pointer}`, resolvePointer(read.data, pointer)]);
   const facts: ContextFact[] = [];
-  for (const [factId, value] of parts) {
-    if (value === undefined) continue;
-    const hash = await factHash(value);
-    facts.push({
-      fact_id: factId,
-      kind,
-      version: await factVersion(db, tenantId, factId, hash, now),
-      hash,
-      trust: "owned",
-      observed_at: now,
-      fresh_until: null,
-      data: value,
-    });
-  }
-  return facts.length > 0 ? { facts, links: read.links } : null;
+  for (const part of read.parts) facts.push(toFact(kind, part, await factVersion(db, tenantId, part.fact_id, part.hash, now), now));
+  return { facts, links: read.links };
 }
 
 /** The same read, with a failure reported instead of thrown. */
@@ -188,6 +214,142 @@ async function tryReadObjectFacts(...args: Parameters<typeof readObjectFacts>) {
   } catch {
     return { failed: true as const };
   }
+}
+
+/** Fact ids per ledger read: D1 binds at most 100 parameters to one statement. */
+const LEDGER_READ_IDS = 90;
+
+/** The latest ledger line of each fact id, in one statement per 90 ids. */
+async function latestVersions(db: AgentDb, tenantId: string, factIds: string[]): Promise<Map<string, { version: number; hash: string }>> {
+  const latest = new Map<string, { version: number; hash: string }>();
+  const ids = [...new Set(factIds)];
+  for (let start = 0; start < ids.length; start += LEDGER_READ_IDS) {
+    const chunk = ids.slice(start, start + LEDGER_READ_IDS);
+    const rows = await db
+      .prepare(
+        `SELECT fact_id, version, hash FROM agent_fact_versions line
+          WHERE tenant_id = ? AND fact_id IN (${chunk.map(() => "?").join(", ")})
+            AND version = (SELECT MAX(version) FROM agent_fact_versions WHERE tenant_id = line.tenant_id AND fact_id = line.fact_id)`,
+      )
+      .bind(tenantId, ...chunk)
+      .all<{ fact_id: string; version: number; hash: string }>();
+    for (const row of rows.results ?? []) latest.set(row.fact_id, { version: row.version, hash: row.hash });
+  }
+  return latest;
+}
+
+/**
+ * Versions for facts read together, as factVersion gives them: a value the ledger holds keeps its
+ * version, any other takes the next one. The ledger is read once per batch of fact ids, and a new
+ * value's line is written only when `commit` keeps that fact, so a fact no run is given is never
+ * recorded.
+ */
+function pendingLedger(db: AgentDb, tenantId: string, now: string) {
+  const latest = new Map<string, { version: number; hash: string } | null>();
+  return {
+    async load(factIds: string[]) {
+      const missing = [...new Set(factIds)].filter((id) => !latest.has(id));
+      const found = await latestVersions(db, tenantId, missing);
+      for (const id of missing) latest.set(id, found.get(id) ?? null);
+    },
+    /** The facts of loaded parts, each at the version it holds or the next one. */
+    versioned(read: ObjectParts): ContextFact[] {
+      return read.parts.map((part) => {
+        const line = latest.get(part.fact_id) ?? null;
+        return toFact(read.kind, part, line?.hash === part.hash ? line.version : (line?.version ?? 0) + 1, now);
+      });
+    },
+    /** Records the new values among the kept facts, in one batch; a writer racing it is settled as factVersion settles it. */
+    async commit(facts: ContextFact[]): Promise<ContextFact[]> {
+      const fresh = new Map<string, ContextFact>();
+      for (const fact of facts) if (latest.get(fact.fact_id)?.hash !== fact.hash) fresh.set(fact.fact_id, fact);
+      if (fresh.size === 0) return facts;
+      const insert = (fact: ContextFact) =>
+        db.prepare("INSERT INTO agent_fact_versions (tenant_id, fact_id, version, hash, observed_at) VALUES (?, ?, ?, ?, ?)").bind(tenantId, fact.fact_id, fact.version, fact.hash, now);
+      try {
+        await db.batch([...fresh.values()].map(insert));
+      } catch (error) {
+        const message = String(error);
+        if (!message.includes(LEDGER_RACE) && !message.includes("UNIQUE constraint failed: agent_fact_versions")) throw error;
+        // Another reader recorded one of these facts first: each takes the version factVersion gives it.
+        const settled = new Map<string, number>();
+        for (const fact of fresh.values()) settled.set(fact.fact_id, await factVersion(db, tenantId, fact.fact_id, fact.hash, now));
+        facts = facts.map((fact) => (settled.has(fact.fact_id) ? { ...fact, version: settled.get(fact.fact_id)! } : fact));
+      }
+      for (const fact of fresh.values()) latest.set(fact.fact_id, { version: facts.find((kept) => kept.fact_id === fact.fact_id)!.version, hash: fact.hash });
+      return facts;
+    },
+  };
+}
+
+/** Object reads in flight at once for one run: each job read already runs its own queries in parallel. */
+const READ_CONCURRENCY = 6;
+
+/** `task` over `items` with at most `limit` running at once; the results keep the items' order. */
+async function inPool<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (let index = next++; index < items.length; index = next++) results[index] = await task(items[index]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** A subject's objects as read: its root, then each object it links to, once, in link order. */
+interface SubjectRead {
+  key: string;
+  root: ObjectParts | null | "failed";
+  links: Array<{ key: string; read: ObjectParts | null | "failed" }>;
+}
+
+/** Reads a subject and, when its root is readable, every object it links to, the links in parallel. */
+async function readSubject(db: AgentDb, models: Record<string, ObjectModel>, tenantId: string, reader: Reader, subject: { aggregate: string; id: string }): Promise<SubjectRead> {
+  const key = `${subject.aggregate}/${subject.id}`;
+  const root = await tryReadObjectParts(db, models, tenantId, reader, subject.aggregate, subject.id);
+  if (root === null || root === "failed") return { key, root, links: [] };
+  const seen = new Set([key]);
+  const linked: Array<{ kind: string; id: string; key: string }> = [];
+  for (const link of root.links) {
+    const linkKey = `${link.kind}/${link.id}`;
+    if (seen.has(linkKey) || !parseFactId(linkKey)) continue;
+    seen.add(linkKey);
+    linked.push({ ...link, key: linkKey });
+  }
+  const links = await inPool(linked, READ_CONCURRENCY, async (link) => ({ key: link.key, read: await tryReadObjectParts(db, models, tenantId, reader, link.kind, link.id) }));
+  return { key, root, links };
+}
+
+const partsOf = (read: SubjectRead) =>
+  [read.root, ...read.links.map((link) => link.read)].flatMap((parts) => (parts && parts !== "failed" ? parts.parts.map((part) => part.fact_id) : []));
+
+/**
+ * A subject's facts within the snapshot limits: the subject first, then the objects it links to, in
+ * link order. Objects the reader may not read are left out silently; an object that cannot be read,
+ * or does not fit, is named in `omitted` so the run knows it is missing.
+ */
+function takeSubject(read: SubjectRead, versioned: (parts: ObjectParts) => ContextFact[], budgetBytes: number): { facts: ContextFact[]; omitted: OmittedFact[] } {
+  const facts: ContextFact[] = [];
+  const omitted: OmittedFact[] = [];
+  if (read.root === "failed") return { facts, omitted: [{ fact_id: read.key, reason: "unreadable" }] };
+  if (read.root === null) return { facts, omitted };
+  let bytes = 0;
+  const take = (key: string, group: ContextFact[]) => {
+    const size = group.reduce((sum, fact) => sum + factBytes(fact), 0);
+    if (facts.length + group.length > SNAPSHOT_LIMITS.facts) omitted.push({ fact_id: key, reason: "limit_reached" });
+    else if (bytes + size > budgetBytes) omitted.push({ fact_id: key, reason: "too_large" });
+    else {
+      facts.push(...group);
+      bytes += size;
+    }
+  };
+  take(read.key, versioned(read.root));
+  for (const link of read.links) {
+    if (link.read === "failed") omitted.push({ fact_id: link.key, reason: "unreadable" });
+    // A linked object that does not fit is left out whole; a smaller later one may still fit.
+    else if (link.read) take(link.key, versioned(link.read));
+  }
+  return { facts, omitted };
 }
 
 /**
@@ -204,36 +366,16 @@ export async function subjectFacts(
   now: string,
   budgetBytes = SNAPSHOT_LIMITS.bytes,
 ): Promise<{ facts: ContextFact[]; omitted: OmittedFact[] }> {
-  const facts: ContextFact[] = [];
-  const omitted: OmittedFact[] = [];
-  if (!subject || !parseFactId(`${subject.aggregate}/${subject.id}`)) return { facts, omitted };
-  let bytes = 0;
-  const take = (key: string, group: ContextFact[]) => {
-    const size = group.reduce((sum, fact) => sum + factBytes(fact), 0);
-    if (facts.length + group.length > SNAPSHOT_LIMITS.facts) omitted.push({ fact_id: key, reason: "limit_reached" });
-    else if (bytes + size > budgetBytes) omitted.push({ fact_id: key, reason: "too_large" });
-    else {
-      facts.push(...group);
-      bytes += size;
-    }
-  };
-  const rootKey = `${subject.aggregate}/${subject.id}`;
-  const root = await tryReadObjectFacts(db, models, tenantId, reader, subject.aggregate, subject.id, now);
-  if ("failed" in root) return { facts, omitted: [{ fact_id: rootKey, reason: "unreadable" }] };
-  if (!root.read) return { facts, omitted };
-  take(rootKey, root.read.facts);
-  const seen = new Set([rootKey]);
-  for (const link of root.read.links) {
-    const key = `${link.kind}/${link.id}`;
-    if (seen.has(key) || !parseFactId(key)) continue;
-    seen.add(key);
-    const linked = await tryReadObjectFacts(db, models, tenantId, reader, link.kind, link.id, now);
-    if ("failed" in linked) omitted.push({ fact_id: key, reason: "unreadable" });
-    // A linked object that does not fit is left out whole; a smaller later one may still fit.
-    else if (linked.read) take(key, linked.read.facts);
-  }
-  return { facts, omitted };
+  if (!subject || !parseFactId(`${subject.aggregate}/${subject.id}`)) return { facts: [], omitted: [] };
+  const read = await readSubject(db, models, tenantId, reader, subject);
+  const ledger = pendingLedger(db, tenantId, now);
+  await ledger.load(partsOf(read));
+  const taken = takeSubject(read, ledger.versioned, budgetBytes);
+  return { facts: await ledger.commit(taken.facts), omitted: taken.omitted };
 }
+
+/** Subjects read at once for a watch run; the snapshot decides in subject order after each group. */
+const SUBJECT_GROUP = READ_CONCURRENCY;
 
 /**
  * The facts for several subjects (a watch's objects), in order, sharing one snapshot's limits.
@@ -250,27 +392,38 @@ export async function subjectsFacts(
   const facts: ContextFact[] = [];
   const omitted: OmittedFact[] = [];
   const taken = new Set<string>();
+  const ledger = pendingLedger(db, tenantId, now);
   let bytes = 0;
-  for (const subject of subjects) {
-    if (facts.length >= SNAPSHOT_LIMITS.facts) {
-      omitted.push({ fact_id: `${subject.aggregate}/${subject.id}`, reason: "limit_reached" });
-      continue;
+  for (let start = 0; start < subjects.length; start += SUBJECT_GROUP) {
+    const group = subjects.slice(start, start + SUBJECT_GROUP);
+    // Once the snapshot is full, the rest are named without being read, as before.
+    const reads =
+      facts.length >= SNAPSHOT_LIMITS.facts
+        ? group.map(() => null)
+        : await Promise.all(group.map((subject) => (parseFactId(`${subject.aggregate}/${subject.id}`) ? readSubject(db, models, tenantId, specialistId, subject) : null)));
+    await ledger.load(reads.flatMap((read) => (read ? partsOf(read) : [])));
+    for (const [index, subject] of group.entries()) {
+      if (facts.length >= SNAPSHOT_LIMITS.facts) {
+        omitted.push({ fact_id: `${subject.aggregate}/${subject.id}`, reason: "limit_reached" });
+        continue;
+      }
+      const read = reads[index];
+      const part = read ? takeSubject(read, ledger.versioned, SNAPSHOT_LIMITS.bytes - bytes) : { facts: [], omitted: [] };
+      const fresh = part.facts.filter((fact) => !taken.has(fact.fact_id));
+      // A subject's facts go in whole or not at all, so a run never mistakes a part for the object.
+      if (facts.length + fresh.length > SNAPSHOT_LIMITS.facts) {
+        omitted.push({ fact_id: `${subject.aggregate}/${subject.id}`, reason: "limit_reached" });
+        continue;
+      }
+      for (const fact of fresh) {
+        taken.add(fact.fact_id);
+        facts.push(fact);
+        bytes += factBytes(fact);
+      }
+      omitted.push(...part.omitted.filter((entry) => !taken.has(entry.fact_id)));
     }
-    const part = await subjectFacts(db, models, tenantId, specialistId, subject, now, SNAPSHOT_LIMITS.bytes - bytes);
-    const fresh = part.facts.filter((fact) => !taken.has(fact.fact_id));
-    // A subject's facts go in whole or not at all, so a run never mistakes a part for the object.
-    if (facts.length + fresh.length > SNAPSHOT_LIMITS.facts) {
-      omitted.push({ fact_id: `${subject.aggregate}/${subject.id}`, reason: "limit_reached" });
-      continue;
-    }
-    for (const fact of fresh) {
-      taken.add(fact.fact_id);
-      facts.push(fact);
-      bytes += factBytes(fact);
-    }
-    omitted.push(...part.omitted.filter((entry) => !taken.has(entry.fact_id)));
   }
-  return { facts, omitted };
+  return { facts: await ledger.commit(facts), omitted };
 }
 
 /** The ref a citation falls under: the fact itself, or the part of it the pointer names. */
@@ -292,8 +445,11 @@ function refUnder(byId: Map<string, FactRef>, citation: string): { ref: FactRef;
   return null;
 }
 
-/** Reads a fact's value again; the signal's value comes from its immutable signal row. */
-export type FactReader = (ref: FactRef) => Promise<ContextFact | null>;
+/**
+ * Reads a fact's value again; the signal's value comes from its immutable signal row. `all` reads
+ * many at once, as a resume does.
+ */
+export type FactReader = ((ref: FactRef) => Promise<ContextFact | null>) & { all?: (refs: FactRef[]) => Promise<Array<ContextFact | null>> };
 
 export function factReader(
   db: AgentDb,
@@ -304,7 +460,7 @@ export function factReader(
   signal: (ref: FactRef) => Promise<ContextFact | null>,
 ): FactReader {
   const reads = new Map<string, Promise<Map<string, ContextFact> | null>>();
-  return async (ref) => {
+  const read: FactReader = async (ref) => {
     if (ref.kind === "signal") return await signal(ref);
     const parsed = parseFactId(ref.fact_id);
     if (!parsed) return null;
@@ -318,6 +474,25 @@ export function factReader(
       );
     return (await reads.get(key)!)?.get(ref.fact_id) ?? null;
   };
+  // Every object once, several at a time, and the ledger in one read: each fact at the version its
+  // value holds, or the next one, which is not recorded (a resume only needs to know it moved).
+  read.all = async (refs) => {
+    const objects = [...new Set(refs.filter((ref) => ref.kind !== "signal").flatMap((ref) => {
+      const parsed = parseFactId(ref.fact_id);
+      return parsed ? [`${parsed.kind}/${parsed.id}`] : [];
+    }))];
+    const parts = new Map<string, ObjectParts | null>();
+    await inPool(objects, READ_CONCURRENCY, async (key) => {
+      const parsed = parseFactId(key)!;
+      const result = await tryReadObjectParts(db, models, tenantId, reader, parsed.kind, parsed.id);
+      parts.set(key, result === "failed" ? null : result);
+    });
+    const ledger = pendingLedger(db, tenantId, now);
+    await ledger.load([...parts.values()].flatMap((object) => object?.parts.map((part) => part.fact_id) ?? []));
+    const facts = new Map([...parts.values()].flatMap((object) => (object ? ledger.versioned(object) : [])).map((fact) => [fact.fact_id, fact]));
+    return await Promise.all(refs.map(async (ref) => (ref.kind === "signal" ? await signal(ref) : (facts.get(ref.fact_id) ?? null))));
+  };
+  return read;
 }
 
 /**
@@ -326,12 +501,11 @@ export function factReader(
  * run sees it is stale instead of acting on the new value under the old version.
  */
 export async function hydrate(refs: FactRef[], read: FactReader): Promise<Array<ContextFact & { current?: false }>> {
-  const facts: Array<ContextFact & { current?: false }> = [];
-  for (const ref of refs) {
-    const fresh = await read(ref);
-    facts.push(fresh && fresh.version === ref.version && fresh.hash === ref.hash ? { ...ref, data: fresh.data } : { ...ref, data: null, current: false });
-  }
-  return facts;
+  const fresh = read.all ? await read.all(refs) : await Promise.all(refs.map((ref) => read(ref)));
+  return refs.map((ref, index) => {
+    const now = fresh[index];
+    return now && now.version === ref.version && now.hash === ref.hash ? { ...ref, data: now.data } : { ...ref, data: null, current: false as const };
+  });
 }
 
 /**

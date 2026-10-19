@@ -216,6 +216,7 @@ export class ProviderGateway {
         modelsUsed,
         authMode: shown ? this.adapterOf(shown.route.provider).authMode : null,
         family: shown?.entry?.family ?? null,
+        effort: shown?.route.effort ?? null,
         adapter: account?.adapter ?? null,
         billing: account?.billing ?? null,
         route: routeKind(shown),
@@ -754,7 +755,7 @@ function routeKind(hop: Hop | null): GatewayResult["route"] {
 }
 
 function hopRecord(hop: Hop, reason: AbstainReason, retryAt: number | undefined): FailoverHop {
-  return { routeId: hop.id, provider: hop.route.provider, model: hop.route.model, reason, retryAt: retryAt ?? null };
+  return { routeId: hop.id, provider: hop.route.provider, model: hop.route.model, family: hop.entry?.family ?? null, reason, retryAt: retryAt ?? null };
 }
 
 /**

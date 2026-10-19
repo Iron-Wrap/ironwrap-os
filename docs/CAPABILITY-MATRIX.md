@@ -244,8 +244,10 @@ Current source tracing distinguishes implemented modules from reachable producti
   conversation object yet, so those cannot be cited. Shadow mode (`0203`) records a shadowed action's
   proposals with no effect and counts agreement with people's decisions; no shadow comparator is
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
-  within-limits action to asks first. An audit from the reviewed run's own provider family is not
-  accepted. Five cadence watches fire from the cron with deterministic conditions (`0204`),
+  within-limits action to asks first. An audit from the reviewed run's own model family is not
+  accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
+  v3 close keeps its output only on one of them; a synthetic run closes only on a Worker whose
+  `AGENT_DATA_CLASS` is synthetic. Five cadence watches fire from the cron with deterministic conditions (`0204`),
   including the four owner reports; the other watches and every event-triggered watch do not fire yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
   live provider call, deployment or reference run has happened.

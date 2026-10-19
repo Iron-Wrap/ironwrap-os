@@ -13,6 +13,7 @@ import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
 import { reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
+import { recordProposalDeliveryConfirmation } from "../src/commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
   deriveSuccess,
@@ -1793,6 +1794,33 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(mismatch.status, 409);
     assert.deepEqual(await mismatch.json(), { error: "commercial_publication_effect_mismatch" });
+    // The provider showed something other than what was sent, so delivery is not confirmed and a
+    // person must record what they found before the proposal goes again.
+    const resendAfterMismatch = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-after-mismatch-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(resendAfterMismatch.status, 409);
+    assert.equal(
+      (await resendAfterMismatch.json() as { next_step: string }).next_step,
+      "confirm_delivery_by_hand",
+    );
+    h.db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const confirmed = await recordProposalDeliveryConfirmation(h.env as never, {
+      tenantId: TENANT,
+      effectId: "effect:iro208:mismatch",
+      outcome: "not_delivered",
+      note: "Checked with the customer: no proposal reached them.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "iro208-delivery-confirmation-0001",
+    });
+    assert.equal(confirmed.effectState, "reconciled");
     const successPermit = await preparePublication(h, ids, "iro208-publication-prepare-success-0001");
     await runPublicationEffect(h, successPermit, ids, "effect:iro208:success", "success");
     const settled = await handleAuthenticatedRoute(

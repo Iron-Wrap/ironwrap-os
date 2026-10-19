@@ -1077,3 +1077,214 @@ test("a proposal is not sent again until its last send is confirmed delivered", 
     }
   }
 });
+
+test("a person records whether a proposal send that could not be confirmed reached the customer", async () => {
+  const { authenticateAppRequest, randomToken, sessionHashFor } = await import("../src/app-auth.ts");
+  for (const outcome of ["not_delivered", "delivered"] as const) {
+    const db = new SqliteD1();
+    const env = {
+      ...commercialEnv(db),
+      APP_TENANT_ID: TENANT,
+      APP_AUTH_PEPPER: "delivery-confirmation-test-pepper-0123456789abcdef",
+    } as AppEnv;
+    try {
+      const triage = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/lead-triage-decisions", {
+          lead_id: LEAD_ID,
+          expected_lead_version: 1,
+          lifecycle_status: "qualified",
+          priority: "normal",
+          category: "replacement",
+          summary: "Qualified lead for publication.",
+          next_action: "Prepare the customer proposal.",
+        }, `delivery-confirm-triage-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(triage.status, 201);
+      await seedApprovedQuote(env, { alreadyQualified: true });
+      const proposal = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-revisions", proposalBody(new Date().toISOString()), `delivery-confirm-proposal-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(proposal.status, 201);
+      const prepareBody = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        facts_observed_at: new Date().toISOString(),
+        evidence: EVIDENCE,
+      };
+      const prepared = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-1-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(prepared.status, 201);
+      const { permit } = await prepared.json() as {
+        permit: { permit_id: string; policy_ref: string; policy_version: string; expires_at: string };
+      };
+      const expectedReadback = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        state: "published",
+      };
+      const effectId = `effect:publication:conflict:${outcome}`;
+      // The provider answers, but its readback is not what was sent: a manual exception.
+      await runExternalEffect(
+        env,
+        {
+          effectId,
+          tenantId: TENANT,
+          actor: { type: "worker", id: OPS_ID },
+          taskId: "task:commercial-publication",
+          authority: {
+            permitRef: permit.permit_id,
+            policyRef: permit.policy_ref,
+            policyVersion: permit.policy_version,
+            tenantId: TENANT,
+            actorType: "worker",
+            actorId: OPS_ID,
+            expiresAt: permit.expires_at,
+            allowedActions: ["proposal.publish"],
+          },
+          aggregate: { type: "proposal_publication", id: "proposal-pack:commercial:api:0001", version: 1 },
+          intentId: "proposal-revision:commercial:api:0001",
+          action: "proposal.publish",
+          request: expectedReadback,
+          provider: "native-commercial-publication",
+          idempotencyKey: `${effectId}:key`,
+          deadlineAt: new Date(Date.parse(permit.expires_at) - 1_000).toISOString(),
+          expectedReadback,
+          correlationId: "commercial-publication-correlation",
+        },
+        {
+          async dispatch() {
+            return {
+              outcome: "accepted" as const,
+              value: { published: true },
+              providerExternalId: "provider-publication-conflict",
+              providerResponse: { id: "provider-publication-conflict" },
+              readback: {
+                status: "match" as const,
+                providerExternalId: "provider-publication-conflict",
+                observed: { ...expectedReadback, state: "withdrawn" },
+              },
+            };
+          },
+          async replay() {
+            return { published: false };
+          },
+        },
+      ).catch(() => undefined);
+      const effectState = () => (db.raw.prepare("SELECT state FROM external_effects WHERE effect_id = ?")
+        .get(effectId) as { state: string }).state;
+      assert.equal(effectState(), "manual_exception");
+
+      const blocked = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-2-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(blocked.status, 409);
+      assert.deepEqual(await blocked.json(), {
+        error: "proposal_delivery_unconfirmed",
+        delivery_state: "manual_exception",
+        external_effect_id: effectId,
+        next_step: "confirm_delivery_by_hand",
+      });
+
+      const confirmation = { external_effect_id: effectId, outcome, note: "Called the customer and checked their inbox." };
+      // A role without the commercial set, or a caller that is not a person's own session, is refused.
+      const notPerson = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/delivery-confirmations", confirmation, `delivery-confirm-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      assert.equal(notPerson.status, 403);
+      assert.deepEqual(await notPerson.json(), { error: "person_session_required" });
+
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const token = randomToken();
+      const now = new Date();
+      db.raw.prepare(
+        `INSERT INTO app_sessions
+          (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+           created_ip_hash, created_user_agent_hash, device_id)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+      ).run(
+        await sessionHashFor(env, token), OPS_ID, TENANT, now.toISOString(),
+        new Date(now.getTime() + 3_600_000).toISOString(), now.toISOString(), "d".repeat(64), "e".repeat(64),
+      );
+      const authenticated = await authenticateAppRequest(
+        new Request("https://app.example.com/api/v1/session", { headers: { cookie: `__Host-ironwrap_session=${token}` } }),
+        env,
+      );
+      assert.ok(authenticated.ok);
+      const person = authenticated.auth;
+      const confirm = (key: string, body: Record<string, unknown>) =>
+        handleAuthenticatedRoute(
+          new Request("https://app.example.com/api/v1/commercial/proposal-publications/delivery-confirmations", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": key,
+              "x-csrf-token": person.csrfToken,
+            },
+            body: JSON.stringify(body),
+          }),
+          env,
+          person,
+        );
+      const tooShort = await confirm(`delivery-confirm-short-${outcome}`, { ...confirmation, note: "ok" });
+      assert.equal(tooShort.status, 400);
+
+      const recorded = await confirm(`delivery-confirm-${outcome}`, confirmation);
+      assert.equal(recorded.status, 201, await recorded.clone().text());
+      const expectedState = outcome === "delivered" ? "succeeded" : "reconciled";
+      assert.equal((await recorded.json() as { effect: { state: string } }).effect.state, expectedState);
+      assert.equal(effectState(), expectedState);
+      assert.equal(
+        (db.raw.prepare("SELECT count(*) AS n FROM audit_log WHERE automation = 'proposal_delivery'").get() as { n: number }).n,
+        1,
+        "one audit row per confirmation",
+      );
+      assert.equal(
+        (db.raw.prepare("SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'")
+          .get(effectId) as { n: number }).n,
+        0,
+        "the exception the send opened is resolved by the confirmation",
+      );
+      const replay = await confirm(`delivery-confirm-${outcome}`, confirmation);
+      assert.equal(replay.status, 200);
+      assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+      const again = await confirm(`delivery-confirm-again-${outcome}`, confirmation);
+      assert.equal(again.status, 409);
+      assert.equal((await again.json() as { error: string }).error, "proposal_delivery_not_awaiting_confirmation");
+
+      const next = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-3-${outcome}`),
+        env,
+        auth("ops"),
+      );
+      if (outcome === "not_delivered") {
+        assert.equal(next.status, 201, "not delivered: the proposal may be sent again");
+      } else {
+        // Delivered: record that send as the publication instead of sending it a second time.
+        assert.equal(next.status, 409);
+        assert.deepEqual(await next.json(), {
+          error: "proposal_delivery_not_recorded",
+          delivery_state: "succeeded",
+          external_effect_id: effectId,
+          next_step: "record_publication",
+        });
+      }
+    } finally {
+      db.close();
+    }
+  }
+});

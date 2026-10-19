@@ -199,6 +199,28 @@ test("a signal becomes one run with only the tools both the Worker and the allow
   assert.deepEqual([requests[0].qualifications, requests[0].providers], [[], ["claude", "codex"]]);
 });
 
+test("a v3 close names the effort of the route that answered and the family of every hop it passed over", async (t) => {
+  const worker = fakeWorker(openedRun({ review_of: null, expected_action_id: null, mode: "live", close_model: 3 }));
+  const { options } = runner(t, worker, async (request) => ({
+    ...okResult(request),
+    routeId: "codex_sol_high",
+    effort: "high",
+    route: "declared_fallback",
+    failover: [
+      { routeId: "codex_sol", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retryAt: 1_000 },
+      // A hop whose route lost its registry entry has no family; the Worker treats it as unknown.
+      { routeId: "codex_gone", provider: "codex", model: "gpt-gone", family: null, reason: "no_qualified_route", retryAt: null },
+    ],
+  }));
+  await runSignal(options, signal());
+  const model = worker.closed[0].body.model as { effort: string; failover: unknown[] };
+  assert.equal(model.effort, "high");
+  assert.deepEqual(model.failover, [
+    { route_id: "codex_sol", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retry_at: 1_000 },
+    { route_id: "codex_gone", provider: "codex", model: "gpt-gone", family: null, reason: "no_qualified_route", retry_at: null },
+  ]);
+});
+
 test("the run under review, the expected action and a shadow mode reach the gateway, and the close records the route", async (t) => {
   const worker = fakeWorker(openedRun({ review_of: { run_id: "run_0000000000", provider: "codex" }, expected_action_id: "lead.qualify", mode: "shadow" }));
   const { options, requests } = runner(t, worker, async (request) => ({
@@ -641,4 +663,35 @@ test("a failing work loop flips readiness even while heartbeats get through, and
     concurrency: 1,
   });
   await broken.heartbeat();
+});
+
+test("a slow Worker call names its route, and opening a run gets its own, longer timeout", async () => {
+  const seen: Array<{ path: string; waited: number }> = [];
+  // Answers only when the caller's signal aborts, so each call ends at its own timeout.
+  const hang = (async (url: string, init: RequestInit) => {
+    const started = Date.now();
+    // AbortSignal.timeout's timer does not hold the event loop open; this one does, until the abort.
+    const keepAlive = setTimeout(() => {}, 10_000);
+    await new Promise((resolveAbort) => init.signal?.addEventListener("abort", resolveAbort));
+    clearTimeout(keepAlive);
+    seen.push({ path: new URL(url).pathname, waited: Date.now() - started });
+    throw init.signal?.reason;
+  }) as typeof fetch;
+  const client = new WorkerClient({ baseUrl: "https://bus.example.invalid", token: "host-token", timeoutMs: 20, openTimeoutMs: 120, fetch: hang });
+  await assert.rejects(client.signals(null, 20), (error: WorkerError) => {
+    assert.deepEqual([error.status, error.code, error.message], [0, "timeout", "GET /api/v1/agents/signals timed out after 20 ms"]);
+    return true;
+  });
+  await assert.rejects(client.openRun({ signal_id: "s", specialist_id: "x", host_run_key: "k" }), (error: WorkerError) => {
+    assert.deepEqual([error.code, error.message], ["timeout", "POST /api/v1/agents/runs timed out after 120 ms"]);
+    return true;
+  });
+  assert.ok(seen[1].waited >= 100, `open waited ${seen[1].waited} ms`);
+  // A network failure names the route too, and both stay retryable: the batch comes round again.
+  const offline = new WorkerClient({ baseUrl: "https://bus.example.invalid", token: "host-token", timeoutMs: 20, fetch: (async () => { throw new TypeError("fetch failed"); }) as typeof fetch });
+  await assert.rejects(offline.heartbeat({} as never), (error: WorkerError) => {
+    assert.deepEqual([error.code, error.message], ["network", "POST /api/v1/agents/host/heartbeat failed: fetch failed"]);
+    assert.equal(retryable(error), true);
+    return true;
+  });
 });

@@ -1,208 +1,85 @@
-// production-gate-clearance.test.ts - the six scheduling gates finally have producers.
+// production-gate-clearance.test.ts - the gate routes append to the ledger, and only people use them.
 //
-// The point every case here defends is ELEC-120 finding 3: gate states were
-// validated and enforced, and nothing in the product could move one off `Blocked`.
-// So these tests drive the real route, through the real runway read, into a real
-// R2 receipt, and assert exactly what reaches Frappe - not that the module agrees
-// with itself.
+// ELEC-120 finding 3 was that nothing in the product could move a scheduling gate off `blocked`.
+// These cases drive the real routes, through a person's real cookie session, the real runway read
+// and a real R2 receipt, into the migration 0153 ledger, and assert what the ledger, the gate row
+// and the audit log hold afterwards - not that the module agrees with itself. D1's own refusals
+// are proved directly in production-gate-clearances.test.ts.
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import {
   CLEARABLE_PRODUCTION_GATES,
   depositSettlementReceipt,
-  frappeRefusalCode,
+  isWaivableProductionGate,
   parseProductionGateClearance,
+  parseProductionGateWaiverDecision,
   settledDepositIntent,
   settlementObservedAt,
 } from "../src/production-gate-clearance.ts";
 import type { AccountingIntentRecord } from "../src/accounting-intents.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 
+// Synthetic fixtures only: reserved example.invalid identities and run-relative times.
 const TENANT = "ironwrap";
-const OWNER = "owner@example.com";
+const PEPPER = "synthetic-gate-ledger-route-pepper-0123456789";
 const JOB_ID = "job:elec122";
+const KEY = "gate-clearance-key-0000000001";
+const SEED_CREATED_BY = "system:owner_directed_qa_seed_grant";
+const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 const CLEARANCE_PATH = (gate: string, job = JOB_ID) =>
   `/api/v1/production/jobs/${encodeURIComponent(job)}/gates/${gate}/clearance`;
-const KEY = "gate-clearance-key-0000000001";
+const DECISION_PATH = (gate: string, job = JOB_ID) =>
+  `/api/v1/production/jobs/${encodeURIComponent(job)}/gates/${gate}/waiver-decisions`;
 
-class SqliteD1 {
-  readonly raw = new DatabaseSync(":memory:");
+const USERS = {
+  owner: { id: "appu_owner_gate_0001", role: "owner", access: "owner" },
+  secondOwner: { id: "appu_owner_gate_0002", role: "owner", access: "owner" },
+  production: { id: "appu_production_gate", role: "ops", access: "production" },
+  ops: { id: "appu_ops_gate_000001", role: "ops", access: "ops" },
+  seed: { id: "appu_seed_owner_gate", role: "owner", access: "owner" },
+  accounting: { id: "appu_accounting_gate", role: "ops", access: "accounting" },
+} as const;
 
-  constructor() {
-    this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of readdirSync(new URL("../migrations/", import.meta.url))
-      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
-      .sort()) {
-      this.raw.exec(
-        readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"),
-      );
-    }
-    const now = new Date().toISOString();
-    const insert = this.raw.prepare(
-      `INSERT INTO app_users (
-        user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
-        active, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, 'seed', ?, ?)`,
-    );
-    insert.run("appu_owner_0001", TENANT, OWNER, "Owner", "owner", OWNER, now, now);
-    insert.run("appu_ops_0001", TENANT, "ops@example.com", "Ops", "ops", "ops@example.com", now, now);
-    insert.run(
-      "appu_owner_0002",
-      TENANT,
-      "unbound@example.com",
-      "Unbound Owner",
-      "owner",
-      null,
-      now,
-      now,
-    );
-  }
-
-  seedNativeRunway(jobId = JOB_ID, gateState = "blocked"): void {
-    const now = "2026-08-20T10:00:00.000Z";
-    this.raw
-      .prepare(
-        `INSERT INTO envelopes
-         (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts,
-          status, created_at, updated_at)
-         VALUES (?, 'manual', 'Gate Customer', 'gate@example.invalid', '{}',
-                 'raw/gate/0001.json', ?, 'reconciled', ?, ?)`,
-      )
-      .run("ow_gate_clearance_0001", now, now, now);
-    this.raw
-      .prepare(
-        `INSERT INTO operating_leads
-         (lead_id, tenant_id, source_envelope_id, source, contact_name, contact_email,
-          lifecycle_status, version, created_at, updated_at)
-         VALUES ('lead:gate:0001', ?, 'ow_gate_clearance_0001', 'manual',
-                 'Gate Customer', 'gate@example.invalid', 'qualified', 1, ?, ?)`,
-      )
-      .run(TENANT, now, now);
-    this.raw
-      .prepare(
-        `INSERT INTO operating_customers
-         (customer_id, tenant_id, source_envelope_id, display_name, contact_email,
-          lifecycle_status, version, created_at, updated_at)
-         VALUES ('customer:gate:0001', ?, 'ow_gate_clearance_0001',
-                 'Gate Customer', 'gate@example.invalid', 'active', 1, ?, ?)`,
-      )
-      .run(TENANT, now, now);
-    this.raw
-      .prepare(
-        `INSERT INTO operating_roof_jobs
-         (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
-          brand, job_number, service_type, job_status, current_gate_state,
-          version, created_at, updated_at)
-         VALUES (?, ?, 'lead:gate:0001', 'customer:gate:0001',
-                 'ow_gate_clearance_0001', 'ironwrap', 'IW-122-1', 'Roofing',
-                 'qualified', 'blocked', 1, ?, ?)`,
-      )
-      .run(jobId, TENANT, now, now);
-    const insertGate = this.raw.prepare(
-      `INSERT INTO operating_production_gates
-       (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, state,
-        owner_user, assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-       VALUES (?, ?, ?, 'ow_gate_clearance_0001', ?, ?, 'owner@example.com',
-               ?, '2026-08-21T12:00:00.000Z', 'No active blocker', 1, ?, ?)`,
-    );
-    for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) {
-      insertGate.run(
-        `gate:elec122:${gate.toLowerCase()}`,
-        TENANT,
-        jobId,
-        gate,
-        gateState,
-        now,
-        now,
-        now,
-      );
-    }
-  }
-
-  /** Seed one money-lane row in the state an authenticated read-back would have left. */
-  seedDepositIntent(overrides: Partial<AccountingIntentRecord> = {}): void {
-    const row: Record<string, unknown> = {
-      intent_id: "acct-intent-deposit-0000001",
-      tenant_id: TENANT,
-      kind: "deposit_invoice",
-      roof_job_id: JOB_ID,
-      basis_json: "{}",
-      basis_sha256: "a".repeat(64),
-      source_documents_json: "[]",
-      expected_sha256: "b".repeat(64),
-      tax_policy_snapshot_sha256: "e".repeat(64),
-      provider: "quickbooks",
-      realm_id: "4620816365000000000",
-      provider_entity_type: "Invoice",
-      provider_payload_json: "{}",
-      provider_payload_sha256: "c".repeat(64),
-      provider_request_id: "req-deposit-0000000000001",
-      currency: "CAD",
-      subtotal: "5000.00",
-      tax_amount: "250.00",
-      total_amount: "5250.00",
-      settled_amount: "5250.00",
-      authority_permit_ref: "permit:test",
-      authority_policy_ref: "policy:test",
-      authority_policy_version: "1",
-      authority_max_amount: "100000.00",
-      effect_id: "effect:deposit-0000000000001",
-      effect_idempotency_key: "effect-key-deposit-000000001",
-      compensates_effect_id: null,
-      final_invoice_intent_id: null,
-      compensates_intent_id: null,
-      state: "reconciled",
-      version: 1,
-      blocker_code: null,
-      blocker_next_step: null,
-      reason_code: null,
-      error_code: null,
-      derived_by_actor_kind: "owner",
-      derived_by_user_id: "appu_owner_0001",
-      derived_at: "2026-08-20T12:00:00.000Z",
-      approved_by_user_id: "appu_owner_0002",
-      approved_at: "2026-08-20T12:02:00.000Z",
-      rejected_by_user_id: null,
-      rejected_at: null,
-      provider_entity_id: "1042",
-      // `reconciled` is only legal when the observed fact set matches the expected
-      // one; the storage layer enforces it, so the fixture honours it.
-      observed_sha256: "b".repeat(64),
-      provider_submitted_at: "2026-08-20T12:05:00.000Z",
-      provider_reconciled_at: "2026-08-20T12:10:00.000Z",
-      created_at: "2026-08-20T12:00:00.000Z",
-      updated_at: "2026-08-20T12:10:00.000Z",
-      ...overrides,
-    };
-    const columns = Object.keys(row);
-    this.raw
-      .prepare(
-        `INSERT INTO accounting_intents (${columns.join(", ")})
-         VALUES (${columns.map(() => "?").join(", ")})`,
-      )
-      .run(...(columns.map((column) => row[column]) as never[]));
-  }
+class TestD1 {
+  readonly sqlite = new DatabaseSync(":memory:");
 
   prepare(sql: string) {
+    const sqlite = this.sqlite;
     return {
-      bind: (...args: unknown[]) => {
-        const statement = this.raw.prepare(sql);
+      bind(...values: unknown[]) {
         return {
-          first: async <T>() => (statement.get(...args) ?? null) as T | null,
-          all: async <T>() => ({ results: statement.all(...args) as T[] }),
-          run: async () => {
-            const result = statement.run(...args);
-            return { success: true, meta: { changes: Number(result.changes) } };
+          async all<T>() {
+            return { results: sqlite.prepare(sql).all(...(values as never[])) as T[] };
+          },
+          async first<T>() {
+            return (sqlite.prepare(sql).get(...(values as never[])) as T | undefined) ?? null;
+          },
+          async run() {
+            return { success: true, meta: { changes: Number(sqlite.prepare(sql).run(...(values as never[])).changes) } };
           },
         };
       },
     };
+  }
+
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    this.sqlite.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.sqlite.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 
@@ -230,10 +107,7 @@ class MemoryR2 {
       object: {
         size: new TextEncoder().encode(value).byteLength,
         checksums: {
-          sha256: checksum.buffer.slice(
-            checksum.byteOffset,
-            checksum.byteOffset + checksum.byteLength,
-          ),
+          sha256: checksum.buffer.slice(checksum.byteOffset, checksum.byteOffset + checksum.byteLength),
         },
         customMetadata: options.customMetadata,
       },
@@ -242,730 +116,705 @@ class MemoryR2 {
   }
 }
 
-interface FrappeCall {
-  body: Record<string, unknown>;
-}
-
 interface Harness {
   env: AppEnv;
-  db: SqliteD1;
+  db: TestD1;
   raw: MemoryR2;
-  frappeCalls: FrappeCall[];
-  restore: () => void;
 }
 
-function setup(options: {
-  gateState?: string;
-  jobStatus?: string;
-  jobs?: boolean;
-  frappeStatus?: number;
-  frappeBody?: string;
-} = {}): Harness {
-  const db = new SqliteD1();
-  if (options.jobs !== false) {
-    const nativeState = (options.gateState ?? "Blocked").toLowerCase();
-    db.seedNativeRunway(JOB_ID, nativeState === "ready" ? "ready" : "blocked");
+function insertUser(db: TestD1, user: { id: string; role: string; access: string }, createdBy = "owner@example.invalid") {
+  db.sqlite.prepare(
+    `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+        active, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, 1, ?, ?, ?)`,
+  ).run(user.id, TENANT, `${user.id}@example.invalid`, `Synthetic ${user.access}`, user.role, user.access, createdBy, at(-60), at(-60));
+}
+
+function seedJob(db: TestD1, jobId = JOB_ID, suffix = "0001"): void {
+  const now = "2026-08-20T10:00:00.000Z";
+  const email = `gate-${suffix}@example.invalid`;
+  db.sqlite.prepare(
+    `INSERT INTO envelopes
+       (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts, status,
+        created_at, updated_at)
+     VALUES (?, 'manual', 'Gate Customer', ?, '{}', ?, ?, 'reconciled', ?, ?)`,
+  ).run(`ow_gate_clearance_${suffix}`, email, `raw/gate/${suffix}.json`, now, now, now);
+  db.sqlite.prepare(
+    `INSERT INTO operating_leads
+       (lead_id, tenant_id, source_envelope_id, source, contact_name, contact_email,
+        lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, 'manual', 'Gate Customer', ?, 'qualified', 1, ?, ?)`,
+  ).run(`lead:gate:${suffix}`, TENANT, `ow_gate_clearance_${suffix}`, email, now, now);
+  db.sqlite.prepare(
+    `INSERT INTO operating_customers
+       (customer_id, tenant_id, source_envelope_id, display_name, contact_email,
+        lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, 'Gate Customer', ?, 'active', 1, ?, ?)`,
+  ).run(`customer:gate:${suffix}`, TENANT, `ow_gate_clearance_${suffix}`, email, now, now);
+  db.sqlite.prepare(
+    `INSERT INTO operating_roof_jobs
+       (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id, brand, job_number,
+        service_type, job_status, current_gate_state, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'ironwrap', ?, 'Roofing', 'qualified', 'blocked', 1, ?, ?)`,
+  ).run(jobId, TENANT, `lead:gate:${suffix}`, `customer:gate:${suffix}`, `ow_gate_clearance_${suffix}`, `IW-122-${suffix}`, now, now);
+  for (const gate of CLEARABLE_PRODUCTION_GATES) {
+    db.sqlite.prepare(
+      `INSERT INTO operating_production_gates
+         (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, owner_user, assigned_at,
+          due_at, blocker_reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'owner@example.invalid', ?, '2026-08-21T12:00:00.000Z',
+               'No active blocker', ?, ?)`,
+    ).run(`gate:${suffix}:${gate.toLowerCase()}`, TENANT, jobId, `ow_gate_clearance_${suffix}`, gate, now, now, now);
   }
+}
+
+/** Seed one money-lane row in the state an authenticated read-back would have left. */
+function seedDepositIntent(db: TestD1, overrides: Partial<AccountingIntentRecord> = {}): void {
+  const row: Record<string, unknown> = {
+    intent_id: "acct-intent-deposit-0000001",
+    tenant_id: TENANT,
+    kind: "deposit_invoice",
+    roof_job_id: JOB_ID,
+    basis_json: "{}",
+    basis_sha256: "a".repeat(64),
+    source_documents_json: "[]",
+    expected_sha256: "b".repeat(64),
+    tax_policy_snapshot_sha256: "e".repeat(64),
+    provider: "quickbooks",
+    realm_id: "4620816365000000000",
+    provider_entity_type: "Invoice",
+    provider_payload_json: "{}",
+    provider_payload_sha256: "c".repeat(64),
+    provider_request_id: "req-deposit-0000000000001",
+    currency: "CAD",
+    subtotal: "5000.00",
+    tax_amount: "250.00",
+    total_amount: "5250.00",
+    settled_amount: "5250.00",
+    authority_permit_ref: "permit:test",
+    authority_policy_ref: "policy:test",
+    authority_policy_version: "1",
+    authority_max_amount: "100000.00",
+    effect_id: "effect:deposit-0000000000001",
+    effect_idempotency_key: "effect-key-deposit-000000001",
+    state: "reconciled",
+    version: 1,
+    derived_by_actor_kind: "owner",
+    derived_by_user_id: USERS.owner.id,
+    derived_at: "2026-08-20T12:00:00.000Z",
+    approved_by_user_id: USERS.accounting.id,
+    approved_at: "2026-08-20T12:02:00.000Z",
+    provider_entity_id: "1042",
+    // `reconciled` is only legal when the observed fact set matches the expected one.
+    observed_sha256: "b".repeat(64),
+    provider_submitted_at: "2026-08-20T12:05:00.000Z",
+    provider_reconciled_at: "2026-08-20T12:10:00.000Z",
+    created_at: "2026-08-20T12:00:00.000Z",
+    updated_at: "2026-08-20T12:10:00.000Z",
+    ...overrides,
+  };
+  const columns = Object.keys(row);
+  db.sqlite.prepare(
+    `INSERT INTO accounting_intents (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(columns.map((column) => row[column]) as never[]));
+}
+
+/**
+ * The full migration chain, one roof job with six blocked gates, and the people who touch them:
+ * one active owner, production, ops, and the QA seed owner, who never counts as a holder.
+ */
+function setup(options: { secondOwner?: boolean } = {}): Harness {
+  const db = new TestD1();
+  db.sqlite.exec("PRAGMA foreign_keys = ON");
+  for (const name of readdirSync(new URL("../migrations/", import.meta.url))
+    .filter((value) => /^\d{4}_.+\.sql$/.test(value))
+    .sort()) {
+    db.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+  }
+  insertUser(db, USERS.owner);
+  insertUser(db, USERS.production);
+  insertUser(db, USERS.ops);
+  insertUser(db, USERS.seed, SEED_CREATED_BY);
+  insertUser(db, USERS.accounting);
+  if (options.secondOwner) insertUser(db, USERS.secondOwner);
+  seedJob(db);
   const raw = new MemoryR2();
-  const frappeCalls: FrappeCall[] = [];
-  const original = globalThis.fetch;
   const env = {
     DB: db as never,
     RAW: raw as never,
-    APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_TENANT_ID: TENANT,
+    APP_AUTH_PEPPER: PEPPER,
     APP_TIME_ZONE: "America/Edmonton",
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "read-key",
-    ERPNEXT_API_SECRET: "read-secret",
   } as AppEnv;
-
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const inbound = input instanceof Request ? input : new Request(input, init);
-    const url = new URL(inbound.url);
-    if (url.pathname.endsWith("record_production_gate_clearance")) {
-      frappeCalls.push({ body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
-      if (options.frappeStatus && options.frappeStatus !== 200) {
-        return new Response(
-          options.frappeBody ?? '{"exception":"production_gate_actor_role_denied: nope"}',
-          { status: options.frappeStatus },
-        );
-      }
-      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-      return Response.json({
-        message: {
-          gate: {
-            name: `GATE-${String(body.gate)}`,
-            gate: body.gate,
-            roof_job: JOB_ID,
-            state: body.clearance === "waived" ? "Waived" : "Ready",
-          },
-          evidence_item: body.evidence ? `gate-clearance:${String(body.decision_id)}` : null,
-          actor_role: "IronWrap Owner",
-          replayed: false,
-        },
-      });
-    }
-    const doctype = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-    if (doctype === "Roof Job") {
-      return Response.json({
-        data: options.jobs === false
-          ? []
-          : [{
-            name: JOB_ID,
-            job_number: "IW-122-1",
-            brand: "IronWrap Exteriors",
-            service_type: "Roofing",
-            job_status: options.jobStatus ?? "Won",
-            modified: "2026-08-20T10:00:00.000Z",
-          }],
-      });
-    }
-    if (doctype === "Production Gate State") {
-      return Response.json({
-        data: ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
-          name: `GATE-${gate}`,
-          roof_job: JOB_ID,
-          gate,
-          state: options.gateState ?? "Blocked",
-          modified: "2026-08-20T10:00:00.000Z",
-        })),
-      });
-    }
-    return Response.json({ data: [] });
-  };
-
-  return {
-    env,
-    db,
-    raw,
-    frappeCalls,
-    restore: () => {
-      globalThis.fetch = original;
-    },
-  };
+  return { env, db, raw };
 }
 
-function auth(role: AppRole, userId = role === "owner" ? "appu_owner_0001" : "appu_ops_0001"): AuthContext {
-  const now = new Date();
-  const email = userId === "appu_owner_0001"
-    ? OWNER
-    : userId === "appu_ops_0001"
-      ? "ops@example.com"
-      : "unbound@example.com";
+/** A real cookie session, authenticated the way the router authenticates a signed-in person. */
+async function person(h: Harness, userId: string): Promise<AuthContext> {
+  const token = randomToken();
+  h.db.sqlite.prepare(
+    `INSERT INTO app_sessions
+       (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+  ).run(await sessionHashFor(h.env, token), userId, TENANT, at(-1), at(60), at(-1), "d".repeat(64), "e".repeat(64));
+  const outcome = await authenticateAppRequest(
+    new Request("https://app.example.invalid/api/v1/session", {
+      headers: { cookie: `__Host-ironwrap_session=${token}` },
+    }),
+    h.env,
+  );
+  assert.ok(outcome.ok, "the synthetic person session authenticates");
+  return outcome.auth;
+}
+
+/** A signed-in role without a person's cookie token: a connector, an agent host, a service token. */
+function machine(role: AppRole = "owner"): AuthContext {
   return {
     rawSessionToken: "s".repeat(43),
     csrfToken: "csrf",
     permissions: permissionsForRole(role),
     session: {
       session_hash: "a".repeat(64),
-      session_created_at: new Date(now.getTime() - 60_000).toISOString(),
-      session_expires_at: new Date(now.getTime() + 3_600_000).toISOString(),
+      session_created_at: at(-1),
+      session_expires_at: at(60),
       revoked_at: null,
-      user_id: userId,
+      user_id: USERS.owner.id,
       tenant_id: TENANT,
-      email_normalized: email,
+      email_normalized: `${USERS.owner.id}@example.invalid`,
       display_name: role,
       role,
-      frappe_user_id: userId === "appu_owner_0002" ? null : email,
+      frappe_user_id: role === "owner" ? "owner@example.invalid" : null,
       active: 1,
-      created_by: OWNER,
-      created_at: now.toISOString(),
-      updated_at: now.toISOString(),
+      created_by: "owner@example.invalid",
+      created_at: at(-60),
+      updated_at: at(-60),
     },
   };
 }
 
-function request(
-  path: string,
-  body: Record<string, unknown>,
-  options: { idempotency?: string | null; csrf?: boolean } = {},
-): Request {
-  const headers = new Headers({ "content-type": "application/json" });
-  if (options.csrf !== false) headers.set("x-csrf-token", "csrf");
-  if (options.idempotency !== null) headers.set("idempotency-key", options.idempotency ?? KEY);
-  return new Request(`https://app.example.com${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-}
-
 async function post(
-  harness: Harness,
+  h: Harness,
+  auth: AuthContext,
   path: string,
   body: Record<string, unknown>,
-  context = auth("owner"),
-  options: { idempotency?: string | null; csrf?: boolean } = {},
-): Promise<{ status: number; body: Record<string, unknown> }> {
+  options: { idempotency?: string | null; csrf?: string | null } = {},
+): Promise<{ status: number; body: Record<string, any> }> {
+  const headers = new Headers({ "content-type": "application/json" });
+  const csrf = options.csrf === undefined ? auth.csrfToken : options.csrf;
+  if (csrf) headers.set("x-csrf-token", csrf);
+  if (options.idempotency !== null) headers.set("idempotency-key", options.idempotency ?? KEY);
   const response = await handleAuthenticatedRoute(
-    request(path, body, options),
-    harness.env,
-    context,
+    new Request(`https://app.example.invalid${path}`, { method: "POST", headers, body: JSON.stringify(body) }),
+    h.env,
+    auth,
   );
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: (await response.json()) as Record<string, any> };
 }
 
-test("an ops session may read the runway but never clear a gate", async () => {
-  const harness = setup();
-  try {
-    const result = await post(
-      harness,
-      CLEARANCE_PATH("Weather"),
-      { basis: "office_waiver", reason: "Forecast clear through the install window." },
-      auth("ops"),
-    );
-    assert.equal(result.status, 403);
-    assert.equal(result.body.error, "production_gate_clearance_forbidden");
-  } finally {
-    harness.restore();
+function gate(h: Harness, name: string, jobId = JOB_ID): Record<string, unknown> {
+  return {
+    ...(h.db.sqlite.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id, cleared_by_user_id,
+              evidence_refs_json
+         FROM operating_production_gates WHERE tenant_id = ? AND roof_job_id = ? AND gate = ?`,
+    ).get(TENANT, jobId, name) as Record<string, unknown>),
+  };
+}
+
+function entries(h: Harness, name?: string): Array<Record<string, any>> {
+  return h.db.sqlite.prepare(
+    `SELECT clearance_id, gate, entry_kind, basis, to_state, from_gate_version, request_id,
+            actor_user_id, actor_role, requested_by, self_approval, self_approval_basis, reason,
+            evidence_refs_json
+       FROM production_gate_clearances
+      WHERE ? IS NULL OR gate = ?
+      ORDER BY from_gate_version, rowid`,
+  ).all(name ?? null, name ?? null).map((row) => ({ ...row }));
+}
+
+function auditRows(h: Harness, clearanceId: string): Array<Record<string, unknown>> {
+  return h.db.sqlite.prepare(
+    `SELECT action, approved_by, source_ids, reason FROM audit_log WHERE run_id = ?`,
+  ).all(clearanceId).map((row) => ({ ...row }));
+}
+
+const WAIVER = { basis: "office_waiver", reason: "Panels staged at the shop and released for delivery." };
+
+test("a connector, agent or service token never moves a gate, even with an owner role", async () => {
+  const h = setup();
+  for (const path of [CLEARANCE_PATH("Materials"), DECISION_PATH("Materials")]) {
+    const body = path.endsWith("clearance")
+      ? WAIVER
+      : { request_id: `pgc_${"0".repeat(40)}`, expected_gate_version: 1, decision: "approve", reason: WAIVER.reason };
+    const machineCall = await post(h, machine("owner"), path, body);
+    assert.equal(machineCall.status, 403);
+    assert.equal(machineCall.body.error, "person_session_required");
+    // An empty token and an empty CSRF still never make a person.
+    const anonymous = { ...machine("owner"), rawSessionToken: "", csrfToken: "" };
+    const empty = await post(h, anonymous, path, body, { csrf: null });
+    assert.equal(empty.status, 403);
+    assert.equal(empty.body.error, "person_session_required");
   }
+  assert.deepEqual(entries(h), []);
+  assert.equal(gate(h, "Materials").version, 1);
 });
 
-test("an owner with no leftover Frappe identity still clears a gate on D1", async () => {
-  const harness = setup();
-  try {
-    const result = await post(
-      harness,
-      CLEARANCE_PATH("Weather"),
-      { basis: "office_waiver", reason: "Forecast clear through the install window." },
-      auth("owner", "appu_owner_0002"),
-    );
-    assert.equal(result.status, 200);
-    assert.equal(result.body.clearance, "waived");
-    const row = harness.db.raw.prepare(
-      `SELECT state, cleared_by_user_id, clearance_basis
-         FROM operating_production_gates
-        WHERE gate = 'Weather'`,
-    ).get() as { state: string; cleared_by_user_id: string; clearance_basis: string };
-    assert.equal(row.state, "waived");
-    assert.equal(row.cleared_by_user_id, "appu_owner_0002");
-    assert.equal(row.clearance_basis, "office_waiver");
-  } finally {
-    harness.restore();
-  }
-});
-
-test("a clearance without CSRF or an idempotency key is refused before any read", async () => {
-  const harness = setup();
-  try {
-    const noCsrf = await post(
-      harness,
-      CLEARANCE_PATH("Access"),
-      { basis: "office_waiver", reason: "Homeowner confirmed side-yard access." },
-      auth("owner"),
-      { csrf: false },
-    );
-    assert.equal(noCsrf.status, 403);
-    assert.equal(noCsrf.body.error, "csrf_failed");
-    const noKey = await post(
-      harness,
-      CLEARANCE_PATH("Access"),
-      { basis: "office_waiver", reason: "Homeowner confirmed side-yard access." },
-      auth("owner"),
-      { idempotency: null },
-    );
-    assert.equal(noKey.status, 400);
-    assert.equal(noKey.body.error, "idempotency_key_required");
-  } finally {
-    harness.restore();
-  }
-});
-
-test("Completion is a closeout gate and is not clearable on this rail", async () => {
-  const harness = setup();
-  try {
-    const result = await post(harness, CLEARANCE_PATH("Completion"), {
-      basis: "office_waiver",
-      reason: "Work finished ahead of the closeout review.",
-    });
-    assert.equal(result.status, 400);
-    assert.equal(result.body.error, "invalid_production_gate_clearance");
-  } finally {
-    harness.restore();
-  }
-});
-
-test("a job the caller's own runway cannot see has no gate to clear", async () => {
-  const harness = setup({ jobs: false });
-  try {
-    const result = await post(harness, CLEARANCE_PATH("Materials"), {
-      basis: "office_waiver",
-      reason: "Panels staged at the shop and released for delivery.",
-    });
-    assert.equal(result.status, 409);
-    assert.equal(result.body.error, "production_gate_job_not_on_runway");
-  } finally {
-    harness.restore();
-  }
-});
-
-// Deposit is the one gate both bases can reach, so this case is also the record of a
-// deliberate product decision: a job with no deposit to settle - here an insurance
-// restoration file the carrier pays on completion - is still schedulable, on a named
-// actor's authority, and the result must stay distinguishable from a settlement
-// (ELEC-219 read the header's five-gate list as forbidding this).
-test("an office waiver on Deposit persists as a waived gate attributed to the app user, never as settlement", async () => {
-  const harness = setup();
-  try {
-    const reason = "No deposit on this insurance restoration file; carrier pays on completion.";
-    const result = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "office_waiver",
-      reason,
-    });
-    assert.equal(result.status, 200);
-    assert.equal(result.body.clearance, "waived");
-    assert.equal(result.body.basis, "office_waiver");
-    assert.equal(result.body.evidence_item, null);
-    assert.equal(result.body.actor_role, "owner");
-    const row = harness.db.raw.prepare(
-      `SELECT state, version, clearance_basis, clearance_decision_id, cleared_by_user_id
-         FROM operating_production_gates
-        WHERE gate = 'Deposit'`,
-    ).get() as {
-      state: string;
-      version: number;
-      clearance_basis: string;
-      clearance_decision_id: string;
-      cleared_by_user_id: string;
-    };
-    assert.equal(row.state, "waived");
-    assert.equal(row.version, 2);
-    assert.equal(row.clearance_basis, "office_waiver");
-    assert.equal(row.clearance_decision_id, KEY);
-    assert.equal(row.cleared_by_user_id, "appu_owner_0001");
-    // A waiver is never mistaken for settled money: `Waived` and not `Ready`, no
-    // evidence item on the answer, and no receipt in immutable storage.
-    assert.notEqual(row.state, "complete");
-    assert.equal(harness.raw.objects.size, 0);
-  } finally {
-    harness.restore();
-  }
-});
-
-test("a waiver with no real reason is refused", async () => {
-  const harness = setup();
-  try {
-    for (const reason of ["", "ok", " ".repeat(20)]) {
-      const result = await post(harness, CLEARANCE_PATH("Safety"), {
-        basis: "office_waiver",
-        reason,
-      });
-      assert.equal(result.status, 400);
-      assert.equal(result.body.error, "invalid_production_gate_clearance");
-    }
-  } finally {
-    harness.restore();
-  }
-});
-
-test("the Deposit gate refuses a settlement clearance the money lane has not settled", async () => {
-  const harness = setup();
-  try {
-    const result = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(result.status, 409);
-    assert.equal(result.body.error, "deposit_settlement_not_observed");
-    assert.equal(harness.raw.objects.size, 0);
-  } finally {
-    harness.restore();
-  }
-});
-
-test("a partial provider payment remains blocked until the deposit intent is reconciled", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent({
-    state: "partially_settled",
-    settled_amount: "100.00",
-    provider_reconciled_at: null,
+test("CSRF is checked first, then the person, then the operation set and the idempotency key", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  const noCsrf = await post(h, owner, CLEARANCE_PATH("Access"), WAIVER, { csrf: null });
+  assert.deepEqual([noCsrf.status, noCsrf.body.error], [403, "csrf_failed"]);
+  const wrongCsrf = await post(h, owner, CLEARANCE_PATH("Access"), WAIVER, { csrf: "forged" });
+  assert.deepEqual([wrongCsrf.status, wrongCsrf.body.error], [403, "csrf_failed"]);
+  const machineNoCsrf = await post(h, machine("owner"), CLEARANCE_PATH("Access"), WAIVER, { csrf: null });
+  assert.deepEqual([machineNoCsrf.status, machineNoCsrf.body.error], [403, "csrf_failed"]);
+  const ops = await person(h, USERS.ops.id);
+  const forbidden = await post(h, ops, CLEARANCE_PATH("Weather"), WAIVER);
+  assert.deepEqual([forbidden.status, forbidden.body.error], [403, "production_gate_clearance_forbidden"]);
+  const noKey = await post(h, owner, CLEARANCE_PATH("Access"), WAIVER, { idempotency: null });
+  assert.deepEqual([noKey.status, noKey.body.error], [400, "idempotency_key_required"]);
+  const production = await person(h, USERS.production.id);
+  const productionDecides = await post(h, production, DECISION_PATH("Access"), {
+    request_id: `pgc_${"0".repeat(40)}`,
+    expected_gate_version: 1,
+    decision: "approve",
+    reason: WAIVER.reason,
   });
-  try {
-    const result = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(result.status, 409);
-    assert.equal(result.body.error, "deposit_settlement_not_observed");
-    assert.equal(harness.raw.objects.size, 0);
-    const row = harness.db.raw.prepare(
-      `SELECT state, version, clearance_decision_id
-         FROM operating_production_gates WHERE gate = 'Deposit'`,
-    ).get() as { state: string; version: number; clearance_decision_id: string | null };
-    assert.deepEqual({ ...row }, { state: "blocked", version: 1, clearance_decision_id: null });
-  } finally {
-    harness.restore();
-  }
+  assert.deepEqual(
+    [productionDecides.status, productionDecides.body.error],
+    [403, "production_gate_waiver_decision_forbidden"],
+  );
+  assert.deepEqual(entries(h), []);
 });
 
-test("a settled deposit invoice clears the gate on a stored, hashed receipt", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent();
-  try {
-    const result = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(result.status, 200);
-    assert.equal(result.body.clearance, "verified");
-    assert.equal(result.body.evidence_item, `gate-clearance:${KEY}`);
-
-    const [stored] = [...harness.raw.objects.entries()];
-    assert.match(stored[0], /^production-gate-clearance\/v1\/[a-f0-9]{64}\.json$/);
-    const receipt = JSON.parse(stored[1].body) as Record<string, unknown>;
-    assert.equal(receipt.kind, "production_gate_clearance");
-    assert.equal(receipt.basis, "deposit_settlement");
-    assert.equal(receipt.settlement_observed_at, "2026-08-20T12:10:00.000Z");
-    assert.deepEqual(receipt.money_intent, {
-      intent_id: "acct-intent-deposit-0000001",
-      kind: "deposit_invoice",
-      state: "reconciled",
-      provider: "quickbooks",
-      realm_id: "4620816365000000000",
-      provider_entity_type: "Invoice",
-      provider_entity_id: "1042",
-      currency: "CAD",
-      total_amount: "5250.00",
-      settled_amount: "5250.00",
-      observed_sha256: "b".repeat(64),
-      provider_reconciled_at: "2026-08-20T12:10:00.000Z",
-    });
-
-    const row = harness.db.raw.prepare(
-      `SELECT state, clearance_basis, clearance_decision_id, evidence_refs_json
-         FROM operating_production_gates
-        WHERE gate = 'Deposit'`,
-    ).get() as {
-      state: string;
-      clearance_basis: string;
-      clearance_decision_id: string;
-      evidence_refs_json: string;
-    };
-    assert.equal(row.state, "complete");
-    assert.equal(row.clearance_basis, "deposit_settlement");
-    assert.equal(row.clearance_decision_id, KEY);
-    const evidence = JSON.parse(row.evidence_refs_json) as Record<string, unknown>;
-    assert.equal(evidence.r2_key, stored[0]);
-    assert.equal(
-      evidence.content_checksum,
-      createHash("sha256").update(stored[1].body).digest("hex"),
-    );
-    assert.equal(
-      evidence.content_length,
-      new TextEncoder().encode(stored[1].body).byteLength,
-    );
-  } finally {
-    harness.restore();
+test("Completion is not clearable here, and a job off the caller's runway has no gate to clear", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  const completion = await post(h, owner, CLEARANCE_PATH("Completion"), WAIVER);
+  assert.deepEqual([completion.status, completion.body.error], [400, "invalid_production_gate_clearance"]);
+  const elsewhere = await post(h, owner, CLEARANCE_PATH("Materials", "job:not-on-runway"), WAIVER);
+  assert.deepEqual([elsewhere.status, elsewhere.body.error], [409, "production_gate_job_not_on_runway"]);
+  for (const reason of ["", "ok", " ".repeat(20)]) {
+    const result = await post(h, owner, CLEARANCE_PATH("Access"), { basis: "office_waiver", reason });
+    assert.deepEqual([result.status, result.body.error], [400, "invalid_production_gate_clearance"]);
   }
+  assert.deepEqual(entries(h), []);
 });
 
-test("the same settlement clearance twice stores the same bytes and converges", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent();
-  try {
-    const first = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
+test("Safety, Weather and Crew are never waivable, not even by the only owner", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  for (const name of ["Safety", "Weather", "Crew"]) {
+    const result = await post(h, owner, CLEARANCE_PATH(name), WAIVER, { idempotency: `gate-clearance-${name}-0000001` });
+    assert.deepEqual([result.status, result.body.error], [409, "production_gate_not_waivable"], name);
+    const decision = await post(h, owner, DECISION_PATH(name), {
+      request_id: `pgc_${"0".repeat(40)}`,
+      expected_gate_version: 1,
+      decision: "approve",
+      reason: WAIVER.reason,
     });
-    const [r2Key] = harness.raw.objects.keys();
-    assert.ok(r2Key);
-    const stored = harness.raw.objects.get(r2Key)!.body;
-    const second = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(first.status, 200);
-    // A retry re-stores identical bytes rather than colliding with its own first
-    // attempt, which is what an immutable object store does to a wall-clock stamp.
-    assert.equal(second.status, 200);
-    assert.equal(harness.raw.objects.size, 1);
-    assert.equal(harness.raw.objects.get(r2Key)!.body, stored);
-  } finally {
-    harness.restore();
+    assert.deepEqual([decision.status, decision.body.error], [409, "production_gate_not_waivable"], name);
+    assert.deepEqual({ state: gate(h, name).state, version: gate(h, name).version }, { state: "blocked", version: 1 });
   }
+  assert.deepEqual(entries(h), []);
 });
 
-test("a conflicting settlement replay preserves the R2 receipt and gate bytes", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent();
-  try {
-    const first = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(first.status, 200);
-    const [r2Key] = harness.raw.objects.keys();
-    assert.ok(r2Key);
-    const storedBefore = harness.raw.objects.get(r2Key)!;
-    const bodyBefore = storedBefore.body;
-    const checksumBefore = Buffer.from(
-      (storedBefore.object.checksums as { sha256: ArrayBuffer }).sha256,
-    ).toString("hex");
-    const gateBefore = harness.db.raw.prepare(
-      `SELECT state, version, clearance_basis, clearance_decision_id,
-              cleared_by_user_id, evidence_refs_json
-         FROM operating_production_gates WHERE gate = 'Deposit'`,
-    ).get();
-
-    const conflictingActor = await post(
-      harness,
-      CLEARANCE_PATH("Deposit"),
-      { basis: "deposit_settlement" },
-      auth("owner", "appu_owner_0002"),
-    );
-    assert.equal(conflictingActor.status, 409);
-    assert.equal(conflictingActor.body.error, "production_gate_clearance_replay_conflict");
-
-    const conflictingPayload = await post(harness, CLEARANCE_PATH("Deposit"), {
+test("production cannot waive: its waiver is a request, and the owner decides it", async () => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const requested = await post(h, production, CLEARANCE_PATH("Materials"), WAIVER);
+  assert.equal(requested.status, 409);
+  assert.deepEqual(requested.body, { error: "production_gate_waiver_requested" });
+  const [request] = entries(h, "Materials");
+  assert.deepEqual(
+    { ...request, clearance_id: undefined },
+    {
+      clearance_id: undefined,
+      gate: "Materials",
+      entry_kind: "waiver_request",
       basis: "office_waiver",
-      reason: "Carrier exception approved for this restoration project.",
-    });
-    assert.equal(conflictingPayload.status, 409);
-    assert.equal(conflictingPayload.body.error, "production_gate_clearance_replay_conflict");
-
-    const storedAfter = harness.raw.objects.get(r2Key)!;
-    assert.equal(storedAfter.body, bodyBefore);
-    assert.equal(
-      Buffer.from((storedAfter.object.checksums as { sha256: ArrayBuffer }).sha256).toString("hex"),
-      checksumBefore,
-    );
-    assert.deepEqual(
-      harness.db.raw.prepare(
-        `SELECT state, version, clearance_basis, clearance_decision_id,
-                cleared_by_user_id, evidence_refs_json
-           FROM operating_production_gates WHERE gate = 'Deposit'`,
-      ).get(),
-      gateBefore,
-    );
-  } finally {
-    harness.restore();
-  }
-});
-
-test("a new Deposit decision on an already-cleared gate writes no orphan receipt", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent();
-  try {
-    const first = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(first.status, 200);
-    const [[r2Key, storedBefore]] = [...harness.raw.objects.entries()];
-    const checksumBefore = Buffer.from(
-      (storedBefore.object.checksums as { sha256: ArrayBuffer }).sha256,
-    ).toString("hex");
-    const gateBefore = harness.db.raw.prepare(
-      `SELECT state, version, clearance_basis, clearance_decision_id,
-              cleared_by_user_id, evidence_refs_json
-         FROM operating_production_gates WHERE gate = 'Deposit'`,
-    ).get();
-
-    const refused = await post(
-      harness,
-      CLEARANCE_PATH("Deposit"),
-      { basis: "deposit_settlement" },
-      auth("owner"),
-      { idempotency: "gate-clearance-key-0000000002" },
-    );
-    assert.equal(refused.status, 409);
-    assert.equal(refused.body.error, "production_gate_already_cleared");
-    assert.equal(harness.raw.objects.size, 1);
-    assert.equal(harness.raw.objects.get(r2Key)!.body, storedBefore.body);
-    assert.equal(
-      Buffer.from(
-        (harness.raw.objects.get(r2Key)!.object.checksums as { sha256: ArrayBuffer }).sha256,
-      ).toString("hex"),
-      checksumBefore,
-    );
-    assert.deepEqual(
-      harness.db.raw.prepare(
-        `SELECT state, version, clearance_basis, clearance_decision_id,
-                cleared_by_user_id, evidence_refs_json
-           FROM operating_production_gates WHERE gate = 'Deposit'`,
-      ).get(),
-      gateBefore,
-    );
-  } finally {
-    harness.restore();
-  }
-});
-
-test("the same decision id clears two jobs into distinct scoped immutable receipts", async () => {
-  const harness = setup();
-  const secondJobId = "job:elec123";
-  harness.db.seedDepositIntent();
-  harness.db.raw.prepare(
-    `INSERT INTO operating_roof_jobs
-       (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
-        brand, job_number, service_type, job_status, current_gate_state,
-        version, created_at, updated_at)
-     SELECT ?, tenant_id, lead_id, customer_id, source_envelope_id,
-            brand, 'IW-122-2', service_type, job_status, current_gate_state,
-            version, created_at, updated_at
-       FROM operating_roof_jobs
-      WHERE tenant_id = ? AND roof_job_id = ?`,
-  ).run(secondJobId, TENANT, JOB_ID);
-  harness.db.raw.prepare(
-    `INSERT INTO operating_production_gates
-       (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key,
-        gate, state, owner_user, assigned_at, due_at, blocker_reason,
-        version, created_at, updated_at)
-     SELECT 'gate:elec123:' || lower(gate), tenant_id, ?, source_envelope_id,
-            source_raw_key, gate, state, owner_user, assigned_at, due_at, blocker_reason,
-            version, created_at, updated_at
-       FROM operating_production_gates
-      WHERE tenant_id = ? AND roof_job_id = ?`,
-  ).run(secondJobId, TENANT, JOB_ID);
-  harness.db.seedDepositIntent({
-    intent_id: "acct-intent-deposit-0000002",
-    roof_job_id: secondJobId,
-    basis_sha256: "d".repeat(64),
-    expected_sha256: "f".repeat(64),
-    tax_policy_snapshot_sha256: "9".repeat(64),
-    provider_payload_sha256: "8".repeat(64),
-    provider_request_id: "req-deposit-0000000000002",
-    effect_id: "effect:deposit-0000000000002",
-    effect_idempotency_key: "effect-key-deposit-000000002",
-    provider_entity_id: "1043",
-    observed_sha256: "f".repeat(64),
+      to_state: "blocked",
+      from_gate_version: 1,
+      request_id: null,
+      actor_user_id: USERS.production.id,
+      actor_role: "production",
+      requested_by: null,
+      self_approval: 0,
+      self_approval_basis: null,
+      reason: WAIVER.reason,
+      evidence_refs_json: null,
+    },
+  );
+  assert.deepEqual(gate(h, "Materials"), {
+    state: "blocked",
+    version: 2,
+    clearance_basis: null,
+    clearance_decision_id: null,
+    cleared_by_user_id: null,
+    evidence_refs_json: null,
   });
-  try {
-    const first = await post(harness, CLEARANCE_PATH("Deposit", JOB_ID), {
-      basis: "deposit_settlement",
-    });
-    const second = await post(harness, CLEARANCE_PATH("Deposit", secondJobId), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(first.status, 200);
-    assert.equal(second.status, 200);
+  assert.equal(auditRows(h, request!.clearance_id).length, 1);
+  // A replay of the request answers the same and appends nothing.
+  const again = await post(h, production, CLEARANCE_PATH("Materials"), WAIVER);
+  assert.deepEqual([again.status, again.body.error], [409, "production_gate_waiver_requested"]);
+  assert.equal(entries(h).length, 1);
 
-    const rows = harness.db.raw.prepare(
-      `SELECT roof_job_id, evidence_refs_json
-         FROM operating_production_gates
-        WHERE tenant_id = ? AND gate = 'Deposit'
-        ORDER BY roof_job_id`,
-    ).all(TENANT) as Array<{ roof_job_id: string; evidence_refs_json: string }>;
-    const scopedKeys = rows.map((row) =>
-      (JSON.parse(row.evidence_refs_json) as { r2_key: string }).r2_key
-    );
-    assert.equal(new Set(scopedKeys).size, 2);
-    assert.equal(harness.raw.objects.size, 2);
-    for (const [index, row] of rows.entries()) {
-      const receipt = harness.raw.objects.get(scopedKeys[index] ?? "");
-      assert.ok(receipt);
-      assert.equal(
-        (JSON.parse(receipt.body) as { roof_job_id: string }).roof_job_id,
-        row.roof_job_id,
-      );
-    }
-  } finally {
-    harness.restore();
-  }
+  const owner = await person(h, USERS.owner.id);
+  const decide = (version: number, key = "gate-waiver-decision-0000000001") =>
+    post(h, owner, DECISION_PATH("Materials"), {
+      request_id: request!.clearance_id,
+      expected_gate_version: version,
+      decision: "approve",
+      reason: "Owner approves: the shop holds every panel for this job.",
+    }, { idempotency: key });
+  const stale = await decide(1, "gate-waiver-decision-stale-00001");
+  assert.deepEqual([stale.status, stale.body.error], [409, "production_gate_version_conflict"]);
+  const approved = await decide(2);
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.decision.decision, "approve");
+  assert.equal(approved.body.decision.requested_by, USERS.production.id);
+  assert.equal(approved.body.decision.decided_by, USERS.owner.id);
+  assert.equal(approved.body.decision.self_approval, false);
+  assert.deepEqual(approved.body.gate, {
+    name: "gate:0001:materials",
+    gate: "Materials",
+    roof_job: JOB_ID,
+    state: "waived",
+    version: 3,
+  });
+  assert.equal(approved.body.replayed, false);
+  assert.deepEqual(
+    { state: gate(h, "Materials").state, basis: gate(h, "Materials").clearance_basis, by: gate(h, "Materials").cleared_by_user_id },
+    { state: "waived", basis: "office_waiver", by: USERS.owner.id },
+  );
+  const replayed = await decide(2);
+  assert.equal(replayed.status, 200);
+  assert.equal(replayed.body.replayed, true);
+  const twice = await decide(3, "gate-waiver-decision-0000000002");
+  assert.deepEqual([twice.status, twice.body.error], [409, "production_gate_already_cleared"]);
+  assert.equal(entries(h).length, 2);
 });
 
-test("a receipt that could not be stored never becomes a cleared gate", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent();
-  harness.raw.failNextPut = true;
-  try {
-    const result = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(result.status, 503);
-    assert.equal(result.body.error, "production_gate_receipt_unavailable");
-    const row = harness.db.raw.prepare(
-      `SELECT state FROM operating_production_gates WHERE gate = 'Deposit'`,
-    ).get() as { state: string };
-    assert.equal(row.state, "blocked");
-  } finally {
-    harness.restore();
-  }
+test("the only owner approves their own waiver with a reason, recorded as a self-approval", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  const reason = "No deposit on this insurance restoration file; the carrier pays on completion.";
+  const result = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "office_waiver", reason });
+  assert.equal(result.status, 200);
+  // The runway's strict response: exactly these keys, nothing new.
+  assert.deepEqual(result.body, {
+    gate: { name: "gate:0001:deposit", gate: "Deposit", roof_job: JOB_ID, state: "Waived" },
+    basis: "office_waiver",
+    clearance: "waived",
+    evidence_item: null,
+    actor_role: "owner",
+    replayed: false,
+  });
+  const [entry] = entries(h, "Deposit");
+  assert.equal(entry!.entry_kind, "waiver_decision");
+  assert.equal(entry!.request_id, null);
+  assert.equal(entry!.requested_by, USERS.owner.id);
+  assert.equal(entry!.actor_user_id, USERS.owner.id);
+  assert.equal(entry!.self_approval, 1);
+  assert.equal(entry!.self_approval_basis, "only_holder");
+  assert.equal(entry!.reason, reason);
+  assert.equal(entry!.evidence_refs_json, null, "the reason stays out of structured evidence");
+  assert.deepEqual(gate(h, "Deposit"), {
+    state: "waived",
+    version: 2,
+    clearance_basis: "office_waiver",
+    clearance_decision_id: entry!.clearance_id,
+    cleared_by_user_id: USERS.owner.id,
+    evidence_refs_json: null,
+  });
+  // The receipt of the self-approval: one audit row naming it, and no free text in it.
+  assert.deepEqual(auditRows(h, entry!.clearance_id), [{
+    action: "waiver_decision:office_waiver",
+    approved_by: USERS.owner.id,
+    source_ids: `job:${JOB_ID},gate:Deposit,from_version:1,to_state:waived,self_approval:only_holder`,
+    reason: null,
+  }]);
+  // A waiver is never mistaken for settled money: no receipt in immutable storage.
+  assert.equal(h.raw.objects.size, 0);
+});
+
+test("with a second owner active, the requester cannot approve their own waiver and the other owner decides", async () => {
+  const h = setup({ secondOwner: true });
+  const owner = await person(h, USERS.owner.id);
+  const secondOwner = await person(h, USERS.secondOwner.id);
+  const requested = await post(h, owner, CLEARANCE_PATH("Access"), WAIVER);
+  assert.deepEqual([requested.status, requested.body.error], [409, "production_gate_waiver_requested"]);
+  const [request] = entries(h, "Access");
+  assert.equal(request!.entry_kind, "waiver_request");
+  const decision = (decision: "approve" | "decline", version: number, key: string, requestId = request!.clearance_id) => ({
+    body: { request_id: requestId, expected_gate_version: version, decision, reason: "Access confirmed with the property manager." },
+    key,
+  });
+
+  const own = decision("approve", 2, "gate-waiver-decision-own-0000001");
+  const refused = await post(h, owner, DECISION_PATH("Access"), own.body, { idempotency: own.key });
+  assert.deepEqual([refused.status, refused.body.error], [409, "production_gate_waiver_self_approval_refused"]);
+  const ownDecline = decision("decline", 2, "gate-waiver-decision-own-0000002");
+  const refusedDecline = await post(h, owner, DECISION_PATH("Access"), ownDecline.body, { idempotency: ownDecline.key });
+  assert.deepEqual([refusedDecline.status, refusedDecline.body.error], [409, "production_gate_waiver_self_approval_refused"]);
+  assert.equal(entries(h).length, 1);
+
+  const declined = decision("decline", 2, "gate-waiver-decision-other-00001");
+  const declinedResult = await post(h, secondOwner, DECISION_PATH("Access"), declined.body, { idempotency: declined.key });
+  assert.equal(declinedResult.status, 200);
+  assert.equal(declinedResult.body.decision.decision, "decline");
+  assert.deepEqual({ state: gate(h, "Access").state, version: gate(h, "Access").version }, { state: "blocked", version: 3 });
+  const again = decision("approve", 3, "gate-waiver-decision-other-00002");
+  const decidedTwice = await post(h, secondOwner, DECISION_PATH("Access"), again.body, { idempotency: again.key });
+  assert.deepEqual([decidedTwice.status, decidedTwice.body.error], [409, "production_gate_waiver_already_decided"]);
+
+  // A fresh request; the other owner approves it.
+  const second = await post(h, owner, CLEARANCE_PATH("Access"), WAIVER, { idempotency: "gate-clearance-key-0000000002" });
+  assert.deepEqual([second.status, second.body.error], [409, "production_gate_waiver_requested"]);
+  const secondRequest = entries(h, "Access").at(-1)!;
+  const approve = decision("approve", 4, "gate-waiver-decision-other-00003", secondRequest.clearance_id);
+  const approved = await post(h, secondOwner, DECISION_PATH("Access"), approve.body, { idempotency: approve.key });
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.decision.self_approval, false);
+  assert.equal(gate(h, "Access").state, "waived");
+  for (const entry of entries(h)) assert.equal(auditRows(h, entry.clearance_id).length, 1);
+});
+
+test("once the other owner leaves, the requester is the only holder and may approve their own request", async () => {
+  const h = setup({ secondOwner: true });
+  const owner = await person(h, USERS.owner.id);
+  await post(h, owner, CLEARANCE_PATH("Materials"), WAIVER);
+  const [request] = entries(h, "Materials");
+  h.db.sqlite.prepare("UPDATE app_users SET active = 0 WHERE user_id = ?").run(USERS.secondOwner.id);
+  const approved = await post(h, owner, DECISION_PATH("Materials"), {
+    request_id: request!.clearance_id,
+    expected_gate_version: 2,
+    decision: "approve",
+    reason: "Only holder now: panels confirmed staged at the shop.",
+  }, { idempotency: "gate-waiver-decision-own-0000003" });
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.decision.self_approval, true);
+  assert.equal(approved.body.decision.self_approval_basis, "only_holder");
+  assert.equal(gate(h, "Materials").state, "waived");
+});
+
+test("the QA seed owner is refused on every route, and never stands in as another holder", async () => {
+  const h = setup();
+  seedDepositIntent(h.db);
+  const seed = await person(h, USERS.seed.id);
+  const waiver = await post(h, seed, CLEARANCE_PATH("Materials"), WAIVER);
+  assert.deepEqual([waiver.status, waiver.body.error], [403, "production_gate_clearance_seed_identity_refused"]);
+  const settlement = await post(h, seed, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" }, {
+    idempotency: "gate-clearance-seed-settlement-01",
+  });
+  assert.deepEqual([settlement.status, settlement.body.error], [403, "production_gate_clearance_seed_identity_refused"]);
+  const production = await person(h, USERS.production.id);
+  await post(h, production, CLEARANCE_PATH("Access"), WAIVER, { idempotency: "gate-clearance-production-000001" });
+  const [request] = entries(h, "Access");
+  const decided = await post(h, seed, DECISION_PATH("Access"), {
+    request_id: request!.clearance_id,
+    expected_gate_version: 2,
+    decision: "approve",
+    reason: "The seed identity must never decide a waiver.",
+  }, { idempotency: "gate-waiver-decision-seed-000001" });
+  assert.deepEqual([decided.status, decided.body.error], [403, "production_gate_clearance_seed_identity_refused"]);
+  assert.equal(entries(h).length, 1);
+  assert.deepEqual(
+    [gate(h, "Materials").state, gate(h, "Deposit").state, gate(h, "Access").state],
+    ["blocked", "blocked", "blocked"],
+  );
+  // The active seed owner does not make the real owner one of two holders.
+  const owner = await person(h, USERS.owner.id);
+  const own = await post(h, owner, CLEARANCE_PATH("Materials"), WAIVER, { idempotency: "gate-clearance-owner-0000000001" });
+  assert.equal(own.status, 200);
+  assert.equal(own.body.clearance, "waived");
+});
+
+test("the Deposit gate refuses a settlement the money lane has not settled", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  const none = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  assert.deepEqual([none.status, none.body.error], [409, "deposit_settlement_not_observed"]);
+  seedDepositIntent(h.db, { state: "partially_settled", settled_amount: "100.00", provider_reconciled_at: null });
+  const partial = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  assert.deepEqual([partial.status, partial.body.error], [409, "deposit_settlement_not_observed"]);
+  assert.equal(h.raw.objects.size, 0);
+  assert.deepEqual(entries(h), []);
+  assert.deepEqual({ state: gate(h, "Deposit").state, version: gate(h, "Deposit").version }, { state: "blocked", version: 1 });
+});
+
+test("a settled deposit invoice clears the gate on a stored, hashed receipt named by its ledger entry", async () => {
+  const h = setup();
+  seedDepositIntent(h.db);
+  const production = await person(h, USERS.production.id);
+  const result = await post(h, production, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  assert.equal(result.status, 200);
+  const [entry] = entries(h, "Deposit");
+  assert.deepEqual(result.body, {
+    gate: { name: "gate:0001:deposit", gate: "Deposit", roof_job: JOB_ID, state: "Ready" },
+    basis: "deposit_settlement",
+    clearance: "verified",
+    evidence_item: `gate-clearance:${entry!.clearance_id}`,
+    actor_role: "production",
+    replayed: false,
+  });
+  assert.equal(entry!.entry_kind, "clear");
+  assert.equal(entry!.to_state, "complete");
+  assert.equal(entry!.reason, null);
+
+  const [stored] = [...h.raw.objects.entries()];
+  assert.match(stored![0], /^production-gate-clearance\/v1\/[a-f0-9]{64}\.json$/);
+  const receipt = JSON.parse(stored![1].body) as Record<string, unknown>;
+  assert.equal(receipt.kind, "production_gate_clearance");
+  assert.equal(receipt.basis, "deposit_settlement");
+  assert.equal(receipt.decision_id, entry!.clearance_id);
+  assert.equal(receipt.cleared_by_user_id, USERS.production.id);
+  assert.equal(receipt.settlement_observed_at, "2026-08-20T12:10:00.000Z");
+  assert.deepEqual(receipt.money_intent, {
+    intent_id: "acct-intent-deposit-0000001",
+    kind: "deposit_invoice",
+    state: "reconciled",
+    provider: "quickbooks",
+    realm_id: "4620816365000000000",
+    provider_entity_type: "Invoice",
+    provider_entity_id: "1042",
+    currency: "CAD",
+    total_amount: "5250.00",
+    settled_amount: "5250.00",
+    observed_sha256: "b".repeat(64),
+    provider_reconciled_at: "2026-08-20T12:10:00.000Z",
+  });
+
+  const row = gate(h, "Deposit");
+  assert.equal(row.state, "complete");
+  assert.equal(row.clearance_basis, "deposit_settlement");
+  assert.equal(row.clearance_decision_id, entry!.clearance_id);
+  assert.equal(row.evidence_refs_json, entry!.evidence_refs_json);
+  const evidence = JSON.parse(String(row.evidence_refs_json)) as Record<string, unknown>;
+  assert.equal(evidence.r2_key, stored![0]);
+  assert.equal(evidence.content_checksum, createHash("sha256").update(stored![1].body).digest("hex"));
+  assert.equal(evidence.content_length, new TextEncoder().encode(stored![1].body).byteLength);
+  assert.equal(evidence.money_intent_id, "acct-intent-deposit-0000001");
+  assert.equal(auditRows(h, entry!.clearance_id).length, 1);
+});
+
+test("the same settlement twice converges on one receipt and one entry", async () => {
+  const h = setup();
+  seedDepositIntent(h.db);
+  const owner = await person(h, USERS.owner.id);
+  const first = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  const [r2Key] = h.raw.objects.keys();
+  const storedBody = h.raw.objects.get(r2Key!)!.body;
+  const second = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(second.body.replayed, true);
+  assert.equal(second.body.evidence_item, first.body.evidence_item);
+  assert.equal(h.raw.objects.size, 1);
+  assert.equal(h.raw.objects.get(r2Key!)!.body, storedBody);
+  assert.equal(entries(h).length, 1);
+  assert.equal(gate(h, "Deposit").version, 2);
+});
+
+test("a conflicting replay of a settlement key preserves the receipt, the entry and the gate", async () => {
+  const h = setup({ secondOwner: true });
+  seedDepositIntent(h.db);
+  const owner = await person(h, USERS.owner.id);
+  assert.equal((await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" })).status, 200);
+  const [r2Key] = h.raw.objects.keys();
+  const before = { receipt: h.raw.objects.get(r2Key!)!.body, gate: gate(h, "Deposit"), entries: entries(h) };
+
+  const otherActor = await post(h, await person(h, USERS.secondOwner.id), CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  assert.deepEqual([otherActor.status, otherActor.body.error], [409, "production_gate_clearance_replay_conflict"]);
+  const otherBody = await post(h, owner, CLEARANCE_PATH("Deposit"), {
+    basis: "office_waiver",
+    reason: "Carrier exception approved for this restoration project.",
+  });
+  assert.deepEqual([otherBody.status, otherBody.body.error], [409, "production_gate_clearance_replay_conflict"]);
+  // The key names one request in the tenant: the same key on another job is a conflict too.
+  seedJob(h.db, "job:elec123", "0002");
+  const otherJob = await post(h, owner, CLEARANCE_PATH("Deposit", "job:elec123"), { basis: "deposit_settlement" });
+  assert.deepEqual([otherJob.status, otherJob.body.error], [409, "production_gate_clearance_replay_conflict"]);
+
+  assert.equal(h.raw.objects.size, 1);
+  assert.equal(h.raw.objects.get(r2Key!)!.body, before.receipt);
+  assert.deepEqual(gate(h, "Deposit"), before.gate);
+  assert.deepEqual(entries(h), before.entries);
+  assert.equal(gate(h, "Deposit", "job:elec123").state, "blocked");
+});
+
+test("a new decision on a cleared gate is refused before any receipt is stored", async () => {
+  const h = setup();
+  seedDepositIntent(h.db);
+  const owner = await person(h, USERS.owner.id);
+  assert.equal((await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" })).status, 200);
+  const before = { objects: [...h.raw.objects.keys()], gate: gate(h, "Deposit") };
+  const refused = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" }, {
+    idempotency: "gate-clearance-key-0000000002",
+  });
+  assert.deepEqual([refused.status, refused.body.error], [409, "production_gate_already_cleared"]);
+  const waiver = await post(h, owner, CLEARANCE_PATH("Deposit"), WAIVER, { idempotency: "gate-clearance-key-0000000003" });
+  assert.deepEqual([waiver.status, waiver.body.error], [409, "production_gate_already_cleared"]);
+  assert.deepEqual([...h.raw.objects.keys()], before.objects);
+  assert.deepEqual(gate(h, "Deposit"), before.gate);
+  assert.equal(entries(h).length, 1);
+});
+
+test("a receipt that could not be stored never becomes a ledger entry", async () => {
+  const h = setup();
+  seedDepositIntent(h.db);
+  h.raw.failNextPut = true;
+  const owner = await person(h, USERS.owner.id);
+  const result = await post(h, owner, CLEARANCE_PATH("Deposit"), { basis: "deposit_settlement" });
+  assert.deepEqual([result.status, result.body.error], [503, "production_gate_receipt_unavailable"]);
+  assert.deepEqual(entries(h), []);
+  assert.equal(gate(h, "Deposit").state, "blocked");
 });
 
 test("settlement is a Deposit-only basis and takes no caller prose", async () => {
-  const harness = setup();
-  harness.db.seedDepositIntent();
-  try {
-    const wrongGate = await post(harness, CLEARANCE_PATH("Crew"), {
-      basis: "deposit_settlement",
-    });
-    assert.equal(wrongGate.status, 400);
-    const withReason = await post(harness, CLEARANCE_PATH("Deposit"), {
-      basis: "deposit_settlement",
-      reason: "The customer told me they paid.",
-    });
-    assert.equal(withReason.status, 400);
-  } finally {
-    harness.restore();
-  }
+  const h = setup();
+  seedDepositIntent(h.db);
+  const owner = await person(h, USERS.owner.id);
+  const wrongGate = await post(h, owner, CLEARANCE_PATH("Crew"), { basis: "deposit_settlement" });
+  assert.equal(wrongGate.status, 400);
+  const withReason = await post(h, owner, CLEARANCE_PATH("Deposit"), {
+    basis: "deposit_settlement",
+    reason: "The customer told me they paid.",
+  });
+  assert.equal(withReason.status, 400);
+  assert.deepEqual(entries(h), []);
 });
 
-test("a second clearance with a different decision is refused as already cleared", async () => {
-  const harness = setup();
-  try {
-    const first = await post(harness, CLEARANCE_PATH("Access"), {
-      basis: "office_waiver",
-      reason: "Homeowner confirmed the side-yard gate stays unlocked.",
-    });
-    assert.equal(first.status, 200);
-    const result = await post(
-      harness,
-      CLEARANCE_PATH("Access"),
-      { basis: "office_waiver", reason: "Homeowner confirmed the side-yard gate stays unlocked." },
-      auth("owner"),
-      { idempotency: "gate-clearance-key-0000000002" },
-    );
-    assert.equal(result.status, 409);
-    assert.equal(result.body.error, "production_gate_already_cleared");
-  } finally {
-    harness.restore();
-  }
-});
-
-test("the same waiver decision id replays the stored D1 clearance", async () => {
-  const harness = setup();
-  try {
-    const first = await post(harness, CLEARANCE_PATH("Weather"), {
-      basis: "office_waiver",
-      reason: "Environment Canada shows a dry three-day window from Monday.",
-    });
-    const second = await post(harness, CLEARANCE_PATH("Weather"), {
-      basis: "office_waiver",
-      reason: "Environment Canada shows a dry three-day window from Monday.",
-    });
-    const conflictingReason = await post(harness, CLEARANCE_PATH("Weather"), {
-      basis: "office_waiver",
-      reason: "A different forecast source now predicts a shorter dry window.",
-    });
-    assert.equal(first.status, 200);
-    assert.equal(second.status, 200);
-    assert.equal(second.body.replayed, true);
-    assert.equal(conflictingReason.status, 409);
-    assert.equal(conflictingReason.body.error, "production_gate_clearance_replay_conflict");
-    const row = harness.db.raw.prepare(
-      `SELECT version FROM operating_production_gates WHERE gate = 'Weather'`,
-    ).get() as { version: number };
-    assert.equal(row.version, 2);
-  } finally {
-    harness.restore();
-  }
+test("the same waiver key replays the stored entry, and a changed reason under it conflicts", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  const body = { basis: "office_waiver", reason: "Homeowner confirmed the side-yard gate stays unlocked." };
+  const first = await post(h, owner, CLEARANCE_PATH("Access"), body);
+  const second = await post(h, owner, CLEARANCE_PATH("Access"), body);
+  const changed = await post(h, owner, CLEARANCE_PATH("Access"), {
+    basis: "office_waiver",
+    reason: "A different note about the side-yard gate entirely.",
+  });
+  assert.equal(first.status, 200);
+  assert.deepEqual(second.body, { ...first.body, replayed: true });
+  assert.deepEqual([changed.status, changed.body.error], [409, "production_gate_clearance_replay_conflict"]);
+  const other = await post(h, owner, CLEARANCE_PATH("Access"), body, { idempotency: "gate-clearance-key-0000000002" });
+  assert.deepEqual([other.status, other.body.error], [409, "production_gate_already_cleared"]);
+  assert.equal(gate(h, "Access").version, 2);
+  assert.equal(entries(h).length, 1);
 });
 
 test("the runway advertises the clearing action only to a session that may use it", async () => {
-  const harness = setup();
-  try {
-    const owner = await handleAuthenticatedRoute(
-      new Request("https://app.example.com/api/v1/production"),
-      harness.env,
-      auth("owner"),
-    );
-    const ownerBody = (await owner.json()) as { allowed_actions: string[] };
-    assert.ok(ownerBody.allowed_actions.includes("production_gate.clear"));
-
-    const ops = await handleAuthenticatedRoute(
-      new Request("https://app.example.com/api/v1/production"),
-      harness.env,
-      auth("ops"),
-    );
-    const opsBody = (await ops.json()) as { allowed_actions: string[] };
-    assert.ok(!opsBody.allowed_actions.includes("production_gate.clear"));
-  } finally {
-    harness.restore();
-  }
+  const h = setup();
+  const owner = await handleAuthenticatedRoute(new Request("https://app.example.invalid/api/v1/production"), h.env, machine("owner"));
+  const ownerBody = (await owner.json()) as { allowed_actions: string[] };
+  assert.ok(ownerBody.allowed_actions.includes("production_gate.clear"));
+  const ops = await handleAuthenticatedRoute(new Request("https://app.example.invalid/api/v1/production"), h.env, machine("ops"));
+  const opsBody = (await ops.json()) as { allowed_actions: string[] };
+  assert.ok(!opsBody.allowed_actions.includes("production_gate.clear"));
 });
 
 test("settledDepositIntent requires reconciliation and ignores partial or zero settlement", () => {
@@ -976,20 +825,13 @@ test("settledDepositIntent requires reconciliation and ignores partial or zero s
   } as unknown as AccountingIntentRecord;
   const partial = { ...base, intent_id: "a", state: "partially_settled" } as AccountingIntentRecord;
   const reconciled = { ...base, intent_id: "b", state: "reconciled" } as AccountingIntentRecord;
-  const zero = {
-    ...base,
-    intent_id: "c",
-    state: "reconciled",
-    settled_amount: "0.00",
-  } as AccountingIntentRecord;
+  const zero = { ...base, intent_id: "c", state: "reconciled", settled_amount: "0.00" } as AccountingIntentRecord;
   assert.equal(settledDepositIntent([partial, reconciled])?.intent_id, "b");
   assert.equal(settledDepositIntent([partial]), null);
   assert.equal(settledDepositIntent([zero]), null);
   assert.equal(settledDepositIntent([]), null);
   assert.equal(
-    settledDepositIntent([
-      { ...base, intent_id: "d", state: "submitted" } as AccountingIntentRecord,
-    ]),
+    settledDepositIntent([{ ...base, intent_id: "d", state: "submitted" } as AccountingIntentRecord]),
     null,
   );
 });
@@ -1012,21 +854,17 @@ test("the receipt is canonical, so the same observation always hashes the same",
   const input = {
     tenantId: TENANT,
     roofJobId: JOB_ID,
-    decisionId: KEY,
-    clearedByUserId: "appu_owner_0001",
+    decisionId: `pgc_${"a".repeat(40)}`,
+    clearedByUserId: USERS.owner.id,
     intent,
   };
   assert.equal(depositSettlementReceipt(input), depositSettlementReceipt({ ...input }));
-  // No wall-clock stamp anywhere in it: R2 stores the receipt immutably, so a
-  // "when this ran" field would make every retry collide with its own first
-  // attempt. Found exactly that way on a real stack.
+  // No wall-clock stamp anywhere in it: R2 stores the receipt immutably, so a "when this ran"
+  // field would make every retry collide with its own first attempt. Found that way on a real stack.
   const decoded = JSON.parse(depositSettlementReceipt(input)) as Record<string, unknown>;
   assert.equal(decoded.settlement_observed_at, "2026-08-20T12:10:00.000Z");
   assert.ok(!("observed_at" in decoded));
-  assert.equal(
-    settlementObservedAt({ ...intent, provider_reconciled_at: null } as AccountingIntentRecord),
-    null,
-  );
+  assert.equal(settlementObservedAt({ ...intent, provider_reconciled_at: null } as AccountingIntentRecord), null);
   assert.equal(
     settlementObservedAt({
       ...intent,
@@ -1037,54 +875,45 @@ test("the receipt is canonical, so the same observation always hashes the same",
   );
 });
 
-// The basis/gate matrix, stated once so the asymmetry cannot be "corrected" by
-// reading the module header as an exclusion list (ELEC-219): settlement is bound to
-// the gate that has a deposit invoice, a waiver is bound to nothing.
-test("a waiver is a valid basis on every clearable gate; settlement is Deposit-only", () => {
-  for (const gate of CLEARABLE_PRODUCTION_GATES) {
+// The basis/gate matrix, stated once: settlement is bound to the gate that has a deposit invoice;
+// a waiver's body parses on every clearable gate, and the owner ruling decides which may be waived.
+test("settlement is Deposit-only, and only Deposit, Materials and Access may be waived", () => {
+  for (const gateName of CLEARABLE_PRODUCTION_GATES) {
     assert.ok(
-      parseProductionGateClearance(gate, JOB_ID, KEY, {
+      parseProductionGateClearance(gateName, JOB_ID, KEY, {
         basis: "office_waiver",
         reason: "Recorded by the office against a stated business reason.",
       }),
-      `${gate} must accept an office waiver`,
+      `${gateName} parses an office waiver body`,
     );
-    const settlement = parseProductionGateClearance(gate, JOB_ID, KEY, {
-      basis: "deposit_settlement",
-    });
-    if (gate === "Deposit") {
-      assert.ok(settlement, "Deposit must accept a settlement clearance");
-    } else {
-      assert.equal(settlement, null, `${gate} must not accept a settlement clearance`);
-    }
+    const settlement = parseProductionGateClearance(gateName, JOB_ID, KEY, { basis: "deposit_settlement" });
+    assert.equal(settlement !== null, gateName === "Deposit", gateName);
+    assert.equal(isWaivableProductionGate(gateName), ["Deposit", "Materials", "Access"].includes(gateName), gateName);
   }
+  assert.equal(parseProductionGateClearance("Weather", JOB_ID, "short", { basis: "office_waiver" }), null);
+  assert.equal(parseProductionGateClearance("Weather", JOB_ID, KEY, { basis: "office_waiver", extra: 1 }), null);
+  assert.equal(parseProductionGateClearance("Weather", JOB_ID, KEY, { basis: "nonsense" }), null);
 });
 
-test("parse and refusal-code helpers refuse what they cannot read", () => {
-  assert.equal(parseProductionGateClearance("Weather", JOB_ID, "short", { basis: "office_waiver" }), null);
-  assert.equal(
-    parseProductionGateClearance("Weather", JOB_ID, KEY, { basis: "office_waiver", extra: 1 }),
-    null,
-  );
-  assert.equal(parseProductionGateClearance("Weather", JOB_ID, KEY, { basis: "nonsense" }), null);
-  assert.equal(frappeRefusalCode("nothing machine readable here"), "production_gate_frappe_refused");
-  assert.equal(
-    frappeRefusalCode('{"exception":"production_gate_not_found: no such gate"}'),
-    "production_gate_not_found",
-  );
-  // The module path is in every Frappe traceback and matches the code shape; a real
-  // refusal once surfaced as the meaningless code `production_gate_api` because of it.
-  assert.equal(
-    frappeRefusalCode(
-      'File "/apps/ironwrap_roofing/ironwrap_roofing/production_gate_api.py", line 400',
-    ),
-    "production_gate_frappe_refused",
-  );
-  // A rule with no code of its own is not given one.
-  assert.equal(
-    frappeRefusalCode(
-      '{"exception":"frappe.exceptions.PermissionError: a waiver must be attributed to the current owner-level actor"}',
-    ),
-    "production_gate_frappe_refused",
-  );
+test("a waiver decision body has exactly its four keys", () => {
+  const body = {
+    request_id: `pgc_${"b".repeat(40)}`,
+    expected_gate_version: 2,
+    decision: "decline",
+    reason: "Declined: the materials are not on site yet.",
+  };
+  assert.deepEqual(parseProductionGateWaiverDecision(body), {
+    requestId: body.request_id,
+    expectedGateVersion: 2,
+    decision: "decline",
+    reason: body.reason,
+  });
+  assert.equal(parseProductionGateWaiverDecision({ ...body, extra: true }), null);
+  assert.equal(parseProductionGateWaiverDecision({ ...body, decision: "waive" }), null);
+  assert.equal(parseProductionGateWaiverDecision({ ...body, expected_gate_version: 0 }), null);
+  assert.equal(parseProductionGateWaiverDecision({ ...body, expected_gate_version: "2" }), null);
+  assert.equal(parseProductionGateWaiverDecision({ ...body, request_id: "pgc_short" }), null);
+  assert.equal(parseProductionGateWaiverDecision({ ...body, reason: "short" }), null);
+  const { reason: _reason, ...withoutReason } = body;
+  assert.equal(parseProductionGateWaiverDecision(withoutReason), null);
 });

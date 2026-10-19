@@ -1,4 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
+import { EFFECT_ATTEMPT_LEASE_MS } from "./effect-runtime.ts";
 import {
   commercialCommandFingerprint,
   type CommercialAuthorityBinding,
@@ -266,6 +267,246 @@ export function buildLeadTriageCommand(input: RecordLeadTriageInput): Readonly<R
     summary: text(input.summary, 1, 2_000, "commercial_lead_summary_invalid"),
     next_action: text(input.nextAction, 1, 500, "commercial_lead_next_action_invalid"),
   });
+}
+
+/**
+ * External effect states in which a proposal send has started but its delivery is not confirmed:
+ * proposed, claimed (authorized, executing, reconciling, retry), unknown, compensating, or a
+ * manual exception. A delivery check (`reconcileExternalEffect`) settles an unknown send; a person
+ * settles a manual exception with `recordProposalDeliveryConfirmation`; compensating clears when
+ * the compensation settles.
+ */
+export const UNCONFIRMED_PROPOSAL_DELIVERY_STATES = [
+  "proposed",
+  "authorized",
+  "executing",
+  "reconciling",
+  "retry",
+  "unknown",
+  "compensating",
+  "manual_exception",
+] as const;
+
+export type ProposalDeliveryOutcome = "delivered" | "not_delivered";
+
+export interface ProposalDeliveryConfirmationRecord {
+  confirmation_id: string;
+  tenant_id: string;
+  effect_id: string;
+  proposal_pack_id: string;
+  proposal_revision_id: string;
+  outcome: ProposalDeliveryOutcome;
+  note: string;
+  confirmed_by_user_id: string;
+  confirmed_by_role: string;
+  created_at: string;
+}
+
+export class ProposalDeliveryConfirmationError extends Error {
+  readonly code: string;
+  readonly status: number;
+  readonly detail: Record<string, unknown>;
+
+  constructor(code: string, status: number, detail: Record<string, unknown> = {}) {
+    super(code);
+    this.code = code;
+    this.status = status;
+    this.detail = detail;
+    this.name = "ProposalDeliveryConfirmationError";
+  }
+}
+
+/**
+ * A person records what they found about a proposal send that could not be confirmed (0156): one
+ * append-only row whose insert moves an `unknown` or `manual_exception` effect to `succeeded` or
+ * `reconciled`, resolves its exception and writes the audit row. The same key with the same request
+ * replays; anything else conflicts.
+ */
+export async function recordProposalDeliveryConfirmation(
+  env: AppEnv,
+  input: {
+    tenantId: string;
+    effectId: string;
+    outcome: ProposalDeliveryOutcome;
+    note: string;
+    actorUserId: string;
+    actorRole: string;
+    idempotencyKey: string;
+    now?: string;
+  },
+): Promise<{ confirmation: ProposalDeliveryConfirmationRecord; replayed: boolean; effectState: string }> {
+  const keyHash = await sha256Hex(`proposal-delivery-confirmation\n${input.tenantId}\n${input.idempotencyKey}`);
+  const requestSha = await sha256Hex(canonicalJson({
+    effect_id: input.effectId,
+    outcome: input.outcome,
+    note: input.note,
+    actor: input.actorUserId,
+  }));
+  const readConfirmation = async (where: string, value: string) =>
+    await env.DB.prepare(
+      `SELECT confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome,
+              note, confirmed_by_user_id, confirmed_by_role, created_at, request_sha256
+         FROM proposal_delivery_confirmations WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
+    ).bind(input.tenantId, value).first<ProposalDeliveryConfirmationRecord & { request_sha256: string }>();
+  const replay = async () => {
+    const prior = await readConfirmation("idempotency_key_hash", keyHash);
+    if (!prior) return null;
+    if (prior.request_sha256 !== requestSha) {
+      throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_replay_conflict", 409);
+    }
+    const { request_sha256: _hash, ...confirmation } = prior;
+    const effect = await env.DB.prepare("SELECT state FROM external_effects WHERE effect_id = ?")
+      .bind(prior.effect_id).first<{ state: string }>();
+    return { confirmation, replayed: true, effectState: effect?.state ?? "" };
+  };
+  const earlier = await replay();
+  if (earlier) return earlier;
+
+  const effect = await env.DB.prepare(
+    `SELECT effect_id, state, aggregate_id, intent_id, updated_at FROM external_effects
+      WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
+        AND aggregate_type = 'proposal_publication'`,
+  ).bind(input.tenantId, input.effectId).first<{
+    effect_id: string;
+    state: string;
+    aggregate_id: string;
+    intent_id: string;
+    updated_at: string;
+  }>();
+  if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
+  if (effect.state !== "manual_exception" && effect.state !== "unknown") {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_not_awaiting_confirmation", 409, {
+      delivery_state: effect.state,
+    });
+  }
+  const createdAt = input.now ?? new Date().toISOString();
+  // A fresh unknown may only be late: "not delivered" waits until the provider's own answer could no
+  // longer arrive inside an attempt lease, so a person cannot clear the way for a second send early.
+  if (effect.state === "unknown" && input.outcome === "not_delivered") {
+    const settleableUntil = Date.parse(effect.updated_at) + EFFECT_ATTEMPT_LEASE_MS;
+    if (Date.parse(createdAt) < settleableUntil) {
+      throw new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
+        delivery_state: effect.state,
+        not_before: new Date(settleableUntil).toISOString(),
+      });
+    }
+  }
+  const confirmationId = `delivery-confirmation:${keyHash.slice(0, 40)}`;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).bind(
+      confirmationId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id,
+      input.outcome, input.note, input.actorUserId, input.actorRole, keyHash, requestSha, createdAt,
+    ).run();
+  } catch (error) {
+    const raced = await replay();
+    if (raced) return raced;
+    const message = error instanceof Error ? error.message : String(error);
+    const code = message.match(/proposal_delivery_confirmation_[a-z_]+/)?.[0] ?? "proposal_delivery_confirmation_failed";
+    throw new ProposalDeliveryConfirmationError(code, code.endsWith("_failed") ? 503 : 409);
+  }
+  const stored = await readConfirmation("confirmation_id", confirmationId);
+  if (!stored) throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_failed", 503);
+  const { request_sha256: _hash, ...confirmation } = stored;
+  return {
+    confirmation,
+    replayed: false,
+    effectState: input.outcome === "delivered" ? "succeeded" : "reconciled",
+  };
+}
+
+/**
+ * A live publish permit for this proposal pack, at any publication version, that no effect has used
+ * yet, or null. Two live permits could each produce a send, so a second is refused.
+ */
+export async function outstandingProposalPublishPermit(
+  env: AppEnv,
+  tenantId: string,
+  proposalPackId: string,
+  now = new Date(),
+): Promise<{ permit_id: string; expires_at: string } | null> {
+  return await env.DB.prepare(
+    `SELECT permit.permit_id, permit.expires_at FROM commercial_authority_permits permit
+      WHERE permit.tenant_id = ? AND permit.action = 'proposal.publish'
+        AND permit.aggregate_type = 'proposal_publication' AND permit.aggregate_id = ?
+        AND julianday(permit.expires_at) > julianday(?)
+        AND NOT EXISTS (
+          SELECT 1 FROM external_effects effect
+           WHERE effect.tenant_id = permit.tenant_id AND effect.authority_ref = permit.permit_id
+        )
+      ORDER BY permit.issued_at DESC LIMIT 1`,
+  ).bind(tenantId, proposalPackId, now.toISOString())
+    .first<{ permit_id: string; expires_at: string }>();
+}
+
+/**
+ * Why this proposal revision may not be sent again yet, or null. A proposal is not sent again until
+ * its last send is confirmed delivered, on the manual and the AI path alike, because both prepare
+ * publication through this check:
+ * - a send still pending, claimed, unknown, compensating or in a manual exception blocks, with the
+ *   step that settles it (check delivery, or a person confirming it by hand);
+ * - a send confirmed delivered but not yet recorded as the publication blocks too, so it is
+ *   recorded instead of sent a second time.
+ */
+export async function unconfirmedProposalDelivery(
+  env: AppEnv,
+  tenantId: string,
+  proposalPackId: string,
+  proposalRevisionId: string,
+  now = new Date(),
+): Promise<{ error: string; effect_id: string; state: string; next_step: string } | null> {
+  const states = UNCONFIRMED_PROPOSAL_DELIVERY_STATES;
+  // A send that never started (proposed, authorized, retry) and is past its deadline can no longer
+  // be claimed or executed, so it sent nothing and does not block; the D1 single-flight trigger
+  // (0156) applies the same rule.
+  const pending = await env.DB.prepare(
+    `SELECT effect_id, state FROM external_effects
+      WHERE tenant_id = ? AND aggregate_type = 'proposal_publication' AND aggregate_id = ?
+        AND intent_id = ? AND action = 'proposal.publish'
+        AND state IN (${states.map(() => "?").join(", ")})
+        AND NOT (state IN ('proposed', 'authorized', 'retry')
+                 AND julianday(deadline_at) <= julianday(?))
+      ORDER BY created_at DESC, effect_id DESC
+      LIMIT 1`,
+  ).bind(tenantId, proposalPackId, proposalRevisionId, ...states, now.toISOString())
+    .first<{ effect_id: string; state: string }>();
+  if (pending) {
+    return {
+      error: "proposal_delivery_unconfirmed",
+      effect_id: pending.effect_id,
+      state: pending.state,
+      // An unknown or conflicting send is settled by a person recording what they checked.
+      next_step: pending.state === "manual_exception" || pending.state === "unknown"
+        ? "confirm_delivery_by_hand"
+        : "check_delivery",
+    };
+  }
+  const delivered = await env.DB.prepare(
+    `SELECT effect.effect_id, effect.state FROM external_effects effect
+      WHERE effect.tenant_id = ? AND effect.aggregate_type = 'proposal_publication'
+        AND effect.aggregate_id = ? AND effect.intent_id = ? AND effect.action = 'proposal.publish'
+        AND effect.state = 'succeeded'
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_publication_events publication
+           WHERE publication.tenant_id = effect.tenant_id
+             AND publication.external_effect_id = effect.effect_id
+        )
+      ORDER BY effect.created_at DESC, effect.effect_id DESC
+      LIMIT 1`,
+  ).bind(tenantId, proposalPackId, proposalRevisionId)
+    .first<{ effect_id: string; state: string }>();
+  return delivered
+    ? {
+      error: "proposal_delivery_not_recorded",
+      effect_id: delivered.effect_id,
+      state: delivered.state,
+      next_step: "record_publication",
+    }
+    : null;
 }
 
 export async function recordLeadTriageDecision(
@@ -608,6 +849,14 @@ export async function recordCommercialProposalPublication(
   );
   if (quote.terms_hash !== proposal.terms_hash) fail("commercial_publication_terms_mismatch");
   const action = input.state === "published" ? "proposal.publish" : "proposal.withdraw";
+  // A succeeded effect bound to this permit already ran; recording it is readback (see
+  // `readbackOfEffectCreatedAt`), so an expired permit or a renewed policy cannot strand it.
+  const ranEffect = input.authority.kind === "policy_permit" && externalEffectId
+    ? await env.DB.prepare(
+      `SELECT created_at FROM external_effects
+        WHERE effect_id = ? AND tenant_id = ? AND state = 'succeeded' AND authority_ref = ?`,
+    ).bind(externalEffectId, input.tenantId, input.authority.permitId).first<{ created_at: string }>()
+    : null;
   const authority = await resolveCommercialAuthority(env, input.authority, {
     tenantId: input.tenantId,
     action,
@@ -617,6 +866,7 @@ export async function recordCommercialProposalPublication(
     customerQuoteId: quote.customer_quote_id,
     proposalPackId: input.proposalPackId,
     now: occurredAt,
+    ...(ranEffect ? { readbackOfEffectCreatedAt: ranEffect.created_at } : {}),
   });
   if (authority.kind === "policy_permit") {
     if (!externalEffectId) fail("commercial_publication_effect_required");

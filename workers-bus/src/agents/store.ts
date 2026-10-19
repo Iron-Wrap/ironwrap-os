@@ -11,7 +11,7 @@ import { currentDelegation, escalateRunAbstention, specialistControl, specialist
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
-import { currentQualifications, divertsToShadow, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
+import { CANDIDATE_BAR, currentQualifications, delegationCandidates, divertsToShadow, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
@@ -700,6 +700,24 @@ export async function proposeStep(
       delegation_id: null,
       reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
     };
+  }
+  // The system proposes acting within limits only where the action meets the earned-autonomy bar
+  // for that specialist (contract "Delegation" item 13): below it, policy refuses the proposal.
+  if (decision.result !== "deny" && input.action_id === "delegation.propose_change" && (input.args as { proposed?: unknown }).proposed === "within_limits") {
+    const pair = input.args as { specialist_id: string; action_id: string };
+    const earned = (await delegationCandidates(db, tenantId, CANDIDATE_BAR, { specialist_id: pair.specialist_id, action_id: pair.action_id })).length > 0;
+    decision = earned
+      ? { ...decision, checks: [...decision.checks, { check: "earned_autonomy", passed: true }] }
+      : {
+          ...decision,
+          result: "deny",
+          outcome: "failed",
+          reason_codes: ["policy_denied"],
+          checks: [...decision.checks, { check: "earned_autonomy", passed: false }],
+          permit_kind: "none",
+          delegation_id: null,
+          reviewer_role: null,
+        };
   }
   const now = new Date(nowMs).toISOString();
   // An admitted read reads now. One its reader may not make, or that fails, stops as an

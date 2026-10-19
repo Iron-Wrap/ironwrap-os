@@ -12,8 +12,10 @@ import {
 } from "../src/effect-runtime-admin.ts";
 import type { AppEnv } from "../src/app-types.ts";
 
-const NOW = "2026-08-16T12:00:00.000Z";
-const DEADLINE = "2026-08-16T12:30:00.000Z";
+// The claim route runs on the server's clock (a caller cannot backdate a claim), so the fixture
+// clock is the real one and the deadline lies ahead of it.
+const NOW = new Date().toISOString();
+const DEADLINE = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");

@@ -42,6 +42,7 @@ import {
   validateAppOrigin,
   validAppCsrf,
   type AppAuthRefusal,
+  personCookieSession,
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
@@ -235,6 +236,7 @@ import {
   commercialCommandFingerprint,
   CommercialAuthorityError,
   getCommercialPermit,
+  commercialPermitForKey,
 } from "./commercial-authority.ts";
 import {
   buildLeadTriageCommand,
@@ -255,6 +257,10 @@ import {
   recordCommercialProposalRevision,
   type CommercialLeadTriageRecord,
   type CommercialProposalRecord,
+  ProposalDeliveryConfirmationError,
+  recordProposalDeliveryConfirmation,
+  outstandingProposalPublishPermit,
+  unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
@@ -1155,6 +1161,12 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/commercial/proposal-publications"
   ) {
     return await settleCommercialProposalPublication(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-confirmations"
+  ) {
+    return await confirmProposalDeliveryByHand(req, env, auth);
   }
   if (
     req.method === "POST" &&
@@ -4608,6 +4620,65 @@ async function createCommercialQuoteRevision(
   }
 }
 
+/**
+ * A person records whether a proposal send that could not be confirmed reached the customer
+ * (0156). People only: the commercial set (owner, operations, sales) in their own session, so an
+ * agent, connector or service token can never confirm a delivery.
+ */
+async function confirmProposalDeliveryByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  const keys = isRecord(body) ? Object.keys(body) : [];
+  const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  if (
+    !isRecord(body) ||
+    keys.length !== 3 ||
+    !keys.every((name) => ["external_effect_id", "outcome", "note"].includes(name)) ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160) ||
+    (body.outcome !== "delivered" && body.outcome !== "not_delivered") ||
+    // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
+    [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_confirmation" }, 400);
+  }
+  try {
+    const result = await recordProposalDeliveryConfirmation(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      outcome: body.outcome,
+      note,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      confirmation: result.confirmation,
+      effect: { external_effect_id: result.confirmation.effect_id, state: result.effectState },
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_confirmation_failed" }, 503);
+  }
+}
+
 async function prepareCommercialProposalPublication(
   req: Request,
   env: AppEnv,
@@ -4671,6 +4742,43 @@ async function prepareCommercialProposalPublication(
     if (!proposal) return privateAppJson({ error: "commercial_publication_proposal_missing" }, 404);
     if (proposal.quote_status !== "approved") {
       return privateAppJson({ error: "commercial_publication_quote_not_approved" }, 409);
+    }
+    // A proposal is not sent again until its last send is confirmed delivered: a second send
+    // while the first is pending or unknown could reach the customer twice. A replay of the same
+    // request returns its original permit instead, so it is checked first.
+    const replayedPermit = input.state === "published"
+      ? await commercialPermitForKey(env, auth.session.tenant_id, requestIdempotencyKey)
+      : null;
+    if (input.state === "published" && !replayedPermit) {
+      const pending = await unconfirmedProposalDelivery(
+        env,
+        auth.session.tenant_id,
+        input.proposalPackId,
+        input.proposalRevisionId,
+        now,
+      );
+      if (pending) {
+        return privateAppJson({
+          error: pending.error,
+          delivery_state: pending.state,
+          external_effect_id: pending.effect_id,
+          next_step: pending.next_step,
+        }, 409);
+      }
+      const outstanding = await outstandingProposalPublishPermit(
+        env,
+        auth.session.tenant_id,
+        input.proposalPackId,
+        now,
+      );
+      if (outstanding) {
+        return privateAppJson({
+          error: "proposal_publication_permit_outstanding",
+          permit_id: outstanding.permit_id,
+          permit_expires_at: outstanding.expires_at,
+          next_step: "use_or_wait_for_permit",
+        }, 409);
+      }
     }
     if (proposal.job_status === "cancelled" || proposal.customer_status === "archived") {
       return privateAppJson({ error: "commercial_job_not_active" }, 409);
@@ -4791,7 +4899,20 @@ async function settleCommercialProposalPublication(
       permit.actor_type !== expectedActorType ||
       permit.actor_id !== auth.session.user_id
     ) {
-      return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+      // Recording a send that already ran is readback: any person in the commercial set may record
+      // a succeeded effect bound to this permit, so a preparer who left or changed role strands
+      // nothing.
+      const ran = input.externalEffectId
+        ? await env.DB.prepare(
+          `SELECT 1 AS found FROM external_effects
+            WHERE tenant_id = ? AND effect_id = ? AND state = 'succeeded' AND authority_ref = ?`,
+        ).bind(auth.session.tenant_id, input.externalEffectId, permit.permit_id).first()
+        : null;
+      // A caller whose person session cannot be established is not a person; refuse, never fail.
+      const person = ran ? await personCookieSession(env, auth).catch(() => null) : null;
+      if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+        return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+      }
     }
     const result = await recordCommercialProposalPublication(env, {
       tenantId: auth.session.tenant_id,

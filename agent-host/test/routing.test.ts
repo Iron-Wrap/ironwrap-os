@@ -99,7 +99,7 @@ test("a rate-limited primary fails over to its declared fallback, which answers;
     [result.routeId, result.provider, result.family, result.route, result.qualificationRef, result.attempts, result.complianceRef, result.runClass],
     ["backup_sol", "codex_backup", "openai", "declared_fallback", "q-backup_sol", 2, "ai.openai.chatgpt-commercial", "live"],
   );
-  assert.deepEqual(result.failover, [{ routeId: "codex_sol", provider: "codex", model: "gpt-6.1-sol", reason: "rate_limited", retryAt: h.clock.now + 3_600_000 }]);
+  assert.deepEqual(result.failover, [{ routeId: "codex_sol", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retryAt: h.clock.now + 3_600_000 }]);
   assert.equal(result.gatewayConfigSha256, config.sha256);
   assert.deepEqual(
     ledger(h).map((record) => [record.routeId, record.route, record.provider, record.outcome, record.billing, record.runClass, record.complianceRef]),

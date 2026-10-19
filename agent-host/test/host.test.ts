@@ -199,6 +199,28 @@ test("a signal becomes one run with only the tools both the Worker and the allow
   assert.deepEqual([requests[0].qualifications, requests[0].providers], [[], ["claude", "codex"]]);
 });
 
+test("a v3 close names the effort of the route that answered and the family of every hop it passed over", async (t) => {
+  const worker = fakeWorker(openedRun({ review_of: null, expected_action_id: null, mode: "live", close_model: 3 }));
+  const { options } = runner(t, worker, async (request) => ({
+    ...okResult(request),
+    routeId: "codex_sol_high",
+    effort: "high",
+    route: "declared_fallback",
+    failover: [
+      { routeId: "codex_sol", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retryAt: 1_000 },
+      // A hop whose route lost its registry entry has no family; the Worker treats it as unknown.
+      { routeId: "codex_gone", provider: "codex", model: "gpt-gone", family: null, reason: "no_qualified_route", retryAt: null },
+    ],
+  }));
+  await runSignal(options, signal());
+  const model = worker.closed[0].body.model as { effort: string; failover: unknown[] };
+  assert.equal(model.effort, "high");
+  assert.deepEqual(model.failover, [
+    { route_id: "codex_sol", provider: "codex", model: "gpt-6.1-sol", family: "openai", reason: "rate_limited", retry_at: 1_000 },
+    { route_id: "codex_gone", provider: "codex", model: "gpt-gone", family: null, reason: "no_qualified_route", retry_at: null },
+  ]);
+});
+
 test("the run under review, the expected action and a shadow mode reach the gateway, and the close records the route", async (t) => {
   const worker = fakeWorker(openedRun({ review_of: { run_id: "run_0000000000", provider: "codex" }, expected_action_id: "lead.qualify", mode: "shadow" }));
   const { options, requests } = runner(t, worker, async (request) => ({

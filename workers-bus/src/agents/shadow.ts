@@ -601,23 +601,23 @@ export async function currentQualifications(db: AgentDb, tenantId: string, speci
 
 /**
  * Whether a close may rely on the qualification it names: a passed row of this tenant and
- * specialist for the provider, model and release the close ran on, with no failure recorded for its
- * key since. The close names no effort; the row's own effort is the one its route matched.
+ * specialist for the provider, model, effort and release the close ran on, with no failure recorded
+ * for that key since.
  */
 export async function qualificationHolds(
   db: AgentDb,
   tenantId: string,
   specialistId: string,
-  close: { qualification_ref: string | null; provider: string; model: string; release_sha256: string | null },
+  close: { qualification_ref: string | null; provider: string; model: string; effort: string; release_sha256: string | null },
 ): Promise<boolean> {
   if (close.qualification_ref === null || close.release_sha256 === null) return false;
   const row = await db
     .prepare(
       `SELECT q.qualification_id FROM agent_qualifications q
       WHERE q.tenant_id = ? AND q.qualification_id = ? AND q.specialist_id = ? AND q.passed = 1
-        AND q.provider = ? AND q.model = ? AND q.release_sha256 = ? AND NOT EXISTS (${LATER_FOR_KEY} AND l.passed = 0)`,
+        AND q.provider = ? AND q.model = ? AND q.effort = ? AND q.release_sha256 = ? AND NOT EXISTS (${LATER_FOR_KEY} AND l.passed = 0)`,
     )
-    .bind(tenantId, close.qualification_ref, specialistId, close.provider, close.model, close.release_sha256)
+    .bind(tenantId, close.qualification_ref, specialistId, close.provider, close.model, close.effort, close.release_sha256)
     .first<{ qualification_id: string }>();
   return row !== null;
 }
@@ -699,28 +699,18 @@ interface RunsOn {
 }
 
 /**
- * The provider and model of the specialist's most recent closed run with a model. A v3 close also
- * records its release, and the qualification it relied on records the route's effort; a legacy
- * close shows neither, so its qualification matches on provider and model alone.
+ * The provider and model of the specialist's most recent closed run with a model, and the effort
+ * and release a v3 close also records; a legacy close shows neither, so its qualification matches
+ * on provider and model alone.
  */
 async function specialistRunsOn(db: AgentDb, tenantId: string, specialistId: string): Promise<RunsOn | null> {
-  const close = await db
+  return await db
     .prepare(
       `SELECT json_extract(close_json, '$.model.provider') AS provider, json_extract(close_json, '$.model.model') AS model,
-        json_extract(close_json, '$.model.release_sha256') AS release, json_extract(close_json, '$.model.qualification_ref') AS ref FROM agent_runs
+        json_extract(close_json, '$.model.effort') AS effort, json_extract(close_json, '$.model.release_sha256') AS release FROM agent_runs
       WHERE tenant_id = ? AND specialist_id = ? AND state = 'closed' AND json_extract(close_json, '$.model.model') IS NOT NULL
       ORDER BY ended_at DESC, rowid DESC LIMIT 1`,
     )
     .bind(tenantId, specialistId)
-    .first<{ provider: string; model: string; release: string | null; ref: string | null }>();
-  if (!close) return null;
-  // Only a reference to this specialist's own row for the same provider, model and release names the effort.
-  const relied =
-    close.ref === null || close.release === null
-      ? null
-      : await db
-          .prepare("SELECT effort FROM agent_qualifications WHERE tenant_id = ? AND specialist_id = ? AND qualification_id = ? AND provider = ? AND model = ? AND release_sha256 = ?")
-          .bind(tenantId, specialistId, close.ref, close.provider, close.model, close.release)
-          .first<{ effort: string }>();
-  return { provider: close.provider, model: close.model, effort: relied?.effort ?? null, release: close.release };
+    .first<RunsOn>();
 }

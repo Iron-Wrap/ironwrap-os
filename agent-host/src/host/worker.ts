@@ -132,6 +132,8 @@ export interface CloseModelV3 {
   adapter: string;
   family: string;
   model: string;
+  /** The effort of the route that answered, which its qualification names. */
+  effort: string;
   models_used: string[];
   /** The account's credential mode. */
   auth_mode: string;
@@ -139,8 +141,8 @@ export interface CloseModelV3 {
   tier: string;
   route_id: string;
   route: "primary" | "declared_fallback";
-  /** Every hop the run passed over or failed on, in order (at most three). */
-  failover: Array<{ route_id: string; provider: string; model: string; reason: string; retry_at: number | null }>;
+  /** Every hop the run passed over or failed on, in order (at most three), with its family (null with no registry entry). */
+  failover: Array<{ route_id: string; provider: string; model: string; family: string | null; reason: string; retry_at: number | null }>;
   /** The Worker's `qualification_id` the route matched; null on a synthetic run. */
   qualification_ref: string | null;
   release_sha256: string | null;

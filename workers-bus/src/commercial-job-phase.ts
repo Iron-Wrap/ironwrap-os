@@ -1,6 +1,7 @@
 import type { AppEnv } from "./app-types.ts";
 import { isNativeFinalInvoiceCurrent } from "./quickbooks-native-final-invoice.ts";
 import type { AccountingIntentRecord } from "./accounting-intents.ts";
+import { contractDepositTerms } from "./deposit-policy.ts";
 
 const MAX_CURRENT_HEAD_ROWS = 2;
 const MAX_ACCEPTANCE_ROWS = 101;
@@ -96,6 +97,8 @@ interface GateRow {
   blocker_reason: string;
   version: number;
   updated_at: string;
+  /** The basis of the ledger entry the gate stands on (0153), when one does. */
+  basis_in_force: string | null;
 }
 
 interface AssignmentRow {
@@ -192,6 +195,12 @@ export interface CommercialJobPhaseReadModel {
        */
       acceptance_under_withdrawn_publication: Record<string, unknown> | null;
       deposit_derivation: Record<string, unknown> | null;
+      /**
+       * `not_required_by_contract` once the deposit policy recorded that the accepted contract has
+       * no deposit (OD-01, migration 0155): the Deposit gate is complete by `contract_no_deposit`.
+       * That reads "Not required by the contract", never done or paid. Null otherwise.
+       */
+      deposit_requirement: "not_required_by_contract" | null;
     };
     production: {
       gates: Array<Record<string, unknown>>;
@@ -309,10 +318,13 @@ export async function readCommercialJobPhase(
         LIMIT ${MAX_DEPOSIT_ROWS}`,
     ).bind(tenantId, roofJobId).all<DepositRow>(),
     env.DB.prepare(
-      `SELECT gate, state, blocker_reason, version, updated_at
-         FROM operating_production_gates
-        WHERE tenant_id = ? AND roof_job_id = ?
-        ORDER BY gate ASC`,
+      `SELECT gate.gate, gate.state, gate.blocker_reason, gate.version, gate.updated_at,
+              entry.basis AS basis_in_force
+         FROM operating_production_gates gate
+         LEFT JOIN production_gate_clearances entry
+           ON entry.tenant_id = gate.tenant_id AND entry.clearance_id = gate.clearance_decision_id
+        WHERE gate.tenant_id = ? AND gate.roof_job_id = ?
+        ORDER BY gate.gate ASC`,
     ).bind(tenantId, roofJobId).all<GateRow>(),
     env.DB.prepare(
       `SELECT current.assignment_id, current.assignment_version, current.crew_id,
@@ -404,6 +416,11 @@ export async function readCommercialJobPhase(
     ? exactDepositCandidates[0]!
     : null;
   const gateRows = gates.results ?? [];
+  // OD-01 (0155): a contract with no deposit, which the policy recorded on the Deposit gate.
+  const quoteHasNoDeposit = !!quote && contractDepositTerms(quote.terms_json) === "no_deposit";
+  const depositGate = gateRows.find((row) => row.gate === "Deposit");
+  const depositNotRequired = !!exactAcceptance && quoteHasNoDeposit &&
+    depositGate?.state === "complete" && depositGate.basis_in_force === "contract_no_deposit";
   const requiredGateNames = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"];
   const allRequiredGatesReady = requiredGateNames.every((name) => {
     const gate = gateRows.find((row) => row.gate === name);
@@ -435,6 +452,7 @@ export async function readCommercialJobPhase(
     acceptance: exactAcceptance,
     deposit: exactDeposit,
     depositReconciled,
+    depositNotRequired,
     finalInvoiceReconciled,
     allRequiredGatesReady,
     safetyBlocked: stopRows.length > 0,
@@ -448,6 +466,8 @@ export async function readCommercialJobPhase(
     publication,
     acceptance: exactAcceptance,
     deposit: exactDeposit,
+    quoteHasNoDeposit,
+    depositNotRequired,
     gateRows,
     requiredGateNames,
     completionPacket,
@@ -496,6 +516,7 @@ export async function readCommercialJobPhase(
           ? acceptanceProjection(withdrawnAcceptanceCandidates[0]!)
           : null,
         deposit_derivation: exactDeposit ? depositProjection(exactDeposit) : null,
+        deposit_requirement: depositNotRequired ? "not_required_by_contract" : null,
       },
       production: {
         gates: gateRows.map(gateProjection),
@@ -566,6 +587,8 @@ export function derivePhase(input: {
   acceptance: AcceptanceRow | null;
   deposit: DepositRow | null;
   depositReconciled: boolean;
+  /** OD-01 (0155): the policy recorded Deposit as not required by the accepted contract. */
+  depositNotRequired?: boolean;
   finalInvoiceReconciled: boolean;
   allRequiredGatesReady: boolean;
   safetyBlocked: boolean;
@@ -579,7 +602,11 @@ export function derivePhase(input: {
   if (!input.quote || !input.proposal || !input.publication || input.publication.state !== "published")
     return input.quote || input.proposal || input.publication ? "commercial_in_progress" : "qualified";
   if (!input.acceptance) return "commercial_in_progress";
-  if (!input.deposit || input.deposit.state !== "derived" || !input.depositReconciled)
+  // A contract with no deposit has no deposit pending.
+  if (
+    !input.depositNotRequired &&
+    (!input.deposit || input.deposit.state !== "derived" || !input.depositReconciled)
+  )
     return "deposit_pending";
   if (!input.allRequiredGatesReady) return "production_blocked";
   if (input.finalInvoiceReconciled && input.completionPacket) return "financially_closed";
@@ -595,6 +622,8 @@ function phaseStaleReasons(input: {
   publication: PublicationRow | null;
   acceptance: AcceptanceRow | null;
   deposit: DepositRow | null;
+  quoteHasNoDeposit: boolean;
+  depositNotRequired: boolean;
   gateRows: GateRow[];
   requiredGateNames: string[];
   completionPacket: CompletionRow | null;
@@ -631,6 +660,13 @@ function phaseStaleReasons(input: {
   else if (!input.acceptance) reasons.push("commercial.customer_acceptance_missing");
   if (input.acceptanceOverflow) reasons.push("commercial.customer_acceptance_scan_overflow");
   if (input.depositAmbiguous) reasons.push("commercial.deposit_derivation_ambiguous");
+  // A quote with no deposit (OD-01) never has a derivation; once accepted, the open fact is the
+  // policy's Deposit record.
+  else if (input.quoteHasNoDeposit) {
+    if (input.acceptance && !input.depositNotRequired) {
+      reasons.push("commercial.deposit_not_required_unrecorded");
+    }
+  }
   else if (!input.deposit) reasons.push("commercial.deposit_derivation_missing");
   else if (input.deposit.state !== "derived") reasons.push(`commercial.deposit_${input.deposit.state}`);
   if (input.depositOverflow) reasons.push("commercial.deposit_derivation_scan_overflow");

@@ -104,7 +104,8 @@ number taken from the change request".
    id while a within-limits setting was in force and the step fit its ceiling is a record gap
    (`low`); a within-limits permit with no within-limits setting in force is a step outside
    delegation. So is a step outside the ceiling: its amount, its listed recipients, or its count
-   per period when a cited fact counts the period.
+   per period when a cited fact counts the period. With `fallback` true the record cannot say when
+   the fallback began, so a step under its `setting_id` is no finding on that ground alone.
 3. Quantities: issued = shop good output + scrap tickets + NCR quantity + returns; shop output =
    delivered; delivered = installed + returned + recorded damage; invoiced = accepted + approved
    change orders. An unexplained difference is a finding; never assume scrap.

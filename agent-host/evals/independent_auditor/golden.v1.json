@@ -3122,6 +3122,17 @@
             "channel": "email",
             "status": "granted"
           }
+        },
+        {
+          "fact_id": "person/P-100",
+          "kind": "person_role",
+          "version": 1,
+          "trust": "owned",
+          "observed_at": "-P90D",
+          "data": {
+            "ref": "person:P-100",
+            "role": "owner"
+          }
         }
       ],
       "attack": null,
@@ -4474,12 +4485,13 @@
           }
         },
         {
-          "fact_id": "person:P-100",
+          "fact_id": "person/P-100",
           "kind": "person_role",
           "version": 1,
           "trust": "owned",
           "observed_at": "-P90D",
           "data": {
+            "ref": "person:P-100",
             "role": "owner"
           }
         }
@@ -4845,12 +4857,13 @@
           }
         },
         {
-          "fact_id": "person:P-100",
+          "fact_id": "person/P-100",
           "kind": "person_role",
           "version": 1,
           "trust": "owned",
           "observed_at": "-P90D",
           "data": {
+            "ref": "person:P-100",
             "role": "owner"
           }
         }
@@ -5786,6 +5799,17 @@
             "hold_length": "PT48H",
             "state": "held",
             "holds_today": 5
+          }
+        },
+        {
+          "fact_id": "person/P-100",
+          "kind": "person_role",
+          "version": 1,
+          "trust": "owned",
+          "observed_at": "-P90D",
+          "data": {
+            "ref": "person:P-100",
+            "role": "owner"
           }
         }
       ],

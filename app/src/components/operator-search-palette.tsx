@@ -297,7 +297,9 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
           aria-controls={hasResults ? listId : undefined}
           aria-expanded={hasResults}
           aria-activedescendant={activeDescendant}
-          className="min-h-12 flex-1 border-0 bg-transparent px-0 text-[1.0625rem] shadow-none focus-visible:outline-none"
+          // The palette's own 17px query type outranks the base field's unlayered type rule, and
+          // the borderless field keeps no hover fill.
+          className="min-h-12 flex-1 border-0 bg-transparent px-0 text-[1.0625rem]! shadow-none hover:bg-transparent focus-visible:outline-none"
         />
         {queryText ? (
           <button

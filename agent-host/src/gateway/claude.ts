@@ -1,13 +1,14 @@
-// Claude through the Claude Agent SDK. The CLI subprocess runs isolated: no built-in tools, no
-// filesystem settings, hooks or CLAUDE.md, no session persistence, an empty working directory, a
-// gateway-owned config directory, and an environment rebuilt from scratch that carries only the
-// one credential the configured auth mode names. Only allowlisted MCP tools are callable.
+// Claude through the Claude Agent SDK, for one `claude_agent_sdk` provider account. The CLI
+// subprocess runs isolated: no built-in tools, no filesystem settings, hooks or CLAUDE.md, no session
+// persistence, an empty working directory, a gateway-owned config directory, and an environment
+// rebuilt from scratch that carries only the one credential the account's credential mode names.
+// Only allowlisted MCP tools are callable.
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { GatewayConfig } from "./config.ts";
+import type { ClaudeAccount } from "./config.ts";
 import { sha256 } from "./schema.ts";
 import {
   ProviderError,
@@ -27,21 +28,21 @@ const MCP_PREFIX = "mcp__ironwrap__";
 const AUTH_ERRORS = new Set(["authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required", "billing_error"]);
 
 export function createClaudeAdapter(
-  config: GatewayConfig,
+  provider: ClaudeAccount,
   stateDir: string,
   env: Record<string, string | undefined>,
   query?: ClaudeQuery,
 ): ProviderAdapter {
-  const provider = config.providers.claude;
-  const credentialName = provider.auth === "oauth" ? provider.oauthTokenEnv : provider.apiKeyEnv;
+  const mode = provider.credentialMode;
+  const credentialName = mode === "oauth" ? provider.oauthTokenEnv : provider.apiKeyEnv;
   const readCredential = () => env[credentialName]?.trim() || null;
 
   return {
-    id: "claude",
-    authMode: provider.auth,
+    id: provider.id,
+    authMode: mode,
     async credential() {
       const value = readCredential();
-      return { fingerprint: value ? sha256(`claude:${provider.auth}:${value}`) : null };
+      return { fingerprint: value ? sha256(`${provider.id}:${mode}:${value}`) : null };
     },
     async call(request: ProviderCall) {
       const secret = readCredential();
@@ -62,7 +63,7 @@ export function createClaudeAdapter(
         CLAUDE_AGENT_SDK_CLIENT_APP: "ironwrap-agent-host/0.1.0",
         DISABLE_AUTOUPDATER: "1",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        [provider.auth === "oauth" ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"]: secret,
+        [mode === "oauth" ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"]: secret,
       };
       for (const name of request.tools?.server.passEnv ?? []) childEnv[name] = env[name];
 

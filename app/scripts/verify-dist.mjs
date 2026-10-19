@@ -124,6 +124,15 @@ const entryScriptIndex = indexHtml.search(/<script type="module"[^>]*src="\/asse
 if (stylesheetIndex === -1 || entryScriptIndex === -1) {
   throw new Error("dist/index.html must link a stylesheet and a module entry script");
 }
+// One render-blocking stylesheet: a second one linked from the shell (a lazy route's CSS pulled
+// into a preloaded chunk) would decide the cascade layer order before index.css and leave the
+// utilities below Preflight everywhere.
+const linkedStylesheets = indexHtml.match(/<link\b[^>]*\brel=["']stylesheet["'][^>]*>/g) ?? [];
+if (linkedStylesheets.length !== 1) {
+  throw new Error(
+    `dist/index.html must link exactly one stylesheet, the entry's; found ${linkedStylesheets.length}`,
+  );
+}
 if (stylesheetIndex > entryScriptIndex) {
   throw new Error(
     "dist/index.html must discover its render-blocking stylesheet before the module graph; " +

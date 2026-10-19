@@ -231,7 +231,8 @@ describe("tokens.css", () => {
       "@media (prefers-color-scheme: dark)",
       ...modes.slice(1).map((mode) => `[data-mode="${mode}"]`),
       ':root, [data-density="office"]',
-      "@media (pointer: coarse)",
+      // A narrow office window is touch too, so its controls stay touch targets.
+      "@media (pointer: coarse), (max-width: 720px)",
       '[data-density="touch"]',
       '[data-density="glove"]',
       ":root",

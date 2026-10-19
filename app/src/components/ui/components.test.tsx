@@ -18,7 +18,8 @@ describe("foundation UI states", () => {
       </Button>,
     );
     const button = screen.getByRole("button", { name: "Save proof" });
-    expect(button).toHaveClass("min-h-16");
+    // The primary control height: 64 on touch, 72 on glove.
+    expect(button).toHaveClass("min-h-[var(--control-height-primary)]");
     expect(button).toHaveAttribute("aria-busy", "true");
     expect(button).toBeDisabled();
   });
@@ -31,7 +32,7 @@ describe("foundation UI states", () => {
     );
     const link = screen.getByRole("link", { name: "Open job packet" });
     expect(link).toHaveAttribute("href", "/jobs/JOB-1");
-    expect(link).toHaveClass("min-h-16");
+    expect(link).toHaveClass("min-h-[var(--control-height-primary)]");
   });
 
   it("pairs outbox color with an icon and a visible state word", () => {
@@ -69,7 +70,9 @@ describe("foundation UI states", () => {
         <Textarea invalid aria-label="Correction reason" />
       </>,
     );
-    expect(screen.getByRole("combobox", { name: "Crew" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("combobox", { name: "Crew" })).toHaveClass(
+      "min-h-[var(--control-height-primary)]",
+    );
     expect(screen.getByRole("combobox", { name: "Crew" })).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("textbox", { name: "Correction reason" })).toHaveAttribute(
       "aria-invalid",

@@ -48,10 +48,12 @@ export function generatedTokenNames(tokensCss: string): Set<string> {
 
 /**
  * The text a token can be read from outside the stylesheet being pruned: every other stylesheet
- * and script under `src`. Not the generated file, the design-system sources or the tests, which
- * name tokens without reading them. Reading it from source rather than from the bundle keeps the
- * pruned stylesheet a pure function of the source tree, so its content hash still says what is
- * in it.
+ * and script under `src`. Not the generated file, the utility mapping (`styles/theme.css`, part of
+ * the stylesheet being pruned, which reads its tokens only through the utilities it generates),
+ * the design-system sources or the tests, which name tokens without reading them, and not the
+ * component gallery (`src/gallery`, served by the dev server only), which never ships. Reading it from source rather than from the bundle keeps
+ * the pruned stylesheet a pure function of the source tree, so its content hash still says what
+ * is in it.
  */
 export async function sourceTokenReads(srcDir: string): Promise<string> {
   const text: string[] = [];
@@ -60,9 +62,22 @@ export async function sourceTokenReads(srcDir: string): Promise<string> {
     if (/\.test\.tsx?$/.test(entry.name)) continue;
     const path = join(entry.parentPath, entry.name);
     const relative = path.slice(srcDir.length + 1).replaceAll("\\", "/");
-    if (relative === "styles.css" || relative === "styles/tokens.css") continue;
-    if (relative.startsWith("design-system/")) continue;
+    if (["styles.css", "styles/tokens.css", "styles/theme.css"].includes(relative)) continue;
+    if (relative.startsWith("design-system/") || relative.startsWith("gallery/")) continue;
     text.push(await readFile(path, "utf8"));
   }
   return text.join("\n");
+}
+
+/**
+ * The tokens the split stylesheet's colour utilities read. components/ai/ai.css generates its own
+ * utilities into a lazy chunk (scripts/split-stylesheet.ts), so the stylesheet pruned here never
+ * shows them: `border-signal-you-tint-edge` in an AI part reads `--signal-you-tint-edge` only
+ * there. Every colour of the mapping whose utility name a split source mentions counts as read.
+ */
+export function splitThemeReads(themeCss: string, splitSources: string): string {
+  return [...themeCss.matchAll(/--color-([\w-]+):\s*var\((--[\w-]+)\)/g)]
+    .filter(([, name]) => new RegExp(`-${name}(?![\\w-])`).test(splitSources))
+    .map(([, , token]) => `var(${token})`)
+    .join("\n");
 }

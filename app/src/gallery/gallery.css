@@ -1,0 +1,154 @@
+/*
+ * The component gallery's own layout (gallery.html, dev server only). Plain CSS on purpose:
+ * styles.css keeps the gallery out of Tailwind's sources, so nothing here reaches the shipped
+ * stylesheet. It reads the generated tokens like any other stylesheet.
+ */
+.g-page {
+  min-height: 100dvh;
+  background: var(--surface-rail);
+}
+
+.g-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px 20px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line-hairline);
+  background: var(--surface-paper);
+}
+
+.g-toolbar h1 {
+  margin-right: auto;
+  font-size: var(--type-title-size);
+  line-height: var(--type-title-line-height);
+  font-weight: 600;
+}
+
+.g-control {
+  display: grid;
+  gap: 4px;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line-height);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.g-canvas {
+  display: grid;
+  gap: 56px;
+  padding: 32px var(--space-gutter) 64px;
+}
+
+.g-canvas[data-width="phone"] {
+  max-width: 390px;
+  margin-inline: auto;
+}
+
+.g-section {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.g-section > h2 {
+  font-size: var(--type-headline-size);
+  line-height: var(--type-headline-line-height);
+  font-weight: 600;
+  letter-spacing: var(--type-headline-tracking);
+}
+
+.g-section h3 {
+  font-size: var(--type-lead-size);
+  line-height: var(--type-lead-line-height);
+  font-weight: 600;
+}
+
+.g-note {
+  max-width: 72ch;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+.g-label {
+  color: var(--text-secondary);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line-height);
+}
+
+.g-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  align-items: start;
+  gap: 20px 24px;
+}
+
+.g-grid[data-wide] {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 32rem), 1fr));
+}
+
+.g-cell {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.g-cell[data-stretch] {
+  justify-items: stretch;
+}
+
+.g-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.g-matrix {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.g-matrix table {
+  border-collapse: separate;
+  border-spacing: 12px 10px;
+}
+
+.g-matrix th {
+  color: var(--text-secondary);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line-height);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.g-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
+}
+
+.g-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.g-card {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+}
+
+.g-section > .segmented[data-variant="control"] {
+  justify-self: start;
+}

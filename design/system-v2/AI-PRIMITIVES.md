@@ -224,9 +224,10 @@ control.
 hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
 whole team is paused. `delegable: false` with asks_first (17 actions, for example storm_mode.propose,
 inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
-Contract version: catalog sha `a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852` (16 specialists,
-162 actions, 115 watches; every action has a plain `name`); a copy for builders
-is `output/figma-v2/ai-kit/AI-TEAM-CONTRACT.md` and `contract.json`.
+Contract version: catalog sha `b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34` (16 specialists,
+163 actions, 116 watches; every action has a plain `name`). Builders read
+[`docs/AI-TEAM-CONTRACT.md`](../../docs/AI-TEAM-CONTRACT.md) itself; a local copy, such as one under the git-ignored
+`output/`, is current only while its catalog sha equals this one.
 
 ## Where the primitives go
 

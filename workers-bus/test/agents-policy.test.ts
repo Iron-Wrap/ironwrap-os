@@ -170,8 +170,17 @@ test("a non-delegable action asks first whatever the owner set, and off-until-en
   assert.deepEqual(live.reason_codes, ["policy_denied"]);
 });
 
+/** A production manager's press on compliance's view, the request a competency record answers. */
+const PRESS = {
+  signal_ref: "signal/sig_1",
+  kind: "owner_request",
+  source: "request",
+  actor: { type: "staff", role: "production", ref: "person:appu_production_1", authenticated: true },
+  expected_action_id: "authority.record",
+};
+
 test("compliance proposes an internal competency record for a person's approval only", () => {
-  const compliance = { specialistId: "compliance" };
+  const compliance = { specialistId: "compliance", requester: PRESS };
   const command = {
     operation: "record",
     authority_kind: "Worker Competency",
@@ -197,6 +206,10 @@ test("compliance proposes an internal competency record for a person's approval 
   assert.equal(proposed.result, "needs_approval");
   assert.equal(proposed.permit_kind, "asks_first");
   assert.equal(proposed.reviewer_role, "production");
+  // Only a press on compliance's view: the same command answering an ask, a field worker's press or
+  // no person's request abstains before its arguments are read.
+  for (const requester of [{ ...PRESS, source: "ask" }, { ...PRESS, actor: { ...PRESS.actor, type: "worker", role: "field" } }, { ...PRESS, expected_action_id: "authority.evaluate" }, null])
+    assert.deepEqual(evaluateStep(input({ ...compliance, requester, actionId: "authority.record", args: command })).reason_codes, ["out_of_scope"], JSON.stringify(requester));
   // More reference text than the stored list holds would only fail after a person approved it.
   // Each reference is within its own 512-character limit; together they are not.
   const oversized = Array.from({ length: 40 }, (_, index) => ({ ref: `r2://authority/${String(index).padStart(485, "x")}`, sha256: "c".repeat(64) }));
@@ -225,9 +238,9 @@ test("handoffs stop at the depth and repeat limits", () => {
 
 
 test("the followup contract keeps closed machine reasons, auditor protection and protective revoke", () => {
-  assert.equal(CATALOG.actions.length, 162);
-  assert.equal(CATALOG.watches.length, 115);
-  assert.equal(CATALOG_VERSION, "a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852");
+  assert.equal(CATALOG.actions.length, 163);
+  assert.equal(CATALOG.watches.length, 116);
+  assert.equal(CATALOG_VERSION, "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34");
   assert.deepEqual(catalogAction("specialist.hold")?.never_targets, ["independent_auditor"]);
   assert.equal(catalogAction("portal_link.revoke")?.protective, true);
   assert.equal(catalogAction("portal_link.revoke")?.side_effect_class, "internal_reversible");
@@ -499,4 +512,50 @@ test("the settings map form is for action arguments only: the strict output dial
   // Every other registered schema stays in the strict dialect.
   for (const [actionId, entry] of Object.entries(REGISTRY))
     if (entry && actionId !== "settings.propose_change") assert.doesNotThrow(() => assertStrictSchema(entry.args), actionId);
+});
+
+test("a prepared people-only act names the person who performs it, under a hold too", () => {
+  const prepared = (specialistId: string, actionId: string, held: boolean) =>
+    evaluateStep(input({ specialistId, actionId, args: { note: "Synthetic." }, specialistState: { paused: false, held }, registry: registry({ [actionId]: ANY_ARGS }) }));
+  // The access change answers a staff ask (its own rule), as a draft and under a hold.
+  assert.deepEqual([prepare(PAIRING).reviewer_role, prepare(PAIRING, { specialistState: { paused: false, held: true } }).reviewer_role], ["owner", "owner"]);
+  for (const [specialistId, actionId, person] of [
+    ["orchestrator", "delegation.propose_change", "owner"],
+    ["billing_reconciliation", "payee.unfreeze_prepare", "owner"],
+    ["field_safety", "safety_stop.release_prepare", "production"],
+  ] as const) {
+    assert.equal(prepared(specialistId, actionId, false).reviewer_role, person, `${actionId} draft`);
+    assert.equal(prepared(specialistId, actionId, true).reviewer_role, person, `${actionId} under a hold`);
+  }
+});
+
+test("lead_fact.propose proposes from the inbound the run answers and cites only it", () => {
+  const INBOUND = { signal_ref: "signal/sig_1", kind: "event", source: "web_form", actor: null };
+  const fields = { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null };
+  const propose = (overrides: Partial<StepInput> = {}, args: unknown = { lead_id: "L-5401", fields }) =>
+    evaluateStep(input({ specialistId: "lead_concierge", actionId: "lead_fact.propose", args, requester: INBOUND, ...overrides }));
+  const requester = (decision: ReturnType<typeof evaluateStep>) => decision.checks.find((check) => check.check === "requester");
+  const proposed = propose();
+  assert.deepEqual([proposed.result, proposed.outcome, proposed.permit_kind, requester(proposed)], ["allow", "succeeded", "draft", { check: "requester", passed: true }]);
+  // Any other root, or any other citation beside the inbound, stops before the arguments are read.
+  const leadFact = { fact_id: "lead/L-5401", version: 1, hash: "sha256:02", trust: "owned" as const, fresh_until: null };
+  for (const [label, overrides] of [
+    ["an owner's request", { requester: { ...INBOUND, kind: "owner_request", source: "ask" } }],
+    ["a watch", { requester: { ...INBOUND, kind: "watch", source: "watch_scheduler" } }],
+    ["no root", { requester: null }],
+    ["a record cited beside it", { citations: [{ fact_id: "signal/sig_1", version: 1 }, { fact_id: "lead/L-5401", version: 1 }], snapshot: new Map([[SIGNAL_FACT.fact_id, SIGNAL_FACT], [leadFact.fact_id, leadFact]]), currentVersions: new Map([["signal/sig_1", 1], ["lead/L-5401", 1]]) }],
+    ["another signal", { citations: [{ fact_id: "signal/sig_2", version: 1 }] }],
+    ["nothing cited", { citations: [] }],
+  ] as const) {
+    const stopped = propose(overrides as Partial<StepInput>);
+    assert.deepEqual([stopped.outcome, stopped.reason_codes, requester(stopped)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
+  }
+  // The four facts, exactly as lead_fact.confirm takes them, at least one set.
+  for (const args of [
+    { lead_id: "L-5401", fields: { service: null, scope: null, address: null, timing: null } },
+    { lead_id: "L-5401", fields: { service: "metal_roofing" } },
+    { lead_id: "L-5401", fields, proposal_id: "LP-1" },
+    { fields },
+  ])
+    assert.deepEqual(propose({}, args).reason_codes, ["action_unregistered"], JSON.stringify(args));
 });

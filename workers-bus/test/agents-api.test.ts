@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { handleAgentHostApi, handleAgentTeamAppRoute, type AgentEnv } from "../src/agents/api.ts";
 import { appendSignal } from "../src/agents/store.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
@@ -43,7 +44,7 @@ class SqliteD1 {
       );
       this.raw.exec(readFileSync(new URL("../migrations/0201_agent_delegation.sql", import.meta.url), "utf8"));
       // The operating core that shared-memory subjects resolve against, and the fact-version ledger.
-      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql", "0204_agent_watch_firings.sql"])
+      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql", "0204_agent_watch_firings.sql", "0205_agent_step_pair_index.sql"])
         this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     const user = this.raw.prepare(
@@ -217,7 +218,7 @@ test("a run opens once per key, resumes while open, and refuses a closed key", a
   assert.equal(opened.status, 201);
   assert.equal(opened.body.context.facts[0].fact_id, `signal/${id}`);
   assert.equal(opened.body.context.facts[0].trust, "untrusted_text");
-  assert.deepEqual(opened.body.tools.map((tool: { action_id: string }) => tool.action_id).sort(), ["exception.escalate", "fact.explain", "handoff.create", "lead_fact.confirm", "note.add"]);
+  assert.deepEqual(opened.body.tools.map((tool: { action_id: string }) => tool.action_id).sort(), ["exception.escalate", "fact.explain", "handoff.create", "lead_fact.confirm", "lead_fact.propose", "note.add"]);
   // The receptionist owns no people-only act; the face names its four, as names and not tools.
   assert.deepEqual(opened.body.people_only, []);
   const face = await signal(db, { specialist_id: "orchestrator", subject: null, dedupe_key: "owner-ask:people-only" });
@@ -240,7 +241,7 @@ test("steps are decided by policy, recorded as receipts, and a repeated step ans
   const id = await signal(db);
   const run = (await call("POST", "/api/v1/agents/runs", { signal_id: id, specialist_id: "lead_concierge", host_run_key: "r".repeat(40) })).body;
   const base = `/api/v1/agents/runs/${run.run_id}`;
-  assert.equal((await call("GET", `${base}/tools`)).body.tools.length, 5);
+  assert.equal((await call("GET", `${base}/tools`)).body.tools.length, 6);
 
   const read = await call("POST", `${base}/steps`, explain(`signal/${id}`));
   assert.equal(read.body.decision, "recorded");
@@ -393,6 +394,8 @@ test("the agent host's own client and runner work end to end against these route
     join(specialists, "lead_concierge", "allowlist.json"),
     JSON.stringify({ schema_version: "ironwrap.specialist-allowlist.v1", specialist_id: "lead_concierge", catalog_sha256: "0".repeat(64), actions: [{ action_id: "fact.explain", autonomy: "A0", purpose: "Explain" }] }),
   );
+  const { specialistRelease } = await import("../../agent-host/src/host/release.ts");
+  qualify(db, "lead_concierge", specialistRelease(specialists, "lead_concierge", "0".repeat(64)).release_sha256);
   const client = new WorkerClient({
     baseUrl: "https://bus.example.invalid",
     token: TOKEN,
@@ -411,13 +414,9 @@ test("the agent host's own client and runner work end to end against these route
             output: OUTPUT,
             specialist: r.specialist,
             tier: r.tier,
-            // This Worker sends routing fields, so the host closes with the route the gateway took.
-            routeId: "sol",
+            // This Worker takes the v3 close, so the host closes with the route the gateway took.
+            ...onCodexSol(r),
             reviewOf: null,
-            provider: "codex",
-            model: "gpt-6.1-sol",
-            modelsUsed: [],
-            authMode: "chatgpt",
             attempts: 1,
             usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1 },
             costUsd: 0,
@@ -444,6 +443,163 @@ test("the agent host's own client and runner work end to end against these route
   const run = db.raw.prepare("SELECT state, result FROM agent_runs WHERE signal_id = ?").get(id) as { state: string; result: string };
   assert.deepEqual({ ...run }, { state: "closed", result: "completed" });
 });
+
+/** A synthetic lead_concierge on disk as the host loads it, and the release a qualification of it binds to. */
+async function syntheticConcierge(t: TestContext): Promise<{ root: string; release: string }> {
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  const { specialistRelease } = await import("../../agent-host/src/host/release.ts");
+  const root = mkdtempSync(join(tmpdir(), "agents-specialists-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, "COMMON.md"), "# Common\n");
+  mkdirSync(join(root, "lead_concierge"));
+  const headings = ["Mission", "Watches", "Reads", "Reasoning from macro to micro", "Decision rules", "Never", "Abstain and escalate", "Drafts and tone", "Receipt"];
+  writeFileSync(
+    join(root, "lead_concierge", "playbook.md"),
+    ["# AI receptionist", "", "Specialist id: `lead_concierge`", "Wave: 1", "Runtime tier: routine", "", ...headings.map((h) => `## ${h}\n\nSynthetic.\n`)].join("\n"),
+  );
+  writeFileSync(
+    join(root, "lead_concierge", "allowlist.json"),
+    JSON.stringify({ schema_version: "ironwrap.specialist-allowlist.v1", specialist_id: "lead_concierge", catalog_sha256: "0".repeat(64), actions: [{ action_id: "fact.explain", autonomy: "A0", purpose: "Explain" }] }),
+  );
+  return { root, release: specialistRelease(root, "lead_concierge", "0".repeat(64)).release_sha256 };
+}
+
+test("the host's runner and gateway close a v3 run on the owner's qualification, and stop on its failure", async (t) => {
+  const { db, env } = setup();
+  const { WorkerClient } = await import("../../agent-host/src/host/worker.ts");
+  const { runSignal } = await import("../../agent-host/src/host/runner.ts");
+  const { ProviderGateway } = await import("../../agent-host/src/gateway/gateway.ts");
+  const { loadGatewayConfig } = await import("../../agent-host/src/gateway/config.ts");
+  const stateDir = mkdtempSync(join(tmpdir(), "agents-e2e-v3-"));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const { root, release } = await syntheticConcierge(t);
+  // The shipped v3 configuration; live runs on its Codex account wait for the owner's written
+  // retention confirmation, so this host carries a synthetic one.
+  const config = loadGatewayConfig(fileURLToPath(new URL("../../agent-host/config/gateway.json", import.meta.url)));
+  config.providers.codex.confirmedRetention = { confirmedBy: "owner", reference: "synthetic retention confirmation" };
+  const calls: Array<{ model: string; effort: string }> = [];
+  let duringCall: (() => void) | null = null;
+  const now = Date.parse("2026-01-01T00:00:00Z");
+  const adapters = {
+    codex: {
+      id: "codex",
+      authMode: "oauth",
+      async credential() {
+        return { fingerprint: "codex-credential-1", refreshedAt: now, plan: "business" };
+      },
+      async call(call: { model: string; effort: string }) {
+        calls.push(call);
+        duringCall?.();
+        return { output: OUTPUT, usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 5 }, costUsd: 0.01, modelsUsed: ["gpt-6.1-sol"], toolCalls: [] };
+      },
+    },
+    claude: {
+      id: "claude",
+      authMode: "oauth",
+      async credential() {
+        return { fingerprint: "claude-credential-1" };
+      },
+      async call(): Promise<never> {
+        throw new Error("no Claude call in this run");
+      },
+    },
+  };
+  const gateway = new ProviderGateway({ config, stateDir, env: {}, adapters, now: () => now });
+  const client = new WorkerClient({
+    baseUrl: "https://bus.example.invalid",
+    token: TOKEN,
+    timeoutMs: 1000,
+    fetch: (async (url: string, init: RequestInit) => handleAgentHostApi(new Request(url, init), env)) as typeof fetch,
+  });
+  const runOnce = async (dedupe: string) => {
+    const id = await signal(db, { dedupe_key: dedupe });
+    const signals = (await client.signals(null, 50)).signals;
+    const outcome = await runSignal(
+      {
+        gateway,
+        worker: client,
+        specialistsRoot: root,
+        stateDir,
+        actionServer: (runId: string, actionIds: string[]) => ({ command: "node", args: [], env: { AGENT_RUN_ID: runId, AGENT_ALLOWED_ACTIONS: actionIds.join(",") }, passEnv: [] }),
+        log: () => {},
+      },
+      signals.find((entry: { signal_id: string }) => entry.signal_id === id)!,
+    );
+    const run = db.raw.prepare("SELECT run_id, result, close_json FROM agent_runs WHERE signal_id = ?").get(id) as { run_id: string; result: string; close_json: string };
+    const receipt = db.raw.prepare("SELECT reason_code FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'").get(run.run_id) as { reason_code: string } | undefined;
+    return { status: outcome.status, result: run.result, reason: receipt?.reason_code ?? null, close: JSON.parse(run.close_json) };
+  };
+
+  // The open hands the owner's qualification to the gateway, its route matches it, and the v3
+  // close that names it keeps its output.
+  const qualified = qualify(db, "lead_concierge", release);
+  const kept = await runOnce("lead-intake:v3-kept");
+  assert.deepEqual([kept.status, kept.result, kept.reason], ["ok", "completed", null]);
+  const { model } = kept.close;
+  assert.deepEqual(
+    [model.provider, model.family, model.route_id, model.effort, model.qualification_ref, model.release_sha256, model.run_class, model.compliance_ref, kept.close.data_class],
+    ["codex", "openai", "codex_sol", "medium", qualified, release, "live", "ai.openai.chatgpt-commercial", "business"],
+  );
+  assert.deepEqual(calls.map((call) => [call.model, call.effort]), [["gpt-6.1-sol", "medium"]]);
+  // The v3 close fixture the Worker's tests use has exactly the keys this host sends.
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/agent-close-v3.json", import.meta.url), "utf8"));
+  const { data_class: _recorded, ...sent } = kept.close;
+  assert.deepEqual([Object.keys(sent).sort(), Object.keys(model).sort()], [Object.keys(fixture).sort(), Object.keys(fixture.model).sort()]);
+
+  // The owner records a failure while a run is already on the model: the host relied on the hint
+  // it opened with, and the Worker does not keep that output.
+  duringCall = () => {
+    qualify(db, "lead_concierge", release, false, "2026-01-01T00:00:01.000Z");
+    duringCall = null;
+  };
+  const raced = await runOnce("lead-intake:v3-raced");
+  assert.deepEqual([raced.status, raced.result, raced.reason, raced.close.model.qualification_ref], ["ok", "abstained", "no_qualified_route", qualified]);
+  // The next open offers no qualification for that route, so the host abstains before any call.
+  const stopped = await runOnce("lead-intake:v3-stopped");
+  assert.deepEqual([stopped.status, stopped.result, stopped.reason, stopped.close.model.qualification_ref], ["abstained", "abstained", "no_qualified_route", null]);
+  assert.equal(calls.length, 2);
+});
+
+/**
+ * The owner's qualification of lead routes on codex/gpt-6.1-sol at medium effort, written straight to
+ * D1 as recordQualification writes it (the owner session path has its own tests).
+ */
+function qualify(db: SqliteD1, specialistId: string, release: string, passed = true, at = "2026-01-01T00:00:00.000Z"): string {
+  const id = `qal_${createHash("sha256").update(`${specialistId}:${release}:${passed}:${at}`).digest("hex").slice(0, 32)}`;
+  db.raw
+    .prepare(
+      `INSERT INTO agent_qualifications (qualification_id,tenant_id,specialist_id,provider,model,effort,release_sha256,passed,report_sha256,recorded_by_user_id,recorded_at,idempotency_key)
+      VALUES (?, ?, ?, 'codex', 'gpt-6.1-sol', 'medium', ?, ?, ?, 'appu_owner_0001', ?, ?)`,
+    )
+    .run(id, TENANT, specialistId, release, passed ? 1 : 0, "a".repeat(64), at, `qualify:${id}`);
+  return id;
+}
+
+/**
+ * The route fields of a gateway result for one run on the shipped codex_sol route (gateway config
+ * v3), relying on the Worker's qualification hint for that route and the request's release.
+ */
+function onCodexSol(r: { qualifications?: Array<{ id: string; provider: string; model: string; effort: string; release: string }>; release?: string }) {
+  const hint = r.qualifications?.find((row) => row.provider === "codex" && row.model === "gpt-6.1-sol" && row.effort === "medium" && row.release === r.release);
+  return {
+    routeId: "codex_sol",
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    modelsUsed: [],
+    authMode: "oauth",
+    family: "openai",
+    effort: "medium" as const,
+    adapter: "codex" as const,
+    billing: "subscription" as const,
+    route: "primary" as const,
+    qualificationRef: hint?.id ?? null,
+    failover: [],
+    runClass: "live" as const,
+    complianceRef: "ai.openai.chatgpt-commercial",
+    riskAcceptance: null,
+    gatewayConfigSha256: "9".repeat(64),
+  };
+}
 
 function owner(role: "owner" | "field" = "owner"): AuthContext {
   return {
@@ -707,7 +863,7 @@ test("parallel handoffs reserve only two slots for one pair and object", async (
   );
 });
 
-test("an expired run cannot resume and its original lifetime still blocks new steps", async () => {
+test("an expired run cannot resume: it closes at its ceiling, and its original lifetime still blocks new steps", async () => {
   const { db, call, tick } = setup(TOKEN, true);
   const id = await signal(db);
   const opening = {
@@ -738,12 +894,23 @@ test("an expired run cannot resume and its original lifetime still blocks new st
       .get(run.run_id),
     beforeExpiry,
   );
+  // It closed at its wall-time ceiling as a ceiling close does: ceiling_reached, with a receipt
+  // naming the specialist's reviewer, so it never stays open.
+  assert.deepEqual(
+    { ...db.raw.prepare("SELECT state, result, json_extract(close_json, '$.reason') AS reason FROM agent_runs WHERE run_id=?").get(run.run_id) },
+    { state: "closed", result: "ceiling_reached", reason: "run_expired" },
+  );
+  assert.deepEqual(
+    { ...db.raw.prepare("SELECT outcome, reason_code, needs_reviewer_role FROM agent_run_steps WHERE run_id=? AND action_id='exception.escalate'").get(run.run_id) },
+    { outcome: "abstained", reason_code: "ceiling_reached", needs_reviewer_role: "sales" },
+  );
   const response = await call(
     "POST",
     `/api/v1/agents/runs/${run.run_id}/steps`,
     { ...explain(`signal/${id}`), step_key: stepKey("after-expiry") },
   );
-  assert.deepEqual(response.body.reason_codes, ["ceiling_reached"]);
+  assert.deepEqual([response.status, response.body.error], [409, "run_closed"]);
+  assert.equal((await call("POST", "/api/v1/agents/runs", opening)).body.error, "run_closed");
 });
 
 test("a losing concurrent step key must retain the exact ordered citations", async () => {

@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "orchestrator",
-  "catalog_sha256": "a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852",
+  "catalog_sha256": "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34",
   "actions": [
     {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer an authenticated owner, staff, or crew question, explain a receipt or a pending decision, within the asker's read rights; args: object, explanation"},
     {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a person's request on a canonical object to the owning specialist; args: to_specialist_id, expected_action_id, object, reason"},
@@ -10,11 +10,11 @@
     {"action_id": "staff.notify", "autonomy": "A2", "purpose": "Deliver a report, a decision request, or a storm notice to named staff; args: recipient_role, urgency"},
     {"action_id": "owner.interrupt", "autonomy": "A2", "purpose": "Protective: interrupt the owner at once with an item on the owner's immediate-only list; args: category, job_id"},
     {"action_id": "exception.escalate", "autonomy": "A2", "purpose": "Protective: open an exception with its reason code for a named person and notify them; args: reason_code, route_to (a reviewer role), urgency (immediate, today, brief), summary, object"},
-    {"action_id": "delegation.propose_change", "autonomy": "A1", "purpose": "Propose a delegation change for one delegable action of another specialist, with the history preview; args: specialist_id, action_id, proposed, ceiling"},
+    {"action_id": "delegation.propose_change", "autonomy": "A1", "purpose": "Propose a delegation change for one delegable action of another specialist, from its delegation record; args: specialist_id, action_id, proposed, ceiling, reason"},
     {"action_id": "policy.propose_change", "autonomy": "A1", "purpose": "Propose a policy, ceiling, or standing-order change for the owner; args: policy_id, proposed"},
     {"action_id": "settings.propose_change", "autonomy": "A1", "purpose": "Prepare a settings edit that is not a policy rule (business details, hours, notification preferences, how integrations are shown) with its before-and-after preview, from the owner's request or a person's own notification preferences; args: settings_id, before, after"},
     {"action_id": "dead_letter.replay", "autonomy": "A3", "purpose": "Propose re-driving one dead-lettered envelope after its dry run; asks first, reviewer ops; args: envelope_id"},
-    {"action_id": "import.retry_failed", "autonomy": "A3", "purpose": "Propose retrying only the failed items of one import run, never a whole file or an item that failed for its own data; asks the owner first; args: import_run_id, source_keys"},
+    {"action_id": "import.retry_failed", "autonomy": "A3", "purpose": "Propose retrying only the failed items of one import run the hourly import check lists, never a whole file; asks the owner first; args: import_run_id, source_keys"},
     {"action_id": "storm_mode.propose", "autonomy": "A3", "purpose": "Propose switching storm mode on or off for a service area; always asks the owner first; args: mode, area, storm_watch_id"},
     {"action_id": "access.prepare_change", "autonomy": "A1", "purpose": "Prepare a crew phone pairing, a role change, or a device change in Decisions for the owner to apply, only for the signed-in owner or staff ask the run answers; args: person_ref, change, target_role, device_ref, expected_access_version, request_ref, reason"},
     {"action_id": "note.add", "autonomy": "A2", "purpose": "Attach an authenticated person's statement to the object it concerns, as proposed context; args: object, text"}

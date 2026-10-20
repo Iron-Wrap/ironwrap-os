@@ -23,10 +23,17 @@ export interface Receipt {
   do_it_myself: { surface: string | null; context: unknown };
 }
 
+/** The ask of a finished draft that prepares a people-only act for the person who performs it. */
+export const APPLY_IN_OWN_SCREEN = "apply_in_own_screen";
+
 const ASKS: Record<string, string> = {
   approve_or_decline: "Approve or decline this step.",
   acknowledge_and_act: "Take this over and act on it.",
+  [APPLY_IN_OWN_SCREEN]: "Check this and apply it yourself in your own screen; the AI team only prepared it.",
 };
+
+/** A step that waits on a person: undecided, stopped, or a prepared people-only act to apply. */
+const NEEDS_YOU = `needs_reviewer_role IS NOT NULL AND (outcome IS NULL OR outcome = 'abstained' OR needs_ask = '${APPLY_IN_OWN_SCREEN}')`;
 
 /** The specialist and the action in words for a sentence people read: no ids, no codes. */
 export function stepWords(specialistId: string, actionId: string): { name: string; action: string | null; work: string } {
@@ -51,7 +58,7 @@ export function receiptOf(step: StepRow): Receipt {
     did,
     doing,
     needs_from_you:
-      step.needs_reviewer_role && (step.outcome === null || step.outcome === "abstained")
+      step.needs_reviewer_role && (step.outcome === null || step.outcome === "abstained" || step.needs_ask === APPLY_IN_OWN_SCREEN)
         ? { reviewer_role: step.needs_reviewer_role, person_id: step.needs_person_id, ask: ASKS[step.needs_ask ?? ""] ?? ASKS.acknowledge_and_act }
         : null,
     sources: JSON.parse(step.sources_json),
@@ -67,14 +74,17 @@ export function receiptOf(step: StepRow): Receipt {
 
 export type ReceiptView = "needs_you" | "doing" | "done";
 
-/** Now's three lanes: steps waiting on a person, steps in progress, and closed steps. */
+/**
+ * Now's three lanes: steps waiting on a person, steps in progress, and closed steps. A prepared
+ * people-only act is finished work for the AI team but not yet done, so it shows only in Needs you.
+ */
 export async function listReceipts(db: AgentDb, tenantId: string, view: ReceiptView, limit: number, reviewer: {user_id: string; role: string} | null = null) {
   const where =
     view === "needs_you"
-      ? "(outcome IS NULL OR outcome = 'abstained') AND needs_reviewer_role IS NOT NULL"
+      ? NEEDS_YOU
       : view === "doing"
         ? "outcome IS NULL AND needs_reviewer_role IS NULL"
-        : "outcome IS NOT NULL";
+        : `outcome IS NOT NULL AND needs_ask IS NOT '${APPLY_IN_OWN_SCREEN}'`;
   const assigned = reviewer ? " AND needs_reviewer_role = ?" : "";
   const values = reviewer ? [tenantId, reviewer.role, limit] : [tenantId, limit];
   const rows = await db

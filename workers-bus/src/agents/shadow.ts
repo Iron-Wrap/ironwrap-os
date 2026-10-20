@@ -7,11 +7,15 @@
 // action. Candidates for more delegation are listed for the owner, who alone raises delegation;
 // the one automatic change is a demotion to asks first after a catastrophe.
 
-import { CATALOG, catalogAction, catalogSpecialist, CATALOG_VERSION } from "./catalog.ts";
+import { CATALOG, catalogAction, catalogSpecialist, CATALOG_VERSION, earnable } from "./catalog.ts";
 import {
   changedGuard,
   controlError,
   currentDelegation,
+  decisionHistory,
+  stepFitsCeiling,
+  WINDOW_MS,
+  type Ceiling,
   humanGuard,
   openException,
   specialistControl,
@@ -109,13 +113,57 @@ export async function shadowSetting(
   tenantId: string,
   specialistId: string,
   actionId: string,
-): Promise<{ shadow: boolean; revision: number }> {
+): Promise<{ shadow: boolean; revision: number; stopped: boolean }> {
   const row = await db
-    .prepare("SELECT shadow, revision FROM agent_shadow_settings WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? ORDER BY revision DESC LIMIT 1")
+    .prepare("SELECT shadow, revision, set_at FROM agent_shadow_settings WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? ORDER BY revision DESC LIMIT 1")
     .bind(tenantId, specialistId, actionId)
-    .first<{ shadow: number; revision: number }>();
-  return { shadow: row?.shadow === 1, revision: row?.revision ?? 0 };
+    .first<{ shadow: number; revision: number; set_at: string }>();
+  const shadow = row?.shadow === 1;
+  return { shadow, revision: row?.revision ?? 0, stopped: shadow && (await practiceStopped(db, tenantId, specialistId, actionId, row!.set_at)) };
 }
+
+/**
+ * Whether a practice-only setting's practice runs stopped (contract "Delegation" item 7): since the
+ * owner set it, a practice step of that action was recorded as a catastrophe, or a run of the
+ * specialist ended without a qualified route. The setting stays practice only, and the action
+ * neither practises nor runs, until the owner confirms it again.
+ */
+async function practiceStopped(db: AgentDb, tenantId: string, specialistId: string, actionId: string, since: string): Promise<boolean> {
+  const catastrophe = await db
+    .prepare(
+      `SELECT 1 AS found FROM agent_agreements WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? AND compared_at >= ?
+        AND catastrophes_json <> '[]' LIMIT 1`,
+    )
+    .bind(tenantId, specialistId, actionId, since)
+    .first();
+  return catastrophe !== null || (await unqualifiedSince(db, tenantId, specialistId, since));
+}
+
+/**
+ * Whether a run of the specialist ended without a qualified route since `since`: the host found no
+ * route a current passed qualification names, or the Worker refused a close on one. Its release
+ * (playbook, prompt, tier or model) changed without passing qualification (contract "Delegation"
+ * item 7), so a within-limits setting falls back and practice runs stop.
+ * ponytail: reads the tenant's runs started since the setting; add an index or a recorded marker if
+ * it shows in step latency.
+ */
+export async function unqualifiedSince(db: AgentDb, tenantId: string, specialistId: string, since: string): Promise<boolean> {
+  // A run that ended after `since` started at most a run's lifetime before it: its wall time and the
+  // cron's grace (store.ts EXPIRY_GRACE_MS) are well inside two days. The bound keeps the read a range
+  // on the tenant's closed runs by start time (idx_agent_runs_tenant_state).
+  const started = new Date(Date.parse(since) - RUN_LIFETIME_BOUND_MS).toISOString();
+  const row = await db
+    .prepare(
+      `SELECT 1 AS found FROM agent_runs WHERE tenant_id = ? AND state = 'closed' AND started_at >= ? AND specialist_id = ? AND ended_at >= ?
+        AND 'no_qualified_route' IN (json_extract(close_json, '$.reason'), json_extract(close_json, '$.refused.reason')) LIMIT 1`,
+    )
+    .bind(tenantId, started, specialistId, since)
+    .first();
+  return row !== null;
+}
+
+/** Longer than any run lives before it closes: its wall time plus the cron's grace, with room to spare. */
+export const RUN_LIFETIME_BOUND_MS = 2 * 86_400_000;
 
 /** An action can be shadowed when it is the specialist's own, has an effect to stand in for, and is not protective or people-only. */
 export function shadowable(specialistId: string, actionId: string): boolean {
@@ -201,7 +249,10 @@ export async function setShadow(
  */
 export async function runMode(db: AgentDb, tenantId: string, specialistId: string, candidates: string[]): Promise<"live" | "shadow"> {
   if (candidates.length === 0) return "live";
-  for (const actionId of candidates) if (!(await shadowSetting(db, tenantId, specialistId, actionId)).shadow) return "live";
+  for (const actionId of candidates) {
+    const practice = await shadowSetting(db, tenantId, specialistId, actionId);
+    if (!practice.shadow || practice.stopped) return "live";
+  }
   return "shadow";
 }
 
@@ -215,16 +266,6 @@ export function signalActions(signal: { kind: string; specialist_id: string; wat
   if (signal.kind === "watch" && signal.watch_id)
     return CATALOG.watches.find((watch) => watch.watch_id === signal.watch_id && watch.owner === signal.specialist_id)?.proposes ?? [];
   return [];
-}
-
-/**
- * Whether a step is diverted into shadow: only an action the owner shadowed for this specialist,
- * never a protective one. The run's mode is a budget hint for the host and diverts nothing: it
- * comes from the signal, which another specialist's handoff can choose.
- */
-export async function divertsToShadow(db: AgentDb, tenantId: string, run: { specialist_id: string }, actionId: string): Promise<boolean> {
-  if (catalogAction(actionId)?.protective) return false;
-  return (await shadowSetting(db, tenantId, run.specialist_id, actionId)).shadow;
 }
 
 /** Records a shadow proposal once per step key, with the decision policy would have made. */
@@ -568,6 +609,60 @@ export async function recordQualification(
   return { qualification_id: qualificationId };
 }
 
+/** One qualification row as the host's gateway matches a route against it. */
+export interface QualificationHint {
+  qualification_id: string;
+  provider: string;
+  model: string;
+  effort: string;
+  release_sha256: string;
+}
+
+/** A row recorded after `q` for the same specialist, provider, model, effort and release (`l` is the later row). */
+const LATER_FOR_KEY = `SELECT 1 FROM agent_qualifications l WHERE l.tenant_id = q.tenant_id AND l.specialist_id = q.specialist_id
+  AND l.provider = q.provider AND l.model = q.model AND l.effort = q.effort AND l.release_sha256 = q.release_sha256
+  AND (l.recorded_at > q.recorded_at OR (l.recorded_at = q.recorded_at AND l.rowid > q.rowid))`;
+
+/**
+ * The specialist's current qualifications, which a run's open sends the host: for each provider,
+ * model, effort and release, the latest row, and only while it passed. Newest first; at most 100,
+ * which leaves room for many releases of every route the specialist runs on.
+ */
+export async function currentQualifications(db: AgentDb, tenantId: string, specialistId: string): Promise<QualificationHint[]> {
+  const rows = await db
+    .prepare(
+      `SELECT q.qualification_id, q.provider, q.model, q.effort, q.release_sha256 FROM agent_qualifications q
+      WHERE q.tenant_id = ? AND q.specialist_id = ? AND q.passed = 1 AND NOT EXISTS (${LATER_FOR_KEY})
+      ORDER BY q.recorded_at DESC, q.rowid DESC LIMIT 100`,
+    )
+    .bind(tenantId, specialistId)
+    .all<QualificationHint>();
+  return rows.results ?? [];
+}
+
+/**
+ * Whether a close may rely on the qualification it names: a passed row of this tenant and
+ * specialist for the provider, model, effort and release the close ran on, with no failure recorded
+ * for that key since.
+ */
+export async function qualificationHolds(
+  db: AgentDb,
+  tenantId: string,
+  specialistId: string,
+  close: { qualification_ref: string | null; provider: string; model: string; effort: string; release_sha256: string | null },
+): Promise<boolean> {
+  if (close.qualification_ref === null || close.release_sha256 === null) return false;
+  const row = await db
+    .prepare(
+      `SELECT q.qualification_id FROM agent_qualifications q
+      WHERE q.tenant_id = ? AND q.qualification_id = ? AND q.specialist_id = ? AND q.passed = 1
+        AND q.provider = ? AND q.model = ? AND q.effort = ? AND q.release_sha256 = ? AND NOT EXISTS (${LATER_FOR_KEY} AND l.passed = 0)`,
+    )
+    .bind(tenantId, close.qualification_ref, specialistId, close.provider, close.model, close.effort, close.release_sha256)
+    .first<{ qualification_id: string }>();
+  return row !== null;
+}
+
 export interface DelegationCandidate {
   specialist_id: string;
   action_id: string;
@@ -580,64 +675,46 @@ export interface DelegationCandidate {
 }
 
 /**
- * Actions the owner could delegate further: the most recent comparisons meet the bar, none of
- * them was a catastrophe, the latest qualification for the model the specialist actually runs on
- * (its most recent closed run) passed, and the action can be delegated at all. People-only and
- * never-delegable actions are never candidates.
+ * Actions the owner could delegate further (contract "Delegation" item 13): the most recent compared
+ * decisions meet the bar, none of them was a catastrophe, the latest qualification for what the
+ * specialist actually runs on (its most recent closed run) passed, and the action can be delegated
+ * at all. Only decisions under the current step policy and the specialist's current release count,
+ * so a legacy close, which records no release, never does. People-only and never-delegable actions
+ * are never candidates. `only` narrows it to one specialist and action.
  */
-export async function delegationCandidates(db: AgentDb, tenantId: string, bar = CANDIDATE_BAR): Promise<DelegationCandidate[]> {
+export async function delegationCandidates(
+  db: AgentDb,
+  tenantId: string,
+  bar = CANDIDATE_BAR,
+  only: { specialist_id: string; action_id: string } | null = null,
+): Promise<DelegationCandidate[]> {
   const pairs = await db
-    .prepare("SELECT DISTINCT specialist_id, action_id FROM agent_agreements WHERE tenant_id = ? AND verdict <> 'unscored'")
-    .bind(tenantId)
+    .prepare(
+      `SELECT DISTINCT specialist_id, action_id FROM agent_agreements WHERE tenant_id = ? AND verdict <> 'unscored'
+        AND (? IS NULL OR (specialist_id = ? AND action_id = ?))`,
+    )
+    .bind(tenantId, only?.specialist_id ?? null, only?.specialist_id ?? null, only?.action_id ?? null)
     .all<{ specialist_id: string; action_id: string }>();
   const candidates: DelegationCandidate[] = [];
-  // The provider and model each specialist runs on, from its most recent closed run with a model.
-  // Effort and release are recorded with each qualification and matched once closes report them.
-  const runsOn = new Map<string, { provider: string; model: string } | null>();
+  const runsOn = new Map<string, RunsOn | null>();
   for (const pair of pairs.results ?? []) {
     const action = catalogAction(pair.action_id);
-    if (!action || action.autonomy === "H" || action.human_only || !action.delegable || action.protective) continue;
-    if (action.autonomy !== "A2" && action.autonomy !== "A3") continue;
-    const recent = await db
-      .prepare(
-        `SELECT verdict, catastrophes_json, rowid AS row FROM agent_agreements WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? AND verdict <> 'unscored'
-        ORDER BY compared_at DESC, rowid DESC LIMIT ?`,
-      )
-      .bind(tenantId, pair.specialist_id, pair.action_id, bar.compared)
-      .all<{ verdict: Verdict; catastrophes_json: string; row: number }>();
-    const window = recent.results ?? [];
+    if (!action || !earnable(action)) continue;
+    if (!runsOn.has(pair.specialist_id)) runsOn.set(pair.specialist_id, await specialistRunsOn(db, tenantId, pair.specialist_id));
+    const model = runsOn.get(pair.specialist_id);
+    if (!model?.release) continue;
+    const window = await countedWindow(db, tenantId, pair.specialist_id, pair.action_id, model.release, bar.compared);
     if (window.length < bar.compared) continue;
-    // A catastrophe anywhere since the window began blocks it, scored or not (a take-over is unscored).
-    const flagged = await db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM agent_agreements WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? AND catastrophes_json <> '[]'
-        AND rowid >= ?`,
-      )
-      .bind(tenantId, pair.specialist_id, pair.action_id, Math.min(...window.map((row) => row.row)))
-      .first<{ n: number }>();
-    if (Number(flagged?.n ?? 0) > 0) continue;
+    if (await catastropheSince(db, tenantId, pair.specialist_id, pair.action_id, window)) continue;
     const matchRate = window.filter((row) => row.verdict === "match").length / window.length;
     if (matchRate < bar.matchRate) continue;
-    if (!runsOn.has(pair.specialist_id))
-      runsOn.set(
-        pair.specialist_id,
-        await db
-          .prepare(
-            `SELECT json_extract(close_json, '$.model.provider') AS provider, json_extract(close_json, '$.model.model') AS model FROM agent_runs
-            WHERE tenant_id = ? AND specialist_id = ? AND state = 'closed' AND json_extract(close_json, '$.model.model') IS NOT NULL
-            ORDER BY ended_at DESC, rowid DESC LIMIT 1`,
-          )
-          .bind(tenantId, pair.specialist_id)
-          .first<{ provider: string; model: string }>(),
-      );
-    const model = runsOn.get(pair.specialist_id);
-    if (!model) continue;
     const qualification = await db
       .prepare(
         `SELECT qualification_id, provider, model, passed FROM agent_qualifications WHERE tenant_id = ? AND specialist_id = ? AND provider = ? AND model = ?
+          AND (? IS NULL OR effort = ?) AND release_sha256 = ?
         ORDER BY recorded_at DESC, rowid DESC LIMIT 1`,
       )
-      .bind(tenantId, pair.specialist_id, model.provider, model.model)
+      .bind(tenantId, pair.specialist_id, model.provider, model.model, model.effort, model.effort, model.release)
       .first<{ qualification_id: string; provider: string; model: string; passed: number }>();
     if (qualification?.passed !== 1) continue;
     const current = (await currentDelegation(db, tenantId, pair.specialist_id, pair.action_id))?.setting ?? action.default_delegation ?? "asks_first";
@@ -646,4 +723,284 @@ export async function delegationCandidates(db: AgentDb, tenantId: string, bar = 
     candidates.push({ specialist_id: pair.specialist_id, action_id: pair.action_id, compared: window.length, match_rate: matchRate, qualification_id: qualification.qualification_id, provider: qualification.provider, model: qualification.model, current_setting: current });
   }
   return candidates;
+}
+
+/**
+ * The specialist and action pairs with a full counted window: enough compared decisions under the
+ * current policy and release for a preview, whether or not they meet the bar.
+ */
+export async function previewablePairs(db: AgentDb, tenantId: string, bar = CANDIDATE_BAR): Promise<Array<{ specialist_id: string; action_id: string; compared: number; match_rate: number }>> {
+  const pairs = await db
+    .prepare("SELECT DISTINCT specialist_id, action_id FROM agent_agreements WHERE tenant_id = ? AND verdict <> 'unscored'")
+    .bind(tenantId)
+    .all<{ specialist_id: string; action_id: string }>();
+  const previewable = [];
+  const releases = new Map<string, string | null>();
+  for (const pair of pairs.results ?? []) {
+    const action = catalogAction(pair.action_id);
+    if (!action || !action.owners.includes(pair.specialist_id) || !earnable(action)) continue;
+    if (!releases.has(pair.specialist_id)) releases.set(pair.specialist_id, (await specialistRunsOn(db, tenantId, pair.specialist_id))?.release ?? null);
+    const release = releases.get(pair.specialist_id);
+    if (!release) continue;
+    const window = await countedWindow(db, tenantId, pair.specialist_id, pair.action_id, release, bar.compared);
+    if (window.length < bar.compared) continue;
+    previewable.push({ ...pair, compared: window.length, match_rate: window.filter((row) => row.verdict === "match").length / window.length });
+  }
+  return previewable;
+}
+
+/**
+ * One specialist and action's earned-autonomy record, the `delegation/<specialist>:<action>` fact
+ * the face reads and cites (contract `delegation.propose_change` reads that action's history for
+ * that specialist): the setting, practice, the counted window and the bar, the qualification it
+ * relies on, the decision history, failed readbacks, and the most proposals in any rolling hour, day
+ * or week over the 30 days up to its latest proposal, which is where a ceiling's count comes from.
+ * Null for an id that names no pair whose autonomy can be earned. Its value moves with every
+ * proposal of the pair, so a step that cites it may meet `fact_stale` and stop; the watch's run
+ * also cites its immutable signal, whose digest carries each pair's bar result.
+ * Its step reads use idx_agent_run_steps_pair (migration 0205).
+ */
+export async function delegationRecord(db: AgentDb, tenantId: string, id: string): Promise<Record<string, unknown> | null> {
+  const split = id.indexOf(":");
+  if (split < 1) return null;
+  const specialistId = id.slice(0, split);
+  const actionId = id.slice(split + 1);
+  const preview = await delegationPreview(db, tenantId, specialistId, actionId, null);
+  if (!preview) return null;
+  const action = catalogAction(actionId)!;
+  const current = await currentDelegation(db, tenantId, specialistId, actionId);
+  const practice = await shadowSetting(db, tenantId, specialistId, actionId);
+  const model = await specialistRunsOn(db, tenantId, specialistId);
+  const qualification = model?.release
+    ? await db
+        .prepare(
+          `SELECT qualification_id, provider, model, effort, passed FROM agent_qualifications WHERE tenant_id = ? AND specialist_id = ? AND provider = ? AND model = ?
+            AND (? IS NULL OR effort = ?) AND release_sha256 = ?
+          ORDER BY recorded_at DESC, rowid DESC LIMIT 1`,
+        )
+        .bind(tenantId, specialistId, model.provider, model.model, model.effort, model.effort, model.release)
+        .first<{ qualification_id: string; provider: string; model: string; effort: string; passed: number }>()
+    : null;
+  // Steps under the current setting that ended unknown or with a readback mismatch: the same steps
+  // that make a within-limits setting fall back (control.ts currentDelegation).
+  const counts = current
+    ? await db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = ? AND action_id = ?
+            AND json_extract(permit_json, '$.delegation_id') = ? AND (outcome = 'unknown' OR reason_code = 'readback_mismatch')`,
+        )
+        .bind(tenantId, specialistId, actionId, current.delegation_id)
+        .first<{ n: number }>()
+    : null;
+  const proposed = await db
+    .prepare(
+      `SELECT at FROM (
+        SELECT created_at AS at FROM agent_run_steps WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3
+        UNION ALL SELECT proposed_at AS at FROM agent_shadow_steps WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3
+      ) ORDER BY at DESC LIMIT 5000`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .all<{ at: string }>();
+  const times = (proposed.results ?? []).map((row) => Date.parse(row.at)).reverse();
+  const since = times.length > 0 ? times[times.length - 1] - 30 * 86_400_000 : 0;
+  const recent = times.filter((at) => at >= since);
+  const most = (span: number) => {
+    let best = 0;
+    for (let end = 0, start = 0; end < recent.length; end += 1) {
+      while (recent[end] - recent[start] >= span) start += 1;
+      best = Math.max(best, end - start + 1);
+    }
+    return best;
+  };
+  const setting = current?.setting ?? (action.default_delegation === "off_until_enabled" ? "off" : (action.default_delegation ?? "asks_first"));
+  return {
+    specialist_id: specialistId,
+    action_id: actionId,
+    setting: {
+      setting,
+      fallback: current?.fallback ?? false,
+      ceiling: current?.ceiling ?? null,
+      // The stored revision a within-limits permit names as its `delegation_id`; null with no row.
+      setting_id: current?.delegation_id ?? null,
+      revision: current?.revision ?? null,
+      set_by: current?.set_by ?? null,
+      set_at: current?.set_at ?? null,
+    },
+    practice: { shadow: practice.shadow, stopped: practice.stopped, ...preview.practice },
+    release_sha256: preview.release_sha256,
+    policy_version: Number(STEP_POLICY_VERSION),
+    window: { ...preview.window, match_rate: preview.window.match_rate === null ? null : Math.round(preview.window.match_rate * 1000) / 1000 },
+    bar: preview.bar,
+    qualified:
+      qualification?.passed === 1
+        ? { provider: qualification.provider, model: qualification.model, effort: qualification.effort, qualification_id: qualification.qualification_id }
+        : null,
+    history: preview.history,
+    failed_readback: Number(counts?.n ?? 0),
+    most_proposed_in: { hour: most(WINDOW_MS.hour), day: most(WINDOW_MS.day), week: most(WINDOW_MS.week) },
+  };
+}
+
+/**
+ * Whether the face already proposed a change for this pair that the owner has not answered: a
+ * finished `delegation.propose_change` since the pair's latest delegation or practice setting.
+ */
+export async function proposalAwaitsOwner(db: AgentDb, tenantId: string, specialistId: string, actionId: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS found FROM agent_run_steps s WHERE s.tenant_id = ?1 AND s.specialist_id = 'orchestrator'
+        AND s.action_id = 'delegation.propose_change' AND s.outcome = 'succeeded'
+        AND json_extract(s.args_json, '$.specialist_id') = ?2 AND json_extract(s.args_json, '$.action_id') = ?3
+        AND s.created_at > COALESCE((SELECT MAX(set_at) FROM (
+          SELECT set_at FROM agent_delegation_settings WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3
+          UNION ALL SELECT set_at FROM agent_shadow_settings WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3)), '')
+      LIMIT 1`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .first();
+  return row !== null;
+}
+
+/** One compared decision in the bar's window, with the proposal it compared. */
+interface CountedDecision {
+  verdict: Verdict;
+  row: number;
+  args_json: string;
+  /** When the specialist proposed it. */
+  at: string;
+}
+
+/**
+ * The most recent compared decisions that count toward the bar, newest first: scored, of a run under
+ * the current step policy and closed on the specialist's current release. A run whose close the
+ * Worker refused cannot earn autonomy, so its matches do not count; what a person or comparator did
+ * not match on it still counts against the specialist.
+ */
+async function countedWindow(db: AgentDb, tenantId: string, specialistId: string, actionId: string, release: string, limit: number): Promise<CountedDecision[]> {
+  const rows = await db
+    .prepare(
+      `SELECT a.verdict, a.rowid AS row, COALESCE(s.args_json, h.args_json) AS args_json, COALESCE(s.created_at, h.proposed_at) AS at
+        FROM agent_agreements a
+        LEFT JOIN agent_run_steps s ON s.step_id = a.step_id
+        LEFT JOIN agent_shadow_steps h ON h.shadow_step_id = a.shadow_step_id
+        JOIN agent_runs r ON r.run_id = COALESCE(s.run_id, h.run_id)
+      WHERE a.tenant_id = ? AND a.specialist_id = ? AND a.action_id = ? AND a.verdict <> 'unscored'
+        AND r.policy_version = ? AND json_extract(r.close_json, '$.model.release_sha256') = ?
+        AND (json_extract(r.close_json, '$.refused') IS NULL OR a.verdict <> 'match')
+      ORDER BY a.compared_at DESC, a.rowid DESC LIMIT ?`,
+    )
+    .bind(tenantId, specialistId, actionId, `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`, release, limit)
+    .all<CountedDecision>();
+  return rows.results ?? [];
+}
+
+export interface DelegationPreview {
+  specialist_id: string;
+  action_id: string;
+  /** The release the counted decisions ran on: the specialist's current one, or null without a v3 close. */
+  release_sha256: string | null;
+  bar: { compared: number; match_rate: number; meets: boolean };
+  window: { compared: number; match: number; partial: number; diverge: number; match_rate: number | null; catastrophe: boolean };
+  history: { proposed: number; approved: number; declined: number; done_by_person: number };
+  practice: { proposed: number; compared: number };
+  /** Which of the counted decisions the ceiling would have let run, and how many of those a person or comparator did not match. */
+  would_have_run: { ran: number; ran_not_matching: number; of: number } | null;
+}
+
+/**
+ * What the owner sees before deciding a delegation change (contract "Delegation" item 4): that
+ * action's history for that specialist, its practice runs, the counted decisions and how they
+ * compared, whether it meets the earned-autonomy bar, and which of the counted decisions the
+ * ceiling would have let run, replayed in the order they were proposed. Null for an action whose
+ * autonomy the specialist cannot earn.
+ */
+export async function delegationPreview(
+  db: AgentDb,
+  tenantId: string,
+  specialistId: string,
+  actionId: string,
+  ceiling: Ceiling | null,
+  bar = CANDIDATE_BAR,
+): Promise<DelegationPreview | null> {
+  const action = catalogAction(actionId);
+  if (!action || !action.owners.includes(specialistId) || !earnable(action)) return null;
+  const release = (await specialistRunsOn(db, tenantId, specialistId))?.release ?? null;
+  const window = release ? await countedWindow(db, tenantId, specialistId, actionId, release, bar.compared) : [];
+  const count = (verdict: Verdict) => window.filter((row) => row.verdict === verdict).length;
+  const practice = await db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM agent_shadow_steps WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3) AS proposed,
+        (SELECT COUNT(*) FROM agent_agreements WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3 AND source = 'shadow' AND verdict <> 'unscored') AS compared`,
+    )
+    .bind(tenantId, specialistId, actionId)
+    .first<{ proposed: number; compared: number }>();
+  let wouldHaveRun: DelegationPreview["would_have_run"] = null;
+  if (ceiling) {
+    const ran: Array<{ at: number; matched: boolean }> = [];
+    for (const decision of [...window].sort((a, b) => a.at.localeCompare(b.at) || a.row - b.row)) {
+      const at = Date.parse(decision.at);
+      const inWindow = ran.filter((entry) => entry.at > at - WINDOW_MS[ceiling.count.per]).length;
+      if (inWindow < ceiling.count.max && stepFitsCeiling(ceiling, JSON.parse(decision.args_json))) ran.push({ at, matched: decision.verdict === "match" });
+    }
+    wouldHaveRun = { ran: ran.length, ran_not_matching: ran.filter((entry) => !entry.matched).length, of: window.length };
+  }
+  return {
+    specialist_id: specialistId,
+    action_id: actionId,
+    release_sha256: release,
+    bar: {
+      compared: bar.compared,
+      match_rate: bar.matchRate,
+      meets: (await delegationCandidates(db, tenantId, bar, { specialist_id: specialistId, action_id: actionId })).length > 0,
+    },
+    window: {
+      compared: window.length,
+      match: count("match"),
+      partial: count("partial"),
+      diverge: count("diverge"),
+      match_rate: window.length > 0 ? count("match") / window.length : null,
+      catastrophe: await catastropheSince(db, tenantId, specialistId, actionId, window),
+    },
+    history: await decisionHistory(db, tenantId, specialistId, actionId),
+    practice: { proposed: Number(practice?.proposed ?? 0), compared: Number(practice?.compared ?? 0) },
+    would_have_run: wouldHaveRun,
+  };
+}
+
+/** A catastrophe anywhere since the window began blocks it, scored or not (a take-over is unscored), on any release. */
+async function catastropheSince(db: AgentDb, tenantId: string, specialistId: string, actionId: string, window: Array<{ row: number }>): Promise<boolean> {
+  if (window.length === 0) return false;
+  const flagged = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM agent_agreements WHERE tenant_id = ? AND specialist_id = ? AND action_id = ? AND catastrophes_json <> '[]'
+      AND rowid >= ?`,
+    )
+    .bind(tenantId, specialistId, actionId, Math.min(...window.map((row) => row.row)))
+    .first<{ n: number }>();
+  return Number(flagged?.n ?? 0) > 0;
+}
+
+/** What a specialist runs on: a provider and model, with the effort and release when its close shows them. */
+interface RunsOn {
+  provider: string;
+  model: string;
+  effort: string | null;
+  release: string | null;
+}
+
+/**
+ * The provider and model of the specialist's most recent closed run with a model, and the effort
+ * and release a v3 close also records; a legacy close shows neither, so its qualification matches
+ * on provider and model alone.
+ */
+async function specialistRunsOn(db: AgentDb, tenantId: string, specialistId: string): Promise<RunsOn | null> {
+  return await db
+    .prepare(
+      `SELECT json_extract(close_json, '$.model.provider') AS provider, json_extract(close_json, '$.model.model') AS model,
+        json_extract(close_json, '$.model.effort') AS effort, json_extract(close_json, '$.model.release_sha256') AS release FROM agent_runs
+      WHERE tenant_id = ? AND specialist_id = ? AND state = 'closed' AND json_extract(close_json, '$.model.model') IS NOT NULL
+      ORDER BY ended_at DESC, rowid DESC LIMIT 1`,
+    )
+    .bind(tenantId, specialistId)
+    .first<RunsOn>();
 }

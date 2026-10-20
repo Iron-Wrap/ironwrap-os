@@ -13,7 +13,7 @@ import { ROLE_PERMISSIONS } from "../app-types.ts";
 import { COMPETENCY_KIND } from "../authority-record-native.ts";
 import { EXTERNAL_ISSUER_AUTHORITY_KINDS, type AuthorityRequirement } from "../authority-records.ts";
 import { isReservedEvidenceUploadReference } from "../evidence-upload-reference.ts";
-import { CATALOG, catalogAction } from "./catalog.ts";
+import { CATALOG, catalogAction, earnable } from "./catalog.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
 export type Binding =
@@ -255,6 +255,66 @@ const SETTINGS_PROPOSE_CHANGE: RegistryEntry = {
   machinePermitProven: false,
 };
 
+/** A within-limits ceiling (contract "Delegation" item 2): a count per window, an amount, the recipients. */
+export const CEILING_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["count", "amount", "recipients"],
+  properties: {
+    count: {
+      type: "object",
+      additionalProperties: false,
+      required: ["max", "per"],
+      properties: {
+        max: { type: "integer", minimum: 1, maximum: 10_000 },
+        per: { type: "string", enum: ["hour", "day", "week"] },
+      },
+    },
+    amount: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["max_minor", "currency"],
+      properties: {
+        max_minor: { type: "integer", minimum: 0 },
+        currency: { type: "string", pattern: "^[A-Z]{3}$" },
+      },
+    },
+    recipients: {
+      type: ["array", "null"],
+      maxItems: 200,
+      uniqueItems: true,
+      items: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
+};
+
+// A proposal for the owner, who decides it with delegation.set (H) in Settings → AI team, after the
+// preview. Only an action whose autonomy can be earned, for a specialist that owns it; a ceiling
+// only with within limits. The earned-autonomy bar for within limits is checked when it is proposed.
+const DELEGATION_PROPOSE_CHANGE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["specialist_id", "action_id", "proposed", "ceiling", "reason"],
+    properties: {
+      specialist_id: { type: "string", pattern: "^[a-z_]{2,64}$" },
+      action_id: { type: "string", pattern: "^[a-z_]+\\.[a-z_]+$" },
+      // The setting proposed: within limits, practice only, or back to asks first.
+      proposed: { type: "string", enum: ["within_limits", "shadow", "asks_first"] },
+      ceiling: nullable(CEILING_SCHEMA),
+      reason: text(1000),
+    },
+  },
+  argsError: (args) => {
+    const { specialist_id, action_id, proposed, ceiling } = args as { specialist_id: string; action_id: string; proposed: string; ceiling: unknown };
+    const action = catalogAction(action_id);
+    if (!action || !action.owners.includes(specialist_id) || !earnable(action)) return "delegation_not_earnable";
+    return (proposed === "within_limits") === (ceiling !== null) ? null : "delegation_ceiling_mismatch";
+  },
+  binding: { kind: "record" },
+  machinePermitProven: false,
+};
+
 const IMPORT_RETRY_FAILED: RegistryEntry = {
   args: {
     type: "object",
@@ -272,6 +332,28 @@ const IMPORT_RETRY_FAILED: RegistryEntry = {
   machinePermitProven: false,
 };
 
+// The lead's four facts as lead_concierge proposes them from the inbound it answers; null leaves a
+// fact unproposed, and at least one is set. lead_fact.confirm copies exactly these, naming this step
+// as its proposal. Policy holds its citations to that inbound (policy.ts INBOUND_ONLY).
+const LEAD_FACT_FIELDS = {
+  type: "object",
+  additionalProperties: false,
+  required: ["service", "scope", "address", "timing"],
+  properties: { service: nullable(text(200)), scope: nullable(text(2000)), address: nullable(text(600)), timing: nullable(text(600)) },
+};
+
+const LEAD_FACT_PROPOSE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["lead_id", "fields"],
+    properties: { lead_id: recordId, fields: LEAD_FACT_FIELDS },
+  },
+  argsError: (args) => (Object.values((args as { fields: Record<string, unknown> }).fields).some((value) => value !== null) ? null : "lead_fields_empty"),
+  binding: { kind: "record" },
+  machinePermitProven: false,
+};
+
 const LEAD_FACT_CONFIRM: RegistryEntry = {
   args: {
     type: "object",
@@ -281,12 +363,7 @@ const LEAD_FACT_CONFIRM: RegistryEntry = {
       lead_id: recordId,
       proposal_id: recordId,
       // Values copied from the proposal; null leaves that fact unconfirmed. At least one is set.
-      fields: {
-        type: "object",
-        additionalProperties: false,
-        required: ["service", "scope", "address", "timing"],
-        properties: { service: nullable(text(200)), scope: nullable(text(2000)), address: nullable(text(600)), timing: nullable(text(600)) },
-      },
+      fields: LEAD_FACT_FIELDS,
     },
   },
   argsError: (args) => (Object.values((args as { fields: Record<string, unknown> }).fields).some((value) => value !== null) ? null : "lead_fields_empty"),
@@ -462,7 +539,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "report.compose": NOT_YET_REGISTERED,
   "staff.notify": NOT_YET_REGISTERED,
   "owner.interrupt": NOT_YET_REGISTERED,
-  "delegation.propose_change": NOT_YET_REGISTERED,
+  "delegation.propose_change": DELEGATION_PROPOSE_CHANGE,
   "delegation.set": NOT_YET_REGISTERED,
   "policy.propose_change": NOT_YET_REGISTERED,
   "policy.activate": NOT_YET_REGISTERED,
@@ -479,6 +556,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "inquiry.classify": NOT_YET_REGISTERED,
   "inquiry.link_duplicate": NOT_YET_REGISTERED,
   "inquiry.record_triage": NOT_YET_REGISTERED,
+  "lead_fact.propose": LEAD_FACT_PROPOSE,
   "lead_fact.confirm": LEAD_FACT_CONFIRM,
   "inquiry.close": NOT_YET_REGISTERED,
   "inbound.quarantine": NOT_YET_REGISTERED,

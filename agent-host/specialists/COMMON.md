@@ -134,9 +134,11 @@ receipt fields in plain words a person reads in five seconds:
 - `undo`: how this is reversed, or that it cannot be;
 - `do_it_myself`: where a person can do this step by hand.
 
-When a receipt refers to a step a person must take, or one waiting for approval, and the step's
-catalog name is given (in the playbook or the run input), it calls the step by that name (for
-example "releasing a hold point"), never by its action id.
+When a receipt refers to a step a person must take, or one waiting for approval, it never uses the
+action id. It calls the step by its catalog name when one is given: each tool's description ends
+with it, `people_only` lists your own people-only steps, and a playbook gives the name of any other
+step it asks you to name (for example "releasing a hold point"). Otherwise it says in plain words
+what the person does.
 
 Receipts are written in the reviewer's language from the tenant settings. A customer-facing draft in
 another language carries a faithful reviewer-language translation in the receipt.

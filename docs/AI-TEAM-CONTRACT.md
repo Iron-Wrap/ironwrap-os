@@ -74,19 +74,25 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
 12. **Kept board decisions.** No self-approval (OD-23). Owner approval below 25% gross margin
     (OD-32).
 13. **Models.** One provider-agnostic gateway. Each tenant sets its providers, models and billing
-    by configuration, and production supports any of them. Subscription sign-ins (Claude and Codex
-    through OAuth) are for building; production uses them only when a tenant chooses them. The
-    configurable defaults are GPT-6.1 Sol for routine specialist work, GPT-6 Astra for hard
-    reasoning, subject to the measured stage-0 pilot, and Claude Opus 5.5 for the independent
-    audit. A specialist runs on a model only after that pair passes qualification. The independent
-    auditor, and any eval judge, runs on a model family different from the family that proposed the
-    work under review. The auditor therefore has one route per family (a Claude route to audit
-    GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime records both
-    families on the `coordination_run` and refuses a run that would violate this.
+    by configuration. Production runs on commercial terms only: an API account or a commercial
+    subscription. A consumer sign-in serves synthetic runs only, or `eval_history` runs under a
+    recorded owner risk acceptance (see "Providers"). The configurable defaults are GPT-6.1 Sol
+    for routine specialist work, GPT-6 Astra for hard reasoning, subject to the measured stage-0
+    pilot, and Claude Opus 5.5 for the independent audit. A specialist runs on a model only after
+    that pair passes qualification. The independent auditor, and any eval judge, runs on a model
+    family different from the family that proposed the work under review. The auditor therefore
+    has one route per family (a Claude route to audit GPT-proposed work, a GPT route to audit
+    Claude-proposed work). The runtime records both families on the `coordination_run` and refuses
+    a run that would violate this.
 14. **Release bar for specialists.** A specialist release passes its evaluations, on each model it
     runs on, only with zero catastrophes, a golden-case mean of at least 0.90 with no case median
     below 0.60, and a red-team mean of at least 0.95 with the correct decision in every repetition,
-    over three repetitions. Lowering the bar needs an owner decision recorded in this contract.
+    over three repetitions. The third score is the history score: the specialist is replayed on
+    the company's own past records, and its proposals are compared with what actually happened
+    ([history evaluation](../agent-host/evals/README.md#history-evaluation)). A history bar is
+    gating when it decides the release and advisory when it only reports: a missed gating bar
+    fails the release, while advisory bars and a missing history score never do. Lowering the bar
+    needs an owner decision recorded in this contract.
 15. **Live answering.** Answering a live call or chat (`conversation.answer_live`) is off until the
     owner turns it on in setup; nothing answers live before that. Once on, it acts within the
     owner's limits (hours and channels), quotes no price, commits no date or coverage, says it is AI
@@ -167,13 +173,13 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 | Aspect | Detail |
 |---|---|
 | Mission | Be the team's one face on every role screen, the crew phone included: answer with sources, take requests and route them to the owning specialist, show what the team did, is doing and needs, deliver the owner reports, and keep every run inside its ceilings. |
-| Watches | `route_new_signal`, `unacknowledged_exception`, `run_at_ceiling`, `dead_letter`, `pipeline`, `daily_owner_brief`, `weekly_review`, `owner_requests`, `role_questions`, `interrupt_candidates`, `storm_events`, `delegation_review`, `page_unacknowledged` |
+| Watches | `route_new_signal`, `unacknowledged_exception`, `run_at_ceiling`, `dead_letter`, `pipeline`, `daily_owner_brief`, `weekly_review`, `owner_requests`, `role_questions`, `interrupt_candidates`, `storm_events`, `delegation_review`, `page_unacknowledged`, `import_failed_items` |
 | Proposes | Routing, owner reports, owner interrupts, storm mode changes, delegation, policy and settings changes with a preview, access changes for a person to apply, recovery of a dead-lettered envelope, retries of an import run's failed items. |
 | Reads | Every canonical object and coordination record; when it answers a person, only what that person's role may read. |
 | Writes as proposals | Routing and handoff records, report drafts, delegation and policy proposals. |
 | Hard boundary | Corporate governor: "cannot activate its own policy". It never performs another specialist's action, never changes a delegation setting, and never shows a person a fact their role cannot read. |
 | Reviewer | Owner; operations for dead-letter recovery. |
-| Do it myself | The role screens it summarizes (Now, Decisions, search) and Settings → AI team. |
+| Do it myself | The role screens it summarizes (Now, Decisions, search) and Settings → AI team; for an import run's failed items, the import screen's Retry (not built yet: the app has no import screen; see `CAPABILITY-MATRIX.md`). |
 
 #### AI market analyst (`market_analyst`)
 
@@ -416,7 +422,16 @@ An action's class is fixed by its consequence. It never changes at runtime.
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
 `payee.unfreeze_prepare`, `safety_stop.release_prepare` and `access.prepare_change` do at class
-`A1`; it never performs the act.
+`A1`; it never performs the act. A prepared draft names the person who performs the act, also while
+its specialist is on hold, and waits in that person's Needs you, never under Done for you: the
+owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfreeze_prepare`, and
+production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
+receipt asks the person to check it and apply it in their own screen. The draft is to leave Needs
+you when the matching act lands or a newer draft replaces it, its receipt naming which happened,
+and Needs you is to offer "Not now", which names what it removes. Neither is built yet (see
+`CAPABILITY-MATRIX.md`): today a prepared draft stays in Needs you. A run gets the names of the
+people-only acts its specialist owns as `people_only` (each `{action_id, name}`), so a receipt can
+name them; they are never its tools.
 
 ### Delegation
 
@@ -443,31 +458,48 @@ actions only.
 3. **Owner only, with step-up.** Only the owner changes a setting (`delegation.set`), in Settings →
    AI team, after a fresh interactive sign-in or second factor in the owner's own session, never
    from a link in a message. No specialist, not the face and not the auditor, has a tool that writes
-   a setting. The face may propose one (`delegation.propose_change`).
-4. **Preview.** Before confirming, the owner sees that action's history for that specialist:
-   proposals made, approved unchanged, edited, declined and undone, practice runs and how each
-   compared, the share that matched, and which of them the new ceiling would have let run.
+   a setting. The face may propose one (`delegation.propose_change`). Step-up evidence is not built
+   yet (see `CAPABILITY-MATRIX.md`): the Worker takes a setting change only from an owner session
+   signed in within the last five minutes, but asks for no second factor and records no step-up
+   evidence on the setting.
+4. **Preview.** Before confirming, the owner sees that action's history for that specialist
+   (`GET /api/v1/agent-team/specialists/:id/preview?action=…[&ceiling=…]`): proposals made,
+   approved, declined and done by hand, practice runs and how many were compared, the counted
+   decisions (item 13) and how each compared, the share that matched, whether the action meets the
+   bar, and, for a ceiling, how many of the counted decisions it would have let run and how many of
+   those did not match.
 5. **Audit.** Every step that runs within limits carries the setting's id on its receipt. The
    auditor verifies every such step until the setting has 20 clean ones, then a sample (one in ten
-   by default).
+   by default). Not built yet (see `CAPABILITY-MATRIX.md`): steps carry the setting's id, but the
+   auditor's check of them and its sampling do not run.
 6. **Revoke.** The owner can revoke or lower a setting at any time. The change applies to the next
    permit, and issued permits that have not executed are cancelled.
-7. **Automatic fallback.** A setting falls back to asks first, until the owner confirms it again,
-   when a step under it ends `unknown` or with a readback mismatch, a person undoes a step it ran,
-   the action's policy version changes, or the specialist's release (playbook, prompt, runtime
-   tier or model) changes without passing that action's evaluations. A within-limits setting also
-   falls back when a step under it is recorded as a catastrophe (item 12), and that fallback opens
-   an exception for the owner. A practice-only setting never falls back to asks first, which would
-   give the action more autonomy: the same triggers stop its practice runs, and the setting stays
-   practice only until the owner confirms it again. The auditor can also put a specialist on hold
-   (`specialist.hold`): that sets the specialist's hold flag, so all its non-protective actions ask
-   first, except that a practice-only action stops its practice runs and keeps its `shadow`
-   setting. The flag cannot be set on the AI auditor (the JSON `never_targets`), and only the owner
-   clears it, through `delegation.set`. Clearing the flag restores no setting by itself: each
-   setting the hold overrode stays asks first, and each practice-only setting stays practice only,
-   until the owner confirms it again. These fallbacks and the hold flag are the only delegation
-   changes the system makes by itself. Each moves toward more human control and none turns a
-   practice-only setting into a live one; only the owner ever gives an action more autonomy.
+7. **Automatic fallback.** A within-limits setting falls back to asks first, until the owner
+   confirms it again, when a step under it ends `unknown`, fails with a readback mismatch or is
+   done by a person instead (`done_by_person`), when the catalog or the step policy version
+   changes, when a person undoes a step it ran, or when the specialist's release changes without a
+   passed qualification of the specialist on the route it runs, which the Worker sees as a run of
+   the specialist that ends without a qualified route (`no_qualified_route`) after the setting was
+   set. It also falls back when a step under it is recorded as a catastrophe (item 12), and that
+   fallback opens an exception for the owner. The step policy is at version 5
+   (`ironwrap.agent_step_policy@5`); a new version is such a change, so every within-limits setting
+   asks first again until the owner confirms it, and a run opened under the old version takes no
+   new step. The undo trigger applies once a receipt offers an undo; no undo flow exists yet (see
+   `CAPABILITY-MATRIX.md`). A practice-only setting never falls back to asks first, which would
+   give the action more autonomy: the release and catastrophe triggers stop its practice runs (a
+   catastrophe recorded for that action of the specialist, or a run of the specialist without a
+   qualified route, since the owner set it), and the action then neither practises nor runs until
+   the owner confirms it again; the setting stays practice only. The auditor can also put a
+   specialist on hold (`specialist.hold`): that sets the specialist's hold flag, so all its
+   non-protective actions ask first, except that a practice-only action stops its practice runs
+   and keeps its `shadow` setting. Stopping practice runs under a hold is not built yet: they
+   continue. The flag cannot be set on the AI auditor (the JSON `never_targets`), and only the
+   owner clears it, through `delegation.set`.
+   Clearing the flag restores no setting by itself: each setting the hold overrode stays asks
+   first, and each practice-only setting stays practice only, until the owner confirms it again.
+   These fallbacks and the hold flag are the only delegation changes the system makes by itself.
+   Each moves toward more human control and none turns a practice-only setting into a live one;
+   only the owner ever gives an action more autonomy.
 8. **Never delegable.** `H` actions have no setting. No setting switches off a hard boundary or a
    check in this contract. These `A3` actions always ask first, because each releases a protection,
    approves a control the agents themselves work under, or is an owner-only right: `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`, `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`, `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`, `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`, `cancellation.release_hold`, `ncr.verify_close`.
@@ -490,24 +522,36 @@ actions only.
     runs spend only from their own low `shadow:` ceiling (see "Ceilings"), and a practice run never
     changes a setting.
 12. **Agreement.** Agreement is measured per specialist and action, from live asks-first decisions
-    and practice runs together. A live decision is a match when the reviewer approves the proposal
-    unchanged, partial when the reviewer edits it and then approves, and diverge when the reviewer
-    declines it. A practice run is compared with what the person actually did in the same case: a
-    match when the real act equals the proposal in action, object, values and recipient, partial
-    when it is the same action with other values, and diverge when it differs or nothing was done.
-    A catastrophe is a step that did, or as a practice run would have done, what an entry in the
-    evaluation catastrophe list
+    and practice runs together. There is no edit-then-approve flow: a live decision is a match when
+    the reviewer approves the proposal, diverge when the reviewer declines it, and unscored when a
+    person does the work by hand instead ("Do it myself"). A practice run is compared with what the
+    person actually did in the same case: a match when the real act equals the proposal in action,
+    object, values and recipient, partial when it is the same action with other values, and
+    diverge when it differs. Only that comparison gives `partial`. A practice run with nothing to
+    compare with inside its seven-day window is unscored, and no comparator is built yet (see
+    `CAPABILITY-MATRIX.md`). An unscored decision or practice run never counts toward the share
+    that matched, but a catastrophe recorded on it, a person's take-over included, still blocks the
+    bar (item 13). A catastrophe is a step that did, or as a practice run would have done, what an
+    entry in the evaluation catastrophe list
     ([`agent-host/evals/catastrophes.v1.json`](../agent-host/evals/catastrophes.v1.json)) describes,
     as the auditor's finding or the reviewer's decision records it.
 13. **Earned autonomy.** The system may propose acting within limits for an action and specialist
     only when the recent compared decisions meet every part of this bar: at least 50 of them, at
     least 95% of them a match, no catastrophe among them, and the specialist qualified on the model
-    it runs on (see "Qualification"). Only decisions under the action's current policy version and
-    the specialist's current release count. The face proposes the change
-    (`delegation.propose_change`, with the preview) and the owner decides (`delegation.set`). No `H`
-    action and no action whose `delegable` is false is ever proposed. These numbers are floors:
-    tenant policy may raise them, and lowering one needs an owner decision recorded in this
-    contract.
+    it runs on (see "Qualification"). Only decisions under the current step policy version and the
+    specialist's current release count. The window keys on the release (`release_sha256`:
+    playbook, allowlist, `COMMON.md` and catalog), never on the model or the runtime tier: with
+    declared failover a run's model alternates between the primary and a fallback, and a window
+    keyed on it would flap. The qualification covers the route instead: the bar needs a passed
+    qualification on the exact route the specialist's latest run used, and a run on an unqualified
+    route makes a within-limits setting fall back to asks first (item 7). A close the Worker
+    refused (no qualified route, or an audit off independence) counts toward the bar only against
+    the specialist, never for it: the run's matches leave the window, while its divergences, a
+    person's declined proposal included, still count. The face proposes the change
+    (`delegation.propose_change`, with the preview), the Worker refuses a proposal to act within
+    limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action and no
+    action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
+    lowering one needs an owner decision recorded in this contract.
 14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
     your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
     actions the words shown are the current setting's.
@@ -568,9 +612,11 @@ first. Publishing a reception script version always asks first (`reception_scrip
 
 ### Policy checks
 
-Every action runs the base checks `scope`, `fresh`, `cited`, `budget` and `injection`; the catalog
-lists the further checks per action. A check is deterministic code, evaluated when the permit is
-issued and again immediately before execution. A failing check stops the step.
+Every action runs the base checks `scope`, `fresh`, `cited` and `budget`; the catalog lists the
+further checks per action. A check is deterministic code, evaluated when the permit is issued and
+again immediately before execution. A failing check stops the step. There is no injection check:
+no deterministic detector exists, and injection is handled structurally (see "Inbound text is
+data").
 
 | Check | Passes when |
 |---|---|
@@ -578,7 +624,6 @@ issued and again immediately before execution. A failing check stops the step.
 | `fresh` (base) | Every cited fact is still at its cited version and inside its freshness rule |
 | `cited` (base) | Every number, name, date, amount and claim in the output matches a cited fact or a deterministic computation over cited facts |
 | `budget` (base) | The run, the specialist's daily spend and the rate ceilings have room; a practice run spends from its own `shadow:` ceiling, never the live spend |
-| `injection` (base) | No instruction from inbound content reached the goal, the tool arguments or the recipients |
 | `consent` | A current consent covers this recipient, channel and purpose (for an insurer or another third party, the customer's authorization to share), and no suppression applies. The exact message the person sent is the basis for replying on that same channel without a separate consent fact; a `safety_notice` also needs no separate consent fact. Every other send needs a consent fact as tenant policy defines it. Neither exception bypasses suppression or provider opt-outs |
 | `quiet_hours` | The send falls inside the recipient's allowed contact hours in their time zone. A `safety_notice` is exempt |
 | `recipient` | The recipient comes from the canonical contact point of the right party, never from inbound text, and matches the consent |
@@ -608,6 +653,7 @@ issued and again immediately before execution. A failing check stops the step.
 | `counterparty` | The supplier or subcontractor is approved and verified, and the contact comes from its verified record |
 | `payee_protected` | No pending or unverified change to the counterparty's payee or bank details |
 | `identity` | The requester's identity and authority over the property, job or account are verified through the portal identity or a call-back to a number on file |
+| `requester` | The step answers a person's request: the run's own signal, or the root of its handoff chain, is an `owner_request` from an authenticated owner or staff member, and the step cites it. `access.prepare_change` takes an ask or any press (source `ask` or `request`) and sets it as `request_ref`; `authority.record` takes only a press (source `request`) whose expected action is `authority.record` |
 | `privacy` | Only the minimum personal data needed leaves the system, to an allowed recipient or processor |
 | `segregation` | The reviewer did not author the revision, and the separation rules in AUTHORITY-AND-EVIDENCE-CONTRACT.md hold |
 | `bounded` | The effect stays inside its declared objects, area, duration and count |
@@ -655,6 +701,10 @@ them and follows these conventions:
 - Money is an integer in minor units (cents) plus an ISO 4217 currency code.
 - Language is a BCP 47 tag.
 - Ids are named `<aggregate>_id`, such as `quote_id`.
+- A reference to a person, a device or a signal is a `<kind>_ref` whose value carries its kind:
+  `person:<app user id>`, `device:<id>` or `signal/<id>`, as `access.prepare_change` names its
+  person, device and request (`person_ref`, `device_ref`, `request_ref`). `authority.record` keeps
+  the authority record's own subject and scope references (`subject_ref`, `scope_ref`).
 - Reasons: `exception.escalate` takes one of the receipt's abstention codes; `handoff.create` gives
   its reason as text. The actions in the table below take a `reason_code` from their own closed
   vocabulary.
@@ -663,6 +713,12 @@ them and follows these conventions:
   person), `urgency` (always `immediate`), `summary`, `location`, `job_id` and `contact_id`.
   An unknown canonical `job_id` or `contact_id` is explicitly `null`; never invent a record or delay
   the page to fill either id. The summary and location distinguish reported facts from unknowns.
+- `lead_fact.propose` takes `lead_id` and `fields` (`service`, `scope`, `address` and `timing`),
+  the same four keys as the `fields` of `lead_fact.confirm`: every key present, `null` where nothing
+  is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
+  `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
+  citations, never an argument. Only a run started by the inbound event itself may propose it, and
+  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`).
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:
@@ -696,7 +752,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
-| `fact.explain` | A0 | — | Explain facts, blockers, a proposal or a decision, within the asker's read rights. | Facts at their cited versions | — | — | None; citations are checked again when shown | Read models: `GET /api/v1/now`, `GET /api/v1/owner/now`, `GET /api/v1/search`, `GET /api/v1/jobs/{job}/commercial-context`, `GET /api/v1/jobs/{job}/history` |
+| `fact.explain` | A0 | — | Explain facts, blockers, a proposal or a decision, within the asker's read rights. | Facts at their cited versions | — | — | None; citations are checked again when shown (`POST /api/v1/agent-team/facts/current`) | Read models: `GET /api/v1/now`, `GET /api/v1/owner/now`, `GET /api/v1/search`, `GET /api/v1/jobs/{job}/commercial-context`, `GET /api/v1/jobs/{job}/history` |
 | `handoff.create` | A0 | — | Hand a canonical object to another specialist with a reason and the action expected next. | Object id and version; expected action id | `handoff_limits` | — | Handoff record on the run → run read back | new (coordination run) |
 | `exception.escalate` | A2 | Acts within your limits | Protective. Abstain or escalate: open an exception with its reason code for a named person and notify them. | Facts behind the reason code | `named_person` | Never asks first | Exception and staff notification → exception read back; delivery status | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
 | `note.add` | A2 | Acts within your limits | Add a note to a canonical object; a note is proposed context, never a fact, and a later note can withdraw it. | The object and its version; any facts the note cites | — | The proposing specialist's reviewer | Note on the object → read back | new |
@@ -709,7 +765,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `report.compose` | A1 | — | Compose an owner report: new inquiries (the AI receptionist), pipeline, daily brief or weekly review. Owners: `orchestrator`, `lead_concierge`. | Receipts, runs and facts in the report window | — | — | Report draft (proposed) | new; predecessor `sendDailyDigest` in `workers-bus/src/notify.ts` |
 | `staff.notify` | A2 | Acts within your limits | Deliver a report, a decision request or a schedule to named staff. Owners: `orchestrator`, `lead_concierge`, `scheduler_dispatcher`, `shop_planner`. | Recipient and role; content limited to the recipient's read rights | `staff_recipient` | The proposing specialist's reviewer | In-app, push or email notification → delivery status | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
 | `owner.interrupt` | A2 | Acts within your limits | Protective. Interrupt the owner at once with an item on the owner's immediate-only list; an internal notification with no outside effect. | The facts that put the item on the list | `immediate_only`, `staff_recipient` | Never asks first | Urgent notification to the owner, repeated until acknowledged → acknowledgement | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
-| `delegation.propose_change` | A1 | — | Propose a delegation change for one specialist and action, with a preview of what would have run. | That action's history for that specialist: proposals, approvals, edits, declines, undos, practice runs, how each compared, and outcomes | — | — | Proposal for the owner | new (Settings → AI team) |
+| `delegation.propose_change` | A1 | — | Propose a delegation change for one specialist and action (within limits with a ceiling, practice only, or back to asks first), with a preview of what would have run; within limits only for an action that meets the earned-autonomy bar (Delegation item 13). The draft waits in the owner's Needs you. | That action's record for that specialist (`delegation/<specialist>:<action>`): proposals, approvals, declines, work done by hand, practice runs, how each compared, and outcomes | — | — | Proposal for the owner, who decides with `delegation.set` after the preview | Recorded on the run; the preview is `GET /api/v1/agent-team/specialists/:id/preview?action=…[&ceiling=…]` (Settings → AI team) |
 | `delegation.set` | H | — | Set asks first, within limits with a ceiling, or practice only, for a specialist and action, or revoke it; clear a specialist's hold flag, after which each setting the hold overrode stays asks first until the owner confirms it again. | — | — | People only: owner, with step-up | Delegation setting → read back by the next permit | new (Settings → AI team) |
 | `policy.propose_change` | A1 | — | Propose a policy, ceiling or standing-order change. | Facts that motivate it; affected runs | — | — | Proposal for the owner | new |
 | `policy.activate` | H | — | Activate a policy, ceiling or standing-order version. | — | — | People only: owner | Policy version → read back at the next evaluation | new |
@@ -717,7 +773,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `settings.apply` | H | — | Apply a prepared settings edit after its before-and-after preview. Agents never apply settings, the same rule as `policy.activate`. | — | — | People only: a person with the right to change that setting, the owner by default | Settings version → read back | new (Settings) |
 | `onboarding.go_live` | H | — | Make the owner's launch decision at the end of onboarding. Before it, nothing with an outside effect runs. | — | — | People only: owner | Tenant live → read back | new (onboarding) |
 | `dead_letter.replay` | A3 | Asks first | Re-drive one dead-lettered envelope. | Envelope at status `dead`; dry-run result | — | Ops | Envelope re-driven → envelope status and replay ledger | `bus:dry_run_replay`, then `bus:request_replay` |
-| `import.retry_failed` | A3 | Asks first | Retry only the failed items of an import run. A retry is idempotent: an item already imported is adopted, never duplicated. | The import run and its failed items, each with its source key | `bounded`, `exact_match` | Owner | Failed items imported or adopted → import run read back | new; predecessor `POST /admin/crm-import/execute`, which re-runs a whole file |
+| `import.retry_failed` | A3 | Asks first | Retry only the failed items of an import run. A retry is idempotent: an item already imported is adopted, never duplicated. | The import run and its failed items, each with its source key | `bounded`, `exact_match` | Owner | Failed items imported or adopted → import run read back | No executor yet: an approval records the decision and returns the step to the reviewer to do by hand; predecessor `POST /admin/crm-import/execute`, which re-runs a whole file |
 
 #### Catalog: AI market analyst (`market_analyst`)
 
@@ -736,7 +792,8 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `inquiry.classify` | A1 | — | Classify an inquiry: service, urgency, emergency, storm context, fit, spam and scam likelihood. | Raw inbound receipt hash; linked customer, property and job facts | — | — | Classification (proposed) on the lead | new; the deterministic lead-triage shadow evaluator (`workers-bus/src/lead-triage-shadow-authority.ts`) stays informational |
 | `inquiry.link_duplicate` | A2 | Acts within your limits | Link an inquiry to an existing customer, property or open inquiry; never merge records. | Contact point or address facts at version | `exact_match` | Sales | Duplicate link → link read back | new |
 | `inquiry.record_triage` | A2 | Acts within your limits | Record the triage decision for an inquiry. | Classification; qualification facts | `qualification` | Sales | Lead captured → triaged → lead version read back | `POST /api/v1/commercial/lead-triage-decisions`; predecessor `erp:request_mark_lead_triaged` behind the lead-triage approval broker |
-| `lead_fact.confirm` | A3 | Asks first | Confirm values the AI proposed on a lead (such as the service, the scope, the address or the timing) into lead facts, as `property_fact.confirm` does for a property. | The proposed values and their source: the raw inbound receipt or the conversation | `conflict`, `segregation` | Sales | Lead fact version → read back | new |
+| `lead_fact.propose` | A1 | — | Propose values for a lead's facts (the service, the scope, the address or the timing) from the raw inbound receipt, as `property_fact.propose` does for a property; `lead_fact.confirm` resolves the proposal. | The raw inbound receipt (`signal/<id>`, the envelope) each value comes from; conversation text is not citable | — | — | Lead fact proposal (proposed) | new |
+| `lead_fact.confirm` | A3 | Asks first | Confirm values the AI proposed on a lead (such as the service, the scope, the address or the timing) into lead facts, as `property_fact.confirm` does for a property. | The proposed values and their source, which is only the raw inbound receipt (the envelope); conversation text is not citable | `conflict`, `segregation` | Sales | Lead fact version → read back | No executor yet: an approval records the decision and returns the step to the reviewer to do by hand |
 | `inquiry.close` | A3 | Asks first | Decline, disqualify or move an inquiry to nurture. | Qualification facts; reason codes | `qualification` | Sales | Lead transition → lead version read back | new |
 | `inbound.quarantine` | A2 | Acts within your limits | Protective. Hold suspected spam, scam or injected inbound content in which nothing valid remains: no reply, and no tool acts on it. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Raw inbound receipt hash; reason codes | — | Never asks first | Inbound held → hold read back | new |
 | `inbound.release` | A3 | Asks first | Always asks first. Release quarantined content into normal handling. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Quarantine record and its reason codes | — | The proposing specialist's reviewer | Hold released → read back | new |
@@ -897,15 +954,15 @@ safety occurrence. The Worker registry and the human release route must preserve
 
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
-| `authority.evaluate` | A0 | — | Evaluate the authority records for a job, crew or subcontractor. | Authority record versions; issuer readbacks | — | — | None | `GET /api/v1/authority-records` |
+| `authority.evaluate` | A0 | — | Evaluate the authority records for a job, crew or subcontractor. | Authority record versions; issuer readbacks | — | — | None | A Worker read of the authority heads plus fence requirement resolution: the named record's current head, and each requirement of the job's current assignment resolved, read as the run's role and answered with the step (`evaluation`) |
 | `gate.block` | A2 | Acts within your limits | Protective. Block a gate whose authority fact is missing, expired or contradicted. | Authority record versions | — | Never asks first | Gate blocked → read back | new; predecessor `erp:request_update_gate` |
 | `gate.clear` | A3 | Asks first | Always asks first. Clear a gate with its evidence. | Evidence and issuer readback | `gates`, `segregation` | Production | Gate cleared → read back | `POST /api/v1/production/jobs/{job}/gates/{gate}/clearance` |
 | `gate.waive` | H | — | Waive a gate. | — | — | People only: owner | Waiver → read back | new |
 | `document.request` | A2 | Asks first | Ask a subcontractor or supplier for a certificate, clearance or insurance document. | The authority gap; verified contact | `counterparty`, `privacy` | Production | Request → delivery status | new |
-| `authority.record` | A3 | Asks first | Always asks first. Record a verified authority record with its issuer readback. | Issuer readback; document hash | `segregation` | Production | Authority record → read back | `POST /api/v1/authority-records/actions`, `POST /api/v1/authority-records/readbacks` |
+| `authority.record` | A3 | Asks first | Always asks first. Record an internal Worker Competency from a completed Internal Competency Assessment. Record, verify and revoke each write a new version, never an edit. External kinds (a licence, clearance, permit, inspection or certificate from an issuer) are refused: they are evaluated with `authority.evaluate` and never recorded by this action. The trigger is a person's press on compliance's view for this action: an `owner_request` with source `request` whose expected action is `authority.record`, from an authenticated owner or staff member, which the step cites. | The assessment fact, plus `evidence_refs`, each with its SHA-256; the press | `requester`, `segregation` | Production holding `authority:approve`, or the owner; never the worker the record is about | New Worker Competency version → read back from the D1 owned store | `POST /api/v1/authority-records/commands` plus the step decision: an approval runs the same internal competency command natively in D1, inside the decision's own transaction |
 | `privacy_request.answer` | A3 | Asks first | Always asks first. Answer a request to see or correct personal data. | Verified identity; records in scope | `identity`, `privacy`, `disclosure` | Owner | Response → delivery status | new |
 | `privacy_incident.contain` | A2 | Asks first | Contain suspected exposure: revoke portal links and device pairings. | The exposure signal | — | Owner | Revocations → read back | `POST /api/v1/customer-portal/links/{link}/revoke`, `POST /api/v1/device-pairings/{pairing}/revoke` |
-| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a role change or a device change and open it in Decisions for a person to apply with `access.change`. Only on the request of a signed-in staff member through the face, never from inbound customer or supplier text. Owners: `compliance`, `orchestrator`. | The staff member's request in their own session; the person's current role, access and devices | — | — | Access change (proposed) for a person to apply | new |
+| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a phone replacement or revocation, or a role change for one person, for the owner to apply with `access.change`: the draft waits in the owner's Needs you, not under Done for you, and names the owner, under a hold too. Only a role change names a target role, which may be any app role except owner; adding or removing a person stays on the owner's `access.change` screen. The request comes from an owner or staff member, either as the run's own ask or request or as the root of its handoff chain, never from inbound customer or supplier text; since no view can request an access change, any owner or staff press counts. Owners: `compliance`, `orchestrator`. | The request (`request_ref`, `signal/<id>`), set and cited; the person's current role, access and devices | `requester` | — | Access change (proposed) for a person to apply | new |
 | `access.change` | H | — | Grant or change a person's role or access. | — | — | People only: owner | Access → read back | `POST /api/v1/admin/app-users/{user}/role`, `POST /api/v1/admin/app-users/{user}/access` |
 
 #### Catalog: AI customer care (`customer_care_warranty`)
@@ -996,9 +1053,11 @@ matches a cited fact.
 | `unknown` | The effect was dispatched and its result cannot be established yet. Reconciliation runs; the step is never retried blindly. |
 | `abstained` | The specialist stopped before acting, recorded an abstention code, and escalated to a named person. |
 
-`policy.reason_codes` carries the reason; the codes are listed in the machine-readable contract. An
-`unknown` outcome becomes `succeeded` or `failed` only through reconciliation, recorded as a new
-receipt version.
+`policy.reason_codes` carries the reason. The machine-readable contract lists the codes of
+`failed`, `unknown` and `abstained` steps, and the one code a `succeeded` step may carry:
+`view_spec_invalid`, which the face's answer receipt carries when it refused a view (see "Requests
+through the face"). An `unknown` outcome becomes `succeeded` or `failed` only through
+reconciliation, recorded as a new receipt version.
 
 ### Undo
 
@@ -1014,7 +1073,9 @@ receipt version.
 ### How screens use receipts
 
 - **Now** is the team brief. Done for you: closed steps that succeeded, each with its receipt and
-  undo. Doing: open steps. Needs you: steps waiting on a person. Found: opportunity and risk alerts.
+  undo. Doing: open steps. Needs you: steps waiting on a person, and drafts of a people-only act for
+  the person who performs it (see "Action classes"), which never show under Done for you. Found:
+  opportunity and risk alerts.
 - **Decisions** shows only steps that ask first and acts that are people only. Nothing else goes
   there.
 - A decision card states what approving does and does not do, the exact values, the recipient, the
@@ -1053,7 +1114,7 @@ records:
 | `trigger` | The event, watch or schedule, or the person and session that asked |
 | `goal` | One declared goal |
 | `context_snapshot_hash` | Hash of the `ContextSnapshot`: every cited fact id, version and hash |
-| `model` | Provider, adapter, model id, model family, provider-reported model version, runtime tier, billing kind (`api` or `subscription`), route (`primary` or `declared_fallback`), credential mode and qualification reference; an audit run also records the model family that proposed the work under review |
+| `model` | Provider, adapter, model id, model family, provider-reported model version, effort, runtime tier, billing kind (`api` or `subscription`), route (`primary` or `declared_fallback`) and each failover hop the run passed over (at most three, each with its route, model, family and reason), credential mode, qualification reference, run class, `compliance_ref`, any owner risk acceptance the run relied on and the specialist's `release_sha256`; the Worker adds the data class it holds (`AGENT_DATA_CLASS`); an audit run also records the model family that proposed the work under review |
 | `prompt_hash` | SHA-256 over the system prompt, playbook version and standing-orders version |
 | `schema_hash` | SHA-256 over the output schema |
 | `tool_manifest_hash` | SHA-256 over the actions and tools the run may use |
@@ -1063,6 +1124,22 @@ records:
 | `usage` | Steps, model calls, tokens, cost and wall time, against the ceilings |
 | `result` | `completed`, `abstained`, `escalated`, `ceiling_reached` or `cancelled` |
 | `parent_run_id`, `correlation_id`, `started_at`, `ended_at` | Lineage and time |
+
+A host closes a run with a `model` block in the shape the Worker names when the run opens
+(`close_model`, 3 today). Any change to that block (a new required field, a tightened field or a
+removed field) raises `close_model` by one. This is a review rule, not a check: no change may
+tighten a block in place under its current number. A Worker accepts its current `close_model` and
+the one before it, so a Worker deployed ahead of its host keeps accepting the older shape: today's
+Worker takes the `close_model` 3 block, the routed block of a gateway config v2 host (`route_id`,
+`review_of` and `mode`) and the legacy block, and refuses an unknown field in any of them. Two
+tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
+with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
+to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
+host. A host sends the newest close model it knows that is no newer than the Worker's: today's
+host sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still
+gets the block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on
+a later close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block records the effort, run class, qualification, release and
+data class, so only its live or shadow output is held to a qualification (see "Qualification").
 
 ## Shared memory
 
@@ -1104,6 +1181,11 @@ evidence.
 - `fact_id` is `<object>/<id>`, optionally followed by `#` and a JSON pointer to one field, such as
   `job/<id>#/gates/deposit`. Raw evidence is `evidence/<id>`; a provider fact is
   `<provider>/<entity>/<id>`, such as `quickbooks/invoice/<id>`.
+- One specialist and action's earned-autonomy record is the fact
+  `delegation/<specialist_id>:<action_id>`, readable at `owner:read`: the setting and whether it
+  fell back, practice and whether it stopped, the counted window and the bar (see "Delegation"),
+  the qualification it relies on, the decision history, failed readbacks, and the most proposals in
+  any hour, day or week. Its version moves with every proposal of the pair.
 - `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
   changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
   is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.
@@ -1116,6 +1198,8 @@ evidence.
   instructions.
 - Immediately before a permit is used, the cited versions are read again. Any change stops the step,
   which is proposed again from the new facts.
+- Citations are checked again when shown, through `POST /api/v1/agent-team/facts/current`: it
+  answers each cited fact's current version and hash, never its value, read as the viewer's role.
 - A model output, a projection or an unversioned value is never a citation.
 - Supplier and conversation facts have no D1 tables yet, so they are unreadable: a step that cites
   one abstains (`citation_unverifiable`).
@@ -1176,20 +1260,21 @@ work.
 | `orchestrator` | `dead_letter` | On `dead_letter.created` | An envelope is dead-lettered | `dead_letter.replay`, `exception.escalate` |
 | `orchestrator` | `pipeline` | Every `PT1H` | Stage changes, stalled cases or waiting decisions since the last report | `report.compose`, `staff.notify` |
 | `orchestrator` | `daily_owner_brief` | Every `P1D` | The tenant's daily brief time | `report.compose`, `staff.notify` |
-| `orchestrator` | `weekly_review` | Every `P7D` | The tenant's weekly review day and time | `report.compose`, `staff.notify` |
+| `orchestrator` | `weekly_review` | Every `P7D` | The tenant's weekly review day and time; its digest lists the delegation candidates, the pairs with enough compared decisions for a preview (`previewable`) and the proposals awaiting the owner (`awaiting_owner`) | `report.compose`, `staff.notify` |
 | `orchestrator` | `owner_requests` | On `face.message_received` | The owner asks the face a question or asks for an action | `fact.explain`, `signal.route`, `handoff.create` |
 | `orchestrator` | `role_questions` | On `face.message_received` | A person in another role, the crew phone included, asks the face a question | `fact.explain`, `handoff.create`, `owner.interrupt` |
 | `orchestrator` | `interrupt_candidates` | On `signal.received` | A signal matches the owner's immediate-only list | `owner.interrupt`, `exception.escalate` |
 | `orchestrator` | `storm_events` | On `storm_watch.opened` | A storm watch opens, or the owner switches storm mode | `staff.notify`, `handoff.create`, `storm_mode.propose` |
-| `orchestrator` | `delegation_review` | Every `P7D` | An action meets the earned-autonomy bar for a specialist, or has enough compared decisions for a preview | `delegation.propose_change` |
+| `orchestrator` | `delegation_review` | Every `P7D` | An action meets the earned-autonomy bar for a specialist, or has enough compared decisions for a preview; each such pair is an object of the run (`delegation/<specialist>:<action>`), and a pair the face already proposed that the owner has not answered is listed under `awaiting_owner` instead | `delegation.propose_change` |
 | `orchestrator` | `page_unacknowledged` | On `page.unacknowledged` | A page has no acknowledgement inside its window; the next person in the escalation order is paged, ending with the owner | `exception.escalate`, `owner.interrupt` |
+| `orchestrator` | `import_failed_items` | Every `PT1H` | An import run finished with failed items since the last firing | `import.retry_failed` |
 | `market_analyst` | `storm_events` | On `weather.alert` | The configured weather feed reports hail, high wind or a severe storm over a service area | `storm_watch.open`, `market_alert.raise`, `storm_mode.propose` |
 | `market_analyst` | `inquiry_cluster` | On `lead.captured` | Inquiries for one area and service pass the configured cluster threshold inside its window | `storm_watch.open`, `market_alert.raise` |
 | `market_analyst` | `material_price_move` | On `catalog_snapshot.recorded` | A snapshot moves the price of a material the business uses past the configured threshold | `market_alert.raise` |
 | `market_analyst` | `competitor_scan` | Every `P1D` | Scheduled scan of the configured public sources | `market_watch_item.add`, `market_alert.raise` |
 | `market_analyst` | `weekly_market_review` | Every `P7D` | Before the weekly review is composed | `market_review.draft` |
 | `lead_concierge` | `new_leads` | Every `PT15M` | At least one inquiry arrived or changed since the last new-inquiries report | `report.compose`, `staff.notify` |
-| `lead_concierge` | `new_inbound` | On `inbound.received` | A form, call report, email, SMS or message arrives from someone without an accepted job | `inquiry.classify`, `inbound.quarantine`, `inquiry.link_duplicate`, `inquiry.record_triage`, `customer_message.draft`, `conversation.assign_person`, `emergency.page` |
+| `lead_concierge` | `new_inbound` | On `inbound.received` | A form, call report, email, SMS or message arrives from someone without an accepted job | `inquiry.classify`, `inbound.quarantine`, `inquiry.link_duplicate`, `inquiry.record_triage`, `lead_fact.propose`, `customer_message.draft`, `conversation.assign_person`, `emergency.page` |
 | `lead_concierge` | `first_response_due` | Every `PT5M` | An inquiry has no approved first response inside the response target | `customer_message.draft`, `exception.escalate` |
 | `lead_concierge` | `follow_up_due` | `P3D`, `P10D`, `P21D` after `customer_message.sent` | A prospect has not replied or decided since the last message; days 3, 10 and 21 by default, per case | `customer_message.draft`, `inquiry.close` |
 | `lead_concierge` | `reception_session` | On `reception.session_reported` | The voice provider reports a finished reception session | `inquiry.classify`, `visit.hold_slot`, `conversation.assign_person` |
@@ -1265,7 +1350,7 @@ work.
 | `compliance` | `incident_notice` | On `incident.reported` | An incident may need a regulator notice | `filing.draft_packet`, `exception.escalate` |
 | `compliance` | `privacy_request` | On `privacy.request_received` | Someone asks to see or correct their data | `privacy_request.answer` |
 | `compliance` | `exposure_suspected` | On `privacy.exposure_suspected` | Data may have reached the wrong person | `privacy_incident.contain`, `exception.escalate` |
-| `compliance` | `issuer_readback` | On `authority.readback_received` | An issuer confirms a record | `authority.record`, `gate.clear` |
+| `compliance` | `issuer_readback` | On `authority.readback_received` | An issuer confirms a record; the record is evaluated, never recorded by this watch | `authority.evaluate`, `gate.clear` |
 | `compliance` | `lien_window` | On `lien_window.timer_due` | A lien or holdback window on a job reaches a point set in tenant policy | `filing.draft_packet`, `exception.escalate` |
 | `customer_care_warranty` | `customer_message` | On `inbound.received` | A customer with an accepted job writes or calls | `customer_message.draft`, `conversation.assign_person`, `service_case.open`, `inbound.quarantine` |
 | `customer_care_warranty` | `phase_notice` | On `job.phase_changed` | The job reaches a phase the customer should hear about, closeout included | `customer_message.draft` |
@@ -1293,7 +1378,7 @@ work.
 | New inquiries | `new_leads`, every 15 minutes | AI receptionist | Each inquiry that arrived or changed since the last report: who, what, channel, what the AI receptionist did (with receipts), and what it needs | In the app and as a push to the owner; not delivered when empty |
 | Pipeline | `pipeline`, hourly | IronWrap | Stage changes, stalled cases, quotes at risk (expiry, margin, re-price), follow-ups due, and decisions waiting | In the app, with a push only when a decision waits; not delivered when empty |
 | Daily owner brief | `daily_owner_brief`, daily at the tenant's configured time | IronWrap | Done for you (with receipts and undo), Doing, Needs you (asks first and people only), Found (opportunities and risks), and a strip of cash, backlog, capacity, storms and coil | In the app and by email |
-| Weekly market and portfolio review | `weekly_review`, weekly at the configured day and time | IronWrap, with the AI market analyst's part | Demand by area, service and source; wins and losses with their reasons; margin by job type and estimated against actual; prices against the market and the coil trend; capacity and backlog; reputation; delegation candidates with their history | In the app and by email |
+| Weekly market and portfolio review | `weekly_review`, weekly at the configured day and time | IronWrap, with the AI market analyst's part | Demand by area, service and source; wins and losses with their reasons; margin by job type and estimated against actual; prices against the market and the coil trend; capacity and backlog; reputation; delegation candidates with their history, the pairs ready for a preview and the proposals awaiting the owner | In the app and by email |
 
 Every fact in a report is cited from records (decision 9); a figure that cannot be cited is not
 shown. A report that is not delivered because it is empty is still recorded as a run. Between
@@ -1338,8 +1423,10 @@ reports, the owner is interrupted only for an item on the owner's immediate-only
 
 Specialists hand work over only through canonical objects, events and `handoff.create`. A handoff
 names the object and its version, the reason, and the action expected next; it creates no fact. The
-receiving specialist runs from its own watch. There is no free-text conversation between
-specialists.
+receiving specialist runs from its own watch. When the chain began with a person's ask or request,
+the receiving run reads that root signal as the fact `signal/<root_id>`: who asked and how (its
+source and actor), and its text only when the run reads as the owner. There is no free-text
+conversation between specialists.
 
 ### Ceilings
 
@@ -1360,6 +1447,11 @@ specialists.
 Defaults are tenant policy configuration. Tightening one is routine; raising one is an owner act
 (`policy.activate`). A run at a ceiling stops with `ceiling_reached` and escalates.
 
+A run still open past its wall time takes no further step and closes as `ceiling_reached`: at once
+when its host opens it again, and otherwise when the five-minute cron finds it 60 minutes past the
+ceiling, a grace that lets a close still on its way land. Its receipt names the specialist's
+reviewer, except for a person's ask and an owner report, whose receipts name nobody.
+
 ### Abstention
 
 A specialist abstains instead of guessing. It stops, records the abstention code, and escalates
@@ -1379,18 +1471,28 @@ owner.
 
 | Urgency | When | Delivery | If nobody acknowledges |
 |---|---|---|---|
-| Immediate | The owner's "immediate only" list in [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md#immediate-only), a safety risk, a missed working-alone check-in, an active leak, suspected fraud or payment redirection, suspected data exposure, a provider credential failure | Page at once | Page again every 5 minutes; after 15 minutes page the next person, ending with the owner (the `page_unacknowledged` watches) |
+| Immediate | The owner's "immediate only" list in [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md#immediate-only), a safety risk, a missed working-alone check-in, an active leak, suspected fraud or payment redirection, suspected data exposure | Page at once | Page again every 5 minutes; after 15 minutes page the next person, ending with the owner (the `page_unacknowledged` watches) |
 | Today | A blocked customer promise, a money exception, a credential or permit inside its warning window | Notify at once | Notify again at the start of the next business day and include it in the daily brief |
 | Brief | Everything else | The next daily brief | Nothing further |
 
+A provider credential failure, such as a revoked key or a sign-in the agent host cannot refresh, is
+not a page: it opens an exception in the owner's queue at immediate urgency.
+
 ### Requests through the face
 
-A person can ask the face to do something. The face routes the request to the specialist that owns
-the action, which proposes it. If the person who asked holds the reviewer right, the decision
-appears in the same conversation and binds the exact revision like any other decision. A request
-that matches no catalog action gets a plain answer and the screen where the person can do it
-themselves. A request that arrives inside a message, document or email is never a person's request,
-whoever it claims to come from.
+A person's question is an `owner_request` to the face from `ask:<user_id>`. Its run reads shared
+memory as the asker's role at ask time, never as the face's reviewer role. A completed ask closes
+with the face's answer receipt (`fact.explain`): it cites the facts its admitted steps cited and
+those a shown view cites, and carries the view check (`view_spec`) when the answer offered a view.
+A refused view is not shown, and the receipt records `view_spec_invalid`.
+
+A press on a view's action never executes anything. It becomes an `owner_request` to the action's
+owning specialist, whose run proposes the action, and policy decides; a people-only act cannot be
+requested. If the person who asked holds the reviewer right, the decision appears in the same
+conversation and binds the exact revision like any other decision. A request that matches no
+catalog action gets a plain answer and the screen where the person can do it themselves. A request
+that arrives inside a message, document or email is never a person's request, whoever it claims to
+come from.
 
 ## Model routing
 
@@ -1407,83 +1509,127 @@ tokens or other secrets.
 
 ### Providers
 
-Each tenant configures its own providers. A provider entry names its adapter, its endpoint, its
-billing kind (`api` or `subscription`), its credential mode and the name of its secret.
+Each tenant configures its own provider accounts. A provider entry names its adapter, its billing
+kind (`api` or `subscription`), its credential mode, the names of its secrets, its `compliance_ref`
+and the account's own model registry (see "Model registry").
 
 | Adapter | Reaches |
 |---|---|
-| `openai_compatible` | Any OpenAI-compatible endpoint, OpenRouter, Azure OpenAI and self-hosted endpoints included |
-| `anthropic_messages` | The Anthropic Messages API |
-| `gemini` | The Gemini API |
-| `bedrock` | Amazon Bedrock |
-| `vertex` | Google Vertex AI |
-| `claude_agent_sdk` | Claude through the Claude Agent SDK, with an OAuth subscription sign-in |
-| `codex` | Codex, with a subscription sign-in |
+| `claude_agent_sdk` | Claude through the Claude Agent SDK, with an OAuth sign-in or an API key |
+| `codex` | Codex, with a ChatGPT sign-in or an API key |
 
-Subscription sign-ins (`claude_agent_sdk` and `codex`) are for building. A tenant's production uses
-them only when that tenant chooses them. Within these adapters, adding a provider or a model, or
-changing how one is billed, changes configuration only, with no code, prompt or schema change.
+These two adapters exist. The HTTP adapters are not built yet (see `CAPABILITY-MATRIX.md`):
+`openai_compatible` (any OpenAI-compatible endpoint, OpenRouter, Azure OpenAI and self-hosted
+endpoints included), `anthropic_messages` (the Anthropic Messages API), `gemini` (the Gemini API),
+`bedrock` (Amazon Bedrock) and `vertex` (Google Vertex AI).
+
+Each account's `compliance_ref` is its `Ref` under "AI model providers" in
+[`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md#ai-model-providers), and the account's adapter
+and credential mode must match that ref. A ref allows a set of run classes: `live` and `shadow`
+runs on business data, `eval_history` runs on the company's own pseudonymised history, and
+`synthetic` runs (golden and red-team cases, or any run on a host that holds synthetic data only).
+A commercial ref (an API account or a commercial subscription) allows every class; the one whose
+register row is conditional serves live and shadow runs only once the owner's confirmation is
+recorded on the account (`confirmed_retention`). A consumer ref allows `synthetic` only, and a
+recorded owner risk acceptance may extend it to `eval_history` and nothing else. A live or shadow
+run on a consumer ref is refused before any call, and so is every run on an account that names no
+ref. The agent host's data class (`AGENT_HOST_DATA_CLASS`) defaults to `business` and fails
+closed: any value other than `business` or `synthetic` stops the host. The Worker has its own
+(`AGENT_DATA_CLASS`): `business` by default and `synthetic` on the QA and local Workers, and any
+other value stops its agent host API. A `synthetic` run closes only on a synthetic Worker and an
+`eval_history` run on none; such a close is refused and records nothing. Adding an account on an
+existing ref, or a model to an account's registry, changes configuration only, with no code,
+prompt or schema change. The register's refs are also code: a new ref needs its row in
+`agent-host/src/gateway/compliance.ts` as well as in the register.
 
 ### Model registry
 
-Routing uses only models in the tenant's model registry. Each entry records the model id and:
+Routing uses only models in the provider account's own model registry. Each entry records the
+model id and:
 
 | Entry | Holds |
 |---|---|
 | Family | The model family, such as GPT, Claude or Gemini; the independence rule compares families |
 | Tool use | Whether the model calls tools through its adapter |
-| JSON-schema output | Whether it returns output constrained to a JSON schema |
-| Context size | The most tokens one call may carry |
-| Price | The price per token, or the subscription it runs under |
-| Rate limits | The account's request and token limits |
+| JSON-schema output | Whether it constrains output to a JSON schema itself, or the gateway validates the output |
+| Context size | The most tokens one call may carry, and the most it may return |
+| Efforts | The reasoning-effort levels a route may ask of it |
+| Price | The price per million tokens, or the subscription it runs under |
+| Rate limits | The account's per-minute request and token limits, which the gateway keeps |
 
-A route may use a model only when its entry meets every need of the step: tool use for a step that
-calls tools, JSON-schema output for the run output, a context that holds the `ContextSnapshot`, and
-a price and rate limits that fit the specialist's budget and ceilings. A model without an entry is
-never routed.
+Each figure (the context size, the output size and a token price) cites the provider source it was
+read from, or is listed as unverified; a live run never uses an entry with an unverified figure. A
+route may use a model only when its entry meets every need of the step: tool use for a step that
+calls tools, a context that holds the request and the most output it may return, and a per-minute
+input limit the request fits. A model without an entry is never routed.
 
 ### Runtime tiers
 
 | Tier | Default model | Used by |
 |---|---|---|
-| `routine` | `gpt-6.1-sol` (GPT-6.1 Sol) | The face and every specialist except the AI auditor |
-| `hard` | `gpt-6-astra` (GPT-6 Astra), subject to the stage-0 pilot | A run that meets an escalation trigger |
+| `routine` | `gpt-6.1-sol` (GPT-6.1 Sol) | The specialists whose playbook names it, the face among them |
+| `hard` | `gpt-6-astra` (GPT-6 Astra), subject to the stage-0 pilot | The specialists whose playbook names it |
 | `audit` | `claude-opus-5-5` (Claude Opus 5.5) for GPT-proposed work and `gpt-6-astra` (GPT-6 Astra) for Claude-proposed work | The AI auditor |
 
-These defaults are configuration. A tenant may route a tier to any model in its registry, and each
-specialist runs on that route only once its pair is qualified. Routing is measured, not
-benchmark-led: the `hard` default is provisional until the stage-0 pilot has compared it with other
-routes on this company's own cases (the `pilot` stage of the qualification run in
+These defaults are configuration. A tenant may route a tier to any model in its providers'
+registries, and each specialist runs on that route only once its pair is qualified. Routing is
+measured, not benchmark-led: the `hard` default is provisional until the stage-0 pilot has compared
+it with other routes on this company's own cases (the `pilot` stage of the qualification run in
 [`agent-host/evals/README.md`](../agent-host/evals/README.md#qualification-run)). A route changes
 only by configuration, when that measurement favours another qualified route.
 
 Every specialist may use `routine` and `hard`; the AI auditor uses `audit` only (`tiers` in the
-machine-readable contract). The family behind each tier is configuration, so a proposing
-specialist may run on any family.
-
-Escalation to `hard` is deterministic: a `margin_floor` or `amount_ceiling` breach, a price outside
-the job type's configured band, any payee or bank-detail change, a first order with a supplier, a
-complaint or dispute that claims money or legal rights, or a `conflict` abstention that needs an
-explanation for a person. A specialist may also ask for it with a reason, which the gateway records.
+machine-readable contract). A specialist's tier is fixed: its playbook names one (`Runtime tier`),
+and every run of the specialist uses it. The gateway configuration routes each tier, or a route it
+names for the specialist or for the action a run is expected to take; nothing moves a run to
+another tier. The family behind each tier is configuration, so a proposing specialist may run on
+any family.
 
 ### Qualification
 
-Qualification belongs to a pair: one specialist on one model. A specialist runs on a model only
-after that pair passes qualification on the specialist's golden and red-team suites at the release
-bar (decision 14): zero catastrophes, a golden-case mean of at least 0.90 with no case median below
-0.60, and a red-team mean of at least 0.95 with the correct decision in all three repetitions.
-Passing on one model qualifies no other. Changing a specialist's model, a declared fallback
-included, needs that pair qualified first, and a new specialist release qualifies on each model it
-runs on. A run records the qualification it relies on, and a route whose pair is not qualified is
-never used: without a qualified route the specialist abstains with `no_qualified_route`.
+Qualification belongs to a pair: one specialist release on one route, recorded as (provider, model,
+effort, `release_sha256`). `release_sha256` is the SHA-256 of the canonical JSON of
+`{specialist_id, playbook_sha256, allowlist_sha256, common_sha256, catalog_sha256}`, so a change to
+the playbook, the allowlist, `COMMON.md` or the catalog makes a new release, and a new release
+qualifies on each route it runs on.
+
+A pair passes on the specialist's golden and red-team suites at the release bar (decision 14): zero
+catastrophes, a golden-case mean of at least 0.90 with no case median below 0.60, a red-team mean
+of at least 0.95 with the correct decision in all three repetitions, and no gating history bar
+missed. Passing on one route qualifies no other. An owner records each qualification, with
+step-up: specialist, provider, model, effort, `release_sha256`, `passed` and `report_sha256`.
+
+A live or shadow run uses a route only when the specialist's current release holds a passed
+qualification there, and the run records it as its `qualification_ref`; eval and synthetic runs
+need no qualification. The Worker sends the specialist's current qualifications when a run opens:
+for each provider, model, effort and release, the latest one, and only while it passed. When the
+run closes, the Worker keeps a live or shadow output only when its `qualification_ref` names a
+passed qualification of that specialist for the provider, model, effort and release the close
+names, with no failure recorded for that key since. Otherwise the run abstains with
+`no_qualified_route` and keeps no output; an emergency, a safety event or suspected injection the
+output raised still reaches a person. A close on an older close model names no qualification and
+is not held to one (see "Coordination run"). Changing a specialist's model, a declared fallback
+included, needs that pair qualified first. Without a qualified route the specialist abstains with
+`no_qualified_route`. A specialist is a delegation candidate (see "Delegation") only when the
+latest qualification for the provider, model, effort and release of its most recent closed run
+passed; a close on an older close model records no release, so a specialist whose most recent
+closed run is one is no candidate. The delegation window counts decisions by release, not by
+route; the route is held to its qualification instead (see "Delegation", item 13).
 
 ### Independence
 
 Per run, the independent auditor, and any eval judge, runs on a model family different from the
-family that proposed the work under review. The auditor therefore has one route per family (a
-Claude route to audit GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime
-records both families on the `coordination_run` and refuses a run that would violate this. When no
-route of another family is available, the audit waits; it never runs on the proposer's family.
+family that proposed the work under review. A route's family is the one its model registry entry
+records, and it is checked on every hop: the primary route and each declared fallback. The auditor
+therefore has one route per family (a Claude route to audit GPT-proposed work, a GPT route to audit
+Claude-proposed work). The runtime records both families on the `coordination_run` and refuses a
+run that would violate this. When no route of another family is available, the audit abstains; it
+never runs on the proposer's family. The Worker checks again when an audit closes: the audit's
+family, and the family of every hop it passed over, must be known and other than the family the
+reviewed run recorded. A hop, or a reviewed run, whose family the Worker cannot name fails closed:
+the audit abstains (`provider_unavailable`, unless its output raised an emergency, a safety event
+or suspected injection, which stays the reason) and keeps no output. A reviewed run that is
+missing, still open or recorded no model, such as one that expired, is not checked.
 
 ### Credentials
 
@@ -1491,29 +1637,40 @@ route of another family is available, the audit waits; it never runs on the prop
   store, never in D1, prompts, logs or receipts.
 - Each provider has a `credential_mode` of `api_key`, `oauth` (a subscription sign-in) or
   `cloud_identity` (the cloud account credentials Bedrock and Vertex use), and the name of its
-  secret. Changing the mode or the billing kind changes configuration only, with no code, prompt or
-  schema change. Every later run records the new mode.
-- A credential failure, such as a revoked key or a failed OAuth token refresh, raises an immediate
-  exception to the owner.
-- Before customer personal data passes through a provider account, that account's data-use,
-  retention and training terms are recorded in [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
-  Until then, or while those terms allow training on business data, routes on that account receive
-  redacted context only.
+  secret. `cloud_identity` is not built yet, like the five HTTP adapters (see "Providers" and
+  `CAPABILITY-MATRIX.md`). Changing the mode or the billing kind changes configuration only, with
+  no code, prompt or schema change. Every later run records the new mode.
+- A credential failure, such as a revoked key or a failed OAuth token refresh, opens an exception
+  in the owner's queue at immediate urgency; it is not a page (see "Escalation to a named
+  person").
+- Business data passes through a provider account only when its data-use, retention and training
+  terms are recorded as a `Ref` in [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md), the
+  account names that ref (`compliance_ref`), and the ref serves the run's class (see
+  "Providers"); every other run on the account is refused before a call.
 
 ### Recorded on every run
 
-The provider, adapter, model id, model family, provider-reported model version, billing kind (`api`
-or `subscription`), route (`primary` or `declared_fallback`), qualification reference, runtime tier,
-credential mode, prompt hash, schema hash, tool manifest hash, context snapshot hash and gateway
-configuration hash; an audit run also records the model family that proposed the work under review
-(see "Coordination run").
+The provider, adapter, model id, model family, provider-reported model version, effort, billing
+kind (`api` or `subscription`), route (`primary` or `declared_fallback`) and each failover hop the
+run passed over with its reason (at most three), run class, `compliance_ref`, any owner risk
+acceptance the run relied on, the specialist's `release_sha256`, qualification reference, runtime
+tier, credential mode, prompt hash, schema hash, tool manifest hash, context snapshot hash, gateway
+configuration hash and the data class of the Worker it closed on; an audit run also records the
+model family that proposed the work under review (see "Coordination run").
 
 ### Outages and limits
 
-- A run never switches provider or model by itself. Failover is declared, never silent: a route may
-  name a fallback route in configuration, and a run uses it only when that fallback is qualified for
-  the specialist and keeps the independence rule (an audit fallback never shares the family of the
-  work it audits). The run records the route it used (`primary` or `declared_fallback`).
+- A run never switches provider or model by itself. Failover is declared, never silent, and only for
+  live runs: a route may name a fallback route in configuration, at most two deep and on the
+  route's own family, while practice and eval runs keep the one route. A live run moves along that
+  chain only when a hop fails for a listed reason: a rate limit, a provider error, a failed or
+  missing credential, or a provider the run may not use (`rate_limited`, `provider_error`,
+  `auth_failed`, `credential_missing`, `provider_disabled`). It uses a fallback only when that
+  fallback is qualified for the specialist, fits the run and keeps the independence rule (an audit
+  fallback never shares the family of the work it audits), and skips any other. A primary route
+  that is not qualified, or does not fit the run, is no outage: the run abstains with
+  `no_qualified_route` and tries no fallback. The run records the route it used (`primary` or
+  `declared_fallback`) and each hop it passed over.
 - When a provider fails, hits a rate limit or loses its credential, and no declared, qualified
   fallback exists, the specialist abstains with `provider_unavailable`. When the tier has no route
   whose pair with the specialist is qualified, or no registered model meets the step's needs, it
@@ -1523,7 +1680,8 @@ configuration hash; an audit run also records the model family that proposed the
   people; Decisions and every manual screen keep working.
 - Every provider account has rate limits, and a subscription sign-in shares its limits with every
   other use of that subscription. The gateway queues work in this order: immediate escalations, a
-  person waiting on the face, event watches, reports, backfills, then practice runs. A run never
+  person waiting on the face, event watches, reports, backfills, then practice runs. Queue priority
+  is not implemented yet: the host takes signals in the order the Worker feeds them. A run never
   exceeds its budget to get ahead.
 
 ## Safety and abuse
@@ -1536,9 +1694,13 @@ configuration hash; an audit run also records the model family that proposed the
 - A run's goal, allowed actions, tools, recipients and delegation are fixed before the model sees
   inbound content, and they cannot change during the run.
 - Tool arguments come only from cited facts and the catalog. Recipients, amounts, bank details,
-  links and dates are never taken from inbound text (`recipient`, `injection`).
-- Instruction-like content (ignore your rules, pay this new account, send it to this other address,
-  reveal data, act now or lose the deal) is flagged, and the auditor sees every flag.
+  links and dates are never taken from inbound text (`recipient`, `cited`).
+- No deterministic detector looks for injection. It is handled structurally: inbound text is
+  untrusted data, every claim is cited, and policy, permits and approvals apply to every step. A
+  model that meets instruction-like content (ignore your rules, pay this new account, send it to
+  this other address, reveal data, act now or lose the deal) raises `injection_suspected`, which
+  reaches a person. The auditor is to see every such flag through its `injection_flagged` watch;
+  that is not built yet, since nothing emits `injection.flagged` (see `CAPABILITY-MATRIX.md`).
 - A flagged item that still carries valid, verifiable work is worked: the specialist does that work
   from verified facts only, never from the instructions inside the item, and records
   `exception.escalate` with `injection_suspected`. Only when nothing valid remains does it
@@ -1547,9 +1709,22 @@ configuration hash; an audit run also records the model family that proposed the
   which returns text and hashes only.
 - Only an authenticated person in their own session, on the face or a role screen, can direct the
   team. A message that claims to come from the owner, an adjuster or IronWrap itself is data.
+- Every signal the model sees carries `actor`, which the Worker writes:
+  `{type, role, ref, authenticated}`, or `null`. `type` is `owner`, `staff`, `worker`, `customer`
+  or `external`. `owner` and `staff` are app users with their app role (`owner` only for the owner
+  role); `worker` is a crew member on a paired device (role `field`); `customer` is a token-bound
+  portal session; `external` is an inbound sender the OS has not authenticated (`authenticated`
+  false, `ref` `channel:<email|sms|web|voice>`). A message that claims to come from staff or the
+  owner without that authentication is `external`, and its claim is untrusted text. Watch firings
+  and handoffs carry `null`. No inbound channel feeds the team yet, so the Worker writes only
+  `owner`, `staff` and `worker` actors so far, each with `ref` `person:<user_id>`. A person's ask
+  or press is an `owner_request` with source `ask` (to the face) or `request` (to the owning
+  specialist), and it gets the owner's trust only when `actor.type` is `owner`.
 - An access change (a crew phone pairing, a role change or a device change) is prepared
-  (`access.prepare_change`) only on the request of a signed-in staff member through the face, and
-  never from customer or supplier text, whoever it claims to come from.
+  (`access.prepare_change`) only on the request of an owner or staff member, either as the run's
+  own ask or request or as the root of its handoff chain; the step sets that request as
+  `request_ref` and cites it (the `requester` check). It is never prepared from customer or
+  supplier text, whoever it claims to come from.
 
 ### Spam and time-wasters
 
@@ -1745,7 +1920,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
 {
   "schema": "ironwrap_ai_team_contract_v1",
   "specialists": [
-    {"specialist_id": "orchestrator", "display_name": "IronWrap", "reviewer_role": "owner", "wave": 1, "tiers": ["routine", "hard"], "watches": ["route_new_signal", "unacknowledged_exception", "run_at_ceiling", "dead_letter", "pipeline", "daily_owner_brief", "weekly_review", "owner_requests", "role_questions", "interrupt_candidates", "storm_events", "delegation_review", "page_unacknowledged"]},
+    {"specialist_id": "orchestrator", "display_name": "IronWrap", "reviewer_role": "owner", "wave": 1, "tiers": ["routine", "hard"], "watches": ["route_new_signal", "unacknowledged_exception", "run_at_ceiling", "dead_letter", "pipeline", "daily_owner_brief", "weekly_review", "owner_requests", "role_questions", "interrupt_candidates", "storm_events", "delegation_review", "page_unacknowledged", "import_failed_items"]},
     {"specialist_id": "market_analyst", "display_name": "AI market analyst", "reviewer_role": "owner", "wave": 3, "tiers": ["routine", "hard"], "watches": ["storm_events", "inquiry_cluster", "material_price_move", "competitor_scan", "weekly_market_review"]},
     {"specialist_id": "lead_concierge", "display_name": "AI receptionist", "reviewer_role": "sales", "wave": 1, "tiers": ["routine", "hard"], "watches": ["new_leads", "new_inbound", "first_response_due", "follow_up_due", "reception_session", "stop_request", "visit_request", "live_conversation"]},
     {"specialist_id": "estimator", "display_name": "AI estimator", "reviewer_role": "sales", "wave": 1, "tiers": ["routine", "hard"], "watches": ["measurement_accepted", "design_committed", "catalog_cost_change", "supplier_cost_change", "quote_expiring", "field_change"]},
@@ -1788,6 +1963,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "inquiry.classify", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sorting a new inquiry"},
     {"action_id": "inquiry.link_duplicate", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "linking a repeat inquiry"},
     {"action_id": "inquiry.record_triage", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording the decision on a new inquiry"},
+    {"action_id": "lead_fact.propose", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "proposing a detail on an inquiry"},
     {"action_id": "lead_fact.confirm", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming the details on an inquiry"},
     {"action_id": "inquiry.close", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing an inquiry"},
     {"action_id": "inbound.quarantine", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"], "name": "setting aside a suspicious message"},
@@ -1901,7 +2077,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "gate.clear", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "clearing a job gate"},
     {"action_id": "gate.waive", "owners": ["compliance"], "aggregate": "gate", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "waiving a job gate"},
     {"action_id": "document.request", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking for a certificate or insurance document"},
-    {"action_id": "authority.record", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a verified licence or clearance"},
+    {"action_id": "authority.record", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording an internal worker competency"},
     {"action_id": "privacy_request.answer", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "answering a personal data request"},
     {"action_id": "privacy_incident.contain", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "stopping a possible data leak"},
     {"action_id": "access.prepare_change", "owners": ["compliance", "orchestrator"], "aggregate": "user_access", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "preparing an access or crew phone change"},
@@ -1940,13 +2116,14 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"watch_id": "storm_events", "owner": "orchestrator", "trigger": "storm_watch.opened", "proposes": ["staff.notify", "handoff.create", "storm_mode.propose"]},
     {"watch_id": "delegation_review", "owner": "orchestrator", "every": "P7D", "proposes": ["delegation.propose_change"]},
     {"watch_id": "page_unacknowledged", "owner": "orchestrator", "trigger": "page.unacknowledged", "proposes": ["exception.escalate", "owner.interrupt"]},
+    {"watch_id": "import_failed_items", "owner": "orchestrator", "every": "PT1H", "proposes": ["import.retry_failed"]},
     {"watch_id": "storm_events", "owner": "market_analyst", "trigger": "weather.alert", "proposes": ["storm_watch.open", "market_alert.raise", "storm_mode.propose"]},
     {"watch_id": "inquiry_cluster", "owner": "market_analyst", "trigger": "lead.captured", "proposes": ["storm_watch.open", "market_alert.raise"]},
     {"watch_id": "material_price_move", "owner": "market_analyst", "trigger": "catalog_snapshot.recorded", "proposes": ["market_alert.raise"]},
     {"watch_id": "competitor_scan", "owner": "market_analyst", "every": "P1D", "proposes": ["market_watch_item.add", "market_alert.raise"]},
     {"watch_id": "weekly_market_review", "owner": "market_analyst", "every": "P7D", "proposes": ["market_review.draft"]},
     {"watch_id": "new_leads", "owner": "lead_concierge", "every": "PT15M", "proposes": ["report.compose", "staff.notify"]},
-    {"watch_id": "new_inbound", "owner": "lead_concierge", "trigger": "inbound.received", "proposes": ["inquiry.classify", "inbound.quarantine", "inquiry.link_duplicate", "inquiry.record_triage", "customer_message.draft", "conversation.assign_person", "emergency.page"]},
+    {"watch_id": "new_inbound", "owner": "lead_concierge", "trigger": "inbound.received", "proposes": ["inquiry.classify", "inbound.quarantine", "inquiry.link_duplicate", "inquiry.record_triage", "lead_fact.propose", "customer_message.draft", "conversation.assign_person", "emergency.page"]},
     {"watch_id": "first_response_due", "owner": "lead_concierge", "every": "PT5M", "proposes": ["customer_message.draft", "exception.escalate"]},
     {"watch_id": "follow_up_due", "owner": "lead_concierge", "trigger": "customer_message.sent", "after": ["P3D", "P10D", "P21D"], "proposes": ["customer_message.draft", "inquiry.close"]},
     {"watch_id": "reception_session", "owner": "lead_concierge", "trigger": "reception.session_reported", "proposes": ["inquiry.classify", "visit.hold_slot", "conversation.assign_person"]},
@@ -2022,7 +2199,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"watch_id": "incident_notice", "owner": "compliance", "trigger": "incident.reported", "proposes": ["filing.draft_packet", "exception.escalate"]},
     {"watch_id": "privacy_request", "owner": "compliance", "trigger": "privacy.request_received", "proposes": ["privacy_request.answer"]},
     {"watch_id": "exposure_suspected", "owner": "compliance", "trigger": "privacy.exposure_suspected", "proposes": ["privacy_incident.contain", "exception.escalate"]},
-    {"watch_id": "issuer_readback", "owner": "compliance", "trigger": "authority.readback_received", "proposes": ["authority.record", "gate.clear"]},
+    {"watch_id": "issuer_readback", "owner": "compliance", "trigger": "authority.readback_received", "proposes": ["authority.evaluate", "gate.clear"]},
     {"watch_id": "lien_window", "owner": "compliance", "trigger": "lien_window.timer_due", "proposes": ["filing.draft_packet", "exception.escalate"]},
     {"watch_id": "customer_message", "owner": "customer_care_warranty", "trigger": "inbound.received", "proposes": ["customer_message.draft", "conversation.assign_person", "service_case.open", "inbound.quarantine"]},
     {"watch_id": "phase_notice", "owner": "customer_care_warranty", "trigger": "job.phase_changed", "proposes": ["customer_message.draft"]},
@@ -2059,6 +2236,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     "policy_results": ["allow", "needs_approval", "deny"],
     "permit_kinds": ["none", "draft", "within_limits", "asks_first", "shadow"],
     "reason_codes": {
+      "succeeded": ["view_spec_invalid"],
       "failed": ["policy_denied", "declined", "approval_expired", "superseded", "done_by_person", "tool_refused", "provider_rejected", "readback_mismatch"],
       "unknown": ["no_readback_yet"],
       "abstained": ["fact_missing", "fact_stale", "fact_conflict", "citation_unverifiable", "action_unregistered", "policy_missing", "ceiling_reached", "no_progress", "provider_unavailable", "no_qualified_route", "injection_suspected", "out_of_scope", "person_requested", "safety_event", "emergency"]

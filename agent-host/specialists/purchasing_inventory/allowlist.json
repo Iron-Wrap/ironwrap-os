@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "purchasing_inventory",
-  "catalog_sha256": "a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852",
+  "catalog_sha256": "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34",
   "actions": [
     { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain commitments, stock, quotes, blockers and decisions to the owner or staff, with exact cited figures" },
     { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a substitution, unreleased takeoff, lot-identity conflict, privacy request or misrouted inquiry to the owning specialist" },

@@ -78,13 +78,14 @@ const DURATION = /^-?P(?!$)(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+S)?)?$/;
 // and in `expected` before scoring and judging.
 const DATE_MARKERS = new Set(["$case_date", "$case_time"]);
 
-// A marker's span stays within a century, so the runner always lands on a real ISO date.
-const MARKER_MAX_DAYS = 36600;
-function markerDuration(value) {
+// Every case-relative span (signal and fact times, date markers) stays within a century, so the
+// runner always lands on a real ISO instant.
+const MAX_SPAN_DAYS = 36600;
+function boundedDuration(value) {
   const match = typeof value === "string" ? DURATION.exec(value) : null;
   if (!match) return false;
-  const [days, hours, minutes, seconds] = [match[1], match[3], match[4], match[5]].map((part) => Number.parseInt(part ?? "0", 10));
-  return days + hours / 24 + minutes / 1440 + seconds / 86400 <= MARKER_MAX_DAYS;
+  const [days, hours, minutes, seconds] = [match[1], match[3], match[4], match[5]].map((part) => BigInt((part ?? "0").replace(/\D/g, "")));
+  return days * 86400n + hours * 3600n + minutes * 60n + seconds <= BigInt(MAX_SPAN_DAYS) * 86400n;
 }
 
 // Every `$`-key in a case that is not a marker the runner resolves: a one-key
@@ -94,7 +95,7 @@ function dateMarkerProblems(value, resolved, path = []) {
   if (!value || typeof value !== "object") return [];
   const keys = Object.keys(value);
   if (keys.some((key) => key.startsWith("$"))) {
-    const valid = resolved && keys.length === 1 && DATE_MARKERS.has(keys[0]) && markerDuration(value[keys[0]]);
+    const valid = resolved && keys.length === 1 && DATE_MARKERS.has(keys[0]) && boundedDuration(value[keys[0]]);
     return valid ? [] : [path.join(".") || "case"];
   }
   return keys.flatMap((key) => dateMarkerProblems(value[key], resolved, [...path, key]));
@@ -487,13 +488,22 @@ function checkCase(item, context) {
   if (!item.title) fail(`${label}: missing title`);
   const signal = item.signal ?? {};
   if (!SIGNAL_KINDS.has(signal.kind)) fail(`${label}: signal.kind invalid`);
-  if (!DURATION.test(signal.at ?? "")) fail(`${label}: signal.at must be a relative ISO 8601 duration`);
+  if (!boundedDuration(signal.at)) fail(`${label}: signal.at must be a relative ISO 8601 duration of at most ${MAX_SPAN_DAYS} days`);
   if (catalog && signal.watch_id) {
     const watches = (catalog.specialists.get(id)?.watches ?? []).map((watch) => (typeof watch === "string" ? watch : watch.watch_id));
     if (!watches.includes(signal.watch_id)) fail(`${label}: watch ${signal.watch_id} is not a ${id} watch in the contract`);
   }
-  if (!signal.content || (typeof signal.content.text !== "string" && !signal.content.request)) {
-    fail(`${label}: signal.content needs text or request`);
+  // A watch firing may carry the Worker's own content, { watch_id, objects, digest, summary }. Its
+  // period_key is a calendar date, so a case leaves it out.
+  const content = signal.content;
+  if (signal.kind === "watch" && content && typeof content.summary === "string" && content.digest && typeof content.digest === "object" && !Array.isArray(content.digest)) {
+    if (content.watch_id !== signal.watch_id) fail(`${label}: a watch firing's content.watch_id is its signal's watch_id`);
+    const objectsValid = Array.isArray(content.objects) && content.objects.length <= 24 &&
+      content.objects.every((object) => typeof object?.aggregate === "string" && typeof object?.id === "string");
+    if (!objectsValid) fail(`${label}: a watch firing's objects are at most 24 { aggregate, id }`);
+    if (content.period_key !== undefined) fail(`${label}: a watch firing's period_key is a calendar date; leave it out`);
+  } else if (!content || (typeof content.text !== "string" && !content.request)) {
+    fail(`${label}: signal.content needs text or request, or a watch firing's digest and summary`);
   }
   // The signal's actor, as the Worker writes it: who sent it, or null for the Worker's own watch
   // firings and specialist handoffs. Only an external sender is unauthenticated.
@@ -530,7 +540,7 @@ function checkCase(item, context) {
     }
     if (!TRUST.has(fact.trust)) fail(`${label}: fact ${fact.fact_id} trust invalid`);
     for (const key of ["observed_at", "fresh_until"]) {
-      if (fact[key] !== undefined && !DURATION.test(fact[key])) fail(`${label}: fact ${fact.fact_id} ${key} must be a duration`);
+      if ((key === "observed_at" || fact[key] !== undefined) && !boundedDuration(fact[key])) fail(`${label}: fact ${fact.fact_id} ${key} must be a duration of at most ${MAX_SPAN_DAYS} days`);
     }
   }
   // Fact data and `expected` may carry case-relative date markers; no other `$`-key belongs in a case.
@@ -544,7 +554,7 @@ function checkCase(item, context) {
     ...dateMarkerProblems(rest, false),
   ];
   for (const at of markerProblems) {
-    fail(`${label}: ${at}: a \`$\`-key is only { "$case_date" | "$case_time": <duration of at most ${MARKER_MAX_DAYS} days> } alone in an object, inside fact data or expected`);
+    fail(`${label}: ${at}: a \`$\`-key is only { "$case_date" | "$case_time": <duration of at most ${MAX_SPAN_DAYS} days> } alone in an object, inside fact data or expected`);
   }
   const factIds = new Set((item.facts ?? []).map((fact) => fact.fact_id));
   if (suite === "golden" && item.attack !== null) fail(`${label}: golden cases need attack: null`);

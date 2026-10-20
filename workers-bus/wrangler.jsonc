@@ -310,7 +310,11 @@
       "PROPOSAL_TEMPLATE_DOC_ID": "",
       "DEDUP_WINDOW_HOURS": "72",
       "STUCK_THRESHOLD_MIN": "15",
-      "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
+      "COMMERCIAL_AUTHORITY_POLICY_JSON": "",
+      // What data this Worker holds, for the AI team: business data here, so a run closes as a
+      // live or shadow run on a qualified route, and a synthetic run (a QA or dev agent host) is
+      // refused. Only a Worker on seed data says "synthetic".
+      "AGENT_DATA_CLASS": "business"
     }
   },
 
@@ -528,7 +532,9 @@
           "PROPOSAL_TEMPLATE_DOC_ID": "",
           "DEDUP_WINDOW_HOURS": "72",
           "STUCK_THRESHOLD_MIN": "15",
-          "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": "",
+          // The local stack holds throwaway seed data, so a dev agent host's synthetic runs close here.
+          "AGENT_DATA_CLASS": "synthetic"
         }
       }
     },
@@ -780,7 +786,10 @@
           // 10000000 cents, owner and worker (staff) actors, never agents. production and local
           // carry "" and keep the commercial write path closed. When the window lapses the QA seed
           // stops with policy_expired; renewal is that event's one-line edit of valid_from/valid_until.
-          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}"
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}",
+          // qa holds synthetic data only, and the QA agent host runs as a synthetic host
+          // (AGENT_HOST_DATA_CLASS=synthetic), so its synthetic runs close here.
+          "AGENT_DATA_CLASS": "synthetic"
         }
       }
     }

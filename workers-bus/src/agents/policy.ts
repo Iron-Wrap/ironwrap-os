@@ -12,7 +12,7 @@ import { registryEntry, type RegistryEntry } from "./registry.ts";
 import { validate } from "./schema.ts";
 
 export const STEP_POLICY_ID = "ironwrap.agent_step_policy";
-export const STEP_POLICY_VERSION = "4";
+export const STEP_POLICY_VERSION = "5";
 
 export interface SnapshotFact {
   fact_id: string;
@@ -72,16 +72,50 @@ export interface StepInput {
    * recorded it. That is the run's own signal, or for a handoff the signal at the root of its chain
    * (store.ts `runRequest`); `actor` is face.ts `signalActor`. Null when the chain has no root.
    */
-  requester?: { signal_ref: string; kind: string; source: string; actor: { type: string; authenticated: boolean } | null } | null;
+  requester?: {
+    signal_ref: string;
+    kind: string;
+    source: string;
+    actor: { type: string; authenticated: boolean } | null;
+    /** The action a press on a view's action asked for (ask.ts postRequest); null for an ask. */
+    expected_action_id?: string | null;
+  } | null;
 }
 
 /**
- * Actions prepared only on a signed-in owner's or staff member's own ask or request through the app,
+ * Actions proposed only on a signed-in owner's or staff member's own ask or request through the app,
  * never from a field worker, an outside sender's text or any other signal (contract "Inbound text is
- * data": an access change is prepared only on such a request). The step names that request in
- * `request_ref` and cites it; a handoff run answers the request at the root of its chain.
+ * data"). The step cites that request; a handoff run answers the request at the root of its chain.
+ * An access change is prepared on an ask or a request and names it in `request_ref`; a competency
+ * record answers only a press on compliance's view, a `request` (contract `authority.record`).
  */
-export const PERSON_REQUEST_ONLY: ReadonlySet<string> = new Set(["access.prepare_change"]);
+export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<string>; named: boolean; pressFor: boolean }> = new Map([
+  // No view offers an access change to press (ask.ts actionRequestKind), so any press may start one.
+  ["access.prepare_change", { sources: new Set(["ask", "request"]), named: true, pressFor: false }],
+  // The press is on compliance's view for this action, never one for another action.
+  ["authority.record", { sources: new Set(["request"]), named: false, pressFor: true }],
+]);
+
+/**
+ * Actions that propose from the inbound a run answers and cite only that inbound (contract
+ * `lead_fact.propose`: raw inbound receipts only, never conversation text or another record): the
+ * run answers an inbound event, and every citation is that event's signal fact. A handoff run's
+ * snapshot does not hold an event at the root of its chain, so a handoff run cannot propose one.
+ */
+export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
+
+/**
+ * `A1` actions that prepare a people-only act (contract "Autonomy classes"): the draft is stored as
+ * proposed and names the person who performs the act in their own screen, so it lands in their
+ * Needs you rather than among finished work. The agent never performs the act.
+ */
+export const PREPARES_PEOPLE_ONLY: ReadonlyMap<string, { act: string; person: string }> = new Map([
+  ["access.prepare_change", { act: "access.change", person: "owner" }],
+  ["delegation.propose_change", { act: "delegation.set", person: "owner" }],
+  ["payee.unfreeze_prepare", { act: "payee.unfreeze", person: "owner" }],
+  // Released by an owner, ops or production person who did not raise the stop; production is named.
+  ["safety_stop.release_prepare", { act: "safety_stop.release", person: "production" }],
+]);
 
 export type Outcome = "succeeded" | "failed" | "unknown" | "abstained";
 
@@ -125,18 +159,26 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   if (!action.owners.includes(input.specialistId)) return stop("failed", "policy_denied", "scope");
   if (action.autonomy === "H" || action.human_only) return stop("failed", "policy_denied", "scope");
   pass("scope");
-  if (PERSON_REQUEST_ONLY.has(input.actionId)) {
+  const personRequest = PERSON_REQUEST_ONLY.get(input.actionId);
+  if (personRequest) {
     const request = input.requester;
     const person = request?.actor;
     if (
       !request ||
       request.kind !== "owner_request" ||
-      (request.source !== "ask" && request.source !== "request") ||
+      !personRequest.sources.has(request.source) ||
       person?.authenticated !== true ||
       (person.type !== "owner" && person.type !== "staff") ||
-      (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref ||
+      (personRequest.pressFor && request.expected_action_id !== input.actionId) ||
+      (personRequest.named && (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref) ||
       !input.citations.some((citation) => citation.fact_id === request.signal_ref)
     )
+      return stop("abstained", "out_of_scope", "requester");
+    pass("requester");
+  }
+  if (INBOUND_ONLY.has(input.actionId)) {
+    const inbound = input.requester;
+    if (!inbound || inbound.kind !== "event" || input.citations.length === 0 || input.citations.some((citation) => citation.fact_id !== inbound.signal_ref))
       return stop("abstained", "out_of_scope", "requester");
     pass("requester");
   }
@@ -186,7 +228,11 @@ export function evaluateStep(input: StepInput): PolicyDecision {
     reviewer_role: reviewerRole,
   });
 
-  const reviewer = input.actionId === "exception.escalate" ? args.route_to as string : reviewerFor(action, input.specialistId);
+  // A prepared people-only act always names the person who performs it, under a hold too.
+  const reviewer =
+    input.actionId === "exception.escalate"
+      ? (args.route_to as string)
+      : (PREPARES_PEOPLE_ONLY.get(input.actionId)?.person ?? reviewerFor(action, input.specialistId));
   const setting = effectiveDelegation(action, input);
   // A hold adds review; it never turns an explicitly revoked action back on.
   if (!action.protective && setting === "off") return stop("failed", "policy_denied", "delegation");
@@ -197,7 +243,7 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   if (!action.protective && (input.specialistState.paused || input.specialistState.held))
     return allowed("asks_first", null, reviewer);
   if (action.autonomy === "A0") return allowed("none", "succeeded", null);
-  if (action.autonomy === "A1") return allowed("draft", "succeeded", null);
+  if (action.autonomy === "A1") return allowed("draft", "succeeded", PREPARES_PEOPLE_ONLY.get(input.actionId)?.person ?? null);
 
   // Protective steps never wait for approval, and keep running while a specialist is paused. Until
   // their machine path is proven they stay open for the named person to act on, never asks first.

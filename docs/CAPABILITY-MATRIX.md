@@ -546,6 +546,17 @@ IRO-38 branch-local side-effect substrate:
   Frappe credentials and provider call; the Worker owns the durable lease and settlement state.
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
   live provider, deployment, or business-acceptance proof.
+- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) never claims, settles, reconciles or
+  retries an outside send. `proposal.publish`, `proposal.withdraw`, `customer.email.send` and
+  `operations.email.send` answer 403 `effect_outside_send_token_refused`, since only the bus
+  executes them. A `qa-synthetic-*` provider passes only on a Worker whose `AGENT_DATA_CLASS` is
+  `synthetic` (qa and local); elsewhere it answers 403 `effect_provider_not_allowed`. A proposal
+  send claimed with a retry answers 422 `effect_outside_send_retry_forbidden`. The MCP host's
+  `mcp.*` effects keep the token, as do the remaining actions. Migration
+  `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
+  never `retry`) and moves an `unknown` `proposal.publish` to `succeeded` or `reconciled` only with
+  a person's delivery confirmation (0156). Checks: `workers-bus/test/outside-send-guards.test.ts`,
+  `commercial-proposal-api.test.ts`, `qa-seed-journey.test.ts`.
 
 ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
 

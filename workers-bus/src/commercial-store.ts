@@ -272,9 +272,9 @@ export function buildLeadTriageCommand(input: RecordLeadTriageInput): Readonly<R
 /**
  * External effect states in which a proposal send has started but its delivery is not confirmed:
  * proposed, claimed (authorized, executing, reconciling, retry), unknown, compensating, or a
- * manual exception. A delivery check (`reconcileExternalEffect`) settles an unknown send; a person
- * settles a manual exception with `recordProposalDeliveryConfirmation`; compensating clears when
- * the compensation settles.
+ * manual exception. A person settles an unknown send or a manual exception with
+ * `recordProposalDeliveryConfirmation`; D1 refuses any other move from unknown to succeeded or
+ * reconciled (0164). Compensating clears when the compensation settles.
  */
 export const UNCONFIRMED_PROPOSAL_DELIVERY_STATES = [
   "proposed",

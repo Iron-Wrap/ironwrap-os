@@ -37,7 +37,7 @@ validation, rate limits, idempotency, and authorization checks.
 | `/webhook/newo*` | Newo handler-specific webhook identity and configuration | `workers-bus/src/newo.ts` |
 | `/oauth/quickbooks/callback` | QuickBooks OAuth callback state and provider-response validation | QuickBooks OAuth handler called by `workers-bus/src/index.ts` |
 | `/internal/v1/authority-records/*` | Timestamped request-body HMAC with a configured executor key, followed by actor/tenant/command binding | `workers-bus/src/authority-record-executor-api.ts` |
-| `/admin/effects/*` | Effect-runtime bearer; claim, retry, reconcile, and settle remain separate from general administration | effect-runtime handlers called by `workers-bus/src/index.ts` |
+| `/admin/effects/*` | Effect-runtime bearer; claim, retry, reconcile, and settle remain separate from general administration and refuse every outside send (proposal publish and withdraw, customer and operations email), which only the bus executes; a `qa-synthetic-*` provider passes only on a synthetic Worker | effect-runtime handlers called by `workers-bus/src/index.ts` |
 | Remaining `/admin/*` | Admin bearer plus route-specific method and input validation | `workers-bus/src/index.ts` and delegated admin handlers |
 
 Application routes currently cover authentication and company administration; lead and operating

@@ -199,9 +199,10 @@ export function attestGateInLedger(
 }
 
 /**
- * Waive Deposit, Materials or Access the way the waiver routes do (0153): the owner decides. When
- * the requester is someone else (an owner or production person) they request it first; when it is
- * the owner, they are the only active owner and approve their own item with a reason (D-08).
+ * Waive Deposit, Materials or Access the way the waiver routes do (0153): an owner decides, never
+ * their own request while another active owner can decide it. The requester (an owner or
+ * production person; the owner by default) requests the waiver and another owner decides it; an
+ * owner who is the only active one approves their own item with a reason (D-08).
  */
 export function waiveGateInLedger(
   db: DatabaseSync,
@@ -217,8 +218,18 @@ export function waiveGateInLedger(
 ): string {
   const at = input.at ?? new Date().toISOString();
   const requester = input.requesterUserId ?? input.ownerUserId;
+  let decider = input.ownerUserId;
+  if (requester === decider) {
+    const other = db.prepare(
+      `SELECT user_id FROM app_users
+        WHERE tenant_id = ? AND user_id != ? AND active = 1 AND access_role = 'owner'
+          AND created_by != 'system:owner_directed_qa_seed_grant'
+        ORDER BY user_id LIMIT 1`,
+    ).get(input.tenantId, requester) as { user_id: string } | undefined;
+    if (other) decider = other.user_id;
+  }
   let requestId: string | null = null;
-  if (requester !== input.ownerUserId) {
+  if (requester !== decider) {
     const gate = currentGate(db, input);
     requestId = append(db, {
       tenant_id: input.tenantId,
@@ -231,7 +242,7 @@ export function waiveGateInLedger(
       from_gate_version: gate.version,
       actor_kind: "person",
       actor_user_id: requester,
-      actor_role: input.requesterRole ?? "production",
+      actor_role: input.requesterRole ?? (requester === input.ownerUserId ? "owner" : "production"),
       reason: REASON,
       request_sha256: hex64(),
       idempotency_key_hash: hex64(),
@@ -250,7 +261,7 @@ export function waiveGateInLedger(
     from_gate_version: gate.version,
     request_id: requestId,
     actor_kind: "person",
-    actor_user_id: input.ownerUserId,
+    actor_user_id: decider,
     actor_role: "owner",
     requested_by: requester,
     self_approval: requestId === null ? 1 : 0,

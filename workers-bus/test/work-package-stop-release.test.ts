@@ -19,7 +19,7 @@ import {
   nativeWorkPackageAction,
   type NativeWorkPackageDefinition,
 } from "../src/work-package-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { bindCrewInLedger, clearScheduleGatesInLedger } from "./production-gate-ledger-fixture.ts";
 
 // Every fixture is synthetic: reserved example.invalid identities, and times relative to the run
 // rather than calendar dates.
@@ -328,7 +328,16 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
       .run(`gate:wp:${suffix}:${gate.toLowerCase()}`, packet.tenantId, packet.jobId, envelopeId,
         rawKey, gate, owner.id, now, packet.expiresAt, now, now);
   }
-  recordLegacyGateStates(sqlite, { tenantId: packet.tenantId, roofJobId: packet.jobId, at: now });
+  // People on no crew clear the five gates a schedule rests on: production in this tenant, the
+  // owner alone in the other one.
+  const attester = packet.tenantId === TENANT ? USERS.production : owner;
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    ownerUserId: owner.id,
+    attesterUserId: attester.id,
+    attesterRole: attester === owner ? "owner" : "production",
+  });
   sqlite
     .prepare(
       `INSERT OR IGNORE INTO fleet_crews
@@ -351,6 +360,13 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
       )
       .run(`membership:wp:${suffix}:${index + 1}`, packet.tenantId, crewId, workerId, now, now);
   }
+  // The schedule binds Crew by policy in the same write as its row (0159).
+  bindCrewInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    crewId,
+    assignmentId: packet.assignmentId,
+  });
   sqlite
     .prepare(
       `INSERT INTO operating_job_assignments
@@ -1669,7 +1685,13 @@ async function seedOfficeAssignment(env: TestEnv) {
       .run(`gate:stop-release:${gate.toLowerCase()}`, TENANT, OFFICE_JOB, gate, USERS.owner.id, now,
         at(24 * 60), now, now);
   }
-  recordLegacyGateStates(sqlite, { tenantId: TENANT, roofJobId: OFFICE_JOB, at: now });
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: TENANT,
+    roofJobId: OFFICE_JOB,
+    ownerUserId: USERS.owner.id,
+    attesterUserId: USERS.production.id,
+    attesterRole: "production",
+  });
   sqlite
     .prepare(
       `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)

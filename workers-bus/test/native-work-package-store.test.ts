@@ -19,7 +19,11 @@ import {
   releaseNativeWorkPackageHold,
   type NativeWorkPackageDefinition,
 } from "../src/work-package-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import {
+  bindCrewInLedger,
+  clearScheduleGatesInLedger,
+  fixtureSchedule,
+} from "./production-gate-ledger-fixture.ts";
 
 class TestD1 {
   readonly sqlite = new DatabaseSync(":memory:");
@@ -456,7 +460,14 @@ function seedAssignmentSnapshot(
         now,
       );
   }
-  recordLegacyGateStates(sqlite, { tenantId: packet.tenantId, roofJobId: packet.jobId, at: now });
+  // Production, on no crew, clears the five gates a schedule rests on.
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    ownerUserId: "appu_owner_native",
+    attesterUserId: "appu_production_native",
+    attesterRole: "production",
+  });
   sqlite
     .prepare(
       `INSERT OR IGNORE INTO fleet_crews
@@ -488,6 +499,14 @@ function seedAssignmentSnapshot(
         now,
       );
   }
+  // The schedule binds Crew by policy in the same write as its row (0159), and its work falls inside
+  // the attested Weather window, which D1 holds to its own clock.
+  bindCrewInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    crewId,
+    assignmentId: packet.assignmentId,
+  });
   sqlite
     .prepare(
       `INSERT INTO operating_job_assignments
@@ -507,8 +526,8 @@ function seedAssignmentSnapshot(
       packet.assignmentVersion,
       crewId,
       JSON.stringify(workerIds),
-      packet.issuedAt,
-      packet.expiresAt,
+      fixtureSchedule(1).start,
+      fixtureSchedule(1).end,
       packet.assignmentCommandFingerprint,
       createHash("sha256").update(packet.assignmentId).digest("hex"),
       packet.issuedAt,
@@ -982,8 +1001,8 @@ test("native Work Package issue aborts atomically when the assignment snapshot i
       packet.jobId,
       current.crew_id,
       current.assigned_users_json,
-      "2026-08-21T09:00:00.000Z",
-      "2026-08-22T09:00:00.000Z",
+      fixtureSchedule(2).start,
+      fixtureSchedule(2).end,
       packet.assignmentId,
       "c".repeat(64),
       "d".repeat(64),

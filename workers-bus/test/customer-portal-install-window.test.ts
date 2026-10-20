@@ -12,12 +12,13 @@ import {
   type RecordOperatingJobAssignmentInput,
 } from "../src/operating-job-assignment-store.ts";
 import { createProductionScheduleApprovalRequest } from "../src/production-schedule-approval-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { clearScheduleGatesInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 
 const NOW = "2026-08-21T08:00:00.000Z";
 const SAVED_AT = "2026-08-21T09:00:00.000Z";
-const START = "2026-08-24T14:00:00.000Z";
-const END = "2026-08-24T22:00:00.000Z";
+// A schedule falls inside the Weather window a person attested, which D1 holds to its own clock.
+const { start: START, end: END } = fixtureSchedule(1);
+const REVISED = fixtureSchedule(2);
 const TOKEN = "a".repeat(43);
 const LINK_ID = "portal_0123456789abcdef0123456789abcdef";
 const ORIGIN = "https://portal.example.invalid";
@@ -37,6 +38,19 @@ class SqliteD1 {
 
   prepare(sql: string) {
     return new SqliteStatement(this.raw.prepare(sql));
+  }
+
+  async batch(statements: SqliteStatement[]) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 
@@ -142,7 +156,14 @@ function seedJob(db: DatabaseSync, tenantId: string, suffix: string) {
       NOW,
     );
   }
-  recordLegacyGateStates(db, { tenantId, roofJobId, at: NOW });
+  // The job's owner, on no crew, clears the five gates a schedule rests on; the schedule binds Crew.
+  clearScheduleGatesInLedger(db, {
+    tenantId,
+    roofJobId,
+    ownerUserId: ownerId,
+    attesterUserId: ownerId,
+    attesterRole: "owner",
+  });
   db.prepare(
     `INSERT INTO fleet_crews
     (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
@@ -321,8 +342,8 @@ test("portal rereads the current revision after a native schedule supersedes its
       {
         ...job.command,
         idempotencyKey: "portal:schedule:primary:2",
-        scheduledStart: "2026-08-25T14:00:00.000Z",
-        scheduledEnd: "2026-08-25T22:00:00.000Z",
+        scheduledStart: REVISED.start,
+        scheduledEnd: REVISED.end,
         supersedesAssignmentId: first.assignment.assignment_id,
         correctionReason: "Synthetic dispatcher moved the install window.",
       },

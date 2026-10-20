@@ -12,7 +12,7 @@ import worker from "../src/index.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
-import { reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
+import { EFFECT_ATTEMPT_LEASE_MS, reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
 import { recordProposalDeliveryConfirmation } from "../src/commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
@@ -1799,10 +1799,26 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(resendBeforeCheck.status, 409);
     assert.equal((await resendBeforeCheck.json() as { error: string }).error, "proposal_delivery_unconfirmed");
-    await reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
-      outcome: "not_executed",
-      evidence: { checked: "provider has no publication for this proposal revision" },
+    // A reconcile to "not executed" is refused in D1 (0164): only a person's record settles a lost
+    // send, and "not delivered" waits until the provider's own answer can no longer arrive.
+    await assert.rejects(
+      reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
+        outcome: "not_executed",
+        evidence: { checked: "provider has no publication for this proposal revision" },
+      }),
+      /proposal_delivery_settle_evidence_missing/,
+    );
+    const lostChecked = await recordProposalDeliveryConfirmation(h.env as never, {
+      tenantId: TENANT,
+      effectId: "effect:iro208:lost",
+      outcome: "not_delivered",
+      note: "Checked the provider: no publication for this proposal revision.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "iro208-delivery-confirmation-lost-0001",
+      now: new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
     });
+    assert.equal(lostChecked.effectState, "reconciled");
     const mismatchPermit = await preparePublication(h, ids, "iro208-publication-prepare-mismatch-0001");
     await runPublicationEffect(h, mismatchPermit, ids, "effect:iro208:mismatch", "mismatch");
     const mismatch = await handleAuthenticatedRoute(

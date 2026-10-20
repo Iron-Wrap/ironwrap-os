@@ -1484,59 +1484,55 @@ test("D1 holds one proposal send in flight, the claim route included, and a pers
     const { permit } = await prepared.json() as { permit: Permit };
     await runSend(env, permit, "effect:single-flight:unknown", "unknown");
 
-    // The service-token claim path never passes through prepare; D1 refuses the second send itself.
+    // The service-token claim path never passes through prepare. On this business Worker the token
+    // is refused for a proposal send before D1 (0164). The QA seed's synthetic stand-in on a
+    // synthetic Worker still reaches D1, which refuses the second send itself.
+    const synthetic = { ...env, AGENT_DATA_CLASS: "synthetic" } as AppEnv;
+    const claimSend = (target: AppEnv, effect: Record<string, unknown>, authority: unknown) =>
+      handleExternalEffectClaim(
+        new Request("https://worker.example.com/admin/effects/claim", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+          body: JSON.stringify({ effect, authority }),
+        }),
+        target,
+      );
+    const publishEffects = () =>
+      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n;
     const second = effectRequest(permit, "effect:single-flight:second");
-    const claim = await handleExternalEffectClaim(
-      new Request("https://worker.example.com/admin/effects/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
-        body: JSON.stringify({ effect: second, authority: second.authority }),
-      }),
-      env,
-    );
+    const businessClaim = await claimSend(env, second, second.authority);
+    assert.equal(businessClaim.status, 403, await businessClaim.clone().text());
+    assert.deepEqual(await businessClaim.json(), { error: "effect_outside_send_token_refused" });
+    const businessSynthetic = await claimSend(env, { ...second, provider: "qa-synthetic-publication" }, second.authority);
+    assert.equal(businessSynthetic.status, 403, await businessSynthetic.clone().text());
+    assert.deepEqual(await businessSynthetic.json(), { error: "effect_provider_not_allowed" });
+    const claim = await claimSend(synthetic, { ...second, provider: "qa-synthetic-publication" }, second.authority);
     assert.equal(claim.status, 409, await claim.clone().text());
     assert.deepEqual(await claim.json(), { error: "proposal_delivery_unconfirmed" });
-    assert.equal(
-      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
-      1,
-    );
+    assert.equal(publishEffects(), 1);
 
     // A caller-supplied compensation link is no exemption: a "compensation" that is itself a
     // publish of the same revision is a second send.
-    const disguised = effectRequest(permit, "effect:single-flight:disguised");
-    const disguisedClaim = await handleExternalEffectClaim(
-      new Request("https://worker.example.com/admin/effects/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
-        body: JSON.stringify({
-          effect: { ...disguised, compensatesEffectId: "effect:single-flight:unknown" },
-          authority: disguised.authority,
-        }),
-      }),
-      env,
-    );
+    const disguised = { ...effectRequest(permit, "effect:single-flight:disguised"), compensatesEffectId: "effect:single-flight:unknown" };
+    const businessDisguised = await claimSend(env, disguised, disguised.authority);
+    assert.equal(businessDisguised.status, 403, await businessDisguised.clone().text());
+    assert.deepEqual(await businessDisguised.json(), { error: "effect_outside_send_token_refused" });
+    const disguisedClaim = await claimSend(synthetic, { ...disguised, provider: "qa-synthetic-publication" }, disguised.authority);
     assert.equal(disguisedClaim.status, 409, await disguisedClaim.clone().text());
     assert.deepEqual(await disguisedClaim.json(), { error: "proposal_delivery_unconfirmed" });
-    assert.equal(
-      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
-      1,
-      "no second publish effect exists",
-    );
+    assert.equal(publishEffects(), 1, "no second publish effect exists");
     // The claim runs on the server's clock: a backdated `now` cannot make a lapsed deadline current.
-    const backdated = effectRequest(permit, "effect:single-flight:backdated", new Date(Date.now() - 60_000).toISOString());
-    const backdatedClaim = await handleExternalEffectClaim(
-      new Request("https://worker.example.com/admin/effects/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
-        body: JSON.stringify({
-          effect: { ...backdated, now: new Date(Date.now() - 120_000).toISOString() },
-          authority: backdated.authority,
-        }),
-      }),
-      env,
-    );
+    const backdated = {
+      ...effectRequest(permit, "effect:single-flight:backdated", new Date(Date.now() - 60_000).toISOString()),
+      now: new Date(Date.now() - 120_000).toISOString(),
+    };
+    const businessBackdated = await claimSend(env, backdated, backdated.authority);
+    assert.equal(businessBackdated.status, 403, await businessBackdated.clone().text());
+    assert.deepEqual(await businessBackdated.json(), { error: "effect_outside_send_token_refused" });
+    const backdatedClaim = await claimSend(synthetic, { ...backdated, provider: "qa-synthetic-publication" }, backdated.authority);
     assert.equal(backdatedClaim.status, 422, await backdatedClaim.clone().text());
     assert.deepEqual(await backdatedClaim.json(), { error: "effect_deadline_invalid" });
+    assert.equal(publishEffects(), 1);
 
     // A person may say "not delivered" only once the provider's own answer can no longer be late.
     const ops = await personSession(db, env, OPS_ID, "ops");
@@ -1717,12 +1713,24 @@ test("single flight holds across publication versions, and any commercial person
       { code: "effect_proposal_delivery_unconfirmed" },
     );
 
-    // A send that succeeded is recorded by another commercial person, with no hand confirmation.
+    // An unknown send moves on only with a person's record (0164): a reconcile that reports it
+    // executed is refused in D1. Once one person confirms delivery, another commercial person
+    // records the publication.
     const { reconcileExternalEffect } = await import("../src/effect-runtime.ts");
-    await reconcileExternalEffect(env, "effect:versions:unknown", {
-      outcome: "executed",
-      evidence: { provider: "late answer: delivered" },
+    await assert.rejects(
+      reconcileExternalEffect(env, "effect:versions:unknown", {
+        outcome: "executed",
+        evidence: { provider: "late answer: delivered" },
+      }),
+      /proposal_delivery_settle_evidence_missing/,
+    );
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "versions-confirm", {
+      external_effect_id: "effect:versions:unknown",
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
     });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
     const other = await personSession(db, env, OTHER_OPS_ID, "ops");
     const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "versions-record", {
       proposal_revision_id: REVISION,

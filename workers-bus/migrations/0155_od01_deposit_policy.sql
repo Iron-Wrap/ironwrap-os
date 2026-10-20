@@ -18,7 +18,8 @@
 --    the additions are marked [0155]:
 --      * `clear` / `contract_no_deposit` by `policy`: the job's latest accepted contract has no
 --        deposit and the tenant is OD-01. Recorded by policy, with the contract version as
---        evidence; it is not a waiver and not a person's call;
+--        evidence; it is not a waiver and not a person's call, and it reads "No deposit under
+--        this contract";
 --      * `reverse` / `contract_superseded` by `policy`: a later accepted contract carries a
 --        deposit, so Deposit returns to blocked. From then on a settlement must be that contract's
 --        own deposit invoice, or the owner waives;
@@ -28,9 +29,9 @@
 -- The Worker appends the Deposit entry after an acceptance commits, never inside it, so a failed
 -- entry never fails an acceptance; the five-minute sweep appends any entry that is missing.
 --
--- This file may apply after higher-numbered migrations already on a database (0200-0204 on qa and
--- production). It creates its own table and four triggers and re-creates 0116's enqueue trigger
--- and two 0153 guards; no higher-numbered migration touches any of them.
+-- This file may apply after higher-numbered migrations already on a database (0156 and 0200-0204
+-- on qa and production). It creates its own table and four triggers and re-creates 0116's enqueue
+-- trigger and two 0153 guards; no higher-numbered migration touches any of them.
 
 CREATE TABLE IF NOT EXISTS tenant_deposit_policy_revisions (
   revision_id TEXT PRIMARY KEY CHECK (
@@ -361,7 +362,7 @@ BEGIN
   WHERE NEW.actor_kind = 'policy'
     AND NOT (
       NEW.gate = 'Deposit'
-      AND NEW.policy_version = 'ironwrap.deposit-gate.v1'
+      AND NEW.policy_version IS 'ironwrap.deposit-gate.v1'
       AND NEW.actor_user_id IS NULL AND NEW.actor_role IS NULL
       AND NEW.requested_by IS NULL AND NEW.request_id IS NULL AND NEW.self_approval = 0
       AND NEW.reason IS NULL AND NEW.reason_redacted_at IS NULL AND NEW.attestation_json IS NULL
@@ -414,6 +415,7 @@ BEGIN
   );
 
   -- A person entry: an active user of this tenant holding the recorded role right now.
+  -- [0155] Scoped to person entries; a policy entry names no user.
   SELECT RAISE(ABORT, 'production_gate_clearance_actor_invalid')
   WHERE NEW.actor_kind = 'person' AND NOT EXISTS (
     SELECT 1

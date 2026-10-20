@@ -624,10 +624,10 @@ row. The latest revision is in force, and a tenant with none takes payment on co
 
 - `od01_payment_on_completion` (OD-01): a contract has no deposit, `deposit_percent: 0` with
   `payment_schedule: ["completion"]`. After the customer's acceptance commits, the policy appends
-  `contract_no_deposit` to Deposit, with the signed contract version as evidence. Deposit then reads
-  "Not required by the contract": it is not a waiver, not a payment and not a person's decision.
-  The append never fails the acceptance; the five-minute sweep appends any that is missing, once
-  per contract.
+  `contract_no_deposit` to Deposit, with the signed contract version as evidence, and no deposit
+  invoice is derived. Deposit then reads as a system state, "No deposit under this contract": it
+  is not a waiver, not a payment and not a person's decision. The append never fails the
+  acceptance; the five-minute sweep appends any that is missing, once per contract.
 - `md13_deposit` (MD-13): a contract carries a deposit of 1 to 100 percent, and Deposit clears as
   above. A later accepted contract that carries a deposit makes the policy reverse
   `contract_no_deposit` (`contract_superseded`); Deposit is blocked again and clears only on that

@@ -41,6 +41,7 @@ import {
 import { parseBody } from "./core.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
 import { publicCompanyContact } from "./company-profile.ts";
+import { NO_DEPOSIT_UNDER_CONTRACT } from "./deposit-policy.ts";
 import {
   listCurrentJobMeasurements,
   type JobMeasurementSummary,
@@ -1932,7 +1933,7 @@ export async function buildJobReadModel(
           slot,
           label: `${slot} proof`,
           state: text(row.state) ?? "Blocked",
-          blocker_reason: text(row.blocker_reason),
+          blocker_reason: productionGateReason(row),
         },
       ];
     }),
@@ -3939,8 +3940,9 @@ function nativeGateStateLabel(value: string | null): string | null {
 }
 
 /**
- * OD-01 (0155): the policy recorded Deposit as not required by the signed contract. That gate is
- * complete, but nothing was done or paid, so it never reads or counts as done.
+ * OD-01 (0155): the policy recorded that the signed contract has no deposit. That gate is
+ * complete, but nothing was done or paid: it reads as a system state, "No deposit under this
+ * contract", and never reads or counts as done.
  */
 function depositNotRequiredByContract(row: FrappeRow | undefined): boolean {
   return text(row?.gate) === "Deposit" && text(row?.state) === "complete" &&
@@ -3949,8 +3951,13 @@ function depositNotRequiredByContract(row: FrappeRow | undefined): boolean {
 
 function productionGateStateLabel(row: FrappeRow | undefined): string | null {
   return depositNotRequiredByContract(row)
-    ? "Not required by the contract"
+    ? NO_DEPOSIT_UNDER_CONTRACT
     : nativeGateStateLabel(text(row?.state));
+}
+
+/** The gate's recorded reason, or the system state when the contract has no deposit. */
+function productionGateReason(row: FrappeRow): string | null {
+  return depositNotRequiredByContract(row) ? NO_DEPOSIT_UNDER_CONTRACT : text(row.blocker_reason);
 }
 
 function jobReadMode(auth: AuthContext): "any" | "assigned" {
@@ -4096,7 +4103,7 @@ function gateModel(
           id: gateId,
           name: text(row.gate),
           state: productionGateStateLabel(row),
-          blocker_reason: text(row.blocker_reason),
+          blocker_reason: productionGateReason(row),
           owner: redactOwner ? null : text(row.owner_user),
           due_at: text(row.due_at),
         },

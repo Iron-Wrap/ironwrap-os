@@ -643,7 +643,9 @@ free text is an optional note of at most 300 characters kept in the redactable r
 is 0 to 10 references to verified, stored Work Package captures of the job or, for Materials, live
 stock reservations of the job; the Worker resolves each reference and records its checksum, so a
 client never supplies a hash. Safety is its own operation set, `production.gates.safety`, carried
-today by owner and production, and it also needs the attester's current internal Worker Competency
+today by owner and production. Its proof answers the permit: needed and held, with the permit
+number, or not needed; an unknown answer is refused as `production_gate_safety_permit_unknown`, so
+the person changes the answer. Safety also needs the attester's current internal Worker Competency
 (`authority.record`) in site safety: `authority_scope` exactly `site_safety`, a closed token in a
 field that is otherwise free text, so an empty, foreign or near value does not count; verified by an
 internal assessment, neither revoked nor superseded, in force today and not bound to another job.

@@ -620,6 +620,7 @@ const SENT = {
   }),
   Safety: () => ({
     hazard_assessment_ref: "FLHA-2026-0042",
+    permit: { answer: "needed_and_held", number: "building permit 4417" },
     fall_protection: { plan_ref: "FPP#42" },
     assessed_at: at(-HOUR),
   }),
@@ -848,6 +849,44 @@ test("Safety needs the attester's current competency and no active stop on the j
   assert.deepEqual([waiver.status, waiver.body.error], [409, "production_gate_not_waivable"]);
 });
 
+test("Safety's permit is held with its number or not needed; unknown is refused by name, on the route and in D1", async () => {
+  const withPermit = (permit: unknown) => ({ ...SENT.Safety(), permit });
+  for (const [label, permit, refusal] of [
+    ["held with its number", { answer: "needed_and_held", number: "building permit 4417" }, null],
+    ["not needed", { answer: "not_needed" }, null],
+    ["held without a number", { answer: "needed_and_held" }, [400, "production_gate_attestation_invalid"]],
+    ["unknown", { answer: "unknown" }, [409, "production_gate_safety_permit_unknown"]],
+    ["no permit answer", undefined, [400, "production_gate_attestation_invalid"]],
+  ] as const) {
+    // Through a person's session.
+    const h = setup();
+    const production = await person(h, USERS.production.id);
+    insertCompetency(h.sqlite, USERS.production.id);
+    const routed = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety", 1, {
+      attestation: withPermit(permit),
+    }));
+    if (refusal) {
+      assert.deepEqual([routed.status, routed.body.error], refusal, label);
+      assert.deepEqual({ state: gateRow(h.sqlite, "Safety").state, entries: ledgerRows(h.sqlite).length }, { state: "blocked", entries: 0 }, label);
+    } else {
+      assert.equal(routed.status, 200, `${label}: ${JSON.stringify(routed.body)}`);
+      assert.deepEqual(routed.body.entry.attestation.permit, permit, label);
+      assert.equal(gateRow(h.sqlite, "Safety").state, "ready", label);
+    }
+    // Straight at D1, as a writer that skipped the route would.
+    const { sqlite: db } = setup();
+    const competency = insertCompetency(db, USERS.production.id);
+    const write = () => append(db, { gate: "Safety", attestation_json: JSON.stringify({ ...withPermit(permit), competency }) });
+    if (refusal) {
+      refused(write, refusal[1]);
+      assert.equal(gateRow(db, "Safety").state, "blocked", label);
+    } else {
+      write();
+      assert.equal(gateRow(db, "Safety").state, "ready", label);
+    }
+  }
+});
+
 /**
  * Production holds a current `site_safety` competency and attests Safety twice: through the route,
  * and straight at D1 as a writer that skipped the route would. Both are refused by the stop, and
@@ -973,7 +1012,7 @@ test("another job's stop, a shop or vehicle stop, or a lifted stop leaves Safety
   assert.equal(gateRow(h.sqlite, "Safety").state, "ready");
 });
 
-test("the route alone holds the site_safety scope and every stop, with D1's validate guard lifted", async () => {
+test("the route alone holds the site_safety scope, every stop and the permit answer, with D1's validate guard lifted", async () => {
   // D1 answers each of these with the same code, so here its validate guard is dropped: only the
   // route's own read can refuse, and a gap in it would let the attestation through.
   for (const [label, prepare, refusal] of [
@@ -1019,6 +1058,21 @@ test("the route alone holds the site_safety scope and every stop, with D1's vali
     prepare(h.sqlite);
     const production = await person(h, USERS.production.id);
     const result = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+    assert.deepEqual([result.status, result.body.error], refusal, label);
+    assert.equal(gateRow(h.sqlite, "Safety").state, "blocked", label);
+  }
+  for (const [label, permit, refusal] of [
+    ["permit unknown", { answer: "unknown" }, [409, "production_gate_safety_permit_unknown"]],
+    ["permit held without a number", { answer: "needed_and_held" }, [400, "production_gate_attestation_invalid"]],
+    ["no permit answer", undefined, [400, "production_gate_attestation_invalid"]],
+  ] as const) {
+    const h = setup();
+    h.sqlite.exec("DROP TRIGGER production_gate_clearances_validate_insert");
+    insertCompetency(h.sqlite, USERS.production.id);
+    const production = await person(h, USERS.production.id);
+    const result = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety", 1, {
+      attestation: { ...SENT.Safety(), permit },
+    }));
     assert.deepEqual([result.status, result.body.error], refusal, label);
     assert.equal(gateRow(h.sqlite, "Safety").state, "blocked", label);
   }
@@ -1381,6 +1435,32 @@ test("D1 holds each gate to its typed attestation with no free text but a short 
     { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { no_exposure_at_3m: false } }) },
     { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { plan_ref: "a plan in the truck" } }) },
     { gate: "Safety", attestation_json: safetyStored(named, { assessed_at: "2026-02-30T10:00:00.000Z" }) },
+    // The permit: exactly {answer} when not needed or unknown, {answer, number} when held, and the
+    // number a reference whose words single spaces join.
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: undefined }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: "not_needed" }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "held", number: "BP-4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "maybe" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "not_needed", number: "BP-4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "unknown", number: "BP-4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "not_needed", checked_by: "office" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: 4417 } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "building  permit 4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "building permit 4417 " } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: " building permit 4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "permit\n4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "permit (4417)" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "P".repeat(81) } }) },
+    // A second answer would let the first, read by every check, hide the one a reader trusts.
+    {
+      gate: "Safety",
+      attestation_json: safetyStored(named).replace(
+        '"permit":{"answer":"needed_and_held","number":"building permit 4417"}',
+        '"permit":{"answer":"not_needed","answer":"unknown"}',
+      ),
+    },
     { gate: "Safety", attestation_json: safetyStored({ ...named, authority_version: "1" } as never) },
     { gate: "Safety", attestation_json: safetyStored({ ...named, issued_by: "x" } as never) },
   ]) {
@@ -1620,6 +1700,9 @@ test("the validate trigger after every migration still holds A1's, A2's and A3's
     "FROM work_package_stop_releases released",
     "production_gate_competency_required",
     "competency.authority_scope = 'site_safety'",
+    "production_gate_safety_permit_unknown",
+    "'$.permit.answer'",
+    "'$.permit.number'",
     "production_gate_forecast_stale",
     "production_gate_weather_window_invalid",
     "production_gate_reversal_target_invalid",
@@ -1705,6 +1788,45 @@ test("an attestation body has exactly its keys, and times, notes and constraints
   assert.equal(noted("   ")?.note, null);
   assert.equal(parseEvidenceRefs(["field-evidence://evi_short"]), null);
   assert.deepEqual(parseEvidenceRefs(undefined), []);
+  // Safety's permit: held with a number of single-spaced words, not needed, or unknown; the route
+  // refuses an unknown answer by name after the shape is accepted.
+  const permitOf = (permit: unknown) => (parseProductionGateAttestation("Safety", {
+    basis: "person_attestation",
+    expected_gate_version: 1,
+    attestation: {
+      hazard_assessment_ref: "FLHA-1",
+      fall_protection: { no_exposure_at_3m: true },
+      assessed_at: new Date(now.getTime() - HOUR).toISOString(),
+      ...(permit === undefined ? {} : { permit }),
+    },
+  }, now)?.attestation as { permit?: unknown } | undefined)?.permit ?? null;
+  for (const permit of [
+    { answer: "needed_and_held", number: "building permit 4417" },
+    { answer: "needed_and_held", number: `B${" P".repeat(39)}1` },
+    { answer: "not_needed" },
+    { answer: "unknown" },
+  ]) {
+    assert.deepEqual(permitOf(permit), permit, JSON.stringify(permit));
+  }
+  for (const permit of [
+    undefined,
+    "needed_and_held",
+    { answer: "Needed_and_held", number: "BP-4417" },
+    { answer: "maybe" },
+    { answer: "needed_and_held" },
+    { answer: "needed_and_held", number: "" },
+    { answer: "needed_and_held", number: 4417 },
+    { answer: "needed_and_held", number: "building  permit" },
+    { answer: "needed_and_held", number: "building permit " },
+    { answer: "needed_and_held", number: " building permit" },
+    { answer: "needed_and_held", number: "building\tpermit" },
+    { answer: "needed_and_held", number: `B${" P".repeat(40)}` },
+    { answer: "not_needed", number: "BP-4417" },
+    { answer: "unknown", number: "BP-4417" },
+    { answer: "unknown", note: "nobody checked" },
+  ]) {
+    assert.equal(permitOf(permit), null, JSON.stringify(permit));
+  }
   const reversalBody = { expected_gate_version: 2, reverses_id: `pgc_${"a".repeat(40)}`, reason: "Supplier recalled the panels." };
   assert.deepEqual(parseProductionGateReversal(reversalBody), {
     expectedGateVersion: 2,

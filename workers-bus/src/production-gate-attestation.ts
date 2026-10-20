@@ -4,7 +4,8 @@
 // and Weather. Each has one small shape, parsed here with exact keys. The only free text is an
 // optional note of at most 300 characters, counted in code points; it never enters the structured
 // attestation, because the route stores it in the ledger's redactable `reason`. References are
-// short identifiers, never prose, and times are UTC instants. Evidence is cited by reference only:
+// short identifiers, never prose; a permit number may also hold single spaces ("building permit
+// 4417"). Times are UTC instants. Evidence is cited by reference only:
 // the route resolves and checksums each one, so a client never sends a hash. Migration 0158 repeats
 // every rule here in D1, so a writer that skipped this parser is refused there too.
 
@@ -18,6 +19,8 @@ export const MATERIALS_SOURCES = [
   "none_needed",
 ] as const;
 export const ACCESS_CONFIRMED_WITH = ["customer", "property_manager", "not_needed"] as const;
+/** Safety's permit answer. `unknown` is well formed, and the route refuses it by name. */
+export const SAFETY_PERMIT_ANSWERS = ["needed_and_held", "not_needed", "unknown"] as const;
 /** What the crew must plan around on site, named as in the target pre-start checklist. */
 export const ACCESS_CONSTRAINTS = [
   "occupants",
@@ -48,6 +51,8 @@ const DAY_MS = 24 * HOUR_MS;
 /** A time observed on the caller's device may run this far ahead of the Worker's clock. */
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const REFERENCE_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,79}$/;
+/** A reference whose words are joined by single spaces; at most 80 characters. */
+const PERMIT_NUMBER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]*(?: [A-Za-z0-9._:/#-]+)*$/;
 const FORECAST_SOURCE_RE = /^[a-z0-9][a-z0-9.-]{1,63}$/;
 const INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const FIELD_EVIDENCE_REF_RE = /^field-evidence:\/\/(evi_[0-9a-f]{32})$/;
@@ -73,6 +78,7 @@ export interface WeatherAttestation {
 
 export interface SafetyAttestation {
   hazard_assessment_ref: string;
+  permit: { answer: "needed_and_held"; number: string } | { answer: "not_needed" | "unknown" };
   fall_protection: { plan_ref: string } | { no_exposure_at_3m: true };
   assessed_at: string;
 }
@@ -182,11 +188,29 @@ function weather(value: Record<string, unknown>, now: Date): WeatherAttestation 
   };
 }
 
+/** Held with its number, not needed, or unknown; any other key, or a number elsewhere, fails. */
+function permit(value: unknown): SafetyAttestation["permit"] | null {
+  if (!isRecord(value) || !oneOf(SAFETY_PERMIT_ANSWERS, value.answer)) return null;
+  if (value.answer !== "needed_and_held") {
+    return exactKeys(value, ["answer"]) ? { answer: value.answer } : null;
+  }
+  const number = value.number;
+  return exactKeys(value, ["answer", "number"]) && typeof number === "string" &&
+      number.length <= 80 && PERMIT_NUMBER_RE.test(number)
+    ? { answer: "needed_and_held", number }
+    : null;
+}
+
 function safety(value: Record<string, unknown>, now: Date): SafetyAttestation | null {
-  if (!exactKeys(value, ["hazard_assessment_ref", "fall_protection", "assessed_at"])) return null;
+  if (!exactKeys(value, ["hazard_assessment_ref", "permit", "fall_protection", "assessed_at"])) {
+    return null;
+  }
   const assessedAt = observed(value.assessed_at, now);
+  const permitAnswer = permit(value.permit);
   const fall = value.fall_protection;
-  if (!reference(value.hazard_assessment_ref) || !assessedAt || !isRecord(fall)) return null;
+  if (!reference(value.hazard_assessment_ref) || !assessedAt || !permitAnswer || !isRecord(fall)) {
+    return null;
+  }
   let fallProtection: SafetyAttestation["fall_protection"];
   if (exactKeys(fall, ["plan_ref"]) && reference(fall.plan_ref)) {
     fallProtection = { plan_ref: fall.plan_ref };
@@ -197,6 +221,7 @@ function safety(value: Record<string, unknown>, now: Date): SafetyAttestation | 
   }
   return {
     hazard_assessment_ref: value.hazard_assessment_ref,
+    permit: permitAnswer,
     fall_protection: fallProtection,
     assessed_at: assessedAt,
   };

@@ -16,7 +16,9 @@
 --     live stock reservation of the job at its current version.
 --       - Materials is refused while an inventory exception of the job is open or contained.
 --       - Safety is the `production.gates.safety` set ("checks site safety"), carried today by owner
---         and production. It names the attester's current internal Worker Competency whose
+--         and production. Its proof answers the permit: `needed_and_held` with the permit number,
+--         or `not_needed`; `unknown` is well formed and refused by name. It names the attester's
+--         current internal Worker Competency whose
 --         `authority_scope` is exactly `site_safety`, the closed token this migration names for
 --         site safety, verified, in force today and not bound to another job. It is refused while
 --         a stop applies to the job: a safety stop on the tenant, the job or any of its Work
@@ -262,7 +264,7 @@ BEGIN
            OR (NEW.gate = 'Weather' AND field.key IN (
                'window_start', 'window_end', 'forecast_source', 'forecast_observed_at'))
            OR (NEW.gate = 'Safety' AND field.key IN (
-               'hazard_assessment_ref', 'fall_protection', 'assessed_at', 'competency'))
+               'hazard_assessment_ref', 'permit', 'fall_protection', 'assessed_at', 'competency'))
          )
       )
       OR EXISTS (
@@ -336,6 +338,25 @@ BEGIN
       OR (NEW.gate = 'Safety' AND (
         json_type(NEW.attestation_json, '$.hazard_assessment_ref') IS NOT 'text'
         OR json_type(NEW.attestation_json, '$.assessed_at') IS NOT 'text'
+        -- The permit answer: exactly {answer} when not needed or unknown, and exactly
+        -- {answer, number} when held, the number a reference whose words single spaces join.
+        OR json_type(NEW.attestation_json, '$.permit') IS NOT 'object'
+        OR json_type(NEW.attestation_json, '$.permit.answer') IS NOT 'text'
+        OR json_extract(NEW.attestation_json, '$.permit.answer') NOT IN (
+          'needed_and_held', 'not_needed', 'unknown'
+        )
+        OR (SELECT COUNT(*) FROM json_each(NEW.attestation_json, '$.permit'))
+          != CASE json_extract(NEW.attestation_json, '$.permit.answer')
+               WHEN 'needed_and_held' THEN 2 ELSE 1 END
+        OR (json_extract(NEW.attestation_json, '$.permit.answer') = 'needed_and_held' AND NOT (
+          json_type(NEW.attestation_json, '$.permit.number') IS 'text'
+          AND length(json_extract(NEW.attestation_json, '$.permit.number')) BETWEEN 1 AND 80
+          AND json_extract(NEW.attestation_json, '$.permit.number') GLOB '[A-Za-z0-9]*'
+          AND json_extract(NEW.attestation_json, '$.permit.number')
+            NOT GLOB '*[^A-Za-z0-9 ._:/#-]*'
+          AND json_extract(NEW.attestation_json, '$.permit.number') NOT GLOB '*  *'
+          AND json_extract(NEW.attestation_json, '$.permit.number') NOT GLOB '* '
+        ))
         OR json_type(NEW.attestation_json, '$.fall_protection') IS NOT 'object'
         OR (SELECT COUNT(*) FROM json_each(NEW.attestation_json, '$.fall_protection')) != 1
         OR NOT (
@@ -443,6 +464,13 @@ BEGIN
          AND held.aggregate_id = NEW.roof_job_id
          AND held.status IN ('open', 'contained')
     );
+
+  -- [0158] An unknown permit answer is a well-formed Safety proof that never clears the gate. It has
+  -- its own code, so the person is asked to change the answer rather than the proof's shape.
+  SELECT RAISE(ABORT, 'production_gate_safety_permit_unknown')
+  WHERE NEW.basis = 'person_attestation'
+    AND NEW.gate = 'Safety'
+    AND json_extract(NEW.attestation_json, '$.permit.answer') = 'unknown';
 
   -- [0158] Safety is never attested while an active stop applies to the job: a safety stop on the
   -- whole tenant, on the job, or on any Work Package of the job in any status, Superseded included;

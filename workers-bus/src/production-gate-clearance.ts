@@ -24,7 +24,9 @@
 //       exactly `{basis, expected_gate_version, attestation, evidence_refs?}`, with the gate's
 //       typed attestation (production-gate-attestation.ts) and 0 to 10 evidence references that
 //       this route resolves and checksums. The attester is on no crew; Materials needs no open
-//       inventory exception. Safety needs the attester's current internal Worker Competency in
+//       inventory exception. Safety's permit answer is held with its number or not needed; an
+//       unknown answer is 409 `production_gate_safety_permit_unknown`. Safety needs the
+//       attester's current internal Worker Competency in
 //       site safety (`authority_scope` exactly `site_safety`) and no stop that applies to the
 //       job: a safety stop on the tenant, the job or any of its Work Packages, a crew stop_work on
 //       one of them that no release has lifted, or a safety stop whose scope cannot be resolved.
@@ -60,6 +62,7 @@ import {
   stockReservationId,
   weatherRefusal,
   type AttestableProductionGate,
+  type SafetyAttestation,
   type WeatherAttestation,
 } from "./production-gate-attestation.ts";
 import { ROLE_PERMISSIONS, type AppEnv, type AppRole, type AuthContext } from "./app-types.ts";
@@ -184,6 +187,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_attestation_invalid: 400,
   production_gate_evidence_invalid: 409,
   production_gate_material_exception_open: 409,
+  production_gate_safety_permit_unknown: 409,
   production_gate_safety_stop_active: 409,
   production_gate_competency_required: 403,
   production_gate_forecast_stale: 409,
@@ -1086,6 +1090,10 @@ async function attestGate(
     if (weather) throw refusal(weather, 409);
   }
   if (gate === "Safety") {
+    // A well-formed proof whose permit nobody has checked: the person changes the permit answer.
+    if ((input.attestation as SafetyAttestation).permit.answer === "unknown") {
+      throw refusal("production_gate_safety_permit_unknown", 409);
+    }
     if (await safetyStopActive(env, tenantId, roofJobId)) {
       throw refusal("production_gate_safety_stop_active", 409);
     }

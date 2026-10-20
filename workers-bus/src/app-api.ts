@@ -4713,7 +4713,8 @@ async function recordProposalDeliveryFindingByHand(
     !idText(body.external_effect_id, 16, 160) ||
     (body.supersedes_finding_id !== null &&
       (typeof body.supersedes_finding_id !== "string" || !idText(body.supersedes_finding_id, 16, 200))) ||
-    (body.finding !== "delivered" && body.finding !== "not_received" && body.finding !== "not_executed") ||
+    // A person finds "delivered" or "not received"; "not executed" is provider proof only.
+    (body.finding !== "delivered" && body.finding !== "not_received") ||
     // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
     [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
   ) {

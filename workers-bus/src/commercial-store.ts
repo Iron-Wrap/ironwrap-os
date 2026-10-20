@@ -462,7 +462,8 @@ async function proposalDeliveryLateAnswerUntil(
   return endedAt + await proposalDeliveryLateAnswerWindowMs(env, effect.provider);
 }
 
-export type ProposalDeliveryFindingKind = "delivered" | "not_received" | "not_executed";
+/** What a person found. "Not executed" is never a person's finding: only provider proof says so. */
+export type ProposalDeliveryFindingKind = "delivered" | "not_received";
 
 export interface ProposalDeliveryFindingRecord {
   finding_id: string;
@@ -471,6 +472,8 @@ export interface ProposalDeliveryFindingRecord {
   proposal_pack_id: string;
   proposal_revision_id: string;
   finding: ProposalDeliveryFindingKind;
+  /** The send's last attempt when the finding was recorded: the provider confirmed it, or never answered. */
+  attempt_state: "succeeded" | "unknown";
   supersedes_finding_id: string | null;
   note: string;
   found_by_user_id: string;
@@ -495,11 +498,13 @@ async function latestProposalDeliveryFinding(
 
 /**
  * A person records what they found about a settled proposal send, or corrects what was found
- * (0161): one append-only finding that never changes the send. `not_executed` says nothing went
- * out; `not_received` says it went out but the customer did not get it. The first finding of a send
- * supersedes nothing; a correction names the newest finding, so the history never forks. Open until
- * the next send of the proposal or the customer's decision on it. The same key with the same
- * request replays; anything else conflicts.
+ * (0161): one append-only finding that never changes the send. A person finds `delivered` or
+ * `not_received` (the customer says they did not get it); whether the provider executed the send is
+ * provider proof, never a person's finding. Each finding keeps the state of the send's last attempt
+ * at that moment (`succeeded` or `unknown`). The first finding of a send supersedes nothing; a
+ * correction names the newest finding, so the history never forks. Open until the next send of the
+ * proposal or the customer's decision on it. The same key with the same request replays; anything
+ * else conflicts.
  */
 export async function recordProposalDeliveryFinding(
   env: AppEnv,
@@ -529,7 +534,8 @@ export async function recordProposalDeliveryFinding(
   const readFinding = async (where: string, value: string) =>
     await env.DB.prepare(
       `SELECT finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
-              supersedes_finding_id, note, found_by_user_id, found_by_role, created_at, request_sha256
+              attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role, created_at,
+              request_sha256
          FROM proposal_delivery_findings WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
     ).bind(input.tenantId, value).first<ProposalDeliveryFindingRecord & { request_sha256: string }>();
   const replay = async () => {
@@ -545,11 +551,26 @@ export async function recordProposalDeliveryFinding(
   if (earlier) return earlier;
 
   const effect = await env.DB.prepare(
-    `SELECT effect_id, aggregate_id, intent_id FROM external_effects
-      WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
-        AND aggregate_type = 'proposal_publication'`,
-  ).bind(input.tenantId, input.effectId).first<{ effect_id: string; aggregate_id: string; intent_id: string }>();
+    `SELECT effect.effect_id, effect.aggregate_id, effect.intent_id, attempt.state AS attempt_state
+       FROM external_effects effect
+       LEFT JOIN external_effect_attempts attempt
+         ON attempt.effect_id = effect.effect_id AND attempt.attempt_number = effect.attempt_count
+      WHERE effect.tenant_id = ? AND effect.effect_id = ? AND effect.action = 'proposal.publish'
+        AND effect.aggregate_type = 'proposal_publication'`,
+  ).bind(input.tenantId, input.effectId).first<{
+    effect_id: string;
+    aggregate_id: string;
+    intent_id: string;
+    attempt_state: string | null;
+  }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
+  // A finding is about a send the provider confirmed or never answered; a refused or unstarted send
+  // has nothing a customer could have received.
+  if (effect.attempt_state !== "succeeded" && effect.attempt_state !== "unknown") {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_effect_invalid", 409, {
+      attempt_state: effect.attempt_state,
+    });
+  }
   // Only the newest finding is corrected; naming another one would fork the history.
   const latest = await latestProposalDeliveryFinding(env, input.tenantId, effect.effect_id);
   if ((latest?.finding_id ?? null) !== input.supersedesFindingId) {
@@ -563,13 +584,13 @@ export async function recordProposalDeliveryFinding(
     await env.DB.prepare(
       `INSERT INTO proposal_delivery_findings
          (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
-          supersedes_finding_id, note, found_by_user_id, found_by_role, idempotency_key_hash,
-          request_sha256, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+          idempotency_key_hash, request_sha256, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).bind(
       findingId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id, input.finding,
-      input.supersedesFindingId, input.note, input.actorUserId, input.actorRole, keyHash, requestSha,
-      createdAt,
+      effect.attempt_state, input.supersedesFindingId, input.note, input.actorUserId, input.actorRole,
+      keyHash, requestSha, createdAt,
     ).run();
   } catch (error) {
     const raced = await replay();

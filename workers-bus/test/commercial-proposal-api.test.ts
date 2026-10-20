@@ -1749,6 +1749,7 @@ const FINDINGS_PATH = "/api/v1/commercial/proposal-publications/delivery-finding
 type Finding = {
   finding_id: string;
   finding: string;
+  attempt_state: string;
   supersedes_finding_id: string | null;
 };
 
@@ -1834,11 +1835,12 @@ test("a person records findings about a settled send and corrects only the newes
       (db.raw.prepare("SELECT count(*) AS n FROM external_effect_events WHERE effect_id = ?").get(effectId) as { n: number }).n;
     const eventsAfterConfirmation = stateEvents();
 
+    // "Not executed" is provider proof, never a person's finding.
     const malformed = await personPost(env, ops, FINDINGS_PATH, "findings-chain-malformed", {
       external_effect_id: effectId,
       supersedes_finding_id: null,
-      finding: "not_delivered",
-      note: "Not one of the three findings.",
+      finding: "not_executed",
+      note: "A person cannot know nothing went out.",
     });
     assert.equal(malformed.status, 400);
     assert.deepEqual(await malformed.json(), { error: "invalid_proposal_delivery_finding" });
@@ -1857,6 +1859,8 @@ test("a person records findings about a settled send and corrects only the newes
       replayed: boolean;
     };
     assert.equal(firstFinding.finding.finding, "not_received");
+    // The provider's readback never matched this send, so its last attempt is unknown.
+    assert.equal(firstFinding.finding.attempt_state, "unknown");
     assert.equal(firstFinding.finding.supersedes_finding_id, null);
     // A finding never changes the send: same state, result and time, and no state event.
     assert.deepEqual(firstFinding.effect, { external_effect_id: effectId, state: "succeeded" });
@@ -1899,7 +1903,7 @@ test("a person records findings about a settled send and corrects only the newes
     const stale = await personPost(env, ops, FINDINGS_PATH, "findings-chain-stale", {
       external_effect_id: effectId,
       supersedes_finding_id: firstFinding.finding.finding_id,
-      finding: "not_executed",
+      finding: "not_received",
       note: "Correcting a finding someone already corrected.",
     });
     assert.equal(stale.status, 409);
@@ -1911,8 +1915,8 @@ test("a person records findings about a settled send and corrects only the newes
     const third = await personPost(env, ops, FINDINGS_PATH, "findings-chain-3", {
       external_effect_id: effectId,
       supersedes_finding_id: secondFinding.finding_id,
-      finding: "not_executed",
-      note: "The provider shows nothing went out for this send.",
+      finding: "not_received",
+      note: "They checked again: it is not in their inbox after all.",
     });
     assert.equal(third.status, 201, await third.clone().text());
     assert.deepEqual(effectRow(db, effectId), settled);
@@ -1927,7 +1931,7 @@ test("a person records findings about a settled send and corrects only the newes
       [
         { finding: "not_received", found_by_user_id: OPS_ID, found_by_role: "ops" },
         { finding: "delivered", found_by_user_id: OTHER_OPS_ID, found_by_role: "sales" },
-        { finding: "not_executed", found_by_user_id: OPS_ID, found_by_role: "ops" },
+        { finding: "not_received", found_by_user_id: OPS_ID, found_by_role: "ops" },
       ],
     );
     assert.equal(
@@ -1942,7 +1946,7 @@ test("a person records findings about a settled send and corrects only the newes
         { action: "proposal_delivery_delivered", approved_by: OPS_ID },
         { action: "proposal_delivery_finding_not_received", approved_by: OPS_ID },
         { action: "proposal_delivery_finding_delivered", approved_by: OTHER_OPS_ID },
-        { action: "proposal_delivery_finding_not_executed", approved_by: OPS_ID },
+        { action: "proposal_delivery_finding_not_received", approved_by: OPS_ID },
       ],
     );
 
@@ -1965,15 +1969,15 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
   try {
     await unknownSendThroughRoutes(env, prepare, "findings-d1-prepare-1", effectId);
     db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
-    const direct = (findingId: string, supersedes: string | null, finding = "not_received") =>
+    const direct = (findingId: string, supersedes: string | null, finding = "not_received", attemptState = "unknown") =>
       db.raw.prepare(
         `INSERT INTO proposal_delivery_findings
            (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
-            supersedes_finding_id, note, found_by_user_id, found_by_role, idempotency_key_hash,
-            request_sha256, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+            attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+            idempotency_key_hash, request_sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
       ).run(
-        findingId, TENANT, effectId, PACK, REVISION, finding, supersedes, OPS_ID,
+        findingId, TENANT, effectId, PACK, REVISION, finding, attemptState, supersedes, OPS_ID,
         findingId.slice(-1).repeat(64), "f".repeat(64), new Date().toISOString(),
       );
     // An unknown send is not settled: a person answers it through the first confirmation (0156).
@@ -1987,7 +1991,17 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
       note: "It went out, but they cannot find it.", actorUserId: OPS_ID, actorRole: "ops",
       idempotencyKey: "findings-d1-1",
     });
+    assert.equal(first.finding.attempt_state, "unknown");
     assert.throws(() => direct("delivery-finding:direct-second-root-b", null, "delivered"), /proposal_delivery_finding_not_latest/);
+    // A person never records "not executed", and the attempt state is the send's own.
+    assert.throws(
+      () => direct("delivery-finding:direct-not-executed-h", first.finding.finding_id, "not_executed"),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => direct("delivery-finding:direct-claimed-success-i", first.finding.finding_id, "delivered", "succeeded"),
+      /proposal_delivery_finding_attempt_mismatch/,
+    );
     assert.throws(
       () => direct("delivery-finding:direct-orphan-c", "delivery-finding:no-such-finding", "delivered"),
       /proposal_delivery_finding_chain_invalid/,
@@ -1997,9 +2011,9 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
       () => db.raw.prepare(
         `INSERT INTO proposal_delivery_findings
            (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
-            supersedes_finding_id, note, found_by_user_id, found_by_role, idempotency_key_hash,
-            request_sha256, created_at)
-         VALUES ('delivery-finding:direct-stranger-g', ?, ?, ?, ?, 'delivered', ?, 'Direct insert attempt',
+            attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+            idempotency_key_hash, request_sha256, created_at)
+         VALUES ('delivery-finding:direct-stranger-g', ?, ?, ?, ?, 'delivered', 'unknown', ?, 'Direct insert attempt',
                  'appu_unknown_0161', 'ops', ?, ?, ?)`,
       ).run(TENANT, effectId, PACK, REVISION, first.finding.finding_id, "7".repeat(64), "f".repeat(64), new Date().toISOString()),
       /proposal_delivery_finding_actor_invalid/,
@@ -2014,9 +2028,9 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
       () => db.raw.prepare(
         `INSERT OR REPLACE INTO proposal_delivery_findings
            (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
-            supersedes_finding_id, note, found_by_user_id, found_by_role, idempotency_key_hash,
-            request_sha256, created_at)
-         VALUES (?, ?, ?, ?, ?, 'delivered', NULL, 'Replacing the first finding', ?, 'ops', ?, ?, ?)`,
+            attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+            idempotency_key_hash, request_sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, 'delivered', 'unknown', NULL, 'Replacing the first finding', ?, 'ops', ?, ?, ?)`,
       ).run(first.finding.finding_id, TENANT, effectId, PACK, REVISION, OPS_ID, "9".repeat(64), "f".repeat(64), new Date().toISOString()),
       /proposal_delivery_finding_exists/,
     );
@@ -2031,6 +2045,51 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
     assert.equal(effectRow(db, effectId).state, "succeeded");
   } finally {
     db.close();
+  }
+});
+
+test("each finding keeps whether the provider confirmed the send or never answered", async () => {
+  const { recordProposalDeliveryFinding } = await import("../src/commercial-store.ts");
+  for (const mode of ["success", "rejected"] as const) {
+    const { db, env, prepare } = await publicationReady(`findings-attempt-${mode}`);
+    const effectId = `effect:findings-attempt:${mode}`;
+    try {
+      const prepared = await prepare(`findings-attempt-${mode}-prepare`);
+      const { permit } = await prepared.json() as { permit: Permit };
+      if (mode === "success") {
+        await runSend(env, permit, effectId, "success");
+      } else {
+        await runExternalEffect(env, effectRequest(permit, effectId), {
+          async dispatch() {
+            return { outcome: "rejected", detailCode: "provider_rejected" } as never;
+          },
+          async replay() {
+            return { published: false };
+          },
+        }).catch(() => undefined);
+      }
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const find = () => recordProposalDeliveryFinding(env, {
+        tenantId: TENANT, effectId, supersedesFindingId: null, finding: "not_received",
+        note: "They say it is not in their inbox.", actorUserId: OPS_ID, actorRole: "ops",
+        idempotencyKey: `findings-attempt-${mode}-1`,
+      });
+      if (mode === "success") {
+        // The provider confirmed the send, and the customer says they did not get it.
+        const recorded = await find();
+        assert.equal(recorded.finding.attempt_state, "succeeded");
+        assert.equal(recorded.finding.finding, "not_received");
+        assert.equal(recorded.effectState, "succeeded");
+      } else {
+        // A send the provider refused reached no one: there is nothing to find.
+        await assert.rejects(find(), {
+          code: "proposal_delivery_finding_effect_invalid",
+          detail: { attempt_state: "failed" },
+        });
+      }
+    } finally {
+      db.close();
+    }
   }
 });
 

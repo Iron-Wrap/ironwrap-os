@@ -3,14 +3,18 @@
 -- and the person who recorded each new proposal publication.
 --
 -- Findings. A person records what they found about a settled proposal send, and may correct it,
--- in `proposal_delivery_findings`: append-only rows that never change the send itself. A finding
--- says the customer has the proposal (`delivered`), that it went out but the customer did not get
--- it (`not_received`), or that nothing went out (`not_executed`). The first finding of a send
--- supersedes nothing; a correction supersedes the newest finding of the same send, so each finding
--- can be superseded once and a fork is refused. Earlier findings stay as the history. A finding
--- can be recorded until the next send of that proposal or the customer's decision on it, and its
--- insert writes one audit_log row. The send's state stays what the effect runtime and 0156's first
--- confirmation made it.
+-- in `proposal_delivery_findings`: append-only rows that never change the send itself. A person
+-- finds that the customer has the proposal (`delivered`) or says they did not get it
+-- (`not_received`). A person cannot know whether the provider executed a send, so "not executed"
+-- is never a person's finding: it comes only from provider proof, in the effect ledger. Each
+-- finding keeps the state of the send's last attempt when it was recorded (`succeeded` or
+-- `unknown`), so a reader can tell "they say they did not get it, and the provider confirmed the
+-- send" from "they say they did not get it, and the provider never answered". The first finding
+-- of a send supersedes nothing; a correction supersedes the newest finding of the same send, so
+-- each finding can be superseded once and a fork is refused. Earlier findings stay as the history.
+-- A finding can be recorded until the next send of that proposal or the customer's decision on
+-- it, and its insert writes one audit_log row. The send's state stays what the effect runtime and
+-- 0156's first confirmation made it.
 --
 -- Late answers. Nothing moves an unknown proposal send to "not executed" (`reconciled`) before its
 -- provider's own answer can no longer arrive: neither a person's "not delivered" (0156's apply
@@ -93,7 +97,8 @@ CREATE TABLE IF NOT EXISTS proposal_delivery_findings (
   effect_id TEXT NOT NULL,
   proposal_pack_id TEXT NOT NULL CHECK (length(proposal_pack_id) BETWEEN 1 AND 160),
   proposal_revision_id TEXT NOT NULL CHECK (length(proposal_revision_id) BETWEEN 1 AND 160),
-  finding TEXT NOT NULL CHECK (finding IN ('delivered', 'not_received', 'not_executed')),
+  finding TEXT NOT NULL CHECK (finding IN ('delivered', 'not_received')),
+  attempt_state TEXT NOT NULL CHECK (attempt_state IN ('succeeded', 'unknown')),
   supersedes_finding_id TEXT UNIQUE,
   note TEXT NOT NULL CHECK (length(trim(note)) BETWEEN 8 AND 500),
   found_by_user_id TEXT NOT NULL CHECK (length(found_by_user_id) BETWEEN 3 AND 128),
@@ -155,6 +160,14 @@ BEFORE INSERT ON proposal_delivery_findings BEGIN
          AND effect.aggregate_id = NEW.proposal_pack_id
          AND effect.intent_id = NEW.proposal_revision_id
          AND effect.state IN ('succeeded', 'reconciled')
+    );
+  -- The attempt state it keeps is the send's last attempt as it stands.
+  SELECT RAISE(ABORT, 'proposal_delivery_finding_attempt_mismatch')
+    WHERE NOT EXISTS (
+      SELECT 1 FROM external_effects effect
+        JOIN external_effect_attempts attempt
+          ON attempt.effect_id = effect.effect_id AND attempt.attempt_number = effect.attempt_count
+       WHERE effect.effect_id = NEW.effect_id AND attempt.state = NEW.attempt_state
     );
   -- Open until the next send of this proposal or the customer's decision on it.
   SELECT RAISE(ABORT, 'proposal_delivery_finding_closed')

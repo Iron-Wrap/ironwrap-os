@@ -490,6 +490,7 @@ actions only.
 | `asks_first` | Asks first | The reviewer approves the exact revision; then policy issues the permit |
 | `within_limits` | Acts within your limits | Policy issues the permit without a person while the step stays inside the setting's ceiling; a step above the ceiling asks first |
 | `off_until_enabled` | Off until you turn it on | The action does nothing until the owner turns it on in setup; once on, it acts within the owner's limits. Used only where asking first per step is impossible, such as a live conversation |
+| `off` | Off | The owner turned the action off: a step proposed under it fails (`policy_denied`), and people do the work by hand. The owner may set it on any delegable `A2` or `A3` action, and on an action that starts off |
 | `shadow` | Practice only | The specialist does the step as a practice run: the full proposal, its checks and a receipt marked as practice, but the tool is never called, so nothing reaches anyone outside the company and no business record changes. A person still does the real work, or approves it on the path in use today |
 
 1. **Start state.** Every `A3` action, and every `A2` action with an outside effect, starts as asks

@@ -196,8 +196,8 @@ export async function recordCustomerPortalProposalView(
  * When someone holding the customer's link first opened this proposal revision (0163), or null.
  * Only the pack's live publication counts: its newest event, which a first-open row can name only
  * while it is `published` for this revision. When the revision has a send attempt (its newest
- * `proposal.publish` effect), only an open at or after that attempt started counts, so an open of
- * an earlier send never answers for a later one.
+ * `proposal.publish` effect), only an open at or after that attempt started counts, and none while
+ * it has not started, so an open of an earlier send never answers for a later one.
  */
 export async function readProposalFirstViewedAt(
   env: Env,
@@ -212,26 +212,24 @@ export async function readProposalFirstViewedAt(
         LIMIT 1
      ),
      latest_attempt AS (
-       SELECT MIN(attempt.started_at) AS started_at
-         FROM external_effect_attempts attempt
-        WHERE attempt.effect_id = (
-          SELECT effect.effect_id
-            FROM external_effects effect
-           WHERE effect.tenant_id = ?1 AND effect.action = 'proposal.publish'
-             AND effect.aggregate_type = 'proposal_publication'
-             AND effect.aggregate_id = ?2 AND effect.intent_id = ?3
-           ORDER BY effect.created_at DESC, effect.effect_id DESC
-           LIMIT 1
-        )
+       SELECT effect.effect_id
+         FROM external_effects effect
+        WHERE effect.tenant_id = ?1 AND effect.action = 'proposal.publish'
+          AND effect.aggregate_type = 'proposal_publication'
+          AND effect.aggregate_id = ?2 AND effect.intent_id = ?3
+        ORDER BY effect.created_at DESC, effect.effect_id DESC
+        LIMIT 1
      )
      SELECT MIN(view.first_viewed_at) AS viewed_at
        FROM live
        JOIN customer_portal_proposal_views view
          ON view.tenant_id = ?1 AND view.publication_event_id = live.publication_event_id
       WHERE view.proposal_revision_id = ?3
-        AND ((SELECT started_at FROM latest_attempt) IS NULL
-             OR julianday(view.first_viewed_at)
-                >= julianday((SELECT started_at FROM latest_attempt)))`,
+        AND (NOT EXISTS (SELECT 1 FROM latest_attempt)
+             OR julianday(view.first_viewed_at) >= (
+               SELECT julianday(MIN(started.started_at))
+                 FROM external_effect_attempts started
+                WHERE started.effect_id = (SELECT effect_id FROM latest_attempt)))`,
   )
     .bind(input.tenantId, input.proposalPackId, input.proposalRevisionId)
     .first<{ viewed_at: string | null }>();

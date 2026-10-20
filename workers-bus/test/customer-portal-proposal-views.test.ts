@@ -32,7 +32,7 @@ import {
   pruneCustomerPortalRecords,
   readProposalFirstViewedAt,
 } from "../src/customer-portal-store.ts";
-import { runExternalEffect } from "../src/effect-runtime.ts";
+import { proposeExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
 
 const TENANT = "ironwrap";
 const ORIGIN = "https://app.example.com";
@@ -948,6 +948,35 @@ test("the staff read counts only the live publication, at or after the latest se
       }),
       null,
     );
+
+    // A newer send of the live version that has not started yet: no open answers for it.
+    const resendAt = new Date(republishAt.getTime() + 20_000);
+    const aggregate = { type: "proposal_publication" as const, id: h.chain.proposalPackId, version: 3 };
+    const resend = await admitFor(h.env, "proposal.publish", aggregate, { delivery_kind: "repeat" },
+      "permit:portal-views:resend", resendAt);
+    await proposeExternalEffect(h.env, {
+      effectId: "effect:portal-views:resend",
+      tenantId: TENANT,
+      actor: { type: "agent", id: "sales-orchestrator" },
+      taskId: "commercial:effect:portal-views:resend",
+      authority: commercialEffectAuthority(resend),
+      aggregate,
+      intentId: h.chain.proposalRevisionId,
+      action: "proposal.publish",
+      request: { proposal_revision_id: h.chain.proposalRevisionId, state: "published" },
+      provider: "customer-portal",
+      providerAccountRef: TENANT,
+      idempotencyKey: "effect:portal-views:resend",
+      deadlineAt: new Date(resendAt.getTime() + 5 * 60_000).toISOString(),
+      preconditions: {},
+      evidenceRefs: EVIDENCE.map(({ ref }) => ref),
+      expectedReadback: { state: "published" },
+      retryLimit: 1,
+      compensationPlan: {},
+      correlationId: "effect:portal-views:resend",
+      now: resendAt.toISOString(),
+    });
+    assert.equal(await read(), null, "no open counts for an attempt that has not started");
   } finally {
     h.close();
   }

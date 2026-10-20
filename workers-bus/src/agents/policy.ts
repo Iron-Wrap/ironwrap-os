@@ -97,6 +97,14 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
 ]);
 
 /**
+ * Actions that propose from the inbound a run answers and cite only that inbound (contract
+ * `lead_fact.propose`: raw inbound receipts only, never conversation text or another record): the
+ * run answers an inbound event, and every citation is that event's signal fact. A handoff run's
+ * snapshot does not hold an event at the root of its chain, so a handoff run cannot propose one.
+ */
+export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
+
+/**
  * `A1` actions that prepare a people-only act (contract "Autonomy classes"): the draft is stored as
  * proposed and names the person who performs the act in their own screen, so it lands in their
  * Needs you rather than among finished work. The agent never performs the act.
@@ -165,6 +173,12 @@ export function evaluateStep(input: StepInput): PolicyDecision {
       (personRequest.named && (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref) ||
       !input.citations.some((citation) => citation.fact_id === request.signal_ref)
     )
+      return stop("abstained", "out_of_scope", "requester");
+    pass("requester");
+  }
+  if (INBOUND_ONLY.has(input.actionId)) {
+    const inbound = input.requester;
+    if (!inbound || inbound.kind !== "event" || input.citations.length === 0 || input.citations.some((citation) => citation.fact_id !== inbound.signal_ref))
       return stop("abstained", "out_of_scope", "requester");
     pass("requester");
   }

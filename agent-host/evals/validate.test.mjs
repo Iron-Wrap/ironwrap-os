@@ -365,7 +365,7 @@ test("signal and fact times span at most a century, checked from both sides", ()
 
 test("the Worker registry is read whole, or the validator says what it could not read", () => {
   const real = loadRegistry(join(here, "../.."));
-  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "delegation.propose_change", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "note.add", "settings.propose_change", "specialist.hold"]);
+  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "delegation.propose_change", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "lead_fact.propose", "note.add", "settings.propose_change", "specialist.hold"]);
   assert.deepEqual(real.unread, []);
   const root = fixture();
   const path = join(root, "workers-bus/src/agents/registry.ts");

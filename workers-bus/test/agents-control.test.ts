@@ -38,6 +38,7 @@ class SqliteD1 {
           "0202_agent_fact_versions.sql",
           "0203_agent_shadow_agreement.sql",
           "0204_agent_watch_firings.sql",
+          "0205_agent_step_pair_index.sql",
         ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")
@@ -2268,4 +2269,31 @@ test("only the owner's and ops' views read a delegation record, and the release-
   );
   // A run closes within its wall time plus the cron's grace; the read looks back further than that.
   assert.ok(RUN_LIFETIME_BOUND_MS > DEFAULT_CEILINGS.wallTimeMs + EXPIRY_GRACE_MS + 3_600_000);
+});
+
+test("lead_concierge proposes an inquiry's details from the inbound it answers, citing only that inbound", async () => {
+  const s = setup();
+  const run = await s.run();
+  const fields = { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: "before the first snow" };
+  const proposed = (await s.propose(run, "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body;
+  assert.deepEqual([proposed.decision, proposed.receipt.outcome, proposed.receipt.needs_from_you], ["drafted", "succeeded", null], JSON.stringify(proposed));
+  // lead_fact.confirm names this step as its proposal.
+  assert.ok(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(proposed.step_id));
+  // A run started by an owner's ask is not an inbound: the same proposal stops.
+  const asked = await s.run("lead_concierge", { kind: "owner_request", source: "ask:appu_test_owner", content: { text: "Synthetic ask" } });
+  assert.deepEqual((await s.propose(asked, "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body.reason_codes, ["out_of_scope"]);
+});
+
+test("the pair index serves the delegation reads, and only the face proposes delegation changes", async () => {
+  const { CATALOG } = await import("../src/agents/catalog.ts");
+  // proposalAwaitsOwner reads the face's steps only: a second owner would need that read widened.
+  assert.deepEqual(CATALOG.actions.find((action) => action.action_id === "delegation.propose_change")?.owners, ["orchestrator"]);
+  const s = setup(true);
+  const plan = (sql: string) => (s.db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((row) => row.detail).join(" | ");
+  for (const sql of [
+    "SELECT COUNT(*) FROM agent_run_steps WHERE tenant_id = 't' AND specialist_id = 's' AND action_id = 'a' AND created_at >= 'x' AND json_extract(permit_json, '$.kind') = 'within_limits'",
+    "SELECT step_id FROM agent_run_steps WHERE tenant_id = 't' AND specialist_id = 's' AND action_id = 'a' AND json_extract(permit_json, '$.delegation_id') = 'd' LIMIT 1",
+    "SELECT COUNT(*) FROM agent_run_steps s LEFT JOIN agent_step_decisions d ON d.step_id = s.step_id WHERE s.tenant_id = 't' AND s.specialist_id = 's' AND s.action_id = 'a'",
+  ])
+    assert.match(plan(sql), /idx_agent_run_steps_pair/, sql);
 });

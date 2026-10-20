@@ -715,7 +715,8 @@ test("a Weather gate that stands on no attested window, as one recorded before t
   for (const user of Object.values(USERS)) insertUser(db, user, user === USERS.seed ? SEED_CREATED_BY : undefined);
   seedJob(db, JOB, "0001");
   db.prepare("UPDATE operating_production_gates SET state = 'ready', version = 2 WHERE gate_id = ?").run(gateId("Weather"));
-  db.prepare("UPDATE operating_production_gates SET state = 'complete', version = 2 WHERE gate_id = ?").run(gateId("Crew"));
+  // A pre-ledger Crew clearance kept whatever evidence text its writer left, parseable or not.
+  db.prepare("UPDATE operating_production_gates SET state = 'complete', version = 2, evidence_refs_json = '{not json' WHERE gate_id = ?").run(gateId("Crew"));
   for (const name of names.filter((value) => value >= "0153")) {
     db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
@@ -735,6 +736,8 @@ test("a Weather gate that stands on no attested window, as one recorded before t
   );
   const env = envFor(new TestD1(db));
   await rejectsWith(recordOperatingJobAssignment(env, command()), "operating_job_assignment_weather_window_ended");
+  // In D1, a schedule written over the legacy Crew entry is refused by name, whatever its evidence.
+  refused(() => insertAssignment(db), "operating_job_assignment_crew_gate_unbound");
   // Re-attested, Weather holds a window again; the legacy Crew entry is reversed and Crew bound.
   reverseGateInLedger(db, { tenantId: TENANT, roofJobId: JOB, gate: "Weather", actorUserId: USERS.owner.id, actorRole: "owner" });
   attestGateInLedger(db, { tenantId: TENANT, roofJobId: JOB, gate: "Weather", actorUserId: USERS.production.id, actorRole: "production" });

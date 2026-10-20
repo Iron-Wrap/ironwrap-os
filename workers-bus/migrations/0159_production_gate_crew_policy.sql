@@ -196,10 +196,12 @@ BEGIN
        WHERE reversed.tenant_id = NEW.tenant_id
          AND reversed.clearance_id = NEW.reverses_id
          AND reversed.basis = 'crew_assignment'
-         AND json_extract(reversed.evidence_refs_json, '$.crew_id')
-           = json_extract(NEW.evidence_refs_json, '$.crew_id')
-         AND json_extract(reversed.evidence_refs_json, '$.crew_version')
-           = json_extract(NEW.evidence_refs_json, '$.crew_version')
+         AND CASE WHEN json_valid(reversed.evidence_refs_json) THEN
+           json_extract(reversed.evidence_refs_json, '$.crew_id')
+             = json_extract(NEW.evidence_refs_json, '$.crew_id')
+           AND json_extract(reversed.evidence_refs_json, '$.crew_version')
+             = json_extract(NEW.evidence_refs_json, '$.crew_version')
+         END
     );
 
   -- The basis x gate matrix this migration admits, all of it person entries.
@@ -922,7 +924,8 @@ BEGIN
   );
 
   -- Crew stands on the policy's `crew_assignment` entry bound to this crew at this version, made by
-  -- this schedule or an earlier one of the same job.
+  -- this schedule or an earlier one of the same job. An entry from before the ledger may hold any
+  -- evidence text, so it is read only once it parses.
   SELECT RAISE(ABORT, 'operating_job_assignment_crew_gate_unbound')
   WHERE NOT EXISTS (
     SELECT 1
@@ -938,18 +941,20 @@ BEGIN
        AND gate.state = 'complete'
        AND bound.actor_kind = 'policy'
        AND bound.basis = 'crew_assignment'
-       AND json_extract(bound.evidence_refs_json, '$.crew_id') = NEW.crew_id
-       AND json_extract(bound.evidence_refs_json, '$.crew_version') = NEW.crew_version
-       AND (
-         json_extract(bound.evidence_refs_json, '$.assignment_id') = NEW.assignment_id
-         OR EXISTS (
-           SELECT 1
-             FROM operating_job_assignments earlier
-            WHERE earlier.tenant_id = NEW.tenant_id
-              AND earlier.roof_job_id = NEW.roof_job_id
-              AND earlier.assignment_id = json_extract(bound.evidence_refs_json, '$.assignment_id')
+       AND CASE WHEN json_valid(bound.evidence_refs_json) THEN
+         json_extract(bound.evidence_refs_json, '$.crew_id') = NEW.crew_id
+         AND json_extract(bound.evidence_refs_json, '$.crew_version') = NEW.crew_version
+         AND (
+           json_extract(bound.evidence_refs_json, '$.assignment_id') = NEW.assignment_id
+           OR EXISTS (
+             SELECT 1
+               FROM operating_job_assignments earlier
+              WHERE earlier.tenant_id = NEW.tenant_id
+                AND earlier.roof_job_id = NEW.roof_job_id
+                AND earlier.assignment_id = json_extract(bound.evidence_refs_json, '$.assignment_id')
+           )
          )
-       )
+       END
   );
 
   -- Deposit never stands on a contract with no deposit once a later contract of the job carries

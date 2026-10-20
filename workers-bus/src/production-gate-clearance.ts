@@ -24,8 +24,10 @@
 //       exactly `{basis, expected_gate_version, attestation, evidence_refs?}`, with the gate's
 //       typed attestation (production-gate-attestation.ts) and 0 to 10 evidence references that
 //       this route resolves and checksums. The attester is on no crew; Materials needs no open
-//       inventory exception, and Safety needs no active stop and the attester's current internal
-//       Worker Competency. The answer is the stored entry and the gate after it.
+//       inventory exception. Safety needs the attester's current internal Worker Competency in
+//       site safety (`authority_scope` `site-safety`) and no active stop that applies to the job:
+//       on the tenant, the job or any of its Work Packages, or any stop whose scope cannot be
+//       resolved. The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
 //     the deciding set answers a waiver request on a job of their own runway. The requester never
@@ -105,6 +107,11 @@ const CLEAR_PERMISSION = "production:clear_gate";
  * production). This line is the whole mapping on the Worker side; migration 0158 holds it in D1.
  */
 export const PRODUCTION_GATE_SAFETY_PERMISSION = CLEAR_PERMISSION;
+/**
+ * The `authority_scope` of an internal Worker Competency in site safety, the competency "checks
+ * site safety" needs. Migration 0158 names the same value in D1; no other scope counts.
+ */
+export const SITE_SAFETY_AUTHORITY_SCOPE = "site-safety";
 /**
  * The role that carries the set deciding a waiver: `money.approve` for Deposit and
  * `production.gates.waive` for Materials and Access. Migration 0153 holds the same mapping.
@@ -843,7 +850,13 @@ async function materialExceptionOpen(
   return row !== null;
 }
 
-/** An active safety stop on the job, read exactly as the job phase reads it. */
+/**
+ * An active safety stop that applies to the job, as migration 0158 reads it: one on the whole
+ * tenant, on the job, or on any Work Package of the job. A stop whose scope cannot be resolved
+ * applies too: one naming a roof job or a Work Package this tenant does not have, or a scope type
+ * this rule does not know. A stop on a shop or a vehicle is not the job's. The job phase's own read
+ * of active stops stays as it is: it reports job-scoped stops.
+ */
 async function safetyStopActive(
   env: AppEnv,
   tenantId: string,
@@ -851,18 +864,43 @@ async function safetyStopActive(
 ): Promise<boolean> {
   const row = await env.DB.prepare(
     `SELECT 1 AS found
-       FROM safety_occurrences
-      WHERE tenant_id = ? AND scope_type = 'roof_job' AND scope_id = ? AND stop_active = 1
+       FROM safety_occurrences occurrence
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND (
+          occurrence.scope_type = 'tenant'
+          OR (occurrence.scope_type = 'roof_job' AND (
+            occurrence.scope_id = ?
+            OR NOT EXISTS (
+              SELECT 1 FROM operating_roof_jobs job
+               WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+            )
+          ))
+          OR (occurrence.scope_type = 'work_package' AND (
+            EXISTS (
+              SELECT 1 FROM work_packages package
+               WHERE package.tenant_id = occurrence.tenant_id
+                 AND package.work_package_id = occurrence.scope_id AND package.job_id = ?
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM work_packages package
+               WHERE package.tenant_id = occurrence.tenant_id
+                 AND package.work_package_id = occurrence.scope_id
+            )
+          ))
+          OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
+        )
       LIMIT 1`,
-  ).bind(tenantId, roofJobId).first();
+  ).bind(tenantId, roofJobId, roofJobId).first();
   return row !== null;
 }
 
 /**
- * The person's current internal Worker Competency, as migration 0158 checks it: under any login
- * coordinate they carry, the latest version of its record with no contradicting copy, superseded
- * by no other record, verified by an internal assessment, not revoked, in force today and not
- * bound to another job. The most recently observed one is bound into the attestation.
+ * The person's current internal Worker Competency in site safety (`SITE_SAFETY_AUTHORITY_SCOPE`), as
+ * migration 0158 checks it: under any login coordinate they carry, the latest version of its
+ * record with no contradicting copy, superseded by no other record, verified by an internal
+ * assessment, not revoked, in force today and not bound to another job. The most recently
+ * observed one is bound into the attestation.
  */
 async function currentCompetency(
   env: AppEnv,
@@ -880,6 +918,7 @@ async function currentCompetency(
         AND competency.subject_type = 'Person'
         AND competency.subject_role = 'Worker'
         AND competency.authority_kind = 'Worker Competency'
+        AND competency.authority_scope = ?
         AND lower(trim(competency.person_user)) IN (${person.identities.map(() => "?").join(", ")})
         AND (competency.roof_job IS NULL OR competency.roof_job = ?)
         AND competency.verification_state = 'verified'
@@ -905,7 +944,7 @@ async function currentCompetency(
         )
       ORDER BY competency.observed_at DESC, competency.readback_id DESC
       LIMIT 1`,
-  ).bind(tenantId, ...person.identities, roofJobId, today, today).first<{
+  ).bind(tenantId, SITE_SAFETY_AUTHORITY_SCOPE, ...person.identities, roofJobId, today, today).first<{
     readback_id: string;
     authority_record_id: string;
     authority_version: number;

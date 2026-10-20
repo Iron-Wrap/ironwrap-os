@@ -19,6 +19,7 @@ import {
   releaseNativeWorkPackageHold,
   type NativeWorkPackageDefinition,
 } from "../src/work-package-store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 class TestD1 {
   readonly sqlite = new DatabaseSync(":memory:");
@@ -439,7 +440,7 @@ function seedAssignmentSnapshot(
          (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key,
           gate, state, owner_user, assigned_at, due_at, blocker_reason, version,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'ready', 'appu_owner_native', ?, ?,
+       VALUES (?, ?, ?, ?, ?, ?, 'blocked', 'appu_owner_native', ?, ?,
                'No active blocker', 1, ?, ?)`,
       )
       .run(
@@ -455,6 +456,7 @@ function seedAssignmentSnapshot(
         now,
       );
   }
+  recordLegacyGateStates(sqlite, { tenantId: packet.tenantId, roofJobId: packet.jobId, at: now });
   sqlite
     .prepare(
       `INSERT OR IGNORE INTO fleet_crews

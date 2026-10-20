@@ -201,7 +201,10 @@ import { handleEvidenceContentRead, handleEvidenceUpload } from "./evidence-uplo
 import { handlePrivacyEvidenceAuditRoute } from "./privacy-evidence-audit.ts";
 import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-disposition.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
-import { handleProductionGateClearance } from "./production-gate-clearance.ts";
+import {
+  handleProductionGateClearance,
+  handleProductionGateWaiverDecision,
+} from "./production-gate-clearance.ts";
 import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
@@ -1954,17 +1957,19 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "newo_operations_unavailable" }, 502);
     }
   }
-  // The producers the six scheduling gates never had (ELEC-122). Nested under the
-  // job on purpose: a gate has no identity apart from the job it locks, and the
-  // path says which job's schedule is being unlocked.
-  const productionGateClearanceMatch = url.pathname.match(
-    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/clearance$/,
+  // A production gate moves only by an entry in its ledger (migration 0153). Nested
+  // under the job on purpose: a gate has no identity apart from the job it locks, and
+  // the path says which job's schedule is being unlocked.
+  const productionGateLedgerMatch = url.pathname.match(
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions)$/,
   );
-  if (req.method === "POST" && productionGateClearanceMatch) {
-    const roofJobId = decodedPathSegment(productionGateClearanceMatch[1]);
-    const gate = decodedPathSegment(productionGateClearanceMatch[2]);
+  if (req.method === "POST" && productionGateLedgerMatch) {
+    const roofJobId = decodedPathSegment(productionGateLedgerMatch[1]);
+    const gate = decodedPathSegment(productionGateLedgerMatch[2]);
     if (!roofJobId || !gate) return privateAppJson({ error: "not_found" }, 404);
-    return await handleProductionGateClearance(req, env, auth, roofJobId, gate);
+    return productionGateLedgerMatch[3] === "clearance"
+      ? await handleProductionGateClearance(req, env, auth, roofJobId, gate)
+      : await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
     if (!hasPermission(auth, "production:read")) {

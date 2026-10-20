@@ -19,6 +19,7 @@ import { VIEW_SCHEMA } from "../src/agents/face.ts";
 import { assertStrictSchema, canonicalJson } from "../src/agents/schema.ts";
 import { appendSignal, peopleOnlyFor, toolsFor, type BoundStatement } from "../src/agents/store.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const TOKEN = "synthetic-agent-host-token-0001";
@@ -871,7 +872,7 @@ test("facts/current gives a part the version it is cited at for every reader, af
   const current = async (who: Person, ids: string[]) => (await t.app(who, "POST", "/facts/current", { fact_ids: ids })).body;
   const whole = (await current("owner", [`job/${JOB}`])).facts[0] as Source;
   // A gate clears: the whole job is a new version; the job part the sales asker read is not.
-  t.db.raw.exec("UPDATE operating_production_gates SET state = 'ready', blocker_reason = 'No active blocker', version = version + 1 WHERE gate_id = 'gate_mem_access'");
+  recordLegacyGateStates(t.db.raw, { tenantId: TENANT, roofJobId: JOB, gates: ["Access"] });
   const owner = await current("owner", [`job/${JOB}`, part.fact_id, pointer]);
   assert.equal(owner.facts[0].version, whole.version + 1, "the whole job moved");
   assert.deepEqual(owner.facts.slice(1), sources, "the owner sees the part and its field unchanged");

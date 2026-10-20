@@ -10,6 +10,7 @@ import { test } from "node:test";
 
 import worker from "../src/index.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
 import { reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
@@ -30,6 +31,7 @@ import {
   depositIntentIsReconciled,
   selectPhaseWorkPackage,
 } from "../src/commercial-job-phase.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const PUBLIC_ORIGIN = "https://app.example.invalid";
@@ -1030,6 +1032,36 @@ async function jobPhase(h: Harness, jobId: string): Promise<{
   };
 }
 
+/** A signed-in person's own cookie session, authenticated the way the router authenticates it. */
+async function personAuth(h: Harness, userId: string): Promise<AuthContext> {
+  const token = randomToken();
+  const now = Date.now();
+  h.db.raw.prepare(
+    `INSERT INTO app_sessions
+       (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+  ).run(
+    await sessionHashFor(h.env, token),
+    userId,
+    TENANT,
+    new Date(now - 60_000).toISOString(),
+    new Date(now + 3_600_000).toISOString(),
+    new Date(now).toISOString(),
+    "d".repeat(64),
+    "e".repeat(64),
+  );
+  const outcome = await authenticateAppRequest(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/session`, {
+      headers: { cookie: `__Host-ironwrap_session=${token}` },
+    }),
+    h.env,
+  );
+  assert.ok(outcome.ok, "the synthetic person session authenticates");
+  return outcome.auth;
+}
+
+/** Gate writes are people-only (migration 0153): a real cookie session and its own CSRF token. */
 async function clearProductionGate(
   h: Harness,
   jobId: string,
@@ -1038,14 +1070,21 @@ async function clearProductionGate(
   decisionId: string,
   role: AppRole = "owner",
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  const person = await personAuth(h, role === "owner" ? OWNER_ID : role === "ops" ? OPS_ID : `appu_${role}_0001`);
   const response = await handleAuthenticatedRoute(
-    request(
-      `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
-      body,
-      decisionId,
+    new Request(
+      `${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json", "idempotency-key": decisionId,
+          "x-csrf-token": person.csrfToken, origin: PUBLIC_ORIGIN, "cf-connecting-ip": "203.0.113.20",
+        },
+        body: JSON.stringify(body),
+      },
     ),
     h.env,
-    auth(role),
+    person,
   );
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
@@ -1268,12 +1307,11 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
     assert.equal(receiptBody.money_intent.provider_entity_id, invoiceId);
     assert.equal(receiptBody.money_intent.state, "reconciled");
 
+    // The owner is this tenant's only holder of the waiving set, so their Materials and Access
+    // waivers are self-approved with a reason (owner ruling D-08).
     const waiverReasons: Record<string, string> = {
       Materials: "Synthetic materials readiness waived for repository composition proof.",
-      Safety: "Synthetic safety readiness waived for repository composition proof.",
       Access: "Synthetic site access waived for repository composition proof.",
-      Weather: "Synthetic weather readiness waived for repository composition proof.",
-      Crew: "Synthetic crew readiness waived for repository composition proof.",
     };
     for (const [gate, reason] of Object.entries(waiverReasons)) {
       const decisionId = `iro208b-${gate.toLowerCase()}-waiver-0001`;
@@ -1296,6 +1334,22 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       assert.equal(replayed.status, 200);
       assert.equal(replayed.body.replayed, true);
     }
+    // Safety and Weather are never waivable and Crew has no waiver, so no person can clear them
+    // on this route and production stays blocked.
+    for (const gate of ["Safety", "Weather", "Crew"]) {
+      const refused = await clearProductionGate(
+        h,
+        journey.ids.jobId,
+        gate,
+        { basis: "office_waiver", reason: `Synthetic ${gate.toLowerCase()} waiver attempt for repository proof.` },
+        `iro208b-${gate.toLowerCase()}-waiver-0001`,
+      );
+      assert.equal(refused.status, 409, gate);
+      assert.equal(refused.body.error, "production_gate_not_waivable");
+    }
+    const stillBlocked = await jobPhase(h, journey.ids.jobId);
+    assert.equal(stillBlocked.phase, "production_blocked");
+    assert.equal(stillBlocked.facts.production.all_required_gates_ready, false);
     const depositReplay = await clearProductionGate(
       h,
       journey.ids.jobId,
@@ -1346,6 +1400,14 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       depositGateBeforeConflict,
     );
 
+    // Attestation and Crew-by-policy entries do not exist yet, so the journey records Safety,
+    // Weather and Crew the way 0153 backfills gates cleared before the ledger, and proves the
+    // phase then admits the job.
+    recordLegacyGateStates(h.db.raw, {
+      tenantId: TENANT,
+      roofJobId: journey.ids.jobId,
+      gates: ["Safety", "Weather", "Crew"],
+    });
     const ready = await jobPhase(h, journey.ids.jobId);
     assert.equal(ready.phase, "production_ready");
     assert.equal(ready.facts.accounting.deposit_reconciled, true);

@@ -2697,8 +2697,13 @@ async function routeOnboarding(request, requestUrl, method) {
         access_version: existing ? existing.access_version + 1 : 1,
         updated_at: "2026-08-22T12:32:00.000Z",
         is_self: existing?.is_self ?? false,
-        // Nobody here pairs a crew phone, so no removal ever unpairs one.
-        crew_phone_unpaired: false,
+        // The Worker's computed crew_phone_unpaired: crew members here use a crew phone, so
+        // removing one unpairs it, and nobody in this fixture pairs a phone again.
+        crew_phone_unpaired: Boolean(
+          existing &&
+          (existing.crew_phone_unpaired ||
+            (existing.active && body.active === false && existing.role === "field")),
+        ),
       };
       onboardingState.users = existing
         ? onboardingState.users.map((user) => (user.email === email ? next : user))

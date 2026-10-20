@@ -7,6 +7,7 @@ import {
   fetchFieldBootstrap,
   fieldBootstrapResponseSchema,
   primeFieldBootstrap,
+  settlePrimedFieldBootstrap,
   takePrimedFieldBootstrap,
   type FieldBootstrap,
 } from "./field-bootstrap";
@@ -135,6 +136,28 @@ describe("fieldBootstrapResponseSchema", () => {
 
     await takePrimedFieldBootstrap(loader);
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands a successful entry-time read to the first render and keeps later reads fresh", async () => {
+    const bootstrap = { session, today } as unknown as FieldBootstrap;
+    const loader = vi.fn<() => Promise<FieldBootstrap>>().mockResolvedValue(bootstrap);
+
+    primeFieldBootstrap(loader);
+    await expect(settlePrimedFieldBootstrap()).resolves.toBe(bootstrap);
+    await expect(settlePrimedFieldBootstrap()).resolves.toBeUndefined();
+
+    await takePrimedFieldBootstrap(loader);
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a failed entry-time read for the session query and its retry policy", async () => {
+    const failure = new Error("field bootstrap unavailable");
+    const loader = vi.fn<() => Promise<FieldBootstrap>>().mockRejectedValue(failure);
+
+    primeFieldBootstrap(loader);
+    await expect(settlePrimedFieldBootstrap()).resolves.toBeUndefined();
+    await expect(takePrimedFieldBootstrap(loader)).rejects.toBe(failure);
+    expect(loader).toHaveBeenCalledTimes(1);
   });
 
   it("consumes an early head response once and fetches fresh data afterward", async () => {

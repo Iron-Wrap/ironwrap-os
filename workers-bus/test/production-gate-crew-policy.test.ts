@@ -513,7 +513,8 @@ test("an active stop on the job or the tenant holds the schedule; another job's 
 
 test("a Weather gate left ready after its window ended no longer schedules, read on D1's clock", async () => {
   const h = setup({ ready: false });
-  const window = { start: at(-HOUR), end: at(1_500) };
+  // A window that ends three seconds from now: long enough to attest, short enough to wait out.
+  const window = { start: at(-HOUR), end: at(3_000) };
   ready(h.sqlite, JOB, window);
   // The work fits the window as attested, and the schedule claims a creation time inside it.
   const input = command({ scheduledStart: at(-30 * 60_000), scheduledEnd: window.end });

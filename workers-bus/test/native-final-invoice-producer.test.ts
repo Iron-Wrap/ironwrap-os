@@ -397,6 +397,8 @@ async function seedPriorInvoice(
   amounts = { subtotal: "500.00", tax: "25.00", total: "525.00" },
   settle = true,
   providerCurrency = "CAD",
+  /** Tells a second deposit invoice of the same job apart. */
+  id = "0001",
 ): Promise<void> {
   const snapshot = await recordTaxPolicySnapshot(
     env,
@@ -416,10 +418,10 @@ async function seedPriorInvoice(
     env,
     {
       tenantId: TENANT,
-      intentId: "acct-prior-deposit-0001",
+      intentId: `acct-prior-deposit-${id}`,
       kind: "deposit_invoice",
       roofJobId: JOB,
-      basis: { schema_version: 1, source: "accepted_deposit_schedule" },
+      basis: { schema_version: 1, source: "accepted_deposit_schedule", ...(id === "0001" ? {} : { id }) },
       sourceDocuments: [{ id: "quote-rev-0001", version: 1 }],
       expected: localFactEnvelope({
         realmId: REALM,
@@ -436,7 +438,7 @@ async function seedPriorInvoice(
         DueDate: "2026-08-31",
         Line: [payload.Line[0]],
       },
-      providerRequestId: "request-prior-deposit-0001",
+      providerRequestId: `request-prior-deposit-${id}`,
       subtotal: amounts.subtotal,
       taxAmount: amounts.tax,
       totalAmount: amounts.total,
@@ -446,7 +448,7 @@ async function seedPriorInvoice(
         policyVersion: "v1",
         maxAmount: "25000.00",
       },
-      effectIdempotencyKey: "quickbooks:prior-deposit:0001",
+      effectIdempotencyKey: `quickbooks:prior-deposit:${id}`,
       derivedBy: { actorKind: "agent" },
     },
     NOW,
@@ -1494,40 +1496,77 @@ test("an OD-01 contract replacing a deposit contract whose deposit invoice was n
   }
 });
 
-test("a deposit invoice reversed after it reached QuickBooks is never subtracted: the producer stops for a person", async () => {
-  const { env, db } = nativeTestEnv();
-  seedNativeSource(db);
-  await bindContractTerms(db, FIRST_CONTRACT, DEPOSIT_TERMS);
-  // Issued in QuickBooks and read back, then reversed by the money lane. A reversal answers a
-  // provider duplicate, surplus or mismatch, so whether the original still bills is not in the
-  // intent: excluding it could bill twice and subtracting it could bill short.
-  await seedPriorInvoice(env);
-  for (const state of ["reconciliation_required", "compensating", "compensated"]) {
-    db.raw
-      .prepare(
-        `UPDATE accounting_intents SET state = ?, version = version + 1, updated_at = ?
-          WHERE intent_id = 'acct-prior-deposit-0001'`,
-      )
-      .run(state, "2026-08-21T11:00:00.000Z");
+test("a deposit invoice reversed after it reached QuickBooks is never subtracted: the producer stops for a bookkeeper", async () => {
+  for (const reversal of ["compensating", "compensated"] as const) {
+    const { env, db } = nativeTestEnv();
+    seedNativeSource(db);
+    await bindContractTerms(db, FIRST_CONTRACT, DEPOSIT_TERMS);
+    // Issued in QuickBooks and read back, then reversed by the money lane. A reversal answers a
+    // provider duplicate, surplus or mismatch, so whether the original still bills is not in the
+    // intent: excluding it could bill twice and subtracting it could bill short.
+    await seedPriorInvoice(env);
+    const path = ["reconciliation_required", "compensating", "compensated"];
+    for (const state of path.slice(0, path.indexOf(reversal) + 1)) {
+      db.raw
+        .prepare(
+          `UPDATE accounting_intents SET state = ?, version = version + 1, updated_at = ?
+            WHERE intent_id = 'acct-prior-deposit-0001'`,
+        )
+        .run(state, "2026-08-21T11:00:00.000Z");
+    }
+    await acceptOd01Replacement(db);
+    await recordProviderMapping(env, db, OD01_CONTRACT);
+    // Another deposit invoice that a person can still reject is named first.
+    await seedPriorInvoice(env, undefined, false, "CAD", "0002");
+    const first = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
+    assert.equal(first.outcome, "blocked", reversal);
+    if (first.outcome === "blocked") {
+      assert.equal(first.blocker_code, "prior_invoice_truth_unresolved", reversal);
+      assert.equal(first.blocker_next_step, "reconcile_or_reject_prior_invoices", reversal);
+      assert.deepEqual(blockedIntents(db, first.observation_id), [
+        { intent_id: "acct-prior-deposit-0002", state: "pending_review" },
+      ]);
+    }
+    const pending = db.raw
+      .prepare("SELECT version FROM accounting_intents WHERE intent_id = 'acct-prior-deposit-0002'")
+      .get() as { version: number };
+    await applyAccountingIntentCommand(
+      env,
+      {
+        tenantId: TENANT,
+        intentId: "acct-prior-deposit-0002",
+        operation: "reject",
+        actorUserId: "appu_accounting_0001",
+        idempotencyKey: `reject-second-deposit-${reversal}`,
+        request: { intent_id: "acct-prior-deposit-0002" },
+        requestedVersion: pending.version,
+      },
+      DERIVE_AT,
+    );
+    // The reversed invoice then has its own code and a step a bookkeeper can take.
+    const derived = await deriveNativeFinalInvoiceForJob(
+      env,
+      { tenantId: TENANT, roofJobId: JOB },
+      new Date(DERIVE_AT.getTime() + 60_000),
+    );
+    assert.equal(derived.outcome, "blocked", reversal);
+    if (derived.outcome === "blocked") {
+      assert.equal(derived.blocker_code, "prior_invoice_compensated", reversal);
+      assert.equal(derived.blocker_next_step, "resolve_in_quickbooks_then_mark_prior_invoice_resolved", reversal);
+      assert.deepEqual(blockedIntents(db, derived.observation_id), [
+        { intent_id: "acct-prior-deposit-0001", state: reversal },
+      ]);
+    }
+    assert.equal(
+      Number(
+        (
+          db.raw
+            .prepare("SELECT COUNT(*) AS count FROM accounting_intents WHERE final_invoice_intent_id IS NOT NULL")
+            .get() as { count: number }
+        ).count,
+      ),
+      0,
+      reversal,
+    );
   }
-  await acceptOd01Replacement(db);
-  await recordProviderMapping(env, db, OD01_CONTRACT);
-  const derived = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
-  assert.equal(derived.outcome, "blocked");
-  if (derived.outcome === "blocked") {
-    assert.equal(derived.blocker_code, "prior_invoice_truth_unresolved");
-    assert.deepEqual(blockedIntents(db, derived.observation_id), [
-      { intent_id: "acct-prior-deposit-0001", state: "compensated" },
-    ]);
-  }
-  assert.equal(
-    Number(
-      (
-        db.raw
-          .prepare("SELECT COUNT(*) AS count FROM accounting_intents WHERE final_invoice_intent_id IS NOT NULL")
-          .get() as { count: number }
-      ).count,
-    ),
-    0,
-  );
 });

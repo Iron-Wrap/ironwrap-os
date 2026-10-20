@@ -719,6 +719,25 @@ test("a person attests Materials, Access, Weather and Safety; each entry readies
   );
 });
 
+test("a person's entry takes D1's clock, as the policy's entries do, not the Worker's", async (t) => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const body = attest("Materials");
+  // The Worker's clock runs 30 minutes ahead of D1's for this one request.
+  const realNow = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: realNow + 30 * 60_000 });
+  let result: Awaited<ReturnType<typeof call>>;
+  try {
+    result = await call(h, production, "POST", CLEARANCE("Materials"), body);
+  } finally {
+    t.mock.timers.reset();
+  }
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const stored = h.sqlite.prepare("SELECT created_at FROM production_gate_clearances").get() as { created_at: string };
+  assert.ok(Math.abs(Date.parse(stored.created_at) - realNow) < 60_000, stored.created_at);
+  assert.equal(result.body.entry.created_at, stored.created_at);
+});
+
 test("an attestation is idempotent, version-checked and refused on a gate that is not blocked", async () => {
   const h = setup();
   const production = await person(h, USERS.production.id);

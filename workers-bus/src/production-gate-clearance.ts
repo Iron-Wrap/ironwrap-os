@@ -592,13 +592,15 @@ async function appendEntry(
 ): Promise<{ row: LedgerRow; replayed: boolean }> {
   const { tenantId, gate, person, idempotency, requestSha256, entry } = input;
   try {
+    // created_at is D1's clock, as the policy's own entries take it (0155): one clock for the ledger.
     await env.DB.prepare(
       `INSERT INTO production_gate_clearances (
          clearance_id, tenant_id, gate_id, roof_job_id, gate, entry_kind, basis, to_state,
          from_gate_version, request_id, reverses_id, actor_kind, actor_user_id, actor_role,
          requested_by, self_approval, self_approval_basis, attestation_json, evidence_refs_json,
          reason, request_sha256, idempotency_key_hash, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'person', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'person', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
     ).bind(
       idempotency.clearanceId,
       tenantId,
@@ -621,7 +623,6 @@ async function appendEntry(
       entry.reason,
       requestSha256,
       idempotency.keyHash,
-      new Date().toISOString(),
     ).run();
   } catch (error) {
     const raced = await entryByKey(env, tenantId, idempotency.keyHash);

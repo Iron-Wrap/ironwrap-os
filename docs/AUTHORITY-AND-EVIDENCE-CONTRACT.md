@@ -660,7 +660,8 @@ its Work Packages in any status, Superseded included; a crew `stop_work` on one 
 release has lifted; or an active stop whose scope cannot be resolved, meaning an unknown scope type
 or a Work Package id that maps to no job. Another job's stop, a shop or a vehicle stop does not
 hold it. The entry names the competency record, D1 checks both rules again at insert with the same
-predicate, and no agent or policy ever attests Safety.
+predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
+reversal, takes D1's clock, as the policy's entries do.
 
 ## Stop taxonomy
 

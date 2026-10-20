@@ -1195,13 +1195,13 @@ evidence.
 - An open lead proposal is the fact `lead_proposal/<step_id>`, readable at `sales:read` (the owner,
   ops and sales) and owned: the `lead_id`, the proposed `fields`, `proposed_at`, and the `source` it
   was cited to (`signal/<id>`). Its fields carry customer details, so only runs and screens with
-  that view read them, and no watch digest carries them. A lead links its five newest open
-  proposals, so a later run about the lead holds them. A proposal stays open until a
-  `lead_fact.confirm` that policy admitted names it, whether a person then approves it, declines it
-  or does it by hand, or until a newer proposal for the same lead (by time, then by the order they
-  were recorded) sets every key it set; a newer one that sets only some of them leaves it open. A
-  closed proposal reads as no fact, and of two confirms of one proposal only the first to land is
-  admitted.
+  that view read them; they never reach the snapshot of a run that writes an owner report, nor a
+  watch digest. A lead links its five newest open proposals, so a later run about the lead holds
+  them. A proposal stays open until a `lead_fact.confirm` that policy admitted names it, whether a
+  person then approves it, declines it or does it by hand, or until a newer proposal for the same
+  lead (by time, then by the order they were recorded) sets every key it set; a newer one that sets
+  only some of them leaves it open. A closed proposal reads as no fact, and of two confirms of one
+  proposal only the first to land is admitted.
 - `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
   changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
   is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.

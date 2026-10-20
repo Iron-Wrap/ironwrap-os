@@ -10,7 +10,7 @@ import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal 
 import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
-import { OBJECT_MODELS } from "./read-models.ts";
+import { OBJECT_MODELS, REPORT_MODELS } from "./read-models.ts";
 import { CANDIDATE_BAR, currentQualifications, delegationCandidates, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
@@ -298,8 +298,10 @@ export async function openRun(
   if (asker !== null && Date.parse(now) - Date.parse(signal.received_at) > ASK_UNANSWERED_MS) return { error: "ask_expired", status: 409 };
   // A watch names the objects its condition found; the run starts from each of them.
   const watchObjects = watchSubjects(signal);
+  // An owner report's run writes for a wider audience: it reads no lead proposal.
+  const reportRun = signal.kind === "watch" && signal.source === WATCH_SIGNAL_SOURCE && signal.watch_id !== null && Object.hasOwn(OWNER_REPORTS, signal.watch_id);
   const memory = watchObjects
-    ? await subjectsFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
+    ? await subjectsFacts(db, reportRun ? REPORT_MODELS : OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
     : await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
   // A handoff run also starts from the person's ask or request at the root of its chain.
   const root = signal.kind === "handoff" ? await rootOf(db, tenantId, signal) : null;

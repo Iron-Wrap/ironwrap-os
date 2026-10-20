@@ -2369,6 +2369,23 @@ test("an open lead proposal reaches a later run, and a confirm must name it, for
   const raced = await confirm(later, { service: null, scope: "house only", address: null, timing: null });
   assert.deepEqual(refused(raced), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
   assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'lead_fact.confirm' AND json_extract(args_json, '$.proposal_id') = ? AND json_extract(policy_json, '$.result') <> 'deny'", later).n, 1);
+  // An owner report's run writes for a wider audience: its snapshot holds no proposal, while an
+  // ordinary run about the same lead does.
+  const watched = async (watch_id: string, key: string) => {
+    const signal = await appendSignal(
+      s.db,
+      TENANT,
+      { kind: "watch", specialist_id: "lead_concierge", watch_id, source: "watch_scheduler", subject: null, content: { watch_id, period_key: key, objects: [{ aggregate: "lead", id: "synthetic-lead" }], digest: {}, summary: "Synthetic" }, dedupe_key: `watch:${watch_id}:${key}` },
+      s.now(),
+    );
+    assert.ok("signal_id" in signal);
+    const opened = await s.worker.openRun({ signal_id: signal.signal_id, specialist_id: "lead_concierge", host_run_key: `proposal-${key}` });
+    return opened.context.facts.map((fact: { fact_id: string }) => fact.fact_id);
+  };
+  const fresh = await propose({ service: "metal_roofing", scope: "house only", address: "1 Synthetic Way", timing: "next week" });
+  const report = await watched("new_leads", "report");
+  assert.ok(report.includes("lead/synthetic-lead") && !report.some((id: string) => id.startsWith("lead_proposal/")), JSON.stringify(report));
+  assert.ok((await watched("first_response_due", "work")).includes(`lead_proposal/${fresh.step_id}`));
   // Only the sales view reads it: its fields carry customer details.
   const { viewFor } = await import("../src/agents/memory.ts");
   assert.deepEqual([{ role: "sales" }, { role: "owner" }, { role: "field" }, { role: "accounting" }].map((reader) => viewFor(OBJECT_MODELS, reader, "lead_proposal") !== null), [true, true, false, false]);

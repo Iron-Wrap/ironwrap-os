@@ -453,3 +453,11 @@ export const OBJECT_MODELS: Record<string, ObjectModel> = {
   delegation,
   lead_proposal: leadProposalModel,
 };
+
+/**
+ * The objects a report run reads: every one but an open lead proposal, whose fields carry customer
+ * details and so never reach text written for a wider audience (contract "Citing facts").
+ */
+export const REPORT_MODELS: Record<string, ObjectModel> = Object.fromEntries(
+  Object.entries(OBJECT_MODELS).filter(([kind]) => kind !== "lead_proposal"),
+);

@@ -55,6 +55,7 @@ import { listAccountingIntents, type AccountingIntentRecord } from "./accounting
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { listJobEvidenceItemsFromD1, r2ObjectStore } from "./field-actions.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { safetyStopActive } from "./production-job-stops.ts";
 import {
   fieldEvidenceId,
   isAttestableProductionGate,
@@ -855,58 +856,6 @@ async function materialExceptionOpen(
         AND status IN ('open', 'contained')
       LIMIT 1`,
   ).bind(tenantId, roofJobId).first();
-  return row !== null;
-}
-
-/**
- * A stop that applies to the job, as migration 0158 reads it: an active safety stop on the whole
- * tenant, on the job, or on any Work Package of the job in any status, Superseded included; or a
- * crew's stop_work on any Work Package of the job that no release has lifted (0145). An active
- * safety stop whose scope cannot be resolved applies too: a scope type this rule does not know, or
- * a Work Package that maps to no job. A stop on another job, a shop or a vehicle does not. The job
- * phase's own read of active stops stays as it is: it reports job-scoped stops.
- */
-async function safetyStopActive(
-  env: AppEnv,
-  tenantId: string,
-  roofJobId: string,
-): Promise<boolean> {
-  const jobPackages = `SELECT package.work_package_id FROM work_packages package
-               WHERE package.tenant_id = ? AND package.job_id = ?`;
-  const row = await env.DB.prepare(
-    `SELECT 1 AS found
-       WHERE EXISTS (
-         SELECT 1
-           FROM safety_occurrences occurrence
-          WHERE occurrence.tenant_id = ?
-            AND occurrence.stop_active = 1
-            AND (
-              occurrence.scope_type = 'tenant'
-              OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = ?)
-              OR (occurrence.scope_type = 'work_package' AND (
-                occurrence.scope_id IN (${jobPackages})
-                OR NOT EXISTS (
-                  SELECT 1 FROM work_packages package
-                   WHERE package.tenant_id = occurrence.tenant_id
-                     AND package.work_package_id = occurrence.scope_id
-                )
-              ))
-              OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
-            )
-       )
-       OR EXISTS (
-         SELECT 1
-           FROM work_package_events crew_stop
-          WHERE crew_stop.tenant_id = ?
-            AND crew_stop.event_kind = 'stop_work'
-            AND crew_stop.work_package_id IN (${jobPackages})
-            AND NOT EXISTS (
-              SELECT 1 FROM work_package_stop_releases released
-               WHERE released.tenant_id = crew_stop.tenant_id
-                 AND released.stop_event_id = crew_stop.event_id
-            )
-       )`,
-  ).bind(tenantId, roofJobId, tenantId, roofJobId, tenantId, tenantId, roofJobId).first();
   return row !== null;
 }
 

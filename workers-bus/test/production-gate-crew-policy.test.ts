@@ -506,9 +506,40 @@ test("an active stop on the job or the tenant holds the schedule; another job's 
     refused(() => insertAssignment(h.sqlite, { assignment_id: "assignment:crew:stopped" }), "operating_job_assignment_stop_active");
     assert.equal(assignmentCount(h.sqlite), 0, scopeType);
   }
+  // A stop whose Work Package maps to no job cannot be placed, so it holds every job.
+  const unresolved = setup();
+  stop(unresolved, "work_package", "wp:crew:unknown");
+  await rejectsWith(recordOperatingJobAssignment(unresolved.env, command()), "operating_job_assignment_stop_active");
+  // A stop on another job, a shop or a vehicle does not apply here.
   const h = setup();
   stop(h, "roof_job", OTHER_JOB);
+  stop(h, "shop", "shop:crew:0001");
+  stop(h, "vehicle", "vehicle:crew:0001");
   assert.equal((await recordOperatingJobAssignment(h.env, command())).kind, "created");
+});
+
+test("0159's stop rule is the one 0158 holds a Safety attestation to, carried unchanged", () => {
+  const body = (sql: string, open: string) => {
+    const at = sql.indexOf(open);
+    assert.ok(at >= 0, open);
+    return sql.slice(at + open.length, sql.indexOf("\n    );\n", at) + 1);
+  };
+  const attestation = body(
+    triggerText(read("0158_production_gate_attestations.sql"), "production_gate_clearances_validate_insert"),
+    [
+      "  SELECT RAISE(ABORT, 'production_gate_safety_stop_active')",
+      "  WHERE NEW.basis = 'person_attestation'",
+      "    AND NEW.gate = 'Safety'",
+      "    AND (\n",
+    ].join("\n"),
+  );
+  const schedule = body(
+    triggerText(read("0159_production_gate_crew_policy.sql"), "operating_job_assignments_gate_evidence_guard"),
+    "  SELECT RAISE(ABORT, 'operating_job_assignment_stop_active')\n  WHERE (\n",
+  );
+  assert.equal(schedule, attestation);
+  assert.match(schedule, /scope_type = 'tenant'/);
+  assert.match(schedule, /work_package_stop_releases/);
 });
 
 test("a Weather gate left ready after its window ended no longer schedules, read on D1's clock", async () => {

@@ -6,13 +6,14 @@
 // `operating_job_assignments_gate_evidence_guard` is read here first, so the route answers each
 // refusal by name:
 //   * the QA seed owner never schedules, because a schedule clears Crew;
-//   * no active stop applies to the job;
+//   * no active stop applies to the job, read as a Safety attestation reads it (0158);
 //   * Deposit does not stand on a contract with no deposit that a later contract of the job with
 //     other terms has superseded;
 //   * Weather stands on a person's attestation whose window has not ended and holds the work;
 //   * no active member of the crew shares a login coordinate with the person whose attestation
 //     Materials, Safety, Access or Weather stands on.
-// The time rules read the real clock, as D1 reads its own; the caller's `now` only stamps rows.
+// The time rules read the real clock, as D1 reads its own. The caller's `now` stamps only the
+// assignment row; the Crew entries, like every ledger entry, take D1's clock.
 //
 // Crew is not a person's call and has no waiver: the schedule binds it by policy. The statements
 // returned here are appended in the same D1 batch as the assignment, before it, so 0098's six-gate
@@ -26,6 +27,7 @@
 
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { safetyStopActive } from "./production-job-stops.ts";
 
 export const CREW_GATE_POLICY_VERSION = "ironwrap.crew-gate.v1";
 /** D1's clock, in the form `Date.toISOString` writes: the policy's own rows take D1's time. */
@@ -99,51 +101,6 @@ async function gatesInForce(env: AppEnv, tenantId: string, roofJobId: string) {
         AND gate.gate IN ('Deposit', 'Materials', 'Safety', 'Access', 'Weather', 'Crew')`,
   ).bind(tenantId, roofJobId).all<GateInForce>();
   return new Map((rows.results ?? []).map((row) => [row.gate, row]));
-}
-
-/** An active stop that applies to the job, or a crew stop of one of its Work Packages. */
-async function stopActive(env: AppEnv, tenantId: string, roofJobId: string): Promise<boolean> {
-  // PROVISIONAL until A3's final stop predicate lands.
-  const row = await env.DB.prepare(
-    `SELECT 1 AS found
-      WHERE EXISTS (
-        SELECT 1
-          FROM safety_occurrences occurrence
-         WHERE occurrence.tenant_id = ?1
-           AND occurrence.stop_active = 1
-           AND (
-             occurrence.scope_type = 'tenant'
-             OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = ?2)
-             OR (occurrence.scope_type = 'work_package' AND (
-               EXISTS (
-                 SELECT 1 FROM work_packages package
-                  WHERE package.tenant_id = occurrence.tenant_id
-                    AND package.work_package_id = occurrence.scope_id
-                    AND package.job_id = ?2
-               )
-               OR NOT EXISTS (
-                 SELECT 1 FROM work_packages package
-                  WHERE package.tenant_id = occurrence.tenant_id
-                    AND package.work_package_id = occurrence.scope_id
-               )
-             ))
-           )
-      )
-      OR EXISTS (
-        SELECT 1
-          FROM work_packages package
-         WHERE package.tenant_id = ?1
-           AND package.job_id = ?2
-           AND package.status = 'Blocked'
-           AND NOT EXISTS (
-             SELECT 1 FROM work_packages later
-              WHERE later.tenant_id = package.tenant_id
-                AND later.work_package_id = package.work_package_id
-                AND later.version > package.version
-           )
-      )`,
-  ).bind(tenantId, roofJobId).first();
-  return row !== null;
 }
 
 /**
@@ -376,7 +333,7 @@ export async function firmStartGateEvidence(
   if (actor?.created_by === QA_SEED_OWNER_CREATED_BY) {
     return refused("operating_job_assignment_seed_identity_refused");
   }
-  if (await stopActive(env, input.tenantId, input.roofJobId)) {
+  if (await safetyStopActive(env, input.tenantId, input.roofJobId)) {
     return refused("operating_job_assignment_stop_active");
   }
   if (await depositContractSuperseded(env, input.tenantId, gates.get("Deposit")!)) {

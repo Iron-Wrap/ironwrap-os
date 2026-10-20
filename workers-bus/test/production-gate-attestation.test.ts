@@ -31,6 +31,7 @@ import {
 import {
   parseProductionGateReversal,
   PRODUCTION_GATE_SAFETY_PERMISSION,
+  SITE_SAFETY_AUTHORITY_SCOPE,
 } from "../src/production-gate-clearance.ts";
 import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
@@ -323,7 +324,7 @@ function insertCompetency(
     person_user: personUser,
     organization: null,
     authority_kind: "Worker Competency",
-    authority_scope: "Site hazard assessment and fall protection",
+    authority_scope: SITE_SAFETY_AUTHORITY_SCOPE,
     scope_type: "Tenant",
     scope_ref: TENANT,
     roof_job: null,
@@ -365,12 +366,12 @@ function insertCompetency(
 function insertCapture(
   db: DatabaseSync,
   evidenceId: string,
-  options: { jobId?: string; status?: "verified" | "r2_stored" } = {},
+  options: { jobId?: string; status?: "verified" | "r2_stored"; capturedAt?: string } = {},
 ): string {
   const deviceActionId = `capture-${evidenceId.slice(4)}`;
   const status = options.status ?? "verified";
   const jobId = options.jobId ?? JOB;
-  const capturedAt = at(-2 * HOUR);
+  const capturedAt = options.capturedAt ?? at(-2 * HOUR);
   db.prepare(
     `INSERT INTO field_actions (
        device_action_id, tenant_id, user_id, job_id, assignment_id, action_kind, payload_hash,
@@ -389,7 +390,7 @@ function insertCapture(
     status === "verified" ? '{"status":"verified"}' : null, capturedAt, capturedAt,
     status === "verified" ? capturedAt : null, `wp:attest:${jobId}`, `step:${evidenceId.slice(-8)}`,
     jobId, jobId,
-    at(-2 * HOUR - 60_000), capturedAt,
+    new Date(Date.parse(capturedAt) - 60_000).toISOString(), capturedAt,
   );
   const checksum = sha(`media:${evidenceId}`);
   db.prepare(
@@ -436,15 +437,171 @@ function insertMaterialException(db: DatabaseSync, status: "open" | "contained" 
   ).run(`exception.attest.${fixtureCounter}`, TENANT, status, JOB, at(-HOUR), at(-HOUR), status === "resolved" ? at(-HOUR) : null);
 }
 
-function insertSafetyStop(db: DatabaseSync, jobId = JOB): void {
+/** One safety stop, active on this job unless a test names another scope or a released one. */
+function insertSafetyStop(
+  db: DatabaseSync,
+  scope: { type?: string; id?: string; active?: 0 | 1 } = {},
+): void {
   fixtureCounter += 1;
+  const active = scope.active ?? 1;
   db.prepare(
     `INSERT INTO safety_occurrences
-       (occurrence_id, tenant_id, occurrence_kind, severity, scope_type, scope_id,
-        reported_by_user_id, reported_at, summary, report_fingerprint_sha256, created_at,
-        updated_at)
-     VALUES (?, ?, 'hazard', 'high', 'roof_job', ?, ?, ?, 'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
-  ).run(`occurrence.attest.${fixtureCounter}`, TENANT, jobId, USERS.field.id, at(-HOUR), sha(`stop:${fixtureCounter}`), at(-HOUR), at(-HOUR));
+       (occurrence_id, tenant_id, occurrence_kind, severity, state, stop_active, scope_type,
+        scope_id, reported_by_user_id, reported_at, summary, report_fingerprint_sha256,
+        created_at, updated_at)
+     VALUES (?, ?, 'hazard', 'high', ?, ?, ?, ?, ?, ?,
+             'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
+  ).run(
+    `occurrence.attest.${fixtureCounter}`, TENANT, active ? "reported" : "controlled", active,
+    scope.type ?? "roof_job", scope.id ?? JOB, USERS.field.id, at(-HOUR), sha(`stop:${fixtureCounter}`),
+    at(-HOUR), at(-HOUR),
+  );
+}
+
+/** One version of a Work Package of a job, its definition mirroring its columns as 0096 requires. */
+function workPackageFields(workPackageId: string, jobId: string, version: number, issuedAt: string) {
+  return {
+    work_package_id: workPackageId,
+    tenant_id: TENANT,
+    version,
+    job_id: jobId,
+    assignment_id: `assignment:${workPackageId}`,
+    work_object_type: "Roof Job",
+    work_object_id: jobId,
+    physical_context_type: "Roof Site",
+    physical_context_id: jobId,
+    assignment_authority_user: null,
+    assignment_authority_role: null,
+    title: "Synthetic tear-off",
+    objective: "Tear off the synthetic roof.",
+    boundaries: "This synthetic roof only.",
+    prerequisites: "The scheduling gates are ready.",
+    expected_result: "The deck is exposed.",
+    stop_conditions: "Stop on any hazard.",
+    make_safe_procedure: "Cover the open deck.",
+    issued_at: issuedAt,
+    expires_at: at(7 * DAY),
+    released_at: issuedAt,
+    release_attempt_id: `attempt:${workPackageId}:${version}`,
+    supersedes_id: null as string | null,
+    correction_reason: null as string | null,
+  };
+}
+
+function insertWorkPackageRow(
+  db: DatabaseSync,
+  fields: ReturnType<typeof workPackageFields>,
+  definition: Record<string, unknown> = {},
+): void {
+  const row: Record<string, unknown> = {
+    ...fields,
+    status: "Released",
+    definition_json: JSON.stringify({
+      ...fields,
+      assigned_workers: [{ sequence: 1, worker_user: USERS.field.id, worker_role: "Installer", required: true }],
+      ...definition,
+    }),
+    created_at: fields.issued_at,
+    updated_at: fields.issued_at,
+  };
+  const columns = Object.keys(row);
+  db.prepare(
+    `INSERT INTO work_packages (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(columns.map((column) => row[column]) as never[]));
+}
+
+/** One released Work Package of a job, the row a work-package-scoped stop names. */
+function insertWorkPackage(db: DatabaseSync, workPackageId: string, jobId: string): void {
+  insertWorkPackageRow(db, workPackageFields(workPackageId, jobId, 1, at(-DAY)));
+}
+
+/**
+ * Office reissue of version 1 as version 2 (0096): version 1 of the package is now Superseded. The
+ * replacement may carry another package id, as 0096 admits, and then every row of the prior id is
+ * Superseded.
+ */
+function supersedeWorkPackage(
+  db: DatabaseSync,
+  workPackageId: string,
+  jobId: string,
+  replacementId = workPackageId,
+): void {
+  const issuedAt = at(-HOUR);
+  const reason = "Synthetic correction for repository proof only.";
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `INSERT INTO work_package_supersessions
+         (supersession_id, tenant_id, device_action_id, command_sha256, prior_work_package_id,
+          prior_work_package_version, replacement_work_package_id, replacement_work_package_version,
+          job_id, assignment_id, work_object_type, work_object_id, physical_context_type,
+          physical_context_id, actor_user_id, actor_role, correction_reason, manifest_key,
+          occurred_at, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?, 2, ?, ?, 'Roof Job', ?, 'Roof Site', ?, ?, 'IronWrap Owner', ?, ?, ?, ?)`,
+    ).run(
+      `supersession:${workPackageId}`, TENANT, `supersede-${sha(workPackageId).slice(0, 24)}`,
+      sha(`supersede:${workPackageId}`), workPackageId, replacementId, jobId, `assignment:${workPackageId}`,
+      jobId, jobId, USERS.owner.id, reason, `work-packages/office-actions/${TENANT}/supersede.json`,
+      issuedAt, issuedAt,
+    );
+    insertWorkPackageRow(
+      db,
+      {
+        ...workPackageFields(replacementId, jobId, 2, issuedAt),
+        assignment_id: `assignment:${workPackageId}`,
+        supersedes_id: workPackageId,
+        correction_reason: reason,
+      },
+      { supersedes_version: 1, issued_by_user: USERS.owner.id, issued_by_role: "IronWrap Owner" },
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/**
+ * The assigned field worker's stop_work on version 1 of a package (0094, 0097): the version is
+ * Blocked until a release (0145) lifts it.
+ */
+function insertCrewStop(db: DatabaseSync, workPackageId: string, jobId: string): void {
+  const occurredAt = at(-HOUR);
+  db.prepare(
+    `INSERT INTO work_package_events
+       (event_id, tenant_id, work_package_id, work_package_version, job_id, assignment_id,
+        work_object_type, work_object_id, physical_context_type, physical_context_id,
+        release_attempt_id, event_kind, actor_user_id, actor_role, device_action_id, occurred_at,
+        manifest_key, payload_json, created_at)
+     VALUES (?, ?, ?, 1, ?, ?, 'Roof Job', ?, 'Roof Site', ?, ?, 'stop_work', ?,
+             'Installer', ?, ?, ?, '{}', ?)`,
+  ).run(
+    `wpe_stop_${sha(workPackageId).slice(0, 24)}`, TENANT, workPackageId, jobId, `assignment:${workPackageId}`,
+    jobId, jobId, `attempt:${workPackageId}:1`, USERS.field.id, `stop-${sha(workPackageId).slice(0, 24)}`,
+    occurredAt, `work-packages/field-actions/${TENANT}/stop.json`, occurredAt,
+  );
+}
+
+/** The owner's release of that crew stop (0145, 0152), citing a capture taken after the stop. */
+function releaseCrewStop(db: DatabaseSync, workPackageId: string, jobId: string): void {
+  const evidenceId = `evi_${sha(`release:${workPackageId}`).slice(0, 32)}`;
+  const checksum = insertCapture(db, evidenceId, { jobId, capturedAt: at(-30 * 60_000) });
+  db.prepare(
+    `INSERT INTO work_package_stop_releases
+       (release_id, tenant_id, device_action_id, request_sha256, work_package_id,
+        work_package_version, job_id, stop_event_id, stop_device_action_id, stop_actor_user_id,
+        stop_reporter_user_id, restored_status, released_by_user_id, released_by_role,
+        independence_json, evidence_refs_json, reason, manifest_key, created_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, NULL, 'Released', ?, 'owner', ?, ?, ?, ?, ?)`,
+  ).run(
+    `wsr_${sha(`release-id:${workPackageId}`).slice(0, 32)}`, TENANT, `release-${sha(workPackageId).slice(0, 24)}`,
+    sha(`release-request:${workPackageId}`), workPackageId, jobId, `wpe_stop_${sha(workPackageId).slice(0, 24)}`,
+    `stop-${sha(workPackageId).slice(0, 24)}`, USERS.field.id, USERS.owner.id,
+    JSON.stringify({ released_by_is_stop_actor: false, released_by_is_stop_reporter: false, released_in_person_session: true }),
+    JSON.stringify([{ ref: `field-evidence://${evidenceId}`, sha256: checksum }]),
+    "Synthetic release after the anchor was replaced, for repository proof only.",
+    `work-packages/stop-releases/${TENANT}/release.json`, at(-10 * 60_000),
+  );
 }
 
 /** Each gate's attestation as a person sends it, built fresh so its times follow the clock. */
@@ -463,6 +620,7 @@ const SENT = {
   }),
   Safety: () => ({
     hazard_assessment_ref: "FLHA-2026-0042",
+    permit: { answer: "needed_and_held", number: "building permit 4417" },
     fall_protection: { plan_ref: "FPP#42" },
     assessed_at: at(-HOUR),
   }),
@@ -561,6 +719,25 @@ test("a person attests Materials, Access, Weather and Safety; each entry readies
   );
 });
 
+test("a person's entry takes D1's clock, as the policy's entries do, not the Worker's", async (t) => {
+  const h = setup();
+  const production = await person(h, USERS.production.id);
+  const body = attest("Materials");
+  // The Worker's clock runs 30 minutes ahead of D1's for this one request.
+  const realNow = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: realNow + 30 * 60_000 });
+  let result: Awaited<ReturnType<typeof call>>;
+  try {
+    result = await call(h, production, "POST", CLEARANCE("Materials"), body);
+  } finally {
+    t.mock.timers.reset();
+  }
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const stored = h.sqlite.prepare("SELECT created_at FROM production_gate_clearances").get() as { created_at: string };
+  assert.ok(Math.abs(Date.parse(stored.created_at) - realNow) < 60_000, stored.created_at);
+  assert.equal(result.body.entry.created_at, stored.created_at);
+});
+
 test("an attestation is idempotent, version-checked and refused on a gate that is not blocked", async () => {
   const h = setup();
   const production = await person(h, USERS.production.id);
@@ -652,6 +829,11 @@ test("Safety needs the attester's current competency and no active stop on the j
   insertCompetency(h.sqlite, USERS.production.id, { authority_expires_at: day(-1) });
   insertCompetency(h.sqlite, USERS.production.id, { roof_job: OTHER_JOB, scope_type: "Roof Job", scope_ref: OTHER_JOB });
   insertCompetency(h.sqlite, USERS.production.id, { verification_state: "unavailable", authority_verification_method: null });
+  // A current competency in another field, or with no scope at all, is not one in site safety.
+  insertCompetency(h.sqlite, USERS.production.id, { authority_scope: "roofing-installation" });
+  insertCompetency(h.sqlite, USERS.production.id, { authority_scope: null });
+  insertCompetency(h.sqlite, USERS.production.id, { authority_scope: "" });
+  insertCompetency(h.sqlite, USERS.production.id, { authority_scope: "Site Safety" });
   insertCompetency(h.sqlite, USERS.owner.id);
   const superseded = insertCompetency(h.sqlite, USERS.production.id);
   insertCompetency(h.sqlite, USERS.production.id, {
@@ -669,7 +851,7 @@ test("Safety needs the attester's current competency and no active stop on the j
   const h2 = setup();
   const production2 = await person(h2, USERS.production.id);
   const current2 = insertCompetency(h2.sqlite, USERS.production.id, { roof_job: JOB, scope_type: "Roof Job", scope_ref: JOB });
-  insertSafetyStop(h2.sqlite, OTHER_JOB);
+  insertSafetyStop(h2.sqlite, { id: OTHER_JOB });
   const cleared = await call(h2, production2, "POST", CLEARANCE("Safety"), attest("Safety", 1, {
     attestation: { ...SENT.Safety(), fall_protection: { no_exposure_at_3m: true } },
   }));
@@ -684,6 +866,235 @@ test("Safety needs the attester's current competency and no active stop on the j
     reason: "Nobody may waive the safety gate, not even the owner.",
   });
   assert.deepEqual([waiver.status, waiver.body.error], [409, "production_gate_not_waivable"]);
+});
+
+test("Safety's permit is held with its number or not needed; unknown is refused by name, on the route and in D1", async () => {
+  const withPermit = (permit: unknown) => ({ ...SENT.Safety(), permit });
+  for (const [label, permit, refusal] of [
+    ["held with its number", { answer: "needed_and_held", number: "building permit 4417" }, null],
+    ["not needed", { answer: "not_needed" }, null],
+    ["held without a number", { answer: "needed_and_held" }, [400, "production_gate_attestation_invalid"]],
+    ["unknown", { answer: "unknown" }, [409, "production_gate_safety_permit_unknown"]],
+    ["no permit answer", undefined, [400, "production_gate_attestation_invalid"]],
+  ] as const) {
+    // Through a person's session.
+    const h = setup();
+    const production = await person(h, USERS.production.id);
+    insertCompetency(h.sqlite, USERS.production.id);
+    const routed = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety", 1, {
+      attestation: withPermit(permit),
+    }));
+    if (refusal) {
+      assert.deepEqual([routed.status, routed.body.error], refusal, label);
+      assert.deepEqual({ state: gateRow(h.sqlite, "Safety").state, entries: ledgerRows(h.sqlite).length }, { state: "blocked", entries: 0 }, label);
+    } else {
+      assert.equal(routed.status, 200, `${label}: ${JSON.stringify(routed.body)}`);
+      assert.deepEqual(routed.body.entry.attestation.permit, permit, label);
+      assert.equal(gateRow(h.sqlite, "Safety").state, "ready", label);
+    }
+    // Straight at D1, as a writer that skipped the route would.
+    const { sqlite: db } = setup();
+    const competency = insertCompetency(db, USERS.production.id);
+    const write = () => append(db, { gate: "Safety", attestation_json: JSON.stringify({ ...withPermit(permit), competency }) });
+    if (refusal) {
+      refused(write, refusal[1]);
+      assert.equal(gateRow(db, "Safety").state, "blocked", label);
+    } else {
+      write();
+      assert.equal(gateRow(db, "Safety").state, "ready", label);
+    }
+  }
+});
+
+/**
+ * Production holds a current `site_safety` competency and attests Safety twice: through the route,
+ * and straight at D1 as a writer that skipped the route would. Both are refused by the stop, and
+ * the gate stays blocked.
+ */
+async function assertSafetyHeldByStop(h: Harness): Promise<void> {
+  const production = await person(h, USERS.production.id);
+  const competency = insertCompetency(h.sqlite, USERS.production.id);
+  const route = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+  assert.deepEqual([route.status, route.body.error], [409, "production_gate_safety_stop_active"]);
+  refused(
+    () => append(h.sqlite, { gate: "Safety", attestation_json: safetyStored(competency) }),
+    "production_gate_safety_stop_active",
+  );
+  assert.deepEqual({ state: gateRow(h.sqlite, "Safety").state, entries: ledgerRows(h.sqlite).length }, { state: "blocked", entries: 0 });
+}
+
+test("an active stop on the job holds Safety, on the route and in D1", async () => {
+  const h = setup();
+  insertSafetyStop(h.sqlite, { type: "roof_job", id: JOB });
+  await assertSafetyHeldByStop(h);
+});
+
+test("a tenant stop holds Safety, on the route and in D1", async () => {
+  const h = setup();
+  insertSafetyStop(h.sqlite, { type: "tenant", id: TENANT });
+  await assertSafetyHeldByStop(h);
+});
+
+test("a work_package stop on one of the job's packages holds Safety, Superseded included, on the route and in D1", async () => {
+  const h = setup();
+  insertWorkPackage(h.sqlite, "wp:attest:tear-off", JOB);
+  insertSafetyStop(h.sqlite, { type: "work_package", id: "wp:attest:tear-off" });
+  await assertSafetyHeldByStop(h);
+  // A stop on a package that was reissued under another id still names this job's package, though
+  // its only row is Superseded.
+  const superseded = setup();
+  insertWorkPackage(superseded.sqlite, "wp:attest:reissued", JOB);
+  supersedeWorkPackage(superseded.sqlite, "wp:attest:reissued", JOB, "wp:attest:reissued-2");
+  assert.deepEqual(
+    superseded.sqlite.prepare("SELECT version, status FROM work_packages WHERE work_package_id = ?")
+      .all("wp:attest:reissued").map((row) => ({ ...row })),
+    [{ version: 1, status: "Superseded" }],
+  );
+  insertSafetyStop(superseded.sqlite, { type: "work_package", id: "wp:attest:reissued" });
+  await assertSafetyHeldByStop(superseded);
+});
+
+test("a crew stop_work that no release has lifted holds Safety, on the route and in D1", async () => {
+  const h = setup();
+  insertWorkPackage(h.sqlite, "wp:attest:stopped", JOB);
+  insertCrewStop(h.sqlite, "wp:attest:stopped", JOB);
+  assert.equal(
+    (h.sqlite.prepare("SELECT status FROM work_packages WHERE work_package_id = ?")
+      .get("wp:attest:stopped") as { status: string }).status,
+    "Blocked",
+  );
+  // No safety occurrence exists: the crew's own stop is the stop.
+  assert.equal((h.sqlite.prepare("SELECT COUNT(*) AS n FROM safety_occurrences").get() as { n: number }).n, 0);
+  await assertSafetyHeldByStop(h);
+});
+
+/**
+ * A stop of a scope type 0047's CHECK does not admit today, as a later migration might add one: the
+ * CHECK is lifted for this one insert, so the gate rule meets a type it does not know.
+ */
+function insertUnknownScopeStop(db: DatabaseSync): void {
+  db.exec("PRAGMA ignore_check_constraints = ON");
+  try {
+    insertSafetyStop(db, { type: "crane", id: "crane:attest:0001" });
+  } finally {
+    db.exec("PRAGMA ignore_check_constraints = OFF");
+  }
+}
+
+test("an unresolvable stop scope holds Safety, on the route and in D1", async () => {
+  // A work_package stop naming a package this tenant does not have maps to no job: it may be this
+  // job's, so it holds.
+  const h = setup();
+  insertSafetyStop(h.sqlite, { type: "work_package", id: "wp:attest:unknown" });
+  await assertSafetyHeldByStop(h);
+  // A scope type the rule does not know may cover this job, so it holds too.
+  const unknownType = setup();
+  insertUnknownScopeStop(unknownType.sqlite);
+  assert.equal(
+    (unknownType.sqlite.prepare("SELECT scope_type FROM safety_occurrences").get() as { scope_type: string }).scope_type,
+    "crane",
+  );
+  await assertSafetyHeldByStop(unknownType);
+});
+
+test("another job's stop, a shop or vehicle stop, or a lifted stop leaves Safety open on the route and in D1", async () => {
+  const h = setup();
+  insertWorkPackage(h.sqlite, "wp:attest:other-job", OTHER_JOB);
+  insertCrewStop(h.sqlite, "wp:attest:other-job", OTHER_JOB);
+  // A crew stop on this job's package that a release has lifted: the version is Released again.
+  insertWorkPackage(h.sqlite, "wp:attest:released", JOB);
+  insertCrewStop(h.sqlite, "wp:attest:released", JOB);
+  releaseCrewStop(h.sqlite, "wp:attest:released", JOB);
+  assert.equal(
+    (h.sqlite.prepare("SELECT status FROM work_packages WHERE work_package_id = ?")
+      .get("wp:attest:released") as { status: string }).status,
+    "Released",
+  );
+  for (const scope of [
+    { type: "work_package", id: "wp:attest:other-job" },
+    { type: "roof_job", id: OTHER_JOB },
+    // A roof_job stop names its job by id: an id this tenant has no job for is not this job.
+    { type: "roof_job", id: "IW-ATTEST-0001" },
+    { type: "shop", id: "shop:attest:main" },
+    { type: "vehicle", id: "vehicle:attest:truck-1" },
+    { type: "roof_job", id: JOB, active: 0 as const },
+  ]) {
+    insertSafetyStop(h.sqlite, scope);
+  }
+  const production = await person(h, USERS.production.id);
+  const competency = insertCompetency(h.sqlite, USERS.production.id);
+  const routed = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+  assert.equal(routed.status, 200, JSON.stringify(routed.body));
+  // The same stops let a direct D1 attestation through as well, once the gate is blocked again.
+  append(h.sqlite, reversal("Safety", routed.body.entry.id, { actor_user_id: USERS.owner.id, actor_role: "owner" }));
+  append(h.sqlite, { gate: "Safety", attestation_json: safetyStored(competency) });
+  assert.equal(gateRow(h.sqlite, "Safety").state, "ready");
+});
+
+test("the route alone holds the site_safety scope, every stop and the permit answer, with D1's validate guard lifted", async () => {
+  // D1 answers each of these with the same code, so here its validate guard is dropped: only the
+  // route's own read can refuse, and a gap in it would let the attestation through.
+  for (const [label, prepare, refusal] of [
+    ["competency in another field", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id, { authority_scope: "roofing-installation" });
+    }, [403, "production_gate_competency_required"]],
+    ["competency with no scope", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id, { authority_scope: null });
+    }, [403, "production_gate_competency_required"]],
+    ["competency with an empty scope", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id, { authority_scope: "" });
+    }, [403, "production_gate_competency_required"]],
+    ["stop on the job", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertSafetyStop(db, { type: "roof_job", id: JOB });
+    }, [409, "production_gate_safety_stop_active"]],
+    ["stop on the tenant", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertSafetyStop(db, { type: "tenant", id: TENANT });
+    }, [409, "production_gate_safety_stop_active"]],
+    ["stop on a Superseded package of the job", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertWorkPackage(db, "wp:attest:reissued", JOB);
+      supersedeWorkPackage(db, "wp:attest:reissued", JOB, "wp:attest:reissued-2");
+      insertSafetyStop(db, { type: "work_package", id: "wp:attest:reissued" });
+    }, [409, "production_gate_safety_stop_active"]],
+    ["crew stop_work on a package of the job", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertWorkPackage(db, "wp:attest:stopped", JOB);
+      insertCrewStop(db, "wp:attest:stopped", JOB);
+    }, [409, "production_gate_safety_stop_active"]],
+    ["stop on an unknown package", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertSafetyStop(db, { type: "work_package", id: "wp:attest:unknown" });
+    }, [409, "production_gate_safety_stop_active"]],
+    ["stop of an unknown scope type", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertUnknownScopeStop(db);
+    }, [409, "production_gate_safety_stop_active"]],
+  ] as const) {
+    const h = setup();
+    h.sqlite.exec("DROP TRIGGER production_gate_clearances_validate_insert");
+    prepare(h.sqlite);
+    const production = await person(h, USERS.production.id);
+    const result = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+    assert.deepEqual([result.status, result.body.error], refusal, label);
+    assert.equal(gateRow(h.sqlite, "Safety").state, "blocked", label);
+  }
+  for (const [label, permit, refusal] of [
+    ["permit unknown", { answer: "unknown" }, [409, "production_gate_safety_permit_unknown"]],
+    ["permit held without a number", { answer: "needed_and_held" }, [400, "production_gate_attestation_invalid"]],
+    ["no permit answer", undefined, [400, "production_gate_attestation_invalid"]],
+  ] as const) {
+    const h = setup();
+    h.sqlite.exec("DROP TRIGGER production_gate_clearances_validate_insert");
+    insertCompetency(h.sqlite, USERS.production.id);
+    const production = await person(h, USERS.production.id);
+    const result = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety", 1, {
+      attestation: { ...SENT.Safety(), permit },
+    }));
+    assert.deepEqual([result.status, result.body.error], refusal, label);
+    assert.equal(gateRow(h.sqlite, "Safety").state, "blocked", label);
+  }
 });
 
 test("Materials is refused over an open or contained inventory exception", async () => {
@@ -856,7 +1267,7 @@ test("the office reads every gate with its entries and the request ids a waiver 
   const materials = read.body.gates.find((gate: { gate: string }) => gate.gate === "Materials");
   assert.deepEqual(materials.open_waiver_requests, [{
     request_id: materialsRequest!.clearance_id,
-    requested_by: USERS.production.id,
+    is_own_request: false,
     requested_by_role: "production",
     from_gate_version: 1,
     reason: "Production asks the owner to waive Materials for this job.",
@@ -911,6 +1322,14 @@ test("the office reads every gate with its entries and the request ids a waiver 
   const access = reopened.body.gates.find((gate: { gate: string }) => gate.gate === "Access");
   assert.deepEqual(access.open_waiver_requests.map((request: { request_id: string }) => request.request_id), [accessRequest!.clearance_id]);
 
+  // The requester reads the same request as their own.
+  const ownRead = await call(h, production, "GET", GATES());
+  const ownAccess = ownRead.body.gates.find((gate: { gate: string }) => gate.gate === "Access");
+  assert.deepEqual(
+    ownAccess.open_waiver_requests.map((request: Record<string, unknown>) => [request.request_id, request.is_own_request]),
+    [[accessRequest!.clearance_id, true]],
+  );
+  assert.ok(!JSON.stringify(ownRead.body).includes(USERS.production.id), "no user id in the office's read");
   // Office roles read it; others are refused. An agent may read gates, never move one.
   assert.equal((await call(h, await person(h, USERS.ops.id), "GET", GATES())).status, 200);
   assert.equal((await call(h, machine("owner"), "GET", GATES())).status, 200);
@@ -1035,6 +1454,32 @@ test("D1 holds each gate to its typed attestation with no free text but a short 
     { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { no_exposure_at_3m: false } }) },
     { gate: "Safety", attestation_json: safetyStored(named, { fall_protection: { plan_ref: "a plan in the truck" } }) },
     { gate: "Safety", attestation_json: safetyStored(named, { assessed_at: "2026-02-30T10:00:00.000Z" }) },
+    // The permit: exactly {answer} when not needed or unknown, {answer, number} when held, and the
+    // number a reference whose words single spaces join.
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: undefined }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: "not_needed" }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "held", number: "BP-4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "maybe" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "not_needed", number: "BP-4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "unknown", number: "BP-4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "not_needed", checked_by: "office" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: 4417 } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "building  permit 4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "building permit 4417 " } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: " building permit 4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "permit\n4417" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "permit (4417)" } }) },
+    { gate: "Safety", attestation_json: safetyStored(named, { permit: { answer: "needed_and_held", number: "P".repeat(81) } }) },
+    // A second answer would let the first, read by every check, hide the one a reader trusts.
+    {
+      gate: "Safety",
+      attestation_json: safetyStored(named).replace(
+        '"permit":{"answer":"needed_and_held","number":"building permit 4417"}',
+        '"permit":{"answer":"not_needed","answer":"unknown"}',
+      ),
+    },
     { gate: "Safety", attestation_json: safetyStored({ ...named, authority_version: "1" } as never) },
     { gate: "Safety", attestation_json: safetyStored({ ...named, issued_by: "x" } as never) },
   ]) {
@@ -1102,6 +1547,10 @@ test("D1 refuses Materials over an open or contained exception and Safety withou
   const otherJob = insertCompetency(db, USERS.production.id, { roof_job: OTHER_JOB, scope_type: "Roof Job", scope_ref: OTHER_JOB });
   const unverified = insertCompetency(db, USERS.production.id, { verification_state: "unavailable", authority_verification_method: null });
   const external = insertCompetency(db, USERS.production.id, { authority_verification_method: "Signed Issuer Record" });
+  const otherScope = insertCompetency(db, USERS.production.id, { authority_scope: "roofing-installation" });
+  const noScope = insertCompetency(db, USERS.production.id, { authority_scope: null });
+  const emptyScope = insertCompetency(db, USERS.production.id, { authority_scope: "" });
+  const nearScope = insertCompetency(db, USERS.production.id, { authority_scope: "site_safety " });
   const revoked = insertCompetency(db, USERS.production.id);
   insertCompetency(db, USERS.production.id, {
     authority_version: 2,
@@ -1120,7 +1569,7 @@ test("D1 refuses Materials over an open or contained exception and Safety withou
     authority_record_id: versionOne.authority_record_id,
     authority_version: 2,
   });
-  for (const competency of [owners, expired, future, otherJob, unverified, external, revoked, contradicted, versionOne]) {
+  for (const competency of [owners, expired, future, otherJob, unverified, external, otherScope, noScope, emptyScope, nearScope, revoked, contradicted, versionOne]) {
     refused(() => append(db, { gate: "Safety", attestation_json: safetyStored(competency) }), required);
   }
   const attested = append(db, { gate: "Safety", attestation_json: safetyStored(versionTwo) });
@@ -1199,15 +1648,20 @@ test("D1 reverses only the entry holding a gate's state, never a no-deposit cont
   assert.equal(gateRow(db, "Deposit").state, "complete");
 });
 
-test("0158 re-creates the validate guard with every 0155 line carried, in order", () => {
+test("the final validate guard carries every line of 0155 as the merged tree holds it, in order", () => {
   const read = (name: string) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
   const trigger = (sql: string): string => {
     const match = sql.match(/CREATE TRIGGER (?:IF NOT EXISTS )?production_gate_clearances_validate_insert\n[\s\S]*?\nEND;/);
     assert.ok(match, "validate trigger");
     return match[0];
   };
-  const lines = (sql: string) => sql.split("\n").map((line) => line.trim());
-  const recreated = lines(trigger(read("0158_production_gate_attestations.sql")));
+  // sqlite_master keeps a trigger's text without the closing semicolon the migration file has.
+  const lines = (sql: string) => sql.split("\n").map((line) => line.trim().replace(/^END;$/, "END"));
+  // The trigger the fully migrated database ends with, not a copy of it.
+  const { sqlite: migrated } = setup();
+  const recreated = lines(String((migrated.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'production_gate_clearances_validate_insert'",
+  ).get() as { sql: string }).sql));
   // The only 0155 lines 0158 widens, each with the form it takes there.
   const widened: Record<string, string> = {
     "OR NEW.reverses_id IS NOT NULL": "OR (NEW.reverses_id IS NOT NULL AND NEW.entry_kind != 'reverse')",
@@ -1224,7 +1678,7 @@ test("0158 re-creates the validate guard with every 0155 line carried, in order"
   for (const line of lines(trigger(read("0155_od01_deposit_policy.sql")))) {
     if (!line || line.startsWith("--") || line.startsWith("CREATE TRIGGER")) continue;
     const found = recreated.indexOf(widened[line] ?? line, at);
-    assert.ok(found >= 0, `0158 carries, in order: ${line}`);
+    assert.ok(found >= 0, `the final validate guard carries, in order: ${line}`);
     at = found + 1;
   }
 });
@@ -1259,7 +1713,15 @@ test("the validate trigger after every migration still holds A1's, A2's and A3's
     "NOT json_valid(NEW.evidence_refs_json)",
     "production_gate_material_exception_open",
     "production_gate_safety_stop_active",
+    "occurrence.scope_type = 'tenant'",
+    "FROM work_packages package",
+    "FROM work_package_events crew_stop",
+    "FROM work_package_stop_releases released",
     "production_gate_competency_required",
+    "competency.authority_scope = 'site_safety'",
+    "production_gate_safety_permit_unknown",
+    "'$.permit.answer'",
+    "'$.permit.number'",
     "production_gate_forecast_stale",
     "production_gate_weather_window_invalid",
     "production_gate_reversal_target_invalid",
@@ -1345,6 +1807,45 @@ test("an attestation body has exactly its keys, and times, notes and constraints
   assert.equal(noted("   ")?.note, null);
   assert.equal(parseEvidenceRefs(["field-evidence://evi_short"]), null);
   assert.deepEqual(parseEvidenceRefs(undefined), []);
+  // Safety's permit: held with a number of single-spaced words, not needed, or unknown; the route
+  // refuses an unknown answer by name after the shape is accepted.
+  const permitOf = (permit: unknown) => (parseProductionGateAttestation("Safety", {
+    basis: "person_attestation",
+    expected_gate_version: 1,
+    attestation: {
+      hazard_assessment_ref: "FLHA-1",
+      fall_protection: { no_exposure_at_3m: true },
+      assessed_at: new Date(now.getTime() - HOUR).toISOString(),
+      ...(permit === undefined ? {} : { permit }),
+    },
+  }, now)?.attestation as { permit?: unknown } | undefined)?.permit ?? null;
+  for (const permit of [
+    { answer: "needed_and_held", number: "building permit 4417" },
+    { answer: "needed_and_held", number: `B${" P".repeat(39)}1` },
+    { answer: "not_needed" },
+    { answer: "unknown" },
+  ]) {
+    assert.deepEqual(permitOf(permit), permit, JSON.stringify(permit));
+  }
+  for (const permit of [
+    undefined,
+    "needed_and_held",
+    { answer: "Needed_and_held", number: "BP-4417" },
+    { answer: "maybe" },
+    { answer: "needed_and_held" },
+    { answer: "needed_and_held", number: "" },
+    { answer: "needed_and_held", number: 4417 },
+    { answer: "needed_and_held", number: "building  permit" },
+    { answer: "needed_and_held", number: "building permit " },
+    { answer: "needed_and_held", number: " building permit" },
+    { answer: "needed_and_held", number: "building\tpermit" },
+    { answer: "needed_and_held", number: `B${" P".repeat(40)}` },
+    { answer: "not_needed", number: "BP-4417" },
+    { answer: "unknown", number: "BP-4417" },
+    { answer: "unknown", note: "nobody checked" },
+  ]) {
+    assert.equal(permitOf(permit), null, JSON.stringify(permit));
+  }
   const reversalBody = { expected_gate_version: 2, reverses_id: `pgc_${"a".repeat(40)}`, reason: "Supplier recalled the panels." };
   assert.deepEqual(parseProductionGateReversal(reversalBody), {
     expectedGateVersion: 2,

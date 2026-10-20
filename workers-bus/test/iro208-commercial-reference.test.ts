@@ -1646,8 +1646,8 @@ test("0116 backfills shipped acceptances into the native activation and deposit 
 });
 
 // Since 0155 the tenant's deposit policy refuses such terms by name where the quote is recorded,
-// so they never reach a customer; the acceptance trigger still aborts them as a backstop, proved
-// in deposit-policy.test.ts.
+// so they never reach a customer. The acceptance trigger still aborts the same values atomically
+// as the backstop, proved in customer-contract-acceptance.test.ts ("D1 keeps MD-13's 1-100 rule").
 test("a deposit outside 1-100 is refused by name at the quote, before anything reaches a customer", async () => {
   const cases: Array<[string, unknown]> = [["string", "25"], ["decimal", 25.5], ["range", 101], ["zero", 0]];
   for (const [label, depositPercent] of cases) {

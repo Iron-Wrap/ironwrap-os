@@ -196,11 +196,11 @@ export interface CommercialJobPhaseReadModel {
       acceptance_under_withdrawn_publication: Record<string, unknown> | null;
       deposit_derivation: Record<string, unknown> | null;
       /**
-       * `not_required_by_contract` once the deposit policy recorded that the accepted contract has
+       * `no_deposit_under_contract` once the deposit policy recorded that the accepted contract has
        * no deposit (OD-01, migration 0155): the Deposit gate is complete by `contract_no_deposit`.
-       * That reads "Not required by the contract", never done or paid. Null otherwise.
+       * That reads "No deposit under this contract", never done or paid. Null otherwise.
        */
-      deposit_requirement: "not_required_by_contract" | null;
+      deposit_requirement: "no_deposit_under_contract" | null;
     };
     production: {
       gates: Array<Record<string, unknown>>;
@@ -516,7 +516,7 @@ export async function readCommercialJobPhase(
           ? acceptanceProjection(withdrawnAcceptanceCandidates[0]!)
           : null,
         deposit_derivation: exactDeposit ? depositProjection(exactDeposit) : null,
-        deposit_requirement: depositNotRequired ? "not_required_by_contract" : null,
+        deposit_requirement: depositNotRequired ? "no_deposit_under_contract" : null,
       },
       production: {
         gates: gateRows.map(gateProjection),
@@ -664,7 +664,7 @@ function phaseStaleReasons(input: {
   // policy's Deposit record.
   else if (input.quoteHasNoDeposit) {
     if (input.acceptance && !input.depositNotRequired) {
-      reasons.push("commercial.deposit_not_required_unrecorded");
+      reasons.push("commercial.no_deposit_record_missing");
     }
   }
   else if (!input.deposit) reasons.push("commercial.deposit_derivation_missing");

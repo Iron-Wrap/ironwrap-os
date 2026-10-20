@@ -16,15 +16,21 @@
 --     live stock reservation of the job at its current version.
 --       - Materials is refused while an inventory exception of the job is open or contained.
 --       - Safety is the `production.gates.safety` set ("checks site safety"), carried today by owner
---         and production. It names the attester's current internal Worker Competency, verified, in
---         force today and not bound to another job, and it is refused during an active safety stop
---         on the job. Only a person ever clears Safety, and it is never waived.
+--         and production. Its proof answers the permit: `needed_and_held` with the permit number,
+--         or `not_needed`; `unknown` is well formed and refused by name. It names the attester's
+--         current internal Worker Competency whose
+--         `authority_scope` is exactly `site_safety`, the closed token this migration names for
+--         site safety, verified, in force today and not bound to another job. It is refused while
+--         a stop applies to the job: a safety stop on the tenant, the job or any of its Work
+--         Packages (Superseded included), a crew stop_work on one of them that no release has
+--         lifted, or a safety stop whose scope cannot be resolved. Only a person ever clears
+--         Safety, and it is never waived.
 --       - Weather names a work window of at most 14 days that has not ended and ends within 14 days
 --         of the forecast it rests on, which was observed at most 72 hours ago.
 --   * `reverse` / `person_reversal`: by an owner or production user, with a reason, of the entry
 --     that holds the gate's current state. The gate returns to `blocked` and nothing is deleted.
 -- 0158 re-creates the trigger 0155 re-creates, so it applies after 0155: D1 applies pending
--- migrations in name order, and qa and production receive both after 0156 and 0200-0204. Every time
+-- migrations in name order, and qa and production receive both after 0156 and 0200-0205. Every time
 -- rule reads D1's own clock, never the entry's `created_at`. 0153's replace guard is then re-created
 -- unchanged so that, firing newest first, a replayed key still reports itself before validation.
 -- Object counts are unchanged.
@@ -85,7 +91,7 @@ BEGIN
   WHERE NEW.actor_kind = 'policy'
     AND NOT (
       NEW.gate = 'Deposit'
-      AND NEW.policy_version = 'ironwrap.deposit-gate.v1'
+      AND NEW.policy_version IS 'ironwrap.deposit-gate.v1'
       AND NEW.actor_user_id IS NULL AND NEW.actor_role IS NULL
       AND NEW.requested_by IS NULL AND NEW.request_id IS NULL AND NEW.self_approval = 0
       AND NEW.reason IS NULL AND NEW.reason_redacted_at IS NULL AND NEW.attestation_json IS NULL
@@ -155,6 +161,7 @@ BEGIN
     );
 
   -- A person entry: an active user of this tenant holding the recorded role right now.
+  -- [0155] Scoped to person entries; a policy entry names no user.
   SELECT RAISE(ABORT, 'production_gate_clearance_actor_invalid')
   WHERE NEW.actor_kind = 'person' AND NOT EXISTS (
     SELECT 1
@@ -257,7 +264,7 @@ BEGIN
            OR (NEW.gate = 'Weather' AND field.key IN (
                'window_start', 'window_end', 'forecast_source', 'forecast_observed_at'))
            OR (NEW.gate = 'Safety' AND field.key IN (
-               'hazard_assessment_ref', 'fall_protection', 'assessed_at', 'competency'))
+               'hazard_assessment_ref', 'permit', 'fall_protection', 'assessed_at', 'competency'))
          )
       )
       OR EXISTS (
@@ -331,6 +338,25 @@ BEGIN
       OR (NEW.gate = 'Safety' AND (
         json_type(NEW.attestation_json, '$.hazard_assessment_ref') IS NOT 'text'
         OR json_type(NEW.attestation_json, '$.assessed_at') IS NOT 'text'
+        -- The permit answer: exactly {answer} when not needed or unknown, and exactly
+        -- {answer, number} when held, the number a reference whose words single spaces join.
+        OR json_type(NEW.attestation_json, '$.permit') IS NOT 'object'
+        OR json_type(NEW.attestation_json, '$.permit.answer') IS NOT 'text'
+        OR json_extract(NEW.attestation_json, '$.permit.answer') NOT IN (
+          'needed_and_held', 'not_needed', 'unknown'
+        )
+        OR (SELECT COUNT(*) FROM json_each(NEW.attestation_json, '$.permit'))
+          != CASE json_extract(NEW.attestation_json, '$.permit.answer')
+               WHEN 'needed_and_held' THEN 2 ELSE 1 END
+        OR (json_extract(NEW.attestation_json, '$.permit.answer') = 'needed_and_held' AND NOT (
+          json_type(NEW.attestation_json, '$.permit.number') IS 'text'
+          AND length(json_extract(NEW.attestation_json, '$.permit.number')) BETWEEN 1 AND 80
+          AND json_extract(NEW.attestation_json, '$.permit.number') GLOB '[A-Za-z0-9]*'
+          AND json_extract(NEW.attestation_json, '$.permit.number')
+            NOT GLOB '*[^A-Za-z0-9 ._:/#-]*'
+          AND json_extract(NEW.attestation_json, '$.permit.number') NOT GLOB '*  *'
+          AND json_extract(NEW.attestation_json, '$.permit.number') NOT GLOB '* '
+        ))
         OR json_type(NEW.attestation_json, '$.fall_protection') IS NOT 'object'
         OR (SELECT COUNT(*) FROM json_each(NEW.attestation_json, '$.fall_protection')) != 1
         OR NOT (
@@ -355,7 +381,10 @@ BEGIN
     );
 
   -- [0158] The evidence list is plain JSON as the Worker writes it. JSON5 would pass json_each below and
-  -- then fail every reader that parses the stored list.
+  -- then fail every reader that parses the stored list. This relies on one-argument json_valid
+  -- refusing JSON5 while json_each and json_type read it, as in SQLite 3.45 and later. D1 does not
+  -- let a query read sqlite_version(); wrangler 4.151.0's local D1 (workerd 1.20261012.1) behaves
+  -- so, and tools/d1-gate-ledger-probe.mjs checks it against that engine on every worker-contract run.
   SELECT RAISE(ABORT, 'production_gate_evidence_invalid')
   WHERE NEW.basis = 'person_attestation' AND NOT json_valid(NEW.evidence_refs_json);
 
@@ -436,23 +465,73 @@ BEGIN
          AND held.status IN ('open', 'contained')
     );
 
-  -- [0158] Safety is never attested during an active safety stop on the job, read as the job phase reads it.
+  -- [0158] An unknown permit answer is a well-formed Safety proof that never clears the gate. It has
+  -- its own code, so the person is asked to change the answer rather than the proof's shape.
+  SELECT RAISE(ABORT, 'production_gate_safety_permit_unknown')
+  WHERE NEW.basis = 'person_attestation'
+    AND NEW.gate = 'Safety'
+    AND json_extract(NEW.attestation_json, '$.permit.answer') = 'unknown';
+
+  -- [0158] Safety is never attested while an active stop applies to the job: a safety stop on the
+  -- whole tenant, on the job, or on any Work Package of the job in any status, Superseded included;
+  -- or a crew's stop_work on any Work Package of the job that no release has lifted (0145). A
+  -- safety stop whose scope cannot be resolved holds it too: a scope type this rule does not know,
+  -- or a Work Package that maps to no job. A stop on another job, on a shop or on a vehicle does not.
   SELECT RAISE(ABORT, 'production_gate_safety_stop_active')
   WHERE NEW.basis = 'person_attestation'
     AND NEW.gate = 'Safety'
-    AND EXISTS (
-      SELECT 1
-        FROM safety_occurrences occurrence
-       WHERE occurrence.tenant_id = NEW.tenant_id
-         AND occurrence.scope_type = 'roof_job'
-         AND occurrence.scope_id = NEW.roof_job_id
-         AND occurrence.stop_active = 1
+    AND (
+      EXISTS (
+        SELECT 1
+          FROM safety_occurrences occurrence
+         WHERE occurrence.tenant_id = NEW.tenant_id
+           AND occurrence.stop_active = 1
+           AND (
+             occurrence.scope_type = 'tenant'
+             OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = NEW.roof_job_id)
+             OR (occurrence.scope_type = 'work_package' AND (
+               occurrence.scope_id IN (
+                 SELECT package.work_package_id
+                   FROM work_packages package
+                  WHERE package.tenant_id = NEW.tenant_id
+                    AND package.job_id = NEW.roof_job_id
+               )
+               OR NOT EXISTS (
+                 SELECT 1
+                   FROM work_packages package
+                  WHERE package.tenant_id = occurrence.tenant_id
+                    AND package.work_package_id = occurrence.scope_id
+               )
+             ))
+             OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
+           )
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM work_package_events crew_stop
+         WHERE crew_stop.tenant_id = NEW.tenant_id
+           AND crew_stop.event_kind = 'stop_work'
+           AND crew_stop.work_package_id IN (
+             SELECT package.work_package_id
+               FROM work_packages package
+              WHERE package.tenant_id = NEW.tenant_id
+                AND package.job_id = NEW.roof_job_id
+           )
+           AND NOT EXISTS (
+             SELECT 1
+               FROM work_package_stop_releases released
+              WHERE released.tenant_id = crew_stop.tenant_id
+                AND released.stop_event_id = crew_stop.event_id
+           )
+      )
     );
 
-  -- [0158] Safety names the attester's current internal Worker Competency: the latest version of its
-  -- record, with no contradicting copy of that version, superseded by no other record, verified by
-  -- an internal assessment, not revoked, in force today and not bound to another job. Its person is
-  -- any login coordinate the attester carries.
+  -- [0158] Safety names the attester's current internal Worker Competency in site safety: the latest
+  -- version of its record, with no contradicting copy of that version, superseded by no other
+  -- record, verified by an internal assessment, not revoked, in force today and not bound to another
+  -- job. Its scope is exactly the closed token `site_safety`, the `authority_scope` this migration
+  -- names for "checks site safety"; no other text counts. Its person is any login coordinate the
+  -- attester carries.
   SELECT RAISE(ABORT, 'production_gate_competency_required')
   WHERE NEW.basis = 'person_attestation'
     AND NEW.gate = 'Safety'
@@ -474,6 +553,7 @@ BEGIN
          AND competency.subject_type = 'Person'
          AND competency.subject_role = 'Worker'
          AND competency.authority_kind = 'Worker Competency'
+         AND competency.authority_scope = 'site_safety'
          AND lower(trim(competency.person_user)) IN (
            lower(attester.user_id), attester.email_normalized, lower(trim(attester.frappe_user_id))
          )

@@ -24,8 +24,13 @@
 //       exactly `{basis, expected_gate_version, attestation, evidence_refs?}`, with the gate's
 //       typed attestation (production-gate-attestation.ts) and 0 to 10 evidence references that
 //       this route resolves and checksums. The attester is on no crew; Materials needs no open
-//       inventory exception, and Safety needs no active stop and the attester's current internal
-//       Worker Competency. The answer is the stored entry and the gate after it.
+//       inventory exception. Safety's permit answer is held with its number or not needed; an
+//       unknown answer is 409 `production_gate_safety_permit_unknown`. Safety needs the
+//       attester's current internal Worker Competency in
+//       site safety (`authority_scope` exactly `site_safety`) and no stop that applies to the
+//       job: a safety stop on the tenant, the job or any of its Work Packages, a crew stop_work on
+//       one of them that no release has lifted, or a safety stop whose scope cannot be resolved.
+//       The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
 //     the deciding set answers a waiver request on a job of their own runway. The requester never
@@ -36,7 +41,8 @@
 //     Nothing is deleted. A `contract_no_deposit` entry is reversed only by a superseding contract.
 //   GET /api/v1/production/jobs/{job}/gates
 //     The office's read: each scheduling gate with its state, version, ledger entries and open
-//     waiver requests, whose `request_id` is what a waiver decision answers.
+//     waiver requests, whose `request_id` is what a waiver decision answers and whose
+//     `is_own_request` says whether the reader made it.
 //
 // Every write is people-only: the CSRF token, then the person's own cookie session, then the
 // operation set of their live role. Agents, connectors, service tokens and the effect runtime
@@ -56,6 +62,7 @@ import {
   stockReservationId,
   weatherRefusal,
   type AttestableProductionGate,
+  type SafetyAttestation,
   type WeatherAttestation,
 } from "./production-gate-attestation.ts";
 import { ROLE_PERMISSIONS, type AppEnv, type AppRole, type AuthContext } from "./app-types.ts";
@@ -105,6 +112,12 @@ const CLEAR_PERMISSION = "production:clear_gate";
  * production). This line is the whole mapping on the Worker side; migration 0158 holds it in D1.
  */
 export const PRODUCTION_GATE_SAFETY_PERMISSION = CLEAR_PERMISSION;
+/**
+ * The closed `authority_scope` token of an internal Worker Competency in site safety, the competency
+ * "checks site safety" needs. `authority_scope` is otherwise free text, so only an exact match
+ * counts. Migration 0158 names the same token in D1.
+ */
+export const SITE_SAFETY_AUTHORITY_SCOPE = "site_safety";
 /**
  * The role that carries the set deciding a waiver: `money.approve` for Deposit and
  * `production.gates.waive` for Materials and Access. Migration 0153 holds the same mapping.
@@ -174,6 +187,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_attestation_invalid: 400,
   production_gate_evidence_invalid: 409,
   production_gate_material_exception_open: 409,
+  production_gate_safety_permit_unknown: 409,
   production_gate_safety_stop_active: 409,
   production_gate_competency_required: 403,
   production_gate_forecast_stale: 409,
@@ -578,13 +592,15 @@ async function appendEntry(
 ): Promise<{ row: LedgerRow; replayed: boolean }> {
   const { tenantId, gate, person, idempotency, requestSha256, entry } = input;
   try {
+    // created_at is D1's clock, as the policy's own entries take it (0155): one clock for the ledger.
     await env.DB.prepare(
       `INSERT INTO production_gate_clearances (
          clearance_id, tenant_id, gate_id, roof_job_id, gate, entry_kind, basis, to_state,
          from_gate_version, request_id, reverses_id, actor_kind, actor_user_id, actor_role,
          requested_by, self_approval, self_approval_basis, attestation_json, evidence_refs_json,
          reason, request_sha256, idempotency_key_hash, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'person', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'person', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
     ).bind(
       idempotency.clearanceId,
       tenantId,
@@ -607,7 +623,6 @@ async function appendEntry(
       entry.reason,
       requestSha256,
       idempotency.keyHash,
-      new Date().toISOString(),
     ).run();
   } catch (error) {
     const raced = await entryByKey(env, tenantId, idempotency.keyHash);
@@ -843,26 +858,64 @@ async function materialExceptionOpen(
   return row !== null;
 }
 
-/** An active safety stop on the job, read exactly as the job phase reads it. */
+/**
+ * A stop that applies to the job, as migration 0158 reads it: an active safety stop on the whole
+ * tenant, on the job, or on any Work Package of the job in any status, Superseded included; or a
+ * crew's stop_work on any Work Package of the job that no release has lifted (0145). An active
+ * safety stop whose scope cannot be resolved applies too: a scope type this rule does not know, or
+ * a Work Package that maps to no job. A stop on another job, a shop or a vehicle does not. The job
+ * phase's own read of active stops stays as it is: it reports job-scoped stops.
+ */
 async function safetyStopActive(
   env: AppEnv,
   tenantId: string,
   roofJobId: string,
 ): Promise<boolean> {
+  const jobPackages = `SELECT package.work_package_id FROM work_packages package
+               WHERE package.tenant_id = ? AND package.job_id = ?`;
   const row = await env.DB.prepare(
     `SELECT 1 AS found
-       FROM safety_occurrences
-      WHERE tenant_id = ? AND scope_type = 'roof_job' AND scope_id = ? AND stop_active = 1
-      LIMIT 1`,
-  ).bind(tenantId, roofJobId).first();
+       WHERE EXISTS (
+         SELECT 1
+           FROM safety_occurrences occurrence
+          WHERE occurrence.tenant_id = ?
+            AND occurrence.stop_active = 1
+            AND (
+              occurrence.scope_type = 'tenant'
+              OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = ?)
+              OR (occurrence.scope_type = 'work_package' AND (
+                occurrence.scope_id IN (${jobPackages})
+                OR NOT EXISTS (
+                  SELECT 1 FROM work_packages package
+                   WHERE package.tenant_id = occurrence.tenant_id
+                     AND package.work_package_id = occurrence.scope_id
+                )
+              ))
+              OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
+            )
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM work_package_events crew_stop
+          WHERE crew_stop.tenant_id = ?
+            AND crew_stop.event_kind = 'stop_work'
+            AND crew_stop.work_package_id IN (${jobPackages})
+            AND NOT EXISTS (
+              SELECT 1 FROM work_package_stop_releases released
+               WHERE released.tenant_id = crew_stop.tenant_id
+                 AND released.stop_event_id = crew_stop.event_id
+            )
+       )`,
+  ).bind(tenantId, roofJobId, tenantId, roofJobId, tenantId, tenantId, roofJobId).first();
   return row !== null;
 }
 
 /**
- * The person's current internal Worker Competency, as migration 0158 checks it: under any login
- * coordinate they carry, the latest version of its record with no contradicting copy, superseded
- * by no other record, verified by an internal assessment, not revoked, in force today and not
- * bound to another job. The most recently observed one is bound into the attestation.
+ * The person's current internal Worker Competency in site safety (`SITE_SAFETY_AUTHORITY_SCOPE`), as
+ * migration 0158 checks it: under any login coordinate they carry, the latest version of its
+ * record with no contradicting copy, superseded by no other record, verified by an internal
+ * assessment, not revoked, in force today and not bound to another job. The most recently
+ * observed one is bound into the attestation.
  */
 async function currentCompetency(
   env: AppEnv,
@@ -880,6 +933,7 @@ async function currentCompetency(
         AND competency.subject_type = 'Person'
         AND competency.subject_role = 'Worker'
         AND competency.authority_kind = 'Worker Competency'
+        AND competency.authority_scope = ?
         AND lower(trim(competency.person_user)) IN (${person.identities.map(() => "?").join(", ")})
         AND (competency.roof_job IS NULL OR competency.roof_job = ?)
         AND competency.verification_state = 'verified'
@@ -905,7 +959,7 @@ async function currentCompetency(
         )
       ORDER BY competency.observed_at DESC, competency.readback_id DESC
       LIMIT 1`,
-  ).bind(tenantId, ...person.identities, roofJobId, today, today).first<{
+  ).bind(tenantId, SITE_SAFETY_AUTHORITY_SCOPE, ...person.identities, roofJobId, today, today).first<{
     readback_id: string;
     authority_record_id: string;
     authority_version: number;
@@ -1037,6 +1091,10 @@ async function attestGate(
     if (weather) throw refusal(weather, 409);
   }
   if (gate === "Safety") {
+    // A well-formed proof whose permit nobody has checked: the person changes the permit answer.
+    if ((input.attestation as SafetyAttestation).permit.answer === "unknown") {
+      throw refusal("production_gate_safety_permit_unknown", 409);
+    }
     if (await safetyStopActive(env, tenantId, roofJobId)) {
       throw refusal("production_gate_safety_stop_active", 409);
     }
@@ -1083,7 +1141,29 @@ async function depositSettlementEntry(
   } catch {
     throw refusal("accounting_read_unavailable", 502);
   }
-  const intent = settledDepositIntent(intents);
+  // The deposit invoice of the contract in force (0155): the one derived from the job's latest
+  // accepted binding. An earlier contract's invoice never settles a later contract's deposit, so
+  // the job's other deposit invoices count only when that binding has no derivation row at all.
+  // Once a superseding contract re-blocked Deposit, D1 accepts only that one as well.
+  let current: { derivation_id: string | null; intent_id: string | null } | null;
+  try {
+    current = await env.DB.prepare(
+      `SELECT derivation.derivation_id, derivation.intent_id
+         FROM commercial_acceptance_bindings binding
+         LEFT JOIN commercial_deposit_derivations derivation
+           ON derivation.tenant_id = binding.tenant_id
+          AND derivation.acceptance_binding_id = binding.acceptance_binding_id
+        WHERE binding.tenant_id = ? AND binding.roof_job_id = ?
+        ORDER BY binding.accepted_at DESC, binding.acceptance_binding_id DESC
+        LIMIT 1`,
+    ).bind(tenantId, input.roofJobId).first<NonNullable<typeof current>>();
+  } catch {
+    throw refusal("accounting_read_unavailable", 502);
+  }
+  const derivation = current?.derivation_id ? current : null;
+  const intent = settledDepositIntent(
+    derivation ? intents.filter((row) => row.intent_id === derivation.intent_id) : intents,
+  );
   const observedAt = intent ? settlementObservedAt(intent) : null;
   if (!intent || !observedAt) throw refusal("deposit_settlement_not_observed", 409);
   const receipt = depositSettlementReceipt({
@@ -1334,7 +1414,7 @@ export async function handleProductionGateReversal(
 }
 
 /** One gate as the office reads it, with its newest entries and its open waiver requests. */
-async function gateRead(env: AppEnv, tenantId: string, gate: GateRow) {
+async function gateRead(env: AppEnv, tenantId: string, readerUserId: string, gate: GateRow) {
   const [entries, requests] = await Promise.all([
     env.DB.prepare(
       `SELECT ${LEDGER_COLUMNS}
@@ -1373,7 +1453,9 @@ async function gateRead(env: AppEnv, tenantId: string, gate: GateRow) {
       ? []
       : requestRows.slice(0, MAX_GATE_READ_ROWS).reverse().map((row) => ({
         request_id: row.clearance_id,
-        requested_by: row.actor_user_id,
+        // Whether the reader made it: the owner may decide another person's request, and their own
+        // only as the only holder. Who else asked stays out of the office's read.
+        is_own_request: row.actor_user_id === readerUserId,
         requested_by_role: row.actor_role,
         from_gate_version: Number(row.from_gate_version),
         reason: row.reason,
@@ -1410,7 +1492,9 @@ export async function handleProductionGatesRead(
     if (gates.length === 0) return json({ error: "production_gate_job_not_found" }, 404);
     return json({
       roof_job: roofJobId,
-      gates: await Promise.all(gates.map((gate) => gateRead(env, tenantId, gate))),
+      gates: await Promise.all(
+        gates.map((gate) => gateRead(env, tenantId, auth.session.user_id, gate)),
+      ),
     });
   } catch {
     return json({ error: "production_gates_unavailable" }, 502);

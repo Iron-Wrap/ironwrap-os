@@ -421,6 +421,52 @@ test.describe("Field Companion PWA acceptance", () => {
     expect(bootstrapRequests).toEqual([{ deviceProof }]);
   });
 
+  test("opens a paired reload straight on the run sheet, with no sign-in check first", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    const shownText = await watchShownText(page, ["Checking your sign-in", "Today's work"]);
+    // The intake panel is office work; a crew phone's run sheet must not wait on its code.
+    // (The service worker's precache downloads every chunk later; those requests are its own.)
+    const intakeChunkRequests: string[] = [];
+    page.on("request", (request) => {
+      if (/\/assets\/operating-intake-panel-[^/]+\.js$/.test(new URL(request.url()).pathname))
+        intakeChunkRequests.push(request.url());
+    });
+
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
+
+    expect(await shownText()).toEqual(["Today's work"]);
+    expect(intakeChunkRequests).toEqual([]);
+  });
+
+  test("shows the not-ready screen after one failed bootstrap read and recovers on retry", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    const shownText = await watchShownText(page, ["IronWrap OS is not ready", "Today's work"]);
+    let bootstrapReads = 0;
+    await page.route("**/api/v1/field/bootstrap", async (route) => {
+      bootstrapReads += 1;
+      if (bootstrapReads === 1) {
+        await route.fulfill({ status: 500, json: { error: "internal_error" } });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "IronWrap OS is not ready" })).toBeVisible();
+    expect(await shownText()).toEqual(["IronWrap OS is not ready"]);
+    expect(bootstrapReads).toBe(1);
+
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
+    expect(await shownText()).toEqual(["IronWrap OS is not ready", "Today's work"]);
+    expect(bootstrapReads).toBe(2);
+  });
+
   test("never receives run-sheet data before a paired device supplies its proof", async ({
     page,
   }) => {
@@ -437,6 +483,34 @@ test.describe("Field Companion PWA acceptance", () => {
     expect(bootstrapRequests).toEqual([{ deviceProof: undefined }]);
   });
 });
+
+/**
+ * Records, in order of first appearance, which of `phrases` any node the next navigation inserts
+ * (or any text it changes) ever carried, watching from before the document's first byte. A state
+ * that renders once and is replaced never reaches a final assertion, so the tests read the record.
+ */
+async function watchShownText(page: import("@playwright/test").Page, phrases: string[]) {
+  await page.addInitScript((watched) => {
+    const shown: string[] = [];
+    Object.assign(window, { __ironwrapShownText: shown });
+    const look = (node: Node) => {
+      const text = node.textContent ?? "";
+      for (const phrase of watched) {
+        if (!shown.includes(phrase) && text.includes(phrase)) shown.push(phrase);
+      }
+    };
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "characterData") look(record.target);
+        record.addedNodes.forEach(look);
+      }
+    }).observe(document, { childList: true, characterData: true, subtree: true });
+  }, phrases);
+  return () =>
+    page.evaluate(
+      () => (window as unknown as { __ironwrapShownText: string[] }).__ironwrapShownText,
+    );
+}
 
 async function seedPairedFieldDevice(
   page: import("@playwright/test").Page,

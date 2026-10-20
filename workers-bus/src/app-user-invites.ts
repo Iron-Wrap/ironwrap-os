@@ -583,7 +583,12 @@ export async function acceptUserInvite(
   // a link in a mailbox would let an issued-then-superseded invitation quietly undo a role change
   // the office made deliberately; role changes have their own authenticated route and their own
   // rules. The invitation is still spent, so the secret cannot be used twice.
-  const existing = await authStore.findActiveUser(env, invite.tenant_id, invite.email_normalized);
+  const account = await authStore.findAppUserByEmail(
+    env,
+    invite.tenant_id,
+    invite.email_normalized,
+  );
+  const existing = account?.active === 1 ? account : null;
   if (existing) {
     const settled = await settleUserInviteWithoutGrant(env, {
       invite,
@@ -616,6 +621,8 @@ export async function acceptUserInvite(
     };
   }
 
+  // A removed account gets access back only against the access version read here; its granted
+  // audit row, with the change in access_change, commits in the claim's own batch (0157).
   const claim = await claimUserInvite(env, {
     invite,
     candidateUserId: `appu_${crypto.randomUUID()}`,
@@ -623,19 +630,13 @@ export async function acceptUserInvite(
     // predates the least-privilege vocabulary, and `access_role` (0038) is the effective role.
     storageRole: invite.access_role === "owner" ? "owner" : "ops",
     now: nowIso,
+    expected: account,
+    request,
   });
   if (!claim.claimed || !claim.user) {
     const current = await findUserInviteById(env, invite.tenant_id, invite.invite_id);
     return settledInviteFailure(current ?? invite, nowIso);
   }
-  await authStore.recordAuthAudit(env, {
-    tenantId: invite.tenant_id,
-    userId: claim.user.user_id,
-    event: "user_invite_accept",
-    outcome: "granted",
-    request,
-    detailCode: `${invite.access_role}:${invite.invite_id}`,
-  });
   return {
     ok: true,
     body: await acceptanceBody(env, claim.user, "accepted", request, now, ctx, deps),
@@ -746,6 +747,7 @@ export async function changeAppUserRole(
         event: "user_role_change",
         outcome: "changed",
         request: await authRequestContext(req, env),
+        detailCode: `${user.role}->${parsed.value.role}:${auth.session.user_id}`,
       },
     },
   });
@@ -807,6 +809,7 @@ export async function changeAppUserAccess(
         event: "user_access_change",
         outcome: parsed.value.active ? "restored" : "removed",
         request: await authRequestContext(req, env),
+        detailCode: `${user.role}:${auth.session.user_id}`,
       },
     },
   });

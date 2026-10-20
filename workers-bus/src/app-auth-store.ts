@@ -26,6 +26,8 @@ export interface AccessChangeAudit {
   event: string;
   outcome: string;
   request: AuthRequestContext;
+  /** The row's short text, as each route has always written it. */
+  detailCode: string;
 }
 
 /** A person's access at one version: their role and whether they can sign in. */
@@ -35,8 +37,9 @@ export interface AccessState {
 }
 
 /**
- * One role or access change as its audit row records it: the access version the change produced,
- * the access before it (none for a new person) and after it, and who made it.
+ * One role or access change as its audit row records it in `access_change` (0157): the access
+ * version the change produced, the access before it (none for a new person) and after it, and who
+ * decided it.
  */
 export interface AccessChange {
   version: number;
@@ -45,50 +48,17 @@ export interface AccessChange {
   actorUserId: string;
 }
 
-const ACCESS_CHANGE_EVENTS = ["user_provision", "user_role_change", "user_access_change"] as const;
-
-function accessStateCode(state: AccessState | null): string {
-  return state ? `${state.role}.${state.active ? 1 : 0}` : "-";
-}
-
-/**
- * `v{version}:{role}.{0|1}>{role}.{0|1}:{actor user id}`, `-` for no earlier access. The version
- * in the row is what lets a refused change say what moved since the version it was decided on,
- * without a column of its own (0157).
- */
-export function accessChangeDetail(change: AccessChange): string {
-  return `v${change.version}:${accessStateCode(change.before)}>${
-    accessStateCode(change.after)
-  }:${change.actorUserId}`;
-}
-
-const ACCESS_CHANGE_DETAIL = /^v([1-9][0-9]{0,8}):(?:-|([a-z]+)\.([01]))>([a-z]+)\.([01]):(\S+)$/;
-
-/** The change an access audit row records; null for a row written before 0157 or by another path. */
-export function parseAccessChangeDetail(detail: string | null): AccessChange | null {
-  const match = detail?.match(ACCESS_CHANGE_DETAIL);
-  if (!match) return null;
-  const [, version, beforeRole, beforeActive, afterRole, afterActive, actorUserId] = match;
-  if (beforeRole !== undefined && !isAppRole(beforeRole)) return null;
-  if (!isAppRole(afterRole)) return null;
-  return {
-    version: Number(version),
-    before: beforeRole === undefined ? null : { role: beforeRole, active: beforeActive === "1" },
-    after: { role: afterRole, active: afterActive === "1" },
-    actorUserId: actorUserId!,
-  };
-}
-
-function accessStateOf(user: AppUserRecord): AccessState {
+export function accessStateOf(user: AppUserRecord): AccessState {
   return { role: user.role, active: user.active === 1 };
 }
 
 /**
  * The audit row of a role or access change. It sits directly after the change in one batch and is
  * written only when that change itself wrote a row (`changes() = 1`), so a lost race leaves neither
- * the change nor an audit claiming it.
+ * the change nor an audit claiming it. `access_change` is JSON the column's json_valid CHECK
+ * accepts or the whole batch fails: a change never lands without its record.
  */
-function accessChangeAuditStatement(
+export function accessChangeAuditStatement(
   env: Env,
   tenantId: string,
   userId: string,
@@ -97,8 +67,9 @@ function accessChangeAuditStatement(
 ) {
   return env.DB.prepare(
     `INSERT INTO app_auth_audit
-       (created_at, tenant_id, user_id, event, outcome, ip_hash, user_agent_hash, detail_code)
-     SELECT ?,?,?,?,?,?,?,?
+       (created_at, tenant_id, user_id, event, outcome, ip_hash, user_agent_hash, detail_code,
+        access_change)
+     SELECT ?,?,?,?,?,?,?,?,?
       WHERE changes() = 1`,
   ).bind(
     nowIso(),
@@ -108,14 +79,20 @@ function accessChangeAuditStatement(
     audit.outcome.slice(0, 64),
     audit.request.ip_hash,
     audit.request.user_agent_hash,
-    accessChangeDetail(change).slice(0, 120),
+    audit.detailCode.slice(0, 120),
+    JSON.stringify({
+      v: change.version,
+      before: change.before,
+      after: change.after,
+      actor: change.actorUserId,
+    }),
   );
 }
 
 /**
- * The versioned role and access changes in one person's audit above `afterVersion`, newest first,
- * each with when it was recorded. Rows from before 0157 carry no version and are skipped. A person
- * whose access moved more than `limit` times since is described from the newest changes only.
+ * The role and access changes in one person's audit above `afterVersion`, newest first, each with
+ * when it was recorded, read from `access_change` with json_extract. A person whose access moved
+ * more than `limit` times since is described from the newest changes only.
  */
 export async function listAccessChangesSince(
   env: Env,
@@ -125,16 +102,40 @@ export async function listAccessChangesSince(
   limit = 50,
 ): Promise<Array<AccessChange & { recordedAt: string }>> {
   const result = await env.DB.prepare(
-    `SELECT created_at, detail_code FROM app_auth_audit
-      WHERE tenant_id = ? AND user_id = ? AND event IN (?, ?, ?)
-      ORDER BY created_at DESC, id DESC
+    `SELECT created_at,
+            json_extract(access_change, '$.v') AS version,
+            json_extract(access_change, '$.before.role') AS before_role,
+            json_extract(access_change, '$.before.active') AS before_active,
+            json_extract(access_change, '$.after.role') AS after_role,
+            json_extract(access_change, '$.after.active') AS after_active,
+            json_extract(access_change, '$.actor') AS actor
+       FROM app_auth_audit
+      WHERE tenant_id = ? AND user_id = ? AND access_change IS NOT NULL
+        AND json_extract(access_change, '$.v') > ?
+      ORDER BY json_extract(access_change, '$.v') DESC, id DESC
       LIMIT ?`,
-  ).bind(tenantId, userId, ...ACCESS_CHANGE_EVENTS, limit)
-    .all<{ created_at: string; detail_code: string | null }>();
-  return (result.results ?? []).flatMap((row) => {
-    const change = parseAccessChangeDetail(row.detail_code);
-    return change && change.version > afterVersion ? [{ ...change, recordedAt: row.created_at }] : [];
-  });
+  ).bind(tenantId, userId, afterVersion, limit).all<{
+    created_at: string;
+    version: number;
+    before_role: string | null;
+    before_active: number | null;
+    after_role: string;
+    after_active: number;
+    actor: string;
+  }>();
+  return (result.results ?? []).flatMap((row) =>
+    isAppRole(row.after_role) && (row.before_role === null || isAppRole(row.before_role))
+      ? [{
+        version: Number(row.version),
+        before: row.before_role === null
+          ? null
+          : { role: row.before_role, active: row.before_active === 1 },
+        after: { role: row.after_role, active: row.after_active === 1 },
+        actorUserId: row.actor,
+        recordedAt: row.created_at,
+      }]
+      : []
+  );
 }
 
 /** The access version the route authorized against; the column is NOT NULL DEFAULT 1 (0157). */

@@ -1516,17 +1516,47 @@ test("a refused change says who changed the access since, what is different and 
     after: { role: "production", active: false },
   });
 
-  // The audit rows carry the version each change produced, and the access before and after it.
+  // The audit rows carry each change as JSON: the version it produced, the access before and
+  // after it, and who decided it; their short detail text is unchanged.
   assert.deepEqual(
     h.db.raw.prepare(
-      `SELECT event, detail_code FROM app_auth_audit
-        WHERE user_id = ? AND event IN ('user_provision', 'user_role_change', 'user_access_change')
-        ORDER BY id`,
-    ).all(grace.user_id).map((row) => ({ ...row })),
+      `SELECT event, detail_code, access_change FROM app_auth_audit
+        WHERE user_id = ? AND access_change IS NOT NULL ORDER BY id`,
+    ).all(grace.user_id).map((row) => ({
+      event: (row as Record<string, unknown>).event,
+      detail_code: (row as Record<string, unknown>).detail_code,
+      access_change: JSON.parse(String((row as Record<string, unknown>).access_change)),
+    })),
     [
-      { event: "user_provision", detail_code: `v2:sales.1>production.1:${ada.user_id}` },
-      { event: "user_access_change", detail_code: `v3:production.1>production.0:${priya.user_id}` },
+      {
+        event: "user_provision",
+        detail_code: "production:owner@example.invalid",
+        access_change: {
+          v: 2,
+          before: { role: "sales", active: true },
+          after: { role: "production", active: true },
+          actor: ada.user_id,
+        },
+      },
+      {
+        event: "user_access_change",
+        detail_code: `production:${priya.user_id}`,
+        access_change: {
+          v: 3,
+          before: { role: "production", active: true },
+          after: { role: "production", active: false },
+          actor: priya.user_id,
+        },
+      },
     ],
+  );
+  // A row that is not JSON never lands: the column refuses it.
+  assert.throws(() =>
+    h.db.raw.prepare(
+      `INSERT INTO app_auth_audit
+         (created_at, tenant_id, user_id, event, outcome, ip_hash, user_agent_hash, access_change)
+       VALUES (?, ?, ?, 'user_access_change', 'removed', ?, ?, ?)`,
+    ).run(new Date().toISOString(), TENANT, grace.user_id, "a".repeat(64), "b".repeat(64), "v4:not json")
   );
 });
 
@@ -1571,6 +1601,132 @@ test("giving access back keeps the role it had and applies against the version t
   assert.equal(userRow(h, "grace@example.invalid")!.access_role, "production");
   assert.equal(userRow(h, "grace@example.invalid")!.active, 1);
   assert.equal(grace.user_id, userRow(h, "grace@example.invalid")!.user_id);
+});
+
+test("an accepted invitation moves a removed person's access version, so an older decision is refused", async () => {
+  const h = harness();
+  const { user: ada, session } = await owner(h);
+  const grace = await addUser(h.env, "grace@example.invalid", "sales", "Grace Obi");
+
+  // Ada removes Grace; the people list shows her removed at version 2, and the next decision taken
+  // on that screen names version 2.
+  assert.equal((await call(h, "POST", `${APP_USERS}/${grace.user_id}/access`, {
+    session,
+    body: { active: false, expected_access_version: 1 },
+  })).status, 200);
+  const listed = await call(h, "GET", APP_USERS, { session });
+  const seen = (listed.body.users as Array<Record<string, unknown>>)
+    .find((user) => user.user_id === grace.user_id)!;
+  assert.deepEqual(
+    { active: seen.active, access_version: seen.access_version },
+    { active: false, access_version: 2 },
+  );
+
+  // Grace is invited again and accepts: her access comes back and its version moves on, with the
+  // granted row and the change committed in the claim's own batch.
+  const issued = await invite(h, session, {
+    email: "grace@example.invalid",
+    display_name: "Grace Obi",
+    role: "sales",
+  });
+  const token = capturedToken(h, "user_invite", "grace@example.invalid");
+  const accepted = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(accepted.status, 200);
+  assert.equal(userRow(h, "grace@example.invalid")!.active, 1);
+  assert.equal(accessVersionOf(h, grace.user_id), 3);
+  const granted = h.db.raw.prepare(
+    `SELECT detail_code, access_change FROM app_auth_audit
+      WHERE user_id = ? AND event = 'user_invite_accept' AND outcome = 'granted'`,
+  ).all(grace.user_id) as Array<{ detail_code: string; access_change: string }>;
+  assert.equal(granted.length, 1, "one granted row, committed with the claim");
+  assert.equal(granted[0]!.detail_code, `sales:${String(issued.invite.invite_id)}`);
+  assert.deepEqual(JSON.parse(granted[0]!.access_change), {
+    v: 3,
+    before: { role: "sales", active: false },
+    after: { role: "sales", active: true },
+    actor: ada.user_id,
+  });
+
+  // The screen still holding version 2 gives her access back: refused, saying what moved.
+  const stale = await call(h, "POST", APP_USERS, {
+    session,
+    body: {
+      tenant_id: TENANT,
+      email: "grace@example.invalid",
+      display_name: "Grace Obi",
+      role: "sales",
+      frappe_user_id: null,
+      active: true,
+      expected_access_version: 2,
+    },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "access_version_conflict");
+  const conflict = stale.body.conflict as Record<string, unknown>;
+  assert.equal(conflict.access_version, 3);
+  assert.deepEqual(conflict.changed_by, {
+    user_id: ada.user_id,
+    display_name: "Ada Owner",
+    is_self_actor: true,
+  });
+  // Removed before, active now: the app reads this as "they have access again".
+  assert.deepEqual(conflict.change, {
+    before: { role: "sales", active: false },
+    after: { role: "sales", active: true },
+  });
+  assert.equal(accessVersionOf(h, grace.user_id), 3, "the refused decision changed nothing");
+});
+
+test("an invitation claim applies only against the access version it read", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const grace = await addUser(h.env, "grace@example.invalid", "sales", "Grace Obi");
+  assert.equal((await call(h, "POST", `${APP_USERS}/${grace.user_id}/access`, {
+    session,
+    body: { active: false, expected_access_version: 1 },
+  })).status, 200);
+  const issued = await invite(h, session, {
+    email: "grace@example.invalid",
+    display_name: "Grace Obi",
+    role: "production",
+  });
+  const token = capturedToken(h, "user_invite", "grace@example.invalid");
+
+  // Someone changes Grace's access between the claim's read and its write.
+  h.db.beforeNextMatchingRun(
+    (sql) => sql.includes("INSERT INTO app_users") && sql.includes("ON CONFLICT"),
+    () => {
+      h.db.raw.prepare(
+        `UPDATE app_users SET access_role = 'accounting', access_version = access_version + 1
+          WHERE user_id = ?`,
+      ).run(grace.user_id);
+    },
+  );
+  const raced = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(raced.status, 503);
+  assert.equal(raced.body.error, "invite_unavailable");
+  assert.equal(userRow(h, "grace@example.invalid")!.active, 0, "nothing granted over a moved version");
+  assert.equal(userRow(h, "grace@example.invalid")!.access_role, "accounting");
+  assert.equal(inviteRow(h, String(issued.invite.invite_id)).accepted_at, null, "the invitation is not spent");
+  assert.equal(
+    scalar(
+      h,
+      `SELECT count(*) AS value FROM app_auth_audit
+        WHERE user_id = ? AND event = 'user_invite_accept' AND outcome = 'granted'`,
+      grace.user_id,
+    ),
+    0,
+  );
+
+  // Accepting again reads the version as it is now and lands.
+  const retried = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(retried.status, 200);
+  assert.equal(userRow(h, "grace@example.invalid")!.active, 1);
+  assert.equal(userRow(h, "grace@example.invalid")!.access_role, "production");
+  assert.equal(accessVersionOf(h, grace.user_id), 4);
 });
 
 test("provisioning names the access version for an existing person and none for a new one", async () => {

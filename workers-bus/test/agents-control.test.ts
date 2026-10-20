@@ -387,12 +387,17 @@ test("H, protective and never-delegable actions cannot receive owner delegation"
   );
 });
 
-test("the owner's D-09 caps keep proposals, change orders and invoices at asks first", async () => {
+test("the owner's caps keep the price, its sends and every customer message at asks first", async () => {
   const s = setup();
+  // D-09 caps the price and its sends; D-05 and Q4 cap every customer message, whatever its purpose.
   const capped = [
+    ["estimator", "quote.commit_revision"],
+    ["estimator", "quote.apply_discount"],
     ["proposal_contract", "proposal.publish"],
     ["proposal_contract", "change_order.send_for_decision"],
     ["billing_reconciliation", "invoice.commit_intent"],
+    ["lead_concierge", "customer_message.send"],
+    ["billing_reconciliation", "customer_message.send"],
   ] as const;
   for (const [specialist, actionId] of capped) {
     const action = catalogAction(actionId);
@@ -405,7 +410,7 @@ test("the owner's D-09 caps keep proposals, change orders and invoices at asks f
       ["asks", setting({ action_id: actionId, setting: "asks_first", ceiling: null })],
       ["off", setting({ action_id: actionId, setting: "off", ceiling: null })],
     ] as const) {
-      const r = await s.app(`/specialists/${specialist}/delegation`, body, "owner", `cap-${key}-${actionId}`);
+      const r = await s.app(`/specialists/${specialist}/delegation`, body, "owner", `cap-${key}-${specialist}-${actionId}`);
       assert.equal(r.status, 422, `${actionId} ${key}`);
       assert.equal(r.body.error, "not_delegable", `${actionId} ${key}`);
     }

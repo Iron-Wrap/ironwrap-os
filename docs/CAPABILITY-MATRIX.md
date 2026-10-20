@@ -287,13 +287,14 @@ Current source tracing distinguishes implemented modules from reachable producti
   call, deployment or reference run has happened.
 - AI team contract f5 (owner rulings D-01 to D-10 and Q1 to Q10; `docs/AI-TEAM-CONTRACT.md`
   "Owner rulings", "Dial levels" and "Appendix: autonomy screen mapping") is Target, Partial, with
-  one Locally-validated part. The owner's D-09 caps are Locally-validated: `proposal.publish`,
-  `change_order.send_for_decision` and `invoice.commit_intent` are not delegable, so the Worker
-  refuses every delegation setting for them (`not_delegable`), never lists them as delegation
-  candidates, and runs a within-limits setting recorded before the cap as asks first
-  (`test/agents-control.test.ts`, "the owner's D-09 caps keep proposals, change orders and invoices
-  at asks first"); before the cap the Worker accepted within limits for all three. The rest is not
-  built yet:
+  one Locally-validated part. The owner's caps are Locally-validated: `quote.commit_revision`,
+  `quote.apply_discount`, `proposal.publish`, `change_order.send_for_decision` and
+  `invoice.commit_intent` (D-09), and `customer_message.send` for every purpose (D-05, Q4), are not
+  delegable, so the Worker refuses every delegation setting for them (`not_delegable`), never lists
+  them as delegation candidates, and runs a within-limits setting recorded before the cap as asks
+  first (`test/agents-control.test.ts`, "the owner's caps keep the price, its sends and every
+  customer message at asks first"); before the caps the Worker accepted within limits for all six.
+  The rest is not built yet:
   - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
     a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
     no undo flow, no non-protective action has a proven machine path (a within-limits step asks
@@ -301,8 +302,8 @@ Current source tracing distinguishes implemented modules from reachable producti
     words (the app shows the contract words, `app/src/components/ai/words.ts`); "Facts only, live"
     has no live conversation runtime.
   - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
-    message purpose covers a visit reminder, `customer_message.send` is not registered, and the
-    Worker would still accept a within-limits setting for it.
+    message purpose covers a visit reminder, and `customer_message.send` is not registered; it
+    always asks first, so no reminder can run automatically.
   - Voice reception (D-02, D-03): `config/newo/production.expected.json` books in `request_only`
     mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
     webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration

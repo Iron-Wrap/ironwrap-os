@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "lead_concierge",
   "suite": "golden",
-  "catalog_sha256": "7d34284aed80989ebd66fb16f6e4f5d515d172fdf1bd3e5ff3b317cc9da51be6",
+  "catalog_sha256": "e62745ba4e475ee1829e2b68b802deaffdfa046fe2f083124f41ff2ee08675e1",
   "cases": [
     {
       "id": "lead_concierge.golden.001",

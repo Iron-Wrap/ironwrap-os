@@ -1038,10 +1038,15 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "shop_order.release_hold",
   "cancellation.release_hold",
   "ncr.verify_close",
-  // Capped at asks first by owner ruling D-09: sending a proposal, a change order or an invoice.
+  // Capped at asks first by owner ruling D-09: the price and sending a proposal, a change order or
+  // an invoice.
+  "quote.commit_revision",
+  "quote.apply_discount",
   "proposal.publish",
   "change_order.send_for_decision",
   "invoice.commit_intent",
+  // Capped because a sent message cannot be undone and reminders go by approval only (D-05, Q4).
+  "customer_message.send",
 ];
 // Human-only: never an agent's act, never delegable.
 const AI_TEAM_PEOPLE_ONLY = [

@@ -2278,9 +2278,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the append-only field item resolution ledger. 0151 adds the person-owned
     // resolution of a failed Newo handoff. 0152 requires the evidence that releases a crew stop
     // to be captured after the stop. 0154 adds four tenant-scoped lookup indexes for a lead's jobs,
-    // a job's deposit derivation and the current quote and proposal revision checks.
+    // a job's deposit derivation and the current quote and proposal revision checks. 0156 lets a
+    // person record whether an unconfirmed proposal send reached the customer.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 133);
+    assert.equal(migrations.length, 134);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2425,10 +2426,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
-    // unchanged. 0154 adds four named indexes.
+    // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
+    // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
+    // name.
     assert.deepEqual(
       { ...counts },
-      { tables: 274, indexes: 376, triggers: 744 },
+      { tables: 275, indexes: 377, triggers: 749 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

@@ -229,7 +229,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   context snapshot and tool manifest, and decides every proposed step by deterministic policy: an
   unregistered action or argument, a missing, unknown or stale citation, or a ceiling abstains,
   and people-only actions are refused. The owner sets delegation, pauses a specialist or clears an
-  auditor hold from a fresh app session; a reviewer decides a waiting step's exact version. An
+  auditor hold from a fresh app session, one signed in within the last five minutes; a second
+  factor and step-up evidence on the setting record are not built yet. A reviewer decides a
+  waiting step's exact version. An
   approval reads the step's cited facts again, so a fact that changed since the proposal abstains
   the step, and its transaction refuses a delegation setting that changed after it was read. The
   protective exception and hold bindings execute against owned records with readback, and so does
@@ -237,7 +239,15 @@ Current source tracing distinguishes implemented modules from reachable producti
   the decision's own transaction, with an owned-store readback on its receipt. Every other
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
-  step to the reviewer to do by hand. Every signal carries the actor the Worker writes: no inbound
+  step to the reviewer to do by hand, and `lead_fact.propose` has no registered arguments yet, so
+  its steps abstain. The app has no import screen, so the Retry a person would use for an import
+  run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
+  `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
+  too, and never under Done for you; closing that draft when the matching act lands or a newer
+  draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.
+  `authority.record` answers only a press on compliance's view for that action, and
+  `access.prepare_change` an owner's or staff member's ask or any press.
+  Every signal carries the actor the Worker writes: no inbound
   channel feeds the team yet, so the Worker writes only owner, staff and worker actors for a
   person's ask or request, and `null` for watch firings and handoffs.
   Shared memory gives a run's snapshot the signal's subject and the objects it
@@ -248,14 +258,32 @@ Current source tracing distinguishes implemented modules from reachable producti
   conversation object yet, so those cannot be cited. Shadow mode (`0203`) records a shadowed action's
   proposals with no effect and counts agreement with people's decisions; no shadow comparator is
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
-  within-limits action to asks first. An audit from the reviewed run's own model family is not
+  within-limits action to asks first. A within-limits setting also reads as asks first after a
+  step under it ends `unknown`, with a readback mismatch or done by a person, after a catalog or
+  step-policy change (the step policy is at version 5), after a later hold, and after a run of the
+  specialist ends without a qualified route; that run, or a catastrophe on the action, also stops
+  a practice-only action's practice runs until the owner confirms it again. The undo fallback is
+  not built yet, and practice runs do not stop under a hold yet. The earned-autonomy window counts
+  scored decisions of runs under the current step policy and the specialist's current release,
+  never a refused run's matches, and a catastrophe since the window began blocks the bar.
+  `delegation.propose_change` is registered: a proposal to act within limits below the bar is
+  refused, the owner's preview is `GET /api/v1/agent-team/specialists/:id/preview`, and each pair
+  is the fact `delegation/<specialist>:<action>`. Within-limits steps
+  carry their setting's id, but the auditor's check of them (every step until 20 clean ones, then
+  one in ten) is not built yet. An audit from the reviewed run's own model family is not
   accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
-  v3 close keeps its output only on one of them; a synthetic run closes only on a Worker whose
-  `AGENT_DATA_CLASS` is synthetic. Five cadence watches fire from the cron with deterministic conditions (`0204`),
-  including the four owner reports; the other watches and every event-triggered watch do not fire yet.
+  v3 close keeps its output only on one of them; a close on an older close model is accepted and
+  is not held to a qualification. The host sends the v3 close only when the Worker names close
+  model 3 exactly, so the host half of the close-model rule (send the newest shape no newer than
+  the Worker's) is not built yet. A synthetic run closes only on a Worker whose
+  `AGENT_DATA_CLASS` is synthetic. Six cadence watches fire from the cron with deterministic
+  conditions (`0204`), the four owner reports and `delegation_review` among them; the other watches
+  and every event-triggered watch do not fire yet, and nothing emits `injection.flagged` yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
   takes signals in the order the Worker feeds them: the contract's queue priority is not
-  implemented yet. No live provider call, deployment or reference run has happened.
+  implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,
+  `bedrock`, `vertex`) and the `cloud_identity` credential mode are not built yet. No live provider
+  call, deployment or reference run has happened.
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.

@@ -1995,11 +1995,11 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
     assert.throws(() => direct("delivery-finding:direct-second-root-b", null, "delivered"), /proposal_delivery_finding_not_latest/);
     // A person never records "not executed", and the attempt state is the send's own.
     assert.throws(
-      () => direct("delivery-finding:direct-not-executed-h", first.finding.finding_id, "not_executed"),
-      /CHECK constraint failed/,
+      () => direct("delivery-finding:direct-not-executed-5", first.finding.finding_id, "not_executed"),
+      /CHECK constraint failed: finding IN/,
     );
     assert.throws(
-      () => direct("delivery-finding:direct-claimed-success-i", first.finding.finding_id, "delivered", "succeeded"),
+      () => direct("delivery-finding:direct-claimed-success-6", first.finding.finding_id, "delivered", "succeeded"),
       /proposal_delivery_finding_attempt_mismatch/,
     );
     assert.throws(

@@ -132,7 +132,7 @@ status.
 
 | Ruling | What it says | Where it applies |
 |---|---|---|
-| D-01 | AI-native and manual-complete: the AI does the work first and the default is reviewing and approving; every manual screen stays, so "Do it myself" always works | Decisions 2 and 3, "Degraded operation" |
+| D-01 | AI-native and manual-complete: the AI does the work first, and the default is reviewing and approving; every manual screen stays, and "Do it myself" stays every action's manual path | Decisions 2 and 3, "Degraded operation" |
 | D-02 | During a call the voice provider may hold an inspection slot; Staff press Keep booking before any confirmation goes out, and Undo releases the slot. Not built yet, and YELLOW until the mid-call webhook is verified (Newo assumption A-05) | Decision 15, "The owner's launch rule" |
 | D-03 | A hand-off to a person is a callback or a review, never a live transfer, and a person can take over the record at any step. Not built yet: the published reception script still transfers a caller to the owner's line (`config/newo`) | `conversation.assign_person` |
 | D-04 | A person's own words run the same action as a button, through the same decision and receipt; generated views stay ad hoc. Not built yet | "Requests through the face" |

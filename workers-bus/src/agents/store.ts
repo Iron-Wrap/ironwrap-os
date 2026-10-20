@@ -15,6 +15,7 @@ import { CANDIDATE_BAR, currentQualifications, delegationCandidates, qualificati
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
+import { LEAD_FACT_KEYS, leadProposal, type LeadFacts } from "./lead-proposals.ts";
 
 export interface BoundStatement {
   first<T>(): Promise<T | null>;
@@ -728,6 +729,32 @@ export async function proposeStep(
           delegation_id: null,
           reviewer_role: null,
         };
+  }
+  // A confirm names an open proposal of the same lead and tenant and confirms only what it proposed
+  // (a non-null value equals the proposal's); a person who wants another value edits the lead by hand.
+  if (decision.result !== "deny" && input.action_id === "lead_fact.confirm") {
+    const confirm = input.args as { lead_id: string; proposal_id: string; fields: LeadFacts };
+    const proposal = await leadProposal(db, tenantId, confirm.proposal_id);
+    const refusal =
+      !proposal || proposal.lead_id !== confirm.lead_id
+        ? "fact_missing"
+        : !proposal.open
+          ? "fact_stale"
+          : LEAD_FACT_KEYS.some((key) => confirm.fields[key] !== null && confirm.fields[key] !== proposal.fields[key])
+            ? "fact_conflict"
+            : null;
+    decision = refusal
+      ? {
+          ...decision,
+          result: "deny",
+          outcome: "abstained",
+          reason_codes: [refusal],
+          checks: [...decision.checks, { check: "proposal", passed: false }],
+          permit_kind: "none",
+          delegation_id: null,
+          reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
+        }
+      : { ...decision, checks: [...decision.checks, { check: "proposal", passed: true }] };
   }
   const now = new Date(nowMs).toISOString();
   // An admitted read reads now. One its reader may not make, or that fails, stops as an

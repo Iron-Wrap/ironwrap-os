@@ -719,6 +719,11 @@ them and follows these conventions:
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
   citations, never an argument. Only a run started by the inbound event itself may propose it, and
   every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`).
+- `lead_fact.confirm` names an open proposal of the same lead and tenant in `proposal_id`
+  (`lead_proposal/<step_id>`) and may only repeat its values: a `null` leaves a field unconfirmed,
+  and a value that differs from the proposal's stops it (`fact_conflict`, check `proposal`), as does
+  a proposal that does not exist or is another lead's (`fact_missing`) or that is no longer open
+  (`fact_stale`). A person who wants another value edits the lead by hand.
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:
@@ -1135,11 +1140,12 @@ Worker takes the `close_model` 3 block, the routed block of a gateway config v2 
 tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
 with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
 to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
-host. A host sends the newest close model it knows that is no newer than the Worker's: today's
-host sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still
-gets the block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on
-a later close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block records the effort, run class, qualification, release and
-data class, so only its live or shadow output is held to a qualification (see "Qualification").
+host. A host sends the newest close model it knows that is no newer than the Worker's: today's host
+sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still gets the
+block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on a later
+close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block
+records the effort, run class, qualification, release and data class, so only its live or shadow
+output is held to a qualification (see "Qualification").
 
 ## Shared memory
 
@@ -1186,6 +1192,13 @@ evidence.
   fell back, practice and whether it stopped, the counted window and the bar (see "Delegation"),
   the qualification it relies on, the decision history, failed readbacks, and the most proposals in
   any hour, day or week. Its version moves with every proposal of the pair.
+- An open lead proposal is the fact `lead_proposal/<step_id>`, readable at `sales:read` and owned:
+  the `lead_id`, the proposed `fields`, `proposed_at`, and the `source` it was cited to
+  (`signal/<id>`). Its fields carry customer details, so no wider view, digest or report carries
+  them. A lead links its open proposals, so a later run about the lead holds them. A proposal stays
+  open until a `lead_fact.confirm` that policy admitted names it, whether a person then approves it,
+  declines it or does it by hand, or until a newer proposal for the same lead sets every key it set
+  (a newer one that sets only some of them leaves it open); a closed proposal reads as no fact.
 - `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
   changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
   is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.

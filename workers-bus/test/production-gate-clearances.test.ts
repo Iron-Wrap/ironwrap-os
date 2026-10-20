@@ -569,6 +569,34 @@ test("waiver entries carry no attestation, contract or evidence fields", () => {
   );
 });
 
+// A person's `clear` names its money receipt only: each contract field the matrix holds NULL is
+// refused on its own, and the same settlement without it is appended (0153, kept by 0155).
+for (const [field, value] of [
+  ["policy_version", "ironwrap.deposit-gate.v1"],
+  ["terms_hash", "a".repeat(64)],
+  ["contract_binding_id", "binding:synthetic:0001"],
+] as const) {
+  test(`a person's settlement clear carrying ${field} is refused`, () => {
+    const db = ledger();
+    const intentId = seedReconciledDeposit(db);
+    const settlement = {
+      gate: "Deposit",
+      entry_kind: "clear",
+      basis: "deposit_settlement",
+      to_state: "complete",
+      reason: null,
+      evidence_refs_json: JSON.stringify({ money_intent_id: intentId }),
+    };
+    refused(() => append(db, { ...settlement, [field]: value }), "production_gate_clearance_basis_invalid");
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM production_gate_clearances").get() as { n: number }).n,
+      0,
+    );
+    append(db, settlement);
+    assert.equal(gateRow(db, "Deposit").state, "complete");
+  });
+}
+
 test("the QA seed owner is refused on every person entry", () => {
   const db = ledger();
   const intentId = seedReconciledDeposit(db);

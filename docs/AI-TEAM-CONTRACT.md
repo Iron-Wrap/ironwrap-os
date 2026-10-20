@@ -134,7 +134,7 @@ status.
 |---|---|---|
 | D-01 | AI-native and manual-complete: the AI does the work first, and the default is reviewing and approving; every manual screen stays, and "Do it myself" stays every action's manual path | Decisions 2 and 3, "Degraded operation" |
 | D-02 | During a call the voice provider may hold an inspection slot; Staff press Keep booking before any confirmation goes out, and Undo releases the slot. Not built yet, and YELLOW until the mid-call webhook is verified (Newo assumption A-05) | Decision 15, "The owner's launch rule" |
-| D-03 | A hand-off to a person is a callback or a review, never a live transfer, and a person can take over the record at any step. Not built yet: the published reception script still transfers a caller to the owner's line (`config/newo`) | `conversation.assign_person` |
+| D-03 | A hand-off to a person is a callback or a review, never a live transfer, and a person can take over the record at any step. Not built yet: the reception script and configuration in `config/newo` still transfer a caller to the owner's line first | `conversation.assign_person` |
 | D-04 | A person's own words run the same action as a button, through the same decision and receipt; generated views stay ad hoc. Not built yet | "Requests through the face" |
 | D-05 | Superseded by Q4 as the owner revised it: a reminder stays at Act with approval, with no cancel window | Q4 |
 | D-06 | A booking offer has two lanes, the phone offer and a written offer the AI drafts and a person approves, and both end at the same booking | Appendix rows A08 and A09 |
@@ -640,7 +640,7 @@ The dial has one named variant. "Facts only, live" is `conversation.answer_live`
 turns it on (decision 15): it states only facts from the record, says it is AI and hands anything
 else to a named person. It is not built yet. There is no "Auto with cancel window": a reminder to
 a customer, for a booking or a payment, is sent only by approval and never automatically (owner
-ruling Q4 as revised). Reminders are not built yet: no message purpose is registered for a visit
+ruling Q4 as revised). Reminders are not built yet: no customer message purpose covers a visit
 reminder (`payment_reminder` is the only reminder purpose), `customer_message.send` is not
 registered, and the Worker would still accept a within-limits setting for it, which asks first
 until its machine path is proven.
@@ -706,8 +706,8 @@ it, and the owner sets it in setup. Not built yet: the Worker keeps no such reco
 receptionist's playbook reads it as a placeholder fact.
 
 Voice reception today is request-only: the reception configuration books in `request_only` mode
-(`config/newo/production.expected.json`), its tools check availability and record a request, and a
-call ends with "Appointment request received." No tool holds a slot, so the D-02 hold is a target,
+(`config/newo/production.expected.json`), its tools check availability and record a request, and the
+caller hears "Appointment request received." No tool holds a slot, so the D-02 hold is a target,
 not built yet, and it stays YELLOW until the voice provider's mid-call webhook is verified (Newo
 assumption A-05).
 
@@ -2391,12 +2391,12 @@ that proposes it abstains (`action_unregistered`). Only 14 actions are registere
 | A02 | Archive spam calls and spam web forms (Newo) | Newo's own spam step, outside the catalog; `inquiry.classify` (spam likelihood); `inbound.quarantine` holds content in which nothing valid remains | Auto with undo | Off · Suggest · Auto with undo | Calls › Close as spam | `inbound.quarantine` is protective (Locked), so Off and Suggest reach only Newo's step and the classification; its release is `inbound.release`, which always asks first. Not registered |
 | A03 | Mark a call urgent from what the caller said | `inquiry.classify` (urgency and emergency); danger also pages (`emergency.page`) | Suggest | Off · Suggest | Urgent? field on the call | `inquiry.classify` is not registered; `emergency.page` is registered. Off for a Prepares action is not built yet |
 | A04 | Link a call to a record when every field matches | `inquiry.link_duplicate` | Auto with undo | Off · Suggest · Auto with undo | Search the customer list and link | Starts within limits, with an automatic undo. Not registered. Its `exact_match` check takes one exact key, so "every field, never the phone number alone" is not built yet |
-| A05 | Create a callback when the caller asks for a person or Newo cannot help (Newo) | The callback request is a Newo step, outside the catalog; `conversation.assign_person` names the person | Auto with undo | Off · Auto with undo | Callbacks › Add callback | `conversation.assign_person` is protective (Locked) and not registered. No callback record exists yet. The published reception script still transfers a caller live (D-03) |
+| A05 | Create a callback when the caller asks for a person or Newo cannot help (Newo) | The callback request is a Newo step, outside the catalog; `conversation.assign_person` names the person | Auto with undo | Off · Auto with undo | Callbacks › Add callback | `conversation.assign_person` is protective (Locked) and not registered. No callback record exists yet. The reception script in `config/newo` still transfers a caller live (D-03) |
 | A06 | Hold an inspection slot during a call (Newo) | `visit.hold_slot` holds it; Keep booking is `visit.confirm` | Act with approval | Off · Act with approval | P11 Book an inspection | The hold starts within limits and Keep booking asks first. Not built yet: neither is registered, voice reception is request-only, and the mid-call webhook is YELLOW (A-05) |
 | A07 | Offer to move or cancel a booking during a call (Newo) | None: no catalog action moves or cancels a booked visit | Act with approval | Off · Act with approval | P10 Change a booking | A Newo step with Staff's Keep change or Undo change, outside the catalog. Not built yet (YELLOW A-05, RED A-16) |
-| A08 | Draft the booking offer (up to three 2-hour slots) and read the lead's reply | `customer_message.draft` drafts the offer; a reply that picks a slot proposes `visit.confirm` (A09) | Act with approval | Off · Suggest · Act with approval | Pick slots in the calendar | No message purpose for a booking offer is registered. Offered slots are not held; they are checked again on the reply. Not registered |
-| A09 | Send booking offers, confirmations and changes | `customer_message.send` (offers and changes); `visit.confirm` (book and confirm) | Act with approval | Off · Act with approval | Send confirmation: text, WhatsApp draft, email or call | Both ask first. No purpose for an offer or a change is registered. Not registered |
-| A10 | Send booking reminders | `customer_message.send` | Act with approval | Off · Act with approval | Staff call or text the day before | Never automatic (Q4). Not built yet: no purpose for a visit reminder is registered (`schedule_notice` covers crew dates), and the Worker would still accept a within-limits setting for `customer_message.send` |
+| A08 | Draft the booking offer (up to three 2-hour slots) and read the lead's reply | `customer_message.draft` drafts the offer; a reply that picks a slot proposes `visit.confirm` (A09) | Act with approval | Off · Suggest · Act with approval | Pick slots in the calendar | No customer message purpose covers a booking offer. Offered slots are not held; they are checked again on the reply. Not registered |
+| A09 | Send booking offers, confirmations and changes | `customer_message.send` (offers and changes); `visit.confirm` (book and confirm) | Act with approval | Off · Act with approval | Send confirmation: text, WhatsApp draft, email or call | Both ask first. No customer message purpose covers an offer or a change. Not registered |
+| A10 | Send booking reminders | `customer_message.send` | Act with approval | Off · Act with approval | Staff call or text the day before | Never automatic (Q4). Not built yet: no customer message purpose covers a visit reminder (`schedule_notice` covers crew dates), and the Worker would still accept a within-limits setting for `customer_message.send` |
 | A11 | Summarise the callback's context and propose its outcome | `fact.explain` summarises; no catalog action proposes a callback outcome | Suggest | Off · Suggest | Outcome field on the callback | `fact.explain` is registered; no callback record exists yet |
 | A12 | Draft replies to callers, leads and customers | `customer_message.draft`, then `customer_message.send` | Suggest | Off · Suggest · Act with approval | Write the message | Every send keeps its `disclosure` check. Not registered |
 | A13 | Fill a lead from a pasted email or note | `lead_fact.propose` | Suggest | Off · Suggest | Type the lead | Not built yet: `lead_fact.propose` cites only the inbound event that started its run, so a pasted email or note cannot be its source |

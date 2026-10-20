@@ -300,13 +300,14 @@ Current source tracing distinguishes implemented modules from reachable producti
     first), and the Worker accepts within limits whatever an action's undo; no screen shows the dial
     words (the app shows the contract words, `app/src/components/ai/words.ts`); "Facts only, live"
     has no live conversation runtime.
-  - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no purpose is
-    registered for a visit reminder, `customer_message.send` is not registered, and the Worker would
-    still accept a within-limits setting for it.
+  - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
+    message purpose covers a visit reminder, `customer_message.send` is not registered, and the
+    Worker would still accept a within-limits setting for it.
   - Voice reception (D-02, D-03): `config/newo/production.expected.json` books in `request_only`
     mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
-    webhook is unverified (YELLOW, Newo assumption A-05). The published reception script still
-    transfers a caller to the owner's line, where D-03 allows no live transfer.
+    webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration
+    in `config/newo` still transfer a caller to the owner's line first, where D-03 allows no live
+    transfer.
   - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI
     receptionist's playbook reads it as a placeholder fact.
   - Free text running an action (D-04): `POST /api/v1/agent-team/ask` runs nothing itself, and the

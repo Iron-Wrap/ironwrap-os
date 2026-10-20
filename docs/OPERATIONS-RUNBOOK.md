@@ -198,7 +198,8 @@ and its approval stay with the two named testers. The job is not scheduled to th
 needs all six production gates cleared, and a gate clears only by an entry in the gate ledger
 (migration `0153`). Deposit clears on the job's reconciled deposit invoice, and a waiver, on
 Deposit, Materials or Access only, is the owner's decision. Safety and Weather are never waivable,
-and Crew has no waiver. D1 refuses every such entry from the seed identity, so the seed clears no
+and Crew has no waiver: it clears by policy when a person schedules the job (migration `0159`). D1
+refuses every such entry from the seed identity, and a schedule from it, so the seed clears no
 gate. It never writes D1 directly, calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.

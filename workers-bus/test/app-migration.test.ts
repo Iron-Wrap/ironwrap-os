@@ -2279,9 +2279,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // resolution of a failed Newo handoff. 0152 requires the evidence that releases a crew stop
     // to be captured after the stop. 0154 adds four tenant-scoped lookup indexes for a lead's jobs,
     // a job's deposit derivation and the current quote and proposal revision checks. 0156 lets a
-    // person record whether an unconfirmed proposal send reached the customer. 0161 lets them
-    // correct that record, moves the late-answer wait into D1 with a window per provider, and
-    // names who recorded each new proposal publication.
+    // person record whether an unconfirmed proposal send reached the customer. 0161 records what
+    // people found about a send, and their corrections, without changing it; holds the late-answer
+    // wait in D1 with a window per provider; and names the permit holder of each new publication.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
     assert.equal(migrations.length, 136);
     assert.equal(migrations[0], "0001_init.sql");
@@ -2431,12 +2431,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
-    // name. 0161 adds three tables (delivery corrections, late-answer windows, publication
-    // recorders), one named index and ten guards, and re-creates the external effect binding guard
-    // under its name.
+    // name. 0161 adds three tables (late-answer windows, delivery findings, publication
+    // recorders), one named index and twelve guards, and re-creates nothing.
     assert.deepEqual(
       { ...counts },
-      { tables: 278, indexes: 379, triggers: 759 },
+      { tables: 278, indexes: 379, triggers: 761 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

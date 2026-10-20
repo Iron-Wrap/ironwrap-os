@@ -212,8 +212,6 @@ export interface RecordCommercialPublicationInput {
   authority: CommercialAuthorityBinding;
   externalEffectId?: string | null;
   idempotencyKey: string;
-  /** The active person recording this publication event (0161); not part of the command. */
-  recordedByUserId: string;
 }
 
 export interface CommercialPublicationRecord {
@@ -365,7 +363,8 @@ export async function recordProposalDeliveryConfirmation(
   if (earlier) return earlier;
 
   const effect = await env.DB.prepare(
-    `SELECT effect_id, state, aggregate_id, intent_id, provider, updated_at FROM external_effects
+    `SELECT effect_id, state, aggregate_id, intent_id, provider, attempt_count, updated_at
+       FROM external_effects
       WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
         AND aggregate_type = 'proposal_publication'`,
   ).bind(input.tenantId, input.effectId).first<{
@@ -374,6 +373,7 @@ export async function recordProposalDeliveryConfirmation(
     aggregate_id: string;
     intent_id: string;
     provider: string;
+    attempt_count: number;
     updated_at: string;
   }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
@@ -383,11 +383,12 @@ export async function recordProposalDeliveryConfirmation(
     });
   }
   const createdAt = input.now ?? new Date().toISOString();
-  // A fresh unknown may only be late: "not delivered" waits until the provider's own answer can no
-  // longer arrive (its late-answer window), so a person cannot clear the way for a second send
-  // early. D1 refuses it too (0161); answering here first names the moment it may go.
-  const settleableUntil = effect.state === "unknown" && input.outcome === "not_delivered"
-    ? Date.parse(effect.updated_at) + await proposalDeliveryLateAnswerWindowMs(env, effect.provider)
+  // A send that went unknown may only be late: "not delivered" waits until its provider's own answer
+  // can no longer arrive (the late-answer window after its last attempt ended), so a person cannot
+  // clear the way for a second send early. D1 refuses it too (0161); answering here first names the
+  // moment it may go.
+  const settleableUntil = input.outcome === "not_delivered"
+    ? await proposalDeliveryLateAnswerUntil(env, effect)
     : null;
   const answerMayBeLate = () =>
     new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
@@ -438,159 +439,149 @@ export async function proposalDeliveryLateAnswerWindowMs(env: AppEnv, provider: 
   return row?.window_ms ?? EFFECT_ATTEMPT_LEASE_MS;
 }
 
-export interface ProposalDeliveryCorrectionRecord {
-  correction_id: string;
+/**
+ * Until when an unknown proposal send may not be called "not executed": the end of its last attempt
+ * plus its provider's late-answer window, or null when the wait does not apply (a send that never
+ * went unknown). D1 holds the same rule (0161, `external_effects_proposal_late_answer_guard`).
+ */
+async function proposalDeliveryLateAnswerUntil(
+  env: AppEnv,
+  effect: { effect_id: string; state: string; provider: string; attempt_count: number; updated_at: string },
+): Promise<number | null> {
+  if (effect.state !== "unknown") {
+    if (effect.state !== "manual_exception") return null;
+    const wentUnknown = await env.DB.prepare(
+      "SELECT 1 AS found FROM external_effect_events WHERE effect_id = ? AND to_state = 'unknown' LIMIT 1",
+    ).bind(effect.effect_id).first<{ found: number }>();
+    if (!wentUnknown) return null;
+  }
+  const attempt = await env.DB.prepare(
+    "SELECT ended_at FROM external_effect_attempts WHERE effect_id = ? AND attempt_number = ?",
+  ).bind(effect.effect_id, effect.attempt_count).first<{ ended_at: string | null }>();
+  const endedAt = Date.parse(attempt?.ended_at ?? effect.updated_at);
+  return endedAt + await proposalDeliveryLateAnswerWindowMs(env, effect.provider);
+}
+
+export type ProposalDeliveryFindingKind = "delivered" | "not_received" | "not_executed";
+
+export interface ProposalDeliveryFindingRecord {
+  finding_id: string;
   tenant_id: string;
   effect_id: string;
   proposal_pack_id: string;
   proposal_revision_id: string;
-  supersedes_confirmation_id: string | null;
-  supersedes_correction_id: string | null;
-  outcome: ProposalDeliveryOutcome;
+  finding: ProposalDeliveryFindingKind;
+  supersedes_finding_id: string | null;
   note: string;
-  corrected_by_user_id: string;
-  corrected_by_role: string;
+  found_by_user_id: string;
+  found_by_role: string;
   created_at: string;
 }
 
-/**
- * The newest answer a person recorded for one proposal send: the 0156 confirmation, or the last
- * correction of its chain (0161). Null when nothing was recorded by hand.
- */
-async function latestProposalDeliveryAnswer(
+/** The newest finding people recorded about one proposal send, or null when there is none (0161). */
+async function latestProposalDeliveryFinding(
   env: AppEnv,
   tenantId: string,
   effectId: string,
-): Promise<{ answer_id: string; kind: "confirmation" | "correction"; outcome: ProposalDeliveryOutcome } | null> {
-  const confirmation = await env.DB.prepare(
-    `SELECT confirmation_id, outcome FROM proposal_delivery_confirmations
+): Promise<{ finding_id: string } | null> {
+  const findings = await env.DB.prepare(
+    `SELECT finding_id, supersedes_finding_id FROM proposal_delivery_findings
       WHERE tenant_id = ? AND effect_id = ?`,
-  ).bind(tenantId, effectId).first<{ confirmation_id: string; outcome: ProposalDeliveryOutcome }>();
-  if (!confirmation) return null;
-  const corrections = await env.DB.prepare(
-    `SELECT correction_id, supersedes_confirmation_id, supersedes_correction_id, outcome
-       FROM proposal_delivery_corrections WHERE tenant_id = ? AND effect_id = ?`,
-  ).bind(tenantId, effectId).all<{
-    correction_id: string;
-    supersedes_confirmation_id: string | null;
-    supersedes_correction_id: string | null;
-    outcome: ProposalDeliveryOutcome;
-  }>();
-  const successor = new Map(
-    (corrections.results ?? []).map((row) => [row.supersedes_confirmation_id ?? row.supersedes_correction_id, row]),
-  );
-  let latest: { answer_id: string; kind: "confirmation" | "correction"; outcome: ProposalDeliveryOutcome } = {
-    answer_id: confirmation.confirmation_id,
-    kind: "confirmation",
-    outcome: confirmation.outcome,
-  };
-  for (let next = successor.get(latest.answer_id); next; next = successor.get(latest.answer_id)) {
-    latest = { answer_id: next.correction_id, kind: "correction", outcome: next.outcome };
-  }
-  return latest;
+  ).bind(tenantId, effectId).all<{ finding_id: string; supersedes_finding_id: string | null }>();
+  const rows = findings.results ?? [];
+  const superseded = new Set(rows.map((row) => row.supersedes_finding_id));
+  return rows.find((row) => !superseded.has(row.finding_id)) ?? null;
 }
 
 /**
- * A person changes what they recorded about a proposal send (0161): one append-only row that
- * supersedes the newest earlier answer, the 0156 confirmation or the last correction. When the
- * outcome flips, its insert moves the send between `succeeded` (delivered) and `reconciled` (not
- * delivered); it always writes the audit row. Only the newest answer may be superseded, and only
- * until the next send of that proposal or the customer's decision on it. The same key with the
- * same request replays; anything else conflicts.
+ * A person records what they found about a settled proposal send, or corrects what was found
+ * (0161): one append-only finding that never changes the send. `not_executed` says nothing went
+ * out; `not_received` says it went out but the customer did not get it. The first finding of a send
+ * supersedes nothing; a correction names the newest finding, so the history never forks. Open until
+ * the next send of the proposal or the customer's decision on it. The same key with the same
+ * request replays; anything else conflicts.
  */
-export async function recordProposalDeliveryCorrection(
+export async function recordProposalDeliveryFinding(
   env: AppEnv,
   input: {
     tenantId: string;
     effectId: string;
-    supersedesId: string;
-    outcome: ProposalDeliveryOutcome;
+    supersedesFindingId: string | null;
+    finding: ProposalDeliveryFindingKind;
     note: string;
     actorUserId: string;
     actorRole: string;
     idempotencyKey: string;
     now?: string;
   },
-): Promise<{ correction: ProposalDeliveryCorrectionRecord; replayed: boolean; effectState: string }> {
-  const keyHash = await sha256Hex(`proposal-delivery-correction\n${input.tenantId}\n${input.idempotencyKey}`);
+): Promise<{ finding: ProposalDeliveryFindingRecord; replayed: boolean; effectState: string }> {
+  const keyHash = await sha256Hex(`proposal-delivery-finding\n${input.tenantId}\n${input.idempotencyKey}`);
   const requestSha = await sha256Hex(canonicalJson({
     effect_id: input.effectId,
-    supersedes_id: input.supersedesId,
-    outcome: input.outcome,
+    supersedes_finding_id: input.supersedesFindingId,
+    finding: input.finding,
     note: input.note,
     actor: input.actorUserId,
   }));
   const effectState = async (effectId: string) =>
     (await env.DB.prepare("SELECT state FROM external_effects WHERE effect_id = ?")
       .bind(effectId).first<{ state: string }>())?.state ?? "";
-  const readCorrection = async (where: string, value: string) =>
+  const readFinding = async (where: string, value: string) =>
     await env.DB.prepare(
-      `SELECT correction_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id,
-              supersedes_confirmation_id, supersedes_correction_id, outcome, note,
-              corrected_by_user_id, corrected_by_role, created_at, request_sha256
-         FROM proposal_delivery_corrections WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
-    ).bind(input.tenantId, value).first<ProposalDeliveryCorrectionRecord & { request_sha256: string }>();
+      `SELECT finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+              supersedes_finding_id, note, found_by_user_id, found_by_role, created_at, request_sha256
+         FROM proposal_delivery_findings WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
+    ).bind(input.tenantId, value).first<ProposalDeliveryFindingRecord & { request_sha256: string }>();
   const replay = async () => {
-    const prior = await readCorrection("idempotency_key_hash", keyHash);
+    const prior = await readFinding("idempotency_key_hash", keyHash);
     if (!prior) return null;
     if (prior.request_sha256 !== requestSha) {
-      throw new ProposalDeliveryConfirmationError("proposal_delivery_correction_replay_conflict", 409);
+      throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_replay_conflict", 409);
     }
-    const { request_sha256: _hash, ...correction } = prior;
-    return { correction, replayed: true, effectState: await effectState(prior.effect_id) };
+    const { request_sha256: _hash, ...finding } = prior;
+    return { finding, replayed: true, effectState: await effectState(prior.effect_id) };
   };
   const earlier = await replay();
   if (earlier) return earlier;
 
   const effect = await env.DB.prepare(
-    `SELECT effect_id, state, aggregate_id, intent_id FROM external_effects
+    `SELECT effect_id, aggregate_id, intent_id FROM external_effects
       WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
         AND aggregate_type = 'proposal_publication'`,
-  ).bind(input.tenantId, input.effectId).first<{
-    effect_id: string;
-    state: string;
-    aggregate_id: string;
-    intent_id: string;
-  }>();
+  ).bind(input.tenantId, input.effectId).first<{ effect_id: string; aggregate_id: string; intent_id: string }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
-  const latest = await latestProposalDeliveryAnswer(env, input.tenantId, effect.effect_id);
-  if (!latest) {
-    throw new ProposalDeliveryConfirmationError("proposal_delivery_nothing_recorded", 409, {
-      delivery_state: effect.state,
+  // Only the newest finding is corrected; naming another one would fork the history.
+  const latest = await latestProposalDeliveryFinding(env, input.tenantId, effect.effect_id);
+  if ((latest?.finding_id ?? null) !== input.supersedesFindingId) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_not_latest", 409, {
+      latest_finding_id: latest?.finding_id ?? null,
     });
   }
-  // Only the newest answer is corrected; naming an older one would fork the history.
-  if (latest.answer_id !== input.supersedesId) {
-    throw new ProposalDeliveryConfirmationError("proposal_delivery_correction_not_latest", 409, {
-      latest_answer_id: latest.answer_id,
-    });
-  }
-  const supersedesConfirmation = latest.kind === "confirmation";
   const createdAt = input.now ?? new Date().toISOString();
-  const correctionId = `delivery-correction:${keyHash.slice(0, 40)}`;
+  const findingId = `delivery-finding:${keyHash.slice(0, 40)}`;
   try {
     await env.DB.prepare(
-      `INSERT INTO proposal_delivery_corrections
-         (correction_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id,
-          supersedes_confirmation_id, supersedes_correction_id, outcome, note, corrected_by_user_id,
-          corrected_by_role, idempotency_key_hash, request_sha256, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO proposal_delivery_findings
+         (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+          supersedes_finding_id, note, found_by_user_id, found_by_role, idempotency_key_hash,
+          request_sha256, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).bind(
-      correctionId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id,
-      supersedesConfirmation ? latest.answer_id : null, supersedesConfirmation ? null : latest.answer_id,
-      input.outcome, input.note, input.actorUserId, input.actorRole, keyHash, requestSha, createdAt,
+      findingId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id, input.finding,
+      input.supersedesFindingId, input.note, input.actorUserId, input.actorRole, keyHash, requestSha,
+      createdAt,
     ).run();
   } catch (error) {
     const raced = await replay();
     if (raced) return raced;
     const message = error instanceof Error ? error.message : String(error);
-    const code = message.match(/proposal_delivery_correction_[a-z_]+/)?.[0] ?? "proposal_delivery_correction_failed";
+    const code = message.match(/proposal_delivery_finding_[a-z_]+/)?.[0] ?? "proposal_delivery_finding_failed";
     throw new ProposalDeliveryConfirmationError(code, code.endsWith("_failed") ? 503 : 409);
   }
-  const stored = await readCorrection("correction_id", correctionId);
-  if (!stored) throw new ProposalDeliveryConfirmationError("proposal_delivery_correction_failed", 503);
-  const { request_sha256: _hash, ...correction } = stored;
-  return { correction, replayed: false, effectState: await effectState(effect.effect_id) };
+  const stored = await readFinding("finding_id", findingId);
+  if (!stored) throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_failed", 503);
+  const { request_sha256: _hash, ...finding } = stored;
+  return { finding, replayed: false, effectState: await effectState(effect.effect_id) };
 }
 
 /**
@@ -1053,29 +1044,19 @@ export async function recordCommercialProposalPublication(
   }
   const eventId = await recordId("commercial-publication", input.tenantId, idempotencyKeyHash);
   try {
-    // The person who recorded the event (0161), in the same batch and first: D1 refuses a recorder
-    // added to an event that already exists. Requiring one for every new event is a later contract
-    // migration, so a rolled-back Worker that does not write it keeps recording publications.
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO commercial_proposal_publication_recorders
-           (publication_event_id, tenant_id, recorded_by_user_id, recorded_at)
-         VALUES (?, ?, ?, ?)`,
-      ).bind(eventId, input.tenantId, input.recordedByUserId, occurredAt),
-      env.DB.prepare(
-        `INSERT INTO commercial_proposal_publication_events (
-           publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
-           publication_version, previous_state, state, policy_permit_id,
-           proposal_publication_approval_id, external_effect_id, command_fingerprint,
-           idempotency_key_hash, evidence_digest, occurred_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        eventId, input.tenantId, input.proposalRevisionId, input.proposalPackId,
-        input.publicationVersion, input.previousState, input.state, authority.policyPermitId,
-        authority.approvalRequestId, externalEffectId, commandFingerprint,
-        idempotencyKeyHash, authority.evidenceDigest, occurredAt,
-      ),
-    ]);
+    await env.DB.prepare(
+      `INSERT INTO commercial_proposal_publication_events (
+         publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+         publication_version, previous_state, state, policy_permit_id,
+         proposal_publication_approval_id, external_effect_id, command_fingerprint,
+         idempotency_key_hash, evidence_digest, occurred_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      eventId, input.tenantId, input.proposalRevisionId, input.proposalPackId,
+      input.publicationVersion, input.previousState, input.state, authority.policyPermitId,
+      authority.approvalRequestId, externalEffectId, commandFingerprint,
+      idempotencyKeyHash, authority.evidenceDigest, occurredAt,
+    ).run();
   } catch (error) {
     const concurrent = await findByIdempotency<CommercialPublicationRecord>(
       env, "commercial_proposal_publication_events", input.tenantId, idempotencyKeyHash,

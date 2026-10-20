@@ -1458,16 +1458,6 @@ test("IRO-208B records a contradictory provider readback as mismatch without rec
 test("0116 backfills shipped acceptances into the native activation and deposit queue", async () => {
   const h = setup("0115_company_profile_convergence.sql");
   try {
-    // Today's Worker writes the person who recorded each publication into the 0161 recorder table,
-    // beside the publication event. A 0115 database has no such table, so this upgrade test adds
-    // just that table, exactly as 0161 declares it, before today's code records the publication;
-    // 0116's backfill reads publication events and acceptances only.
-    const recorderTable = readFileSync(
-      new URL("../migrations/0161_proposal_delivery_corrections.sql", import.meta.url),
-      "utf8",
-    ).match(/CREATE TABLE IF NOT EXISTS commercial_proposal_publication_recorders \([\s\S]*?\n\);/)?.[0];
-    assert.ok(recorderTable, "0161 declares the publication recorder table");
-    h.db.raw.exec(recorderTable);
     const ids = await intakeAndMaterialize(h);
     await publishSyntheticContract(h, ids, TERMS, "upgrade-backfill");
     const acceptanceId = await acceptPublicContract(h, await issuePortalLink(h, ids));

@@ -798,7 +798,6 @@ function publicationRequest(): RecordCommercialPublicationInput {
     state: "published",
     authority: { kind: "policy_permit", permitId: "pending" },
     idempotencyKey: "commercial:publication:0001",
-    recordedByUserId: OWNER_ID,
   };
 }
 

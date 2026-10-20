@@ -1240,7 +1240,6 @@ function publicationRequest(
     state: "published",
     authority: { kind: "policy_permit", permitId: "pending" },
     idempotencyKey: `facet-projection:publication:${revisionNumber}`,
-    recordedByUserId: OWNER,
   };
 }
 

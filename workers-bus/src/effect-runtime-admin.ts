@@ -27,9 +27,13 @@ export async function handleExternalEffectClaim(req: Request, env: AppEnv): Prom
   if (!tenantMatches(env, effect.tenantId) || authority.tenantId !== effect.tenantId) {
     return json({ error: "effect_tenant_mismatch" }, 403);
   }
+  // The claim happens now, by the server's clock: a caller-supplied time could backdate a claim
+  // past an effect's deadline.
+  const now = new Date().toISOString();
   try {
     const proposed = await proposeExternalEffect(env, {
       ...effect,
+      now,
       authority: {
         permitRef: String(record(effect.authority)?.permitRef ?? ""),
         policyRef: String(record(effect.authority)?.policyRef ?? ""),
@@ -37,9 +41,9 @@ export async function handleExternalEffectClaim(req: Request, env: AppEnv): Prom
       },
     } as ExternalEffectRequest);
     const authorized = proposed.state === "proposed"
-      ? await authorizeExternalEffect(env, proposed.effect_id, authority, String(effect.now ?? new Date().toISOString()))
+      ? await authorizeExternalEffect(env, proposed.effect_id, authority, now)
       : proposed;
-    const claimed = await claimExternalEffect(env, authorized.effect_id, new Date(String(effect.now ?? new Date().toISOString())));
+    const claimed = await claimExternalEffect(env, authorized.effect_id, new Date(now));
     return json({ effect: claimed.effect, attempt: claimed.attempt });
   } catch (error) {
     return json({ error: effectError(error) }, effectErrorStatus(error));
@@ -127,11 +131,14 @@ function text(value: unknown): string | null {
 
 function effectError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
+  // D1's single-flight guard (0156): this proposal revision's last send is not confirmed delivered.
+  if (value.includes("proposal_delivery_unconfirmed")) return "proposal_delivery_unconfirmed";
   return /^effect_[a-z0-9_]+$/.test(value) ? value : "effect_runtime_error";
 }
 
 function effectErrorStatus(error: unknown): 400 | 409 | 422 | 500 {
   const code = effectError(error);
+  if (code === "proposal_delivery_unconfirmed") return 409;
   if (code === "effect_runtime_error") return 500;
   if (code.includes("conflict") || code.includes("in_flight") || code.includes("lease_lost")) return 409;
   if (code.includes("missing") || code.includes("invalid") || code.includes("expired") || code.includes("denied")) return 422;

@@ -9,6 +9,7 @@ import {
   delegationOf,
   formatMoney,
   receiptWords,
+  VIEW_REFUSED,
   specialistDelegation,
   type CatalogAction,
   type ContractReceipt,
@@ -95,6 +96,22 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       words: "Answered by Grace Obi · waiting for the phone",
       kind: "pending",
     });
+  });
+
+  it("keeps an answer done when only its generated view was refused, with a note", () => {
+    const words = receiptWords({
+      outcome: "succeeded",
+      needs_from_you: null,
+      policy: {
+        policy_id: "policy",
+        version: "1",
+        result: "allow",
+        checks: [],
+        reason_codes: ["view_spec_invalid"],
+      },
+    });
+    expect(words.state).toBe("done");
+    expect(words.note).toBe(VIEW_REFUSED);
   });
 
   it("gives every held reason one sentence and one next step", () => {

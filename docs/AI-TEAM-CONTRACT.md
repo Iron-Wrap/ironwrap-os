@@ -718,8 +718,7 @@ them and follows these conventions:
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
   citations, never an argument. Only a run started by the inbound event itself may propose it, and
-  every citation is that event (`signal/<id>`). Its arguments are not registered yet, so until
-  they are, a step abstains (`policy_missing`).
+  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`).
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:
@@ -1136,10 +1135,10 @@ Worker takes the `close_model` 3 block, the routed block of a gateway config v2 
 tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
 with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
 to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
-host. The host's half is not built yet (see `CAPABILITY-MATRIX.md`): a host is to send the newest
-close model it knows that is no newer than the Worker's, but today's host sends the `close_model` 3
-block only when the Worker names exactly 3, so a Worker on 4 would get the legacy block from it and
-refuse it. Only a `close_model` 3 block records the effort, run class, qualification, release and
+host. A host sends the newest close model it knows that is no newer than the Worker's: today's
+host sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still
+gets the block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on
+a later close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block records the effort, run class, qualification, release and
 data class, so only its live or shadow output is held to a qualification (see "Qualification").
 
 ## Shared memory

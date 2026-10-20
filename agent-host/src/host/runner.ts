@@ -5,8 +5,9 @@
 // the run with the exact outcome and route. An abstention closes the run too, so every receipt says
 // why nothing happened.
 //
-// Close shape: the v3 model block goes only to a Worker that advertises `close_model: 3`. Any other
-// Worker gets the legacy block, which records a provider id it knows (`claude` or `codex`), so the
+// Close shape: the host sends the newest close model it knows that is not newer than the one the
+// Worker advertises: the v3 model block to a Worker on `close_model` 3 or later (a later Worker
+// still accepts the model before its own). Any other Worker gets the legacy block, which records a provider id it knows (`claude` or `codex`), so the
 // run may use only those providers; another is unavailable (`provider_disabled`).
 //
 // Durability: the close body is written to `pending-closes/` before it is sent and removed once
@@ -23,6 +24,9 @@ import { buildRunInput } from "./prompt.ts";
 import { specialistRelease } from "./release.ts";
 import { loadSpecialist, type Specialist } from "./specialists.ts";
 import { WorkerError, type OpenedRun, type RunClose, type Signal, type WorkerClient } from "./worker.ts";
+
+/** The newest close model this host sends (the v3 model block). */
+export const HOST_CLOSE_MODEL = 3;
 
 export type WorkerLike = Pick<WorkerClient, "openRun" | "closeRun">;
 export interface GatewayLike {
@@ -92,7 +96,7 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
 
   // A Worker that sends any routing field also accepts them back in the close.
   const routed = ["review_of", "expected_action_id", "mode"].some((field) => Object.hasOwn(run, field));
-  const closeV3 = run.close_model === 3;
+  const closeV3 = Number.isInteger(run.close_model) && (run.close_model as number) >= HOST_CLOSE_MODEL;
   const reviewed = run.review_of ?? null;
   const reviewOf = reviewed ? { runId: reviewed.run_id, family: reviewedFamily(reviewed) } : null;
   const action = run.expected_action_id ?? null;

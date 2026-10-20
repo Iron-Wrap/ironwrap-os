@@ -2,6 +2,7 @@ import {
   appPublicOrigin,
   authRequestContext,
   configuredTenantId,
+  hasLiveStaffSession,
   publicTenant,
   randomToken,
   sha256Hex,
@@ -13,9 +14,11 @@ import {
   claimCustomerPortalAccessThrottle,
   findActiveCustomerPortalLink,
   listCustomerPortalLinks,
+  recordCustomerPortalProposalView,
   replaceCustomerPortalLink,
   revokeCustomerPortalLink,
   touchCustomerPortalLink,
+  type ActiveCustomerPortalLink,
   type CustomerPortalLinkRecord,
 } from "./customer-portal-store.ts";
 import { gmailConfigured } from "./google.ts";
@@ -25,7 +28,7 @@ import {
   type NativeCommercialJobPacket,
   type NativeJobCoreRecord,
 } from "./native-job-packet-read.ts";
-import type { AppEnv, AuthContext } from "./app-types.ts";
+import type { AppEnv, AuthContext, AuthRequestContext } from "./app-types.ts";
 import { customerContractAcceptanceAvailable } from "./customer-contract-acceptance.ts";
 import { customerDecisionBackendEnabled } from "./customer-decision-config.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -122,6 +125,16 @@ export function customerPortalEnabled(env: AppEnv): boolean {
   return String(env.APP_CUSTOMER_PORTAL_ENABLED) === "true";
 }
 
+/**
+ * Recording the first open of a proposal (0163) stays off until the owner approves the portal
+ * privacy notice that says the first open is recorded and kept for 3 years.
+ */
+export function customerPortalProposalViewsEnabled(env: AppEnv): boolean {
+  return String(env.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED) === "true";
+}
+
+const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
+
 /** Optional feature gates must not make the core Worker unready while disabled. */
 export function customerPortalConfigured(env: AppEnv): boolean {
   if (!customerPortalEnabled(env)) return true;
@@ -190,17 +203,61 @@ export async function handleCustomerPortalResolve(
       now.toISOString(),
     );
     if (!link) return portalNotFound();
-    const model = await buildCustomerPortalReadModel(env, link);
-    if (!model) return portalNotFound();
+    const portal = await buildCustomerPortalReadModel(env, link);
+    if (!portal) return portalNotFound();
     await touchCustomerPortalLink(env, {
       tenantId,
       linkId: link.link_id,
       now: now.toISOString(),
     });
-    return portalJson(model);
+    if (portal.publication) {
+      await recordFirstProposalOpen(req, env, link, request, portal.publication, now);
+    }
+    return portalJson(portal.model);
   } catch {
     // A D1 outage says nothing about whether a supplied capability was valid.
     return portalUnavailable();
+  }
+}
+
+/**
+ * Record the first time someone holding the customer's link opened the proposal publication this
+ * page shows (0163): ids and this request's time, nothing about the device. Staff never count: a
+ * request carrying a live staff session, or from the device that issued the link, is skipped.
+ * Nothing here can break the customer's page; a failure is logged and the page is still served.
+ */
+async function recordFirstProposalOpen(
+  req: Request,
+  env: AppEnv,
+  link: ActiveCustomerPortalLink,
+  request: AuthRequestContext,
+  publication: PublishedCommercial["publication"],
+  now: Date,
+): Promise<void> {
+  if (!customerPortalProposalViewsEnabled(env)) return;
+  try {
+    if (
+      request.ip_hash === link.issued_ip_hash &&
+      request.user_agent_hash === link.issued_user_agent_hash
+    ) {
+      return;
+    }
+    if (await hasLiveStaffSession(req, env)) return;
+    await recordCustomerPortalProposalView(env, {
+      viewId: `portal-view:${await sha256Hex(
+        `${link.tenant_id}|${link.link_id}|${publication.publication_event_id}`,
+      )}`,
+      tenantId: link.tenant_id,
+      linkId: link.link_id,
+      roofJobId: link.roof_job_id,
+      customerId: link.customer_id,
+      proposalPackId: publication.proposal_pack_id,
+      proposalRevisionId: publication.proposal_revision_id,
+      publicationEventId: publication.publication_event_id,
+      viewedAt: now.toISOString(),
+    });
+  } catch (error) {
+    log({ at: "customer_portal_proposal_view", error: String(error) });
   }
 }
 
@@ -351,11 +408,15 @@ export async function handleCustomerPortalLinks(
 /**
  * Re-read the bound job on every customer request. A capability therefore stops working if the
  * job is later reassigned to a different customer, even before an office user manually revokes it.
+ * Beside the model it returns the publication the page shows, if any; that stays in the Worker.
  */
 export async function buildCustomerPortalReadModel(
   env: AppEnv,
   link: CustomerPortalLinkRecord,
-): Promise<CustomerPortalReadModel | null> {
+): Promise<{
+  model: CustomerPortalReadModel;
+  publication: PublishedCommercial["publication"] | null;
+} | null> {
   const core = await readNativeJobCore(env, link.tenant_id, link.roof_job_id);
   const job = core?.job;
   if (
@@ -401,7 +462,7 @@ export async function buildCustomerPortalReadModel(
   if (companyProfile.updated_at) sourceTimestamps.push(companyProfile.updated_at);
   const companyContact = publicCompanyContact(companyProfile);
 
-  return {
+  const model: CustomerPortalReadModel = {
     version: 1,
     brand: customerPortalBrand(job, env),
     ...(companyContact ? { company_contact: companyContact } : {}),
@@ -459,6 +520,7 @@ export async function buildCustomerPortalReadModel(
     closeout: null,
     warranty: null,
   };
+  return { model, publication: published?.publication ?? null };
 }
 
 async function currentNativePortalAssignment(

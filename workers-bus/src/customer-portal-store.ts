@@ -14,6 +14,12 @@ export interface CustomerPortalLinkRecord {
   access_count: number;
 }
 
+/** A live link with the hashes of the device that issued it (0018), for telling staff apart. */
+export interface ActiveCustomerPortalLink extends CustomerPortalLinkRecord {
+  issued_ip_hash: string;
+  issued_user_agent_hash: string;
+}
+
 export interface CreateCustomerPortalLinkInput {
   linkId: string;
   tokenHash: string;
@@ -71,16 +77,17 @@ export async function findActiveCustomerPortalLink(
   tokenHash: string,
   tenantId: string,
   now: string,
-): Promise<CustomerPortalLinkRecord | null> {
+): Promise<ActiveCustomerPortalLink | null> {
   return await env.DB.prepare(
     `SELECT link_id, tenant_id, roof_job_id, customer_id, issued_by_user_id, created_at, expires_at,
-            revoked_at, revoked_by_user_id, last_accessed_at, access_count
+            revoked_at, revoked_by_user_id, last_accessed_at, access_count,
+            issued_ip_hash, issued_user_agent_hash
      FROM customer_portal_links
      WHERE token_hash = ? AND tenant_id = ? AND revoked_at IS NULL AND expires_at > ?
      LIMIT 1`,
   )
     .bind(tokenHash, tenantId, now)
-    .first<CustomerPortalLinkRecord>();
+    .first<ActiveCustomerPortalLink>();
 }
 
 export async function listCustomerPortalLinks(
@@ -142,6 +149,94 @@ export async function touchCustomerPortalLink(
     .run();
 }
 
+/**
+ * Keep the first open of one published proposal through one portal link (0163). A later open of
+ * the same publication through the same link inserts nothing. D1 refuses a row whose link, job,
+ * customer or publication do not match, or whose time is not D1's own.
+ */
+export async function recordCustomerPortalProposalView(
+  env: Env,
+  input: {
+    viewId: string;
+    tenantId: string;
+    linkId: string;
+    roofJobId: string;
+    customerId: string;
+    proposalPackId: string;
+    proposalRevisionId: string;
+    publicationEventId: string;
+    viewedAt: string;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO customer_portal_proposal_views
+       (view_id, tenant_id, link_id, roof_job_id, customer_id, proposal_pack_id,
+        proposal_revision_id, publication_event_id, first_viewed_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+      WHERE NOT EXISTS (
+        SELECT 1 FROM customer_portal_proposal_views
+         WHERE tenant_id = ?2 AND link_id = ?3 AND publication_event_id = ?8
+      )`,
+  )
+    .bind(
+      input.viewId,
+      input.tenantId,
+      input.linkId,
+      input.roofJobId,
+      input.customerId,
+      input.proposalPackId,
+      input.proposalRevisionId,
+      input.publicationEventId,
+      input.viewedAt,
+    )
+    .run();
+}
+
+/**
+ * When someone holding the customer's link first opened this proposal revision (0163), or null.
+ * Only the pack's live publication counts: its newest event, `published`, for this revision. When
+ * the revision has a send attempt (its newest `proposal.publish` effect), only an open at or after
+ * that attempt started counts, so an open of an earlier send never answers for a later one.
+ */
+export async function readProposalFirstViewedAt(
+  env: Env,
+  input: { tenantId: string; proposalPackId: string; proposalRevisionId: string },
+): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `WITH live AS (
+       SELECT publication_event_id, state, proposal_revision_id
+         FROM commercial_proposal_publication_events
+        WHERE tenant_id = ?1 AND proposal_pack_id = ?2
+        ORDER BY publication_version DESC
+        LIMIT 1
+     ),
+     latest_attempt AS (
+       SELECT MIN(attempt.started_at) AS started_at
+         FROM external_effect_attempts attempt
+        WHERE attempt.effect_id = (
+          SELECT effect.effect_id
+            FROM external_effects effect
+           WHERE effect.tenant_id = ?1 AND effect.action = 'proposal.publish'
+             AND effect.aggregate_type = 'proposal_publication'
+             AND effect.aggregate_id = ?2 AND effect.intent_id = ?3
+           ORDER BY effect.created_at DESC, effect.effect_id DESC
+           LIMIT 1
+        )
+     )
+     SELECT MIN(view.first_viewed_at) AS viewed_at
+       FROM live
+       JOIN customer_portal_proposal_views view
+         ON view.tenant_id = ?1 AND view.publication_event_id = live.publication_event_id
+      WHERE live.state = 'published' AND live.proposal_revision_id = ?3
+        AND ((SELECT started_at FROM latest_attempt) IS NULL
+             OR julianday(view.first_viewed_at)
+                >= julianday((SELECT started_at FROM latest_attempt)))`,
+  )
+    .bind(input.tenantId, input.proposalPackId, input.proposalRevisionId)
+    .first<{ viewed_at: string | null }>();
+  return row?.viewed_at ?? null;
+}
+
 export async function claimCustomerPortalAccessThrottle(
   env: Env,
   input: {
@@ -189,12 +284,19 @@ export async function pruneCustomerPortalRecords(
     now.getTime() - 365 * 24 * 60 * 60_000,
   ).toISOString();
   await Promise.all([
+    // A link that a first-open record names (0163) is kept with that record, which follows the
+    // 3-year commercial retention rather than this one-year portal window.
     env.DB.prepare(
       `DELETE FROM customer_portal_links
        WHERE expires_at <= ? AND (revoked_at IS NULL OR revoked_at <= ?)
          AND NOT EXISTS (
            SELECT 1 FROM customer_portal_acceptance_challenges AS challenge
            WHERE challenge.portal_link_id = customer_portal_links.link_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_proposal_views AS view
+           WHERE view.tenant_id = customer_portal_links.tenant_id
+             AND view.link_id = customer_portal_links.link_id
          )`,
     )
       .bind(retentionCutoff, retentionCutoff)

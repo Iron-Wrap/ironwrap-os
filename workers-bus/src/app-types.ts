@@ -49,6 +49,9 @@ export type AppEnv = Env & {
   // capability. It is provisional -- an estimator still confirms it before pricing moves -- so it
   // is deliberately not folded into the contract-acceptance flag.
   APP_CUSTOMER_PORTAL_DECISION_ENABLED?: string;
+  // Recording the first open of a published proposal (0163). Off until the owner approves the
+  // portal privacy notice that says the first open is recorded and kept for 3 years.
+  APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED?: string;
   APP_TENANT_ID?: string;
   APP_TENANT_NAME?: string;
   APP_TENANT_BRAND?: string;

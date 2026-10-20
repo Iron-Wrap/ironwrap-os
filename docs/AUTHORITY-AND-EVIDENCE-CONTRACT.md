@@ -663,6 +663,24 @@ hold it. The entry names the competency record, D1 checks both rules again at in
 predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
 reversal, takes D1's clock, as the policy's entries do.
 
+Crew clears only by policy, when a person schedules the job (migration `0159`). The schedule
+(`POST /api/v1/jobs/{job}/schedule`, from the person's own cookie session, never the QA seed owner)
+appends `crew_assignment` to Crew in the same D1 batch as the assignment, bound to the crew it names
+at that crew's version, so the two commit together or not at all. A schedule naming another crew or
+crew version first appends the policy's `crew_superseded` reversal of the entry Crew stands on. Crew
+has no waiver and no person clear. The schedule rests on the gate evidence as it stands when it is
+written, read with D1's own clock, and each refusal is named on the route and repeated in D1:
+
+- no stop applies to the job, read exactly as a Safety attestation reads it, so a Safety gate
+  attested before a new stop schedules nothing;
+- Deposit does not stand on a contract with no deposit that a later contract of the job with other
+  terms has superseded: the window before the policy's `contract_superseded` lands;
+- Weather stands on a person's attestation whose window has not ended and holds the scheduled work
+  (a schedule with no end is held to its start), so a Weather gate left `ready` after its window
+  ended, or one recorded before the ledger, schedules nothing until it is attested again;
+- no member of the crew shares a login (user id, email or Frappe user) with the person whose
+  attestation Materials, Safety, Access or Weather stands on.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

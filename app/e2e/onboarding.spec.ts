@@ -219,7 +219,9 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     });
 
     await page.getByRole("button", { name: "Reload Sam’s access" }).click();
-    await expect(access.getByText("Changed somewhere else a moment ago")).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /^Production · changed somewhere else a moment ago/ }),
+    ).toBeVisible();
     await expect(
       access.getByText(
         "Your change is not saved yet: Sam’s role changes from Production to Accounting.",

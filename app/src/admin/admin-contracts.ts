@@ -117,6 +117,8 @@ export const appUserSchema = z.object({
   access_version: z.number().int().min(1),
   updated_at: z.string(),
   is_self: z.boolean(),
+  /** Removing their access unpaired a crew phone; giving it back then needs the phone paired again. */
+  crew_phone_unpaired: z.boolean(),
 });
 
 export const appUserListResponseSchema = z.object({
@@ -133,6 +135,7 @@ export const appUserMutationResponseSchema = z.object({
     active: z.boolean(),
     /** The version this change produced; the next change to this person names it. */
     access_version: z.number().int().min(1),
+    crew_phone_unpaired: z.boolean(),
   }),
 });
 

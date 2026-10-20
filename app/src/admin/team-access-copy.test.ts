@@ -150,10 +150,10 @@ describe("the derived access-conflict phrases", () => {
     expect(cannotApplyLine("Grace Obi", null, NOW)).toBe(
       "Your change cannot apply: someone else removed Grace Obi from the team a moment ago.",
     );
-    expect(changedElsewhere(conflict(you), NOW)).toBe("Changed somewhere else a moment ago");
+    expect(changedElsewhere(conflict(you), NOW)).toBe("changed somewhere else a moment ago");
     expect(changedElsewhere(conflict(priya, ago(12 * MINUTE)), NOW)).toBe(
-      "Changed by Priya Nand 12 min ago",
+      "changed by Priya Nand 12 min ago",
     );
-    expect(changedElsewhere(conflict(nameless), NOW)).toBe("Changed by someone else a moment ago");
+    expect(changedElsewhere(conflict(nameless), NOW)).toBe("changed by someone else a moment ago");
   });
 });

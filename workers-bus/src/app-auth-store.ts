@@ -226,6 +226,24 @@ export async function listAppUsers(
 }
 
 /**
+ * The people whose crew phone a removal of their access unpaired, so giving access back needs it
+ * paired again. An office unpair names who revoked the device; a removal does not. Only the fact
+ * leaves this store, never a device id.
+ */
+export async function usersWithCrewPhoneUnpairedByRemoval(
+  env: Env,
+  tenantId: string,
+  userId?: string,
+): Promise<Set<string>> {
+  const result = await env.DB.prepare(
+    `SELECT DISTINCT user_id FROM app_devices
+      WHERE tenant_id = ? AND (? IS NULL OR user_id = ?)
+        AND revoked_at IS NOT NULL AND revoked_by_user_id IS NULL`,
+  ).bind(tenantId, userId ?? null, userId ?? null).all<{ user_id: string }>();
+  return new Set((result.results ?? []).map((row) => row.user_id));
+}
+
+/**
  * One app user by id in whatever access state it is in. `findActiveUserById` deliberately hides
  * deactivated rows because it answers "may this person act"; managing people needs the opposite
  * question, so restoring access can address the row that already exists.

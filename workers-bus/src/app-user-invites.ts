@@ -171,6 +171,7 @@ export function userInviteState(
 function appUserProjection(
   user: AppUserRecord,
   auth: AuthContext,
+  crewPhoneUnpaired: boolean,
 ): Record<string, unknown> {
   return {
     user_id: user.user_id,
@@ -182,7 +183,23 @@ function appUserProjection(
     updated_at: user.updated_at,
     /** The signed-in owner must not be able to lock themselves out of their own tenant. */
     is_self: user.user_id === auth.session.user_id,
+    /** Removing their access unpaired a crew phone, which giving it back does not re-pair. */
+    crew_phone_unpaired: crewPhoneUnpaired,
   };
+}
+
+/** One person's projection, with whether a removal unpaired their crew phone. */
+async function projectAppUser(
+  env: AppEnv,
+  user: AppUserRecord,
+  auth: AuthContext,
+): Promise<Record<string, unknown>> {
+  const unpaired = await authStore.usersWithCrewPhoneUnpairedByRemoval(
+    env,
+    auth.session.tenant_id,
+    user.user_id,
+  );
+  return appUserProjection(user, auth, unpaired.has(user.user_id));
 }
 
 // --------------------------------------------------------------------------- input parsing
@@ -689,11 +706,15 @@ export async function listAppUsersForOffice(
   const guard = officeGuard(auth);
   if (guard) return guard;
   const users = await authStore.listAppUsers(env, auth.session.tenant_id);
+  const unpaired = await authStore.usersWithCrewPhoneUnpairedByRemoval(
+    env,
+    auth.session.tenant_id,
+  );
   return {
     ok: true,
     body: {
       version: APP_API_VERSION,
-      users: users.map((user) => appUserProjection(user, auth)),
+      users: users.map((user) => appUserProjection(user, auth, unpaired.has(user.user_id))),
     },
   };
 }
@@ -731,7 +752,7 @@ export async function changeAppUserRole(
     return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
   }
   if (user.role === parsed.value.role) {
-    return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
+    return { ok: true, body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) } };
   }
 
   const updated = await authStore.setAppUserAccessRole(env, {
@@ -756,7 +777,7 @@ export async function changeAppUserRole(
   }
   return {
     ok: true,
-    body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },
+    body: { version: APP_API_VERSION, user: await projectAppUser(env, updated, auth) },
   };
 }
 
@@ -792,7 +813,7 @@ export async function changeAppUserAccess(
     return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
   }
   if ((user.active === 1) === parsed.value.active) {
-    return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
+    return { ok: true, body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) } };
   }
 
   const now = new Date().toISOString();
@@ -818,7 +839,7 @@ export async function changeAppUserAccess(
   }
   return {
     ok: true,
-    body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },
+    body: { version: APP_API_VERSION, user: await projectAppUser(env, updated, auth) },
   };
 }
 

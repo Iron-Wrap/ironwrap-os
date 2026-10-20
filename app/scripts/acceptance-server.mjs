@@ -2299,6 +2299,7 @@ const onboardingDefaults = () => ({
       access_version: 1,
       updated_at: "2026-08-22T12:00:00.000Z",
       is_self: true,
+      crew_phone_unpaired: false,
     },
   ],
   leads: [],
@@ -2696,6 +2697,8 @@ async function routeOnboarding(request, requestUrl, method) {
         access_version: existing ? existing.access_version + 1 : 1,
         updated_at: "2026-08-22T12:32:00.000Z",
         is_self: existing?.is_self ?? false,
+        // Nobody here pairs a crew phone, so no removal ever unpairs one.
+        crew_phone_unpaired: false,
       };
       onboardingState.users = existing
         ? onboardingState.users.map((user) => (user.email === email ? next : user))

@@ -102,24 +102,35 @@ export function cannotApplyLine(
   return `Your change cannot apply: ${who} removed ${name} from the team ${when}.`;
 }
 
-/** After a reload, beside a value changed elsewhere. */
+/**
+ * After a reload, what happened to a value changed elsewhere and when: "changed somewhere else
+ * {time}" for the viewer's own other change, "changed by {Actor} {time}" for anyone else. A role
+ * reads "{Role} · changed …" (frame 3); the access chip carries it capitalised.
+ */
 export function changedElsewhere(conflict: AccessConflict | null, now: number): string {
   const when = whenChanged(conflict?.changed_at, now);
   const actor = actorOf(conflict);
-  if (actor.kind === "you") return `Changed somewhere else ${when}`;
-  return `Changed by ${actor.kind === "other" ? actor.name : "someone else"} ${when}`;
+  if (actor.kind === "you") return `changed somewhere else ${when}`;
+  return `changed by ${actor.kind === "other" ? actor.name : "someone else"} ${when}`;
 }
 
-// TODO(Track B build 9): the removal lines below follow Track B's template for SET-03 frames 1,
-// 3, 4 and 5 and are pending its re-gate; replace them with build 9's verbatim lines.
+/** Beside a value this page showed before the other change: "{Value} · may be out of date". */
+export const MAY_BE_OUT_OF_DATE = "may be out of date";
+
+/** Under the values marked out of date (frames 2, 4, 6a and 6b). */
+export const OUT_OF_DATE_NOTE =
+  "Values marked “may be out of date” update when their access reloads.";
 
 /** Under Remove on frames 1 and 3, after the "Remove {First} from the team:" lead. */
 export const REMOVE_EXPLAINS =
   "signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.";
 
-/** Under a held remove's pending line (frame 4). */
+/** Frame 4, after the reload's line: what the held remove will do. */
 export const REMOVING_EXPLAINS =
   "Removing them signs them out everywhere and unpairs any crew phone they use.";
 
-/** In the "Give {First} access back:" line (frame 5), after "the access they had ({Role})". */
+/**
+ * In the "Give {First} access back:" line, after "the access they had ({Role})", only when removing
+ * their access unpaired a crew phone (`crew_phone_unpaired`).
+ */
 export const PAIR_AGAIN = "a crew phone must be paired again";

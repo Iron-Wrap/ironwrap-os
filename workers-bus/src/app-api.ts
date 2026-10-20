@@ -499,6 +499,12 @@ export async function handleAdminAppUserProvision(
       active: user.active === 1,
       access_version: Number(user.access_version ?? 1),
       updated_at: user.updated_at,
+      // Whether removing their access unpaired a crew phone; never which one (0157).
+      crew_phone_unpaired: (await appAuthStore.usersWithCrewPhoneUnpairedByRemoval(
+        appEnv,
+        user.tenant_id,
+        user.user_id,
+      )).has(user.user_id),
     },
   });
 }

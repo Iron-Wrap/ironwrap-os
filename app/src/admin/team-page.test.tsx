@@ -25,6 +25,7 @@ interface Row {
   active?: boolean;
   access_version?: number;
   is_self?: boolean;
+  crew_phone_unpaired?: boolean;
 }
 
 function people(...rows: Row[]) {
@@ -39,6 +40,7 @@ function people(...rows: Row[]) {
       access_version: row.access_version ?? 1,
       updated_at: "2026-08-22T12:00:00.000Z",
       is_self: row.is_self ?? false,
+      crew_phone_unpaired: row.crew_phone_unpaired ?? false,
     })),
   };
 }
@@ -59,6 +61,7 @@ function saved(role: AppRole, active: boolean, accessVersion: number) {
       role,
       active,
       access_version: accessVersion,
+      crew_phone_unpaired: false,
     },
   };
 }
@@ -122,6 +125,7 @@ describe("TeamPage", () => {
         role: "sales" as const,
         active: true,
         access_version: 1,
+        crew_phone_unpaired: false,
       },
     });
     const user = userEvent.setup();
@@ -260,9 +264,11 @@ describe("TeamPage", () => {
     for (const other of [/^Owner/, /^Operations/, /^Sales/, /^Accounting/, /^Crew/]) {
       expect(screen.getByRole("radio", { name: other })).toBeDisabled();
     }
+    // The role this page showed may have changed since.
+    expect(screen.getByRole("radio", { name: /^Sales · may be out of date/ })).toBeDisabled();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
     expect(
-      screen.getByText("The greyed roles wait until their access reloads."),
+      screen.getByText("Values marked “may be out of date” update when their access reloads."),
     ).toBeInTheDocument();
     expect(primaryButtons()).toEqual(["Reload Grace’s access"]);
     expect(
@@ -277,13 +283,12 @@ describe("TeamPage", () => {
 
     // 3 · After reload.
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
-    expect(await screen.findByText("Changed somewhere else a moment ago")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save Grace’s access" })).toHaveFocus();
     expect(
-      within(screen.getByText("Changed somewhere else a moment ago").closest("label")!).getByRole(
-        "radio",
-      ),
-    ).toHaveAccessibleName(/^Operations/);
+      await screen.findByRole("radio", {
+        name: /^Operations · changed somewhere else a moment ago/,
+      }),
+    ).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Save Grace’s access" })).toHaveFocus();
     expect(screen.getByRole("radio", { name: /^Production/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /^Sales/ })).toBeEnabled();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
@@ -326,7 +331,9 @@ describe("TeamPage", () => {
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
-    expect(await screen.findByText("Changed by Priya Nand 5 min ago")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("radio", { name: /^Operations · changed by Priya Nand 5 min ago/ }),
+    ).toBeInTheDocument();
   });
 
   it("4 · a refused remove waits for the reload, then removes against the reloaded version", async () => {
@@ -350,20 +357,24 @@ describe("TeamPage", () => {
       expectedAccessVersion: 1,
     });
 
-    expect(await screen.findByText("Your change: remove Grace from the team.")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Removing them signs them out everywhere and unpairs any crew phone they use.",
+      await screen.findByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          element.textContent === "Your change: remove Grace from the team. Not saved.",
       ),
     ).toBeInTheDocument();
-    expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
     expect(
       screen.getByText(
         "You changed Grace Obi’s access somewhere else a moment ago: their role is now Operations, not Sales.",
       ),
     ).toBeInTheDocument();
     for (const radio of screen.getAllByRole("radio")) expect(radio).toBeDisabled();
-    expect(screen.queryByText("The greyed roles wait until their access reloads.")).toBeNull();
+    // Frame 4 carries the note too, and the role this page showed is marked.
+    expect(
+      screen.getByText("Values marked “may be out of date” update when their access reloads."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Sales · may be out of date/ })).toBeChecked();
     expect(primaryButtons()).toEqual(["Reload Grace’s access"]);
     const later = screen.getByRole("button", { name: "Remove Grace from the team · after reload" });
     expect(later).toBeDisabled();
@@ -373,12 +384,21 @@ describe("TeamPage", () => {
         "Reload Grace’s access: shows their access as it is now and keeps your change until you remove them or leave this page. It does not undo anything.",
       ),
     ).toBeInTheDocument();
+    const removing = screen.getByText(
+      "Removing them signs them out everywhere and unpairs any crew phone they use.",
+    );
+    expect(
+      paragraph(
+        "Reload Grace’s access: shows their access as it is now and keeps your change until you remove them or leave this page. It does not undo anything.",
+      ).compareDocumentPosition(removing) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "after the reload's line",
+    ).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
     const remove = await screen.findByRole("button", { name: "Remove Grace from the team" });
     expect(remove).toBeEnabled();
     expect(primaryButtons()).toEqual(["Remove Grace from the team"]);
-    expect(screen.getByText("Your change: remove Grace from the team.")).toBeInTheDocument();
+    expect(paragraph("Your change: remove Grace from the team. Not saved.")).toBeInTheDocument();
     expect(
       paragraph(
         "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.",
@@ -396,7 +416,12 @@ describe("TeamPage", () => {
   it("5 · a change that cannot apply gives access back first, then saves on the restored version", async () => {
     vi.mocked(listAppUsers)
       .mockResolvedValueOnce(people(ada, grace()) as never)
-      .mockResolvedValueOnce(people(ada, grace({ active: false, access_version: 2 })) as never);
+      .mockResolvedValueOnce(
+        people(
+          ada,
+          grace({ active: false, access_version: 2, crew_phone_unpaired: true }),
+        ) as never,
+      );
     vi.mocked(provisionAppUser)
       .mockRejectedValueOnce(
         refused({
@@ -426,9 +451,8 @@ describe("TeamPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("No access")).toBeInTheDocument();
     expect(
-      screen.getByText("Your change: Grace’s role changes from Sales to Production."),
+      paragraph("Your change: Grace’s role changes from Sales to Production. Not saved."),
     ).toBeInTheDocument();
-    expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
     expect(within(panel()).queryByRole("radio")).toBeNull();
     expect(primaryButtons()).toEqual(["Give Grace access back"]);
     const later = screen.getByRole("button", { name: "Save Grace’s access · after they’re back" });
@@ -501,7 +525,7 @@ describe("TeamPage", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Your change: Grace’s role changes from Sales to Production."),
+      paragraph("Your change: Grace’s role changes from Sales to Production. Not saved."),
     ).toBeInTheDocument();
     expect(primaryButtons()).toEqual(["Reload Grace’s access"]);
     expect(vi.mocked(provisionAppUser).mock.calls[1]![1]).toMatchObject({
@@ -578,7 +602,7 @@ describe("TeamPage", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("The greyed roles wait until their access reloads."),
+      screen.getByText("Values marked “may be out of date” update when their access reloads."),
     ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /^Production/ })).toBeChecked();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
@@ -594,7 +618,9 @@ describe("TeamPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access again" }));
     expect(await screen.findByRole("button", { name: "Save Grace’s access" })).toBeEnabled();
-    expect(screen.getByText("Changed somewhere else a moment ago")).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: /^Operations · changed somewhere else a moment ago/ }),
+    ).toBeInTheDocument();
   });
 
   it("6b · offline, the reload says so and how to finish once back online", async () => {
@@ -636,9 +662,7 @@ describe("TeamPage", () => {
     expect(screen.getByText("No access")).toBeInTheDocument();
     expect(primaryButtons()).toEqual(["Give Grace access back"]);
     expect(
-      paragraph(
-        "Give Grace access back: they can sign in again with the access they had (Sales); a crew phone must be paired again.",
-      ),
+      paragraph("Give Grace access back: they can sign in again with the access they had (Sales)."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Give Grace access back" }));
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledOnce());

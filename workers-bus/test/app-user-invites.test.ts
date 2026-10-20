@@ -1004,6 +1004,82 @@ test("removing access ends the session, the sign-in link, the paired device, and
   assert.equal((restored.body.user as Record<string, unknown>).active, true);
 });
 
+test("the people list says whether removing someone unpaired their crew phone, never which phone", async () => {
+  const h = harness();
+  const { user: ada, session } = await owner(h);
+  const crew = await addUser(h.env, "crew@example.invalid", "field", "Crew Member");
+  const desk = await addUser(h.env, "desk@example.invalid", "sales", "Desk Person");
+  const officeUnpaired = await addUser(h.env, "unpaired@example.invalid", "field", "Office Unpaired");
+  const pair = (userId: string, deviceId: string, proof: string, revokedBy: string | null) =>
+    h.db.raw.prepare(
+      `INSERT INTO app_devices
+         (device_id, tenant_id, user_id, device_proof_hash, paired_at, last_seen_at,
+          revoked_at, revoked_by_user_id, created_ip_hash, created_user_agent_hash)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      deviceId,
+      TENANT,
+      userId,
+      proof.repeat(64),
+      "2026-08-23T00:00:00.000Z",
+      "2026-08-23T00:00:00.000Z",
+      revokedBy ? "2026-08-24T00:00:00.000Z" : null,
+      revokedBy,
+      "a".repeat(64),
+      "b".repeat(64),
+    );
+  pair(crew.user_id, "appd_crew_device_0001", "c", null);
+  // The office unpaired this one's phone before the removal; the removal unpairs nothing more.
+  pair(officeUnpaired.user_id, "appd_office_unpaired_01", "d", ada.user_id);
+  const flags = async () =>
+    Object.fromEntries(
+      ((await call(h, "GET", APP_USERS, { session })).body.users as Array<Record<string, unknown>>)
+        .map((user) => [user.display_name, user.crew_phone_unpaired]),
+    );
+  assert.deepEqual(await flags(), {
+    "Ada Owner": false,
+    "Crew Member": false,
+    "Desk Person": false,
+    "Office Unpaired": false,
+  });
+
+  const removedCrew = await call(h, "POST", APP_USERS, {
+    session,
+    body: {
+      tenant_id: TENANT,
+      email: "crew@example.invalid",
+      display_name: "Crew Member",
+      role: "field",
+      frappe_user_id: "crew@example.invalid",
+      active: false,
+    },
+  });
+  assert.equal(removedCrew.status, 200);
+  assert.equal((removedCrew.body.user as Record<string, unknown>).crew_phone_unpaired, true);
+  for (const person of [desk, officeUnpaired]) {
+    const removed = await call(h, "POST", `${APP_USERS}/${person.user_id}/access`, {
+      session,
+      body: { active: false },
+    });
+    assert.equal(removed.status, 200);
+    assert.equal((removed.body.user as Record<string, unknown>).crew_phone_unpaired, false);
+  }
+
+  assert.deepEqual(await flags(), {
+    "Ada Owner": false,
+    "Crew Member": true,
+    "Desk Person": false,
+    "Office Unpaired": false,
+  });
+  const listed = (await call(h, "GET", APP_USERS, { session })).body.users as Array<
+    Record<string, unknown>
+  >;
+  assert.ok(
+    listed.every((user) => !Object.keys(user).some((key) => key.includes("device"))),
+    "the list carries the fact, never a device id",
+  );
+});
+
 test("legacy deactivation revokes a pending invitation so it cannot restore access", async () => {
   const h = harness();
   const { user: actor, session } = await owner(h);

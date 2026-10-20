@@ -39,7 +39,7 @@ const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^\/safety\/equipment\/[^/]+/, "Equipment item"],
   [/^\/safety\/equipment$/, "Equipment"],
   [/^\/settings\/company$/, "Company"],
-  [/^\/settings\/team$/, "Team"],
+  [/^\/settings\/team$/, "People"],
   [/^\/settings\/devices$/, "Crew devices"],
   [/^\/settings\/integrations$/, "Integrations"],
   [/^\/settings\/configuration/, "Configuration"],

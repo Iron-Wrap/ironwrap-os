@@ -23,6 +23,8 @@ import {
 } from "./admin-contracts";
 import { AdminPageHeader } from "./admin-shell";
 import {
+  MAY_BE_OUT_OF_DATE,
+  OUT_OF_DATE_NOTE,
   PAIR_AGAIN,
   REMOVE_EXPLAINS,
   REMOVING_EXPLAINS,
@@ -394,6 +396,7 @@ function TeamRow({
         role: saved.role,
         active: saved.active,
         access_version: saved.access_version,
+        crew_phone_unpaired: saved.crew_phone_unpaired,
       };
       onSaved(row);
       // Giving access back is a decision of its own: a role change waiting for it stays, now
@@ -472,7 +475,7 @@ function TeamRow({
           )}
           {accessChanged ? (
             <span className="text-xs text-muted">
-              {changedElsewhere(conflict.info, conflict.observedAt)}
+              {sentenceCase(changedElsewhere(conflict.info, conflict.observedAt))}
             </span>
           ) : null}
           {shown.is_self ? (
@@ -570,7 +573,9 @@ function AccessPanel({
   }, [stateKey]);
 
   const removeLine = <EditLine lead={`Remove ${first} from the team:`}>{REMOVE_EXPLAINS}</EditLine>;
-  const hadAccess = `they can sign in again with the access they had (${roleLabel(person.role)}); ${PAIR_AGAIN}.`;
+  const hadAccess = `they can sign in again with the access they had (${roleLabel(person.role)})${
+    person.crew_phone_unpaired ? `; ${PAIR_AGAIN}` : ""
+  }.`;
 
   let body: ReactNode;
   if (unresolved) {
@@ -604,10 +609,7 @@ function AccessPanel({
           </>
         ) : null}
         {pendingRemove ? (
-          <div className="space-y-1">
-            <PendingLine>Your change: remove {first} from the team.</PendingLine>
-            <p className="text-sm text-muted">{REMOVING_EXPLAINS}</p>
-          </div>
+          <PendingLine>Your change: remove {first} from the team.</PendingLine>
         ) : null}
         {!person.active && pendingRole ? (
           <PendingLine>
@@ -640,6 +642,7 @@ function AccessPanel({
             ? `shows their access as it is now and keeps your change until you ${keepUntil} or leave this page. It does not undo anything.`
             : "shows their access as it is now. It does not undo anything."}
         </EditLine>
+        {pendingRemove ? <p className="text-sm text-muted">{REMOVING_EXPLAINS}</p> : null}
       </>
     );
   } else if (!person.active) {
@@ -769,7 +772,7 @@ function RoleChoice({
   pendingRole: AppRole | null;
   /** The access shown is out of date: only the pending choice stays as it is until a reload. */
   locked: boolean;
-  /** The role chosen elsewhere, labelled after a reload. */
+  /** The role chosen elsewhere, marked after a reload. */
   changedRole?: AppRole | null;
   changedLabel?: string;
   onChoose: (role: AppRole) => void;
@@ -782,6 +785,13 @@ function RoleChoice({
         {appRoles.map((role) => {
           const checked = role === selected;
           const greyed = locked && !(checked && pendingRole);
+          // The role this page showed may have changed since; the role chosen elsewhere says so.
+          const marker =
+            locked && role === person.role
+              ? MAY_BE_OUT_OF_DATE
+              : role === changedRole
+                ? changedLabel
+                : null;
           return (
             <label
               key={role}
@@ -801,36 +811,37 @@ function RoleChoice({
               />
               <span className="min-w-0">
                 <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <span className="font-semibold">{roleLabel(role)}</span>
+                  <span>
+                    <span className="font-semibold">{roleLabel(role)}</span>
+                    {marker ? ` · ${marker}` : null}
+                  </span>
                   {checked && pendingRole ? <Status kind="local">Not saved</Status> : null}
                 </span>
                 <span className={cn("block text-sm", greyed ? "text-faint" : "text-muted")}>
                   {ROLE_HELP[role]}
                 </span>
-                {role === changedRole ? (
-                  <span className="block text-xs text-muted">{changedLabel}</span>
-                ) : null}
               </span>
             </label>
           );
         })}
       </div>
-      {locked && pendingRole ? (
-        <p className="mt-2 text-xs text-muted">The greyed roles wait until their access reloads.</p>
-      ) : null}
+      {locked ? <p className="mt-2 text-xs text-muted">{OUT_OF_DATE_NOTE}</p> : null}
     </fieldset>
   );
 }
 
+/** A change this page holds, said the way frames 4 and 5 say it: "Your change: …. Not saved." */
 function PendingLine({ children }: { children: ReactNode }) {
   return (
-    <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-      <Status kind="local">Not saved</Status>
-      <span>{children}</span>
+    <p className="text-sm">
+      {children} <span className="font-semibold">Not saved.</span>
     </p>
   );
 }
 
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 /** Ink text with the info glyph: a conflict is information, never an error. */
 function InfoLine({ children }: { children: ReactNode }) {
   return (

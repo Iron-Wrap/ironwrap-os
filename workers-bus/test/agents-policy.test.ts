@@ -238,9 +238,9 @@ test("handoffs stop at the depth and repeat limits", () => {
 
 
 test("the followup contract keeps closed machine reasons, auditor protection and protective revoke", () => {
-  assert.equal(CATALOG.actions.length, 162);
-  assert.equal(CATALOG.watches.length, 115);
-  assert.equal(CATALOG_VERSION, "86ae29d7af105098e5214bbe754af3f19c0f1611e0687d0b58574a8deac80ab4");
+  assert.equal(CATALOG.actions.length, 163);
+  assert.equal(CATALOG.watches.length, 116);
+  assert.equal(CATALOG_VERSION, "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34");
   assert.deepEqual(catalogAction("specialist.hold")?.never_targets, ["independent_auditor"]);
   assert.equal(catalogAction("portal_link.revoke")?.protective, true);
   assert.equal(catalogAction("portal_link.revoke")?.side_effect_class, "internal_reversible");
@@ -527,4 +527,35 @@ test("a prepared people-only act names the person who performs it, under a hold 
     assert.equal(prepared(specialistId, actionId, false).reviewer_role, person, `${actionId} draft`);
     assert.equal(prepared(specialistId, actionId, true).reviewer_role, person, `${actionId} under a hold`);
   }
+});
+
+test("lead_fact.propose proposes from the inbound the run answers and cites only it", () => {
+  const INBOUND = { signal_ref: "signal/sig_1", kind: "event", source: "web_form", actor: null };
+  const fields = { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null };
+  const propose = (overrides: Partial<StepInput> = {}, args: unknown = { lead_id: "L-5401", fields }) =>
+    evaluateStep(input({ specialistId: "lead_concierge", actionId: "lead_fact.propose", args, requester: INBOUND, ...overrides }));
+  const requester = (decision: ReturnType<typeof evaluateStep>) => decision.checks.find((check) => check.check === "requester");
+  const proposed = propose();
+  assert.deepEqual([proposed.result, proposed.outcome, proposed.permit_kind, requester(proposed)], ["allow", "succeeded", "draft", { check: "requester", passed: true }]);
+  // Any other root, or any other citation beside the inbound, stops before the arguments are read.
+  const leadFact = { fact_id: "lead/L-5401", version: 1, hash: "sha256:02", trust: "owned" as const, fresh_until: null };
+  for (const [label, overrides] of [
+    ["an owner's request", { requester: { ...INBOUND, kind: "owner_request", source: "ask" } }],
+    ["a watch", { requester: { ...INBOUND, kind: "watch", source: "watch_scheduler" } }],
+    ["no root", { requester: null }],
+    ["a record cited beside it", { citations: [{ fact_id: "signal/sig_1", version: 1 }, { fact_id: "lead/L-5401", version: 1 }], snapshot: new Map([[SIGNAL_FACT.fact_id, SIGNAL_FACT], [leadFact.fact_id, leadFact]]), currentVersions: new Map([["signal/sig_1", 1], ["lead/L-5401", 1]]) }],
+    ["another signal", { citations: [{ fact_id: "signal/sig_2", version: 1 }] }],
+    ["nothing cited", { citations: [] }],
+  ] as const) {
+    const stopped = propose(overrides as Partial<StepInput>);
+    assert.deepEqual([stopped.outcome, stopped.reason_codes, requester(stopped)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
+  }
+  // The four facts, exactly as lead_fact.confirm takes them, at least one set.
+  for (const args of [
+    { lead_id: "L-5401", fields: { service: null, scope: null, address: null, timing: null } },
+    { lead_id: "L-5401", fields: { service: "metal_roofing" } },
+    { lead_id: "L-5401", fields, proposal_id: "LP-1" },
+    { fields },
+  ])
+    assert.deepEqual(propose({}, args).reason_codes, ["action_unregistered"], JSON.stringify(args));
 });

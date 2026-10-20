@@ -94,6 +94,56 @@ function criticalPathOrdering(): Plugin {
 }
 
 /**
+ * V8 compiles a function on the main thread the first time it is called, unless the file says
+ * otherwise. Nearly every function in the chunks `/today` boots from runs while it mounts, so on
+ * a paired phone that lazy compilation sat in front of the first paint: on Chrome 155 it was about
+ * half of module evaluation's single long task and much of the first render. The explicit compile
+ * hint `//# allFunctionsCalledOnLoad` hands it to the background thread that already parses each
+ * chunk while it downloads. Every engine that does not read the hint sees a comment.
+ *
+ * Only the entry's static chunk graph and the run sheet's own chunk carry it: compiling a route
+ * the phone may never open would only cost memory. The hint has to be a file's first line, and
+ * both the minifier (which drops comments) and Vite's preload map (prepended in its own
+ * `generateBundle`) come later than `renderChunk`, so the hint is written last. Its presence is
+ * folded into the content hash, so a hashed name still names exactly one content.
+ */
+function bootCompileHints(): Plugin {
+  const HINT = "//# allFunctionsCalledOnLoad\n";
+  let boot = new Set<string>();
+  return {
+    name: "ironwrap-boot-compile-hints",
+    apply: "build",
+    renderStart() {
+      boot = new Set();
+    },
+    renderChunk(_code, _chunk, _options, meta) {
+      if (boot.size > 0) return null;
+      const visit = (fileName: string) => {
+        if (boot.has(fileName) || !meta.chunks[fileName]) return;
+        boot.add(fileName);
+        for (const dependency of meta.chunks[fileName].imports) visit(dependency);
+      };
+      for (const chunk of Object.values(meta.chunks)) {
+        if (chunk.isEntry || chunk.name === "today-page") visit(chunk.fileName);
+      }
+      return null;
+    },
+    augmentChunkHash(chunk) {
+      return boot.has(chunk.fileName) ? HINT : undefined;
+    },
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        for (const output of Object.values(bundle)) {
+          if (output.type === "chunk" && boot.has(output.preliminaryFileName))
+            output.code = HINT + output.code;
+        }
+      },
+    },
+  };
+}
+
+/**
  * `index.html` carries one inline `<style>`: the boot shell shown from first byte until
  * React mounts. `_headers` pins `style-src 'self'`, so the browser blocked that block on
  * every cold start and the shell painted as unstyled text on a white page — the first
@@ -282,6 +332,7 @@ export default defineConfig({
       },
     }),
     criticalPathOrdering(),
+    bootCompileHints(),
     bootStyleCspHash(),
   ],
   build: {
@@ -298,12 +349,16 @@ export default defineConfig({
         // it saves round trips but drags office-only code into the field boot's script
         // evaluation, and the total-blocking-time cost outweighs the latency saved.
         //
-        // Total blocking time only counts the part of a task that runs past 50 ms, so a
-        // single 250 ms evaluation task costs 200 ms of TBT while five 50 ms tasks cost
-        // nothing. Evaluating the whole framework as one entry chunk produced exactly
-        // the former on the CI runner. These groups are all statically reachable from
-        // the entry, so the browser preloads them in the same wave: the bytes and the
-        // round trips stay where they were and only the evaluation is broken up.
+        // The libraries the boot needs travel in two chunks, React's and everything else's. Chrome
+        // evaluates the entry's whole static module graph in one task however many chunks carry it
+        // (the paired-device traces on Chrome 149 and 155 each show a single `v8.evaluateModule`),
+        // so a chunk per library never split that task; the compile hints (bootCompileHints) are
+        // what shortened it. What the chunk count does change is how many responses are in flight
+        // beside the render-blocking stylesheet, and the measured profile's throttle shares the
+        // link evenly between them: with a chunk per library the stylesheet, and so first paint,
+        // landed ~170 ms later. Folding React in as well moved first paint a further ~100 ms but
+        // drew the optional Archivo face into the libraries' download window and cost the largest
+        // paint ~50 ms.
         codeSplitting: {
           groups: [
             {
@@ -311,19 +366,11 @@ export default defineConfig({
               test: /[\\/]node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
               priority: 3,
             },
+            // src/lib/zod-jitless.ts rides with zod: every chunk that builds a schema imports
+            // this one, so its setting is in place before the first contract module runs.
             {
-              name: "router-vendor",
-              test: /[\\/]node_modules[\\/]@tanstack[\\/](?:react-router|router-core|history|store)[\\/]/,
-              priority: 3,
-            },
-            {
-              name: "query-vendor",
-              test: /[\\/]node_modules[\\/]@tanstack[\\/](?:react-query|query-core)[\\/]/,
-              priority: 3,
-            },
-            {
-              name: "contracts-vendor",
-              test: /[\\/]node_modules[\\/](?:zod|tailwind-merge)[\\/]/,
+              name: "vendor",
+              test: /[\\/]node_modules[\\/](?:zod|tailwind-merge|@tanstack[\\/](?:react-router|router-core|history|store|react-query|query-core))[\\/]|[\\/]src[\\/]lib[\\/]zod-jitless\.ts$/,
               priority: 3,
             },
             // The cross-cutting app modules default to a chunk each — the session

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ChevronRight, CircleDashed, PackageCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { useInitialToday, useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
@@ -16,9 +16,14 @@ import {
   type FieldDateOptions,
 } from "./field-formatting";
 import { messageForLoad } from "../lib/plain-error";
-import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 import { OfflineReadiness } from "./offline-readiness";
+
+// Office roles only (see the note where it renders). A static import made the crew phone fetch
+// this chunk, in a round trip of its own, before its run sheet could render.
+const OperatingIntakePanel = lazy(async () => ({
+  default: (await import("../operating-intake/operating-intake-panel")).OperatingIntakePanel,
+}));
 
 type PacketAvailability = "checking" | "saving" | "saved" | "not_saved" | "unavailable";
 type TodayJob = TodayResponse["jobs"][number];
@@ -247,7 +252,11 @@ export function TodayPage() {
           device proof, so the Worker answers 401 and expires the session cookie with it —
           the run sheet was signing the paired phone out on every visit and the next cold
           start showed "Pair this crew phone again" (ELEC-157). */}
-      {session.user.role === "field" ? null : <OperatingIntakePanel />}
+      {session.user.role === "field" ? null : (
+        <Suspense fallback={null}>
+          <OperatingIntakePanel />
+        </Suspense>
+      )}
     </section>
   );
 }

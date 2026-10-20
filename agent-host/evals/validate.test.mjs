@@ -365,7 +365,7 @@ test("signal and fact times span at most a century, checked from both sides", ()
 
 test("the Worker registry is read whole, or the validator says what it could not read", () => {
   const real = loadRegistry(join(here, "../.."));
-  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "delegation.propose_change", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "note.add", "settings.propose_change", "specialist.hold"]);
+  assert.deepEqual([...real.actions.keys()].sort(), ["access.prepare_change", "authority.evaluate", "authority.record", "delegation.propose_change", "emergency.page", "exception.escalate", "fact.explain", "handoff.create", "import.retry_failed", "lead_fact.confirm", "lead_fact.propose", "note.add", "settings.propose_change", "specialist.hold"]);
   assert.deepEqual(real.unread, []);
   const root = fixture();
   const path = join(root, "workers-bus/src/agents/registry.ts");
@@ -417,6 +417,30 @@ test("signal actors follow the Worker's shape; an owner_request names the signed
   assert.match(failures, /\.015: source "ask" belongs to an owner_request/);
   assert.match(failures, /\.016: an owner_request has source "ask" or "request"/);
   assert.match(failures, /\.017: a handoff signal has no actor/);
+});
+
+test("a watch signal may carry the Worker's firing content instead of text", () => {
+  const content = { watch_id: "new_inbound", objects: [{ aggregate: "lead", id: "L-1" }], digest: { leads: ["L-1"] }, summary: "1 new lead" };
+  const watch = (overrides) => ({ kind: "watch", source: "scheduler", watch_id: "new_inbound", at: "PT0M", content: { ...content, ...overrides } });
+  const signals = [
+    watch({}),
+    watch({ watch_id: "pipeline" }),
+    watch({ objects: [{ aggregate: "lead" }] }),
+    watch({ objects: Array.from({ length: 25 }, (_, n) => ({ aggregate: "lead", id: `L-${n}` })) }),
+    watch({ period_key: "P7D" }),
+    { ...watch({}), kind: "event", source: "web_form" },
+    watch({ digest: ["L-1"] }),
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    signals.forEach((entry, index) => (cases[index].signal = entry));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: /);
+  assert.match(failures, /\.002: a watch firing's content\.watch_id is its signal's watch_id/);
+  for (const n of ["003", "004"]) assert.match(failures, new RegExp(`\\.${n}: a watch firing's objects are at most 24 \\{ aggregate, id \\}`));
+  assert.match(failures, /\.005: a watch firing's period_key is a calendar date; leave it out/);
+  for (const n of ["006", "007"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.content needs text or request, or a watch firing's digest and summary`));
 });
 
 test("structural mode without the contract still checks shape", () => {

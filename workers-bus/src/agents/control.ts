@@ -141,11 +141,11 @@ export async function currentDelegation(
     .first<{ revision: number }>();
   const failed = await db
     .prepare(
-      `SELECT step_id FROM agent_run_steps WHERE tenant_id = ?
+      `SELECT step_id FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = ? AND action_id = ?
     AND json_extract(permit_json, '$.delegation_id') = ?
     AND (outcome = 'unknown' OR reason_code IN ('readback_mismatch', 'done_by_person')) LIMIT 1`,
     )
-    .bind(tenantId, row.setting_id)
+    .bind(tenantId, specialistId, actionId, row.setting_id)
     .first<{ step_id: string }>();
   // Each trigger holds until the owner sets the action again (contract "Delegation" item 7); a
   // release that changed without passing qualification counts from the setting's own time.

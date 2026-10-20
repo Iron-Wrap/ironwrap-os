@@ -39,6 +39,7 @@ import {
   type AppRole,
   type AuthContext,
 } from "../src/app-types.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
 const SOURCE = "22222222-2222-4222-8222-222222222222";
@@ -1563,11 +1564,13 @@ function seedOperatingCore(
   const createdAt = "2027-01-15T06:00:00.000Z";
   db.prepare(
     `INSERT INTO app_users
-     (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+     (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
       active, created_by, created_at, updated_at)
-     VALUES (?, ?, 'owner@example.invalid', 'Synthetic Owner', 'owner', NULL,
+     VALUES (?, ?, 'owner@example.invalid', 'Synthetic Owner', 'owner', 'owner', NULL,
              1, 'test-fixture', ?, ?)`,
   ).run(OWNER, TENANT, createdAt, createdAt);
+  // These contracts carry a deposit: the tenant takes deposits (MD-13), since 0155's default is OD-01.
+  recordDepositPolicy(db, { tenantId: TENANT, ownerUserId: OWNER, at: createdAt });
   db.prepare(
     `INSERT INTO envelopes
      (envelope_id, source, contact_name, contact_email, contact_phone, payload_json,

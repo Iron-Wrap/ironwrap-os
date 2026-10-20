@@ -41,6 +41,7 @@ import {
 import { parseBody } from "./core.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
 import { publicCompanyContact } from "./company-profile.ts";
+import { NO_DEPOSIT_UNDER_CONTRACT } from "./deposit-policy.ts";
 import {
   listCurrentJobMeasurements,
   type JobMeasurementSummary,
@@ -274,6 +275,8 @@ interface NativeProductionGateRow {
   assigned_at: string;
   due_at: string;
   updated_at: string;
+  /** The basis of the ledger entry the gate stands on (0153), when one does. */
+  basis_in_force: string | null;
 }
 
 interface NativeProductionCrewRow {
@@ -1539,7 +1542,7 @@ export async function buildProductionRunwayReadModel(
       const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map(
         (name) => ({
           name,
-          state: nativeGateStateLabel(text(latestGatesByName.get(name)?.state)),
+          state: productionGateStateLabel(latestGatesByName.get(name)),
         }),
       );
       const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] =
@@ -1560,8 +1563,9 @@ export async function buildProductionRunwayReadModel(
           .length,
         waived: schedulingGates.filter((gate) => text(gate.state) === "waived")
           .length,
-        done: schedulingGates.filter((gate) => text(gate.state) === "complete")
-          .length,
+        done: schedulingGates.filter(
+          (gate) => text(gate.state) === "complete" && !depositNotRequiredByContract(gate),
+        ).length,
       };
       const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap(
         (row) => {
@@ -1929,7 +1933,7 @@ export async function buildJobReadModel(
           slot,
           label: `${slot} proof`,
           state: text(row.state) ?? "Blocked",
-          blocker_reason: text(row.blocker_reason),
+          blocker_reason: productionGateReason(row),
         },
       ];
     }),
@@ -3428,13 +3432,16 @@ async function nativeProductionGates(
   if (selected.length === 0) return { rows: [], partial: false };
   return await boundedNativeRows<NativeProductionGateRow>(
     env,
-    `SELECT gate_id, roof_job_id, gate, state, blocker_reason, owner_user,
-            assigned_at, due_at, updated_at
-       FROM operating_production_gates
-      WHERE tenant_id = ?
-        AND roof_job_id IN (${selected.map(() => "?").join(", ")})
-        ${state ? "AND state = ?" : ""}
-      ORDER BY roof_job_id ASC, gate ASC, updated_at DESC, gate_id ASC`,
+    `SELECT gate.gate_id, gate.roof_job_id, gate.gate, gate.state, gate.blocker_reason,
+            gate.owner_user, gate.assigned_at, gate.due_at, gate.updated_at,
+            entry.basis AS basis_in_force
+       FROM operating_production_gates gate
+       LEFT JOIN production_gate_clearances entry
+         ON entry.tenant_id = gate.tenant_id AND entry.clearance_id = gate.clearance_decision_id
+      WHERE gate.tenant_id = ?
+        AND gate.roof_job_id IN (${selected.map(() => "?").join(", ")})
+        ${state ? "AND gate.state = ?" : ""}
+      ORDER BY gate.roof_job_id ASC, gate.gate ASC, gate.updated_at DESC, gate.gate_id ASC`,
     [tenantId, ...selected, ...(state ? [state] : [])],
     limit,
   );
@@ -3795,6 +3802,7 @@ function nativeProductionGateFrappeRow(
     assigned_at: row.assigned_at,
     due_at: row.due_at,
     modified: row.updated_at,
+    basis_in_force: row.basis_in_force,
   };
 }
 
@@ -3929,6 +3937,27 @@ function nativeGateStateLabel(value: string | null): string | null {
   if (value === "complete") return "Done";
   if (value === "waived") return "Waived";
   return value;
+}
+
+/**
+ * OD-01 (0155): the policy recorded that the signed contract has no deposit. That gate is
+ * complete, but nothing was done or paid: it reads as a system state, "No deposit under this
+ * contract", and never reads or counts as done.
+ */
+function depositNotRequiredByContract(row: FrappeRow | undefined): boolean {
+  return text(row?.gate) === "Deposit" && text(row?.state) === "complete" &&
+    text(row?.basis_in_force) === "contract_no_deposit";
+}
+
+function productionGateStateLabel(row: FrappeRow | undefined): string | null {
+  return depositNotRequiredByContract(row)
+    ? NO_DEPOSIT_UNDER_CONTRACT
+    : nativeGateStateLabel(text(row?.state));
+}
+
+/** The gate's recorded reason, or the system state when the contract has no deposit. */
+function productionGateReason(row: FrappeRow): string | null {
+  return depositNotRequiredByContract(row) ? NO_DEPOSIT_UNDER_CONTRACT : text(row.blocker_reason);
 }
 
 function jobReadMode(auth: AuthContext): "any" | "assigned" {
@@ -4073,8 +4102,8 @@ function gateModel(
         {
           id: gateId,
           name: text(row.gate),
-          state: nativeGateStateLabel(text(row.state)),
-          blocker_reason: text(row.blocker_reason),
+          state: productionGateStateLabel(row),
+          blocker_reason: productionGateReason(row),
           owner: redactOwner ? null : text(row.owner_user),
           due_at: text(row.due_at),
         },

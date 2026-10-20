@@ -103,8 +103,8 @@ export interface RunClose {
   /**
    * Null when no route was resolved (the specialist could not load, or no route of another family
    * could review the work). `route_id`, `review_of` and `mode` go only to a Worker that sent the
-   * routing fields, and the v3 block only to one that advertises `close_model: 3`: an older Worker
-   * refuses unknown close fields.
+   * routing fields, and the v3 block only to one that advertises `close_model` 3 or later: an older
+   * Worker refuses unknown close fields.
    */
   model: LegacyCloseModel | CloseModelV3 | null;
   hashes: { system: string; prompt: string; schema: string } | null;

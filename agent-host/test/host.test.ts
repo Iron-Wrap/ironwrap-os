@@ -221,6 +221,14 @@ test("a v3 close names the effort of the route that answered and the family of e
   ]);
 });
 
+test("a Worker on a later close model still gets the v3 block, the newest this host knows", async (t) => {
+  const worker = fakeWorker(openedRun({ review_of: null, expected_action_id: null, mode: "live", close_model: 4 }));
+  const { options } = runner(t, worker, async (request) => ({ ...okResult(request), routeId: "codex_sol", effort: "medium" }));
+  await runSignal(options, signal());
+  const model = worker.closed[0].body.model as { effort?: string; run_class?: string; route_id?: string };
+  assert.deepEqual([model.effort, model.route_id, typeof model.run_class], ["medium", "codex_sol", "string"]);
+});
+
 test("the run under review, the expected action and a shadow mode reach the gateway, and the close records the route", async (t) => {
   const worker = fakeWorker(openedRun({ review_of: { run_id: "run_0000000000", provider: "codex" }, expected_action_id: "lead.qualify", mode: "shadow" }));
   const { options, requests } = runner(t, worker, async (request) => ({

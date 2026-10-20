@@ -8,7 +8,8 @@ import { test } from "node:test";
 import { mintToken, seedOwnerSql } from "../../tools/qa-seed-owner.mjs";
 import { PROVIDER, SEED_CREW, runJourney } from "../../tools/seed-qa-journey.mjs";
 import worker from "../src/index.ts";
-import { SqliteD1, type SqliteStatement, env as baseEnv } from "./company-setup-fixture.ts";
+import { SqliteD1, type SqliteStatement, TENANT, USERS, env as baseEnv } from "./company-setup-fixture.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 import { MemoryR2 } from "./onboarding-fixture.ts";
 
 // The QA seed's bodies run through the real Worker entry point on SQLite: sign-in with the minted
@@ -48,6 +49,9 @@ class D1ShapedSqlite extends SqliteD1 {
 
 function harness() {
   const db = new D1ShapedSqlite();
+  // The seed's offer carries a 25% deposit, so this tenant takes deposits (MD-13): since 0155 a
+  // tenant with no revision is OD-01 and refuses that quote by name. PR-D moves the seed to OD-01.
+  recordDepositPolicy(db.raw, { tenantId: TENANT, ownerUserId: USERS.owner });
   const queue: unknown[] = [];
   const policyJson = policy(Date.now() - DAY, Date.now() + 365 * DAY);
   const env = baseEnv(db, {

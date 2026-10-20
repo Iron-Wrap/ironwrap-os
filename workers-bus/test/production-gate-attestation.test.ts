@@ -33,7 +33,6 @@ import {
   PRODUCTION_GATE_SAFETY_PERMISSION,
   SITE_SAFETY_AUTHORITY_SCOPE,
 } from "../src/production-gate-clearance.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times. D1 checks
 // every time rule against its own clock, so the fixtures are relative to the real one.
@@ -1227,27 +1226,6 @@ test("a reversal returns the gate to blocked, deletes nothing, and writes one au
   assert.equal(gateRow(h.sqlite, "Materials").state, "ready");
 });
 
-test("a person never reverses a contract that needs no deposit", async () => {
-  const h = setup();
-  // A2's policy entry is not appendable here yet, so the fixture records it the way a backfill would.
-  recordLegacyGateStates(h.sqlite, {
-    tenantId: TENANT,
-    roofJobId: JOB,
-    gates: ["Deposit"],
-    state: "complete",
-    basis: "contract_no_deposit",
-  });
-  const [deposit] = ledgerRows(h.sqlite);
-  const owner = await person(h, USERS.owner.id);
-  const result = await call(h, owner, "POST", REVERSALS("Deposit"), {
-    expected_gate_version: 2,
-    reverses_id: deposit!.clearance_id,
-    reason: "The owner tries to put the deposit back on a no-deposit contract.",
-  });
-  assert.deepEqual([result.status, result.body.error], [409, "production_gate_contract_no_deposit_not_reversible"]);
-  assert.deepEqual({ state: gateRow(h.sqlite, "Deposit").state, entries: ledgerRows(h.sqlite).length }, { state: "complete", entries: 1 });
-});
-
 test("the office reads every gate with its entries and the request ids a waiver decision answers", async () => {
   const h = setup();
   const production = await person(h, USERS.production.id);
@@ -1618,7 +1596,7 @@ test("D1 checks every time against its own clock, never the entry's created_at",
   assert.deepEqual(ledgerRows(db), []);
 });
 
-test("D1 reverses only the entry holding a gate's state, never a no-deposit contract, and never deletes", () => {
+test("D1 reverses only the entry holding a gate's state, and never deletes", () => {
   const { sqlite: db } = setup();
   refused(() => append(db, reversal("Materials", `pgc_${"0".repeat(40)}`)), "production_gate_not_cleared");
   const first = append(db);
@@ -1637,15 +1615,13 @@ test("D1 reverses only the entry holding a gate's state, never a no-deposit cont
   refused(() => append(db, reversal("Materials", access)), "production_gate_reversal_target_invalid");
   // A crew member may re-block: reversal is the safe direction and the crew rule is the attester's.
   append(db, reversal("Materials", second, { actor_user_id: USERS.crewed.id }));
-  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB, gates: ["Deposit"], state: "complete", basis: "contract_no_deposit" });
-  const contract = ledgerRows(db).find((row) => row.basis === "contract_no_deposit")!.clearance_id;
-  refused(() => append(db, reversal("Deposit", contract, { actor_user_id: USERS.owner.id, actor_role: "owner" })), "production_gate_contract_no_deposit_not_reversible");
+  // No person reverses a contract that needs no deposit: proved on a real contract's policy entry in
+  // customer-contract-acceptance.test.ts, on the route and in D1.
   refused(
     () => db.prepare("DELETE FROM production_gate_clearances WHERE clearance_id = ?").run(first),
     "production_gate_clearance_append_only",
   );
   for (const id of [first, reversed, second, access]) assert.equal(auditRows(db, id).length, 1, id);
-  assert.equal(gateRow(db, "Deposit").state, "complete");
 });
 
 test("the final validate guard carries every line of 0155 as the merged tree holds it, in order", () => {

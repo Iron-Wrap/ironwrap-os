@@ -105,7 +105,7 @@ function recordCompetency(
     person_user: input.personUser,
     organization: null,
     authority_kind: "Worker Competency",
-    authority_scope: "Site hazard assessment and fall protection",
+    authority_scope: "site_safety",
     scope_type: "Tenant",
     scope_ref: input.tenantId,
     roof_job: null,
@@ -186,6 +186,7 @@ export function attestGateInLedger(
       }),
       fall_protection: { no_exposure_at_3m: true },
       hazard_assessment_ref: "FLHA-FIXTURE-0001",
+      permit: { answer: "not_needed" },
     };
   const gate = currentGate(db, input);
   return append(db, {

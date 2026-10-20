@@ -427,11 +427,11 @@ its specialist is on hold, and waits in that person's Needs you, never under Don
 owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfreeze_prepare`, and
 production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
 receipt asks the person to check it and apply it in their own screen. The draft is to leave Needs
-you when the matching act lands or a newer draft replaces it, its receipt naming which happened,
-and Needs you is to offer "Not now", which names what it removes. Neither is built yet (see
-`CAPABILITY-MATRIX.md`): today a prepared draft stays in Needs you. A run gets the names of the
-people-only acts its specialist owns as `people_only` (each `{action_id, name}`), so a receipt can
-name them; they are never its tools.
+you when the matching act lands or a newer draft replaces it: its receipt closes `succeeded` with
+`applied_by_person` or `superseded`, which names what happened, and Needs you is to offer "Not
+now", which names what it removes. Neither is built yet (see `CAPABILITY-MATRIX.md`): today a
+prepared draft stays in Needs you. A run gets the names of the people-only acts its specialist owns
+as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.
 
 ### Delegation
 
@@ -502,9 +502,17 @@ actions only.
    only the owner ever gives an action more autonomy.
 8. **Never delegable.** `H` actions have no setting. No setting switches off a hard boundary or a
    check in this contract. These `A3` actions always ask first, because each releases a protection,
-   approves a control the agents themselves work under, or is an owner-only right: `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`, `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`, `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`, `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`, `cancellation.release_hold`, `ncr.verify_close`.
-   The JSON `delegable` is false for them, for every `H`, `A0` and `A1` action, and for protective
-   actions.
+   approves a control the agents themselves work under, or is an owner-only right:
+   `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`,
+   `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`,
+   `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`,
+   `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`,
+   `cancellation.release_hold`, `ncr.verify_close`. The owner capped three more at asks first
+   (owner ruling D-09): publishing a proposal (`proposal.publish`), sending a change order for the
+   customer's decision (`change_order.send_for_decision`) and creating an invoice in QuickBooks
+   (`invoice.commit_intent`; the catalog has no separate invoice send, and the note sent with an
+   invoice is a `customer_message.send`). The JSON `delegable` is false for all twenty, for every
+   `H`, `A0` and `A1` action, and for protective actions.
 9. **Protective actions never wait.** Actions marked protective only stop, hold, block, freeze,
    quarantine, suppress, alert or escalate, inside the company. They always act within limits and
    cannot be set to asks first. They add coverage on top of deterministic protections (unsubscribe
@@ -841,12 +849,12 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
 | `proposal.draft_revision` | A1 | — | Draft a proposal from the committed quote, design basis and terms. | Quote revision; design basis; terms template version; disclosures | `terms` | — | Proposal draft (proposed) | new |
-| `proposal.publish` | A3 | Asks first | Create the proposal revision and publish exactly the approved draft to the customer. | Approved draft hash; quote revision; terms version; customer identity and decision authority | `terms`, `consent`, `recipient`, `disclosure`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor, above the ceiling, or for non-standard terms | Proposal revision and publication effect → provider delivery readback and publication settlement | `POST /api/v1/commercial/proposal-revisions`, `POST /api/v1/commercial/proposal-publications/prepare`, `POST /api/v1/proposal-publication-approvals/{approval}/approve`, `POST /api/v1/commercial/proposal-publications` |
+| `proposal.publish` | A3 | Asks first | Always asks first. Create the proposal revision and publish exactly the approved draft to the customer. | Approved draft hash; quote revision; terms version; customer identity and decision authority | `terms`, `consent`, `recipient`, `disclosure`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor, above the ceiling, or for non-standard terms | Proposal revision and publication effect → provider delivery readback and publication settlement | `POST /api/v1/commercial/proposal-revisions`, `POST /api/v1/commercial/proposal-publications/prepare`, `POST /api/v1/proposal-publication-approvals/{approval}/approve`, `POST /api/v1/commercial/proposal-publications` |
 | `proposal.withdraw` | A3 | Asks first | Withdraw a published proposal. | Publication; reason | — | Sales | Publication withdrawn → read back | new |
 | `portal_link.send` | A3 | Asks first | Send the customer a portal link. Owners: `proposal_contract`, `customer_care_warranty`. | Verified customer identity; current publication or case | `identity`, `consent`, `recipient`, `disclosure` | The proposing specialist's reviewer | Link and delivery → link read back; delivery status | `POST /api/v1/customer-portal/links` |
 | `portal_link.revoke` | A2 | Acts within your limits | Protective. Revoke a portal link (wrong recipient, superseded or suspected misuse) in the company's own system; nothing is sent to anyone. Owners: `proposal_contract`, `customer_care_warranty`. | Link id; reason | — | Never asks first | Link revoked → read back | `POST /api/v1/customer-portal/links/{link}/revoke` |
 | `acceptance.customer_decision` | H | — | The customer accepts or declines a proposal, a change order, a remedy, or responsibility for a drawing they supplied. Owners: `proposal_contract`, `customer_care_warranty`. | — | — | People only: the customer | Acceptance bound to the exact publication → read back | `POST /api/v1/customer-portal/acceptance/challenge`, `POST /api/v1/customer-portal/acceptance/confirm`, customer only |
-| `change_order.send_for_decision` | A3 | Asks first | Send a committed change order for the customer's decision. | Committed change-order revision | `consent`, `recipient`, `disclosure` | Sales | Change-order publication → delivery and publication read back | new |
+| `change_order.send_for_decision` | A3 | Asks first | Always asks first. Send a committed change order for the customer's decision. | Committed change-order revision | `consent`, `recipient`, `disclosure` | Sales | Change-order publication → delivery and publication read back | new |
 | `terms.legal_signoff` | H | — | Sign off a terms template or non-standard terms. | — | — | People only: owner | Terms version → read back | new |
 | `cancellation.record` | A3 | Asks first | Record a customer's cancellation and hold the affected work. | Authenticated customer request; cancellation terms | `identity` | Sales | Cancellation and holds → read back | new |
 
@@ -930,7 +938,7 @@ safety occurrence. The Worker registry and the human release route must preserve
 
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
-| `invoice.commit_intent` | A3 | Asks first | Commit an invoice intent (deposit, progress or final) with its tax. | Accepted commercial facts; completion; prior invoices; tax rule; provider mapping | `tax_basis`, `amount_ceiling` | Accounting; owner above the ceiling | Intent, then QuickBooks invoice → QuickBooks readback (id, amount, tax, customer) | `POST /api/v1/accounting/intents`, `POST /api/v1/accounting/intents/{intent}/approve`; final invoices `POST /api/v1/quickbooks/final-invoices/{intent}/approve` |
+| `invoice.commit_intent` | A3 | Asks first | Always asks first. Commit an invoice intent (deposit, progress or final) with its tax. | Accepted commercial facts; completion; prior invoices; tax rule; provider mapping | `tax_basis`, `amount_ceiling` | Accounting; owner above the ceiling | Intent, then QuickBooks invoice → QuickBooks readback (id, amount, tax, customer) | `POST /api/v1/accounting/intents`, `POST /api/v1/accounting/intents/{intent}/approve`; final invoices `POST /api/v1/quickbooks/final-invoices/{intent}/approve` |
 | `reconciliation.resolve` | A3 | Asks first | Resolve a reconciliation exception: a payment match or an explained mismatch. | Provider readbacks; ledger facts; exact amounts | `exact_match` | Accounting | Resolution → read back | `POST /api/v1/accounting/exceptions/{exception}/resolve`; predecessor `erp:request_resolve_reconciliation` |
 | `supplier_bill.match` | A1 | — | Extract a supplier bill and match it to the order and the receipt (three-way). | Bill bytes hash; order; receipt | `payee_protected` | — | Match (proposed) | new |
 | `supplier_bill.approve` | A3 | Asks first | Approve a matched supplier bill for payment. | Three-way match | `payee_protected`, `counterparty`, `amount_ceiling`, `segregation` | Accounting; owner above the ceiling | Bill posted to QuickBooks → QuickBooks readback | new |
@@ -1054,10 +1062,13 @@ matches a cited fact.
 | `abstained` | The specialist stopped before acting, recorded an abstention code, and escalated to a named person. |
 
 `policy.reason_codes` carries the reason. The machine-readable contract lists the codes of
-`failed`, `unknown` and `abstained` steps, and the one code a `succeeded` step may carry:
+`failed`, `unknown` and `abstained` steps, and the three codes a `succeeded` step may carry:
 `view_spec_invalid`, which the face's answer receipt carries when it refused a view (see "Requests
-through the face"). An `unknown` outcome becomes `succeeded` or `failed` only through
-reconciliation, recorded as a new receipt version.
+through the face"), and `applied_by_person` and `superseded`, which close a prepared people-only
+draft when a person made the change or a newer draft replaced it (see "Action classes"). The app's
+words for each of the three carry a note for the person (`app/src/components/ai/words.ts`), shown
+once the receipt renders its note; no receipt renders it yet. An `unknown` outcome becomes
+`succeeded` or `failed` only through reconciliation, recorded as a new receipt version.
 
 ### Undo
 
@@ -1997,12 +2008,12 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "design_basis.commit", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in the design"},
     {"action_id": "design_basis.substitute", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "substituting a product in the design"},
     {"action_id": "proposal.draft_revision", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a proposal"},
-    {"action_id": "proposal.publish", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the proposal to the customer"},
+    {"action_id": "proposal.publish", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the proposal to the customer"},
     {"action_id": "proposal.withdraw", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "withdrawing a proposal"},
     {"action_id": "portal_link.send", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer portal link"},
     {"action_id": "portal_link.revoke", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "turning off a customer portal link"},
     {"action_id": "acceptance.customer_decision", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "acceptance", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "accepting or declining an offer"},
-    {"action_id": "change_order.send_for_decision", "owners": ["proposal_contract"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a change order for a decision"},
+    {"action_id": "change_order.send_for_decision", "owners": ["proposal_contract"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a change order for a decision"},
     {"action_id": "terms.legal_signoff", "owners": ["proposal_contract"], "aggregate": "terms", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "signing off contract terms"},
     {"action_id": "cancellation.record", "owners": ["proposal_contract"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a cancellation"},
     {"action_id": "rfq.send", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking suppliers for prices"},
@@ -2052,7 +2063,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "ncr.verify_close", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing a defect report after checking the fix"},
     {"action_id": "completion.draft_packet", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting the completion packet"},
     {"action_id": "completion.accept", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "accepting the completed work"},
-    {"action_id": "invoice.commit_intent", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "creating a deposit, progress or final invoice"},
+    {"action_id": "invoice.commit_intent", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "creating a deposit, progress or final invoice"},
     {"action_id": "reconciliation.resolve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "resolving a payment matching problem"},
     {"action_id": "supplier_bill.match", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching a supplier bill to its order and delivery"},
     {"action_id": "supplier_bill.approve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "approving a supplier bill for payment"},
@@ -2236,7 +2247,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     "policy_results": ["allow", "needs_approval", "deny"],
     "permit_kinds": ["none", "draft", "within_limits", "asks_first", "shadow"],
     "reason_codes": {
-      "succeeded": ["view_spec_invalid"],
+      "succeeded": ["view_spec_invalid", "applied_by_person", "superseded"],
       "failed": ["policy_denied", "declined", "approval_expired", "superseded", "done_by_person", "tool_refused", "provider_rejected", "readback_mismatch"],
       "unknown": ["no_readback_yet"],
       "abstained": ["fact_missing", "fact_stale", "fact_conflict", "citation_unverifiable", "action_unregistered", "policy_missing", "ceiling_reached", "no_progress", "provider_unavailable", "no_qualified_route", "injection_suspected", "out_of_scope", "person_requested", "safety_event", "emergency"]

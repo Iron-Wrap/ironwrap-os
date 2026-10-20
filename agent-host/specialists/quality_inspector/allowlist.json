@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "quality_inspector",
-  "catalog_sha256": "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34",
+  "catalog_sha256": "7d34284aed80989ebd66fb16f6e4f5d515d172fdf1bd3e5ff3b317cc9da51be6",
   "actions": [
     {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain hold point, evidence, NCR, and completion facts to the owner or staff, with citations"},
     {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Route lots, first pieces, certificates, customer completion requests, outside and privacy requests, impersonated authorities, emergencies, and hazard stops to the owning specialist"},

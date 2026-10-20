@@ -1038,6 +1038,10 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "shop_order.release_hold",
   "cancellation.release_hold",
   "ncr.verify_close",
+  // Capped at asks first by owner ruling D-09: sending a proposal, a change order or an invoice.
+  "proposal.publish",
+  "change_order.send_for_decision",
+  "invoice.commit_intent",
 ];
 // Human-only: never an agent's act, never delegable.
 const AI_TEAM_PEOPLE_ONLY = [

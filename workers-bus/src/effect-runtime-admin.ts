@@ -1,7 +1,9 @@
+import { agentDataClass } from "./agents/api.ts";
 import type { AppEnv } from "./app-types.ts";
 import {
   authorizeExternalEffect,
   claimExternalEffect,
+  getExternalEffect,
   proposeExternalEffect,
   reconcileExternalEffect,
   retryExternalEffect,
@@ -14,9 +16,56 @@ import {
 const MAX_EFFECT_BODY_BYTES = 256 * 1024;
 
 /**
- * The MCP host keeps its provider credentials and executes the claimed Frappe
- * request locally. The Worker owns the durable proposal/lease/readback state;
- * this endpoint never accepts provider credentials or performs a provider call.
+ * Sends to someone outside the business. The two proposal actions are bound to a person-issued
+ * permit (0093); the two email actions run only inside the bus (`google.ts`). This bearer never
+ * claims, settles, reconciles or retries one: its holder writes the expected readback itself, so
+ * a settlement it reports would be its own word, not the provider's.
+ */
+const OUTSIDE_SEND_ACTIONS: ReadonlySet<string> = new Set([
+  "proposal.publish",
+  "proposal.withdraw",
+  "customer.email.send",
+  "operations.email.send",
+]);
+/** The permit-bound sends run once: never retried, on this route and in D1 (0164). */
+const PERMIT_BOUND_SENDS: ReadonlySet<string> = new Set(["proposal.publish", "proposal.withdraw"]);
+/** The QA seed's stand-in provider, which reaches no one. */
+const SYNTHETIC_PROVIDER = /^qa-synthetic-[a-z0-9-]+$/;
+
+/**
+ * Why this bearer may not touch an effect with this action and provider, or null. A
+ * `qa-synthetic-*` provider belongs only on a Worker whose data class is exactly `synthetic`:
+ * unset reads as business and a misspelling as no class, so both refuse. An outside send passes
+ * only as such a synthetic effect on such a Worker.
+ */
+function outsideSendRefusal(env: AppEnv, action: string, provider: string): string | null {
+  const syntheticWorker = agentDataClass(env.AGENT_DATA_CLASS) === "synthetic";
+  if (provider.startsWith("qa-synthetic-") && !syntheticWorker) return "effect_provider_not_allowed";
+  if (OUTSIDE_SEND_ACTIONS.has(action) && !(syntheticWorker && SYNTHETIC_PROVIDER.test(provider))) {
+    return "effect_outside_send_token_refused";
+  }
+  return null;
+}
+
+/** A claim that would allow a second attempt: a retry limit other than 0, or more than one attempt. */
+function allowsRetry(effect: Record<string, any>, authority: EffectAuthority): boolean {
+  const maxAttempts = authority.maxAttempts ?? 1;
+  return (effect.retryLimit ?? 0) !== 0 || typeof maxAttempts !== "number" || maxAttempts > 1;
+}
+
+/** The same refusal for an effect that exists; a missing one keeps the runtime's `effect_missing`. */
+async function existingEffectRefusal(env: AppEnv, effectId: string): Promise<Response | null> {
+  const existing = await getExternalEffect(env, effectId);
+  const refusal = existing && outsideSendRefusal(env, existing.action, existing.provider);
+  return refusal ? json({ error: refusal }, effectErrorStatus(refusal)) : null;
+}
+
+/**
+ * The MCP host claims its `mcp.*` effects here: it keeps its provider credentials and executes the
+ * claimed Frappe request locally. An outside send is never claimed here, since only the bus
+ * executes one; the QA seed's `qa-synthetic-*` stand-in is, on a synthetic Worker only. The Worker
+ * owns the durable proposal/lease/readback state; this endpoint never accepts provider credentials
+ * or performs a provider call.
  */
 export async function handleExternalEffectClaim(req: Request, env: AppEnv): Promise<Response> {
   const body = await parseJson(req);
@@ -27,6 +76,10 @@ export async function handleExternalEffectClaim(req: Request, env: AppEnv): Prom
   if (!tenantMatches(env, effect.tenantId) || authority.tenantId !== effect.tenantId) {
     return json({ error: "effect_tenant_mismatch" }, 403);
   }
+  const action = String(effect.action ?? "");
+  const refusal = outsideSendRefusal(env, action, String(effect.provider ?? ""))
+    ?? (PERMIT_BOUND_SENDS.has(action) && allowsRetry(effect, authority) ? "effect_outside_send_retry_forbidden" : null);
+  if (refusal) return json({ error: refusal }, effectErrorStatus(refusal));
   // The claim happens now, by the server's clock: a caller-supplied time could backdate a claim
   // past an effect's deadline.
   const now = new Date().toISOString();
@@ -57,6 +110,8 @@ export async function handleExternalEffectSettlement(req: Request, env: AppEnv):
   const effectId = text(body.effectId);
   const settlement = record(body.settlement);
   if (!effectId || !settlement) return json({ error: "effect_settlement_invalid" }, 400);
+  const refused = await existingEffectRefusal(env, effectId);
+  if (refused) return refused;
   try {
     const settled = await settleExternalEffect(env, effectId, settlement as ExternalEffectSettlement);
     return json({ effect: settled.effect, attempt: settled.attempt, value: settled.value });
@@ -74,6 +129,8 @@ export async function handleExternalEffectReconciliation(req: Request, env: AppE
   if (!effectId || !outcome || !["executed", "not_executed", "inconclusive"].includes(outcome) || !("evidence" in body)) {
     return json({ error: "effect_reconciliation_invalid" }, 400);
   }
+  const refused = await existingEffectRefusal(env, effectId);
+  if (refused) return refused;
   try {
     const effect = await reconcileExternalEffect(env, effectId, {
       outcome: outcome as "executed" | "not_executed" | "inconclusive",
@@ -93,6 +150,8 @@ export async function handleExternalEffectRetry(req: Request, env: AppEnv): Prom
   if (!body) return json({ error: "invalid_json" }, 400);
   const effectId = text(body.effectId);
   if (!effectId) return json({ error: "effect_retry_invalid" }, 400);
+  const refused = await existingEffectRefusal(env, effectId);
+  if (refused) return refused;
   try {
     const effect = await retryExternalEffect(env, effectId, text(body.now) ?? undefined);
     return json({ effect });
@@ -131,15 +190,24 @@ function text(value: unknown): string | null {
 
 function effectError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
+  // D1's outside-send guards (0164): a proposal send is never retried, and an unknown one moves on
+  // only with a person's delivery confirmation.
+  if (value.includes("outside_send_retry_limit_invalid") || value.includes("outside_send_retry_forbidden")) {
+    return "effect_outside_send_retry_forbidden";
+  }
+  if (value.includes("proposal_delivery_settle_evidence_missing")) return "effect_reconciliation_evidence_missing";
   // D1's single-flight guard (0156): this proposal revision's last send is not confirmed delivered.
   if (value.includes("proposal_delivery_unconfirmed")) return "proposal_delivery_unconfirmed";
   return /^effect_[a-z0-9_]+$/.test(value) ? value : "effect_runtime_error";
 }
 
-function effectErrorStatus(error: unknown): 400 | 409 | 422 | 500 {
+function effectErrorStatus(error: unknown): 400 | 403 | 409 | 422 | 500 {
   const code = effectError(error);
   if (code === "proposal_delivery_unconfirmed") return 409;
   if (code === "effect_runtime_error") return 500;
+  if (code === "effect_outside_send_token_refused" || code === "effect_provider_not_allowed") return 403;
+  if (code === "effect_outside_send_retry_forbidden") return 422;
+  if (code === "effect_reconciliation_evidence_missing") return 409;
   if (code.includes("conflict") || code.includes("in_flight") || code.includes("lease_lost")) return 409;
   if (code.includes("missing") || code.includes("invalid") || code.includes("expired") || code.includes("denied")) return 422;
   return 400;

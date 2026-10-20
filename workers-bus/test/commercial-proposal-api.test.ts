@@ -13,6 +13,7 @@ import {
   type RecordCommercialQuoteInput,
 } from "../src/commercial-store.ts";
 import { runExternalEffect } from "../src/effect-runtime.ts";
+import worker from "../src/index.ts";
 import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
@@ -1742,6 +1743,119 @@ test("single flight holds across publication versions, and any commercial person
       external_effect_id: "effect:versions:unknown",
     });
     assert.equal(recorded.status, 201, await recorded.clone().text());
+  } finally {
+    db.close();
+  }
+});
+
+test("the effect-runtime token cannot forge a proposal send: each step of the forged path is refused (0164)", async () => {
+  const { db, env, prepare } = await publicationReady("forged");
+  try {
+    const prepared = await prepare("forged-prepare-1");
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    const bearer = (route: string, body: unknown) =>
+      worker.fetch(
+        new Request(`https://worker.example.com/admin/effects/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+          body: JSON.stringify(body),
+        }),
+        env as never,
+        {} as never,
+      );
+    const count = (sql: string) => (db.raw.prepare(sql).get() as { n: number }).n;
+    const publications = () => count("SELECT count(*) AS n FROM commercial_proposal_publication_events");
+
+    // 1. The holder claims a send against the person's live permit with its own envelope: an empty
+    // expected readback, which any observed value would match. Refused before D1, so the permit
+    // stays unused and no effect exists.
+    const forged = { ...effectRequest(permit, "effect:forged:claim"), expectedReadback: {} };
+    const claim = await bearer("claim", { effect: forged, authority: forged.authority });
+    assert.equal(claim.status, 403, await claim.clone().text());
+    assert.deepEqual(await claim.json(), { error: "effect_outside_send_token_refused" });
+    assert.equal(count("SELECT count(*) AS n FROM external_effects"), 0);
+
+    // 2. A send the bus itself claimed cannot be settled from outside with a reported match.
+    const { authorizeExternalEffect, claimExternalEffect, proposeExternalEffect, reconcileExternalEffect, recoverExpiredExternalEffect, EFFECT_ATTEMPT_LEASE_MS } =
+      await import("../src/effect-runtime.ts");
+    const send = effectRequest(permit, "effect:forged:bus");
+    await proposeExternalEffect(env, {
+      ...send,
+      authority: { permitRef: permit.permit_id, policyRef: permit.policy_ref, policyVersion: permit.policy_version },
+    } as never);
+    await authorizeExternalEffect(env, send.effectId, send.authority);
+    const { attempt } = await claimExternalEffect(env, send.effectId);
+    const row = () => ({ ...db.raw.prepare("SELECT * FROM external_effects WHERE effect_id = ?").get(send.effectId) });
+    const leased = row();
+    const settle = await bearer("settle", {
+      effectId: send.effectId,
+      settlement: { attemptId: attempt.attempt_id, outcome: "accepted", readback: { status: "match", observed: READBACK } },
+    });
+    assert.equal(settle.status, 403, await settle.clone().text());
+    assert.deepEqual(await settle.json(), { error: "effect_outside_send_token_refused" });
+    assert.deepEqual(row(), leased);
+    assert.equal(leased.state, "executing");
+
+    // 3. Nothing is "sent", so even the permit's own preparer cannot record it as the publication.
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const record = await personPost(env, ops, "/api/v1/commercial/proposal-publications", "forged-record", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: send.effectId,
+    });
+    assert.equal(record.status, 409, await record.clone().text());
+    assert.deepEqual(await record.json(), { error: "commercial_publication_effect_mismatch" });
+    assert.equal(publications(), 0);
+
+    // 4. The lease runs out and the send is unknown. Neither the bearer nor a reconcile inside the
+    // bus moves it, so L04 holds: the revision is not sent again until a person records what they
+    // found.
+    await recoverExpiredExternalEffect(env, send.effectId, new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString());
+    const unknown = row();
+    assert.equal(unknown.state, "unknown");
+    for (const outcome of ["executed", "not_executed"]) {
+      const reconcile = await bearer("reconcile", { effectId: send.effectId, outcome, evidence: { provider: "accepted" } });
+      assert.equal(reconcile.status, 403, await reconcile.clone().text());
+      assert.deepEqual(await reconcile.json(), { error: "effect_outside_send_token_refused" });
+    }
+    const retry = await bearer("retry", { effectId: send.effectId });
+    assert.equal(retry.status, 403, await retry.clone().text());
+    assert.deepEqual(await retry.json(), { error: "effect_outside_send_token_refused" });
+    await assert.rejects(
+      reconcileExternalEffect(env, send.effectId, { outcome: "executed", evidence: { provider: "accepted" } }),
+      /proposal_delivery_settle_evidence_missing/,
+    );
+    assert.deepEqual(row(), unknown);
+    const blocked = await prepare("forged-prepare-2");
+    assert.equal(blocked.status, 409);
+    assert.deepEqual(
+      { ...(await blocked.json() as Record<string, unknown>) },
+      { error: "proposal_delivery_unconfirmed", delivery_state: "unknown", external_effect_id: send.effectId, next_step: "confirm_delivery_by_hand" },
+    );
+
+    // The person path is the way out: a confirmed delivery is then recorded.
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "forged-confirm", {
+      external_effect_id: send.effectId,
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
+    });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    const recorded = await personPost(env, ops, "/api/v1/commercial/proposal-publications", "forged-record-2", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: send.effectId,
+    });
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+    assert.equal(publications(), 1);
   } finally {
     db.close();
   }

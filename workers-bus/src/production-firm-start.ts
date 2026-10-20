@@ -335,11 +335,22 @@ export async function firmStartGateEvidence(
   env: AppEnv,
   input: FirmStartInput,
 ): Promise<FirmStartGateEvidence> {
-  const [gates, crewRow, actor] = await Promise.all([
+  const [gates, crewRow, roster, actor] = await Promise.all([
     gatesInForce(env, input.tenantId, input.roofJobId),
     env.DB.prepare(
       `SELECT version, status FROM fleet_crews WHERE tenant_id = ? AND crew_id = ?`,
     ).bind(input.tenantId, input.crewId).first<{ version: number; status: string }>(),
+    // The active members, and how many of them are active field users, as 0098 counts them.
+    env.DB.prepare(
+      `SELECT COUNT(*) AS members,
+              COALESCE(SUM(CASE WHEN worker.active = 1 AND worker.access_role = 'field'
+                           THEN 1 ELSE 0 END), 0) AS field_users
+         FROM fleet_crew_members membership
+         LEFT JOIN app_users worker
+           ON worker.tenant_id = membership.tenant_id
+          AND worker.user_id = membership.user_id
+        WHERE membership.tenant_id = ? AND membership.crew_id = ? AND membership.active = 1`,
+    ).bind(input.tenantId, input.crewId).first<{ members: number; field_users: number }>(),
     env.DB.prepare(
       `SELECT created_by FROM app_users WHERE tenant_id = ? AND user_id = ?`,
     ).bind(input.tenantId, input.actorUserId).first<{ created_by: string }>(),
@@ -357,6 +368,9 @@ export async function firmStartGateEvidence(
     !crewRow || crewRow.status !== "Active" || Number(crewRow.version) !== input.crewVersion
   ) {
     return refused("operating_job_assignment_crew_invalid");
+  }
+  if (!roster || Number(roster.members) === 0 || Number(roster.field_users) !== Number(roster.members)) {
+    return refused("operating_job_assignment_roster_invalid");
   }
 
   // 0159's rules, in its order.

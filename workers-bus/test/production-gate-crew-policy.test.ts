@@ -439,6 +439,10 @@ test("the store answers 0098's rules first, then each 0159 rule by name, and wri
   await rejectsWith(recordOperatingJobAssignment(h.env, command()), "operating_job_assignment_gates_blocked");
   ready(h.sqlite, JOB, h.window);
   await rejectsWith(recordOperatingJobAssignment(h.env, command({ expectedCrewVersion: 2 })), "operating_job_assignment_crew_invalid");
+  // A member who is no longer an active field user: 0098's roster rule, not the Crew entry's.
+  h.sqlite.prepare("UPDATE app_users SET active = 0 WHERE user_id = ?").run(USERS.fieldB.id);
+  await rejectsWith(recordOperatingJobAssignment(h.env, command()), "operating_job_assignment_roster_invalid");
+  h.sqlite.prepare("UPDATE app_users SET active = 1 WHERE user_id = ?").run(USERS.fieldB.id);
   await rejectsWith(recordOperatingJobAssignment(h.env, command({ actorUserId: USERS.seed.id })), "operating_job_assignment_seed_identity_refused");
   await rejectsWith(
     recordOperatingJobAssignment(h.env, command({ scheduledStart: at(-2 * DAY), scheduledEnd: at(-2 * DAY + 8 * HOUR) })),

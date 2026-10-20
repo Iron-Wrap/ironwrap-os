@@ -2065,6 +2065,42 @@ test("a correction is closed once the customer has decided on the proposal", asy
   }
 });
 
+test("a correction is closed once the proposal is sent again", async () => {
+  const { db, env, prepare } = await publicationReady("correction-resent");
+  const firstSend = "effect:correction-resent:first";
+  try {
+    const prepared = await prepare("correction-resent-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, firstSend, "conflict");
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "correction-resent-confirm", {
+      external_effect_id: firstSend,
+      outcome: "not_delivered",
+      note: "Nothing in their inbox or spam folder.",
+    });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    const confirmationId = (await confirmed.json() as { confirmation: { confirmation_id: string } })
+      .confirmation.confirmation_id;
+
+    // The proposal goes out again, so the record of the first send is closed.
+    const again = await prepare("correction-resent-prepare-2");
+    assert.equal(again.status, 201, await again.clone().text());
+    const { permit: second } = await again.json() as { permit: Permit };
+    await runSend(env, second, "effect:correction-resent:second", "success");
+    const late = await personPost(env, ops, CORRECT_PATH, "correction-resent-1", {
+      external_effect_id: firstSend,
+      supersedes_id: confirmationId,
+      outcome: "delivered",
+      note: "They found the first email after all.",
+    });
+    assert.equal(late.status, 409);
+    assert.deepEqual(await late.json(), { error: "proposal_delivery_correction_closed" });
+    assert.equal(effectState(db, firstSend).state, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
 test("D1 refuses an early 'not delivered' on an unknown send, with the window of the send's provider", async () => {
   const { proposalDeliveryLateAnswerWindowMs, recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
   const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");

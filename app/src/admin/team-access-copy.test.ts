@@ -5,6 +5,7 @@ import {
   ALREADY_ON_TEAM_NEXT,
   alreadyOnTeam,
   cannotApplyLine,
+  saveAfterAccessBack,
   changedElsewhere,
   conflictLine,
   firstName,
@@ -172,5 +173,9 @@ describe("the derived access-conflict phrases", () => {
     expect(`${alreadyOnTeam("grace@freshco.example")} ${ALREADY_ON_TEAM_NEXT}`).toBe(
       "grace@freshco.example is already on your team, so nothing was added. To change their access, use “See access” on their row.",
     );
+  });
+
+  it("label frame 5's waiting Save by their access coming back, not by them signing in", () => {
+    expect(saveAfterAccessBack("Grace")).toBe("Save Grace’s access · after their access is back");
   });
 });

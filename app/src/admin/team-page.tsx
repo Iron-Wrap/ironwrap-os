@@ -35,6 +35,7 @@ import {
   changedElsewhere,
   conflictLine,
   firstName,
+  saveAfterAccessBack,
   whatTheChangeDoes,
 } from "./team-access-copy";
 
@@ -682,7 +683,7 @@ function AccessPanel({
             Give {first} access back
           </Button>
           <Button type="button" variant="secondary" className="whitespace-normal" disabled>
-            Save {first}’s access · after they’re back
+            {saveAfterAccessBack(first)}
           </Button>
         </div>
         <EditLine lead={`Give ${first} access back:`}>

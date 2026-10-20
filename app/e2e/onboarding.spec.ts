@@ -333,7 +333,7 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Give Sam access back" })).not.toBeFocused();
     await expect(
-      page.getByRole("button", { name: "Save Sam’s access · after they’re back" }),
+      page.getByRole("button", { name: "Save Sam’s access · after their access is back" }),
     ).toBeDisabled();
     await assertNoHorizontalScroll(page, "cannot apply");
     await assertActionsAreReachable(page, "cannot apply");

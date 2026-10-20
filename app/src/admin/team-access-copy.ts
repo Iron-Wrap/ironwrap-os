@@ -126,6 +126,14 @@ export function changedElsewhere(conflict: AccessConflict | null, now: number): 
   return `changed ${when}`;
 }
 
+/**
+ * Frame 5's disabled Save: it waits for their access, not for them to sign in again (Track B's
+ * built-screen Z1, t04 and t05).
+ */
+export function saveAfterAccessBack(first: string): string {
+  return `Save ${first}’s access · after their access is back`;
+}
+
 /** Beside a value this page showed before the other change: "{Value} · may be out of date". */
 export const MAY_BE_OUT_OF_DATE = "may be out of date";
 

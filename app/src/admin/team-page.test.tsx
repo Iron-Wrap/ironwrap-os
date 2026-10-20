@@ -467,7 +467,9 @@ describe("TeamPage", () => {
     ).toHaveAccessibleDescription(
       "Your change cannot apply: you removed Grace Obi from the team somewhere else a moment ago.",
     );
-    const later = screen.getByRole("button", { name: "Save Grace’s access · after they’re back" });
+    const later = screen.getByRole("button", {
+      name: "Save Grace’s access · after their access is back",
+    });
     expect(later).toBeDisabled();
     expect(later).toHaveAttribute("data-variant", "secondary");
     expect(

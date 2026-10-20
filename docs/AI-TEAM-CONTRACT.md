@@ -140,7 +140,7 @@ status.
 | D-06 | A booking offer has two lanes, the phone offer and a written offer the AI drafts and a person approves, and both end at the same booking | Appendix rows A08 and A09 |
 | D-07 | Live answering states only facts from the record, says it is AI and is its own row; the owner's settings for it are the record `reception_settings:<tenant>`. Not built yet | Decision 15, "Dial levels" |
 | D-08 | When only one person holds an operation set, that person approves their own item with a recorded reason (basis `only_holder`). Not built yet | Decision 12 |
-| D-09 | The owner's autonomy screen shows the dial levels, and the price is capped at Act with approval; with D-05, Q4 and L04, every send outside IronWrap and every price commitment asks first and none is delegable. The caps are built (twenty-two actions); the dial words are not built yet | "Dial levels", Delegation item 8 |
+| D-09 | The owner's autonomy screen shows the dial levels, and the price is capped at Act with approval; with D-05, Q4 and L04, every send outside IronWrap and every price commitment asks first and none is delegable. The caps are built (twenty-three actions); the dial words are not built yet | "Dial levels", Delegation item 8 |
 | D-10 | A design-process ruling (finish the edits in flight, then pause new design items until Phase 1 is approved). No contract change | — |
 | Q1 | Four operation sets, all held by the owner until handed over: sees money and margins; approves money, with a limit; sends purchase orders; checks site safety (clears the Safety gate and releases a stop). A price below the margin floor stays the owner's, with no set (OD-32). Not built yet: today each person has one app role | "Rules for every specialist", decision 12 |
 | Q2 | A complaint is a service request with a Complaint label | `service_case.open` |
@@ -560,9 +560,10 @@ actions only.
    Every send outside IronWrap and every price commitment asks first. None is delegable. Every AI
    action is reversible or approved first (the rework brief), a sent message cannot be undone
    (owner rulings D-05 and Q4; appendix row L04), and the owner capped the price at Act with
-   approval (D-09). These twenty-two actions carry the rule:
+   approval (D-09). These twenty-three actions carry the rule:
    - the price: committing a quote revision (`quote.commit_revision`), applying a discount
      (`quote.apply_discount`) and committing a change order (`change_order.commit`);
+   - money committed to an outside platform: a paid campaign budget (`ad_spend.commit`);
    - sends to a customer: a message for any purpose (`customer_message.send`), a visit confirmation
      (`visit.confirm`), a portal link (`portal_link.send`), a proposal (`proposal.publish`), a
      change order for the customer's decision (`change_order.send_for_decision`), a remedy offer
@@ -578,9 +579,12 @@ actions only.
 
    Three of them are class `A2` (`rfq.send`, `purchase_order.expedite` and `document.request`):
    they commit nothing, but they leave the company, so they ask first too. Live answering is the
-   one exception: once the owner turns it on, it answers within the owner's limits and states only
-   facts from the record (decision 15). The JSON `delegable` is false for the seventeen protections
-   and the twenty-two caps above, for every `H`, `A0` and `A1` action, and for protective actions.
+   owner's exception: once the owner turns it on, it answers within the owner's limits and states
+   only facts from the record (decision 15). Four actions with an outside effect stay delegable,
+   because none of them sends anything or commits a price: `dead_letter.replay` replays internal
+   work, and `privacy_incident.contain`, `content.stop` and `proposal.withdraw` contain or stop
+   something. The JSON `delegable` is false for the seventeen protections and the twenty-three
+   caps above, for every `H`, `A0` and `A1` action, and for protective actions.
 9. **Protective actions never wait.** Actions marked protective only stop, hold, block, freeze,
    quarantine, suppress, alert or escalate, inside the company. They always act within limits and
    cannot be set to asks first. They add coverage on top of deterministic protections (unsubscribe
@@ -929,8 +933,8 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `customer_message.send` | A3 | Asks first | Always asks first. Send the approved message by email or SMS. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Approved draft hash; commercial context hash read again before sending; consent version | `consent`, `quiet_hours`, `recipient`, `disclosure`, `no_commitment`, `claims`, `frequency`, `purpose` | The proposing specialist's reviewer | Send through the effect runtime → provider message id and delivery status | new (communication effect); predecessor `erp:request_record_communication_event` records only |
 | `followup.pause` | A2 | Acts within your limits | Pause a case's follow-up schedule because the customer asked for time, a dispute is open, or a person took over. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The fact behind the pause | — | The proposing specialist's reviewer | Follow-up schedule paused → read back | new |
 | `followup.resume` | A2 | Acts within your limits | Resume a paused follow-up schedule from where it stopped. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The pause and the fact that lifts it | `frequency` | The proposing specialist's reviewer | Follow-up schedule resumed → read back | new |
-| `visit.hold_slot` | A2 | Acts within your limits | Hold a site-visit slot on a staff calendar. The hold confirms nothing to the customer; on a live call the caller may hear that a slot is held (decision 15), and Undo releases it. | Staff availability; property area | `bounded` | Sales | Tentative hold with expiry → read back | new |
-| `visit.confirm` | A3 | Asks first | Always asks first. Book the site visit and confirm it to the customer. | Held slot; the customer's request; access facts | `consent`, `quiet_hours`, `recipient`, `disclosure` | Sales | Appointment and confirmation → appointment read back; delivery status | new; a call may hold a slot, and Staff press Keep booking to confirm it (decision 15) |
+| `visit.hold_slot` | A2 | Acts within your limits | Hold a site-visit slot on a staff calendar. The hold confirms nothing to the customer. Not built yet: on a live call the caller hears that a slot is held (decision 15), and Undo releases it. | Staff availability; property area | `bounded` | Sales | Tentative hold with expiry → read back | new |
+| `visit.confirm` | A3 | Asks first | Always asks first. Book the site visit and confirm it to the customer. | Held slot; the customer's request; access facts | `consent`, `quiet_hours`, `recipient`, `disclosure` | Sales | Appointment and confirmation → appointment read back; delivery status | new; not built yet: a call may hold a slot, and Staff press Keep booking to confirm it (decision 15) |
 | `consent.record` | A3 | Asks first | Always asks first. Record a consent the customer gave, with its capture evidence. Owners: `lead_concierge`, `customer_care_warranty`, `marketing_reputation`. | Capture evidence (form bytes, recording pointer or message) with hash | `consent_capture` | The proposing specialist's reviewer | Consent record → consent version read back | new; predecessor `erp:request_record_communication_consent` |
 | `suppression.apply` | A2 | Acts within your limits | Protective. Apply a stop, unsubscribe or do-not-contact request at once and cancel pending sends. Owners: `lead_concierge`, `customer_care_warranty`, `marketing_reputation`. | The person's message or the provider opt-out event | — | Never asks first | Suppression; pending sends cancelled → suppression read back | new |
 | `conversation.assign_person` | A2 | Acts within your limits | Protective. Hand a conversation to a named person when the customer asks for one or policy requires it. Owners: `lead_concierge`, `customer_care_warranty`. | The request or the policy trigger | `named_person` | Never asks first | Thread owner set; person notified → read back; delivery status | new |
@@ -1116,7 +1120,7 @@ safety occurrence. The Worker registry and the human release route must preserve
 | `content.stop` | A2 | Asks first | Stop scheduled or live content whose claim was withdrawn or misstated; suppression on claim expiry stays deterministic. | Claims record state | — | Owner | Stop → provider readback | `POST /api/v1/postiz/intents/{intent}/stop` |
 | `campaign.send` | A3 | Asks first | Always asks first. Send an email or SMS campaign. | Consent per recipient; suppression list version | `consent`, `quiet_hours`, `frequency`, `claims`, `disclosure` | Owner | Sends → delivery per recipient | new |
 | `review_response.publish` | A3 | Asks first | Always asks first. Publish a response to a public review. | The review; facts | `claims`, `privacy`, `disclosure` | Owner | Response → platform readback | new |
-| `ad_spend.commit` | A3 | Asks first | Set or change a paid campaign budget. | Performance facts | `amount_ceiling` | Owner | Budget → platform readback | new |
+| `ad_spend.commit` | A3 | Asks first | Always asks first. Set or change a paid campaign budget. | Performance facts | `amount_ceiling` | Owner | Budget → platform readback | new |
 
 #### Catalog: AI auditor (`independent_auditor`)
 
@@ -2238,7 +2242,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "content.stop", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "taking down marketing content"},
     {"action_id": "campaign.send", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending an email or text campaign"},
     {"action_id": "review_response.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "replying to a public review"},
-    {"action_id": "ad_spend.commit", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "setting an ad budget"},
+    {"action_id": "ad_spend.commit", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "setting an ad budget"},
     {"action_id": "run.verify", "owners": ["independent_auditor"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking the team's completed work"},
     {"action_id": "finding.raise", "owners": ["independent_auditor"], "aggregate": "finding", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "raising an audit finding"},
     {"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "specialist_hold", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "never_targets": ["independent_auditor"], "name": "putting a team member on hold"},
@@ -2400,7 +2404,7 @@ covers says so: it is a voice provider (Newo) step, a System step, or work the c
 hold. No action is invented for it here.
 
 "Not registered" means the Worker's action registry does not register the action yet, so a step
-that proposes it abstains (`action_unregistered`). Only 14 actions are registered today:
+that proposes it abstains with `policy_missing`. Only 14 actions are registered today:
 `fact.explain`, `handoff.create`, `exception.escalate`, `note.add`, `delegation.propose_change`,
 `settings.propose_change`, `import.retry_failed`, `lead_fact.propose`, `lead_fact.confirm`,
 `authority.evaluate`, `authority.record`, `access.prepare_change`, `emergency.page` and

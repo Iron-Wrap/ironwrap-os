@@ -1064,6 +1064,8 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "document.request",
   "cost_recovery.claim",
   "content.publish",
+  // Money committed to an outside platform.
+  "ad_spend.commit",
 ];
 // Human-only: never an agent's act, never delegable.
 const AI_TEAM_PEOPLE_ONLY = [

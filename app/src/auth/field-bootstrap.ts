@@ -157,6 +157,23 @@ export function primeFieldBootstrap(
 }
 
 /**
+ * Waits for the entry-time read and claims it only when it succeeds, so the app can render the
+ * screen the read decides instead of a checking state it would replace a moment later. A read
+ * that fails stays primed for the session query, which owns the retry and error policy for it.
+ */
+export async function settlePrimedFieldBootstrap(): Promise<FieldBootstrap | undefined> {
+  const bootstrap = primedFieldBootstrap;
+  if (!bootstrap) return undefined;
+  try {
+    const result = await bootstrap;
+    if (primedFieldBootstrap === bootstrap) primedFieldBootstrap = undefined;
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Gives the initial query the in-flight read, then clears it so ordinary React Query
  * retries and later refetches always make a fresh authenticated request.
  */

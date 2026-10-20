@@ -72,7 +72,10 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     sign-offs. Anyone on a crew can stop work. Every person works with zero training. Facts are
     exact, never rounded or silently corrected.
 12. **Kept board decisions.** No self-approval (OD-23). Owner approval below 25% gross margin
-    (OD-32).
+    (OD-32), which no operation set hands to anyone else. When only one person holds an operation
+    set, that person approves their own item with a recorded reason (owner ruling D-08), but a
+    safety stop is never released by the person who raised it (owner ruling Q7). Neither the sets
+    nor the recorded reason is built yet (see "Owner rulings" below).
 13. **Models.** One provider-agnostic gateway. Each tenant sets its providers, models and billing
     by configuration. Production runs on commercial terms only: an API account or a commercial
     subscription. A consumer sign-in serves synthetic runs only, or `eval_history` runs under a
@@ -95,10 +98,16 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     needs an owner decision recorded in this contract.
 15. **Live answering.** Answering a live call or chat (`conversation.answer_live`) is off until the
     owner turns it on in setup; nothing answers live before that. Once on, it acts within the
-    owner's limits (hours and channels), quotes no price, commits no date or coverage, says it is AI
-    and offers a person, goes silent once a person takes over, and writes one receipt per
-    conversation. Booking an inspection time, any follow-up and every other outside effect still ask
-    first.
+    owner's limits (hours and channels), states only facts from the record (no price, no date and
+    no promise; anything else goes to a named person), says it is AI and offers a person, goes
+    silent once a person takes over, and writes one receipt per conversation. It is its own row on
+    the owner's autonomy screen, "Facts only, live" (owner ruling D-07). During a call the voice
+    provider may hold an inspection slot and tell the caller it is held (`visit.hold_slot`); no
+    confirmation goes out until Staff press Keep booking (`visit.confirm`, which asks first), and
+    Undo releases the slot (owner ruling D-02, which replaces request-only voice reception). Every
+    follow-up and every other outside effect still asks first. Both are targets and not built yet:
+    today a call only records a request, and the slot hold stays YELLOW until the voice provider's
+    mid-call webhook is verified (Newo assumption A-05).
 16. **Owner interrupt.** An item on the owner's immediate-only list interrupts the owner at once
     (`owner.interrupt`). It is an internal notification with no outside effect and never waits for
     an approval.
@@ -108,7 +117,41 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     evidence (the `claims` check). AI disclosure stays mandatory in every conversation or message
     to a customer (decision 10): a campaign email or SMS (`campaign.send`) and a reply to a
     specific customer's review (`review_response.publish`) are such messages, and both keep their
-    `disclosure` check.
+    `disclosure` check. In this release no new public post uses a customer's photos or story
+    (owner ruling Q3): the `portfolio_candidate` watch is parked, and the default permission for
+    photos and stories stays No. The AI receptionist may link existing company pages that tenant
+    policy lists, never a page built from a customer's photos or story without that customer's
+    recorded permission; tenant policy lists no such pages yet.
+
+### Owner rulings
+
+The owner's rulings on the rework brief (D-01 to D-10) and on the requirements review (Q1 to Q10)
+refine the decisions above. Each applies where the table says. A ruling the code does not carry
+out yet says "not built yet", and [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) holds the same
+status.
+
+| Ruling | What it says | Where it applies |
+|---|---|---|
+| D-01 | AI-native and manual-complete: the AI does the work first and the default is reviewing and approving; every manual screen stays, so "Do it myself" always works | Decisions 2 and 3, "Degraded operation" |
+| D-02 | During a call the voice provider may hold an inspection slot; Staff press Keep booking before any confirmation goes out, and Undo releases the slot. Not built yet, and YELLOW until the mid-call webhook is verified (Newo assumption A-05) | Decision 15, "The owner's launch rule" |
+| D-03 | A hand-off to a person is a callback or a review, never a live transfer, and a person can take over the record at any step. Not built yet: the published reception script still transfers a caller to the owner's line (`config/newo`) | `conversation.assign_person` |
+| D-04 | A person's own words run the same action as a button, through the same decision and receipt; generated views stay ad hoc. Not built yet | "Requests through the face" |
+| D-05 | Superseded by Q4 as the owner revised it: a reminder stays at Act with approval, with no cancel window | Q4 |
+| D-06 | A booking offer has two lanes, the phone offer and a written offer the AI drafts and a person approves, and both end at the same booking | Appendix rows A08 and A09 |
+| D-07 | Live answering states only facts from the record, says it is AI and is its own row; the owner's settings for it are the record `reception_settings:<tenant>`. Not built yet | Decision 15, "Dial levels" |
+| D-08 | When only one person holds an operation set, that person approves their own item with a recorded reason (basis `only_holder`). Not built yet | Decision 12 |
+| D-09 | The owner's autonomy screen shows the dial levels, and sending a proposal, a change order or an invoice is capped at Act with approval. The caps are built; the dial words are not built yet | "Dial levels", Delegation item 8 |
+| D-10 | A design-process ruling (finish the edits in flight, then pause new design items until Phase 1 is approved). No contract change | — |
+| Q1 | Four operation sets, all held by the owner until handed over: sees money and margins; approves money, with a limit; sends purchase orders; checks site safety (clears the Safety gate and releases a stop). A price below the margin floor stays the owner's, with no set (OD-32). Not built yet: today each person has one app role | "Rules for every specialist", decision 12 |
+| Q2 | A complaint is a service request with a Complaint label | `service_case.open` |
+| Q3 | No new public post uses a customer's photos or story in this release, and the `portfolio_candidate` watch is parked | Decision 17 |
+| Q4 | As the owner revised it: booking reminders and payment reminders are sent only by approval (Act with approval), never automatically, and the dial has no "Auto with cancel window". The internal callback rows (appendix rows A28 to A30) send nothing and run with undo. Reminders are not built yet | "Dial levels", appendix |
+| Q5 | For the 10-day cancellation window after signing (OD-01), a read-only system state holds material orders and a firm start; it is never waivable. Not built yet | `purchase_order.place`, `crew_date.commit`, `shop_order.release` |
+| Q6 | While MD-13 waits, Deposit is the system state "No deposit under this contract", and no deposit invoice is proposed at acceptance. Not built yet | `invoice.commit_intent`, the `deposit_due` watch |
+| Q7 | A stop is never released by the person who raised it, with no exception for working alone; if nobody else can, another Staff member or a named outside person releases it. Completed work is never accepted by the person who did it; a solo owner accepts with a recorded reason (D-08). The outside person and the recorded reason are not built yet | `safety_stop.release`, `completion.accept` |
+| Q8 | As the owner revised it: shop fabrication, coil purchasing, supply-only and customer-material orders stay in this release, and a person passes the first piece before each shop run. No scope change | Appendix row L10 |
+| Q9 | QuickBooks hosts the card page and holds supplier bills; IronWrap prepares, validates, submits and reconciles through its adapters and only observes card payments. No contract change | Appendix rows A32 and A33 |
+| Q10 | One permit line (needed and held, not needed, or unknown, which blocks), two default hold points (the deck before it is covered, and the final check) and a daily one-tap hazard acknowledgement on the crew phone. Not built yet | `work_package.draft`, `hold_point.release` |
 
 ## The team
 
@@ -139,6 +182,10 @@ decision to the owner when they say so. Nobody approves what they authored (OD-2
 safety decisions go to production, and a stop is released by a person in the owner, ops or
 production role who did not raise or report it; privacy goes to the owner, while the AI compliance
 checker works the requests; money items go to accounting; dead letters go to operations (`ops`).
+Under owner ruling Q1, who may approve money (with a limit), send purchase orders, see money and
+margins, or check site safety is to come from four operation sets the owner holds until handing
+one over, not from a role. They are not built yet: today each person has one app role, and the
+reviewer is a role.
 
 ### Roster
 
@@ -554,21 +601,53 @@ actions only.
     qualification on the exact route the specialist's latest run used, and a run on an unqualified
     route makes a within-limits setting fall back to asks first (item 7). A close the Worker
     refused (no qualified route, or an audit off independence) counts toward the bar only against
-    the specialist, never for it: the run's matches leave the window, while its divergences, a
-    person's declined proposal included, still count. The face proposes the change
-    (`delegation.propose_change`, with the preview), the Worker refuses a proposal to act within
-    limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action and no
-    action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
+    the specialist, never for it: only the run's matches leave the window, while its partial and
+    diverging comparisons, a person's declined proposal included, still count. The face proposes the
+    change (`delegation.propose_change`, with the preview), the Worker refuses a proposal to act
+    within limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action
+    and no action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
     lowering one needs an owner decision recorded in this contract.
 14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
     your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
-    actions the words shown are the current setting's.
+    actions the words shown are the current setting's. The owner's autonomy screen shows the dial
+    levels instead (see "Dial levels").
 
 "Per specialist" means the owner can change several actions of one specialist at once (each still
 stored per action) or pause the specialist. Pausing sets every non-protective action of the
 specialist to asks first and stops its drafting, practice runs included; a practice-only action
 keeps its `shadow` setting and never turns into a live asks-first one, because only the owner gives
 an action more autonomy.
+
+### Dial levels
+
+The owner's autonomy screen sets each action on a dial (owner ruling D-09). The dial's words map
+onto the classes and settings above; internal codes and catalog fields keep their names.
+
+| Dial level | Means | Contract words and codes | Today |
+|---|---|---|---|
+| Off | The specialist does not act on this action; people use the manual screen | The setting `off` on a delegable `A2` or `A3` action, and `off_until_enabled` before the owner turns a live action on | A step under `off` fails with `policy_denied`. Not built yet for a Prepares action or for an action whose `delegable` is false: neither takes a setting (pausing the whole specialist stops its drafting) |
+| Suggest | The AI drafts or proposes; each value shows "Proposed" until a person accepts or edits it | Prepares (`A1`) | A Prepares step stores a draft and has no effect |
+| Act with approval | The AI prepares the step, and a person approves it before anything happens | Asks first (`asks_first`) | The reviewer approves the exact revision |
+| Auto with undo | The AI acts, records it and offers Undo on the record | Acts within your limits (`within_limits`), offered only for an action whose receipt offers an undo (catalog `undo` `automatic`) | Not built yet: no undo flow exists; no non-protective action's machine path is proven, so a within-limits step asks first (item 10); and the Worker accepts within limits for any delegable action, whatever its undo |
+| Locked | The owner cannot change the row, and the screen gives the reason in one line | Always on (protective actions) or People only (`H`) | Neither takes a setting |
+
+An action that always asks first (item 8) shows Act with approval and no higher level, the three
+actions D-09 capped among them. The dial also offers Off for those, but the Worker accepts no
+setting for an action whose `delegable` is false, so Off for them is not built yet. Practice only
+(`shadow`) is not a dial level; it stays the owner's own trial setting (item 11).
+
+The dial has one named variant. "Facts only, live" is `conversation.answer_live` once the owner
+turns it on (decision 15): it states only facts from the record, says it is AI and hands anything
+else to a named person. It is not built yet. There is no "Auto with cancel window": a reminder to
+a customer, for a booking or a payment, is sent only by approval and never automatically (owner
+ruling Q4 as revised). Reminders are not built yet: no message purpose is registered for a visit
+reminder (`payment_reminder` is the only reminder purpose), `customer_message.send` is not
+registered, and the Worker would still accept a within-limits setting for it, which asks first
+until its machine path is proven.
+
+Screens show the dial words only on the owner's autonomy screen, which is not built yet; today the
+app shows the words of item 14 (`app/src/components/ai/words.ts`). The appendix ("Appendix:
+autonomy screen mapping") maps each row of that screen to its catalog actions.
 
 ### The owner's launch rule
 
@@ -611,12 +690,26 @@ answer a customer-initiated call or chat while it is live (`conversation.answer_
 through the managed voice provider ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md)) with the
 published reception script, or by text. It is off until the owner turns it on in setup, and nothing
 answers live before that. Once on, it acts within the owner's limits: the owner-set hours and
-channels. It quotes no price at all, commits no date, scope or coverage, always says it is AI and
-offers a person, goes silent once a person takes over, and writes one receipt per conversation. The
-approved script carries a fixed safety line ("if anyone is in danger, call 911"). A
-call may record a request ("Appointment request received."), but booking an inspection time
-(`visit.confirm`), any follow-up (`customer_message.send`) and every other outside effect still ask
-first. Publishing a reception script version always asks first (`reception_script.publish`).
+channels. It states only facts from the record: it quotes no price at all, commits no date, scope
+or coverage, makes no promise, and hands anything else to a named person (owner ruling D-07). It
+always says it is AI and offers a person, goes silent once a person takes over, and writes one
+receipt per conversation. The approved script carries a fixed safety line ("if anyone is in danger,
+call 911"). During a call the voice provider may ask IronWrap to hold an inspection slot
+(`visit.hold_slot`) and tell the caller it is held; nothing is confirmed until Staff press Keep
+booking (`visit.confirm`, which asks first), and Undo releases the slot (owner ruling D-02). Any
+follow-up (`customer_message.send`) and every other outside effect still ask first. Publishing a
+reception script version always asks first (`reception_script.publish`).
+
+The owner's live-answering settings are one record, `reception_settings:<tenant>`: whether live
+answering is on, and the hours and channels in which it answers. `conversation.answer_live` cites
+it, and the owner sets it in setup. Not built yet: the Worker keeps no such record, and the AI
+receptionist's playbook reads it as a placeholder fact.
+
+Voice reception today is request-only: the reception configuration books in `request_only` mode
+(`config/newo/production.expected.json`), its tools check availability and record a request, and a
+call ends with "Appointment request received." No tool holds a slot, so the D-02 hold is a target,
+not built yet, and it stays YELLOW until the voice provider's mid-call webhook is verified (Newo
+assumption A-05).
 
 ### Policy checks
 
@@ -726,7 +819,12 @@ them and follows these conventions:
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
   citations, never an argument. Only a run started by the inbound event itself may propose it, and
-  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`).
+  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`). A lead's
+  proposals stay open by one rule: a newer proposal for the same lead that sets every key an older
+  open one set supersedes it, while one that sets only some of those keys leaves the older one
+  open. A proposal closes for good once any `lead_fact.confirm` that policy admitted names it,
+  whether the reviewer approved it, declined it or did it by hand. Not built yet: the Worker records
+  each proposal as its step, but serves no `lead_proposal` fact and applies no open rule.
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:
@@ -809,8 +907,8 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `customer_message.send` | A3 | Asks first | Send the approved message by email or SMS. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Approved draft hash; commercial context hash read again before sending; consent version | `consent`, `quiet_hours`, `recipient`, `disclosure`, `no_commitment`, `claims`, `frequency`, `purpose` | The proposing specialist's reviewer | Send through the effect runtime → provider message id and delivery status | new (communication effect); predecessor `erp:request_record_communication_event` records only |
 | `followup.pause` | A2 | Acts within your limits | Pause a case's follow-up schedule because the customer asked for time, a dispute is open, or a person took over. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The fact behind the pause | — | The proposing specialist's reviewer | Follow-up schedule paused → read back | new |
 | `followup.resume` | A2 | Acts within your limits | Resume a paused follow-up schedule from where it stopped. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The pause and the fact that lifts it | `frequency` | The proposing specialist's reviewer | Follow-up schedule resumed → read back | new |
-| `visit.hold_slot` | A2 | Acts within your limits | Hold a site-visit slot on a staff calendar; the customer does not see it. | Staff availability; property area | `bounded` | Sales | Tentative hold with expiry → read back | new |
-| `visit.confirm` | A3 | Asks first | Book the site visit and confirm it to the customer. | Held slot; the customer's request; access facts | `consent`, `quiet_hours`, `recipient`, `disclosure` | Sales | Appointment and confirmation → appointment read back; delivery status | new; voice reception stays request-only |
+| `visit.hold_slot` | A2 | Acts within your limits | Hold a site-visit slot on a staff calendar. The hold confirms nothing to the customer; on a live call the caller may hear that a slot is held (decision 15), and Undo releases it. | Staff availability; property area | `bounded` | Sales | Tentative hold with expiry → read back | new |
+| `visit.confirm` | A3 | Asks first | Book the site visit and confirm it to the customer. | Held slot; the customer's request; access facts | `consent`, `quiet_hours`, `recipient`, `disclosure` | Sales | Appointment and confirmation → appointment read back; delivery status | new; a call may hold a slot, and Staff press Keep booking to confirm it (decision 15) |
 | `consent.record` | A3 | Asks first | Always asks first. Record a consent the customer gave, with its capture evidence. Owners: `lead_concierge`, `customer_care_warranty`, `marketing_reputation`. | Capture evidence (form bytes, recording pointer or message) with hash | `consent_capture` | The proposing specialist's reviewer | Consent record → consent version read back | new; predecessor `erp:request_record_communication_consent` |
 | `suppression.apply` | A2 | Acts within your limits | Protective. Apply a stop, unsubscribe or do-not-contact request at once and cancel pending sends. Owners: `lead_concierge`, `customer_care_warranty`, `marketing_reputation`. | The person's message or the provider opt-out event | — | Never asks first | Suppression; pending sends cancelled → suppression read back | new |
 | `conversation.assign_person` | A2 | Acts within your limits | Protective. Hand a conversation to a named person when the customer asks for one or policy requires it. Owners: `lead_concierge`, `customer_care_warranty`. | The request or the policy trigger | `named_person` | Never asks first | Thread owner set; person notified → read back; delivery status | new |
@@ -1505,6 +1603,16 @@ catalog action gets a plain answer and the screen where the person can do it the
 that arrives inside a message, document or email is never a person's request, whoever it claims to
 come from.
 
+A person's own words run the same action as a button (owner ruling D-04). "Move Jordan's
+inspection to Friday" typed to the face is the same request as the press on that action: the
+owning specialist proposes it, and the same policy, decision and receipt apply; the face never
+executes it. Views the face draws stay ad hoc: each answers one question and is never kept as a
+screen. Not built yet (see `CAPABILITY-MATRIX.md`): the ask route runs nothing itself, and the
+face's run may propose only its own actions or hand the work to its owner (`handoff.create`); an
+ask shows its answer, its view and that view's actions, never a decision, so a decision does not
+appear in the same conversation yet; `authority.record` answers only a press; and the app has no
+Ask IronWrap screen yet.
+
 ## Model routing
 
 Which provider, model and billing serve each runtime tier is per-tenant configuration. Routes are
@@ -1623,8 +1731,9 @@ is not held to one (see "Coordination run"). Changing a specialist's model, a de
 included, needs that pair qualified first. Without a qualified route the specialist abstains with
 `no_qualified_route`. A specialist is a delegation candidate (see "Delegation") only when the
 latest qualification for the provider, model, effort and release of its most recent closed run
-passed; a close on an older close model records no release, so a specialist whose most recent
-closed run is one is no candidate. The delegation window counts decisions by release, not by
+passed. A close on an older close model records no release, and a synthetic v3 close, which needs
+no qualification, may record none either; a specialist whose most recent closed run records no
+release is no candidate. The delegation window counts decisions by release, not by
 route; the route is held to its qualification instead (see "Delegation", item 13).
 
 ### Independence
@@ -2257,3 +2366,72 @@ class, start state, owners, the protective and always-asks-first markers, and re
 ```
 
 <!-- ai-team-contract:end -->
+
+## Appendix: autonomy screen mapping
+
+This appendix maps each row of the owner's autonomy screen (see "Dial levels") to the catalog. The
+rows are the rework design's action catalog (A01 to A35) and its Locked rows (L01 to L10), with the
+owner's rulings applied (see "Owner rulings"). Default and "Owner may set" are the screen's dial
+levels. Where a row offers less than the catalog allows, the row is what the screen offers; the
+Worker enforces only the catalog, the three D-09 caps included. A row whose work no catalog action
+covers says so: it is a voice provider (Newo) step, a System step, or work the catalog does not
+hold. No action is invented for it here.
+
+"Not registered" means the Worker's action registry does not register the action yet, so a step
+that proposes it abstains (`action_unregistered`). Only 14 actions are registered today:
+`fact.explain`, `handoff.create`, `exception.escalate`, `note.add`, `delegation.propose_change`,
+`settings.propose_change`, `import.retry_failed`, `lead_fact.propose`, `lead_fact.confirm`,
+`authority.evaluate`, `authority.record`, `access.prepare_change`, `emergency.page` and
+`specialist.hold`. Event-triggered watches do not fire yet. Status here matches
+[`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md).
+
+| Row | On the screen | Catalog actions | Default | Owner may set | Manual twin | Notes and status |
+|---|---|---|---|---|---|---|
+| A01 | Capture the call and propose the lead's details (Newo) | The capture is a Newo step, outside the AI-team catalog; `lead_fact.propose` proposes the details and `lead_fact.confirm` accepts them | Suggest | Off · Suggest · Auto with undo | P03 manual lane: play the recording, type the details | `lead_fact.propose` is registered and cites only the inbound event, but no inbound channel feeds the team yet and the receptionist's allowlist does not name it yet. `lead_fact.confirm` asks first, has no executor and has a manual undo, so Auto with undo is not available |
+| A02 | Archive spam calls and spam web forms (Newo) | Newo's own spam step, outside the catalog; `inquiry.classify` (spam likelihood); `inbound.quarantine` holds content in which nothing valid remains | Auto with undo | Off · Suggest · Auto with undo | Calls › Close as spam | `inbound.quarantine` is protective (Locked), so Off and Suggest reach only Newo's step and the classification; its release is `inbound.release`, which always asks first. Not registered |
+| A03 | Mark a call urgent from what the caller said | `inquiry.classify` (urgency and emergency); danger also pages (`emergency.page`) | Suggest | Off · Suggest | Urgent? field on the call | `inquiry.classify` is not registered; `emergency.page` is registered. Off for a Prepares action is not built yet |
+| A04 | Link a call to a record when every field matches | `inquiry.link_duplicate` | Auto with undo | Off · Suggest · Auto with undo | Search the customer list and link | Starts within limits, with an automatic undo. Not registered. Its `exact_match` check takes one exact key, so "every field, never the phone number alone" is not built yet |
+| A05 | Create a callback when the caller asks for a person or Newo cannot help (Newo) | The callback request is a Newo step, outside the catalog; `conversation.assign_person` names the person | Auto with undo | Off · Auto with undo | Callbacks › Add callback | `conversation.assign_person` is protective (Locked) and not registered. No callback record exists yet. The published reception script still transfers a caller live (D-03) |
+| A06 | Hold an inspection slot during a call (Newo) | `visit.hold_slot` holds it; Keep booking is `visit.confirm` | Act with approval | Off · Act with approval | P11 Book an inspection | The hold starts within limits and Keep booking asks first. Not built yet: neither is registered, voice reception is request-only, and the mid-call webhook is YELLOW (A-05) |
+| A07 | Offer to move or cancel a booking during a call (Newo) | None: no catalog action moves or cancels a booked visit | Act with approval | Off · Act with approval | P10 Change a booking | A Newo step with Staff's Keep change or Undo change, outside the catalog. Not built yet (YELLOW A-05, RED A-16) |
+| A08 | Draft the booking offer (up to three 2-hour slots) and read the lead's reply | `customer_message.draft` drafts the offer; a reply that picks a slot proposes `visit.confirm` (A09) | Act with approval | Off · Suggest · Act with approval | Pick slots in the calendar | No message purpose for a booking offer is registered. Offered slots are not held; they are checked again on the reply. Not registered |
+| A09 | Send booking offers, confirmations and changes | `customer_message.send` (offers and changes); `visit.confirm` (book and confirm) | Act with approval | Off · Act with approval | Send confirmation: text, WhatsApp draft, email or call | Both ask first. No purpose for an offer or a change is registered. Not registered |
+| A10 | Send booking reminders | `customer_message.send` | Act with approval | Off · Act with approval | Staff call or text the day before | Never automatic (Q4). Not built yet: no purpose for a visit reminder is registered (`schedule_notice` covers crew dates), and the Worker would still accept a within-limits setting for `customer_message.send` |
+| A11 | Summarise the callback's context and propose its outcome | `fact.explain` summarises; no catalog action proposes a callback outcome | Suggest | Off · Suggest | Outcome field on the callback | `fact.explain` is registered; no callback record exists yet |
+| A12 | Draft replies to callers, leads and customers | `customer_message.draft`, then `customer_message.send` | Suggest | Off · Suggest · Act with approval | Write the message | Every send keeps its `disclosure` check. Not registered |
+| A13 | Fill a lead from a pasted email or note | `lead_fact.propose` | Suggest | Off · Suggest | Type the lead | Not built yet: `lead_fact.propose` cites only the inbound event that started its run, so a pasted email or note cannot be its source |
+| A14 | Propose a lead's qualification answers and next step | `inquiry.classify`; recording the triage is `inquiry.record_triage` | Suggest | Off · Suggest | Choose the next step | `inquiry.record_triage` starts within limits, above this row's levels. Not registered |
+| A15 | Read a measurement report into roof areas | `measurement.extract` | Suggest | Off · Suggest | Enter each slope's area | Not registered as a team action; the intake's measurement interpreter, outside the team, proposes values for review |
+| A16 | Draft the quote from the measurements and the catalog | `takeoff.draft`, `quote.draft_revision` | Suggest | Off · Suggest | Quote editor | Not registered |
+| A17 | Send the proposal | `proposal.publish` | Act with approval | Off · Act with approval | Share proposal | Capped by D-09: always asks first, and the Worker refuses every setting for it. Not registered as a team action; a person's publish is refused while the last delivery is unconfirmed (L04) |
+| A18 | Create follow-up callbacks on days 3, 10 and 21 (System) | None: a System step, outside the catalog | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Not built yet. The receptionist's `follow_up_due` watch drafts follow-up messages and creates no callback |
+| A19 | Draft follow-up texts | `customer_message.draft` and `customer_message.send` (`follow_up`) | Act with approval | Off · Suggest · Act with approval | Write the message | Not registered |
+| A20 | Fill the contract from the accepted proposal | None: no catalog action drafts a contract from an accepted proposal | Suggest | Off · Suggest | Contract form | Outside the catalog; the template fills the contract by rule on the main lane |
+| A21 | Prepare the production handoff | None for the handoff form; the `acceptance_recorded` watch hands the job on (`handoff.create`) | Suggest | Off · Suggest | Handoff form | `handoff.create` is registered; the watch does not fire yet |
+| A22 | Answer customer questions live | `conversation.answer_live` ("Facts only, live"); `customer_message.draft` for Suggest | Off | Off · Suggest · Facts only, live | A named person replies by a stated time | Not built yet: no live conversation runtime and no `reception_settings` record (decision 15) |
+| A23 | Propose urgency and who pays for a service request | `service_case.triage` | Suggest | Off · Suggest | Urgent? and Who pays fields | A complaint is a service request with a Complaint label (Q2). Not registered |
+| A24 | Draft replies to complaints | `customer_message.draft` (AI customer care) | Suggest | Off · Suggest | Write the reply | Not registered |
+| A25 | Draft a change order | `change_order.draft`; sending it is `change_order.send_for_decision` | Suggest | Off · Suggest | Change order form | Sending it is capped by D-09: always asks first. Not registered |
+| A26 | Draft an invoice | None separate: the AI bookkeeper's proposal of `invoice.commit_intent` is the draft | Suggest | Off · Suggest | Invoice form | Not registered; the final invoice is derived natively, outside the team |
+| A27 | Send an invoice | `invoice.commit_intent` (the invoice in QuickBooks) and `customer_message.send` (`invoice_cover_note`) | Act with approval | Off · Act with approval | Send invoice | `invoice.commit_intent` is capped by D-09: always asks first. One row holds two outside actions. Not registered |
+| A28 | Create a callback when a booking offer gets no answer (System) | None: a System step, outside the catalog | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Sends nothing (Q4, under MD-15). Not built yet |
+| A29 | Create a callback when a held slot is not kept (System) | None: a System step, outside the catalog; the freed slot is the expiry of `visit.hold_slot` | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Sends nothing (Q4, under MD-15). Not built yet |
+| A30 | Create a callback when a change proposal gets no answer (System) | None: a System step, outside the catalog | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Sends nothing (Q4, under MD-15). Not built yet |
+| A31 | Draft a cut list from the drawings and measurements | `cut_list.draft` | Suggest | Off · Suggest | Write the cut list | A person passes the first piece before the run (L10). Not registered |
+| A32 | Prepare a supplier bill: match it to the order and the receipt | `supplier_bill.match`, then `supplier_bill.approve` | Act with approval | Off · Act with approval | Enter the bill in QuickBooks | QuickBooks holds the bill (Q9). `supplier_bill.approve` is delegable in the catalog; this row offers no higher level. Supplier facts have no D1 tables yet. Not registered |
+| A33 | Draft a payment run for approved supplier bills | `payment_run.draft` | Act with approval | Off · Act with approval | Pay the bills in QuickBooks | A Prepares action: the catalog has no approval step for a payment run, and its row says a person pays in the bank where this row says QuickBooks; IronWrap never moves money. Not registered |
+| A34 | Send payment reminders for unpaid invoices | `customer_message.send` (`payment_reminder`), drafted by `customer_message.draft` | Act with approval | Off · Act with approval | Call or email about the unpaid invoice | Never automatic (Q4); not enforced yet, as for A10. The `invoice_overdue` watch does not fire yet. Not registered |
+| A35 | Draft a purchase order for job materials or coil stock | `purchase_order.place`: the proposal is the draft, and approving it places the order | Act with approval | Off · Act with approval | Write the purchase order | A first order with a new supplier goes to the owner. Sending needs the "sends purchase orders" set (Q1), not built yet. Supplier facts have no D1 tables yet. Not registered |
+
+| Row | On the screen | Rule | Catalog actions | Notes and status |
+|---|---|---|---|---|
+| L01 | Stop contact when permission is withdrawn | Always on | `suppression.apply` (protective) | Takes no setting. Not registered |
+| L02 | Contact without permission or outside calling hours | Never | The `consent` and `quiet_hours` checks on every customer send (`customer_message.send`, `visit.confirm`, `campaign.send` and the other sends) | The calling hours are tenant policy. No customer send is registered yet |
+| L03 | Give a price on a call | Never | The `live_session` and `no_commitment` checks on `conversation.answer_live`; the AI receptionist's hard boundary | Nothing answers live yet |
+| L04 | Resend an outside message (a proposal, a confirmation, an invoice or an order) while the last result is unknown | Never | Every outside send; no step retries a dispatched effect whose outcome is unknown ("Ceilings") | Built for proposal publication only: preparing a publish is refused while the last delivery is unconfirmed (migration 0156). Not built yet for every other send |
+| L05 | Approve a price below the margin floor | Owner only | The `margin_floor` check moves the decision to the owner (OD-32); no operation set covers it | Not built yet: no Worker code checks the margin floor, and the owner's recorded reason on her own item (D-08) is not built |
+| L06 | Release a safety stop | A person only | `safety_stop.release` (people only) | For a crew's stop on a work package, an owner, ops or production person who did not raise or report it releases it, with no exception for working alone. Not built yet: the "checks site safety" set and release by a named outside person (Q7) |
+| L07 | Refunds, write-offs, waiving a gate, access and settings changes, legal sign-off | People only | `refund.issue`, `write_off.record`, `gate.waive`, `access.change`, `settings.apply`, `terms.legal_signoff` | People only: no agent performs, requests or is delegated them |
+| L08 | Accept completed work | People only | `completion.accept` (people only) | Not built yet: no route records a person's acceptance of completed work (the crew's own Work Completed step is not that acceptance), so neither "never the person who did the work" nor a solo owner's recorded reason (D-08, Q7) is enforced |
+| L09 | Change a supplier's bank details | People only | `payee.change_details` (people only), after a call to the number on file; `payee.freeze` (protective) holds payments meanwhile; `payee.unfreeze` (people only) | QuickBooks holds the account. Not built yet: D1 has no payee record and no guard |
+| L10 | Pass the first piece before a shop run | People only | None: no catalog action covers it; the AI shop planner's hard boundary keeps first-piece release with people | Any person may pass it, the operator who made it included: a person, never the AI, checks it against the drawing with a photo. Not built yet: no shop-run screen exists |

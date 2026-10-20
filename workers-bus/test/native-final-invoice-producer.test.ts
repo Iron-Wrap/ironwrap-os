@@ -1202,3 +1202,332 @@ test("bounded scheduled derivation rotates past stable blockers and wraps withou
     "job-native-cursor-0001",
   ]);
 });
+
+// ------------------------------------------------------------------ OD-01: payment on completion
+//
+// Under OD-01 a contract has no deposit, so no deposit invoice is derived at acceptance (proved at
+// D1 in customer-contract-acceptance.test.ts). The producer subtracts prior invoices only, so the
+// final invoice must bill the whole contract: these cases prove it on the real producer, and that
+// a deposit invoice of a contract OD-01 replaced is never subtracted unless it still stands.
+
+/** The accepted contract's terms: its quote carries them, and its proposal and acceptance their hash. */
+async function bindContractTerms(
+  db: AccountingTestD1,
+  head: typeof FIRST_CONTRACT,
+  terms: Record<string, unknown>,
+): Promise<void> {
+  const termsJson = JSON.stringify(terms);
+  const termsHash = await sha256Hex(termsJson);
+  db.raw
+    .prepare("UPDATE commercial_quote_revisions SET terms_json = ?, terms_hash = ? WHERE quote_revision_id = ?")
+    .run(termsJson, termsHash, head.quote);
+  db.raw
+    .prepare("UPDATE commercial_proposal_revisions SET terms_hash = ? WHERE proposal_revision_id = ?")
+    .run(termsHash, head.proposal);
+  db.raw
+    .prepare("UPDATE commercial_acceptance_bindings SET terms_hash = ? WHERE acceptance_binding_id = ?")
+    .run(termsHash, head.acceptance);
+}
+
+/**
+ * Revision 2 of the same quote and proposal replaces the first contract with OD-01 terms and a new
+ * price (2200.00 + 110.00 GST), published and accepted after it.
+ */
+async function acceptOd01Replacement(db: AccountingTestD1): Promise<void> {
+  const termsJson = JSON.stringify(OD01_TERMS);
+  const termsHash = await sha256Hex(termsJson);
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_quote_revisions (
+         quote_revision_id, tenant_id, customer_quote_id, revision_number, roof_job_id,
+         customer_id, supersedes_quote_revision_id, status, currency, subtotal_cents, tax_cents,
+         total_cents, terms_hash, terms_json, created_at
+       ) VALUES (?, ?, 'quote-pack-0001', 2, ?, ?, ?, 'approved', 'CAD', 220000, 11000, 231000, ?, ?,
+         '2026-08-19T12:00:00.000Z')`,
+    )
+    .run(OD01_CONTRACT.quote, TENANT, JOB, CUSTOMER, FIRST_CONTRACT.quote, termsHash, termsJson);
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_quote_lines (
+         quote_revision_id, line_id, sequence, subtotal_cents, tax_code, tax_cents, total_cents
+       ) VALUES (?, 'line-roof-0002', 1, 220000, 'GST', 11000, 231000)`,
+    )
+    .run(OD01_CONTRACT.quote);
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_proposal_revisions (
+         proposal_revision_id, tenant_id, proposal_pack_id, revision_number, quote_revision_id,
+         roof_job_id, customer_id, supersedes_proposal_revision_id, terms_hash, created_at
+       ) VALUES (?, ?, 'proposal-pack-0001', 2, ?, ?, ?, ?, ?, '2026-08-19T12:30:00.000Z')`,
+    )
+    .run(OD01_CONTRACT.proposal, TENANT, OD01_CONTRACT.quote, JOB, CUSTOMER, FIRST_CONTRACT.proposal, termsHash);
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_proposal_publication_events (
+         publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+         publication_version, state, occurred_at
+       ) VALUES (?, ?, ?, 'proposal-pack-0001', 2, 'published', '2026-08-19T13:00:00.000Z')`,
+    )
+    .run(OD01_CONTRACT.publication, TENANT, OD01_CONTRACT.proposal);
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_acceptance_bindings (
+         acceptance_binding_id, acceptance_id, tenant_id, quote_revision_id,
+         proposal_revision_id, roof_job_id, customer_id, terms_hash, receipt_hash,
+         accepted_at, bound_at
+       ) VALUES (?, 'acceptance-native-0002', ?, ?, ?, ?, ?, ?, ?, '2026-08-19T14:00:00.000Z',
+         '2026-08-19T14:01:00.000Z')`,
+    )
+    .run(
+      OD01_CONTRACT.acceptance,
+      TENANT,
+      OD01_CONTRACT.quote,
+      OD01_CONTRACT.proposal,
+      JOB,
+      CUSTOMER,
+      termsHash,
+      "d".repeat(64),
+    );
+}
+
+async function recordGstSnapshot(env: AppEnv): Promise<void> {
+  await recordTaxPolicySnapshot(
+    env,
+    {
+      tenantId: TENANT,
+      jurisdiction: "CA-AB",
+      taxCode: "GST",
+      providerTaxCodeId: "10",
+      ratePercent: "5.0000",
+      effectiveFrom: "2026-01-01",
+      sourceRef: "CRA GST policy snapshot 2026-01-01",
+    },
+    NOW,
+  );
+}
+
+/**
+ * The owner's verified QuickBooks mapping for the job, anchored to the contract in force. With no
+ * prior invoice to read it from, an OD-01 job always needs one, or the producer blocks with
+ * `provider_mapping_missing`.
+ */
+async function recordProviderMapping(env: AppEnv, db: AccountingTestD1, head = FIRST_CONTRACT): Promise<void> {
+  await recordNativeFinalInvoiceProviderBinding(
+    env,
+    {
+      tenantId: TENANT,
+      realmId: REALM,
+      roofJobId: JOB,
+      qboCustomerId: "7",
+      qboItemId: "8",
+      qboTaxCodeId: "10",
+      qboTermsId: "9",
+      jurisdiction: "CA-AB",
+      taxCode: "GST",
+      paymentTermsDays: 30,
+      sourceRef: "owner-approved-provider-map:od01",
+      sourceSha256: "5".repeat(64),
+      ...(await currentCommercialAnchor(db, head)),
+    },
+    DERIVE_AT,
+  );
+}
+
+/** The job's one final invoice: the row, its basis and the payload QuickBooks would receive. */
+function finalInvoice(db: AccountingTestD1): {
+  row: Record<string, unknown>;
+  basis: Record<string, any>;
+  payload: Record<string, any>;
+} {
+  const rows = db.raw
+    .prepare("SELECT * FROM accounting_intents WHERE final_invoice_intent_id = intent_id")
+    .all() as Record<string, unknown>[];
+  assert.equal(rows.length, 1);
+  const row = rows[0]!;
+  return {
+    row,
+    basis: JSON.parse(String(row.basis_json)) as Record<string, any>,
+    payload: JSON.parse(String(row.provider_payload_json)) as Record<string, any>,
+  };
+}
+
+/** The intents a blocked derivation names, from its durable observation. */
+function blockedIntents(db: AccountingTestD1, observationId: string): unknown {
+  const observation = db.raw
+    .prepare("SELECT details_json FROM native_final_invoice_derivation_observations WHERE derivation_observation_id = ?")
+    .get(observationId) as { details_json: string };
+  return (JSON.parse(observation.details_json) as { facts: { blocker: { intents: unknown } } }).facts.blocker.intents;
+}
+
+test("an OD-01 contract's final invoice bills the whole contract with its tax and credits no deposit", async () => {
+  const { env, db } = nativeTestEnv();
+  seedNativeSource(db);
+  await bindContractTerms(db, FIRST_CONTRACT, OD01_TERMS);
+  await recordGstSnapshot(env);
+  await recordProviderMapping(env, db);
+
+  // The scheduled producer, as the cron runs it.
+  assert.deepEqual(await deriveNativeFinalInvoiceIntents(env, DERIVE_AT), {
+    scanned: 1,
+    blocked: 0,
+    no_balance: 0,
+    intents_derived: 1,
+    intents_replayed: 0,
+  });
+  const { row, basis, payload } = finalInvoice(db);
+  const contract = db.raw
+    .prepare("SELECT subtotal_cents, tax_cents, total_cents FROM commercial_quote_revisions WHERE quote_revision_id = ?")
+    .get(FIRST_CONTRACT.quote) as { subtotal_cents: number; tax_cents: number; total_cents: number };
+  const dollars = (cents: number) => (cents / 100).toFixed(2);
+  // The whole contract, tax included: 2000.00 + 100.00 GST = 2100.00.
+  assert.deepEqual(
+    { kind: row.kind, subtotal: row.subtotal, tax: row.tax_amount, total: row.total_amount },
+    {
+      kind: "progress_invoice",
+      subtotal: dollars(contract.subtotal_cents),
+      tax: dollars(contract.tax_cents),
+      total: dollars(contract.total_cents),
+    },
+  );
+  assert.equal(row.total_amount, "2100.00");
+  // Nothing credited: no prior invoice, one contract line, no deposit line and no negative line.
+  assert.equal(basis.commercial.already_invoiced, "0.00");
+  assert.equal(basis.commercial.final_balance, "2100.00");
+  assert.deepEqual(basis.prior_invoices, []);
+  assert.deepEqual(basis.commercial.lines, [
+    {
+      source_type: "Customer Quote",
+      source_id: FIRST_CONTRACT.quote,
+      source_version: 1,
+      description_code: "RESIDENTIAL_ACCEPTED_QUOTE",
+      amount: "2000.00",
+    },
+  ]);
+  assert.deepEqual(
+    (basis.evidence as Array<{ doctype: string }>).filter((citation) => citation.doctype === "Accounting Intent"),
+    [],
+  );
+  assert.deepEqual(
+    (payload.Line as Array<{ Amount: number; Description: string }>).map((line) => [line.Amount, line.Description]),
+    [[2000, "Residential roofing contract"]],
+  );
+  assert.doesNotMatch(JSON.stringify({ basis, payload }), /deposit/i);
+  assert.deepEqual(
+    (db.raw.prepare("SELECT kind FROM accounting_intents").all() as Array<{ kind: string }>).map((intent) => intent.kind),
+    ["progress_invoice"],
+  );
+  // The accountant's queue shows the same balance.
+  const listing = await listNativeFinalInvoiceCandidates(env, {
+    tenantId: TENANT,
+    realmId: REALM,
+    roofJobId: JOB,
+    limit: 10,
+  });
+  assert.deepEqual(listing.blockers, []);
+  assert.equal(listing.candidates.length, 1);
+  assert.equal(listing.candidates[0]!.commercial.already_invoiced, "0.00");
+  assert.equal(listing.candidates[0]!.commercial.final_balance, "2100.00");
+});
+
+test("an OD-01 contract replacing a deposit contract whose deposit invoice was never issued bills its whole new total", async () => {
+  // The replaced contract's deposit invoice was never derived: nothing to subtract.
+  {
+    const { env, db } = nativeTestEnv();
+    seedNativeSource(db);
+    await bindContractTerms(db, FIRST_CONTRACT, DEPOSIT_TERMS);
+    await acceptOd01Replacement(db);
+    await recordGstSnapshot(env);
+    await recordProviderMapping(env, db, OD01_CONTRACT);
+    const derived = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
+    assert.equal(derived.outcome, "intent_derived");
+    const { row, basis } = finalInvoice(db);
+    assert.deepEqual([row.subtotal, row.tax_amount, row.total_amount], ["2200.00", "110.00", "2310.00"]);
+    assert.equal(basis.accepted_quote.id, OD01_CONTRACT.quote);
+    assert.equal(basis.commercial.already_invoiced, "0.00");
+    assert.deepEqual(basis.prior_invoices, []);
+  }
+  // It was derived but never approved, so it could still be issued: the producer stops and names
+  // it. Once a person rejects it, which cancels it before QuickBooks, it is left out entirely.
+  {
+    const { env, db } = nativeTestEnv();
+    seedNativeSource(db);
+    await bindContractTerms(db, FIRST_CONTRACT, DEPOSIT_TERMS);
+    await seedPriorInvoice(env, undefined, false);
+    await acceptOd01Replacement(db);
+    await recordProviderMapping(env, db, OD01_CONTRACT);
+    const pending = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
+    assert.equal(pending.outcome, "blocked");
+    if (pending.outcome === "blocked") {
+      assert.equal(pending.blocker_code, "prior_invoice_truth_unresolved");
+      assert.deepEqual(blockedIntents(db, pending.observation_id), [
+        { intent_id: "acct-prior-deposit-0001", state: "pending_review" },
+      ]);
+    }
+    const deposit = db.raw
+      .prepare("SELECT version FROM accounting_intents WHERE intent_id = 'acct-prior-deposit-0001'")
+      .get() as { version: number };
+    const rejected = await applyAccountingIntentCommand(
+      env,
+      {
+        tenantId: TENANT,
+        intentId: "acct-prior-deposit-0001",
+        operation: "reject",
+        actorUserId: "appu_accounting_0001",
+        idempotencyKey: "reject-replaced-contract-deposit-0001",
+        request: { intent_id: "acct-prior-deposit-0001" },
+        requestedVersion: deposit.version,
+      },
+      DERIVE_AT,
+    );
+    assert.equal(rejected.intent.state, "rejected");
+    const derived = await deriveNativeFinalInvoiceForJob(
+      env,
+      { tenantId: TENANT, roofJobId: JOB },
+      new Date(DERIVE_AT.getTime() + 60_000),
+    );
+    assert.equal(derived.outcome, "intent_derived");
+    const { row, basis } = finalInvoice(db);
+    assert.deepEqual([row.subtotal, row.tax_amount, row.total_amount], ["2200.00", "110.00", "2310.00"]);
+    assert.equal(basis.commercial.already_invoiced, "0.00");
+    assert.deepEqual(basis.prior_invoices, []);
+    assert.ok(!JSON.stringify(basis).includes("acct-prior-deposit-0001"));
+  }
+});
+
+test("a deposit invoice reversed after it reached QuickBooks is never subtracted: the producer stops for a person", async () => {
+  const { env, db } = nativeTestEnv();
+  seedNativeSource(db);
+  await bindContractTerms(db, FIRST_CONTRACT, DEPOSIT_TERMS);
+  // Issued in QuickBooks and read back, then reversed by the money lane. A reversal answers a
+  // provider duplicate, surplus or mismatch, so whether the original still bills is not in the
+  // intent: excluding it could bill twice and subtracting it could bill short.
+  await seedPriorInvoice(env);
+  for (const state of ["reconciliation_required", "compensating", "compensated"]) {
+    db.raw
+      .prepare(
+        `UPDATE accounting_intents SET state = ?, version = version + 1, updated_at = ?
+          WHERE intent_id = 'acct-prior-deposit-0001'`,
+      )
+      .run(state, "2026-08-21T11:00:00.000Z");
+  }
+  await acceptOd01Replacement(db);
+  await recordProviderMapping(env, db, OD01_CONTRACT);
+  const derived = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
+  assert.equal(derived.outcome, "blocked");
+  if (derived.outcome === "blocked") {
+    assert.equal(derived.blocker_code, "prior_invoice_truth_unresolved");
+    assert.deepEqual(blockedIntents(db, derived.observation_id), [
+      { intent_id: "acct-prior-deposit-0001", state: "compensated" },
+    ]);
+  }
+  assert.equal(
+    Number(
+      (
+        db.raw
+          .prepare("SELECT COUNT(*) AS count FROM accounting_intents WHERE final_invoice_intent_id IS NOT NULL")
+          .get() as { count: number }
+      ).count,
+    ),
+    0,
+  );
+});

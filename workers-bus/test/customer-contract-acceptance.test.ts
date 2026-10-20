@@ -1757,11 +1757,15 @@ async function clearGate(
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
-/** Quote revision 2 and its proposal, published in place of the first contract. */
-async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
-  const chain = h.chain!;
-  const base = new Date(Date.now() - 20_000);
-  const quoteRevisionId = "quote-revision:acceptance:primary:2";
+/** Quote revision 2 of the chain's customer quote, with these terms. Returns its id. */
+async function reviseQuote(
+  h: Harness,
+  chain: NativeChain,
+  terms: Record<string, unknown>,
+  base: Date,
+): Promise<string> {
+  const suffix = chain.quoteId.split(":").at(-1)!;
+  const quoteRevisionId = `quote-revision:acceptance:${suffix}:2`;
   const quote: RecordCommercialQuoteInput = {
     tenantId: TENANT,
     quoteRevisionId,
@@ -1770,7 +1774,7 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
     roofJobId: JOB_ID,
     customerId: CUSTOMER_ID,
     supersedesQuoteRevisionId: chain.quoteRevisionId,
-    correctionReason: "Synthetic correction: this contract carries a deposit (MD-13).",
+    correctionReason: "Synthetic correction of the contract's payment terms.",
     status: "approved",
     currency: "CAD",
     validUntil: QUOTE_VALID_UNTIL,
@@ -1788,7 +1792,7 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
       taxCents: 5_000,
     }],
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: "acceptance:quote:primary:2",
+    idempotencyKey: `acceptance:quote:${suffix}:2`,
   };
   const preparedQuote = await prepareCommercialQuote(quote);
   const quotePermit = await admitFor(
@@ -1796,12 +1800,20 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
     "quote.revision.record",
     { type: "customer_quote", id: chain.quoteId, version: 2 },
     preparedQuote.command,
-    "permit:acceptance:quote:primary:2",
+    `permit:acceptance:quote:${suffix}:2`,
     base,
     preparedQuote.totalCents,
   );
   quote.authority = { kind: "policy_permit", permitId: quotePermit.permit_id };
   await recordCommercialQuoteRevision(h.env, quote, new Date(base.getTime() + 1_000));
+  return quoteRevisionId;
+}
+
+/** Quote revision 2 and its proposal, published in place of the first contract. */
+async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
+  const chain = h.chain!;
+  const base = new Date(Date.now() - 20_000);
+  const quoteRevisionId = await reviseQuote(h, chain, terms, base);
 
   const proposalRevisionId = "proposal-revision:acceptance:primary:2";
   const proposal: RecordCommercialProposalInput = {
@@ -2587,6 +2599,50 @@ test("the policy's Deposit entry takes D1's time, not the Worker's, and so do th
       (h.db.raw.prepare("SELECT ts FROM audit_log WHERE run_id = ?").get(entry.clearance_id) as { ts: string }).ts,
       entry.created_at,
     );
+  } finally {
+    h.restore();
+  }
+});
+
+
+test("the OD-01 pre-flight counts each open quote and proposal OD-01 would refuse, and nothing else", async () => {
+  const preflight = readFileSync(new URL("../../tools/od01-preflight.sql", import.meta.url), "utf8");
+  const run = (h: Harness) => h.db.raw.prepare(preflight).all().map((row) => ({ ...row }));
+
+  // The primary 25% contract is open and published, until its customer accepts it.
+  const accepted = await setup();
+  try {
+    assert.deepEqual(run(accepted), [
+      { tenant_id: TENANT, open_quotes: 1, open_proposals: 1, published_proposals: 1 },
+    ]);
+    const response = await accept(accepted, await seedPortalLink(accepted.db), "acceptance-preflight-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(run(accepted), []);
+  } finally {
+    accepted.restore();
+  }
+
+  const h = await setup({ contracts: 0 });
+  try {
+    assert.deepEqual(run(h), []);
+    // A deposit, a 0% deposit on another schedule and a missing deposit term are each refused
+    // under OD-01; payment on completion is not.
+    await seedNativeContract(h.env, "deposit", TERMS);
+    const zero = await seedNativeContract(h.env, "zero-deposit-schedule", {
+      ...OD01_TERMS,
+      payment_schedule: ["deposit", "completion"],
+    });
+    await seedNativeContract(h.env, "no-deposit-term", { payment_schedule: ["completion"], payment_terms_days: 30 });
+    await seedNativeContract(h.env, "od01", OD01_TERMS);
+    assert.deepEqual(run(h), [
+      { tenant_id: TENANT, open_quotes: 3, open_proposals: 3, published_proposals: 3 },
+    ]);
+    // A quote revised without a new proposal: the revision is open, and the proposal left on the
+    // superseded quote no longer is.
+    await reviseQuote(h, zero, { ...OD01_TERMS, payment_schedule: ["completion", "completion"] }, new Date(Date.now() - 30_000));
+    assert.deepEqual(run(h), [
+      { tenant_id: TENANT, open_quotes: 3, open_proposals: 2, published_proposals: 2 },
+    ]);
   } finally {
     h.restore();
   }

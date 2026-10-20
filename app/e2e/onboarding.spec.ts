@@ -75,7 +75,7 @@ test.describe("Onboarding v0 mobile acceptance", () => {
 
   test("setup lists what a new company has to do, in order", async ({ page }) => {
     await page.goto("/settings");
-    await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
 
     await expect(page.getByRole("link", { name: /Company details/ })).toBeVisible();
     await expect(page.getByRole("link", { name: /People/ })).toBeVisible();

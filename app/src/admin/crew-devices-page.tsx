@@ -20,7 +20,7 @@ export function CrewDevicesPage() {
         className="-ml-1 inline-flex min-h-11 items-center gap-1 rounded-md pr-2 text-sm font-bold text-muted hover:text-foreground"
       >
         <ChevronLeft className="size-4" aria-hidden="true" />
-        Setup
+        Settings
       </Link>
       <Suspense fallback={<LoadingState label="Loading device setup…" />}>
         <DevicePairingSettings />

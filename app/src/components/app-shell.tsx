@@ -161,11 +161,12 @@ function OfficeShell() {
           >
             <ol className="flex min-w-0 items-center gap-2">
               {trail.workspace ? (
-                <li className="sr-only shrink-0 min-[1101px]:not-sr-only">
+                // Below 1101px the workspace is read, not seen; its link shows itself when tabbed to.
+                <li className="sr-only shrink-0 focus-within:not-sr-only min-[1101px]:not-sr-only">
                   {trail.workspace.to ? (
                     <Link
                       to={trail.workspace.to}
-                      {...(trail.workspace.to === "/now" ? nowLinkOptions : {})}
+                      activeOptions={{ exact: true }}
                       className="environment-control inline-flex items-center hover:text-foreground"
                     >
                       {trail.workspace.label}
@@ -175,18 +176,24 @@ function OfficeShell() {
                   )}
                 </li>
               ) : null}
-              {trail.destination ? (
-                <li className="hidden shrink-0 items-center gap-2 min-[1101px]:flex">
-                  <span aria-hidden="true">/</span>
-                  <Link
-                    to={trail.destination.to}
-                    {...(trail.destination.to === "/now" ? nowLinkOptions : {})}
-                    className="environment-control inline-flex items-center hover:text-foreground"
+              {[trail.destination, trail.parent].map((crumb) =>
+                crumb ? (
+                  <li
+                    key={crumb.to}
+                    className="hidden shrink-0 items-center gap-2 min-[1101px]:flex"
                   >
-                    {trail.destination.label}
-                  </Link>
-                </li>
-              ) : null}
+                    <span aria-hidden="true">/</span>
+                    <Link
+                      to={crumb.to}
+                      activeOptions={{ exact: true }}
+                      {...(crumb.to === "/now" ? nowLinkOptions : {})}
+                      className="environment-control inline-flex items-center hover:text-foreground"
+                    >
+                      {crumb.label}
+                    </Link>
+                  </li>
+                ) : null,
+              )}
               <li className="flex min-w-0 items-center gap-2">
                 {trail.workspace ? (
                   <span aria-hidden="true" className="hidden min-[1101px]:inline">

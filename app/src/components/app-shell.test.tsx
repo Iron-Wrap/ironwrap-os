@@ -239,31 +239,38 @@ describe("AppShell", () => {
 
   it.each([
     ["/settings", "Settings"],
-    ["/settings/company", "Settings/Company"],
-    ["/settings/team", "Settings/Team"],
+    ["/settings/company", "Settings/Company details"],
+    ["/settings/team", "Settings/People"],
     ["/settings/devices", "Settings/Crew devices"],
-    ["/settings/integrations", "Settings/Integrations"],
-    ["/settings/configuration", "Settings/Configuration"],
-    ["/settings/configuration/pipelines", "Settings/Configuration"],
-    ["/settings/configuration/fields", "Settings/Configuration"],
-    ["/settings/configuration/automations", "Settings/Configuration"],
-    ["/settings/configuration/automations/recipients", "Settings/Configuration"],
-    ["/settings/configuration/documents", "Settings/Configuration"],
+    ["/settings/integrations", "Settings/Integration readiness"],
+    ["/settings/configuration", "Settings/Owner configuration"],
+    ["/settings/configuration/pipelines", "Settings/Owner configuration/Pipelines"],
+    ["/settings/configuration/fields", "Settings/Owner configuration/Fields"],
+    ["/settings/configuration/automations", "Settings/Owner configuration/Automations"],
+    ["/settings/configuration/automations/recipients", "Settings/Owner configuration/Recipients"],
+    ["/settings/configuration/documents", "Settings/Owner configuration/Documents"],
     ["/accounting/quickbooks", "Settings/QuickBooks"],
-  ])("says Settings once in the breadcrumb on %s", (pathname, trail) => {
+  ])("says Settings once and names the page as its heading does on %s", (pathname, trail) => {
     mocks.pathname = pathname;
     renderShell(ownerSession);
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
     expect(crumbs.textContent).toBe(trail);
-    expect(within(crumbs).getByText(trail.split("/").at(-1)!)).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    // Only the page itself is current, never the crumb that links back.
+    const current = crumbs.querySelectorAll("[aria-current]");
+    expect(current).toHaveLength(1);
+    expect(current[0]).toHaveTextContent(trail.split("/").at(-1)!);
+    if (pathname === "/settings") expect(within(crumbs).queryByRole("link")).toBeNull();
     // A settings page links its Settings crumb back to the settings desk.
     if (pathname.startsWith("/settings/")) {
       expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute(
         "href",
         "/settings",
+      );
+    }
+    if (pathname.startsWith("/settings/configuration/")) {
+      expect(within(crumbs).getByRole("link", { name: "Owner configuration" })).toHaveAttribute(
+        "href",
+        "/settings/configuration",
       );
     }
   });
@@ -274,9 +281,23 @@ describe("AppShell", () => {
     expect(screen.getByRole("navigation", { name: "Breadcrumb" }).textContent).toBe("Now");
 
     cleanup();
+    const accounting = {
+      ...ownerSession,
+      user: { ...ownerSession.user, role: "accounting" as const },
+    };
     mocks.pathname = "/accounting/quickbooks";
-    renderShell({ ...ownerSession, user: { ...ownerSession.user, role: "accounting" } });
+    renderShell(accounting);
     expect(screen.getByRole("navigation", { name: "Breadcrumb" }).textContent).toBe("Settings");
+
+    cleanup();
+    mocks.pathname = "/accounting/quickbooks/final-invoices/inv-1";
+    renderShell(accounting);
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(crumbs.textContent).toBe("Settings/Final invoice");
+    expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "href",
+      "/accounting/quickbooks",
+    );
   });
 
   it("selects Decisions for the validated decision view and Now for ordinary work", () => {

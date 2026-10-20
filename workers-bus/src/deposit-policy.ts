@@ -31,9 +31,19 @@ export type TenantDepositPolicy = (typeof TENANT_DEPOSIT_POLICIES)[number];
 export const DEFAULT_TENANT_DEPOSIT_POLICY: TenantDepositPolicy = "od01_payment_on_completion";
 export const DEPOSIT_GATE_POLICY_VERSION = "ironwrap.deposit-gate.v1";
 export const DEPOSIT_TERMS_REFUSAL = "deposit_terms_not_allowed_by_policy";
+/**
+ * The same refusal as the customer sees it: plain words and no policy or field names, which stay
+ * in the staff routes and the log. Generic until PR-C brings Track B's copy.
+ */
+export const CUSTOMER_DEPOSIT_TERMS_REFUSAL = {
+  error: DEPOSIT_TERMS_REFUSAL,
+  message: "This contract can't be accepted online. Please contact us to update its payment terms.",
+} as const;
 /** How the Deposit gate reads once the policy recorded a contract with no deposit (OD-01). */
 export const NO_DEPOSIT_UNDER_CONTRACT = "No deposit under this contract";
 
+/** D1's clock, in the form `Date.toISOString` writes: the policy's own rows take D1's time. */
+const D1_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const MAX_BODY_BYTES = 4 * 1024;
 const MIN_REASON_LENGTH = 8;
 const MAX_REASON_LENGTH = 1_000;
@@ -280,7 +290,7 @@ export async function handleTenantDepositPolicy(
         `INSERT INTO tenant_deposit_policy_revisions (
            revision_id, tenant_id, revision, policy, reason, set_by_user_id, set_by_role,
            request_sha256, idempotency_key_hash, set_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'owner', ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, 'owner', ?, ?, ${D1_NOW})`,
       ).bind(
         revisionId,
         tenantId,
@@ -290,7 +300,6 @@ export async function handleTenantDepositPolicy(
         person.userId,
         requestSha256,
         keyHash,
-        new Date().toISOString(),
       ).run();
     } catch (error) {
       const raced = await revisionByKey(env, tenantId, keyHash);
@@ -433,8 +442,60 @@ async function contractFacts(
   ).bind(tenantId, bindingId).first<ContractFacts>();
 }
 
+/** The facts a policy entry's evidence copies: the contract version, identifiers only. */
+export type DepositGateEvidenceFacts = Pick<
+  ContractFacts,
+  | "acceptance_binding_id" | "acceptance_id" | "receipt_hash" | "accepted_at"
+  | "quote_revision_id" | "customer_quote_id" | "quote_revision_number" | "terms_hash"
+  | "terms_json" | "policy_permit_id" | "permit_actor_type" | "permit_actor_id"
+  | "quote_revision_approval_id" | "approval_approved_by_user_id" | "proposal_revision_id"
+  | "publication_event_id" | "quote_evidence_digest" | "proposal_evidence_digest"
+  | "publication_evidence_digest" | "in_force_binding_id"
+>;
+
+/**
+ * A policy entry's evidence: the contract version the entry stands on. D1 bounds the ledger's
+ * `evidence_refs_json` at 4000 characters (0153). Every field is an identifier, digest, number or
+ * timestamp under its own D1 bound, so the whole fits; deposit-policy.test.ts pins the margin.
+ */
+export function depositGateEvidence(
+  facts: DepositGateEvidenceFacts,
+  entry: { basis: "contract_no_deposit" | "contract_superseded"; reverses_id: string | null },
+  tenantPolicy: Pick<TenantDepositPolicyState, "policy" | "version"> | null,
+): string {
+  const parsed = JSON.parse(facts.terms_json) as Record<string, unknown>;
+  return canonicalJson({
+    basis: entry.basis,
+    policy_version: DEPOSIT_GATE_POLICY_VERSION,
+    tenant_policy: tenantPolicy
+      ? { policy: tenantPolicy.policy, version: tenantPolicy.version }
+      : null,
+    reverses: entry.reverses_id
+      ? { clearance_id: entry.reverses_id, acceptance_binding_id: facts.in_force_binding_id }
+      : null,
+    contract: {
+      acceptance_binding_id: facts.acceptance_binding_id,
+      acceptance_id: facts.acceptance_id,
+      receipt_hash: facts.receipt_hash,
+      accepted_at: facts.accepted_at,
+      quote_revision_id: facts.quote_revision_id,
+      customer_quote_id: facts.customer_quote_id,
+      quote_revision_number: Number(facts.quote_revision_number),
+      terms_hash: facts.terms_hash,
+      // The whole terms are bound by `terms_hash`; only the bounded deposit is copied here.
+      deposit_percent: parsed.deposit_percent ?? null,
+      quote_approval: quoteApproval(facts),
+      proposal_revision_id: facts.proposal_revision_id,
+      publication_event_id: facts.publication_event_id,
+      quote_evidence_digest: facts.quote_evidence_digest,
+      proposal_evidence_digest: facts.proposal_evidence_digest,
+      publication_evidence_digest: facts.publication_evidence_digest,
+    },
+  });
+}
+
 /** Who approved the quote revision this contract was made of. */
-function quoteApproval(facts: ContractFacts): Record<string, string | null> {
+function quoteApproval(facts: DepositGateEvidenceFacts): Record<string, string | null> {
   return facts.quote_revision_approval_id
     ? {
       kind: "approval_request",
@@ -461,7 +522,6 @@ function quoteApproval(facts: ContractFacts): Record<string, string | null> {
 export async function recordContractDepositGate(
   env: AppEnv,
   input: { tenantId: string; acceptanceBindingId: string },
-  now = new Date(),
 ): Promise<ContractDepositGateOutcome> {
   const facts = await contractFacts(env, input.tenantId, input.acceptanceBindingId);
   if (!facts) return { outcome: "not_applicable", reason: "contract_missing" };
@@ -525,36 +585,7 @@ export async function recordContractDepositGate(
   if (await recorded()) {
     return { outcome: "already_recorded", basis: entry.basis, clearance_id: clearanceId };
   }
-  const parsed = JSON.parse(facts.terms_json) as Record<string, unknown>;
-  // The contract version the entry stands on: structured identifiers only.
-  const evidence = canonicalJson({
-    basis: entry.basis,
-    policy_version: DEPOSIT_GATE_POLICY_VERSION,
-    tenant_policy: tenantPolicy
-      ? { policy: tenantPolicy.policy, version: tenantPolicy.version }
-      : null,
-    reverses: entry.reverses_id
-      ? { clearance_id: entry.reverses_id, acceptance_binding_id: facts.in_force_binding_id }
-      : null,
-    contract: {
-      acceptance_binding_id: facts.acceptance_binding_id,
-      acceptance_id: facts.acceptance_id,
-      receipt_hash: facts.receipt_hash,
-      accepted_at: facts.accepted_at,
-      quote_revision_id: facts.quote_revision_id,
-      customer_quote_id: facts.customer_quote_id,
-      quote_revision_number: Number(facts.quote_revision_number),
-      terms_hash: facts.terms_hash,
-      // The whole terms are bound by `terms_hash`; only the bounded deposit is copied here.
-      deposit_percent: parsed.deposit_percent ?? null,
-      quote_approval: quoteApproval(facts),
-      proposal_revision_id: facts.proposal_revision_id,
-      publication_event_id: facts.publication_event_id,
-      quote_evidence_digest: facts.quote_evidence_digest,
-      proposal_evidence_digest: facts.proposal_evidence_digest,
-      publication_evidence_digest: facts.publication_evidence_digest,
-    },
-  });
+  const evidence = depositGateEvidence(facts, entry, tenantPolicy);
   const requestSha256 = await sha256Hex(canonicalJson({
     route: "deposit_gate_policy",
     tenant_id: input.tenantId,
@@ -572,7 +603,7 @@ export async function recordContractDepositGate(
          clearance_id, tenant_id, gate_id, roof_job_id, gate, entry_kind, basis, to_state,
          from_gate_version, reverses_id, actor_kind, policy_version, contract_binding_id,
          terms_hash, evidence_refs_json, request_sha256, idempotency_key_hash, created_at
-       ) VALUES (?, ?, ?, ?, 'Deposit', ?, ?, ?, ?, ?, 'policy', ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, 'Deposit', ?, ?, ?, ?, ?, 'policy', ?, ?, ?, ?, ?, ?, ${D1_NOW})`,
     ).bind(
       clearanceId,
       input.tenantId,
@@ -589,7 +620,6 @@ export async function recordContractDepositGate(
       evidence,
       requestSha256,
       keyHash,
-      now.toISOString(),
     ).run();
   } catch (error) {
     if (await recorded()) {
@@ -611,7 +641,6 @@ export async function recordContractDepositGate(
  */
 export async function sweepContractDepositGates(
   env: AppEnv,
-  now = new Date(),
 ): Promise<{ candidates: number; recorded: number; refused: number }> {
   const tenantId = configuredTenantId(env);
   if (!tenantId) return { candidates: 0, recorded: 0, refused: 0 };
@@ -665,7 +694,6 @@ export async function sweepContractDepositGates(
     const result = await recordContractDepositGate(
       env,
       { tenantId, acceptanceBindingId: row.acceptance_binding_id },
-      now,
     ).catch(() => ({ outcome: "refused" as const, reason: "deposit_gate_append_failed" }));
     if (result.outcome === "recorded") recorded += 1;
     else if (result.outcome === "refused") refused += 1;

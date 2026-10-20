@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 import worker from "../src/index.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
@@ -30,6 +30,7 @@ import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 import { reconcileCustomerContractAcceptanceAttempts } from "../src/customer-contract-acceptance.ts";
 import { buildProductionRunwayReadModel } from "../src/app-read-models.ts";
 import {
+  CUSTOMER_DEPOSIT_TERMS_REFUSAL,
   recordContractDepositGate,
   sweepContractDepositGates,
 } from "../src/deposit-policy.ts";
@@ -1663,6 +1664,33 @@ function appendDeposit(h: Harness, overrides: Record<string, unknown>): void {
   ).run(...(columns.map((column) => row[column]) as never[]));
 }
 
+/** The deposit-terms refusals the Worker logged while `action` ran, with what the customer got. */
+async function loggingRefusals<T>(
+  action: () => Promise<T>,
+): Promise<{ result: T; refusals: Array<Record<string, unknown>> }> {
+  const refusals: Array<Record<string, unknown>> = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    let line: unknown = null;
+    try {
+      line = JSON.parse(String(args[0]));
+    } catch {
+      // Not a structured line.
+    }
+    if (isRecord(line) && line.at === "deposit_terms_refused") refusals.push(line);
+    else original(...args);
+  };
+  try {
+    return { result: await action(), refusals };
+  } finally {
+    console.log = original;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function refusedWith(action: () => unknown, code: string): void {
   assert.throws(action, (error: unknown) => {
     assert.match(String((error as Error).message), new RegExp(code));
@@ -1729,11 +1757,15 @@ async function clearGate(
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
-/** Quote revision 2 and its proposal, published in place of the first contract. */
-async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
-  const chain = h.chain!;
-  const base = new Date(Date.now() - 20_000);
-  const quoteRevisionId = "quote-revision:acceptance:primary:2";
+/** Quote revision 2 of the chain's customer quote, with these terms. Returns its id. */
+async function reviseQuote(
+  h: Harness,
+  chain: NativeChain,
+  terms: Record<string, unknown>,
+  base: Date,
+): Promise<string> {
+  const suffix = chain.quoteId.split(":").at(-1)!;
+  const quoteRevisionId = `quote-revision:acceptance:${suffix}:2`;
   const quote: RecordCommercialQuoteInput = {
     tenantId: TENANT,
     quoteRevisionId,
@@ -1742,7 +1774,7 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
     roofJobId: JOB_ID,
     customerId: CUSTOMER_ID,
     supersedesQuoteRevisionId: chain.quoteRevisionId,
-    correctionReason: "Synthetic correction: this contract carries a deposit (MD-13).",
+    correctionReason: "Synthetic correction of the contract's payment terms.",
     status: "approved",
     currency: "CAD",
     validUntil: QUOTE_VALID_UNTIL,
@@ -1760,7 +1792,7 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
       taxCents: 5_000,
     }],
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: "acceptance:quote:primary:2",
+    idempotencyKey: `acceptance:quote:${suffix}:2`,
   };
   const preparedQuote = await prepareCommercialQuote(quote);
   const quotePermit = await admitFor(
@@ -1768,12 +1800,20 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
     "quote.revision.record",
     { type: "customer_quote", id: chain.quoteId, version: 2 },
     preparedQuote.command,
-    "permit:acceptance:quote:primary:2",
+    `permit:acceptance:quote:${suffix}:2`,
     base,
     preparedQuote.totalCents,
   );
   quote.authority = { kind: "policy_permit", permitId: quotePermit.permit_id };
   await recordCommercialQuoteRevision(h.env, quote, new Date(base.getTime() + 1_000));
+  return quoteRevisionId;
+}
+
+/** Quote revision 2 and its proposal, published in place of the first contract. */
+async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
+  const chain = h.chain!;
+  const base = new Date(Date.now() - 20_000);
+  const quoteRevisionId = await reviseQuote(h, chain, terms, base);
 
   const proposalRevisionId = "proposal-revision:acceptance:primary:2";
   const proposal: RecordCommercialProposalInput = {
@@ -1820,12 +1860,26 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
   );
 }
 
-/** A deposit invoice of this job the money lane has reconciled. */
+/** The binding's derivation names its deposit invoice, as the derivation worker records it. */
+function deriveDepositInvoice(h: Harness, acceptanceBindingId: string, intentId: string): void {
+  h.db.raw.prepare(
+    `UPDATE commercial_deposit_derivations
+        SET state = 'derived', intent_id = ?, blocker_code = NULL, blocker_next_step = NULL,
+            version = version + 1, updated_at = ?
+      WHERE tenant_id = ? AND acceptance_binding_id = ?`,
+  ).run(intentId, new Date().toISOString(), TENANT, acceptanceBindingId);
+}
+
+/**
+ * A deposit invoice of this job the money lane has reconciled, unless a case overrides its state
+ * (for example an invoice QuickBooks holds but nobody has paid yet).
+ */
 function seedReconciledDeposit(
   h: Harness,
   intentId: string,
   providerEntityId: string,
   reconciledAt = new Date().toISOString(),
+  overrides: Record<string, unknown> = {},
 ): void {
   const row: Record<string, unknown> = {
     intent_id: intentId,
@@ -1867,6 +1921,7 @@ function seedReconciledDeposit(
     provider_reconciled_at: reconciledAt,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    ...overrides,
   };
   const columns = Object.keys(row);
   h.db.raw.prepare(
@@ -1886,8 +1941,13 @@ test("an OD-01 acceptance records Deposit as not required by the contract, by po
     assert.equal(accepted.status, "accepted");
     const binding = bindingFor(h, accepted.acceptance_id);
     assert.equal(binding.terms_hash, OD01_TERMS_HASH);
-    // No deposit, so nothing to derive.
+    // No deposit, so nothing to derive, and no deposit invoice: not even the recovery pass makes
+    // one. The final invoice therefore has no prior invoice to subtract (native-final-invoice-
+    // producer.test.ts bills such a contract's whole total).
     assert.equal(count(h, "commercial_deposit_derivations"), 0);
+    await reconcileCustomerContractAcceptanceAttempts(h.env, new Date());
+    assert.equal(count(h, "commercial_deposit_derivations"), 0);
+    assert.equal(count(h, "accounting_intents"), 0);
 
     const entries = depositEntries(h);
     assert.equal(entries.length, 1);
@@ -2002,18 +2062,24 @@ test("an OD-01 acceptance records Deposit as not required by the contract, by po
   }
 });
 
-test("under OD-01 a deposit contract gets no challenge: the refusal is named, with the policy and the term", async () => {
+test("under OD-01 a deposit contract gets no challenge: the customer reads plain words, the log names the policy and the term", async () => {
   const h = await setup({ depositPolicy: null });
   try {
     seedGates(h);
     const portalToken = await seedPortalLink(h.db);
-    const challenge = await issueChallenge(h.env, portalToken);
+    const { result: challenge, refusals } = await loggingRefusals(() => issueChallenge(h.env, portalToken));
     assert.equal(challenge.status, 409);
-    assert.deepEqual(await challenge.json(), {
-      error: "deposit_terms_not_allowed_by_policy",
+    // An anonymous buyer gets the code and plain words, never the policy or the field.
+    assert.deepEqual(await challenge.json(), CUSTOMER_DEPOSIT_TERMS_REFUSAL);
+    assert.deepEqual(Object.keys(CUSTOMER_DEPOSIT_TERMS_REFUSAL).sort(), ["error", "message"]);
+    assert.doesNotMatch(CUSTOMER_DEPOSIT_TERMS_REFUSAL.message, /od01|md13|deposit_percent|payment_schedule|_/);
+    assert.deepEqual(refusals, [{
+      at: "deposit_terms_refused",
+      stage: "challenge",
+      roof_job_id: JOB_ID,
       policy: "od01_payment_on_completion",
       field: "terms.deposit_percent",
-    });
+    }]);
     assert.equal(h.sentEmails.length, 0);
     assert.equal(count(h, "customer_portal_acceptance_challenges"), 0);
     assert.equal(count(h, "commercial_acceptance_bindings"), 0);
@@ -2036,23 +2102,28 @@ test("a policy change after the challenge is refused by name at confirmation, an
       policy: "od01_payment_on_completion",
     });
     const token = emailChallengeToken(h.sentEmails);
-    const refusal = {
-      error: "deposit_terms_not_allowed_by_policy",
-      policy: "od01_payment_on_completion",
-      field: "terms.deposit_percent",
-    };
-    const preview = await worker.fetch(previewRequest(token), h.env as never, {} as never);
-    assert.equal(preview.status, 409);
-    assert.deepEqual(await preview.json(), refusal);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const confirmed = await worker.fetch(
-        confirmRequest(token, "acceptance-policy-changed-0001"),
-        h.env as never,
-        {} as never,
-      );
-      assert.equal(confirmed.status, 409);
-      assert.deepEqual(await confirmed.json(), refusal);
-    }
+    const { refusals } = await loggingRefusals(async () => {
+      const preview = await worker.fetch(previewRequest(token), h.env as never, {} as never);
+      assert.equal(preview.status, 409);
+      assert.deepEqual(await preview.json(), CUSTOMER_DEPOSIT_TERMS_REFUSAL);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const confirmed = await worker.fetch(
+          confirmRequest(token, "acceptance-policy-changed-0001"),
+          h.env as never,
+          {} as never,
+        );
+        assert.equal(confirmed.status, 409);
+        assert.deepEqual(await confirmed.json(), CUSTOMER_DEPOSIT_TERMS_REFUSAL);
+      }
+    });
+    // The replay answers from the stored rejection: the policy and the term are logged once each.
+    assert.deepEqual(
+      refusals.map(({ stage, policy, field }) => ({ stage, policy, field })),
+      [
+        { stage: "preview", policy: "od01_payment_on_completion", field: "terms.deposit_percent" },
+        { stage: "confirm", policy: "od01_payment_on_completion", field: "terms.deposit_percent" },
+      ],
+    );
     assert.deepEqual(
       { ...h.db.raw.prepare("SELECT state, error_code FROM customer_portal_acceptance_intents").get() as object },
       { state: "rejected", error_code: "deposit_terms_not_allowed_by_policy" },
@@ -2084,17 +2155,17 @@ for (const [label, terms, from, to, field, abort] of [
       h.db.beforeNextBatch = () => {
         recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: to });
       };
-      const confirmed = await worker.fetch(
+      const { result: confirmed, refusals } = await loggingRefusals(() => worker.fetch(
         confirmRequest(emailChallengeToken(h.sentEmails), "acceptance-policy-race-0001"),
         h.env as never,
         {} as never,
-      );
+      ));
       assert.equal(confirmed.status, 409);
-      assert.deepEqual(await confirmed.json(), {
-        error: "deposit_terms_not_allowed_by_policy",
-        policy: to,
-        field,
-      });
+      assert.deepEqual(await confirmed.json(), CUSTOMER_DEPOSIT_TERMS_REFUSAL);
+      assert.deepEqual(
+        refusals.map(({ stage, policy, field }) => ({ stage, policy, field })),
+        [{ stage: "commit", policy: to, field }],
+      );
       assert.equal(h.db.beforeNextBatch, null);
       // D1 refused the binding itself; the Worker named the refusal afterwards.
       assert.ok(h.db.batchErrors.some((message) => message.includes(abort)), h.db.batchErrors.join(" | "));
@@ -2153,22 +2224,23 @@ test("D1 keeps MD-13's 1-100 rule as the backstop for deposit terms the Worker w
       // the Worker's own policy check is made unreadable: only D1 stands between them and a binding.
       const token = await seedSentChallenge(h);
       h.db.failNextPolicyRead = true;
-      const confirmed = await worker.fetch(
+      const { result: confirmed, refusals } = await loggingRefusals(() => worker.fetch(
         confirmRequest(token, `acceptance-md13-backstop-${label}`),
         h.env as never,
         {} as never,
-      );
+      ));
       assert.equal(h.db.failNextPolicyRead, false, label);
       assert.ok(
         h.db.batchErrors.some((message) => message.includes("commercial_deposit_percent_invalid")),
         `${label}: ${h.db.batchErrors.join(" | ")}`,
       );
       assert.equal(confirmed.status, 409, label);
-      assert.deepEqual(await confirmed.json(), {
-        error: "deposit_terms_not_allowed_by_policy",
-        policy: "md13_deposit",
-        field: "terms.deposit_percent",
-      }, label);
+      assert.deepEqual(await confirmed.json(), CUSTOMER_DEPOSIT_TERMS_REFUSAL, label);
+      assert.deepEqual(
+        refusals.map(({ stage, policy, field }) => ({ stage, policy, field })),
+        [{ stage: "commit", policy: "md13_deposit", field: "terms.deposit_percent" }],
+        label,
+      );
       assert.equal(count(h, "commercial_acceptance_bindings"), 0, label);
       assert.equal(count(h, "commercial_deposit_derivations"), 0, label);
       assert.deepEqual(depositEntries(h), [], label);
@@ -2201,13 +2273,14 @@ test("under MD-13 a contract keeps its 1-100 deposit, enqueues its derivation, a
     // A contract with no deposit is refused by name under MD-13 before it reaches the customer.
     const refused = await setup({ terms: OD01_TERMS });
     try {
-      const challenge = await issueChallenge(refused.env, await seedPortalLink(refused.db));
+      const portal = await seedPortalLink(refused.db);
+      const { result: challenge, refusals } = await loggingRefusals(() => issueChallenge(refused.env, portal));
       assert.equal(challenge.status, 409);
-      assert.deepEqual(await challenge.json(), {
-        error: "deposit_terms_not_allowed_by_policy",
-        policy: "md13_deposit",
-        field: "terms.deposit_percent",
-      });
+      assert.deepEqual(await challenge.json(), CUSTOMER_DEPOSIT_TERMS_REFUSAL);
+      assert.deepEqual(
+        refusals.map(({ stage, policy, field }) => ({ stage, policy, field })),
+        [{ stage: "challenge", policy: "md13_deposit", field: "terms.deposit_percent" }],
+      );
     } finally {
       refused.restore();
     }
@@ -2328,6 +2401,69 @@ test("a later contract that carries a deposit re-blocks Deposit, which then clea
   }
 });
 
+test("an earlier contract's paid deposit invoice never settles a later contract that carries its own deposit", async () => {
+  const h = await setup();
+  try {
+    seedGates(h);
+    h.db.raw.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+          active, created_by, created_at, updated_at)
+       VALUES (?, ?, 'accounting@example.invalid', 'Accounting', 'ops', 'accounting', NULL, 1,
+               'test-seed', ?, ?)`,
+    ).run(ACCOUNTANT_ID, TENANT, new Date().toISOString(), new Date().toISOString());
+    const portalToken = await seedPortalLink(h.db);
+    const first = await accept(h, portalToken, "acceptance-md13-first-paid-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const firstBinding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
+    // Contract A's 25% deposit invoice is derived and paid.
+    seedReconciledDeposit(h, "acct-intent-contract-a-paid-1", "2001", new Date(Date.now() - 60_000).toISOString());
+    deriveDepositInvoice(h, firstBinding.acceptance_binding_id, "acct-intent-contract-a-paid-1");
+
+    // Contract B replaces it with a 30% deposit of its own, before Deposit was cleared on A.
+    await publishCorrectedContract(h, { ...TERMS, deposit_percent: 30 });
+    const second = await accept(h, portalToken, "acceptance-md13-second-unpaid-0001");
+    assert.equal(second.status, 200, await second.clone().text());
+    const secondBinding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    assert.equal(depositGate(h).state, "blocked");
+    assert.deepEqual(depositEntries(h), []);
+    const owner = await personAuth(h, OWNER_ID);
+
+    // B's invoice is not derived yet, and then derived but not paid: A's payment settles neither.
+    const notDerived = await clearGate(h, owner, "Deposit", { basis: "deposit_settlement" }, "deposit-settlement-b-0001");
+    assert.equal(notDerived.status, 409, JSON.stringify(notDerived.body));
+    assert.deepEqual(notDerived.body, { error: "deposit_settlement_not_observed" });
+    seedReconciledDeposit(h, "acct-intent-contract-b-open-1", "2002", new Date().toISOString(), {
+      state: "submitted",
+      settled_amount: null,
+      provider_reconciled_at: null,
+    });
+    deriveDepositInvoice(h, secondBinding.acceptance_binding_id, "acct-intent-contract-b-open-1");
+    const unpaid = await clearGate(h, owner, "Deposit", { basis: "deposit_settlement" }, "deposit-settlement-b-0002");
+    assert.equal(unpaid.status, 409, JSON.stringify(unpaid.body));
+    assert.deepEqual(unpaid.body, { error: "deposit_settlement_not_observed" });
+    assert.equal(depositGate(h).state, "blocked");
+    assert.deepEqual(depositEntries(h), []);
+
+    // Once B's own invoice is reconciled, Deposit clears on it, and only on it.
+    h.db.raw.prepare(
+      `UPDATE accounting_intents
+          SET state = 'reconciled', settled_amount = total_amount, provider_reconciled_at = ?,
+              version = version + 1, updated_at = ?
+        WHERE intent_id = ?`,
+    ).run(new Date().toISOString(), new Date().toISOString(), "acct-intent-contract-b-open-1");
+    const settled = await clearGate(h, owner, "Deposit", { basis: "deposit_settlement" }, "deposit-settlement-b-0003");
+    assert.equal(settled.status, 200, JSON.stringify(settled.body));
+    assert.equal(depositGate(h).state, "complete");
+    assert.equal(
+      JSON.parse(String(depositEntries(h).at(-1)!.evidence_refs_json)).money_intent_id,
+      "acct-intent-contract-b-open-1",
+    );
+  } finally {
+    h.restore();
+  }
+});
+
 test("with no signed contract Deposit stays blocked, and no person ever reverses contract_no_deposit", async () => {
   const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
   try {
@@ -2424,6 +2560,89 @@ test("a Deposit entry that fails after the commit never fails the acceptance, an
     assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
     assert.equal(depositEntries(h).length, 1);
     assert.equal((await jobPhase(h)).facts.commercial.deposit_requirement, "no_deposit_under_contract");
+  } finally {
+    h.restore();
+  }
+});
+
+test("the policy's Deposit entry takes D1's time, not the Worker's, and so do the gate and the audit row", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextLedgerAppend = true;
+    const response = await accept(h, portalToken, "acceptance-od01-clock-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(depositEntries(h), []);
+    // The sweep appends the entry while the Worker's clock reads a day behind D1's.
+    mock.timers.enable({ apis: ["Date"], now: Date.now() - 24 * 60 * 60_000 });
+    let swept: Awaited<ReturnType<typeof sweepContractDepositGates>>;
+    try {
+      swept = await sweepContractDepositGates(h.env);
+    } finally {
+      mock.timers.reset();
+    }
+    assert.deepEqual(swept, { candidates: 1, recorded: 1, refused: 0 });
+    const entry = h.db.raw.prepare(
+      "SELECT clearance_id, created_at FROM production_gate_clearances WHERE gate = 'Deposit'",
+    ).get() as { clearance_id: string; created_at: string };
+    assert.match(entry.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.ok(Math.abs(Date.parse(entry.created_at) - Date.now()) < 60_000, entry.created_at);
+    assert.deepEqual(
+      { ...h.db.raw.prepare(
+        `SELECT updated_at, cleared_at FROM operating_production_gates
+          WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+      ).get(TENANT, JOB_ID) as object },
+      { updated_at: entry.created_at, cleared_at: entry.created_at },
+    );
+    assert.equal(
+      (h.db.raw.prepare("SELECT ts FROM audit_log WHERE run_id = ?").get(entry.clearance_id) as { ts: string }).ts,
+      entry.created_at,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+
+test("the OD-01 pre-flight counts each open quote and proposal OD-01 would refuse, and nothing else", async () => {
+  const preflight = readFileSync(new URL("../../tools/od01-preflight.sql", import.meta.url), "utf8");
+  const run = (h: Harness) => h.db.raw.prepare(preflight).all().map((row) => ({ ...row }));
+
+  // The primary 25% contract is open and published, until its customer accepts it.
+  const accepted = await setup();
+  try {
+    assert.deepEqual(run(accepted), [
+      { tenant_id: TENANT, open_quotes: 1, open_proposals: 1, published_proposals: 1 },
+    ]);
+    const response = await accept(accepted, await seedPortalLink(accepted.db), "acceptance-preflight-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(run(accepted), []);
+  } finally {
+    accepted.restore();
+  }
+
+  const h = await setup({ contracts: 0 });
+  try {
+    assert.deepEqual(run(h), []);
+    // A deposit, a 0% deposit on another schedule and a missing deposit term are each refused
+    // under OD-01; payment on completion is not.
+    await seedNativeContract(h.env, "deposit", TERMS);
+    const zero = await seedNativeContract(h.env, "zero-deposit-schedule", {
+      ...OD01_TERMS,
+      payment_schedule: ["deposit", "completion"],
+    });
+    await seedNativeContract(h.env, "no-deposit-term", { payment_schedule: ["completion"], payment_terms_days: 30 });
+    await seedNativeContract(h.env, "od01", OD01_TERMS);
+    assert.deepEqual(run(h), [
+      { tenant_id: TENANT, open_quotes: 3, open_proposals: 3, published_proposals: 3 },
+    ]);
+    // A quote revised without a new proposal: the revision is open, and the proposal left on the
+    // superseded quote no longer is.
+    await reviseQuote(h, zero, { ...OD01_TERMS, payment_schedule: ["completion", "completion"] }, new Date(Date.now() - 30_000));
+    assert.deepEqual(run(h), [
+      { tenant_id: TENANT, open_quotes: 3, open_proposals: 2, published_proposals: 2 },
+    ]);
   } finally {
     h.restore();
   }

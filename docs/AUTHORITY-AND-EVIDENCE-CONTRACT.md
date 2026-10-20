@@ -605,7 +605,9 @@ free-text reason. Gates cleared before the ledger existed are recorded as `legac
 new one can be added.
 
 - Deposit clears on settlement only from the money lane's reconciled deposit invoice for the same
-  job, stored as an immutable receipt that the entry names.
+  job, stored as an immutable receipt that the entry names. When the job's latest accepted contract
+  has its own deposit derivation, only that contract's invoice settles it; an earlier contract's
+  payment never does.
 - A waiver is the owner's decision. A person holding `production.gates.clear` (owner, production)
   requests one on Deposit, Materials or Access
   (`POST /api/v1/production/jobs/{job}/gates/{gate}/clearance`), holding at most one open request
@@ -620,22 +622,26 @@ new one can be added.
 The tenant's deposit policy (migration `0155`) is the owner's append-only, versioned setting, read
 and changed by the owner only (`GET`/`POST /api/v1/owner/deposit-policy`). A change comes from the
 owner's own cookie session, names the version it read, carries a reason and writes one `audit_log`
-row. The latest revision is in force, and a tenant with none takes payment on completion:
+row. The latest revision is in force, and a tenant with none takes payment on completion. The
+revision and the policy's Deposit entries take D1's clock, not the Worker's:
 
 - `od01_payment_on_completion` (OD-01): a contract has no deposit, `deposit_percent: 0` with
   `payment_schedule: ["completion"]`. After the customer's acceptance commits, the policy appends
   `contract_no_deposit` to Deposit, with the signed contract version as evidence, and no deposit
   invoice is derived. Deposit then reads as a system state, "No deposit under this contract": it
   is not a waiver, not a payment and not a person's decision. The append never fails the
-  acceptance; the five-minute sweep appends any that is missing, once per contract.
+  acceptance; the five-minute sweep appends any that is missing, once per contract. The final
+  invoice bills the whole contract: it subtracts only earlier invoices that stand (reconciled or
+  partly settled), never a rejected one, and stops for a person on any other state.
 - `md13_deposit` (MD-13): a contract carries a deposit of 1 to 100 percent, and Deposit clears as
   above. A later accepted contract that carries a deposit makes the policy reverse
   `contract_no_deposit` (`contract_superseded`); Deposit is blocked again and clears only on that
   contract's own reconciled deposit invoice, or by the owner's waiver. No person reverses
   `contract_no_deposit`.
-- Terms the policy does not allow are refused by name, `deposit_terms_not_allowed_by_policy` with
-  the policy and the term to change, where an approved quote, a proposal, a publication or an
-  acceptance is recorded. D1 aborts such an acceptance as the backstop.
+- Terms the policy does not allow are refused by name, `deposit_terms_not_allowed_by_policy`,
+  where an approved quote, a proposal, a publication or an acceptance is recorded. The staff routes
+  name the policy and the term to change; the customer gets the code and plain words only, and the
+  log keeps the policy and the term. D1 aborts such an acceptance as the backstop.
 
 Materials, Access, Weather and Safety also clear on a person's attestation (migration `0158`): one
 small typed record per gate, by an active owner or production person who is on no crew, whose only

@@ -61,7 +61,11 @@ export function whatTheChangeDoes(whose: string, saved: AppRole, pending: AppRol
   return `${whose} role changes from ${roleLabel(saved)} to ${roleLabel(pending)}`;
 }
 
-/** Who made the other change: the viewer, another named person, or nobody the Worker could name. */
+/**
+ * Who made the other change: the viewer, another named person, or nobody the Worker could name.
+ * An unknown actor may be the viewer on another device, so the copy then says what happened in
+ * the passive and names nobody (Track B's fallback for missing data).
+ */
 function actorOf(
   conflict: AccessConflict | null,
 ): { kind: "you" } | { kind: "other"; name: string } | { kind: "unknown" } {
@@ -71,7 +75,11 @@ function actorOf(
   return actor.display_name ? { kind: "other", name: actor.display_name } : { kind: "unknown" };
 }
 
-/** The conflict line: who changed `name`’s access, when, and what is different now. */
+/**
+ * The conflict line: who changed `name`’s access, when, and what is different now. When the
+ * Worker's answer cannot be read at all, the line only says the access was changed; the reload
+ * shows the values.
+ */
 export function conflictLine(
   name: string,
   conflict: AccessConflict | null,
@@ -79,12 +87,12 @@ export function conflictLine(
   now: number,
 ): string {
   const when = whenChanged(conflict?.changed_at, now);
-  if (!conflict) return `Someone else changed ${name}’s access ${when}.`;
+  if (!conflict) return `${name}’s access was changed ${when}.`;
   const what = whatIsDifferentNow(conflict.change.before ?? seen, conflict.change.after);
   const actor = actorOf(conflict);
   if (actor.kind === "you") return `You changed ${name}’s access somewhere else ${when}: ${what}.`;
-  const who = actor.kind === "other" ? actor.name : "Someone else";
-  return `${who} changed ${name}’s access ${when}: ${what}.`;
+  if (actor.kind === "other") return `${actor.name} changed ${name}’s access ${when}: ${what}.`;
+  return `${name}’s access was changed ${when}: ${what}.`;
 }
 
 /** Why a pending role change cannot apply: `name` was removed from the team meanwhile. */
@@ -98,20 +106,24 @@ export function cannotApplyLine(
   if (actor.kind === "you") {
     return `Your change cannot apply: you removed ${name} from the team somewhere else ${when}.`;
   }
-  const who = actor.kind === "other" ? actor.name : "someone else";
-  return `Your change cannot apply: ${who} removed ${name} from the team ${when}.`;
+  if (actor.kind === "other") {
+    return `Your change cannot apply: ${actor.name} removed ${name} from the team ${when}.`;
+  }
+  return `Your change cannot apply: ${name} was removed from the team ${when}.`;
 }
 
 /**
  * After a reload, what happened to a value changed elsewhere and when: "changed somewhere else
- * {time}" for the viewer's own other change, "changed by {Actor} {time}" for anyone else. A role
- * reads "{Role} · changed …" (frame 3); the access chip carries it capitalised.
+ * {time}" for the viewer's own other change, "changed by {Actor} {time}" for another person, and
+ * "changed {time}" when the Worker could not say who. A role reads "{Role} · changed …" (frame 3);
+ * the access chip carries it capitalised.
  */
 export function changedElsewhere(conflict: AccessConflict | null, now: number): string {
   const when = whenChanged(conflict?.changed_at, now);
   const actor = actorOf(conflict);
   if (actor.kind === "you") return `changed somewhere else ${when}`;
-  return `changed by ${actor.kind === "other" ? actor.name : "someone else"} ${when}`;
+  if (actor.kind === "other") return `changed by ${actor.name} ${when}`;
+  return `changed ${when}`;
 }
 
 /** Beside a value this page showed before the other change: "{Value} · may be out of date". */

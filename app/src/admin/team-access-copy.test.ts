@@ -119,13 +119,21 @@ describe("the derived access-conflict phrases", () => {
       "Priya Nand changed Grace Obi’s access 5 min ago: their role is now Sales, not Operations.",
     );
     expect(conflictLine("Grace Obi", conflict(nameless, ago(2 * HOUR)), seen, NOW)).toBe(
-      "Someone else changed Grace Obi’s access on Tue at 13:30: their role is now Sales, not Operations.",
+      "Grace Obi’s access was changed on Tue at 13:30: their role is now Sales, not Operations.",
     );
     expect(conflictLine("Grace Obi", conflict(null, ago(9 * DAY)), seen, NOW)).toBe(
-      "Someone else changed Grace Obi’s access over a week ago: their role is now Sales, not Operations.",
+      "Grace Obi’s access was changed over a week ago: their role is now Sales, not Operations.",
     );
+    expect(
+      conflictLine(
+        "Grace Obi",
+        { ...conflict(null), change: { before: seen, after: { role: "ops", active: false } } },
+        seen,
+        NOW,
+      ),
+    ).toBe("Grace Obi’s access was changed a moment ago: they no longer have access.");
     expect(conflictLine("Grace Obi", null, seen, NOW)).toBe(
-      "Someone else changed Grace Obi’s access a moment ago.",
+      "Grace Obi’s access was changed a moment ago.",
     );
     // Without the access before from the Worker, the line compares with what this page showed.
     expect(
@@ -148,12 +156,13 @@ describe("the derived access-conflict phrases", () => {
       "Your change cannot apply: Priya Nand removed Grace Obi from the team on Tue at 12:30.",
     );
     expect(cannotApplyLine("Grace Obi", null, NOW)).toBe(
-      "Your change cannot apply: someone else removed Grace Obi from the team a moment ago.",
+      "Your change cannot apply: Grace Obi was removed from the team a moment ago.",
     );
     expect(changedElsewhere(conflict(you), NOW)).toBe("changed somewhere else a moment ago");
     expect(changedElsewhere(conflict(priya, ago(12 * MINUTE)), NOW)).toBe(
       "changed by Priya Nand 12 min ago",
     );
-    expect(changedElsewhere(conflict(nameless), NOW)).toBe("changed by someone else a moment ago");
+    expect(changedElsewhere(conflict(nameless), NOW)).toBe("changed a moment ago");
+    expect(changedElsewhere(conflict(null, ago(3 * DAY)), NOW)).toBe("changed on Sat at 15:30");
   });
 });

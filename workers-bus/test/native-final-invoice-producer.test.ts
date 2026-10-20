@@ -38,6 +38,22 @@ const ASSIGNMENT = "assignment-native-0001";
 const PACKAGE = "package-native-final-0001";
 const COMPLETE_AT = "2026-08-20T10:00:00.000Z";
 const DERIVE_AT = new Date("2026-08-21T12:00:00.000Z");
+/** The contract `seedNativeSource` accepts, and the OD-01 contract a case may replace it with. */
+const FIRST_CONTRACT = {
+  quote: "quote-rev-0001",
+  proposal: "proposal-rev-0001",
+  publication: "publication-event-0001",
+  acceptance: "acceptance-binding-0001",
+};
+const OD01_CONTRACT = {
+  quote: "quote-rev-0002",
+  proposal: "proposal-rev-0002",
+  publication: "publication-event-0002",
+  acceptance: "acceptance-binding-0002",
+};
+/** OD-01: no deposit, the whole contract paid on completion. */
+const OD01_TERMS = { deposit_percent: 0, payment_schedule: ["completion"], payment_terms_days: 30 };
+const DEPOSIT_TERMS = { deposit_percent: 25, payment_schedule: ["deposit", "completion"], payment_terms_days: 30 };
 
 function nativeTestEnv(): { env: AppEnv; db: AccountingTestD1 } {
   const db = new AccountingTestD1();
@@ -126,6 +142,7 @@ function nativeTestEnv(): { env: AppEnv; db: AccountingTestD1 } {
       tax_cents INTEGER NOT NULL,
       total_cents INTEGER NOT NULL,
       terms_hash TEXT NOT NULL,
+      terms_json TEXT,
       created_at TEXT NOT NULL
     );
     CREATE TABLE commercial_quote_lines (
@@ -313,24 +330,23 @@ function seedNativeSource(db: AccountingTestD1): void {
 
 async function currentCommercialAnchor(
   db: AccountingTestD1,
+  head = FIRST_CONTRACT,
 ): Promise<{ commercialTermsHash: string; commercialHeadSha256: string }> {
   const quote = db.raw
-    .prepare("SELECT * FROM commercial_quote_revisions WHERE tenant_id = ? AND quote_revision_id = 'quote-rev-0001'")
-    .get(TENANT) as Record<string, unknown>;
+    .prepare("SELECT * FROM commercial_quote_revisions WHERE tenant_id = ? AND quote_revision_id = ?")
+    .get(TENANT, head.quote) as Record<string, unknown>;
   const lines = db.raw
-    .prepare(
-      "SELECT * FROM commercial_quote_lines WHERE quote_revision_id = 'quote-rev-0001' ORDER BY sequence, line_id",
-    )
-    .all() as Record<string, unknown>[];
+    .prepare("SELECT * FROM commercial_quote_lines WHERE quote_revision_id = ? ORDER BY sequence, line_id")
+    .all(head.quote) as Record<string, unknown>[];
   const proposal = db.raw
-    .prepare("SELECT * FROM commercial_proposal_revisions WHERE tenant_id = ? AND proposal_revision_id = 'proposal-rev-0001'")
-    .get(TENANT) as Record<string, unknown>;
+    .prepare("SELECT * FROM commercial_proposal_revisions WHERE tenant_id = ? AND proposal_revision_id = ?")
+    .get(TENANT, head.proposal) as Record<string, unknown>;
   const publication = db.raw
-    .prepare("SELECT * FROM commercial_proposal_publication_events WHERE tenant_id = ? AND publication_event_id = 'publication-event-0001'")
-    .get(TENANT) as Record<string, unknown>;
+    .prepare("SELECT * FROM commercial_proposal_publication_events WHERE tenant_id = ? AND publication_event_id = ?")
+    .get(TENANT, head.publication) as Record<string, unknown>;
   const acceptance = db.raw
-    .prepare("SELECT * FROM commercial_acceptance_bindings WHERE tenant_id = ? AND acceptance_binding_id = 'acceptance-binding-0001'")
-    .get(TENANT) as Record<string, unknown>;
+    .prepare("SELECT * FROM commercial_acceptance_bindings WHERE tenant_id = ? AND acceptance_binding_id = ?")
+    .get(TENANT, head.acceptance) as Record<string, unknown>;
   const quoteSha256 = await sha256Hex(canonicalJson({ quote, lines }));
   const proposalSha256 = await sha256Hex(canonicalJson(proposal));
   const publicationSha256 = await sha256Hex(canonicalJson(publication));

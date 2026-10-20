@@ -10,12 +10,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
-import { contractDepositTerms, depositTermsRefusalFor } from "../src/deposit-policy.ts";
+import {
+  contractDepositTerms,
+  depositGateEvidence,
+  depositTermsRefusalFor,
+  type DepositGateEvidenceFacts,
+} from "../src/deposit-policy.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times.
 const TENANT = "ironwrap";
@@ -172,6 +177,16 @@ function refused(action: () => unknown, code: string): void {
 
 const MD13 = { policy: "md13_deposit", expected_version: 0, reason: REASON };
 
+/** Runs `action` while the Worker's clock reads a day behind D1's. */
+async function withWorkerClockADayBehind<T>(action: () => Promise<T>): Promise<T> {
+  mock.timers.enable({ apis: ["Date"], now: Date.now() - 24 * 60 * 60_000 });
+  try {
+    return await action();
+  } finally {
+    mock.timers.reset();
+  }
+}
+
 test("the policy reads OD-01 at version 0 until the owner records one, and only the owner reads it", async () => {
   const h = setup();
   const owner = await person(h, USERS.owner.id);
@@ -291,6 +306,20 @@ test("a change is versioned, audited once and replayed exactly", async () => {
   );
 });
 
+test("a revision takes D1's time, not the Worker's, and its audit row the same", async () => {
+  const h = setup();
+  const owner = await person(h, USERS.owner.id);
+  const changed = await withWorkerClockADayBehind(() => call(h, owner, "POST", MD13));
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const setAt = changed.body.deposit_policy.set_at as string;
+  assert.match(setAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.ok(Math.abs(Date.parse(setAt) - Date.now()) < 60_000, setAt);
+  assert.equal(
+    h.db.sqlite.prepare("SELECT ts FROM audit_log WHERE run_id = ?").get(changed.body.deposit_policy.revision_id)!.ts,
+    setAt,
+  );
+});
+
 test("D1 keeps the policy append-only and the decision of an active owner, whatever the writer", async () => {
   const h = setup();
   const owner = await person(h, USERS.owner.id);
@@ -366,4 +395,62 @@ test("the deposit terms each policy allows, and the term a refusal names", () =>
   assert.deepEqual(depositTermsRefusalFor(md13, { ...deposit, deposit_percent: 101 }), {
     error: "deposit_terms_not_allowed_by_policy", policy: md13, field: "terms.deposit_percent",
   });
+});
+
+test("the policy's Deposit evidence fits 0153's 4000-character bound with every identifier at its D1 maximum", () => {
+  const h = setup();
+  // The ledger bounds its evidence at 4000 characters, and so does the gate it is copied onto.
+  for (const table of ["production_gate_clearances", "operating_production_gates"]) {
+    const { sql } = h.db.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as {
+      sql: string;
+    };
+    assert.match(sql, /length\(trim\(evidence_refs_json\)\) BETWEEN 2 AND 4000/, table);
+  }
+  // Each field at the longest its column allows: 0093's identifier and hash bounds, 0029's
+  // acceptance id, the timestamps' 40, a revision number of 1000000, and 0011's 80 for an approver's
+  // user id (0017 leaves that column unbounded, but only an app user's id is written to it).
+  const long = (prefix: string, length: number) => prefix.padEnd(length, "x");
+  const facts: DepositGateEvidenceFacts = {
+    acceptance_binding_id: long("commercial-acceptance:", 120),
+    acceptance_id: long("acceptance_", 100).replaceAll("x", "f"),
+    receipt_hash: "a".repeat(64),
+    accepted_at: long("2026-10-20T16:30:28.759Z", 40),
+    quote_revision_id: long("quote-revision:", 160),
+    customer_quote_id: long("customer-quote:", 160),
+    quote_revision_number: 1_000_000,
+    terms_hash: "b".repeat(64),
+    terms_json: JSON.stringify({ deposit_percent: 100, payment_schedule: ["deposit", "completion"] }),
+    policy_permit_id: long("permit:", 120),
+    permit_actor_type: "external_authority",
+    permit_actor_id: long("actor:", 160),
+    quote_revision_approval_id: null,
+    approval_approved_by_user_id: null,
+    proposal_revision_id: long("proposal-revision:", 160),
+    publication_event_id: long("publication:", 120),
+    quote_evidence_digest: "c".repeat(64),
+    proposal_evidence_digest: "d".repeat(64),
+    publication_evidence_digest: "e".repeat(64),
+    in_force_binding_id: long("commercial-acceptance:in-force:", 120),
+  };
+  const policy = { policy: "od01_payment_on_completion", version: 1_000_000 } as const;
+  const widest = [
+    depositGateEvidence(facts, { basis: "contract_superseded", reverses_id: `pgc_${"f".repeat(40)}` }, policy),
+    depositGateEvidence(
+      {
+        ...facts,
+        terms_json: JSON.stringify({ deposit_percent: 0, payment_schedule: ["completion"] }),
+        policy_permit_id: null,
+        permit_actor_type: null,
+        permit_actor_id: null,
+        quote_revision_approval_id: long("quote-approval:", 120),
+        approval_approved_by_user_id: long("appu_", 80),
+      },
+      { basis: "contract_no_deposit", reverses_id: null },
+      policy,
+    ),
+  ];
+  for (const evidence of widest) {
+    assert.ok(JSON.parse(evidence));
+    assert.ok(evidence.length <= 4000, `${evidence.length} characters`);
+  }
 });

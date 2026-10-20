@@ -19,6 +19,7 @@ import { r2ObjectStore } from "./field-actions.ts";
 import { sendGmail } from "./google.ts";
 import { ensureCommercialDepositDerivation } from "./commercial-deposit.ts";
 import {
+  CUSTOMER_DEPOSIT_TERMS_REFUSAL,
   DEPOSIT_TERMS_REFUSAL,
   depositTermsRefusal,
   recordContractDepositGate,
@@ -198,7 +199,12 @@ export async function handleCustomerPortalAcceptanceChallenge(
     if (!contract) return portalUnavailable();
     // No challenge for a contract the tenant's deposit policy would refuse at acceptance (0155).
     const refusal = await depositTermsRefusal(env, tenantId, contract.termsJson);
-    if (refusal) return acceptanceJson(refusal, 409);
+    if (refusal) {
+      return acceptanceJson(
+        customerDepositRefusal(refusal, { stage: "challenge", roof_job_id: link.roof_job_id }),
+        409,
+      );
+    }
     prepared = contract;
   } catch {
     return portalUnavailable();
@@ -341,7 +347,12 @@ export async function handleCustomerPortalAcceptancePreview(
     if (!contract || !sameContract(challenge, contract))
       return acceptanceJson({ error: "acceptance_contract_changed" }, 409);
     const refusal = await depositTermsRefusal(env, tenantId, contract.termsJson);
-    if (refusal) return acceptanceJson(refusal, 409);
+    if (refusal) {
+      return acceptanceJson(
+        customerDepositRefusal(refusal, { stage: "preview", roof_job_id: challenge.roof_job_id }),
+        409,
+      );
+    }
     return acceptanceJson({
       status: "ready",
       quote_version: contract.quoteVersion,
@@ -556,7 +567,15 @@ async function settleAcceptanceIntent(
     // unreadable policy is not a refusal: D1 checks the same policy in the commit (0155).
     const refusal = await depositTermsRefusal(env, intent.tenant_id, contract.termsJson)
       .catch(() => null);
-    if (refusal) return await rejectNativeAcceptance(env, intent, refusal.error, now, refusal);
+    if (refusal) {
+      return await rejectNativeAcceptance(
+        env,
+        intent,
+        refusal.error,
+        now,
+        customerDepositRefusal(refusal, { stage: "confirm", acceptance_id: intent.acceptance_id }),
+      );
+    }
     return await commitNativeAcceptance(
       env,
       intent,
@@ -1018,7 +1037,15 @@ async function commitNativeAcceptance(
     if (isDepositPolicyAbort(error)) {
       const refusal = await depositTermsRefusal(env, intent.tenant_id, contract.termsJson)
         .catch(() => null);
-      if (refusal) return await rejectNativeAcceptance(env, intent, refusal.error, now, refusal);
+      if (refusal) {
+        return await rejectNativeAcceptance(
+          env,
+          intent,
+          refusal.error,
+          now,
+          customerDepositRefusal(refusal, { stage: "commit", acceptance_id: intent.acceptance_id }),
+        );
+      }
     }
   }
   // OD-01: the Deposit gate entry is appended after the acceptance has committed, never inside it,
@@ -1033,6 +1060,18 @@ async function commitNativeAcceptance(
   return await nativeTerminalResponse(env, intent.acceptance_id, contract);
 }
 
+/**
+ * A deposit-terms refusal as an anonymous buyer gets it: plain words only. The policy and the term
+ * to change go to the log, as the staff routes return them.
+ */
+function customerDepositRefusal(
+  refusal: DepositTermsRefusal,
+  facts: Record<string, string>,
+): typeof CUSTOMER_DEPOSIT_TERMS_REFUSAL {
+  log({ at: "deposit_terms_refused", ...facts, policy: refusal.policy, field: refusal.field });
+  return CUSTOMER_DEPOSIT_TERMS_REFUSAL;
+}
+
 /** The 0155 acceptance trigger refused the contract's deposit terms under the tenant's policy. */
 function isDepositPolicyAbort(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -1045,7 +1084,9 @@ async function rejectNativeAcceptance(
   intent: AcceptanceIntent,
   code: string,
   now: Date,
-  rejected: { error: "acceptance_rejected" } | DepositTermsRefusal = { error: "acceptance_rejected" },
+  rejected: { error: "acceptance_rejected" } | typeof CUSTOMER_DEPOSIT_TERMS_REFUSAL = {
+    error: "acceptance_rejected",
+  },
 ): Promise<Response> {
   const attemptedAt = now.toISOString();
   try {

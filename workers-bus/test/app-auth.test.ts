@@ -7,7 +7,7 @@ import {
   requestMagicLink,
   sessionHashFor,
 } from "../src/app-auth.ts";
-import { upsertAppUser } from "../src/app-auth-store.ts";
+import { seedAppUser } from "./app-user-seed.ts";
 import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
 
 interface MagicRow {
@@ -508,7 +508,7 @@ function waitContext() {
 }
 
 async function addFieldUser(env: AppEnv): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "crew@example.com",
     display_name: "Crew Member",
@@ -523,7 +523,7 @@ async function addOfficeUser(
   env: AppEnv,
   role: Exclude<AppRole, "field"> = "owner",
 ): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "owner@example.com",
     display_name: "Office Owner",
@@ -567,7 +567,7 @@ test("magic-link request is enumeration-resistant and stores only a hash", async
   const env = baseEnv(db);
   await addOfficeUser(env);
   await addFieldUser(env);
-  await upsertAppUser(env, {
+  await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "inactive@example.com",
     display_name: "Inactive User",
@@ -1238,7 +1238,7 @@ test("legacy app-user provisioning cannot bypass owner and self-change authority
     "an exact retry remains one grant",
   );
 
-  const protectedOwner = await upsertAppUser(opsEnv, {
+  const protectedOwner = await seedAppUser(opsEnv, {
     tenant_id: "ironwrap",
     email_normalized: "protected-owner@example.com",
     display_name: "Protected Owner",
@@ -1291,7 +1291,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
   const office = await signInOffice(env);
-  const target = await upsertAppUser(env, {
+  const target = await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "departing@example.com",
     display_name: "Departing Teammate",

@@ -13,8 +13,9 @@ import { test } from "node:test";
 
 import worker from "../src/index.ts";
 import { csrfTokenFor, sessionHashFor } from "../src/app-auth.ts";
-import { pruneAuthRecords, upsertAppUser } from "../src/app-auth-store.ts";
+import { pruneAuthRecords } from "../src/app-auth-store.ts";
 import { userInviteState } from "../src/app-user-invites.ts";
+import { seedAppUser } from "./app-user-seed.ts";
 import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
@@ -165,7 +166,7 @@ async function addUser(
   role: AppRole,
   displayName = email,
 ): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: TENANT,
     email_normalized: email,
     display_name: displayName,
@@ -1080,6 +1081,39 @@ test("the people list says whether removing someone unpaired their crew phone, n
   );
 });
 
+test("a crew phone a removal unpaired stops counting once a phone is paired again", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const crew = await addUser(h.env, "crew@example.invalid", "field", "Crew Member");
+  const pair = (deviceId: string, proof: string, pairedAt: string) =>
+    h.db.raw.prepare(
+      `INSERT INTO app_devices
+         (device_id, tenant_id, user_id, device_proof_hash, paired_at, last_seen_at,
+          revoked_at, revoked_by_user_id, created_ip_hash, created_user_agent_hash)
+       VALUES (?,?,?,?,?,?,NULL,NULL,?,?)`,
+    ).run(deviceId, TENANT, crew.user_id, proof.repeat(64), pairedAt, pairedAt, "a".repeat(64), "b".repeat(64));
+  const unpaired = async () =>
+    ((await call(h, "GET", APP_USERS, { session })).body.users as Array<Record<string, unknown>>)
+      .find((user) => user.user_id === crew.user_id)!.crew_phone_unpaired;
+  pair("appd_crew_first_phone_01", "c", "2026-08-23T00:00:00.000Z");
+
+  // The removal alone: the phone it unpaired must be paired again.
+  assert.equal((await call(h, "POST", `${APP_USERS}/${crew.user_id}/access`, {
+    session,
+    body: { active: false },
+  })).status, 200);
+  assert.equal(await unpaired(), true);
+  // Giving access back pairs nothing.
+  assert.equal((await call(h, "POST", `${APP_USERS}/${crew.user_id}/access`, {
+    session,
+    body: { active: true },
+  })).status, 200);
+  assert.equal(await unpaired(), true);
+  // A phone paired after that removal clears it.
+  pair("appd_crew_second_phone1", "d", new Date(Date.now() + 1_000).toISOString());
+  assert.equal(await unpaired(), false);
+});
+
 test("legacy deactivation revokes a pending invitation so it cannot restore access", async () => {
   const h = harness();
   const { user: actor, session } = await owner(h);
@@ -1717,11 +1751,12 @@ test("an accepted invitation moves a removed person's access version, so an olde
   ).all(grace.user_id) as Array<{ detail_code: string; access_change: string }>;
   assert.equal(granted.length, 1, "one granted row, committed with the claim");
   assert.equal(granted[0]!.detail_code, `sales:${String(issued.invite.invite_id)}`);
+  // The person who accepted made the change, not whoever issued the invitation.
   assert.deepEqual(JSON.parse(granted[0]!.access_change), {
     v: 3,
     before: { role: "sales", active: false },
     after: { role: "sales", active: true },
-    actor: ada.user_id,
+    actor: grace.user_id,
   });
 
   // The screen still holding version 2 gives her access back: refused, saying what moved.
@@ -1741,10 +1776,11 @@ test("an accepted invitation moves a removed person's access version, so an olde
   assert.equal(stale.body.error, "access_version_conflict");
   const conflict = stale.body.conflict as Record<string, unknown>;
   assert.equal(conflict.access_version, 3);
+  // Ada's stale tab is not told she made this change: Grace did, by accepting.
   assert.deepEqual(conflict.changed_by, {
-    user_id: ada.user_id,
-    display_name: "Ada Owner",
-    is_self_actor: true,
+    user_id: grace.user_id,
+    display_name: "Grace Obi",
+    is_self_actor: false,
   });
   // Removed before, active now: the app reads this as "they have access again".
   assert.deepEqual(conflict.change, {

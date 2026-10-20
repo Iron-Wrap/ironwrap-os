@@ -226,9 +226,10 @@ export async function listAppUsers(
 }
 
 /**
- * The people whose crew phone a removal of their access unpaired, so giving access back needs it
- * paired again. An office unpair names who revoked the device; a removal does not. Only the fact
- * leaves this store, never a device id.
+ * The people whose crew phone a removal of their access unpaired and who have not paired one
+ * since, so giving access back needs a phone paired again. Computed, never stored: a device a
+ * removal revoked (an office unpair names who revoked it, a removal does not) with no active
+ * device paired after that revocation. Only the fact leaves this store, never a device id.
  */
 export async function usersWithCrewPhoneUnpairedByRemoval(
   env: Env,
@@ -236,9 +237,14 @@ export async function usersWithCrewPhoneUnpairedByRemoval(
   userId?: string,
 ): Promise<Set<string>> {
   const result = await env.DB.prepare(
-    `SELECT DISTINCT user_id FROM app_devices
-      WHERE tenant_id = ? AND (? IS NULL OR user_id = ?)
-        AND revoked_at IS NOT NULL AND revoked_by_user_id IS NULL`,
+    `SELECT DISTINCT removed.user_id FROM app_devices AS removed
+      WHERE removed.tenant_id = ? AND (? IS NULL OR removed.user_id = ?)
+        AND removed.revoked_at IS NOT NULL AND removed.revoked_by_user_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM app_devices AS paired
+           WHERE paired.tenant_id = removed.tenant_id AND paired.user_id = removed.user_id
+             AND paired.revoked_at IS NULL AND paired.paired_at > removed.revoked_at
+        )`,
   ).bind(tenantId, userId ?? null, userId ?? null).all<{ user_id: string }>();
   return new Set((result.results ?? []).map((row) => row.user_id));
 }
@@ -266,8 +272,8 @@ export async function findAppUserById(
 /**
  * Change one person's effective role. `access_role` is the sole effective role (migration 0038);
  * the legacy `role` column is a deployed authentication-class constraint that only distinguishes
- * owner from everything else, and it is kept consistent here for the same reason `upsertAppUser`
- * keeps it consistent.
+ * owner from everything else, and it is kept consistent here for the same reason
+ * `upsertAppUserWithAuthority` keeps it consistent.
  *
  * A live session picks this up on its next request: `findActiveSession` reads `access_role` from
  * `app_users` every time and permissions are derived per request, so a demotion takes effect
@@ -566,54 +572,6 @@ export async function upsertAppUserWithAuthority(
     ).first<AppUserRecord>();
   }
   if (!row) return null;
-  return row;
-}
-
-export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
-  const now = nowIso();
-  const candidateId = `appu_${crypto.randomUUID()}`;
-  const storageRole = input.role === "owner" ? "owner" : "ops";
-  await env.DB.prepare(
-    `INSERT INTO app_users
-       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active,
-        created_by, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(tenant_id, email_normalized) DO UPDATE SET
-       display_name = excluded.display_name,
-       role = excluded.role,
-       access_role = excluded.access_role,
-       frappe_user_id = excluded.frappe_user_id,
-       active = excluded.active,
-       updated_at = excluded.updated_at`,
-  ).bind(
-    candidateId,
-    input.tenant_id,
-    input.email_normalized,
-    input.display_name,
-    storageRole,
-    input.role,
-    input.frappe_user_id,
-    input.active ? 1 : 0,
-    input.provisioned_by,
-    now,
-    now,
-  ).run();
-
-  const row = await env.DB.prepare(
-    `SELECT user_id, tenant_id, email_normalized, display_name,
-            access_role AS role, access_version, frappe_user_id,
-            active, created_by, created_at, updated_at
-     FROM app_users WHERE tenant_id = ? AND email_normalized = ? LIMIT 1`,
-  ).bind(input.tenant_id, input.email_normalized).first<AppUserRecord>();
-  if (!row) throw new Error("app_user_upsert_missing");
-
-  if (!input.active) {
-    await Promise.all([
-      revokeAllUserSessions(env, row.user_id, now),
-      consumeOpenMagicLinks(env, row.user_id, now),
-      revokeAllUserDevices(env, row.user_id, now),
-    ]);
-  }
   return row;
 }
 
@@ -1086,25 +1044,6 @@ function authorityMutationTimestamp(now: string): string {
   const entropy = crypto.randomUUID().replaceAll("-", "").slice(0, 16)
     .split("").map((digit) => String(Number.parseInt(digit, 16) % 10)).join("");
   return `${now.slice(0, -1)}${entropy}Z`;
-}
-
-async function revokeAllUserSessions(env: Env, userId: string, now: string): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE app_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
-  ).bind(now, userId).run();
-}
-
-async function consumeOpenMagicLinks(env: Env, userId: string, now: string): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE app_magic_links SET consumed_at = ?
-     WHERE user_id = ? AND consumed_at IS NULL`,
-  ).bind(now, userId).run();
-}
-
-async function revokeAllUserDevices(env: Env, userId: string, now: string): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE app_devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
-  ).bind(now, userId).run();
 }
 
 function d1Changes(result: unknown): number {

@@ -643,8 +643,9 @@ export async function acceptUserInvite(
   const claim = await claimUserInvite(env, {
     invite,
     candidateUserId: `appu_${crypto.randomUUID()}`,
-    // Mirrors `upsertAppUser`: `app_users.role` is a deployed authentication-class CHECK that
-    // predates the least-privilege vocabulary, and `access_role` (0038) is the effective role.
+    // Mirrors `upsertAppUserWithAuthority`: `app_users.role` is a deployed authentication-class
+    // CHECK that predates the least-privilege vocabulary, and `access_role` (0038) is the effective
+    // role.
     storageRole: invite.access_role === "owner" ? "owner" : "ops",
     now: nowIso,
     expected: account,
@@ -752,7 +753,10 @@ export async function changeAppUserRole(
     return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
   }
   if (user.role === parsed.value.role) {
-    return { ok: true, body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) } };
+    return {
+      ok: true,
+      body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) },
+    };
   }
 
   const updated = await authStore.setAppUserAccessRole(env, {
@@ -813,7 +817,10 @@ export async function changeAppUserAccess(
     return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
   }
   if ((user.active === 1) === parsed.value.active) {
-    return { ok: true, body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) } };
+    return {
+      ok: true,
+      body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) },
+    };
   }
 
   const now = new Date().toISOString();

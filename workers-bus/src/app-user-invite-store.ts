@@ -203,8 +203,9 @@ export async function findUserInviteByTokenHash(
  * decision someone made on the earlier version is refused instead of landing on top. The claim
  * itself only lands when that row did (`changes() = 1`), so a moved version spends nothing.
  *
- * `storageRole` mirrors `upsertAppUser`: the deployed `app_users.role` CHECK predates the
- * least-privilege vocabulary and `access_role` (migration 0038) is the sole effective role.
+ * `storageRole` mirrors `upsertAppUserWithAuthority`: the deployed `app_users.role` CHECK
+ * predates the least-privilege vocabulary and `access_role` (migration 0038) is the sole effective
+ * role.
  */
 export async function claimUserInvite(
   env: Env,
@@ -267,7 +268,9 @@ export async function claimUserInvite(
       version: expectedVersion === null ? 1 : expectedVersion + 1,
       before: input.expected ? accessStateOf(input.expected) : null,
       after: { role: input.invite.access_role, active: true },
-      actorUserId: input.invite.invited_by_user_id,
+      // The person who accepted made this change, not whoever issued the invitation: an office
+      // tab left open on the earlier version must not read it as its own.
+      actorUserId: input.expected?.user_id ?? input.candidateUserId,
     },
   );
   const claim = env.DB.prepare(

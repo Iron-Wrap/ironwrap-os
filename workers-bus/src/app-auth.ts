@@ -200,29 +200,20 @@ export async function provisionAppUser(
   env: AppEnv,
   input: ProvisionAppUserInput,
   req: Request,
-  authority?: authStore.AppUserMutationAuthority,
+  authority: authStore.AppUserMutationAuthority,
 ): Promise<AppUserRecord | null> {
   const request = await authRequestContext(req, env);
-  const audit = {
-    event: "user_provision",
-    outcome: input.active ? "active" : "inactive",
-    request,
-    detailCode: `${input.role}:${input.provisioned_by}`,
-  };
-  // An authorized change commits its audit row in the same batch, with the access version it
-  // produced and the access before and after it in access_change (0157); the unauthenticated
-  // upsert keeps the audit it always wrote after the fact.
-  if (authority) {
-    return await authStore.upsertAppUserWithAuthority(env, input, { ...authority, audit });
-  }
-  const user = await authStore.upsertAppUser(env, input);
-  if (!user) return null;
-  await authStore.recordAuthAudit(env, {
-    tenantId: user.tenant_id,
-    userId: user.user_id,
-    ...audit,
+  // The change commits its audit row in the same batch, with the access version it produced and
+  // the access before and after it in access_change (0157).
+  return await authStore.upsertAppUserWithAuthority(env, input, {
+    ...authority,
+    audit: {
+      event: "user_provision",
+      outcome: input.active ? "active" : "inactive",
+      request,
+      detailCode: `${input.role}:${input.provisioned_by}`,
+    },
   });
-  return user;
 }
 
 export async function bootstrapFirstOwner(

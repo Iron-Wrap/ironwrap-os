@@ -240,9 +240,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
   step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event
-  the run answers and may cite only that event (`signal/<id>`); the host offers it once the
-  receptionist's allowlist names it. The app has no import screen, so the Retry a person would use for an import
-  run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
+  the run answers and may cite only that event (`signal/<id>`); the receptionist's allowlist names
+  it, so the host offers it. The app has no import screen, so the Retry a person would use for an
+  import run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
   too, and never under Done for you; closing that draft when the matching act lands or a newer
   draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.

@@ -164,6 +164,77 @@ for (const [constant, chunk] of [
   await stat(resolve(`dist${match[1]}`));
 }
 
+// The checks below follow the static imports the browser follows: `import … from "./x.js"`,
+// `import "./x.js"` and `export … from "./x.js"` at a statement start, never `import("./x.js")`.
+const scriptSources = new Map(
+  await Promise.all(
+    (await readdir(resolve("dist/assets")))
+      .filter((name) => name.endsWith(".js"))
+      .map(async (name) => [name, await readFile(resolve("dist/assets", name), "utf8")]),
+  ),
+);
+const staticImports = (name) =>
+  [
+    ...scriptSources
+      .get(name)
+      .matchAll(
+        /(?:^|[;\n])\s*(?:import|export)\s*(?:[\w$*\s{},]*?\bfrom\s*)?["']\.\/([^"']+\.js)["']/g,
+      ),
+  ].map((match) => match[1]);
+const staticGraph = (...roots) => {
+  const reached = new Set();
+  const visit = (name) => {
+    if (reached.has(name) || !scriptSources.has(name)) return;
+    reached.add(name);
+    for (const dependency of staticImports(name)) visit(dependency);
+  };
+  for (const root of roots) visit(root);
+  return reached;
+};
+const assetName = (url) => url.replace(/^\/assets\//, "");
+
+// The chunks `/today` boots from carry V8's explicit compile hint (vite.config.ts,
+// bootCompileHints), and only as their first line does it compile anything off the main thread:
+// the entry's static graph and the run sheet's, including chunks only the run sheet imports.
+// Like the invariants above it is produced by the build, so only the budget notices its loss.
+const COMPILE_HINT = "//# allFunctionsCalledOnLoad\n";
+const entryScript = indexHtml.match(/<script type="module"[^>]*src="(\/assets\/[^"]+\.js)"/)[1];
+const todayChunk = bootstrapPreload.match(/TODAY_ROUTE_CHUNK\s*=\s*"([^"]+)"/)[1];
+for (const chunk of staticGraph(assetName(entryScript), assetName(todayChunk))) {
+  if (!scriptSources.get(chunk).startsWith(COMPILE_HINT)) {
+    throw new Error(
+      `${chunk} boots /today but does not open with V8's compile hint; its functions would ` +
+        "compile on the main thread in front of the first paint",
+    );
+  }
+}
+
+// zod fixes compiled or interpreted parsing per schema when the schema is built, so the jitless
+// setting (src/lib/zod-jitless.ts) has to run before any contract module: it must sit in the
+// chunk that carries zod's core, which the app's shared contract chunk imports and which imports
+// nothing of the app back.
+const holding = (pattern) =>
+  [...scriptSources].filter(([, source]) => pattern.test(source)).map(([name]) => name);
+const [jitlessChunk, ...moreJitless] = holding(/\bjitless:(?:!0|true)\b/);
+const [zodCoreChunk, ...moreZodCores] = holding(/__zod_globalConfig/);
+if (!jitlessChunk || moreJitless.length || moreZodCores.length || jitlessChunk !== zodCoreChunk) {
+  throw new Error(
+    "zod's jitless setting must live in exactly the one chunk that carries zod's core; anywhere " +
+      "else, schemas built before it runs would still compile parsers the production CSP refuses",
+  );
+}
+const appShared = [...scriptSources.keys()].find((name) => name.startsWith("app-shared-"));
+if (
+  !appShared ||
+  !staticImports(appShared).includes(jitlessChunk) ||
+  staticGraph(jitlessChunk).has(appShared)
+) {
+  throw new Error(
+    `${appShared ?? "the app-shared chunk"} must import ${jitlessChunk} (and not the reverse) so ` +
+      "zod's jitless setting runs before the shared contract modules build their schemas",
+  );
+}
+
 // The build drops the System v2 tokens nothing reads (vite.config.ts, scripts/prune-tokens.ts).
 // A token the bundle still reads but no longer declares would resolve to nothing at runtime, so
 // every `var(--token)` in the shipped files must have its declaration in the shipped stylesheets.

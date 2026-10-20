@@ -617,9 +617,10 @@ new one can be added.
 - Every entry is a person's, made from their own cookie session, except the Deposit entries the
   deposit policy records below. The QA seed owner identity is refused and never counts as a holder.
 
-The tenant's deposit policy (migration `0155`) is the owner's append-only, versioned setting
-(`GET`/`POST /api/v1/owner/deposit-policy`, owner only, from their own cookie session, with a
-reason). The latest revision is in force, and a tenant with none takes payment on completion:
+The tenant's deposit policy (migration `0155`) is the owner's append-only, versioned setting, read
+and changed by the owner only (`GET`/`POST /api/v1/owner/deposit-policy`). A change comes from the
+owner's own cookie session, names the version it read, carries a reason and writes one `audit_log`
+row. The latest revision is in force, and a tenant with none takes payment on completion:
 
 - `od01_payment_on_completion` (OD-01): a contract has no deposit, `deposit_percent: 0` with
   `payment_schedule: ["completion"]`. After the customer's acceptance commits, the policy appends

@@ -20,8 +20,8 @@
 --      * no active stop applies to the job;
 --      * Crew stands on the `crew_assignment` entry bound to the schedule's crew at its version,
 --        made by this schedule or an earlier one of the same job;
---      * Deposit does not stand on a contract with no deposit that a later contract of the job
---        with other terms has superseded, the window before the policy's `contract_superseded`;
+--      * Deposit does not stand on a contract with no deposit while the job's latest contract is
+--        another one with other terms, the window before the policy's `contract_superseded`;
 --      * Weather stands on a person's attestation whose window has not ended and holds the
 --        scheduled work;
 --      * no active member of the crew shares a login coordinate (user id, email or Frappe user)
@@ -182,6 +182,18 @@ BEGIN
            AND membership.active = 1
            AND (worker.user_id IS NULL OR worker.active != 1 OR worker.access_role != 'field')
       )
+    );
+
+  -- [0159] A schedule appends its Crew entries in the same batch as its assignment, ahead of it, so
+  -- the assignment an entry names is not written yet.
+  SELECT RAISE(ABORT, 'production_gate_crew_binding_invalid')
+  WHERE NEW.actor_kind = 'policy'
+    AND NEW.gate = 'Crew'
+    AND EXISTS (
+      SELECT 1
+        FROM operating_job_assignments assignment
+       WHERE assignment.tenant_id = NEW.tenant_id
+         AND assignment.assignment_id = json_extract(NEW.evidence_refs_json, '$.assignment_id')
     );
 
   -- [0159] A schedule re-binds Crew only to another crew or crew version than the one the entry
@@ -1041,10 +1053,11 @@ BEGIN
        END
   );
 
-  -- Deposit never stands on a contract with no deposit once a later contract of the job carries
-  -- other terms: that is the window before the policy's `contract_superseded` entry lands. A later
-  -- contract that again has no deposit and is paid on completion leaves Deposit standing, because
-  -- the policy never re-binds one contract with no deposit to another.
+  -- Deposit never stands on a contract with no deposit once the job's latest contract is another
+  -- one with other terms: that is the window before the policy's `contract_superseded` entry lands.
+  -- Only the latest contract counts, because only the latest is the one the policy acts on. A
+  -- latest contract that again has no deposit and is paid on completion leaves Deposit standing,
+  -- because the policy never re-binds one contract with no deposit to another.
   SELECT RAISE(ABORT, 'operating_job_assignment_deposit_contract_superseded')
   WHERE EXISTS (
     SELECT 1
@@ -1057,15 +1070,22 @@ BEGIN
       JOIN commercial_acceptance_bindings binding
         ON binding.tenant_id = deposit.tenant_id
        AND binding.acceptance_binding_id = deposit.contract_binding_id
-      JOIN commercial_acceptance_bindings later
-        ON later.tenant_id = binding.tenant_id
-       AND later.roof_job_id = binding.roof_job_id
-       AND (later.accepted_at > binding.accepted_at
-            OR (later.accepted_at = binding.accepted_at
-                AND later.acceptance_binding_id > binding.acceptance_binding_id))
+      JOIN commercial_acceptance_bindings latest
+        ON latest.tenant_id = binding.tenant_id
+       AND latest.roof_job_id = binding.roof_job_id
+       AND latest.acceptance_binding_id != binding.acceptance_binding_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings later
+          WHERE later.tenant_id = latest.tenant_id
+            AND later.roof_job_id = latest.roof_job_id
+            AND (later.accepted_at > latest.accepted_at
+                 OR (later.accepted_at = latest.accepted_at
+                     AND later.acceptance_binding_id > latest.acceptance_binding_id))
+       )
       LEFT JOIN commercial_quote_revisions quote
-        ON quote.tenant_id = later.tenant_id
-       AND quote.quote_revision_id = later.quote_revision_id
+        ON quote.tenant_id = latest.tenant_id
+       AND quote.quote_revision_id = latest.quote_revision_id
      WHERE gate.tenant_id = NEW.tenant_id
        AND gate.roof_job_id = NEW.roof_job_id
        AND gate.gate = 'Deposit'

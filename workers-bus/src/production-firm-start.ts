@@ -7,8 +7,8 @@
 // refusal by name:
 //   * the QA seed owner never schedules, because a schedule clears Crew;
 //   * no active stop applies to the job, read as a Safety attestation reads it (0158);
-//   * Deposit does not stand on a contract with no deposit that a later contract of the job with
-//     other terms has superseded;
+//   * Deposit does not stand on a contract with no deposit while the job's latest contract is
+//     another one with other terms;
 //   * Weather stands on a person's attestation whose window has not ended and holds the work;
 //   * no active member of the crew shares a login coordinate with the person whose attestation
 //     Materials, Safety, Access or Weather stands on.
@@ -40,6 +40,8 @@ const NON_BLOCKING_STATES = new Set(["ready", "complete", "waived"]);
 export interface FirmStartInput {
   tenantId: string;
   roofJobId: string;
+  /** The job version the schedule was written against, as 0098 checks it. */
+  roofJobVersion: number;
   assignmentId: string;
   crewId: string;
   crewVersion: number;
@@ -104,9 +106,10 @@ async function gatesInForce(env: AppEnv, tenantId: string, roofJobId: string) {
 }
 
 /**
- * Whether Deposit stands on a contract with no deposit while a later contract of the job carries
- * other terms: the window before the policy's `contract_superseded` entry lands. A later contract
- * that again has no deposit and is paid on completion leaves it standing, as 0159 does.
+ * Whether Deposit stands on a contract with no deposit while the job's latest contract is another
+ * one with other terms: the window before the policy's `contract_superseded` entry lands. Only the
+ * latest contract counts, as the policy acts only on it; a latest contract that again has no
+ * deposit and is paid on completion leaves Deposit standing, as 0159 does.
  */
 async function depositContractSuperseded(
   env: AppEnv,
@@ -117,15 +120,21 @@ async function depositContractSuperseded(
   const row = await env.DB.prepare(
     `SELECT 1 AS found
        FROM commercial_acceptance_bindings binding
-       JOIN commercial_acceptance_bindings later
-         ON later.tenant_id = binding.tenant_id
-        AND later.roof_job_id = binding.roof_job_id
-        AND (later.accepted_at > binding.accepted_at
-             OR (later.accepted_at = binding.accepted_at
-                 AND later.acceptance_binding_id > binding.acceptance_binding_id))
+       JOIN commercial_acceptance_bindings latest
+         ON latest.tenant_id = binding.tenant_id
+        AND latest.roof_job_id = binding.roof_job_id
+        AND latest.acceptance_binding_id != binding.acceptance_binding_id
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_acceptance_bindings later
+           WHERE later.tenant_id = latest.tenant_id
+             AND later.roof_job_id = latest.roof_job_id
+             AND (later.accepted_at > latest.accepted_at
+                  OR (later.accepted_at = latest.accepted_at
+                      AND later.acceptance_binding_id > latest.acceptance_binding_id))
+        )
        LEFT JOIN commercial_quote_revisions quote
-         ON quote.tenant_id = later.tenant_id
-        AND quote.quote_revision_id = later.quote_revision_id
+         ON quote.tenant_id = latest.tenant_id
+        AND quote.quote_revision_id = latest.quote_revision_id
       WHERE binding.tenant_id = ? AND binding.acceptance_binding_id = ?
         AND NOT (
           quote.quote_revision_id IS NOT NULL
@@ -291,7 +300,10 @@ export async function firmStartGateEvidence(
   env: AppEnv,
   input: FirmStartInput,
 ): Promise<FirmStartGateEvidence> {
-  const [gates, crewRow, roster, actor] = await Promise.all([
+  const [job, gates, crewRow, roster, actor] = await Promise.all([
+    env.DB.prepare(
+      `SELECT version, job_status FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?`,
+    ).bind(input.tenantId, input.roofJobId).first<{ version: number; job_status: string }>(),
     gatesInForce(env, input.tenantId, input.roofJobId),
     env.DB.prepare(
       `SELECT version, status FROM fleet_crews WHERE tenant_id = ? AND crew_id = ?`,
@@ -308,11 +320,19 @@ export async function firmStartGateEvidence(
         WHERE membership.tenant_id = ? AND membership.crew_id = ? AND membership.active = 1`,
     ).bind(input.tenantId, input.crewId).first<{ members: number; field_users: number }>(),
     env.DB.prepare(
-      `SELECT created_by FROM app_users WHERE tenant_id = ? AND user_id = ?`,
-    ).bind(input.tenantId, input.actorUserId).first<{ created_by: string }>(),
+      `SELECT active, access_role, created_by FROM app_users WHERE tenant_id = ? AND user_id = ?`,
+    ).bind(input.tenantId, input.actorUserId)
+      .first<{ active: number; access_role: string | null; created_by: string }>(),
   ]);
 
-  // 0098's rules first, as its re-created trigger fires first. Crew is the schedule's to bind.
+  // 0098's rules first, in its order, as its re-created trigger fires first. Crew is the schedule's
+  // to bind.
+  if (
+    !job || Number(job.version) !== input.roofJobVersion ||
+    job.job_status === "complete" || job.job_status === "cancelled"
+  ) {
+    return refused("operating_job_assignment_job_invalid");
+  }
   const crew = gates.get("Crew");
   if (
     !crew ||
@@ -324,6 +344,12 @@ export async function firmStartGateEvidence(
     !crewRow || crewRow.status !== "Active" || Number(crewRow.version) !== input.crewVersion
   ) {
     return refused("operating_job_assignment_crew_invalid");
+  }
+  if (
+    !actor || Number(actor.active) !== 1 ||
+    !["owner", "ops", "production"].includes(actor.access_role ?? "")
+  ) {
+    return refused("operating_job_assignment_actor_invalid");
   }
   if (!roster || Number(roster.members) === 0 || Number(roster.field_users) !== Number(roster.members)) {
     return refused("operating_job_assignment_roster_invalid");

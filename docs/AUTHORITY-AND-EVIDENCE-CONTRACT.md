@@ -673,8 +673,8 @@ written, read with D1's own clock, and each refusal is named on the route and re
 
 - no stop applies to the job, read exactly as a Safety attestation reads it, so a Safety gate
   attested before a new stop schedules nothing;
-- Deposit does not stand on a contract with no deposit that a later contract of the job with other
-  terms has superseded: the window before the policy's `contract_superseded` lands;
+- Deposit does not stand on a contract with no deposit while the job's latest contract is another
+  one with other terms: the window before the policy's `contract_superseded` lands;
 - Weather stands on a person's attestation whose window has not ended and holds the scheduled work
   (a schedule with no end is held to its start), so a Weather gate left `ready` after its window
   ended, or one recorded before the ledger, schedules nothing until it is attested again;

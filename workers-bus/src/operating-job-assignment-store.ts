@@ -117,6 +117,7 @@ export async function recordOperatingJobAssignment(
   const gates = await firmStartGateEvidence(env, {
     tenantId: command.tenant_id,
     roofJobId: command.roof_job_id,
+    roofJobVersion: command.expected_roof_job_version,
     assignmentId,
     crewId: command.crew_id,
     crewVersion: command.expected_crew_version,

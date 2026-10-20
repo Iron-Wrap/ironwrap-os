@@ -1768,14 +1768,15 @@ async function reviseQuote(
   chain: NativeChain,
   terms: Record<string, unknown>,
   base: Date,
+  revision = 2,
 ): Promise<string> {
   const suffix = chain.quoteId.split(":").at(-1)!;
-  const quoteRevisionId = `quote-revision:acceptance:${suffix}:2`;
+  const quoteRevisionId = `quote-revision:acceptance:${suffix}:${revision}`;
   const quote: RecordCommercialQuoteInput = {
     tenantId: TENANT,
     quoteRevisionId,
     customerQuoteId: chain.quoteId,
-    revisionNumber: 2,
+    revisionNumber: revision,
     roofJobId: JOB_ID,
     customerId: CUSTOMER_ID,
     supersedesQuoteRevisionId: chain.quoteRevisionId,
@@ -1797,15 +1798,15 @@ async function reviseQuote(
       taxCents: 5_000,
     }],
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: `acceptance:quote:${suffix}:2`,
+    idempotencyKey: `acceptance:quote:${suffix}:${revision}`,
   };
   const preparedQuote = await prepareCommercialQuote(quote);
   const quotePermit = await admitFor(
     h.env,
     "quote.revision.record",
-    { type: "customer_quote", id: chain.quoteId, version: 2 },
+    { type: "customer_quote", id: chain.quoteId, version: revision },
     preparedQuote.command,
-    `permit:acceptance:quote:${suffix}:2`,
+    `permit:acceptance:quote:${suffix}:${revision}`,
     base,
     preparedQuote.totalCents,
   );
@@ -1814,18 +1815,23 @@ async function reviseQuote(
   return quoteRevisionId;
 }
 
-/** Quote revision 2 and its proposal, published in place of the first contract. */
-async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
+/** Quote revision 2 (or `revision`) and its proposal, published in place of the contract before. */
+async function publishCorrectedContract(
+  h: Harness,
+  terms: Record<string, unknown>,
+  revision = 2,
+): Promise<void> {
   const chain = h.chain!;
-  const base = new Date(Date.now() - 20_000);
-  const quoteRevisionId = await reviseQuote(h, chain, terms, base);
+  // Each later revision's events start later, after the ones the revision before it recorded.
+  const base = new Date(Date.now() - 20_000 + (revision - 2) * 10_000);
+  const quoteRevisionId = await reviseQuote(h, chain, terms, base, revision);
 
-  const proposalRevisionId = "proposal-revision:acceptance:primary:2";
+  const proposalRevisionId = `proposal-revision:acceptance:primary:${revision}`;
   const proposal: RecordCommercialProposalInput = {
     tenantId: TENANT,
     proposalRevisionId,
     proposalPackId: chain.proposalPackId,
-    revisionNumber: 2,
+    revisionNumber: revision,
     quoteRevisionId,
     roofJobId: JOB_ID,
     customerId: CUSTOMER_ID,
@@ -1837,15 +1843,15 @@ async function publishCorrectedContract(h: Harness, terms: Record<string, unknow
     contentHash: "d".repeat(64),
     evidence: EVIDENCE,
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: "acceptance:proposal:primary:2",
+    idempotencyKey: `acceptance:proposal:primary:${revision}`,
   };
   const preparedProposal = await prepareCommercialProposal(proposal);
   const proposalPermit = await admitFor(
     h.env,
     "proposal.revision.record",
-    { type: "proposal", id: chain.proposalPackId, version: 2 },
+    { type: "proposal", id: chain.proposalPackId, version: revision },
     preparedProposal.command,
-    "permit:acceptance:proposal:primary:2",
+    `permit:acceptance:proposal:primary:${revision}`,
     new Date(base.getTime() + 2_000),
   );
   proposal.authority = { kind: "policy_permit", permitId: proposalPermit.permit_id };
@@ -2820,6 +2826,43 @@ test("a later contract that again has no deposit leaves Deposit standing, and th
     assert.equal(depositEntries(h).length, 1);
     assert.equal(depositGate(h).state, "complete");
     await schedule("schedule-acceptance-again-0002");
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
+      2,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("only the job's latest contract counts: a deposit contract superseded in turn by one with no deposit leaves the job schedulable", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const first = await accept(h, portalToken, "acceptance-od01-latest-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const schedule = readyToSchedule(h);
+    await schedule("schedule-acceptance-latest-0001");
+
+    // A deposit contract under MD-13 whose policy reversal never lands...
+    recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
+    await publishCorrectedContract(h, TERMS);
+    h.db.failNextLedgerAppend = true;
+    const second = await accept(h, portalToken, "acceptance-md13-latest-0001");
+    assert.equal(second.status, 200, await second.clone().text());
+    await refusedSchedule(schedule("schedule-acceptance-latest-0002"), "operating_job_assignment_deposit_contract_superseded");
+
+    // ...then a contract with no deposit again, under OD-01. The policy acts only on the latest
+    // contract, so nothing will ever reverse the first contract's entry: refusing here would hold
+    // the job forever.
+    recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "od01_payment_on_completion" });
+    await publishCorrectedContract(h, OD01_TERMS, 3);
+    const third = await accept(h, portalToken, "acceptance-od01-latest-0002");
+    assert.equal(third.status, 200, await third.clone().text());
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+    assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    await schedule("schedule-acceptance-latest-0003");
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
       2,

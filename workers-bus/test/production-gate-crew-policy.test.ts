@@ -312,6 +312,20 @@ function refused(action: () => unknown, code: string): void {
   });
 }
 
+let stopCounter = 0;
+
+/** An active safety stop, as a field worker reports one. */
+function stop(h: Harness, scopeType: string, scopeId: string): void {
+  stopCounter += 1;
+  h.sqlite.prepare(
+    `INSERT INTO safety_occurrences
+       (occurrence_id, tenant_id, occurrence_kind, severity, scope_type, scope_id,
+        reported_by_user_id, reported_at, summary, report_fingerprint_sha256, created_at,
+        updated_at)
+     VALUES (?, ?, 'hazard', 'high', ?, ?, ?, ?, 'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
+  ).run(`occurrence.crew.${stopCounter}`, TENANT, scopeType, scopeId, USERS.fieldA.id, at(-HOUR), sha(`stop:${stopCounter}`), at(-HOUR), at(-HOUR));
+}
+
 // --- The schedule binds Crew by policy ----------------------------------------------------------
 
 test("a schedule binds Crew by policy in its own batch, with one audit row, and a replay appends nothing", async () => {
@@ -464,14 +478,63 @@ test("the store answers 0098's rules first, then each 0159 rule by name, and wri
   assert.equal(open.assignment.scheduled_end, null);
 });
 
-test("a crew that shares a login with a current attester is refused, whatever coordinate it shares", async () => {
+test("0098's refusals answer ahead of a stop that applies to the job, on the store and in D1", async () => {
   const h = setup();
-  // A field login of crew A carries the production attester's email as its Frappe user: the same
-  // person would build what they attested.
+  stop(h, "roof_job", JOB);
+  bindCrewInLedger(h.sqlite, { tenantId: TENANT, roofJobId: JOB, crewId: CREW_A, assignmentId: "assignment:crew:order" });
+  const direct = (overrides: Record<string, unknown>) => () =>
+    insertAssignment(h.sqlite, { assignment_id: "assignment:crew:order", ...overrides });
+  // A stale job version.
+  await rejectsWith(recordOperatingJobAssignment(h.env, command({ expectedRoofJobVersion: 2 })), "operating_job_assignment_job_invalid");
+  refused(direct({ roof_job_version: 2 }), "operating_job_assignment_job_invalid");
+  // A crew at another version, and an actor who does not schedule.
+  await rejectsWith(recordOperatingJobAssignment(h.env, command({ expectedCrewVersion: 2 })), "operating_job_assignment_crew_invalid");
+  refused(direct({ crew_version: 2 }), "operating_job_assignment_crew_invalid");
+  await rejectsWith(recordOperatingJobAssignment(h.env, command({ actorUserId: USERS.fieldA.id })), "operating_job_assignment_actor_invalid");
+  refused(direct({ actor_user_id: USERS.fieldA.id }), "operating_job_assignment_actor_invalid");
+  // A cancelled job.
+  h.sqlite.prepare("UPDATE operating_roof_jobs SET job_status = 'cancelled', version = version + 1 WHERE roof_job_id = ?").run(JOB);
+  await rejectsWith(recordOperatingJobAssignment(h.env, command({ expectedRoofJobVersion: 2 })), "operating_job_assignment_job_invalid");
+  refused(direct({ roof_job_version: 2 }), "operating_job_assignment_job_invalid");
+  h.sqlite.prepare("UPDATE operating_roof_jobs SET job_status = 'qualified', version = version + 1 WHERE roof_job_id = ?").run(JOB);
+  // Only then the stop.
+  await rejectsWith(recordOperatingJobAssignment(h.env, command({ expectedRoofJobVersion: 3 })), "operating_job_assignment_stop_active");
+  refused(direct({ roof_job_version: 3 }), "operating_job_assignment_stop_active");
+  assert.equal(assignmentCount(h.sqlite), 0);
+});
+
+test("a crew that shares any login coordinate with a current attester is refused, on the store and in D1", async () => {
+  // Production attested Materials, Safety, Access and Weather. Each case makes a field login of
+  // crew A the same person as production under one pairing of coordinates.
+  const productionEmail = `${USERS.production.id}@example.invalid`;
+  const fieldBEmail = `${USERS.fieldB.id}@example.invalid`;
+  const cases: Array<[string, Array<[string, string]>]> = [
+    ["the worker's Frappe user is the attester's email", [[USERS.fieldB.id, ` ${productionEmail.toUpperCase()} `]]],
+    ["the worker's Frappe user is the attester's user id", [[USERS.fieldB.id, USERS.production.id.toUpperCase()]]],
+    ["the attester's Frappe user is the worker's email", [[USERS.production.id, fieldBEmail]]],
+    ["the attester's Frappe user is the worker's user id", [[USERS.production.id, ` ${USERS.fieldB.id} `]]],
+    ["both carry the same Frappe user", [[USERS.fieldB.id, "frappe:crew:shared"], [USERS.production.id, "FRAPPE:CREW:SHARED"]]],
+  ];
+  for (const [label, frappeUsers] of cases) {
+    const h = setup();
+    for (const [userId, frappeUser] of frappeUsers) {
+      h.sqlite.prepare("UPDATE app_users SET frappe_user_id = ? WHERE user_id = ?").run(frappeUser, userId);
+    }
+    await rejectsWith(recordOperatingJobAssignment(h.env, command()), "operating_job_assignment_crew_not_independent");
+    bindCrewInLedger(h.sqlite, { tenantId: TENANT, roofJobId: JOB, crewId: CREW_A, assignmentId: "assignment:crew:shared" });
+    refused(() => insertAssignment(h.sqlite, { assignment_id: "assignment:crew:shared" }), "operating_job_assignment_crew_not_independent");
+    assert.equal(assignmentCount(h.sqlite), 0, label);
+    // Crew B shares nothing with production.
+    assert.equal((await recordOperatingJobAssignment(h.env, command({ crewId: CREW_B }))).kind, "created", label);
+  }
+});
+
+test("a crew is independent again once the attestations it shares a login with no longer hold the gates", async () => {
+  const h = setup();
+  // A field login of crew A carries the production attester's email as its Frappe user.
   h.sqlite.prepare("UPDATE app_users SET frappe_user_id = ? WHERE user_id = ?")
     .run(`${USERS.production.id}@example.invalid`, USERS.fieldB.id);
   await rejectsWith(recordOperatingJobAssignment(h.env, command()), "operating_job_assignment_crew_not_independent");
-  // Crew B shares nothing with the attester.
   const scheduled = await recordOperatingJobAssignment(h.env, command({ crewId: CREW_B }));
   assert.equal(scheduled.kind, "created");
   // Once the attestation that person made no longer holds the gate, the crew is independent again.
@@ -487,17 +550,6 @@ test("a crew that shares a login with a current attester is refused, whatever co
 });
 
 test("an active stop on the job or the tenant holds the schedule; another job's stop does not", async () => {
-  let counter = 0;
-  const stop = (h: Harness, scopeType: string, scopeId: string) => {
-    counter += 1;
-    h.sqlite.prepare(
-      `INSERT INTO safety_occurrences
-         (occurrence_id, tenant_id, occurrence_kind, severity, scope_type, scope_id,
-          reported_by_user_id, reported_at, summary, report_fingerprint_sha256, created_at,
-          updated_at)
-       VALUES (?, ?, 'hazard', 'high', ?, ?, ?, ?, 'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
-    ).run(`occurrence.crew.${counter}`, TENANT, scopeType, scopeId, USERS.fieldA.id, at(-HOUR), sha(`stop:${counter}`), at(-HOUR), at(-HOUR));
-  };
   for (const [scopeType, scopeId] of [["roof_job", JOB], ["tenant", TENANT]] as const) {
     const h = setup();
     stop(h, scopeType, scopeId);
@@ -717,6 +769,21 @@ test("D1 binds Crew only to a crew 0098 admits: Active at that version, with act
   assert.deepEqual({ state: crewGate(db).state, version: crewGate(db).version }, { state: "complete", version: 4 });
 });
 
+test("D1 refuses a Crew entry that names an assignment already written: the entry comes first, in its batch", async () => {
+  const h = setup();
+  const first = await recordOperatingJobAssignment(h.env, command());
+  // A writer binding Crew after the fact, to an assignment that exists, is refused.
+  refused(
+    () => appendCrew(h.sqlite, {
+      entry_kind: "reverse", basis: "crew_superseded", to_state: "blocked",
+      reverses_id: crewEntries(h.sqlite)[0]!.clearance_id,
+      evidence_refs_json: JSON.stringify(binding(first.assignment.assignment_id, CREW_B)),
+    }),
+    "production_gate_crew_binding_invalid",
+  );
+  assert.equal(crewEntries(h.sqlite).length, 1);
+});
+
 test("D1 holds an assignment to its gate evidence after 0098's rules, each refused in turn", async () => {
   const { sqlite: db } = setup();
   const assignmentId = "assignment:crew:direct:valid";
@@ -921,7 +988,7 @@ test("only a person's own session schedules; agents, connectors and the QA seed 
   assert.equal(crewEntries(h.sqlite).length, 1);
 });
 
-test("the route answers each gate-evidence refusal by name", async () => {
+test("the route answers the window, independence, blocked-gate and stop refusals by name", async () => {
   const h = setup();
   const ops = await person(h, USERS.ops.id);
   const outside = await schedule(h, ops, { scheduled_start: at(-2 * DAY), scheduled_end: at(-2 * DAY + HOUR) });
@@ -933,7 +1000,12 @@ test("the route answers each gate-evidence refusal by name", async () => {
   reverseGateInLedger(h.sqlite, { tenantId: TENANT, roofJobId: JOB, gate: "Access", actorUserId: USERS.owner.id, actorRole: "owner" });
   const blocked = await schedule(h, ops);
   assert.deepEqual([blocked.status, blocked.body], [409, { error: "operating_job_assignment_gates_blocked" }]);
+  const stopped = setup();
+  stop(stopped, "tenant", TENANT);
+  const held = await schedule(stopped, await person(stopped, USERS.ops.id));
+  assert.deepEqual([held.status, held.body], [409, { error: "operating_job_assignment_stop_active" }]);
   assert.deepEqual(crewEntries(h.sqlite), []);
+  assert.deepEqual(crewEntries(stopped.sqlite), []);
 });
 
 // --- The migration ------------------------------------------------------------------------------------

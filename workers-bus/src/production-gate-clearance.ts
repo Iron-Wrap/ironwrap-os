@@ -707,7 +707,7 @@ async function depositSettlementEntry(
         WHERE binding.tenant_id = ? AND binding.roof_job_id = ?
         ORDER BY binding.accepted_at DESC, binding.acceptance_binding_id DESC
         LIMIT 1`,
-    ).bind(tenantId, input.roofJobId).first<{ derivation_id: string | null; intent_id: string | null }>();
+    ).bind(tenantId, input.roofJobId).first<NonNullable<typeof current>>();
   } catch {
     throw refusal("accounting_read_unavailable", 502);
   }

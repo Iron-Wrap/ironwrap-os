@@ -123,7 +123,6 @@ export async function recordOperatingJobAssignment(
     scheduledStart: command.scheduled_start,
     scheduledEnd: command.scheduled_end,
     actorUserId: command.actor_user_id,
-    createdAt,
   });
   if (!gates.ok) fail(gates.code);
   const insert = env.DB.prepare(

@@ -28,6 +28,8 @@ import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 export const CREW_GATE_POLICY_VERSION = "ironwrap.crew-gate.v1";
+/** D1's clock, in the form `Date.toISOString` writes: the policy's own rows take D1's time. */
+const D1_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const QA_SEED_OWNER_CREATED_BY = "system:owner_directed_qa_seed_grant";
 /** The gates 0098 admits a schedule on before Crew, which the schedule itself binds. */
 const EVIDENCE_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather"] as const;
@@ -42,8 +44,6 @@ export interface FirmStartInput {
   scheduledStart: string;
   scheduledEnd: string | null;
   actorUserId: string;
-  /** Stamps the Crew entries, like the assignment's own `created_at`. */
-  createdAt: string;
 }
 
 export type FirmStartGateEvidence =
@@ -308,7 +308,7 @@ async function crewEntry(
        clearance_id, tenant_id, gate_id, roof_job_id, gate, entry_kind, basis, to_state,
        from_gate_version, reverses_id, actor_kind, policy_version, evidence_refs_json,
        request_sha256, idempotency_key_hash, created_at
-     ) VALUES (?, ?, ?, ?, 'Crew', ?, ?, ?, ?, ?, 'policy', ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, 'Crew', ?, ?, ?, ?, ?, 'policy', ?, ?, ?, ?, ${D1_NOW})`,
   ).bind(
     clearanceId,
     input.tenantId,
@@ -323,7 +323,6 @@ async function crewEntry(
     evidence,
     requestSha256,
     keyHash,
-    input.createdAt,
   );
 }
 

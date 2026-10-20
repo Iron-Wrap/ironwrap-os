@@ -288,21 +288,20 @@ Current source tracing distinguishes implemented modules from reachable producti
 - AI team contract f5 (owner rulings D-01 to D-10 and Q1 to Q10; `docs/AI-TEAM-CONTRACT.md`
   "Owner rulings", "Dial levels" and "Appendix: autonomy screen mapping") is Target, Partial, with
   one Locally-validated part. The owner's caps are Locally-validated: every send outside IronWrap
-  and every price commitment asks first (D-05, D-09, Q4, L04), and thirteen actions carry it today,
-  `quote.commit_revision`, `quote.apply_discount`, `change_order.commit`, `customer_message.send`
-  (every purpose), `visit.confirm`, `portal_link.send`, `proposal.publish`,
-  `change_order.send_for_decision`, `remedy.offer`, `campaign.send`, `invoice.commit_intent`,
+  and every price commitment asks first, live answering the one exception (D-05, D-09, Q4, L04),
+  and twenty-two actions carry it: `quote.commit_revision`, `quote.apply_discount`,
+  `change_order.commit`, `customer_message.send` (every purpose), `visit.confirm`,
+  `portal_link.send`, `proposal.publish`, `change_order.send_for_decision`, `remedy.offer`,
+  `campaign.send`, `invoice.commit_intent`, `rfq.send`, `purchase_order.place`,
+  `purchase_order.change`, `purchase_order.expedite`, `supplier_message.send`,
+  `supplier_return.request`, `document.request`, `cost_recovery.claim`, `content.publish`,
   `review_response.publish` and `insurance_supplement.send`. None is delegable, so the Worker
   refuses every delegation setting for them (`not_delegable`), never lists them as delegation
   candidates, refuses a `delegation.propose_change` for them (`delegation_not_earnable`), serves
   no `delegation/<specialist>:<action>` fact or preview for them, and runs a within-limits setting
   recorded before the cap as asks first (`test/agents-control.test.ts`, "the owner's caps keep
-  every capped outside send and price commitment at asks first"); before the caps the Worker
-  accepted within limits for all thirteen. The rest is not built yet:
-  - Sends to suppliers, subcontractors and the public that the catalog still lets the owner
-    delegate: `rfq.send`, `purchase_order.place`, `purchase_order.change`,
-    `purchase_order.expedite`, `supplier_message.send`, `supplier_return.request`,
-    `document.request`, `cost_recovery.claim` and `content.publish`.
+  every outside send and price commitment at asks first"); before the caps the Worker accepted
+  within limits for all twenty-two. The rest is not built yet:
   - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
     a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
     no undo flow, no non-protective action has a proven machine path (a within-limits step asks

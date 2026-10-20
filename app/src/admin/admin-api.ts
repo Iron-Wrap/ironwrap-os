@@ -4,10 +4,12 @@ import { API_PATHS } from "../lib/api-paths";
 import type { AppRole } from "../lib/roles";
 import {
   ADMIN_ERROR_MESSAGES,
+  accessConflictSchema,
   appUserListResponseSchema,
   appUserMutationResponseSchema,
   companyProfileResponseSchema,
   setupProgressResponseSchema,
+  type AccessConflict,
   type CompanyProfileInput,
   type CompanyProfileResponse,
   type SetupProgressResponse,
@@ -131,6 +133,17 @@ export async function provisionAppUser(
     csrfToken: session.csrf_token,
     fetcher,
   });
+}
+
+/**
+ * Whether a change was refused because the person's access moved since it was decided, and what
+ * the Worker says moved: `undefined` for any other failure, `null` for a conflict whose body this
+ * app cannot read (it still is a conflict).
+ */
+export function accessConflictOf(error: unknown): AccessConflict | null | undefined {
+  if (!(error instanceof ApiError) || error.code !== "access_version_conflict") return undefined;
+  const parsed = accessConflictSchema.safeParse(error.details.conflict);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Reads a picked file as the base64 payload the logo route accepts. */

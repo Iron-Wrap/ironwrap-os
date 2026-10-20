@@ -152,7 +152,11 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await page.goto("/settings/team");
     await expect(page.getByRole("heading", { name: "People" })).toBeVisible();
     // The one account a fresh tenant starts with is the owner, and it cannot lock itself out.
-    await expect(page.getByLabel("Role for Ada Owner")).toBeDisabled();
+    await page.getByRole("button", { name: "See access for Ada Owner" }).click();
+    const own = page.getByRole("region", { name: "Ada Owner’s access" });
+    await expect(own.getByText("Nobody can change their own access.")).toBeVisible();
+    await expect(own.getByRole("radio")).toHaveCount(0);
+    await expect(own.getByRole("button")).toHaveCount(0);
 
     await page.getByLabel("Their name").fill("Sam Sales");
     await page.getByLabel("Their work email").fill("sam@freshco.example");
@@ -169,6 +173,60 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await assertNoHorizontalScroll(page, "people after adding");
     await assertNoFrappeDesk(page);
     await page.screenshot({ path: `${SHOT_DIR}/onboarding-05-people-added.png`, fullPage: true });
+  });
+
+  test("a role change refused because another tab changed the access first reloads and saves", async ({
+    page,
+    context,
+  }) => {
+    await page.goto("/settings/team");
+    await page.getByLabel("Their name").fill("Sam Sales");
+    await page.getByLabel("Their work email").fill("sam@freshco.example");
+    await page.getByRole("button", { name: "Add to the company" }).click();
+    await expect(page.getByText("Sam Sales can sign in now")).toBeVisible();
+
+    // This screen decides on Sam's access as it loaded it...
+    await page.getByRole("button", { name: "See access for Sam Sales" }).click();
+    await page.getByRole("radio", { name: /^Accounting/ }).check();
+    const access = page.getByRole("region", { name: "Sam Sales’s access" });
+    await expect(access.getByText("Not saved", { exact: true })).toBeVisible();
+
+    // ...while the same owner changes it on another tab first.
+    const other = await context.newPage();
+    await other.goto("/settings/team");
+    await other.getByRole("button", { name: "See access for Sam Sales" }).click();
+    await other.getByRole("radio", { name: /^Production/ }).check();
+    await other.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(other.getByText("Production · sam@freshco.example")).toBeVisible();
+    await other.close();
+
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(
+      access.getByText(
+        "You changed Sam Sales’s access somewhere else a moment ago: their role is now Production, not Sales.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: /^Accounting/ })).toBeChecked();
+    await expect(page.getByRole("radio", { name: /^Sales/ })).toBeDisabled();
+    await assertNoHorizontalScroll(page, "access conflict");
+    await assertActionsAreReachable(page, "access conflict");
+    await page.screenshot({
+      path: `${SHOT_DIR}/onboarding-05b-access-conflict.png`,
+      fullPage: true,
+    });
+
+    await page.getByRole("button", { name: "Reload Sam’s access" }).click();
+    await expect(access.getByText("Chosen somewhere else a moment ago")).toBeVisible();
+    await expect(
+      access.getByText(
+        "Your change is not saved yet: Sam’s role changes from Production to Accounting.",
+      ),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(page.getByText("Accounting · sam@freshco.example")).toBeVisible();
+    await expect(access.getByText("Not saved", { exact: true })).toHaveCount(0);
+    await assertNoHorizontalScroll(page, "access saved after the reload");
+    await page.screenshot({ path: `${SHOT_DIR}/onboarding-05c-access-saved.png`, fullPage: true });
   });
 
   test("a fresh sales desk offers the first lead instead of an empty tab", async ({ page }) => {

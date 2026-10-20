@@ -131,7 +131,30 @@ export const appUserMutationResponseSchema = z.object({
     display_name: z.string().min(1),
     role: z.enum(appRoles),
     active: z.boolean(),
+    /** The version this change produced; the next change to this person names it. */
+    access_version: z.number().int().min(1),
   }),
+});
+
+const accessStateSchema = z.object({ role: z.enum(appRoles), active: z.boolean() });
+
+/**
+ * What a 409 `access_version_conflict` says moved since the refused change was decided: who made
+ * the newest change (and whether it was the viewer, on another tab or device), the access before
+ * and now, and the version to decide on next. The Worker sends no device: it cannot name one.
+ */
+export const accessConflictSchema = z.object({
+  user_id: z.string().min(1),
+  access_version: z.number().int().min(1),
+  changed_at: z.string().nullable(),
+  changed_by: z
+    .object({
+      user_id: z.string().min(1),
+      display_name: z.string().nullable(),
+      is_self_actor: z.boolean(),
+    })
+    .nullable(),
+  change: z.object({ before: accessStateSchema.nullable(), after: accessStateSchema }),
 });
 
 export type CompanyProfile = z.infer<typeof companyProfileSchema>;
@@ -140,6 +163,9 @@ export type PublicBrand = z.infer<typeof publicBrandSchema>;
 export type SetupProgressResponse = z.infer<typeof setupProgressResponseSchema>;
 export type SetupStep = z.infer<typeof setupStepSchema>;
 export type AppUser = z.infer<typeof appUserSchema>;
+export type AppUserListResponse = z.infer<typeof appUserListResponseSchema>;
+export type AccessState = z.infer<typeof accessStateSchema>;
+export type AccessConflict = z.infer<typeof accessConflictSchema>;
 
 /** The exact body `PUT /api/v1/admin/company-profile` accepts; extra keys are rejected server-side. */
 export interface CompanyProfileInput {

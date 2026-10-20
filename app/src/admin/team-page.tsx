@@ -23,8 +23,11 @@ import {
 } from "./admin-contracts";
 import { AdminPageHeader } from "./admin-shell";
 import {
+  PAIR_AGAIN,
+  REMOVE_EXPLAINS,
+  REMOVING_EXPLAINS,
   cannotApplyLine,
-  chosenElsewhere,
+  changedElsewhere,
   conflictLine,
   firstName,
   whatTheChangeDoes,
@@ -63,13 +66,18 @@ interface AccessDraft {
     refused: AppUser;
     state: "stale" | "failed" | "offline" | "reloaded";
     reloading: boolean;
+    /**
+     * When this page last heard from the Worker about the person (the refusal, then the reload):
+     * the clock the "when" in the copy is read against, so render stays pure.
+     */
+    observedAt: number;
   } | null;
 }
 
 type DraftUpdate = (draft: AccessDraft | undefined) => AccessDraft | undefined;
 
 /** The draft against the access just reloaded: its change kept unless that is already true. */
-function reloadedDraft(draft: AccessDraft, fresh: AppUser): AccessDraft {
+function reloadedDraft(draft: AccessDraft, fresh: AppUser, observedAt: number): AccessDraft {
   const change = draft.change;
   const settled =
     (change?.kind === "role" && change.role === fresh.role) ||
@@ -77,7 +85,12 @@ function reloadedDraft(draft: AccessDraft, fresh: AppUser): AccessDraft {
   return {
     seen: fresh,
     change: settled ? null : change,
-    conflict: draft.conflict && { ...draft.conflict, state: "reloaded", reloading: false },
+    conflict: draft.conflict && {
+      ...draft.conflict,
+      state: "reloaded",
+      reloading: false,
+      observedAt,
+    },
   };
 }
 
@@ -152,7 +165,10 @@ function TeamContent() {
     }
     queryClient.setQueryData(listKey, list);
     const fresh = list.users.find((user) => user.user_id === userId);
-    updateDraft(userId, (draft) => (draft && fresh ? reloadedDraft(draft, fresh) : undefined));
+    const observedAt = Date.now();
+    updateDraft(userId, (draft) =>
+      draft && fresh ? reloadedDraft(draft, fresh, observedAt) : undefined,
+    );
   };
 
   return (
@@ -391,11 +407,17 @@ function TeamRow({
     onError: (error, input) => {
       const info = accessConflictOf(error);
       if (info === undefined) return;
+      // A remove, or a role change this page holds, waits for the person's next decision. With
+      // nothing held the page reloads in place and shows no conflict line. (`draft` is the one this
+      // write was made from.)
+      const held = input.intent === "remove" || Boolean(draft?.change);
+      const observedAt = Date.now();
       updateDraft((current) => ({
         seen: current?.seen ?? input.seen,
         change: input.intent === "remove" ? { kind: "remove" } : (current?.change ?? null),
-        conflict: { info, refused: input.seen, state: "stale", reloading: false },
+        conflict: { info, refused: input.seen, state: "stale", reloading: false, observedAt },
       }));
+      if (!held) onReload();
     },
   });
   const busy = write.isPending ? (write.variables?.intent ?? null) : null;
@@ -415,6 +437,14 @@ function TeamRow({
     });
   };
 
+  // After a reload, a change to whether they can sign in is marked beside the access chip; a
+  // removal that leaves a held role change unable to apply is said in the panel instead.
+  const conflict = draft?.conflict;
+  const accessChanged =
+    conflict?.state === "reloaded" &&
+    conflict.refused.active !== shown.active &&
+    !(draft?.change?.kind === "role" && !shown.active);
+
   return (
     <div className="py-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -428,33 +458,42 @@ function TeamRow({
                 You
               </span>
             ) : null}
+            {draft?.change && !open ? <Status kind="local">Not saved</Status> : null}
           </p>
           <p className="mt-0.5 truncate text-sm text-muted">
             {roleLabel(shown.role)} · {shown.email}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {draft?.change && !open ? <Status kind="local">Not saved</Status> : null}
           {shown.active ? (
             <Status kind="confirmed">Active</Status>
           ) : (
             <Status kind="retired">No access</Status>
           )}
-          <Button
-            type="button"
-            variant="quiet"
-            size="compact"
-            aria-expanded={open}
-            aria-controls={panelId}
-            onClick={onToggle}
-          >
-            {open ? "Hide access" : "See access"}
-            <span className="sr-only"> for {shown.display_name}</span>
-            {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
-          </Button>
+          {accessChanged ? (
+            <span className="text-xs text-muted">
+              {changedElsewhere(conflict.info, conflict.observedAt)}
+            </span>
+          ) : null}
+          {shown.is_self ? (
+            <p className="text-sm text-muted">Nobody can change their own access.</p>
+          ) : (
+            <Button
+              type="button"
+              variant="quiet"
+              size="compact"
+              aria-expanded={open}
+              aria-controls={panelId}
+              onClick={onToggle}
+            >
+              {open ? "Hide access" : "See access"}
+              <span className="sr-only"> for {shown.display_name}</span>
+              {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+            </Button>
+          )}
         </div>
       </div>
-      {open ? (
+      {open && !shown.is_self ? (
         <AccessPanel
           id={panelId}
           person={shown}
@@ -505,10 +544,14 @@ function AccessPanel({
   onRestore: () => void;
   onReload: () => void;
 }) {
+  const now = draft?.conflict?.observedAt ?? 0;
   const first = firstName(person.display_name);
   const change = draft?.change ?? null;
   const conflict = draft?.conflict ?? null;
-  const unresolved = conflict && conflict.state !== "reloaded" ? conflict : null;
+  // A refused change with nothing held reloads in place (TeamRow) and shows no conflict line.
+  const reloadingInPlace = conflict?.state === "stale" && change === null;
+  const unresolved =
+    conflict && conflict.state !== "reloaded" && !reloadingInPlace ? conflict : null;
   const pendingRole = change?.kind === "role" ? change.role : null;
   const pendingRemove = change?.kind === "remove";
 
@@ -526,25 +569,18 @@ function AccessPanel({
     target?.focus();
   }, [stateKey]);
 
+  const removeLine = <EditLine lead={`Remove ${first} from the team:`}>{REMOVE_EXPLAINS}</EditLine>;
+  const hadAccess = `they can sign in again with the access they had (${roleLabel(person.role)}); ${PAIR_AGAIN}.`;
+
   let body: ReactNode;
-  if (person.is_self) {
-    body = (
-      <>
-        <p className="font-semibold">What you can do</p>
-        <p className="text-sm">
-          <span className="font-semibold">{roleLabel(person.role)}:</span> {ROLE_HELP[person.role]}
-        </p>
-        <p className="text-sm text-muted">Nobody can change their own access.</p>
-      </>
-    );
-  } else if (unresolved) {
+  if (unresolved) {
     const keepUntil = pendingRemove ? "remove them" : "save it";
     const reloadLabel =
       unresolved.state === "stale" ? `Reload ${first}’s access` : `Reload ${first}’s access again`;
     const kept = change ? `; your change is kept until you ${keepUntil} or leave this page` : "";
     const statusLine =
       unresolved.state === "stale"
-        ? conflictLine(person.display_name, unresolved.info, unresolved.refused)
+        ? conflictLine(person.display_name, unresolved.info, unresolved.refused, now)
         : unresolved.state === "failed"
           ? `${first}’s access did not reload${kept}.`
           : `You are offline, so ${first}’s access cannot reload${kept}. When you’re back online, reload their access.`;
@@ -568,7 +604,10 @@ function AccessPanel({
           </>
         ) : null}
         {pendingRemove ? (
-          <PendingLine>Your change: remove {first} from the team.</PendingLine>
+          <div className="space-y-1">
+            <PendingLine>Your change: remove {first} from the team.</PendingLine>
+            <p className="text-sm text-muted">{REMOVING_EXPLAINS}</p>
+          </div>
         ) : null}
         {!person.active && pendingRole ? (
           <PendingLine>
@@ -604,19 +643,19 @@ function AccessPanel({
       </>
     );
   } else if (!person.active) {
-    const hadAccess = `they can sign in again with the access they had (${roleLabel(person.role)}).`;
+    const restoreBusy = busy === "restore" || reloadingInPlace;
     body = pendingRole ? (
       <>
         <PendingLine>
           Your change: {whatTheChangeDoes(`${first}’s`, person.role, pendingRole)}.
         </PendingLine>
         <hr className="border-border" />
-        <InfoLine>{cannotApplyLine(person.display_name, conflict?.info ?? null)}</InfoLine>
+        <InfoLine>{cannotApplyLine(person.display_name, conflict?.info ?? null, now)}</InfoLine>
         <div className="flex flex-wrap items-center gap-3">
           <Button
             type="button"
             className="whitespace-normal"
-            busy={busy === "restore"}
+            busy={restoreBusy}
             onClick={onRestore}
           >
             Give {first} access back
@@ -636,7 +675,7 @@ function AccessPanel({
           <Button
             type="button"
             className="whitespace-normal"
-            busy={busy === "restore"}
+            busy={restoreBusy}
             onClick={onRestore}
           >
             Give {first} access back
@@ -656,13 +695,10 @@ function AccessPanel({
           pendingRole={pendingRole}
           locked={false}
           changedRole={changedRole}
-          changedLabel={chosenElsewhere(conflict?.info ?? null)}
+          changedLabel={changedElsewhere(conflict?.info ?? null, now)}
           onChoose={onChooseRole}
         />
         <hr className="border-border" />
-        {pendingRemove ? (
-          <PendingLine>Your change: remove {first} from the team.</PendingLine>
-        ) : null}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
           {pendingRole ? (
             <>
@@ -681,6 +717,11 @@ function AccessPanel({
               </p>
             </>
           ) : null}
+          {pendingRemove ? (
+            <div className="min-w-0 flex-1 basis-56">
+              <PendingLine>Your change: remove {first} from the team.</PendingLine>
+            </div>
+          ) : null}
           <Button
             type="button"
             variant={pendingRemove ? "primary" : "secondary"}
@@ -691,6 +732,7 @@ function AccessPanel({
             Remove {first} from the team
           </Button>
         </div>
+        {removeLine}
       </>
     );
   }

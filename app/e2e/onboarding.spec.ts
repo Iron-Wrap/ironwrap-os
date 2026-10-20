@@ -152,12 +152,12 @@ test.describe("Onboarding v0 mobile acceptance", () => {
   test("an owner adds a teammate and the list shows who has access", async ({ page }) => {
     await page.goto("/settings/team");
     await expect(page.getByRole("heading", { name: "People" })).toBeVisible();
-    // The one account a fresh tenant starts with is the owner, and it cannot lock itself out.
-    await page.getByRole("button", { name: "See access for Ada Owner" }).click();
-    const own = page.getByRole("region", { name: "Ada Owner’s access" });
-    await expect(own.getByText("Nobody can change their own access.")).toBeVisible();
-    await expect(own.getByRole("radio")).toHaveCount(0);
-    await expect(own.getByRole("button")).toHaveCount(0);
+    // The one account a fresh tenant starts with is the owner, and it cannot lock itself out: its
+    // row has no controls, only the line.
+    await expect(
+      page.getByText("Nobody can change their own access.", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /access for Ada Owner/ })).toHaveCount(0);
 
     await page.getByLabel("Their name").fill("Sam Sales");
     await page.getByLabel("Their work email").fill("sam@freshco.example");
@@ -219,7 +219,7 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     });
 
     await page.getByRole("button", { name: "Reload Sam’s access" }).click();
-    await expect(access.getByText("Chosen somewhere else a moment ago")).toBeVisible();
+    await expect(access.getByText("Changed somewhere else a moment ago")).toBeVisible();
     await expect(
       access.getByText(
         "Your change is not saved yet: Sam’s role changes from Production to Accounting.",

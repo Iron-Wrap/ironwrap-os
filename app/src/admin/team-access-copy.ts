@@ -4,14 +4,40 @@ import type { AccessConflict, AccessState } from "./admin-contracts";
 // The derived parts of the access-conflict copy on Settings › People (SET-03 "Access conflict
 // states", frozen build 7, with Track B's rulings for #13). The frozen sentences live in
 // team-page.tsx; only what a person's one role and their access can say is composed here: what is
-// different now, what a pending change does, and who made the other change. There is no pronoun
-// field, so a person is "they"; a clause that would open on a pronoun opens on the first name.
-// The Worker cannot name the device a change came from, so the viewer's own other change is
+// different now, what a pending change does, who made the other change and when. There is no
+// pronoun field, so a person is "they"; a clause that would open on a pronoun opens on the first
+// name. The Worker cannot name the device a change came from, so the viewer's own other change is
 // always "somewhere else".
 
 /** "Grace" for "Grace Obi". */
 export function firstName(displayName: string): string {
   return displayName.trim().split(/\s+/)[0] || displayName;
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const WEEK = 7 * 24 * HOUR;
+
+/**
+ * When the other change was made, by Track B's time ladder: under a minute "a moment ago", under
+ * an hour "{n} min ago", under a week "on {Weekday} at {hh:mm}" (the viewer's local time, 24-hour
+ * clock), then "over a week ago". Never a calendar date. A time the Worker did not send, or one
+ * ahead of this device's clock, reads "a moment ago".
+ */
+export function whenChanged(changedAt: string | null | undefined, now: number): string {
+  const at = changedAt ? Date.parse(changedAt) : Number.NaN;
+  const elapsed = now - at;
+  if (!Number.isFinite(elapsed) || elapsed < MINUTE) return "a moment ago";
+  if (elapsed < HOUR) return `${Math.floor(elapsed / MINUTE)} min ago`;
+  if (elapsed >= WEEK) return "over a week ago";
+  const date = new Date(at);
+  const weekday = new Intl.DateTimeFormat("en-CA", { weekday: "short" }).format(date);
+  const time = new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+  return `on ${weekday} at ${time}`;
 }
 
 /** {what is different now}, after the conflict line's colon. */
@@ -24,7 +50,7 @@ export function whatIsDifferentNow(before: AccessState, after: AccessState): str
   if (!before.active && after.active) {
     return role ? `they have access again and ${role}` : "they have access again";
   }
-  return role ?? "their access is the same as what you see here";
+  return role ?? "nothing you can see here changed";
 }
 
 /**
@@ -35,38 +61,65 @@ export function whatTheChangeDoes(whose: string, saved: AppRole, pending: AppRol
   return `${whose} role changes from ${roleLabel(saved)} to ${roleLabel(pending)}`;
 }
 
-function actorName(conflict: AccessConflict | null): string | null {
+/** Who made the other change: the viewer, another named person, or nobody the Worker could name. */
+function actorOf(
+  conflict: AccessConflict | null,
+): { kind: "you" } | { kind: "other"; name: string } | { kind: "unknown" } {
   const actor = conflict?.changed_by;
-  return actor && !actor.is_self_actor ? (actor.display_name ?? "Someone else") : null;
+  if (!actor) return { kind: "unknown" };
+  if (actor.is_self_actor) return { kind: "you" };
+  return actor.display_name ? { kind: "other", name: actor.display_name } : { kind: "unknown" };
 }
 
-/** The conflict line: who changed `name`’s access and what is different now. */
+/** The conflict line: who changed `name`’s access, when, and what is different now. */
 export function conflictLine(
   name: string,
   conflict: AccessConflict | null,
   seen: AccessState,
+  now: number,
 ): string {
-  if (!conflict) return `${name}’s access changed somewhere else a moment ago.`;
+  const when = whenChanged(conflict?.changed_at, now);
+  if (!conflict) return `Someone else changed ${name}’s access ${when}.`;
   const what = whatIsDifferentNow(conflict.change.before ?? seen, conflict.change.after);
-  const other = actorName(conflict);
-  if (other) return `${other} changed ${name}’s access a moment ago: ${what}.`;
-  return conflict.changed_by
-    ? `You changed ${name}’s access somewhere else a moment ago: ${what}.`
-    : `${name}’s access changed somewhere else a moment ago: ${what}.`;
+  const actor = actorOf(conflict);
+  if (actor.kind === "you") return `You changed ${name}’s access somewhere else ${when}: ${what}.`;
+  const who = actor.kind === "other" ? actor.name : "Someone else";
+  return `${who} changed ${name}’s access ${when}: ${what}.`;
 }
 
 /** Why a pending role change cannot apply: `name` was removed from the team meanwhile. */
-export function cannotApplyLine(name: string, conflict: AccessConflict | null): string {
-  const other = actorName(conflict);
-  if (other)
-    return `Your change cannot apply: ${other} removed ${name} from the team a moment ago.`;
-  return conflict?.changed_by
-    ? `Your change cannot apply: you removed ${name} from the team somewhere else a moment ago.`
-    : `Your change cannot apply: ${name} was removed from the team a moment ago.`;
+export function cannotApplyLine(
+  name: string,
+  conflict: AccessConflict | null,
+  now: number,
+): string {
+  const when = whenChanged(conflict?.changed_at, now);
+  const actor = actorOf(conflict);
+  if (actor.kind === "you") {
+    return `Your change cannot apply: you removed ${name} from the team somewhere else ${when}.`;
+  }
+  const who = actor.kind === "other" ? actor.name : "someone else";
+  return `Your change cannot apply: ${who} removed ${name} from the team ${when}.`;
 }
 
-/** After a reload, on the role that was chosen elsewhere. */
-export function chosenElsewhere(conflict: AccessConflict | null): string {
-  const other = actorName(conflict);
-  return other ? `Chosen by ${other} a moment ago` : "Chosen somewhere else a moment ago";
+/** After a reload, beside a value changed elsewhere. */
+export function changedElsewhere(conflict: AccessConflict | null, now: number): string {
+  const when = whenChanged(conflict?.changed_at, now);
+  const actor = actorOf(conflict);
+  if (actor.kind === "you") return `Changed somewhere else ${when}`;
+  return `Changed by ${actor.kind === "other" ? actor.name : "someone else"} ${when}`;
 }
+
+// TODO(Track B build 9): the removal lines below follow Track B's template for SET-03 frames 1,
+// 3, 4 and 5 and are pending its re-gate; replace them with build 9's verbatim lines.
+
+/** Under Remove on frames 1 and 3, after the "Remove {First} from the team:" lead. */
+export const REMOVE_EXPLAINS =
+  "signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.";
+
+/** Under a held remove's pending line (frame 4). */
+export const REMOVING_EXPLAINS =
+  "Removing them signs them out everywhere and unpairs any crew phone they use.";
+
+/** In the "Give {First} access back:" line (frame 5), after "the access they had ({Role})". */
+export const PAIR_AGAIN = "a crew phone must be paired again";

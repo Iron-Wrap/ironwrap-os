@@ -72,7 +72,7 @@ function refused(conflict: Partial<AccessConflict> & Pick<AccessConflict, "chang
       conflict: {
         user_id: "appu_grace",
         access_version: 2,
-        changed_at: "2026-10-20T09:00:00.000Z",
+        changed_at: new Date(Date.now() - 5_000).toISOString(),
         changed_by: { user_id: "appu_ada", display_name: "Ada Owner", is_self_actor: true },
         ...conflict,
       },
@@ -148,18 +148,16 @@ describe("TeamPage", () => {
 
   it("will not let an owner change their own access", async () => {
     vi.mocked(listAppUsers).mockResolvedValue(people(ada, grace()) as never);
-    const user = userEvent.setup();
     renderWithSession(<TeamPage />, sessionFor("owner"));
 
-    await user.click(await screen.findByRole("button", { name: "See access for Ada Owner" }));
-    const own = screen.getByRole("region", { name: "Ada Owner’s access" });
-    expect(within(own).getByText("Nobody can change their own access.")).toBeInTheDocument();
-    expect(within(own).queryByRole("radio")).toBeNull();
-    expect(within(own).queryByRole("button")).toBeNull();
-    // No row link starts with "Open"; the open row says how to close it.
-    expect(screen.getByRole("button", { name: "Hide access for Ada Owner" })).toHaveAttribute(
+    // The viewer's own row has no controls, only the line.
+    expect(await screen.findByText("Nobody can change their own access.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /access for Ada Owner/ })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Ada Owner’s access" })).toBeNull();
+    // No row link starts with "Open"; everyone else's row says how to see their access.
+    expect(screen.getByRole("button", { name: "See access for Grace Obi" })).toHaveAttribute(
       "aria-expanded",
-      "true",
+      "false",
     );
     expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
   });
@@ -186,6 +184,12 @@ describe("TeamPage", () => {
       "data-variant",
       "secondary",
     );
+    // Pending Track B's re-gate (build 9): what removing does, under the buttons.
+    expect(
+      paragraph(
+        "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.",
+      ),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Save Grace’s access" }));
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledOnce());
@@ -209,11 +213,9 @@ describe("TeamPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Hide access for Grace Obi" }));
     expect(screen.queryByRole("region", { name: "Grace Obi’s access" })).toBeNull();
-    expect(screen.getByText("Not saved")).toBeInTheDocument();
-    // Opening someone else's access hides Grace's; her change still waits.
-    await user.click(screen.getByRole("button", { name: "See access for Ada Owner" }));
+    // The collapsed row says a change is waiting, beside the name.
+    expect(screen.getByText("Not saved").closest("p")).toHaveTextContent("Grace Obi");
     await user.click(screen.getByRole("button", { name: "See access for Grace Obi" }));
-    expect(screen.queryByRole("region", { name: "Ada Owner’s access" })).toBeNull();
     expect(screen.getByRole("radio", { name: /^Production/ })).toBeChecked();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
 
@@ -275,10 +277,10 @@ describe("TeamPage", () => {
 
     // 3 · After reload.
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
-    expect(await screen.findByText("Chosen somewhere else a moment ago")).toBeInTheDocument();
+    expect(await screen.findByText("Changed somewhere else a moment ago")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save Grace’s access" })).toHaveFocus();
     expect(
-      within(screen.getByText("Chosen somewhere else a moment ago").closest("label")!).getByRole(
+      within(screen.getByText("Changed somewhere else a moment ago").closest("label")!).getByRole(
         "radio",
       ),
     ).toHaveAccessibleName(/^Operations/);
@@ -309,6 +311,7 @@ describe("TeamPage", () => {
     vi.mocked(provisionAppUser).mockRejectedValueOnce(
       refused({
         changed_by: { user_id: "appu_priya", display_name: "Priya Nand", is_self_actor: false },
+        changed_at: new Date(Date.now() - 5 * 60_000 - 10_000).toISOString(),
         change: { before: { role: "sales", active: true }, after: { role: "ops", active: true } },
       }),
     );
@@ -319,11 +322,11 @@ describe("TeamPage", () => {
 
     expect(
       await screen.findByText(
-        "Priya Nand changed Grace Obi’s access a moment ago: their role is now Operations, not Sales.",
+        "Priya Nand changed Grace Obi’s access 5 min ago: their role is now Operations, not Sales.",
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
-    expect(await screen.findByText("Chosen by Priya Nand a moment ago")).toBeInTheDocument();
+    expect(await screen.findByText("Changed by Priya Nand 5 min ago")).toBeInTheDocument();
   });
 
   it("4 · a refused remove waits for the reload, then removes against the reloaded version", async () => {
@@ -348,6 +351,11 @@ describe("TeamPage", () => {
     });
 
     expect(await screen.findByText("Your change: remove Grace from the team.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Removing them signs them out everywhere and unpairs any crew phone they use.",
+      ),
+    ).toBeInTheDocument();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -371,6 +379,11 @@ describe("TeamPage", () => {
     expect(remove).toBeEnabled();
     expect(primaryButtons()).toEqual(["Remove Grace from the team"]);
     expect(screen.getByText("Your change: remove Grace from the team.")).toBeInTheDocument();
+    expect(
+      paragraph(
+        "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.",
+      ),
+    ).toBeInTheDocument();
     await user.click(remove);
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledTimes(2));
     expect(vi.mocked(provisionAppUser).mock.calls[1]![1]).toMatchObject({
@@ -423,7 +436,7 @@ describe("TeamPage", () => {
     expect(later).toHaveAttribute("data-variant", "secondary");
     expect(
       paragraph(
-        "Give Grace access back: they can sign in again with the access they had (Sales). Then save to add your change: their role changes from Sales to Production.",
+        "Give Grace access back: they can sign in again with the access they had (Sales); a crew phone must be paired again. Then save to add your change: their role changes from Sales to Production.",
       ),
     ).toBeInTheDocument();
 
@@ -448,6 +461,97 @@ describe("TeamPage", () => {
       active: true,
       expectedAccessVersion: 3,
     });
+  });
+
+  it("a give-back refused because they have access again says so, and the held role change waits for Save", async () => {
+    vi.mocked(listAppUsers)
+      .mockResolvedValueOnce(people(ada, grace()) as never)
+      .mockResolvedValueOnce(people(ada, grace({ active: false, access_version: 2 })) as never)
+      .mockResolvedValueOnce(people(ada, grace({ access_version: 3 })) as never);
+    vi.mocked(provisionAppUser)
+      .mockRejectedValueOnce(
+        refused({
+          change: {
+            before: { role: "sales", active: true },
+            after: { role: "sales", active: false },
+          },
+        }),
+      )
+      // Meanwhile Grace accepted an invitation: her access is back, at version 3.
+      .mockRejectedValueOnce(
+        refused({
+          access_version: 3,
+          change: {
+            before: { role: "sales", active: false },
+            after: { role: "sales", active: true },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(saved("production", true, 4));
+    const user = userEvent.setup();
+    await openGrace(user);
+    await user.click(screen.getByRole("radio", { name: /^Production/ }));
+    await user.click(screen.getByRole("button", { name: "Save Grace’s access" }));
+    await user.click(await screen.findByRole("button", { name: "Reload Grace’s access" }));
+    await user.click(await screen.findByRole("button", { name: "Give Grace access back" }));
+
+    expect(
+      await screen.findByText(
+        "You changed Grace Obi’s access somewhere else a moment ago: they have access again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Your change: Grace’s role changes from Sales to Production."),
+    ).toBeInTheDocument();
+    expect(primaryButtons()).toEqual(["Reload Grace’s access"]);
+    expect(vi.mocked(provisionAppUser).mock.calls[1]![1]).toMatchObject({
+      role: "sales",
+      active: true,
+      expectedAccessVersion: 2,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
+    expect(
+      await screen.findByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          element.textContent ===
+            "Your change is not saved yet: Grace’s role changes from Sales to Production.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Grace’s access" }));
+    await waitFor(() => expect(provisionAppUser).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(provisionAppUser).mock.calls[2]![1]).toMatchObject({
+      role: "production",
+      active: true,
+      expectedAccessVersion: 3,
+    });
+  });
+
+  it("a give-back with nothing held reloads in place and marks what changed, without a conflict line", async () => {
+    vi.mocked(listAppUsers)
+      .mockResolvedValueOnce(people(ada, grace({ active: false })) as never)
+      .mockResolvedValueOnce(people(ada, grace({ access_version: 2 })) as never);
+    vi.mocked(provisionAppUser).mockRejectedValueOnce(
+      refused({
+        change: {
+          before: { role: "sales", active: false },
+          after: { role: "sales", active: true },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    await openGrace(user);
+    await user.click(screen.getByRole("button", { name: "Give Grace access back" }));
+
+    await waitFor(() => expect(listAppUsers).toHaveBeenCalledTimes(2));
+    // The changed value is Grace's access: the label sits beside her chip, which now says Active.
+    const label = await screen.findByText("Changed somewhere else a moment ago");
+    expect(label.parentElement).toHaveTextContent("Active");
+    expect(screen.queryByText("No access")).toBeNull();
+    expect(screen.queryByText(/changed Grace Obi’s access/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Reload/ })).toBeNull();
+    expect(screen.getByRole("radio", { name: /^Sales/ })).toBeChecked();
   });
 
   it("6a · a reload that fails keeps the change and offers the reload again", async () => {
@@ -490,7 +594,7 @@ describe("TeamPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access again" }));
     expect(await screen.findByRole("button", { name: "Save Grace’s access" })).toBeEnabled();
-    expect(screen.getByText("Chosen somewhere else a moment ago")).toBeInTheDocument();
+    expect(screen.getByText("Changed somewhere else a moment ago")).toBeInTheDocument();
   });
 
   it("6b · offline, the reload says so and how to finish once back online", async () => {
@@ -532,7 +636,9 @@ describe("TeamPage", () => {
     expect(screen.getByText("No access")).toBeInTheDocument();
     expect(primaryButtons()).toEqual(["Give Grace access back"]);
     expect(
-      paragraph("Give Grace access back: they can sign in again with the access they had (Sales)."),
+      paragraph(
+        "Give Grace access back: they can sign in again with the access they had (Sales); a crew phone must be paired again.",
+      ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Give Grace access back" }));
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledOnce());

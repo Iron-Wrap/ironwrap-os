@@ -493,8 +493,17 @@ function checkCase(item, context) {
     const watches = (catalog.specialists.get(id)?.watches ?? []).map((watch) => (typeof watch === "string" ? watch : watch.watch_id));
     if (!watches.includes(signal.watch_id)) fail(`${label}: watch ${signal.watch_id} is not a ${id} watch in the contract`);
   }
-  if (!signal.content || (typeof signal.content.text !== "string" && !signal.content.request)) {
-    fail(`${label}: signal.content needs text or request`);
+  // A watch firing may carry the Worker's own content, { watch_id, objects, digest, summary }. Its
+  // period_key is a calendar date, so a case leaves it out.
+  const content = signal.content;
+  if (signal.kind === "watch" && content && typeof content.summary === "string" && content.digest && typeof content.digest === "object" && !Array.isArray(content.digest)) {
+    if (content.watch_id !== signal.watch_id) fail(`${label}: a watch firing's content.watch_id is its signal's watch_id`);
+    const objectsValid = Array.isArray(content.objects) && content.objects.length <= 24 &&
+      content.objects.every((object) => typeof object?.aggregate === "string" && typeof object?.id === "string");
+    if (!objectsValid) fail(`${label}: a watch firing's objects are at most 24 { aggregate, id }`);
+    if (content.period_key !== undefined) fail(`${label}: a watch firing's period_key is a calendar date; leave it out`);
+  } else if (!content || (typeof content.text !== "string" && !content.request)) {
+    fail(`${label}: signal.content needs text or request, or a watch firing's digest and summary`);
   }
   // The signal's actor, as the Worker writes it: who sent it, or null for the Worker's own watch
   // firings and specialist handoffs. Only an external sender is unauthenticated.

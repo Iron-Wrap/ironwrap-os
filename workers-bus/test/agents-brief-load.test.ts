@@ -211,7 +211,7 @@ test("a busy day's brief opens and resumes in few D1 round trips, with the same 
   // for every job whether or not it fitted. Now one ledger read per group of six subjects, and one
   // batch that records only the facts the run is given.
   // Each lead also reads its open proposals (one statement among its concurrent reads, no extra wait).
-  assert.ok(open.statements <= 670, String(open.statements));
+  assert.ok(open.statements <= 665, String(open.statements));
   assert.ok(open.ledgerReads <= 4, String(open.ledgerReads));
   assert.equal(open.ledgerWrites, context.facts.length - 1);
   assert.equal(open.batches, 1);

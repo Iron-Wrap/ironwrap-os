@@ -807,6 +807,7 @@ export async function proposeStep(
           delegatedPermitId: decision.delegation_id,
           windowSince: delegatedCeiling ? new Date(nowMs - windowMs[delegatedCeiling.count.per]).toISOString() : null,
           windowMax: delegatedCeiling?.count.max ?? null,
+          proposalId: input.action_id === "lead_fact.confirm" ? (input.args as { proposal_id: string }).proposal_id : null,
         };
   try {
     // An admitted step counts against the run's step ceiling inside the insert itself, so parallel
@@ -859,14 +860,17 @@ export async function proposeStep(
           latestDelegation?.delegation_id !== delegation?.delegation_id ||
           latestDelegation?.setting !== delegation?.setting ||
           latestDelegation?.fallback !== delegation?.fallback);
+      // Another confirm of the same proposal landed first: the proposal is used, so this one stops
+      // as a confirm of a proposal no longer open.
+      const proposalTaken = admission?.proposalId ? (await leadProposal(db, tenantId, admission.proposalId))?.open === false : false;
       // A proposal overtaken by a committed owner control fails `superseded` (contract reason codes):
       // the owner's own change decided it, so no person is handed a task. A ceiling loser abstains.
       const capped = askReviewer(run, input.action_id, {
         ...decision,
         result: "deny",
         outcome: superseded ? "failed" : "abstained",
-        reason_codes: [superseded ? "superseded" : "ceiling_reached"],
-        checks: [...decision.checks, { check: superseded ? "delegation" : "budget", passed: false }],
+        reason_codes: [superseded ? "superseded" : proposalTaken ? "fact_stale" : "ceiling_reached"],
+        checks: [...decision.checks, { check: superseded ? "delegation" : proposalTaken ? "proposal" : "budget", passed: false }],
         permit_kind: "none",
         delegation_id: null,
         reviewer_role: superseded ? null : reviewer,
@@ -1005,6 +1009,8 @@ interface AdmissionSnapshot {
   delegatedPermitId: string | null;
   windowSince: string | null;
   windowMax: number | null;
+  /** A confirm's proposal: no other admitted confirm may name it by the time this one lands. */
+  proposalId: string | null;
 }
 
 function stepInsert(
@@ -1076,7 +1082,10 @@ function stepInsert(
            AND action_id=? AND created_at>=? AND json_extract(permit_json,'$.kind')='within_limits') < ?)
          AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=? AND specialist_id=? AND action_id=?
            AND json_extract(permit_json,'$.delegation_id')=?
-           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))`,
+           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))
+         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=? AND specialist_id='lead_concierge'
+           AND action_id='lead_fact.confirm' AND json_extract(args_json,'$.proposal_id')=?
+           AND json_extract(policy_json,'$.result')<>'deny'))`,
     )
     .bind(
       stepId,
@@ -1144,6 +1153,9 @@ function stepInsert(
       run.specialist_id,
       input.action_id,
       admission?.delegatedPermitId ?? null,
+      admission?.proposalId ?? null,
+      tenantId,
+      admission?.proposalId ?? null,
     );
 }
 

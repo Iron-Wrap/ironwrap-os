@@ -241,8 +241,8 @@ Current source tracing distinguishes implemented modules from reachable producti
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
   step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event the
   run answers and may cite only that event (`signal/<id>`); the host offers it once the
-  receptionist's allowlist names it. An open proposal is the fact `lead_proposal/<step_id>` (sales
-  view only), linked from its lead, so a later run about the lead can confirm it; a
+  receptionist's allowlist names it. An open proposal is the fact `lead_proposal/<step_id>` (read at
+  `sales:read`), linked from its lead, so a later run about the lead can confirm it; a
   `lead_fact.confirm` must name an open proposal of the same lead and tenant (else `fact_missing`
   or, once used or superseded, `fact_stale`) and may only repeat its values (else `fact_conflict`).
   The app has no import screen, so the Retry a person would use for an import run's failed items is

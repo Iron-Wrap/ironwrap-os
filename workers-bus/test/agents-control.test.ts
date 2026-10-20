@@ -2348,6 +2348,27 @@ test("an open lead proposal reaches a later run, and a confirm must name it, for
   assert.equal(await proposalFact(partial.step_id), null);
   assert.deepEqual(await leadLinks(), [covering.step_id]);
   assert.deepEqual(refused(await confirm(partial.step_id, { service: "asphalt_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  // A refused confirm goes to the specialist's reviewer.
+  const missing = await confirm("step_not_a_proposal", { service: "metal_roofing", scope: null, address: null, timing: null });
+  assert.equal(missing.receipt.needs_from_you?.reviewer_role, "sales");
+  // Proposals made in the same instant: the later one by insertion order supersedes, never by id.
+  const tie = s.now();
+  const tied = async (fields: Record<string, string | null>) => (await s.propose(await s.run(), "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body.step_id as string;
+  s.tick(1_000);
+  const sameInstant = s.now();
+  assert.notEqual(sameInstant, tie);
+  const earlier = await tied({ service: null, scope: null, address: null, timing: "next week" });
+  const later = await tied({ service: "metal_roofing", scope: "house only", address: null, timing: "this week" });
+  assert.equal(await proposalFact(earlier), null, "the later of two same-instant proposals supersedes the earlier");
+  assert.deepEqual(await leadLinks(), [later]);
+  // Two confirms of one proposal racing: the second to land stops as a used proposal.
+  s.db.beforeStepInsert = async () => {
+    const first = await confirm(later, { service: "metal_roofing", scope: null, address: null, timing: null });
+    assert.equal(first.decision, "awaiting_approval");
+  };
+  const raced = await confirm(later, { service: null, scope: "house only", address: null, timing: null });
+  assert.deepEqual(refused(raced), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'lead_fact.confirm' AND json_extract(args_json, '$.proposal_id') = ? AND json_extract(policy_json, '$.result') <> 'deny'", later).n, 1);
   // Only the sales view reads it: its fields carry customer details.
   const { viewFor } = await import("../src/agents/memory.ts");
   assert.deepEqual([{ role: "sales" }, { role: "owner" }, { role: "field" }, { role: "accounting" }].map((reader) => viewFor(OBJECT_MODELS, reader, "lead_proposal") !== null), [true, true, false, false]);

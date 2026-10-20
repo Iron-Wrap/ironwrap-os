@@ -17,11 +17,12 @@
 --       - Materials is refused while an inventory exception of the job is open or contained.
 --       - Safety is the `production.gates.safety` set ("checks site safety"), carried today by owner
 --         and production. It names the attester's current internal Worker Competency whose
---         `authority_scope` is `site-safety`, the value this migration names for site safety,
---         verified, in force today and not bound to another job. It is refused while an active
---         safety stop applies to the job: one on the tenant, the job or any of its Work Packages,
---         or one whose scope cannot be resolved. Only a person ever clears Safety, and it is never
---         waived.
+--         `authority_scope` is exactly `site_safety`, the closed token this migration names for
+--         site safety, verified, in force today and not bound to another job. It is refused while
+--         a stop applies to the job: a safety stop on the tenant, the job or any of its Work
+--         Packages (Superseded included), a crew stop_work on one of them that no release has
+--         lifted, or a safety stop whose scope cannot be resolved. Only a person ever clears
+--         Safety, and it is never waived.
 --       - Weather names a work window of at most 14 days that has not ended and ends within 14 days
 --         of the forecast it rests on, which was observed at most 72 hours ago.
 --   * `reverse` / `person_reversal`: by an owner or production user, with a reason, of the entry
@@ -359,7 +360,10 @@ BEGIN
     );
 
   -- [0158] The evidence list is plain JSON as the Worker writes it. JSON5 would pass json_each below and
-  -- then fail every reader that parses the stored list.
+  -- then fail every reader that parses the stored list. This relies on one-argument json_valid
+  -- refusing JSON5 while json_each and json_type read it, as in SQLite 3.45 and later. D1 does not
+  -- let a query read sqlite_version(); wrangler 4.151.0's local D1 (workerd 1.20261012.1) behaves
+  -- so, and tools/d1-gate-ledger-probe.mjs checks it against that engine on every worker-contract run.
   SELECT RAISE(ABORT, 'production_gate_evidence_invalid')
   WHERE NEW.basis = 'person_attestation' AND NOT json_valid(NEW.evidence_refs_json);
 
@@ -440,53 +444,66 @@ BEGIN
          AND held.status IN ('open', 'contained')
     );
 
-  -- [0158] Safety is never attested while an active safety stop applies to the job: a stop on the
-  -- whole tenant, on the job, or on any Work Package of the job. A stop whose scope cannot be
-  -- resolved holds it too: one naming a roof job or a Work Package this tenant does not have, or a
-  -- scope type this rule does not know. A stop on a shop or a vehicle is not the job's.
+  -- [0158] Safety is never attested while an active stop applies to the job: a safety stop on the
+  -- whole tenant, on the job, or on any Work Package of the job in any status, Superseded included;
+  -- or a crew's stop_work on any Work Package of the job that no release has lifted (0145). A
+  -- safety stop whose scope cannot be resolved holds it too: a scope type this rule does not know,
+  -- or a Work Package that maps to no job. A stop on another job, on a shop or on a vehicle does not.
   SELECT RAISE(ABORT, 'production_gate_safety_stop_active')
   WHERE NEW.basis = 'person_attestation'
     AND NEW.gate = 'Safety'
-    AND EXISTS (
-      SELECT 1
-        FROM safety_occurrences occurrence
-       WHERE occurrence.tenant_id = NEW.tenant_id
-         AND occurrence.stop_active = 1
-         AND (
-           occurrence.scope_type = 'tenant'
-           OR (occurrence.scope_type = 'roof_job' AND (
-             occurrence.scope_id = NEW.roof_job_id
-             OR NOT EXISTS (
-               SELECT 1
-                 FROM operating_roof_jobs job
-                WHERE job.tenant_id = occurrence.tenant_id
-                  AND job.roof_job_id = occurrence.scope_id
-             )
-           ))
-           OR (occurrence.scope_type = 'work_package' AND (
-             EXISTS (
-               SELECT 1
-                 FROM work_packages package
-                WHERE package.tenant_id = occurrence.tenant_id
-                  AND package.work_package_id = occurrence.scope_id
-                  AND package.job_id = NEW.roof_job_id
-             )
-             OR NOT EXISTS (
-               SELECT 1
-                 FROM work_packages package
-                WHERE package.tenant_id = occurrence.tenant_id
-                  AND package.work_package_id = occurrence.scope_id
-             )
-           ))
-           OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
-         )
+    AND (
+      EXISTS (
+        SELECT 1
+          FROM safety_occurrences occurrence
+         WHERE occurrence.tenant_id = NEW.tenant_id
+           AND occurrence.stop_active = 1
+           AND (
+             occurrence.scope_type = 'tenant'
+             OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = NEW.roof_job_id)
+             OR (occurrence.scope_type = 'work_package' AND (
+               occurrence.scope_id IN (
+                 SELECT package.work_package_id
+                   FROM work_packages package
+                  WHERE package.tenant_id = NEW.tenant_id
+                    AND package.job_id = NEW.roof_job_id
+               )
+               OR NOT EXISTS (
+                 SELECT 1
+                   FROM work_packages package
+                  WHERE package.tenant_id = occurrence.tenant_id
+                    AND package.work_package_id = occurrence.scope_id
+               )
+             ))
+             OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
+           )
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM work_package_events crew_stop
+         WHERE crew_stop.tenant_id = NEW.tenant_id
+           AND crew_stop.event_kind = 'stop_work'
+           AND crew_stop.work_package_id IN (
+             SELECT package.work_package_id
+               FROM work_packages package
+              WHERE package.tenant_id = NEW.tenant_id
+                AND package.job_id = NEW.roof_job_id
+           )
+           AND NOT EXISTS (
+             SELECT 1
+               FROM work_package_stop_releases released
+              WHERE released.tenant_id = crew_stop.tenant_id
+                AND released.stop_event_id = crew_stop.event_id
+           )
+      )
     );
 
   -- [0158] Safety names the attester's current internal Worker Competency in site safety: the latest
   -- version of its record, with no contradicting copy of that version, superseded by no other
   -- record, verified by an internal assessment, not revoked, in force today and not bound to another
-  -- job. Its scope is `site-safety`, the `authority_scope` this migration names for "checks site
-  -- safety". Its person is any login coordinate the attester carries.
+  -- job. Its scope is exactly the closed token `site_safety`, the `authority_scope` this migration
+  -- names for "checks site safety"; no other text counts. Its person is any login coordinate the
+  -- attester carries.
   SELECT RAISE(ABORT, 'production_gate_competency_required')
   WHERE NEW.basis = 'person_attestation'
     AND NEW.gate = 'Safety'
@@ -508,7 +525,7 @@ BEGIN
          AND competency.subject_type = 'Person'
          AND competency.subject_role = 'Worker'
          AND competency.authority_kind = 'Worker Competency'
-         AND competency.authority_scope = 'site-safety'
+         AND competency.authority_scope = 'site_safety'
          AND lower(trim(competency.person_user)) IN (
            lower(attester.user_id), attester.email_normalized, lower(trim(attester.frappe_user_id))
          )

@@ -25,9 +25,10 @@
 //       typed attestation (production-gate-attestation.ts) and 0 to 10 evidence references that
 //       this route resolves and checksums. The attester is on no crew; Materials needs no open
 //       inventory exception. Safety needs the attester's current internal Worker Competency in
-//       site safety (`authority_scope` `site-safety`) and no active stop that applies to the job:
-//       on the tenant, the job or any of its Work Packages, or any stop whose scope cannot be
-//       resolved. The answer is the stored entry and the gate after it.
+//       site safety (`authority_scope` exactly `site_safety`) and no stop that applies to the
+//       job: a safety stop on the tenant, the job or any of its Work Packages, a crew stop_work on
+//       one of them that no release has lifted, or a safety stop whose scope cannot be resolved.
+//       The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
 //     the deciding set answers a waiver request on a job of their own runway. The requester never
@@ -38,7 +39,8 @@
 //     Nothing is deleted. A `contract_no_deposit` entry is reversed only by a superseding contract.
 //   GET /api/v1/production/jobs/{job}/gates
 //     The office's read: each scheduling gate with its state, version, ledger entries and open
-//     waiver requests, whose `request_id` is what a waiver decision answers.
+//     waiver requests, whose `request_id` is what a waiver decision answers and whose
+//     `is_own_request` says whether the reader made it.
 //
 // Every write is people-only: the CSRF token, then the person's own cookie session, then the
 // operation set of their live role. Agents, connectors, service tokens and the effect runtime
@@ -108,10 +110,11 @@ const CLEAR_PERMISSION = "production:clear_gate";
  */
 export const PRODUCTION_GATE_SAFETY_PERMISSION = CLEAR_PERMISSION;
 /**
- * The `authority_scope` of an internal Worker Competency in site safety, the competency "checks
- * site safety" needs. Migration 0158 names the same value in D1; no other scope counts.
+ * The closed `authority_scope` token of an internal Worker Competency in site safety, the competency
+ * "checks site safety" needs. `authority_scope` is otherwise free text, so only an exact match
+ * counts. Migration 0158 names the same token in D1.
  */
-export const SITE_SAFETY_AUTHORITY_SCOPE = "site-safety";
+export const SITE_SAFETY_AUTHORITY_SCOPE = "site_safety";
 /**
  * The role that carries the set deciding a waiver: `money.approve` for Deposit and
  * `production.gates.waive` for Materials and Access. Migration 0153 holds the same mapping.
@@ -851,47 +854,54 @@ async function materialExceptionOpen(
 }
 
 /**
- * An active safety stop that applies to the job, as migration 0158 reads it: one on the whole
- * tenant, on the job, or on any Work Package of the job. A stop whose scope cannot be resolved
- * applies too: one naming a roof job or a Work Package this tenant does not have, or a scope type
- * this rule does not know. A stop on a shop or a vehicle is not the job's. The job phase's own read
- * of active stops stays as it is: it reports job-scoped stops.
+ * A stop that applies to the job, as migration 0158 reads it: an active safety stop on the whole
+ * tenant, on the job, or on any Work Package of the job in any status, Superseded included; or a
+ * crew's stop_work on any Work Package of the job that no release has lifted (0145). An active
+ * safety stop whose scope cannot be resolved applies too: a scope type this rule does not know, or
+ * a Work Package that maps to no job. A stop on another job, a shop or a vehicle does not. The job
+ * phase's own read of active stops stays as it is: it reports job-scoped stops.
  */
 async function safetyStopActive(
   env: AppEnv,
   tenantId: string,
   roofJobId: string,
 ): Promise<boolean> {
+  const jobPackages = `SELECT package.work_package_id FROM work_packages package
+               WHERE package.tenant_id = ? AND package.job_id = ?`;
   const row = await env.DB.prepare(
     `SELECT 1 AS found
-       FROM safety_occurrences occurrence
-      WHERE occurrence.tenant_id = ?
-        AND occurrence.stop_active = 1
-        AND (
-          occurrence.scope_type = 'tenant'
-          OR (occurrence.scope_type = 'roof_job' AND (
-            occurrence.scope_id = ?
-            OR NOT EXISTS (
-              SELECT 1 FROM operating_roof_jobs job
-               WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+       WHERE EXISTS (
+         SELECT 1
+           FROM safety_occurrences occurrence
+          WHERE occurrence.tenant_id = ?
+            AND occurrence.stop_active = 1
+            AND (
+              occurrence.scope_type = 'tenant'
+              OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = ?)
+              OR (occurrence.scope_type = 'work_package' AND (
+                occurrence.scope_id IN (${jobPackages})
+                OR NOT EXISTS (
+                  SELECT 1 FROM work_packages package
+                   WHERE package.tenant_id = occurrence.tenant_id
+                     AND package.work_package_id = occurrence.scope_id
+                )
+              ))
+              OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
             )
-          ))
-          OR (occurrence.scope_type = 'work_package' AND (
-            EXISTS (
-              SELECT 1 FROM work_packages package
-               WHERE package.tenant_id = occurrence.tenant_id
-                 AND package.work_package_id = occurrence.scope_id AND package.job_id = ?
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM work_package_events crew_stop
+          WHERE crew_stop.tenant_id = ?
+            AND crew_stop.event_kind = 'stop_work'
+            AND crew_stop.work_package_id IN (${jobPackages})
+            AND NOT EXISTS (
+              SELECT 1 FROM work_package_stop_releases released
+               WHERE released.tenant_id = crew_stop.tenant_id
+                 AND released.stop_event_id = crew_stop.event_id
             )
-            OR NOT EXISTS (
-              SELECT 1 FROM work_packages package
-               WHERE package.tenant_id = occurrence.tenant_id
-                 AND package.work_package_id = occurrence.scope_id
-            )
-          ))
-          OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
-        )
-      LIMIT 1`,
-  ).bind(tenantId, roofJobId, roofJobId).first();
+       )`,
+  ).bind(tenantId, roofJobId, tenantId, roofJobId, tenantId, tenantId, roofJobId).first();
   return row !== null;
 }
 
@@ -1391,7 +1401,7 @@ export async function handleProductionGateReversal(
 }
 
 /** One gate as the office reads it, with its newest entries and its open waiver requests. */
-async function gateRead(env: AppEnv, tenantId: string, gate: GateRow) {
+async function gateRead(env: AppEnv, tenantId: string, readerUserId: string, gate: GateRow) {
   const [entries, requests] = await Promise.all([
     env.DB.prepare(
       `SELECT ${LEDGER_COLUMNS}
@@ -1430,7 +1440,9 @@ async function gateRead(env: AppEnv, tenantId: string, gate: GateRow) {
       ? []
       : requestRows.slice(0, MAX_GATE_READ_ROWS).reverse().map((row) => ({
         request_id: row.clearance_id,
-        requested_by: row.actor_user_id,
+        // Whether the reader made it: the owner may decide another person's request, and their own
+        // only as the only holder. Who else asked stays out of the office's read.
+        is_own_request: row.actor_user_id === readerUserId,
         requested_by_role: row.actor_role,
         from_gate_version: Number(row.from_gate_version),
         reason: row.reason,
@@ -1467,7 +1479,9 @@ export async function handleProductionGatesRead(
     if (gates.length === 0) return json({ error: "production_gate_job_not_found" }, 404);
     return json({
       roof_job: roofJobId,
-      gates: await Promise.all(gates.map((gate) => gateRead(env, tenantId, gate))),
+      gates: await Promise.all(
+        gates.map((gate) => gateRead(env, tenantId, auth.session.user_id, gate)),
+      ),
     });
   } catch {
     return json({ error: "production_gates_unavailable" }, 502);

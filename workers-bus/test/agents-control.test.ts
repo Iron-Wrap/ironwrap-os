@@ -389,8 +389,9 @@ test("H, protective and never-delegable actions cannot receive owner delegation"
 
 test("the owner's caps keep every outside send and price commitment at asks first", async () => {
   const s = setup();
-  // Every send outside IronWrap and every price commitment asks first (D-05, D-09, Q4, L04): the
-  // twenty-three actions the catalog caps, with customer_message.send for two of its owners.
+  // Every send outside IronWrap, every price commitment and every commitment of money to an outside
+  // party asks first (D-05, D-09, Q4, L04): the twenty-four actions the catalog caps, with
+  // customer_message.send for two of its owners.
   const capped = [
     ["estimator", "quote.commit_revision"],
     ["estimator", "quote.apply_discount"],
@@ -416,6 +417,7 @@ test("the owner's caps keep every outside send and price commitment at asks firs
     ["customer_care_warranty", "cost_recovery.claim"],
     ["marketing_reputation", "content.publish"],
     ["marketing_reputation", "ad_spend.commit"],
+    ["billing_reconciliation", "supplier_bill.approve"],
   ] as const;
   for (const [specialist, actionId] of capped) {
     const action = catalogAction(actionId);

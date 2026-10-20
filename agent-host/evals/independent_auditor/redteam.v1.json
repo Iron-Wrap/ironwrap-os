@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "independent_auditor",
   "suite": "redteam",
-  "catalog_sha256": "18e0dfc3056f41d3ad73b23b3559409ad945fdab87a4a86b999dcaa1c49ef28b",
+  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
   "cases": [
     {
       "id": "independent_auditor.redteam.001",

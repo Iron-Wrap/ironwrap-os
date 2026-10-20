@@ -32,6 +32,7 @@ import {
   selectPhaseWorkPackage,
 } from "../src/commercial-job-phase.ts";
 import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
 const PUBLIC_ORIGIN = "https://app.example.invalid";
@@ -90,6 +91,17 @@ class SqliteD1 {
     insert.run(OTHER_OPS_ID, TENANT, "other-ops@example.invalid", "Other Ops", "ops", "ops", "other-ops@example.invalid", now, now);
     insert.run(ACCOUNTANT_ID, TENANT, "accounting@example.invalid", "Accounting", "ops", "accounting", "accounting@example.invalid", now, now);
     insert.run(SECOND_ACCOUNTANT_ID, TENANT, "second-accounting@example.invalid", "Second Accounting", "ops", "accounting", "second-accounting@example.invalid", now, now);
+    // These contracts carry a deposit, so this tenant takes deposits (MD-13): since 0155 a tenant
+    // with no policy revision is OD-01 and refuses them. Like 0133's column, a truncated chain
+    // carries the policy table forward, because the routes read it.
+    if (lastMigration && lastMigration < "0155") {
+      const policy = readFileSync(new URL("0155_od01_deposit_policy.sql", directory), "utf8");
+      this.raw.exec(policy.slice(
+        policy.indexOf("CREATE TABLE IF NOT EXISTS tenant_deposit_policy_revisions"),
+        policy.indexOf("CREATE TRIGGER IF NOT EXISTS tenant_deposit_policy_revisions_validate_insert"),
+      ));
+    }
+    recordDepositPolicy(this.raw, { tenantId: TENANT, ownerUserId: OWNER_ID });
   }
 
   prepare(sql: string): SqliteStatement {
@@ -1580,28 +1592,46 @@ test("0116 backfills shipped acceptances into the native activation and deposit 
   }
 });
 
-test("acceptance refuses non-integer and out-of-range deposit percentages atomically", async () => {
-  const cases: Array<[string, unknown]> = [["string", "25"], ["decimal", 25.5], ["range", 101]];
+// Since 0155 the tenant's deposit policy refuses such terms by name where the quote is recorded,
+// so they never reach a customer; the acceptance trigger still aborts them as a backstop, proved
+// in deposit-policy.test.ts.
+test("a deposit outside 1-100 is refused by name at the quote, before anything reaches a customer", async () => {
+  const cases: Array<[string, unknown]> = [["string", "25"], ["decimal", 25.5], ["range", 101], ["zero", 0]];
   for (const [label, depositPercent] of cases) {
     const h = setup();
     try {
       const ids = await intakeAndMaterialize(h);
-      await publishSyntheticContract(h, ids, { ...TERMS, deposit_percent: depositPercent }, label);
-      const token = await issuePortalLink(h, ids);
-      const challenge = await worker.fetch(
-        publicRequest("/api/v1/customer-portal/acceptance/challenge", { token }), h.env as never, {} as never,
+      const triage = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/lead-triage-decisions", {
+          lead_id: ids.leadId, expected_lead_version: 1, lifecycle_status: "qualified", priority: "normal",
+          category: "replacement", summary: `Synthetic ${label} triage.`, next_action: "Prepare the synthetic proposal.",
+        }, `iro208-invalid-${label}-triage-0001`), h.env, auth("ops"),
       );
-      assert.equal(challenge.status, 200, await challenge.clone().text());
-      const challengeToken = h.fake.sentEmails.at(-1)?.match(/contract-accept#token=([A-Za-z0-9_-]{43})/)?.[1];
-      assert.ok(challengeToken);
-      const confirmed = await worker.fetch(
-        publicRequest("/api/v1/customer-portal/acceptance/confirm", {
-          token: challengeToken, signer_name: "Ada Customer", accepted: true,
-        }, `iro208-invalid-${label}-acceptance-0001`), h.env as never, {} as never,
+      assert.equal(triage.status, 201, await triage.clone().text());
+      const quote = await handleAuthenticatedRoute(
+        request(
+          "/api/v1/commercial/quote-revisions",
+          quoteBody(ids, new Date().toISOString(), { ...TERMS, deposit_percent: depositPercent }),
+          `iro208-invalid-${label}-quote-0001`,
+        ),
+        h.env,
+        auth("ops"),
       );
-      assert.equal(confirmed.status, 503, await confirmed.clone().text());
-      assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings").get()!.count, 0);
-      assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_deposit_derivations").get()!.count, 0);
+      assert.equal(quote.status, 409, label);
+      assert.deepEqual(await quote.json(), {
+        error: "deposit_terms_not_allowed_by_policy",
+        policy: "md13_deposit",
+        field: "terms.deposit_percent",
+      }, label);
+      // Refused before any authority was admitted for it, so nothing was written.
+      assert.equal(h.db.raw.prepare(
+        "SELECT COUNT(*) AS count FROM commercial_authority_permits WHERE action = 'quote.revision.record'",
+      ).get()!.count, 0, label);
+      for (const table of [
+        "commercial_quote_revisions", "commercial_acceptance_bindings", "commercial_deposit_derivations",
+      ]) {
+        assert.equal(h.db.raw.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()!.count, 0, `${label} ${table}`);
+      }
     } finally {
       h.restore();
     }

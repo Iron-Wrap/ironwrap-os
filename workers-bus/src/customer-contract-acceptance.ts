@@ -18,6 +18,12 @@ import {
 import { r2ObjectStore } from "./field-actions.ts";
 import { sendGmail } from "./google.ts";
 import { ensureCommercialDepositDerivation } from "./commercial-deposit.ts";
+import {
+  DEPOSIT_TERMS_REFUSAL,
+  depositTermsRefusal,
+  recordContractDepositGate,
+  type DepositTermsRefusal,
+} from "./deposit-policy.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -25,6 +31,7 @@ const CHALLENGE_TTL_MS = 15 * 60 * 1_000;
 const NATIVE_COMMIT_LEASE_MS = 90 * 1_000;
 const ACCEPTANCE_RECOVERY_WINDOW = 100;
 const ACCEPTANCE_RECEIPT_CONTENT_TYPE = "application/json";
+const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
 
 type ChallengeState = "pending_delivery" | "sent" | "consumed" | "invalidated";
 type IntentState =
@@ -189,6 +196,9 @@ export async function handleCustomerPortalAcceptanceChallenge(
       now.toISOString().slice(0, 10),
     );
     if (!contract) return portalUnavailable();
+    // No challenge for a contract the tenant's deposit policy would refuse at acceptance (0155).
+    const refusal = await depositTermsRefusal(env, tenantId, contract.termsJson);
+    if (refusal) return acceptanceJson(refusal, 409);
     prepared = contract;
   } catch {
     return portalUnavailable();
@@ -330,6 +340,8 @@ export async function handleCustomerPortalAcceptancePreview(
     );
     if (!contract || !sameContract(challenge, contract))
       return acceptanceJson({ error: "acceptance_contract_changed" }, 409);
+    const refusal = await depositTermsRefusal(env, tenantId, contract.termsJson);
+    if (refusal) return acceptanceJson(refusal, 409);
     return acceptanceJson({
       status: "ready",
       quote_version: contract.quoteVersion,
@@ -540,6 +552,11 @@ async function settleAcceptanceIntent(
         now,
       );
     }
+    // Terms the tenant's deposit policy refuses are answered by name before anything is bound. An
+    // unreadable policy is not a refusal: D1 checks the same policy in the commit (0155).
+    const refusal = await depositTermsRefusal(env, intent.tenant_id, contract.termsJson)
+      .catch(() => null);
+    if (refusal) return await rejectNativeAcceptance(env, intent, refusal.error, now, refusal);
     return await commitNativeAcceptance(
       env,
       intent,
@@ -995,10 +1012,32 @@ async function commitNativeAcceptance(
         attemptedAt,
       ),
     ]);
-  } catch {
-    // D1 may commit and lose the response; the immutable intent + binding are the readback.
+  } catch (error) {
+    // D1 may commit and lose the response; the immutable intent + binding are the readback. A
+    // deposit-policy abort (0155) committed nothing: the policy changed since the check above.
+    if (isDepositPolicyAbort(error)) {
+      const refusal = await depositTermsRefusal(env, intent.tenant_id, contract.termsJson)
+        .catch(() => null);
+      if (refusal) return await rejectNativeAcceptance(env, intent, refusal.error, now, refusal);
+    }
+  }
+  // OD-01: the Deposit gate entry is appended after the acceptance has committed, never inside it,
+  // so it can never fail the acceptance. A missed entry is appended by the five-minute sweep.
+  const deposit = await recordContractDepositGate(env, {
+    tenantId: intent.tenant_id,
+    acceptanceBindingId: bindingId,
+  }).catch(() => ({ outcome: "refused" as const, reason: "deposit_gate_append_failed" }));
+  if (deposit.outcome === "refused") {
+    log({ at: "contract_deposit_gate", acceptance_id: intent.acceptance_id, reason: deposit.reason });
   }
   return await nativeTerminalResponse(env, intent.acceptance_id, contract);
+}
+
+/** The 0155 acceptance trigger refused the contract's deposit terms under the tenant's policy. */
+function isDepositPolicyAbort(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(DEPOSIT_TERMS_REFUSAL) ||
+    message.includes("commercial_deposit_percent_invalid");
 }
 
 async function rejectNativeAcceptance(
@@ -1006,9 +1045,9 @@ async function rejectNativeAcceptance(
   intent: AcceptanceIntent,
   code: string,
   now: Date,
+  rejected: { error: "acceptance_rejected" } | DepositTermsRefusal = { error: "acceptance_rejected" },
 ): Promise<Response> {
   const attemptedAt = now.toISOString();
-  const rejected = { error: "acceptance_rejected" };
   try {
     await env.DB.batch([
       env.DB.prepare(
@@ -1423,7 +1462,10 @@ function storedTerminalResponse(intent: AcceptanceIntent): Response | null {
       body.acceptance_id === intent.acceptance_id
     )
       return acceptanceJson(body, 202);
-    if (intent.state === "rejected" && body.error === "acceptance_rejected") {
+    if (
+      intent.state === "rejected" &&
+      (body.error === "acceptance_rejected" || body.error === DEPOSIT_TERMS_REFUSAL)
+    ) {
       return acceptanceJson(body, intent.response_status);
     }
   } catch {

@@ -254,11 +254,12 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // Package stop release record; 0200 adds the AI
   // team coordination run, its steps, signals, event ledger and host heartbeats) includes the
   // automation recipient catalog, per-cron heartbeat, durable office intake receipts, and manual
-  // measurement history. 0153 adds the production gate clearance ledger.
+  // measurement history. 0153 adds the production gate clearance ledger and 0155 the tenant
+  // deposit policy.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 276],
+    ["REQUIRED_TABLE_COUNT", 277],
     ["REQUIRED_INDEX_COUNT", 391],
-    ["REQUIRED_TRIGGER_COUNT", 756],
+    ["REQUIRED_TRIGGER_COUNT", 760],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -349,7 +350,8 @@ test("the full schema matches the recovery frontier through 0201", () => {
     // 0150 adds the field item resolution ledger: one table, three indexes, and four person,
     // append-only and no-replace guards. 0153 adds the production gate clearance ledger: one
     // table, one index, and seven guards (validate, apply, three append-only on the ledger, and
-    // the two state guards on the gate row).
+    // the two state guards on the gate row). 0155 adds the tenant deposit policy table and four
+    // guards.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -357,7 +359,7 @@ test("the full schema matches the recovery frontier through 0201", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 276, indexes: 391, triggers: 756 },
+      { tables: 277, indexes: 391, triggers: 760 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

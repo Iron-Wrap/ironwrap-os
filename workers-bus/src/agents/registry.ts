@@ -539,6 +539,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "inquiry.classify": NOT_YET_REGISTERED,
   "inquiry.link_duplicate": NOT_YET_REGISTERED,
   "inquiry.record_triage": NOT_YET_REGISTERED,
+  "lead_fact.propose": NOT_YET_REGISTERED,
   "lead_fact.confirm": LEAD_FACT_CONFIRM,
   "inquiry.close": NOT_YET_REGISTERED,
   "inbound.quarantine": NOT_YET_REGISTERED,

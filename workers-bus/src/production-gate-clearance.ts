@@ -179,7 +179,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_forecast_stale: 409,
   production_gate_weather_window_invalid: 409,
   production_gate_reversal_target_invalid: 409,
-  production_gate_not_reversible: 409,
+  production_gate_contract_no_deposit_not_reversible: 409,
 };
 
 interface GateRow {
@@ -1306,7 +1306,9 @@ export async function handleProductionGateReversal(
       throw refusal("production_gate_reversal_target_invalid", 409);
     }
     // A contract that needs no deposit is reversed by a superseding contract, never by a person.
-    if (target.basis === "contract_no_deposit") throw refusal("production_gate_not_reversible", 409);
+    if (target.basis === "contract_no_deposit") {
+      throw refusal("production_gate_contract_no_deposit_not_reversible", 409);
+    }
     const appended = await appendEntry(env, {
       tenantId,
       gate: current,

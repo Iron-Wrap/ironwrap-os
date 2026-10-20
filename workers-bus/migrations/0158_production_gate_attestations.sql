@@ -1,10 +1,12 @@
 -- 0158_production_gate_attestations.sql - a person attests a gate with evidence, or reverses one.
 --
--- 0153 admitted settlement and waiver entries only. This migration re-creates the ledger's validate
--- trigger under its name with every 0153 rule kept for the entries 0153 admits, including at most
--- one open waiver request per gate per person and no contract facts on any entry. Only 0153's
--- refusal of any `reverses_id` and of any `attestation_json`, and its blocked-gate rule, now
--- make room for the two person entries the matrix gains:
+-- 0153 admitted settlement and waiver entries, and 0155 the Deposit gate's policy entries. This
+-- migration re-creates the ledger's validate trigger under its name once more, every 0153 and 0155
+-- rule kept for the entries they admit: at most one open waiver request per gate per person, no
+-- contract facts on a person entry, the policy entries' own matrix, and no person ever reversing
+-- `contract_no_deposit`. Only the person matrix's refusal of any `reverses_id` and any
+-- `attestation_json`, and its blocked-gate rule, make room for the two person entries it gains;
+-- the additions are marked [0158]:
 --   * `clear` / `person_attestation`: Materials, Safety, Access or Weather, to `ready`, by an active
 --     owner or production user who is not an active member of any crew under any login coordinate
 --     they carry (user id, email or Frappe user). Each gate has one small typed shape in
@@ -20,11 +22,12 @@
 --       - Weather names a work window of at most 14 days that has not ended and ends within 14 days
 --         of the forecast it rests on, which was observed at most 72 hours ago.
 --   * `reverse` / `person_reversal`: by an owner or production user, with a reason, of the entry
---     that holds the gate's current state. The gate returns to `blocked` and nothing is deleted. A
---     `contract_no_deposit` entry is reversed only by a superseding contract, never by a person.
--- Every time rule reads D1's own clock, never the entry's `created_at`. 0153's replace guard is then
--- re-created unchanged so that, firing newest first, a replayed key still reports itself before
--- validation. Object counts are unchanged.
+--     that holds the gate's current state. The gate returns to `blocked` and nothing is deleted.
+-- 0158 re-creates the trigger 0155 re-creates, so it applies after 0155: D1 applies pending
+-- migrations in name order, and qa and production receive both after 0156 and 0200-0204. Every time
+-- rule reads D1's own clock, never the entry's `created_at`. 0153's replace guard is then re-created
+-- unchanged so that, firing newest first, a replayed key still reports itself before validation.
+-- Object counts are unchanged.
 
 DROP TRIGGER production_gate_clearances_validate_insert;
 
@@ -58,13 +61,49 @@ BEGIN
   SELECT RAISE(ABORT, 'production_gate_not_waivable')
   WHERE NEW.basis = 'office_waiver' AND NEW.gate NOT IN ('Deposit', 'Materials', 'Access');
 
-  -- Only a person clears Safety: no agent and no policy ever attests it.
+  -- [0155] Only a superseding contract reverses `contract_no_deposit`; a person never does.
+  SELECT RAISE(ABORT, 'production_gate_contract_no_deposit_not_reversible')
+  WHERE NEW.actor_kind IS NOT 'policy'
+    AND NEW.reverses_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+        FROM production_gate_clearances reversed
+       WHERE reversed.tenant_id = NEW.tenant_id
+         AND reversed.clearance_id = NEW.reverses_id
+         AND reversed.basis = 'contract_no_deposit'
+    );
+
+  -- [0158] Only a person clears Safety: no agent and no policy ever attests it.
   SELECT RAISE(ABORT, 'production_gate_safety_person_only')
   WHERE NEW.gate = 'Safety' AND NEW.entry_kind = 'clear' AND NEW.actor_kind IS NOT 'person';
 
-  -- The basis x gate matrix this ledger admits, all of it person entries.
+  -- [0155] A policy entry is the Deposit gate's, under `ironwrap.deposit-gate.v1`: `clear` with
+  -- `contract_no_deposit`, or the `reverse` a superseding contract makes, `contract_superseded`.
+  -- It names the contract it was read from and carries no person, request, reason or attestation,
+  -- so the person rules below never apply to it.
   SELECT RAISE(ABORT, 'production_gate_clearance_basis_invalid')
-  WHERE NOT (
+  WHERE NEW.actor_kind = 'policy'
+    AND NOT (
+      NEW.gate = 'Deposit'
+      AND NEW.policy_version = 'ironwrap.deposit-gate.v1'
+      AND NEW.actor_user_id IS NULL AND NEW.actor_role IS NULL
+      AND NEW.requested_by IS NULL AND NEW.request_id IS NULL AND NEW.self_approval = 0
+      AND NEW.reason IS NULL AND NEW.reason_redacted_at IS NULL AND NEW.attestation_json IS NULL
+      AND NEW.contract_binding_id IS NOT NULL AND NEW.terms_hash IS NOT NULL
+      AND NEW.evidence_refs_json IS NOT NULL
+      AND (
+        (NEW.entry_kind = 'clear' AND NEW.basis = 'contract_no_deposit'
+          AND NEW.to_state = 'complete' AND NEW.reverses_id IS NULL)
+        OR (NEW.entry_kind = 'reverse' AND NEW.basis = 'contract_superseded'
+          AND NEW.to_state = 'blocked' AND NEW.reverses_id IS NOT NULL)
+      )
+    );
+
+  -- The basis x gate matrix this migration admits, all of it person entries.
+  -- [0155] Scoped to every entry that is not a policy entry; the rule above checks those.
+  -- [0158] It admits the person's attestation and reversal.
+  SELECT RAISE(ABORT, 'production_gate_clearance_basis_invalid')
+  WHERE NEW.actor_kind IS NOT 'policy' AND (NOT (
       (NEW.entry_kind = 'clear' AND NEW.basis = 'deposit_settlement'
         AND NEW.gate = 'Deposit' AND NEW.to_state = 'complete'
         AND NEW.request_id IS NULL AND NEW.requested_by IS NULL)
@@ -92,19 +131,19 @@ BEGIN
     OR NEW.terms_hash IS NOT NULL
     OR NEW.contract_binding_id IS NOT NULL
     OR (NEW.entry_kind IN ('waiver_request', 'waiver_decision', 'reverse')
-        AND NEW.evidence_refs_json IS NOT NULL);
+        AND NEW.evidence_refs_json IS NOT NULL));
 
-  -- A clear, a waiver request or a waiver decision acts on a blocked gate, and a reversal on a gate
-  -- that is not blocked.
+  -- Each admitted entry acts on a blocked gate.
+  -- [0155] Except the policy's `contract_superseded` reversal, which acts on the gate it reverses.
+  -- [0158] And the person's reversal: every reversal acts on a gate that is not blocked.
   SELECT RAISE(ABORT, 'production_gate_already_cleared')
-  WHERE NEW.entry_kind != 'reverse'
-    AND NOT EXISTS (
-      SELECT 1
-        FROM operating_production_gates gate
-       WHERE gate.tenant_id = NEW.tenant_id
-         AND gate.gate_id = NEW.gate_id
-         AND gate.state = 'blocked'
-    );
+  WHERE NEW.entry_kind IS NOT 'reverse' AND NOT EXISTS (
+    SELECT 1
+      FROM operating_production_gates gate
+     WHERE gate.tenant_id = NEW.tenant_id
+       AND gate.gate_id = NEW.gate_id
+       AND gate.state = 'blocked'
+  );
   SELECT RAISE(ABORT, 'production_gate_not_cleared')
   WHERE NEW.entry_kind = 'reverse'
     AND NOT EXISTS (
@@ -117,7 +156,7 @@ BEGIN
 
   -- A person entry: an active user of this tenant holding the recorded role right now.
   SELECT RAISE(ABORT, 'production_gate_clearance_actor_invalid')
-  WHERE NOT EXISTS (
+  WHERE NEW.actor_kind = 'person' AND NOT EXISTS (
     SELECT 1
       FROM app_users actor
      WHERE actor.tenant_id = NEW.tenant_id
@@ -134,7 +173,7 @@ BEGIN
        AND actor.created_by = 'system:owner_directed_qa_seed_grant'
   );
 
-  -- `production.gates.clear` (owner, production) clears on settlement, attests, requests a waiver
+  -- [0158] `production.gates.clear` (owner, production) clears on settlement, attests, requests a waiver
   -- and reverses. `production.gates.safety` ("checks site safety") attests Safety and is carried
   -- today by the same two roles. The decider holds the matching set: `money.approve` for Deposit,
   -- `production.gates.waive` for Materials and Access. Today the owner carries both.
@@ -145,8 +184,9 @@ BEGIN
          AND NEW.actor_role NOT IN ('owner', 'production'))
      OR (NEW.entry_kind = 'waiver_decision' AND NEW.actor_role != 'owner');
 
+  -- [0158] A person's reversal states its reason too; the policy's carries none.
   SELECT RAISE(ABORT, 'production_gate_clearance_reason_required')
-  WHERE NEW.entry_kind IN ('waiver_request', 'waiver_decision', 'reverse')
+  WHERE (NEW.entry_kind IN ('waiver_request', 'waiver_decision') OR NEW.basis = 'person_reversal')
     AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0);
 
   -- One open waiver request per gate per person: a second would only move the gate's version
@@ -168,7 +208,7 @@ BEGIN
          )
     );
 
-  -- An attester is on no crew: no active crew membership names a login that shares the attester's
+  -- [0158] An attester is on no crew: no active crew membership names a login that shares the attester's
   -- user id, email or Frappe user.
   SELECT RAISE(ABORT, 'production_gate_attester_on_crew')
   WHERE NEW.basis = 'person_attestation'
@@ -196,7 +236,7 @@ BEGIN
          )
     );
 
-  -- One small typed shape per gate and no free text but a note of at most 300 characters.
+  -- [0158] One small typed shape per gate and no free text but a note of at most 300 characters.
   -- References are short identifiers, never prose. Times are UTC instants as the Worker writes
   -- them, and a time something was observed, confirmed or assessed is never in the future. A key
   -- appears once: a second copy would escape every check below, which reads only the first.
@@ -314,12 +354,12 @@ BEGIN
       ))
     );
 
-  -- The evidence list is plain JSON as the Worker writes it. JSON5 would pass json_each below and
+  -- [0158] The evidence list is plain JSON as the Worker writes it. JSON5 would pass json_each below and
   -- then fail every reader that parses the stored list.
   SELECT RAISE(ABORT, 'production_gate_evidence_invalid')
   WHERE NEW.basis = 'person_attestation' AND NOT json_valid(NEW.evidence_refs_json);
 
-  -- 0 to 10 distinct references, each resolved by the Worker against this job: exactly one
+  -- [0158] 0 to 10 distinct references, each resolved by the Worker against this job: exactly one
   -- verified, manifested, stored Work Package capture with the checksum of the stored object or,
   -- on Materials, a live stock reservation of this job at its current version with the digest the
   -- Worker took of it.
@@ -382,7 +422,7 @@ BEGIN
       )
     );
 
-  -- Materials is never attested over an inventory exception of the job that is open or contained,
+  -- [0158] Materials is never attested over an inventory exception of the job that is open or contained,
   -- read as the production runway reads it.
   SELECT RAISE(ABORT, 'production_gate_material_exception_open')
   WHERE NEW.basis = 'person_attestation'
@@ -396,7 +436,7 @@ BEGIN
          AND held.status IN ('open', 'contained')
     );
 
-  -- Safety is never attested during an active safety stop on the job, read as the job phase reads it.
+  -- [0158] Safety is never attested during an active safety stop on the job, read as the job phase reads it.
   SELECT RAISE(ABORT, 'production_gate_safety_stop_active')
   WHERE NEW.basis = 'person_attestation'
     AND NEW.gate = 'Safety'
@@ -409,7 +449,7 @@ BEGIN
          AND occurrence.stop_active = 1
     );
 
-  -- Safety names the attester's current internal Worker Competency: the latest version of its
+  -- [0158] Safety names the attester's current internal Worker Competency: the latest version of its
   -- record, with no contradicting copy of that version, superseded by no other record, verified by
   -- an internal assessment, not revoked, in force today and not bound to another job. Its person is
   -- any login coordinate the attester carries.
@@ -465,7 +505,7 @@ BEGIN
          )
     );
 
-  -- Weather rests on a forecast observed at most 72 hours ago, for a window of at most 14 days that
+  -- [0158] Weather rests on a forecast observed at most 72 hours ago, for a window of at most 14 days that
   -- has not ended and ends within 14 days of that forecast.
   SELECT RAISE(ABORT, 'production_gate_forecast_stale')
   WHERE NEW.basis = 'person_attestation'
@@ -485,7 +525,7 @@ BEGIN
         > julianday(json_extract(NEW.attestation_json, '$.forecast_observed_at')) + 14
     );
 
-  -- A reversal names the entry that holds the gate's current state: the one its current version
+  -- [0158] A reversal names the entry that holds the gate's current state: the one its current version
   -- was produced by.
   SELECT RAISE(ABORT, 'production_gate_reversal_target_invalid')
   WHERE NEW.entry_kind = 'reverse'
@@ -500,16 +540,6 @@ BEGIN
          AND target.gate_id = NEW.gate_id
          AND target.from_gate_version + 1 = gate.version
          AND target.to_state = gate.state
-    );
-  -- A contract that needs no deposit is reversed by a superseding contract, never by a person.
-  SELECT RAISE(ABORT, 'production_gate_not_reversible')
-  WHERE NEW.entry_kind = 'reverse'
-    AND EXISTS (
-      SELECT 1
-        FROM production_gate_clearances target
-       WHERE target.tenant_id = NEW.tenant_id
-         AND target.clearance_id = NEW.reverses_id
-         AND target.basis = 'contract_no_deposit'
     );
 
   -- A settlement is made of a reconciled deposit invoice of this job, named in the evidence.
@@ -575,6 +605,132 @@ BEGIN
            AND holder.access_role = 'owner'
            AND holder.created_by != 'system:owner_directed_qa_seed_grant'
       )
+    );
+
+  -- [0155] `contract_no_deposit` (OD-01): the job's latest accepted contract, exactly as its
+  -- binding recorded it, carries no deposit and is paid on completion.
+  SELECT RAISE(ABORT, 'production_gate_contract_no_deposit_not_observed')
+  WHERE NEW.basis = 'contract_no_deposit'
+    AND NOT EXISTS (
+      SELECT 1
+        FROM commercial_acceptance_bindings binding
+        JOIN customer_portal_acceptance_intents acceptance
+          ON acceptance.tenant_id = binding.tenant_id
+         AND acceptance.acceptance_id = binding.acceptance_id
+         AND acceptance.state = 'accepted'
+        JOIN commercial_quote_revisions quote
+          ON quote.tenant_id = binding.tenant_id
+         AND quote.quote_revision_id = binding.quote_revision_id
+       WHERE binding.tenant_id = NEW.tenant_id
+         AND binding.roof_job_id = NEW.roof_job_id
+         AND binding.acceptance_binding_id = NEW.contract_binding_id
+         AND binding.terms_hash = NEW.terms_hash
+         AND quote.terms_hash = binding.terms_hash
+         AND json_type(quote.terms_json, '$.deposit_percent') = 'integer'
+         AND json_extract(quote.terms_json, '$.deposit_percent') = 0
+         AND json_type(quote.terms_json, '$.payment_schedule') = 'array'
+         AND json_array_length(quote.terms_json, '$.payment_schedule') = 1
+         AND json_extract(quote.terms_json, '$.payment_schedule[0]') = 'completion'
+         AND NOT EXISTS (
+           SELECT 1
+             FROM commercial_acceptance_bindings later
+            WHERE later.tenant_id = binding.tenant_id
+              AND later.roof_job_id = binding.roof_job_id
+              AND (later.accepted_at > binding.accepted_at
+                   OR (later.accepted_at = binding.accepted_at
+                       AND later.acceptance_binding_id > binding.acceptance_binding_id))
+         )
+    );
+  -- [0155] ... and the tenant's deposit policy is payment on completion. No revision means OD-01.
+  SELECT RAISE(ABORT, 'deposit_terms_not_allowed_by_policy')
+  WHERE NEW.basis = 'contract_no_deposit'
+    AND COALESCE((
+      SELECT revision.policy FROM tenant_deposit_policy_revisions revision
+       WHERE revision.tenant_id = NEW.tenant_id
+       ORDER BY revision.revision DESC LIMIT 1
+    ), 'od01_payment_on_completion') != 'od01_payment_on_completion';
+
+  -- [0155] `contract_superseded` (the MD-13 branch): the job's latest accepted contract is a later
+  -- one that carries a deposit, and the entry reversed is the `contract_no_deposit` entry the
+  -- Deposit gate stands on now.
+  SELECT RAISE(ABORT, 'production_gate_contract_superseded_not_observed')
+  WHERE NEW.basis = 'contract_superseded'
+    AND NOT (
+      EXISTS (
+        SELECT 1
+          FROM operating_production_gates gate
+          JOIN production_gate_clearances reversed
+            ON reversed.tenant_id = gate.tenant_id
+           AND reversed.clearance_id = gate.clearance_decision_id
+         WHERE gate.tenant_id = NEW.tenant_id
+           AND gate.gate_id = NEW.gate_id
+           AND gate.state = 'complete'
+           AND reversed.clearance_id = NEW.reverses_id
+           AND reversed.gate_id = NEW.gate_id
+           AND reversed.basis = 'contract_no_deposit'
+           AND reversed.contract_binding_id IS NOT NEW.contract_binding_id
+      )
+      AND EXISTS (
+        SELECT 1
+          FROM commercial_acceptance_bindings binding
+          JOIN customer_portal_acceptance_intents acceptance
+            ON acceptance.tenant_id = binding.tenant_id
+           AND acceptance.acceptance_id = binding.acceptance_id
+           AND acceptance.state = 'accepted'
+          JOIN commercial_quote_revisions quote
+            ON quote.tenant_id = binding.tenant_id
+           AND quote.quote_revision_id = binding.quote_revision_id
+         WHERE binding.tenant_id = NEW.tenant_id
+           AND binding.roof_job_id = NEW.roof_job_id
+           AND binding.acceptance_binding_id = NEW.contract_binding_id
+           AND binding.terms_hash = NEW.terms_hash
+           AND quote.terms_hash = binding.terms_hash
+           AND json_type(quote.terms_json, '$.deposit_percent') = 'integer'
+           AND json_extract(quote.terms_json, '$.deposit_percent') BETWEEN 1 AND 100
+           AND NOT EXISTS (
+             SELECT 1
+               FROM commercial_acceptance_bindings later
+              WHERE later.tenant_id = binding.tenant_id
+                AND later.roof_job_id = binding.roof_job_id
+                AND (later.accepted_at > binding.accepted_at
+                     OR (later.accepted_at = binding.accepted_at
+                         AND later.acceptance_binding_id > binding.acceptance_binding_id))
+           )
+      )
+    );
+
+  -- [0155] Once a superseding contract has re-blocked Deposit, a settlement is made of the
+  -- deposit invoice derived from the job's latest accepted contract, not of any deposit invoice.
+  SELECT RAISE(ABORT, 'deposit_settlement_not_observed')
+  WHERE NEW.basis = 'deposit_settlement'
+    AND EXISTS (
+      SELECT 1
+        FROM production_gate_clearances superseded
+       WHERE superseded.tenant_id = NEW.tenant_id
+         AND superseded.gate_id = NEW.gate_id
+         AND superseded.basis = 'contract_superseded'
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM commercial_acceptance_bindings binding
+        JOIN commercial_deposit_derivations derivation
+          ON derivation.tenant_id = binding.tenant_id
+         AND derivation.acceptance_binding_id = binding.acceptance_binding_id
+       WHERE binding.tenant_id = NEW.tenant_id
+         AND binding.roof_job_id = NEW.roof_job_id
+         AND derivation.intent_id = CASE
+           WHEN json_valid(NEW.evidence_refs_json)
+             THEN json_extract(NEW.evidence_refs_json, '$.money_intent_id')
+         END
+         AND NOT EXISTS (
+           SELECT 1
+             FROM commercial_acceptance_bindings later
+            WHERE later.tenant_id = binding.tenant_id
+              AND later.roof_job_id = binding.roof_job_id
+              AND (later.accepted_at > binding.accepted_at
+                   OR (later.accepted_at = binding.accepted_at
+                       AND later.acceptance_binding_id > binding.acceptance_binding_id))
+         )
     );
 END;
 

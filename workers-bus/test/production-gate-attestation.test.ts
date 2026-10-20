@@ -833,7 +833,7 @@ test("a person never reverses a contract that needs no deposit", async () => {
     reverses_id: deposit!.clearance_id,
     reason: "The owner tries to put the deposit back on a no-deposit contract.",
   });
-  assert.deepEqual([result.status, result.body.error], [409, "production_gate_not_reversible"]);
+  assert.deepEqual([result.status, result.body.error], [409, "production_gate_contract_no_deposit_not_reversible"]);
   assert.deepEqual({ state: gateRow(h.sqlite, "Deposit").state, entries: ledgerRows(h.sqlite).length }, { state: "complete", entries: 1 });
 });
 
@@ -1190,7 +1190,7 @@ test("D1 reverses only the entry holding a gate's state, never a no-deposit cont
   append(db, reversal("Materials", second, { actor_user_id: USERS.crewed.id }));
   recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB, gates: ["Deposit"], state: "complete", basis: "contract_no_deposit" });
   const contract = ledgerRows(db).find((row) => row.basis === "contract_no_deposit")!.clearance_id;
-  refused(() => append(db, reversal("Deposit", contract, { actor_user_id: USERS.owner.id, actor_role: "owner" })), "production_gate_not_reversible");
+  refused(() => append(db, reversal("Deposit", contract, { actor_user_id: USERS.owner.id, actor_role: "owner" })), "production_gate_contract_no_deposit_not_reversible");
   refused(
     () => db.prepare("DELETE FROM production_gate_clearances WHERE clearance_id = ?").run(first),
     "production_gate_clearance_append_only",
@@ -1199,7 +1199,37 @@ test("D1 reverses only the entry holding a gate's state, never a no-deposit cont
   assert.equal(gateRow(db, "Deposit").state, "complete");
 });
 
-test("the validate trigger after every migration still holds A1's and A3's clauses", () => {
+test("0158 re-creates the validate guard with every 0155 line carried, in order", () => {
+  const read = (name: string) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
+  const trigger = (sql: string): string => {
+    const match = sql.match(/CREATE TRIGGER (?:IF NOT EXISTS )?production_gate_clearances_validate_insert\n[\s\S]*?\nEND;/);
+    assert.ok(match, "validate trigger");
+    return match[0];
+  };
+  const lines = (sql: string) => sql.split("\n").map((line) => line.trim());
+  const recreated = lines(trigger(read("0158_production_gate_attestations.sql")));
+  // The only 0155 lines 0158 widens, each with the form it takes there.
+  const widened: Record<string, string> = {
+    "OR NEW.reverses_id IS NOT NULL": "OR (NEW.reverses_id IS NOT NULL AND NEW.entry_kind != 'reverse')",
+    "OR NEW.attestation_json IS NOT NULL":
+      "OR (NEW.attestation_json IS NOT NULL AND NEW.basis != 'person_attestation')",
+    "OR (NEW.entry_kind IN ('waiver_request', 'waiver_decision')":
+      "OR (NEW.entry_kind IN ('waiver_request', 'waiver_decision', 'reverse')",
+    "WHERE NEW.entry_kind IN ('waiver_request', 'waiver_decision')":
+      "WHERE (NEW.entry_kind IN ('waiver_request', 'waiver_decision') OR NEW.basis = 'person_reversal')",
+    "WHERE (NEW.entry_kind IN ('clear', 'waiver_request')":
+      "WHERE (NEW.entry_kind IN ('clear', 'waiver_request', 'reverse')",
+  };
+  let at = 0;
+  for (const line of lines(trigger(read("0155_od01_deposit_policy.sql")))) {
+    if (!line || line.startsWith("--") || line.startsWith("CREATE TRIGGER")) continue;
+    const found = recreated.indexOf(widened[line] ?? line, at);
+    assert.ok(found >= 0, `0158 carries, in order: ${line}`);
+    at = found + 1;
+  }
+});
+
+test("the validate trigger after every migration still holds A1's, A2's and A3's clauses", () => {
   const { sqlite: db } = setup();
   const body = String((db.prepare(
     "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'production_gate_clearances_validate_insert'",
@@ -1233,7 +1263,15 @@ test("the validate trigger after every migration still holds A1's and A3's claus
     "production_gate_forecast_stale",
     "production_gate_weather_window_invalid",
     "production_gate_reversal_target_invalid",
-    "production_gate_not_reversible",
+    // A2 (0155): the Deposit gate's policy entries and the contract facts they rest on, and no
+    // person reversing a contract that needs no deposit.
+    "'contract_no_deposit'",
+    "'contract_superseded'",
+    "'ironwrap.deposit-gate.v1'",
+    "production_gate_contract_no_deposit_not_reversible",
+    "production_gate_contract_no_deposit_not_observed",
+    "deposit_terms_not_allowed_by_policy",
+    "production_gate_contract_superseded_not_observed",
   ]) {
     assert.ok(body.includes(clause), `the final validate trigger keeps ${clause}`);
   }

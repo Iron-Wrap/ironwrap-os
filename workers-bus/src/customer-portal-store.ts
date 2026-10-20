@@ -194,9 +194,10 @@ export async function recordCustomerPortalProposalView(
 
 /**
  * When someone holding the customer's link first opened this proposal revision (0163), or null.
- * Only the pack's live publication counts: its newest event, `published`, for this revision. When
- * the revision has a send attempt (its newest `proposal.publish` effect), only an open at or after
- * that attempt started counts, so an open of an earlier send never answers for a later one.
+ * Only the pack's live publication counts: its newest event, which a first-open row can name only
+ * while it is `published` for this revision. When the revision has a send attempt (its newest
+ * `proposal.publish` effect), only an open at or after that attempt started counts, so an open of
+ * an earlier send never answers for a later one.
  */
 export async function readProposalFirstViewedAt(
   env: Env,
@@ -204,7 +205,7 @@ export async function readProposalFirstViewedAt(
 ): Promise<string | null> {
   const row = await env.DB.prepare(
     `WITH live AS (
-       SELECT publication_event_id, state, proposal_revision_id
+       SELECT publication_event_id
          FROM commercial_proposal_publication_events
         WHERE tenant_id = ?1 AND proposal_pack_id = ?2
         ORDER BY publication_version DESC
@@ -227,7 +228,7 @@ export async function readProposalFirstViewedAt(
        FROM live
        JOIN customer_portal_proposal_views view
          ON view.tenant_id = ?1 AND view.publication_event_id = live.publication_event_id
-      WHERE live.state = 'published' AND live.proposal_revision_id = ?3
+      WHERE view.proposal_revision_id = ?3
         AND ((SELECT started_at FROM latest_attempt) IS NULL
              OR julianday(view.first_viewed_at)
                 >= julianday((SELECT started_at FROM latest_attempt)))`,

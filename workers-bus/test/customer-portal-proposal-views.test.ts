@@ -479,7 +479,15 @@ let linkSequence = 0;
 /** A link row written straight into D1, for the guards that the routes never let a request reach. */
 function insertLink(
   db: SqliteD1,
-  overrides: { roofJobId?: string; customerId?: string; createdAt?: string; expiresAt?: string; revokedAt?: string } = {},
+  overrides: {
+    tenantId?: string;
+    issuedByUserId?: string;
+    roofJobId?: string;
+    customerId?: string;
+    createdAt?: string;
+    expiresAt?: string;
+    revokedAt?: string;
+  } = {},
 ): string {
   linkSequence += 1;
   const linkId = `portal_00000000-0000-4000-8000-${String(linkSequence).padStart(12, "0")}`;
@@ -494,10 +502,10 @@ function insertLink(
     .run(
       linkId,
       createHash("sha256").update(linkId).digest("hex"),
-      TENANT,
+      overrides.tenantId ?? TENANT,
       overrides.roofJobId ?? JOB_ID,
       overrides.customerId ?? CUSTOMER_ID,
-      OWNER_ID,
+      overrides.issuedByUserId ?? OWNER_ID,
       overrides.createdAt ?? new Date(Date.now() - 60 * 60_000).toISOString(),
       overrides.expiresAt ?? new Date(Date.now() + 60 * 60_000).toISOString(),
       overrides.revokedAt ?? null,
@@ -543,6 +551,7 @@ function refused(run: () => void, code: string): void {
 
 test("only the first open of a published proposal through a link is kept", async () => {
   const h = await setup();
+  const logged = mock.method(console, "log", () => {});
   try {
     const first = await issueLink(h.env);
     const page = await openPortal(h.env, first.token);
@@ -550,32 +559,37 @@ test("only the first open of a published proposal through a link is kept", async
     const recorded = views(h.db);
     assert.equal(recorded.length, 1);
     const [row] = recorded;
+    const eventId = publicationEventId(h.db, h.chain, 1);
     assert.deepEqual(
-      { ...row, view_id: undefined, first_viewed_at: undefined },
+      { ...row, first_viewed_at: undefined },
       {
-        view_id: undefined,
+        view_id: `portal-view:${createHash("sha256").update(`${TENANT}|${first.linkId}|${eventId}`).digest("hex")}`,
         tenant_id: TENANT,
         link_id: first.linkId,
         roof_job_id: JOB_ID,
         customer_id: CUSTOMER_ID,
         proposal_pack_id: h.chain.proposalPackId,
         proposal_revision_id: h.chain.proposalRevisionId,
-        publication_event_id: publicationEventId(h.db, h.chain, 1),
+        publication_event_id: eventId,
         first_viewed_at: undefined,
       },
     );
-    assert.match(row!.view_id!, /^portal-view:[0-9a-f]{64}$/);
     assert.ok(Math.abs(Date.parse(row!.first_viewed_at!) - Date.now()) < 5_000);
     // Ids and one time: the row has no column for an address, a device or a later visit.
     assert.deepEqual(Object.keys(row!).sort(), [...VIEW_COLUMNS].sort());
     // The customer's page carries none of it.
     const served = JSON.stringify(page);
-    assert.equal(served.includes(publicationEventId(h.db, h.chain, 1)), false);
+    assert.equal(served.includes(eventId), false);
     assert.equal(served.includes("viewed"), false);
 
     await openPortal(h.env, first.token);
     await openPortal(h.env, first.token);
     assert.deepEqual(views(h.db), recorded, "later opens add nothing and change nothing");
+    assert.equal(
+      logged.mock.calls.some((call) => String(call.arguments[0]).includes("customer_portal_proposal_view")),
+      false,
+      "a later open is skipped by the writer itself, not refused by D1",
+    );
 
     // A new link starts its own first open of the same publication (and revokes the old link).
     const second = await issueLink(h.env);
@@ -591,6 +605,7 @@ test("only the first open of a published proposal through a link is kept", async
       "the staff read gives the earliest open",
     );
   } finally {
+    logged.mock.restore();
     h.close();
   }
 });
@@ -781,12 +796,28 @@ test("D1 refuses a first open of a publication that is not published or not this
       "customer_portal_proposal_view_publication_mismatch");
     refused(() => insertView(h.db, viewRow(h.db, h.chain, linkId, { publication_event_id: "commercial-publication:missing:0001" })),
       "customer_portal_proposal_view_publication_mismatch");
-    // Another job's and customer's link cannot record this job's proposal.
-    const otherLink = insertLink(h.db, { roofJobId: "job:portal-views:other", customerId: "customer:portal-views:other" });
-    refused(() => insertView(h.db, viewRow(h.db, h.chain, otherLink, {
-      roof_job_id: "job:portal-views:other",
-      customer_id: "customer:portal-views:other",
-    })), "customer_portal_proposal_view_publication_mismatch");
+    // A link for another job, or for another customer, cannot record this job's proposal.
+    for (const other of [
+      { roof_job_id: "job:portal-views:other", customer_id: CUSTOMER_ID },
+      { roof_job_id: JOB_ID, customer_id: "customer:portal-views:other" },
+    ]) {
+      const otherLink = insertLink(h.db, { roofJobId: other.roof_job_id, customerId: other.customer_id });
+      refused(() => insertView(h.db, viewRow(h.db, h.chain, otherLink, other)),
+        "customer_portal_proposal_view_publication_mismatch");
+    }
+    // Another tenant holding the same job and customer ids cannot record this tenant's proposal.
+    h.db.raw
+      .prepare(
+        `INSERT INTO app_users
+           (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+            active, created_by, created_at, updated_at)
+         VALUES (?, 'other-tenant', 'other@example.invalid', 'Other owner', 'owner', 'owner', NULL, 1,
+                 'test-seed', ?, ?)`,
+      )
+      .run("appu_other_0001", new Date().toISOString(), new Date().toISOString());
+    const otherTenantLink = insertLink(h.db, { tenantId: "other-tenant", issuedByUserId: "appu_other_0001" });
+    refused(() => insertView(h.db, viewRow(h.db, h.chain, otherTenantLink, { tenant_id: "other-tenant" })),
+      "customer_portal_proposal_view_publication_mismatch");
     insertView(h.db, viewRow(h.db, h.chain, linkId));
     assert.equal(views(h.db).length, 1);
     // A withdrawal is not a published proposal.
@@ -810,6 +841,8 @@ test("D1 holds first_viewed_at to its own clock, within 60 seconds", async () =>
     for (const offset of [-50_000, 50_000]) {
       insertView(h.db, viewRow(h.db, h.chain, insertLink(h.db), { first_viewed_at: at(offset) }));
     }
+    refused(() => insertView(h.db, viewRow(h.db, h.chain, insertLink(h.db), { first_viewed_at: "2026-13-45T99:99:99.999Z" })),
+      "customer_portal_proposal_view_clock_skew");
     refused(() => insertView(h.db, viewRow(h.db, h.chain, insertLink(h.db), { first_viewed_at: at(0).replace("Z", "+00:00") })),
       "CHECK constraint failed");
     assert.equal(views(h.db).length, 2);
@@ -832,6 +865,8 @@ test("first-open rows are append-only and REPLACE cannot rewrite them", async ()
     refused(() => insertView(h.db, { ...row, first_viewed_at: new Date().toISOString() }, "INSERT OR REPLACE"),
       "customer_portal_proposal_views_append_only");
     refused(() => insertView(h.db, { ...row, view_id: `portal-view:${"f".repeat(64)}` }, "REPLACE"),
+      "customer_portal_proposal_views_append_only");
+    refused(() => insertView(h.db, { ...row, link_id: insertLink(h.db) }, "REPLACE"),
       "customer_portal_proposal_views_append_only");
     assert.deepEqual(views(h.db), kept);
   } finally {
@@ -896,6 +931,15 @@ test("the staff read counts only the live publication, at or after the latest se
       first_viewed_at: afterAttempt,
     }));
     assert.equal(await read(), afterAttempt);
+    assert.equal(
+      await readProposalFirstViewedAt(h.env, {
+        tenantId: TENANT,
+        proposalPackId: h.chain.proposalPackId,
+        proposalRevisionId: "proposal-revision:portal-views:other",
+      }),
+      null,
+      "an open counts only for the revision the live publication publishes",
+    );
     assert.equal(
       await readProposalFirstViewedAt(h.env, {
         tenantId: "other-tenant",

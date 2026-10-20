@@ -12,8 +12,9 @@
 //     that writes its assignment row with direct SQL; `recordOperatingJobAssignment` appends the
 //     same entries itself.
 // A schedule must fall inside the Weather window, which D1 checks against its own clock, so the
-// window and the schedules inside it are relative to the real clock (`fixtureWeatherWindow`,
-// `fixtureSchedule`).
+// window and the schedules inside it are relative to that clock (`fixtureWeatherWindow`,
+// `fixtureSchedule`); the helpers read it from the database itself, so a test that mocks `Date`
+// still attests times D1 accepts.
 
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
@@ -50,6 +51,14 @@ export function fixtureSchedule(days = 1, nowMs = Date.now()): { start: string; 
   return { start: start.toISOString(), end: new Date(start.getTime() + 8 * HOUR_MS).toISOString() };
 }
 
+/** D1's own clock, in milliseconds: the clock every time rule of the ledger reads. */
+export function d1Now(db: DatabaseSync): number {
+  const row = db.prepare(
+    "SELECT CAST(round((julianday('now') - 2440587.5) * 86400000.0) AS INTEGER) AS ms",
+  ).get() as { ms: number };
+  return Number(row.ms);
+}
+
 function currentGate(
   db: DatabaseSync,
   input: { tenantId: string; roofJobId: string; gate: string },
@@ -84,7 +93,8 @@ function recordCompetency(
   input: { tenantId: string; personUser: string; observerUserId: string },
 ): Record<string, unknown> {
   const id = randomBytes(8).toString("hex");
-  const day = (offset: number) => new Date(Date.now() + offset * DAY_MS).toISOString().slice(0, 10);
+  const now = d1Now(db);
+  const day = (offset: number) => new Date(now + offset * DAY_MS).toISOString().slice(0, 10);
   const row: Record<string, unknown> = {
     readback_id: `readback.fixture.${id}`,
     tenant_id: input.tenantId,
@@ -115,7 +125,7 @@ function recordCompetency(
     authority_verification_method: "Internal Competency Assessment",
     issuer_receipt_sha256: null,
     observed_by_user_id: input.observerUserId,
-    observed_at: new Date(Date.now() - HOUR_MS).toISOString(),
+    observed_at: new Date(now - HOUR_MS).toISOString(),
     observation_fingerprint_sha256: sha256(`competency-fingerprint:${id}`),
     action_id: null,
   };
@@ -153,7 +163,7 @@ export function attestGateInLedger(
     at?: string;
   },
 ): string {
-  const now = Date.now();
+  const now = d1Now(db);
   const instant = (offsetHours: number) => new Date(now + offsetHours * HOUR_MS).toISOString();
   const window = input.window ?? fixtureWeatherWindow(now);
   const attestation = input.gate === "Materials"
@@ -333,7 +343,7 @@ export function clearScheduleGatesInLedger(
     observerUserId?: string;
   },
 ): { start: string; end: string } {
-  const window = input.window ?? fixtureWeatherWindow();
+  const window = input.window ?? fixtureWeatherWindow(d1Now(db));
   const job = { tenantId: input.tenantId, roofJobId: input.roofJobId };
   waiveGateInLedger(db, {
     ...job,

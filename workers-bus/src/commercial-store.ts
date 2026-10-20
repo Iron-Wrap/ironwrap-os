@@ -212,6 +212,8 @@ export interface RecordCommercialPublicationInput {
   authority: CommercialAuthorityBinding;
   externalEffectId?: string | null;
   idempotencyKey: string;
+  /** The active person recording this publication event (0161); not part of the command. */
+  recordedByUserId: string;
 }
 
 export interface CommercialPublicationRecord {
@@ -363,7 +365,7 @@ export async function recordProposalDeliveryConfirmation(
   if (earlier) return earlier;
 
   const effect = await env.DB.prepare(
-    `SELECT effect_id, state, aggregate_id, intent_id, updated_at FROM external_effects
+    `SELECT effect_id, state, aggregate_id, intent_id, provider, updated_at FROM external_effects
       WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
         AND aggregate_type = 'proposal_publication'`,
   ).bind(input.tenantId, input.effectId).first<{
@@ -371,6 +373,7 @@ export async function recordProposalDeliveryConfirmation(
     state: string;
     aggregate_id: string;
     intent_id: string;
+    provider: string;
     updated_at: string;
   }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
@@ -380,17 +383,18 @@ export async function recordProposalDeliveryConfirmation(
     });
   }
   const createdAt = input.now ?? new Date().toISOString();
-  // A fresh unknown may only be late: "not delivered" waits until the provider's own answer could no
-  // longer arrive inside an attempt lease, so a person cannot clear the way for a second send early.
-  if (effect.state === "unknown" && input.outcome === "not_delivered") {
-    const settleableUntil = Date.parse(effect.updated_at) + EFFECT_ATTEMPT_LEASE_MS;
-    if (Date.parse(createdAt) < settleableUntil) {
-      throw new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
-        delivery_state: effect.state,
-        not_before: new Date(settleableUntil).toISOString(),
-      });
-    }
-  }
+  // A fresh unknown may only be late: "not delivered" waits until the provider's own answer can no
+  // longer arrive (its late-answer window), so a person cannot clear the way for a second send
+  // early. D1 refuses it too (0161); answering here first names the moment it may go.
+  const settleableUntil = effect.state === "unknown" && input.outcome === "not_delivered"
+    ? Date.parse(effect.updated_at) + await proposalDeliveryLateAnswerWindowMs(env, effect.provider)
+    : null;
+  const answerMayBeLate = () =>
+    new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
+      delivery_state: effect.state,
+      ...(settleableUntil === null ? {} : { not_before: new Date(settleableUntil).toISOString() }),
+    });
+  if (settleableUntil !== null && Date.parse(createdAt) < settleableUntil) throw answerMayBeLate();
   const confirmationId = `delivery-confirmation:${keyHash.slice(0, 40)}`;
   try {
     await env.DB.prepare(
@@ -406,6 +410,7 @@ export async function recordProposalDeliveryConfirmation(
     const raced = await replay();
     if (raced) return raced;
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("proposal_delivery_answer_may_be_late")) throw answerMayBeLate();
     const code = message.match(/proposal_delivery_confirmation_[a-z_]+/)?.[0] ?? "proposal_delivery_confirmation_failed";
     throw new ProposalDeliveryConfirmationError(code, code.endsWith("_failed") ? 503 : 409);
   }
@@ -417,6 +422,171 @@ export async function recordProposalDeliveryConfirmation(
     replayed: false,
     effectState: input.outcome === "delivered" ? "succeeded" : "reconciled",
   };
+}
+
+/**
+ * How long after a proposal send became unknown its provider's own answer may still arrive: the
+ * provider's row in `proposal_delivery_late_answer_windows` (0161), else the default row `*`. Each
+ * row records where its value comes from; D1 applies the same rows.
+ */
+export async function proposalDeliveryLateAnswerWindowMs(env: AppEnv, provider: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT window_ms FROM proposal_delivery_late_answer_windows
+      WHERE provider IN (?, '*') ORDER BY provider = '*' LIMIT 1`,
+  ).bind(provider).first<{ window_ms: number }>();
+  // The default row is append-only; if it were ever missing, D1 still decides at the insert.
+  return row?.window_ms ?? EFFECT_ATTEMPT_LEASE_MS;
+}
+
+export interface ProposalDeliveryCorrectionRecord {
+  correction_id: string;
+  tenant_id: string;
+  effect_id: string;
+  proposal_pack_id: string;
+  proposal_revision_id: string;
+  supersedes_confirmation_id: string | null;
+  supersedes_correction_id: string | null;
+  outcome: ProposalDeliveryOutcome;
+  note: string;
+  corrected_by_user_id: string;
+  corrected_by_role: string;
+  created_at: string;
+}
+
+/**
+ * The newest answer a person recorded for one proposal send: the 0156 confirmation, or the last
+ * correction of its chain (0161). Null when nothing was recorded by hand.
+ */
+async function latestProposalDeliveryAnswer(
+  env: AppEnv,
+  tenantId: string,
+  effectId: string,
+): Promise<{ answer_id: string; outcome: ProposalDeliveryOutcome } | null> {
+  const confirmation = await env.DB.prepare(
+    `SELECT confirmation_id, outcome FROM proposal_delivery_confirmations
+      WHERE tenant_id = ? AND effect_id = ?`,
+  ).bind(tenantId, effectId).first<{ confirmation_id: string; outcome: ProposalDeliveryOutcome }>();
+  if (!confirmation) return null;
+  const corrections = await env.DB.prepare(
+    `SELECT correction_id, supersedes_confirmation_id, supersedes_correction_id, outcome
+       FROM proposal_delivery_corrections WHERE tenant_id = ? AND effect_id = ?`,
+  ).bind(tenantId, effectId).all<{
+    correction_id: string;
+    supersedes_confirmation_id: string | null;
+    supersedes_correction_id: string | null;
+    outcome: ProposalDeliveryOutcome;
+  }>();
+  const successor = new Map(
+    (corrections.results ?? []).map((row) => [row.supersedes_confirmation_id ?? row.supersedes_correction_id, row]),
+  );
+  let latest = { answer_id: confirmation.confirmation_id, outcome: confirmation.outcome };
+  for (let next = successor.get(latest.answer_id); next; next = successor.get(latest.answer_id)) {
+    latest = { answer_id: next.correction_id, outcome: next.outcome };
+  }
+  return latest;
+}
+
+/**
+ * A person changes what they recorded about a proposal send (0161): one append-only row that
+ * supersedes the newest earlier answer, the 0156 confirmation or the last correction. When the
+ * outcome flips, its insert moves the send between `succeeded` (delivered) and `reconciled` (not
+ * delivered); it always writes the audit row. Only the newest answer may be superseded, and only
+ * until the next send of that proposal or the customer's decision on it. The same key with the
+ * same request replays; anything else conflicts.
+ */
+export async function recordProposalDeliveryCorrection(
+  env: AppEnv,
+  input: {
+    tenantId: string;
+    effectId: string;
+    supersedesId: string;
+    outcome: ProposalDeliveryOutcome;
+    note: string;
+    actorUserId: string;
+    actorRole: string;
+    idempotencyKey: string;
+    now?: string;
+  },
+): Promise<{ correction: ProposalDeliveryCorrectionRecord; replayed: boolean; effectState: string }> {
+  const keyHash = await sha256Hex(`proposal-delivery-correction\n${input.tenantId}\n${input.idempotencyKey}`);
+  const requestSha = await sha256Hex(canonicalJson({
+    effect_id: input.effectId,
+    supersedes_id: input.supersedesId,
+    outcome: input.outcome,
+    note: input.note,
+    actor: input.actorUserId,
+  }));
+  const effectState = async (effectId: string) =>
+    (await env.DB.prepare("SELECT state FROM external_effects WHERE effect_id = ?")
+      .bind(effectId).first<{ state: string }>())?.state ?? "";
+  const readCorrection = async (where: string, value: string) =>
+    await env.DB.prepare(
+      `SELECT correction_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id,
+              supersedes_confirmation_id, supersedes_correction_id, outcome, note,
+              corrected_by_user_id, corrected_by_role, created_at, request_sha256
+         FROM proposal_delivery_corrections WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
+    ).bind(input.tenantId, value).first<ProposalDeliveryCorrectionRecord & { request_sha256: string }>();
+  const replay = async () => {
+    const prior = await readCorrection("idempotency_key_hash", keyHash);
+    if (!prior) return null;
+    if (prior.request_sha256 !== requestSha) {
+      throw new ProposalDeliveryConfirmationError("proposal_delivery_correction_replay_conflict", 409);
+    }
+    const { request_sha256: _hash, ...correction } = prior;
+    return { correction, replayed: true, effectState: await effectState(prior.effect_id) };
+  };
+  const earlier = await replay();
+  if (earlier) return earlier;
+
+  const effect = await env.DB.prepare(
+    `SELECT effect_id, state, aggregate_id, intent_id FROM external_effects
+      WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
+        AND aggregate_type = 'proposal_publication'`,
+  ).bind(input.tenantId, input.effectId).first<{
+    effect_id: string;
+    state: string;
+    aggregate_id: string;
+    intent_id: string;
+  }>();
+  if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
+  const latest = await latestProposalDeliveryAnswer(env, input.tenantId, effect.effect_id);
+  if (!latest) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_nothing_recorded", 409, {
+      delivery_state: effect.state,
+    });
+  }
+  // Only the newest answer is corrected; naming an older one would fork the history.
+  if (latest.answer_id !== input.supersedesId) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_correction_not_latest", 409, {
+      latest_answer_id: latest.answer_id,
+    });
+  }
+  const supersedesConfirmation = latest.answer_id.startsWith("delivery-confirmation:");
+  const createdAt = input.now ?? new Date().toISOString();
+  const correctionId = `delivery-correction:${keyHash.slice(0, 40)}`;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO proposal_delivery_corrections
+         (correction_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id,
+          supersedes_confirmation_id, supersedes_correction_id, outcome, note, corrected_by_user_id,
+          corrected_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).bind(
+      correctionId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id,
+      supersedesConfirmation ? latest.answer_id : null, supersedesConfirmation ? null : latest.answer_id,
+      input.outcome, input.note, input.actorUserId, input.actorRole, keyHash, requestSha, createdAt,
+    ).run();
+  } catch (error) {
+    const raced = await replay();
+    if (raced) return raced;
+    const message = error instanceof Error ? error.message : String(error);
+    const code = message.match(/proposal_delivery_correction_[a-z_]+/)?.[0] ?? "proposal_delivery_correction_failed";
+    throw new ProposalDeliveryConfirmationError(code, code.endsWith("_failed") ? 503 : 409);
+  }
+  const stored = await readCorrection("correction_id", correctionId);
+  if (!stored) throw new ProposalDeliveryConfirmationError("proposal_delivery_correction_failed", 503);
+  const { request_sha256: _hash, ...correction } = stored;
+  return { correction, replayed: false, effectState: await effectState(effect.effect_id) };
 }
 
 /**
@@ -879,19 +1049,28 @@ export async function recordCommercialProposalPublication(
   }
   const eventId = await recordId("commercial-publication", input.tenantId, idempotencyKeyHash);
   try {
-    await env.DB.prepare(
-      `INSERT INTO commercial_proposal_publication_events (
-         publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
-         publication_version, previous_state, state, policy_permit_id,
-         proposal_publication_approval_id, external_effect_id, command_fingerprint,
-         idempotency_key_hash, evidence_digest, occurred_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
-      eventId, input.tenantId, input.proposalRevisionId, input.proposalPackId,
-      input.publicationVersion, input.previousState, input.state, authority.policyPermitId,
-      authority.approvalRequestId, externalEffectId, commandFingerprint,
-      idempotencyKeyHash, authority.evidenceDigest, occurredAt,
-    ).run();
+    // The recorder goes first, in the same batch: D1 refuses a new publication event without the
+    // person who recorded it (0161), and refuses a recorder added to an event already recorded.
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO commercial_proposal_publication_recorders
+           (publication_event_id, tenant_id, recorded_by_user_id, recorded_at)
+         VALUES (?, ?, ?, ?)`,
+      ).bind(eventId, input.tenantId, input.recordedByUserId, occurredAt),
+      env.DB.prepare(
+        `INSERT INTO commercial_proposal_publication_events (
+           publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+           publication_version, previous_state, state, policy_permit_id,
+           proposal_publication_approval_id, external_effect_id, command_fingerprint,
+           idempotency_key_hash, evidence_digest, occurred_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        eventId, input.tenantId, input.proposalRevisionId, input.proposalPackId,
+        input.publicationVersion, input.previousState, input.state, authority.policyPermitId,
+        authority.approvalRequestId, externalEffectId, commandFingerprint,
+        idempotencyKeyHash, authority.evidenceDigest, occurredAt,
+      ),
+    ]);
   } catch (error) {
     const concurrent = await findByIdempotency<CommercialPublicationRecord>(
       env, "commercial_proposal_publication_events", input.tenantId, idempotencyKeyHash,

@@ -58,7 +58,12 @@ export async function handleExternalEffectSettlement(req: Request, env: AppEnv):
   const settlement = record(body.settlement);
   if (!effectId || !settlement) return json({ error: "effect_settlement_invalid" }, 400);
   try {
-    const settled = await settleExternalEffect(env, effectId, settlement as ExternalEffectSettlement);
+    // Settled now, by the server's clock: a caller's `now` is ignored, so a settlement is dated when
+    // the Worker records it, never when the caller says it was.
+    const settled = await settleExternalEffect(env, effectId, {
+      ...settlement,
+      now: new Date().toISOString(),
+    } as ExternalEffectSettlement);
     return json({ effect: settled.effect, attempt: settled.attempt, value: settled.value });
   } catch (error) {
     return json({ error: effectError(error) }, effectErrorStatus(error));
@@ -79,7 +84,8 @@ export async function handleExternalEffectReconciliation(req: Request, env: AppE
       outcome: outcome as "executed" | "not_executed" | "inconclusive",
       evidence: body.evidence,
       detailCode: text(body.detailCode) ?? undefined,
-      now: text(body.now) ?? undefined,
+      // Reconciled now, by the server's clock; a caller's `now` is ignored.
+      now: new Date().toISOString(),
     });
     return json({ effect });
   } catch (error) {

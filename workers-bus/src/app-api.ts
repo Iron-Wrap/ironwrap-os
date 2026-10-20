@@ -256,6 +256,7 @@ import {
   type CommercialProposalRecord,
   ProposalDeliveryConfirmationError,
   recordProposalDeliveryConfirmation,
+  recordProposalDeliveryCorrection,
   outstandingProposalPublishPermit,
   unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
@@ -1164,6 +1165,12 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/commercial/proposal-publications/delivery-confirmations"
   ) {
     return await confirmProposalDeliveryByHand(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-corrections"
+  ) {
+    return await correctProposalDeliveryByHand(req, env, auth);
   }
   if (
     req.method === "POST" &&
@@ -4674,6 +4681,69 @@ async function confirmProposalDeliveryByHand(
   }
 }
 
+/**
+ * A person changes what they recorded about a proposal send (0161): a new append-only answer that
+ * supersedes the newest earlier one, named by `supersedes_id`. People only, as for the first
+ * answer: the commercial set in their own session, so no agent, connector or service token can
+ * change a delivery record.
+ */
+async function correctProposalDeliveryByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  const keys = isRecord(body) ? Object.keys(body) : [];
+  const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  if (
+    !isRecord(body) ||
+    keys.length !== 4 ||
+    !keys.every((name) => ["external_effect_id", "supersedes_id", "outcome", "note"].includes(name)) ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160) ||
+    typeof body.supersedes_id !== "string" ||
+    !idText(body.supersedes_id, 16, 200) ||
+    (body.outcome !== "delivered" && body.outcome !== "not_delivered") ||
+    // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
+    [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_correction" }, 400);
+  }
+  try {
+    const result = await recordProposalDeliveryCorrection(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      supersedesId: body.supersedes_id,
+      outcome: body.outcome,
+      note,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      correction: result.correction,
+      effect: { external_effect_id: result.correction.effect_id, state: result.effectState },
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_correction_failed" }, 503);
+  }
+}
+
 async function prepareCommercialProposalPublication(
   req: Request,
   env: AppEnv,
@@ -4705,6 +4775,7 @@ async function prepareCommercialProposalPublication(
     authority: { kind: "policy_permit", permitId: "pending" },
     externalEffectId: null,
     idempotencyKey: requestIdempotencyKey,
+    recordedByUserId: auth.session.user_id,
   };
   try {
     const proposal = await env.DB.prepare(
@@ -4919,10 +4990,20 @@ async function settleCommercialProposalPublication(
       authority: { kind: "policy_permit", permitId: permit.permit_id },
       externalEffectId: input.externalEffectId,
       idempotencyKey: requestIdempotencyKey,
+      recordedByUserId: auth.session.user_id,
     }, new Date());
+    // Who recorded it (0161); a publication recorded before 0161 has no recorder.
+    const recorder = await env.DB.prepare(
+      `SELECT recorded_by_user_id FROM commercial_proposal_publication_recorders
+        WHERE tenant_id = ? AND publication_event_id = ?`,
+    ).bind(auth.session.tenant_id, result.publication.publication_event_id)
+      .first<{ recorded_by_user_id: string }>();
     return privateAppJson(
       {
-        publication: commercialPublicationProjection(result.publication),
+        publication: {
+          ...commercialPublicationProjection(result.publication),
+          recorded_by_user_id: recorder?.recorded_by_user_id ?? null,
+        },
         replayed: result.kind === "replayed",
         permit: { permit_id: permit.permit_id },
       },

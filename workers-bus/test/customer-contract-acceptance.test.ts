@@ -478,6 +478,7 @@ async function recordPublicationTransition(
     state,
     authority: { kind: "policy_permit", permitId: "pending" },
     idempotencyKey: `acceptance:publication:${chain.proposalPackId}:${publicationVersion}`,
+    recordedByUserId: OWNER_ID,
   };
   const permit = await admitFor(
     env,

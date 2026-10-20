@@ -644,11 +644,15 @@ is 0 to 10 references to verified, stored Work Package captures of the job or, f
 stock reservations of the job; the Worker resolves each reference and records its checksum, so a
 client never supplies a hash. Safety is its own operation set, `production.gates.safety`, carried
 today by owner and production, and it also needs the attester's current internal Worker Competency
-(`authority.record`) in site safety: `authority_scope` `site-safety`, verified by an internal
-assessment, neither revoked nor superseded, in force today and not bound to another job. Safety is
-refused while an active stop applies to the job: one on the tenant, the job or any of its Work
-Packages, or one whose scope cannot be resolved. The entry names the competency record, D1 checks
-both rules again at insert, and no agent or policy ever attests Safety.
+(`authority.record`) in site safety: `authority_scope` exactly `site_safety`, a closed token in a
+field that is otherwise free text, so an empty, foreign or near value does not count; verified by an
+internal assessment, neither revoked nor superseded, in force today and not bound to another job.
+Safety is refused while a stop applies to the job: an active stop on the tenant, the job or any of
+its Work Packages in any status, Superseded included; a crew `stop_work` on one of them that no
+release has lifted; or an active stop whose scope cannot be resolved, meaning an unknown scope type
+or a Work Package id that maps to no job. Another job's stop, a shop or a vehicle stop does not
+hold it. The entry names the competency record, D1 checks both rules again at insert with the same
+predicate, and no agent or policy ever attests Safety.
 
 ## Stop taxonomy
 

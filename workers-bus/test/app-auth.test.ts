@@ -1071,7 +1071,9 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
   assert.equal(crew?.created_by, "owner@example.com");
   const provisionAudit = db.audits.at(-1)?.args as unknown[] | undefined;
   assert.equal(provisionAudit?.[3], "user_provision");
-  assert.equal(provisionAudit?.[7], "field:owner@example.com");
+  // The access version the grant produced, no earlier access, the access granted, and the
+  // signed-in actor the server attributes it to (0157).
+  assert.equal(provisionAudit?.[7], `v1:->field.1:${office.user.user_id}`);
 
   const salesResponse = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,

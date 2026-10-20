@@ -1443,6 +1443,136 @@ test("a role or access change applies only against the access version it was dec
   assert.equal(auditCount("user_access_change"), 1);
 });
 
+test("a refused change says who changed the access since, what is different and the version now", async () => {
+  const h = harness();
+  const { user: ada, session } = await owner(h);
+  const priya = await addUser(h.env, "priya@example.invalid", "ops", "Priya Nand");
+  const priyaSession = await signIn(h, priya, "p".repeat(43));
+  const grace = await addUser(h.env, "grace@example.invalid", "sales", "Grace Obi");
+  const provision = (role: AppRole, active: boolean, expected: number) => ({
+    tenant_id: TENANT,
+    email: "grace@example.invalid",
+    display_name: "Grace Obi",
+    role,
+    frappe_user_id: null,
+    active,
+    expected_access_version: expected,
+  });
+
+  // Ada changes Grace's role on one screen; the same change decided on another screen is refused.
+  assert.equal((await call(h, "POST", APP_USERS, {
+    session,
+    body: provision("production", true, 1),
+  })).status, 200);
+  const own = await call(h, "POST", APP_USERS, { session, body: provision("accounting", true, 1) });
+  assert.equal(own.status, 409);
+  assert.equal(own.body.error, "access_version_conflict");
+  const ownConflict = own.body.conflict as Record<string, unknown>;
+  assert.match(String(ownConflict.changed_at), /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual({ ...ownConflict, changed_at: "recorded" }, {
+    user_id: grace.user_id,
+    access_version: 2,
+    changed_at: "recorded",
+    changed_by: { user_id: ada.user_id, display_name: "Ada Owner", is_self_actor: true },
+    change: {
+      before: { role: "sales", active: true },
+      after: { role: "production", active: true },
+    },
+  });
+
+  // Priya removes Grace; Ada's change decided on version 2 names Priya, through either route.
+  assert.equal((await call(h, "POST", `${APP_USERS}/${grace.user_id}/access`, {
+    session: priyaSession,
+    body: { active: false, expected_access_version: 2 },
+  })).status, 200);
+  const other = await call(h, "POST", `${APP_USERS}/${grace.user_id}/role`, {
+    session,
+    body: { role: "accounting", expected_access_version: 2 },
+  });
+  assert.equal(other.status, 409);
+  const otherConflict = other.body.conflict as Record<string, unknown>;
+  assert.deepEqual(otherConflict.changed_by, {
+    user_id: priya.user_id,
+    display_name: "Priya Nand",
+    is_self_actor: false,
+  });
+  assert.deepEqual(otherConflict.change, {
+    before: { role: "production", active: true },
+    after: { role: "production", active: false },
+  });
+  assert.equal(otherConflict.access_version, 3);
+
+  // Two changes since the version a screen decided on: the newest names the actor, the first the
+  // access that screen showed.
+  const twoBehind = await call(h, "POST", APP_USERS, {
+    session,
+    body: provision("accounting", true, 1),
+  });
+  assert.equal(twoBehind.status, 409);
+  const twoBehindConflict = twoBehind.body.conflict as Record<string, unknown>;
+  assert.equal((twoBehindConflict.changed_by as Record<string, unknown>).user_id, priya.user_id);
+  assert.deepEqual(twoBehindConflict.change, {
+    before: { role: "sales", active: true },
+    after: { role: "production", active: false },
+  });
+
+  // The audit rows carry the version each change produced, and the access before and after it.
+  assert.deepEqual(
+    h.db.raw.prepare(
+      `SELECT event, detail_code FROM app_auth_audit
+        WHERE user_id = ? AND event IN ('user_provision', 'user_role_change', 'user_access_change')
+        ORDER BY id`,
+    ).all(grace.user_id).map((row) => ({ ...row })),
+    [
+      { event: "user_provision", detail_code: `v2:sales.1>production.1:${ada.user_id}` },
+      { event: "user_access_change", detail_code: `v3:production.1>production.0:${priya.user_id}` },
+    ],
+  );
+});
+
+test("giving access back keeps the role it had and applies against the version the removal left", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const grace = await addUser(h.env, "grace@example.invalid", "sales", "Grace Obi");
+  const provision = (role: AppRole, active: boolean, expected: number) => ({
+    tenant_id: TENANT,
+    email: "grace@example.invalid",
+    display_name: "Grace Obi",
+    role,
+    frappe_user_id: null,
+    active,
+    expected_access_version: expected,
+  });
+  assert.equal(
+    (await call(h, "POST", APP_USERS, { session, body: provision("sales", false, 1) })).status,
+    200,
+  );
+
+  // A screen that still holds a role change for Grace gives her access back first, with the role
+  // she had, against the version the removal left; the role change waits for its own save.
+  const restored = await call(h, "POST", APP_USERS, { session, body: provision("sales", true, 2) });
+  assert.equal(restored.status, 200);
+  assert.deepEqual(
+    {
+      role: (restored.body.user as Record<string, unknown>).role,
+      active: (restored.body.user as Record<string, unknown>).active,
+      access_version: (restored.body.user as Record<string, unknown>).access_version,
+    },
+    { role: "sales", active: true, access_version: 3 },
+  );
+  const staleSave = await call(h, "POST", APP_USERS, {
+    session,
+    body: provision("production", true, 2),
+  });
+  assert.equal(staleSave.status, 409, "the save names the version the restore produced");
+  const saved = await call(h, "POST", APP_USERS, { session, body: provision("production", true, 3) });
+  assert.equal(saved.status, 200);
+  assert.equal((saved.body.user as Record<string, unknown>).access_version, 4);
+  assert.equal(userRow(h, "grace@example.invalid")!.access_role, "production");
+  assert.equal(userRow(h, "grace@example.invalid")!.active, 1);
+  assert.equal(grace.user_id, userRow(h, "grace@example.invalid")!.user_id);
+});
+
 test("provisioning names the access version for an existing person and none for a new one", async () => {
   const h = harness();
   const { session } = await owner(h);

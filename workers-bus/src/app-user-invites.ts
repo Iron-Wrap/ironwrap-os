@@ -81,6 +81,31 @@ interface RouteFailure {
   ok: false;
   error: string;
   status: number;
+  /** Present on `access_version_conflict`: what moved since the refused change was decided. */
+  conflict?: AccessConflict | null;
+}
+
+/**
+ * The body of a 409 `access_version_conflict` past `error`, so the refused screen can say who
+ * changed the person's access, what is different now and which version to decide on next.
+ */
+export interface AccessConflict {
+  user_id: string;
+  /** The version the person's access carries now. */
+  access_version: number;
+  /** When the newest change since the refused change's version was recorded. */
+  changed_at: string | null;
+  changed_by: {
+    user_id: string;
+    display_name: string | null;
+    /** The person whose change was refused made that change too (another tab or device). */
+    is_self_actor: boolean;
+  } | null;
+  change: {
+    /** The access at the version the refused change was decided on, when the audit can say. */
+    before: authStore.AccessState | null;
+    after: authStore.AccessState;
+  };
 }
 
 /**
@@ -225,12 +250,65 @@ export function parseAccessChange(
   return { ok: true, value: { active: value.active, expectedAccessVersion } };
 }
 
+/**
+ * What moved since `expectedAccessVersion`, read from the person's versioned access audit: the
+ * newest change names the actor and when, the first change after that version names the access
+ * before it, and the person's row is the access now. `changed_by` and `change.before` are null
+ * when the audit cannot say (history from before 0157, or more changes since than it reads).
+ *
+ * There is deliberately no device: the audit keeps only keyed hashes of the network address and
+ * browser, and no session, so it cannot tell "your phone" from another tab on this computer.
+ */
+export async function accessConflictBody(
+  env: AppEnv,
+  auth: AuthContext,
+  current: AppUserRecord | null,
+  expectedAccessVersion: number,
+): Promise<AccessConflict | null> {
+  if (!current) return null;
+  const changes = await authStore.listAccessChangesSince(
+    env,
+    auth.session.tenant_id,
+    current.user_id,
+    expectedAccessVersion,
+  );
+  const newest = changes[0];
+  const first = changes.at(-1);
+  const actor = newest
+    ? await authStore.findAppUserById(env, auth.session.tenant_id, newest.actorUserId)
+    : null;
+  return {
+    user_id: current.user_id,
+    access_version: Number(current.access_version ?? 1),
+    changed_at: newest?.recordedAt ?? null,
+    changed_by: newest
+      ? {
+        user_id: newest.actorUserId,
+        display_name: actor?.display_name ?? null,
+        is_self_actor: newest.actorUserId === auth.session.user_id,
+      }
+      : null,
+    change: {
+      before: first?.version === expectedAccessVersion + 1 ? first.before : null,
+      after: { role: current.role, active: current.active === 1 },
+    },
+  };
+}
+
 /** A change decided on an older access version than the person now carries. */
-export const ACCESS_VERSION_CONFLICT: RouteFailure = {
-  ok: false,
-  error: "access_version_conflict",
-  status: 409,
-};
+async function accessVersionConflict(
+  env: AppEnv,
+  auth: AuthContext,
+  current: AppUserRecord,
+  expectedAccessVersion: number,
+): Promise<RouteFailure> {
+  return {
+    ok: false,
+    error: "access_version_conflict",
+    status: 409,
+    conflict: await accessConflictBody(env, auth, current, expectedAccessVersion),
+  };
+}
 
 /** After a refused write: a moved access version is the conflict, anything else a state change. */
 async function accessWriteFailure(
@@ -241,7 +319,7 @@ async function accessWriteFailure(
 ): Promise<RouteFailure> {
   const current = await authStore.findAppUserById(env, auth.session.tenant_id, userId);
   return current && Number(current.access_version ?? 1) !== expectedAccessVersion
-    ? ACCESS_VERSION_CONFLICT
+    ? await accessVersionConflict(env, auth, current, expectedAccessVersion)
     : { ok: false, error: "app_user_state_changed", status: 409 };
 }
 
@@ -649,7 +727,7 @@ export async function changeAppUserRole(
   const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
   if (authority) return authority;
   if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
-    return ACCESS_VERSION_CONFLICT;
+    return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
   }
   if (user.role === parsed.value.role) {
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
@@ -668,7 +746,6 @@ export async function changeAppUserRole(
         event: "user_role_change",
         outcome: "changed",
         request: await authRequestContext(req, env),
-        detailCode: `${user.role}->${parsed.value.role}:${auth.session.user_id}`,
       },
     },
   });
@@ -710,7 +787,7 @@ export async function changeAppUserAccess(
   const authority = authorizeAppUserMutation(auth, user, user.role);
   if (authority) return authority;
   if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
-    return ACCESS_VERSION_CONFLICT;
+    return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
   }
   if ((user.active === 1) === parsed.value.active) {
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
@@ -730,7 +807,6 @@ export async function changeAppUserAccess(
         event: "user_access_change",
         outcome: parsed.value.active ? "restored" : "removed",
         request: await authRequestContext(req, env),
-        detailCode: `${user.role}:${auth.session.user_id}`,
       },
     },
   });

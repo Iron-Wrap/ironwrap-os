@@ -26,7 +26,61 @@ export interface AccessChangeAudit {
   event: string;
   outcome: string;
   request: AuthRequestContext;
-  detailCode: string;
+}
+
+/** A person's access at one version: their role and whether they can sign in. */
+export interface AccessState {
+  role: AppRole;
+  active: boolean;
+}
+
+/**
+ * One role or access change as its audit row records it: the access version the change produced,
+ * the access before it (none for a new person) and after it, and who made it.
+ */
+export interface AccessChange {
+  version: number;
+  before: AccessState | null;
+  after: AccessState;
+  actorUserId: string;
+}
+
+const ACCESS_CHANGE_EVENTS = ["user_provision", "user_role_change", "user_access_change"] as const;
+
+function accessStateCode(state: AccessState | null): string {
+  return state ? `${state.role}.${state.active ? 1 : 0}` : "-";
+}
+
+/**
+ * `v{version}:{role}.{0|1}>{role}.{0|1}:{actor user id}`, `-` for no earlier access. The version
+ * in the row is what lets a refused change say what moved since the version it was decided on,
+ * without a column of its own (0157).
+ */
+export function accessChangeDetail(change: AccessChange): string {
+  return `v${change.version}:${accessStateCode(change.before)}>${
+    accessStateCode(change.after)
+  }:${change.actorUserId}`;
+}
+
+const ACCESS_CHANGE_DETAIL = /^v([1-9][0-9]{0,8}):(?:-|([a-z]+)\.([01]))>([a-z]+)\.([01]):(\S+)$/;
+
+/** The change an access audit row records; null for a row written before 0157 or by another path. */
+export function parseAccessChangeDetail(detail: string | null): AccessChange | null {
+  const match = detail?.match(ACCESS_CHANGE_DETAIL);
+  if (!match) return null;
+  const [, version, beforeRole, beforeActive, afterRole, afterActive, actorUserId] = match;
+  if (beforeRole !== undefined && !isAppRole(beforeRole)) return null;
+  if (!isAppRole(afterRole)) return null;
+  return {
+    version: Number(version),
+    before: beforeRole === undefined ? null : { role: beforeRole, active: beforeActive === "1" },
+    after: { role: afterRole, active: afterActive === "1" },
+    actorUserId: actorUserId!,
+  };
+}
+
+function accessStateOf(user: AppUserRecord): AccessState {
+  return { role: user.role, active: user.active === 1 };
 }
 
 /**
@@ -39,6 +93,7 @@ function accessChangeAuditStatement(
   tenantId: string,
   userId: string,
   audit: AccessChangeAudit,
+  change: AccessChange,
 ) {
   return env.DB.prepare(
     `INSERT INTO app_auth_audit
@@ -53,8 +108,33 @@ function accessChangeAuditStatement(
     audit.outcome.slice(0, 64),
     audit.request.ip_hash,
     audit.request.user_agent_hash,
-    audit.detailCode.slice(0, 120),
+    accessChangeDetail(change).slice(0, 120),
   );
+}
+
+/**
+ * The versioned role and access changes in one person's audit above `afterVersion`, newest first,
+ * each with when it was recorded. Rows from before 0157 carry no version and are skipped. A person
+ * whose access moved more than `limit` times since is described from the newest changes only.
+ */
+export async function listAccessChangesSince(
+  env: Env,
+  tenantId: string,
+  userId: string,
+  afterVersion: number,
+  limit = 50,
+): Promise<Array<AccessChange & { recordedAt: string }>> {
+  const result = await env.DB.prepare(
+    `SELECT created_at, detail_code FROM app_auth_audit
+      WHERE tenant_id = ? AND user_id = ? AND event IN (?, ?, ?)
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`,
+  ).bind(tenantId, userId, ...ACCESS_CHANGE_EVENTS, limit)
+    .all<{ created_at: string; detail_code: string | null }>();
+  return (result.results ?? []).flatMap((row) => {
+    const change = parseAccessChangeDetail(row.detail_code);
+    return change && change.version > afterVersion ? [{ ...change, recordedAt: row.created_at }] : [];
+  });
 }
 
 /** The access version the route authorized against; the column is NOT NULL DEFAULT 1 (0157). */
@@ -218,7 +298,12 @@ export async function setAppUserAccessRole(
   const result = audit
     ? (await env.DB.batch([
       mutation,
-      accessChangeAuditStatement(env, input.tenantId, input.userId, audit),
+      accessChangeAuditStatement(env, input.tenantId, input.userId, audit, {
+        version: version + 1,
+        before: accessStateOf(expected),
+        after: { role: input.role, active: expected.active === 1 },
+        actorUserId: input.authority.actorUserId,
+      }),
     ]))[0]
     : await mutation.run();
   if (d1Changes(result) !== 1) return null;
@@ -270,7 +355,12 @@ export async function setAppUserActive(
     input.authority.actorRole,
   );
   const audit = input.authority.audit
-    ? [accessChangeAuditStatement(env, input.tenantId, input.userId, input.authority.audit)]
+    ? [accessChangeAuditStatement(env, input.tenantId, input.userId, input.authority.audit, {
+      version: version + 1,
+      before: accessStateOf(expected),
+      after: { role: expected.role, active: input.active },
+      actorUserId: input.authority.actorUserId,
+    })]
     : [];
   const result = input.active && audit.length === 0
     ? await mutation.run()
@@ -347,7 +437,12 @@ export async function upsertAppUserWithAuthority(
       authority.actorRole,
     );
     const audit = authority.audit
-      ? [accessChangeAuditStatement(env, input.tenant_id, expected.user_id, authority.audit)]
+      ? [accessChangeAuditStatement(env, input.tenant_id, expected.user_id, authority.audit, {
+        version: version + 1,
+        before: accessStateOf(expected),
+        after: { role: input.role, active: input.active },
+        actorUserId: authority.actorUserId,
+      })]
       : [];
     const result = input.active && audit.length === 0
       ? await mutation.run()
@@ -394,7 +489,12 @@ export async function upsertAppUserWithAuthority(
       authority.actorRole,
     );
     const audit = authority.audit
-      ? [accessChangeAuditStatement(env, input.tenant_id, candidateId, authority.audit)]
+      ? [accessChangeAuditStatement(env, input.tenant_id, candidateId, authority.audit, {
+        version: 1,
+        before: null,
+        after: { role: input.role, active: input.active },
+        actorUserId: authority.actorUserId,
+      })]
       : [];
     const result = input.active && audit.length === 0
       ? await mutation.run()

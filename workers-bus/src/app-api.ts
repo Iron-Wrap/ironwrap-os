@@ -46,10 +46,12 @@ import {
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
+  accessConflictBody,
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
   createUserInvite,
+  type AccessConflict,
   listAppUsersForOffice,
   listUserInvitesForOffice,
   resendUserInviteForOffice,
@@ -457,7 +459,10 @@ export async function handleAdminAppUserProvision(
     (target && Number(target.access_version ?? 1) !== expectedAccessVersion) ||
     (!target && expectedAccessVersion !== null)
   ) {
-    return appJson({ error: "access_version_conflict" }, 409);
+    return appJson({
+      error: "access_version_conflict",
+      conflict: await accessConflictBody(appEnv, auth, target, expectedAccessVersion ?? 0),
+    }, 409);
   }
   const user = await provisionAppUser(appEnv, {
     ...provision,
@@ -476,7 +481,12 @@ export async function handleAdminAppUserProvision(
     const moved = target
       ? Number(current?.access_version ?? 1) !== expectedAccessVersion
       : current !== null;
-    return appJson({ error: moved ? "access_version_conflict" : "app_user_state_changed" }, 409);
+    return moved
+      ? appJson({
+        error: "access_version_conflict",
+        conflict: await accessConflictBody(appEnv, auth, current, expectedAccessVersion ?? 0),
+      }, 409)
+      : appJson({ error: "app_user_state_changed" }, 409);
   }
   return appJson({
     user: {
@@ -646,7 +656,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserRole(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   const appUserAccessMatch = url.pathname.match(
     /^\/api\/v1\/admin\/app-users\/([^/]+)\/access$/,
@@ -657,7 +667,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserAccess(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   if (url.pathname === "/api/v1/admin/user-invites") {
     if (req.method === "GET") {
@@ -7943,6 +7953,15 @@ function decodedPathSegment(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A refused role or access change; a version conflict also says what moved (0157). */
+function accessChangeFailureBody(
+  failure: { error: string; conflict?: AccessConflict | null },
+): Record<string, unknown> {
+  return failure.conflict === undefined
+    ? { error: failure.error }
+    : { error: failure.error, conflict: failure.conflict };
 }
 
 function decodeWorkObjectScope(

@@ -207,10 +207,10 @@ export async function provisionAppUser(
     event: "user_provision",
     outcome: input.active ? "active" : "inactive",
     request,
-    detailCode: `${input.role}:${input.provisioned_by}`,
   };
-  // An authorized change commits its audit row in the same batch (0157); the unauthenticated
-  // upsert keeps the audit it always wrote after the fact.
+  // An authorized change commits its audit row in the same batch, recording the access version it
+  // produced and the access before and after it (0157); the unauthenticated upsert keeps the audit
+  // it always wrote after the fact.
   if (authority) {
     return await authStore.upsertAppUserWithAuthority(env, input, { ...authority, audit });
   }
@@ -220,6 +220,7 @@ export async function provisionAppUser(
     tenantId: user.tenant_id,
     userId: user.user_id,
     ...audit,
+    detailCode: `${input.role}:${input.provisioned_by}`,
   });
   return user;
 }

@@ -254,7 +254,7 @@ function OfficeDevicePairingSettings() {
           {fieldUsers.data.users.length === 0 ? (
             <EmptyState
               title="No active field accounts"
-              message="Create an active Field Companion account before pairing a device."
+              message="Add someone with the crew role on the People page before you pair a phone."
             />
           ) : (
             <>
@@ -548,7 +548,7 @@ function DeviceList({
                     <p className="font-bold text-danger">Revoke this device now?</p>
                     <p className="mt-1 text-sm leading-6 text-danger">
                       {device.field_user_name} will need a new supervised pairing before this
-                      browser can use Field Companion again.
+                      browser can use the crew phone app again.
                     </p>
                     {revokeError ? (
                       <InlineError message={messageFor(revokeError, pairingRefusals)} />

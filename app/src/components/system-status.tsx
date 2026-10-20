@@ -64,11 +64,18 @@ export function SystemStatus({
     outbox.unclaimed === 0;
   // Until saved work is read, the crew banner neither warns nor claims; the chip says it is checking.
   const crewChecking = variant === "crew" && outbox.readState === "checking";
-  // Low space still blocks the next photo, so it shows even when everything went.
+  // Low space still blocks the next photo, so it shows even when everything went. Any other storage
+  // doubt is said only while saved work could be lost, in one line with what to do; with nothing
+  // to protect there is nothing to act on, so the office sees nothing (gate #13: a bare "Storage
+  // warning" chip that nothing explained).
   const storageNeedsEscalation =
     Boolean(storageWarning) &&
     (storageWarning === "low_storage" || (!allSent && !crewChecking)) &&
-    (variant === "crew" || outbox.pending > 0 || outbox.uploading > 0 || outbox.needsAttention > 0);
+    (variant === "crew" ||
+      storageWarning === "low_storage" ||
+      outbox.pending > 0 ||
+      outbox.uploading > 0 ||
+      outbox.needsAttention > 0);
   useAppOpenOutboxSync(outboxPrincipal, csrfToken, deviceProof);
   const { needRefresh, setNeedRefresh, updateServiceWorker } =
     useDeferredServiceWorkerRegistration();
@@ -88,7 +95,6 @@ export function SystemStatus({
     outbox.pending > 0 ||
     outbox.needsAttention > 0 ||
     outbox.unclaimed > 0 ||
-    Boolean(storageWarning) ||
     install.canInstall;
   const hasBannerActions =
     outbox.readState === "error" ||
@@ -143,11 +149,6 @@ export function SystemStatus({
                 <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
                   {outbox.unclaimed} old {outbox.unclaimed === 1 ? "item" : "items"} on this device
                   only
-                </StatusPill>
-              ) : null}
-              {storageWarning ? (
-                <StatusPill tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-                  Storage warning
                 </StatusPill>
               ) : null}
               {install.canInstall ? (

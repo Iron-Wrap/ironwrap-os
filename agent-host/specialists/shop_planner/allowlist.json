@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "shop_planner",
-  "catalog_sha256": "e62745ba4e475ee1829e2b68b802deaffdfa046fe2f083124f41ff2ee08675e1",
+  "catalog_sha256": "614c1e597acbe4bac11f6d9b42f6814a1bb6130601abc33ad0601ddf1a31d18e",
   "actions": [
     {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain shop capacity, plans, blockers, lots, and holds to the owner, production, or an operator, with citations"},
     {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Route reservations, NCRs and quarantine, design questions, vehicles, billing and payment flags, privacy, and pricing to the owning specialist"},

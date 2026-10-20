@@ -222,9 +222,9 @@ payee.unfreeze, refund.issue, write_off.record, filing.submit, gate.waive, acces
 control.
 `protective` (17 actions: stop, hold, block, freeze, escalate, quarantine, page, revoke a portal link, raise a finding,
 hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
-whole team is paused. `delegable: false` with asks_first (23 actions, for example storm_mode.propose,
+whole team is paused. `delegable: false` with asks_first (30 actions, for example storm_mode.propose,
 inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
-Contract version: catalog sha `e62745ba4e475ee1829e2b68b802deaffdfa046fe2f083124f41ff2ee08675e1` (16 specialists,
+Contract version: catalog sha `614c1e597acbe4bac11f6d9b42f6814a1bb6130601abc33ad0601ddf1a31d18e` (16 specialists,
 163 actions, 116 watches; every action has a plain `name`). Builders read
 [`docs/AI-TEAM-CONTRACT.md`](../../docs/AI-TEAM-CONTRACT.md) itself; a local copy, such as one under the git-ignored
 `output/`, is current only while its catalog sha equals this one.

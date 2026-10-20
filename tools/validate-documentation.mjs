@@ -1047,6 +1047,14 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "invoice.commit_intent",
   // Capped because a sent message cannot be undone and reminders go by approval only (D-05, Q4).
   "customer_message.send",
+  // Every other send outside IronWrap and every price commitment the owner capped (L04, D-09).
+  "visit.confirm",
+  "portal_link.send",
+  "remedy.offer",
+  "campaign.send",
+  "review_response.publish",
+  "insurance_supplement.send",
+  "change_order.commit",
 ];
 // Human-only: never an agent's act, never delegable.
 const AI_TEAM_PEOPLE_ONLY = [

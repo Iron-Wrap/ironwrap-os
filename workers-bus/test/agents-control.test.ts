@@ -387,17 +387,25 @@ test("H, protective and never-delegable actions cannot receive owner delegation"
   );
 });
 
-test("the owner's caps keep the price, its sends and every customer message at asks first", async () => {
+test("the owner's caps keep every capped outside send and price commitment at asks first", async () => {
   const s = setup();
-  // D-09 caps the price and its sends; D-05 and Q4 cap every customer message, whatever its purpose.
+  // Every send outside IronWrap and every price commitment asks first (D-05, D-09, Q4, L04); these
+  // are the thirteen actions the catalog caps, customer_message.send for two of its owners.
   const capped = [
     ["estimator", "quote.commit_revision"],
     ["estimator", "quote.apply_discount"],
-    ["proposal_contract", "proposal.publish"],
-    ["proposal_contract", "change_order.send_for_decision"],
-    ["billing_reconciliation", "invoice.commit_intent"],
+    ["estimator", "change_order.commit"],
     ["lead_concierge", "customer_message.send"],
     ["billing_reconciliation", "customer_message.send"],
+    ["lead_concierge", "visit.confirm"],
+    ["proposal_contract", "portal_link.send"],
+    ["proposal_contract", "proposal.publish"],
+    ["proposal_contract", "change_order.send_for_decision"],
+    ["customer_care_warranty", "remedy.offer"],
+    ["marketing_reputation", "campaign.send"],
+    ["billing_reconciliation", "invoice.commit_intent"],
+    ["marketing_reputation", "review_response.publish"],
+    ["estimator", "insurance_supplement.send"],
   ] as const;
   for (const [specialist, actionId] of capped) {
     const action = catalogAction(actionId);

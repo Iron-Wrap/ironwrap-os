@@ -81,7 +81,13 @@ class TestD1 {
     };
   }
 
+  /** Runs right before the next batch, as a writer that committed just ahead of it. */
+  beforeNextBatch: (() => void) | null = null;
+
   async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    const before = this.beforeNextBatch;
+    this.beforeNextBatch = null;
+    before?.();
     this.sqlite.exec("BEGIN");
     try {
       const results = [];
@@ -97,6 +103,7 @@ class TestD1 {
 
 interface Harness {
   env: AppEnv;
+  db: TestD1;
   sqlite: DatabaseSync;
   /** The Weather window a person attested, when the harness is `ready`. */
   window: { start: string; end: string };
@@ -198,7 +205,7 @@ function setup(options: { ready?: boolean } = {}): Harness {
   insertCrew(db.sqlite, CREW_B, [USERS.fieldC]);
   const window = fixtureWeatherWindow();
   if (options.ready !== false) ready(db.sqlite, JOB, window);
-  return { env: envFor(db), sqlite: db.sqlite, window };
+  return { env: envFor(db), db, sqlite: db.sqlite, window };
 }
 
 function ready(db: DatabaseSync, job = JOB, window = fixtureWeatherWindow()): void {
@@ -406,6 +413,23 @@ test("a schedule D1 refuses leaves no Crew entry: the entries and the assignment
     (h.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE automation = 'production_gate_clearance' AND source_ids LIKE '%gate:Crew%'").get() as { n: number }).n,
     0,
   );
+});
+
+test("a Crew gate another schedule moved while this one was written answers with the ledger's code", async () => {
+  const h = setup();
+  // Another schedule binds Crew between this schedule's read and its batch.
+  h.db.beforeNextBatch = () =>
+    bindCrewInLedger(h.sqlite, { tenantId: TENANT, roofJobId: JOB, crewId: CREW_B, assignmentId: "assignment:crew:raced" });
+  await rejectsWith(recordOperatingJobAssignment(h.env, command()), "production_gate_version_conflict");
+  assert.equal(assignmentCount(h.sqlite), 0);
+  assert.deepEqual(crewEntries(h.sqlite).map((row) => JSON.parse(row.evidence_refs_json).assignment_id), ["assignment:crew:raced"]);
+  // The route names it too.
+  h.db.beforeNextBatch = () => {
+    reverseGateInLedger(h.sqlite, { tenantId: TENANT, roofJobId: JOB, gate: "Crew", actorUserId: USERS.owner.id, actorRole: "owner" });
+  };
+  const raced = await schedule(h, await person(h, USERS.ops.id));
+  assert.deepEqual([raced.status, raced.body], [409, { error: "production_gate_version_conflict" }]);
+  assert.equal(assignmentCount(h.sqlite), 0);
 });
 
 // --- The schedule's named refusals ---------------------------------------------------------------

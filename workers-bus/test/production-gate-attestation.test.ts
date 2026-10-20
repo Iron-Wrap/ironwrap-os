@@ -253,11 +253,12 @@ async function call(
   method: "GET" | "POST",
   path: string,
   body?: unknown,
-  options: { idempotency?: string | null } = {},
+  options: { idempotency?: string | null; csrf?: string | null } = {},
 ): Promise<{ status: number; body: Record<string, any> }> {
   const headers = new Headers({ "content-type": "application/json" });
   if (method === "POST") {
-    headers.set("x-csrf-token", auth.csrfToken);
+    const csrf = options.csrf === undefined ? auth.csrfToken : options.csrf;
+    if (csrf !== null) headers.set("x-csrf-token", csrf);
     if (options.idempotency !== null) headers.set("idempotency-key", options.idempotency ?? nextKey());
   }
   const response = await handleAuthenticatedRoute(
@@ -619,12 +620,19 @@ test("a crew member and the QA seed owner are refused, and an agent or connector
   const seed = await person(h, USERS.seed.id);
   const seeded = await call(h, seed, "POST", CLEARANCE("Access"), attest("Access"));
   assert.deepEqual([seeded.status, seeded.body.error], [403, "production_gate_clearance_seed_identity_refused"]);
+  const owner = await person(h, USERS.owner.id);
   for (const path of [CLEARANCE("Weather"), REVERSALS("Weather")]) {
     const body = path.endsWith("clearance")
       ? attest("Weather")
       : { expected_gate_version: 1, reverses_id: `pgc_${"0".repeat(40)}`, reason: "An agent may never reverse a gate." };
     const agent = await call(h, machine("owner"), "POST", path, body);
     assert.deepEqual([agent.status, agent.body.error], [403, "person_session_required"], path);
+    // CSRF is read before the person: a forged or missing token is refused as such, from a person
+    // and from a session that is no person alike.
+    for (const [auth, csrf] of [[owner, "forged"], [owner, null], [machine("owner"), "forged"]] as const) {
+      const result = await call(h, auth, "POST", path, body, { csrf });
+      assert.deepEqual([result.status, result.body.error], [403, "csrf_failed"], `${path} ${String(csrf)}`);
+    }
   }
   assert.deepEqual(ledgerRows(h.sqlite), []);
   for (const gate of ["Materials", "Access", "Weather"]) {
@@ -1012,6 +1020,8 @@ test("D1 holds each gate to its typed attestation with no free text but a short 
     { attestation_json: stored("Materials", { source: "found_on_site" }) },
     { attestation_json: stored("Materials", { reference: "delivered last Tuesday" }) },
     { attestation_json: JSON.stringify({ source: "none_needed" }) },
+    // A second copy of a key would carry text past every check that reads the first.
+    { attestation_json: '{"reference":"DEL-2026-0042","source":"supplier_delivery","source":"The panels came on Tuesday."}' },
     { gate: "Access", attestation_json: stored("Access", { confirmed_at: at(HOUR) }) },
     { gate: "Access", attestation_json: stored("Access", { constraints: ["pets", "pets"] }) },
     { gate: "Access", attestation_json: stored("Access", { constraints: ["a locked gate"] }) },
@@ -1066,6 +1076,8 @@ test("D1 resolves each evidence reference against the job: a stored capture or, 
   ] as const) {
     refused(() => append(db, { gate, evidence_refs_json: refs === null ? null : JSON.stringify(refs) }), invalid);
   }
+  // JSON5 naming a good capture: json_each would read it, every parser of the stored list would not.
+  refused(() => append(db, { evidence_refs_json: `[{ref:"${capture.ref}",sha256:"${capture.sha256}"}]` }), invalid);
   append(db, { evidence_refs_json: JSON.stringify([capture, reservation]) });
   append(db, { gate: "Access", evidence_refs_json: JSON.stringify(eleven.slice(0, 10)) });
   assert.deepEqual(ledgerRows(db).map((row) => row.gate), ["Access", "Materials"]);
@@ -1102,9 +1114,17 @@ test("D1 refuses Materials over an open or contained exception and Safety withou
     authority_record_id: contradicted.authority_record_id,
     authority_state_digest_sha256: sha("a contradicting copy"),
   });
-  for (const competency of [owners, expired, future, otherJob, unverified, external, revoked, contradicted]) {
+  // A record's second version leaves its first behind: only the latest version is current.
+  const versionOne = insertCompetency(db, USERS.production.id);
+  const versionTwo = insertCompetency(db, USERS.production.id, {
+    authority_record_id: versionOne.authority_record_id,
+    authority_version: 2,
+  });
+  for (const competency of [owners, expired, future, otherJob, unverified, external, revoked, contradicted, versionOne]) {
     refused(() => append(db, { gate: "Safety", attestation_json: safetyStored(competency) }), required);
   }
+  const attested = append(db, { gate: "Safety", attestation_json: safetyStored(versionTwo) });
+  append(db, reversal("Safety", attested, { actor_user_id: USERS.owner.id, actor_role: "owner" }));
   refused(() => append(db, { gate: "Safety", attestation_json: safetyStored({ ...own, state_digest_sha256: sha("forged") }) }), required);
   insertSafetyStop(held);
   const stopped = insertCompetency(held, USERS.production.id);
@@ -1129,6 +1149,24 @@ test("D1 refuses a weather window over 14 days, one already over, and a forecast
   }
   append(db, { gate: "Weather", attestation_json: stored("Weather", { window_start: at(0), window_end: at(13 * DAY) }) });
   assert.equal(gateRow(db, "Weather").state, "ready");
+});
+
+test("D1 checks every time against its own clock, never the entry's created_at", () => {
+  const { sqlite: db } = setup();
+  // Each entry claims a creation time under which it would pass; D1's own clock refuses it.
+  refused(
+    () => append(db, { gate: "Weather", created_at: at(-90 * HOUR), attestation_json: stored("Weather", { forecast_observed_at: at(-100 * HOUR) }) }),
+    "production_gate_forecast_stale",
+  );
+  refused(
+    () => append(db, { gate: "Weather", created_at: at(-3 * DAY), attestation_json: stored("Weather", { window_start: at(-DAY), window_end: at(-HOUR) }) }),
+    "production_gate_weather_window_invalid",
+  );
+  refused(
+    () => append(db, { gate: "Access", created_at: at(2 * DAY), attestation_json: stored("Access", { confirmed_at: at(HOUR) }) }),
+    "production_gate_attestation_invalid",
+  );
+  assert.deepEqual(ledgerRows(db), []);
 });
 
 test("D1 reverses only the entry holding a gate's state, never a no-deposit contract, and never deletes", () => {
@@ -1186,7 +1224,9 @@ test("the validate trigger after every migration still holds A1's and A3's claus
     "production_gate_safety_person_only",
     "production_gate_attester_on_crew",
     "production_gate_attestation_invalid",
+    "COUNT(DISTINCT key) FROM json_each(NEW.attestation_json)",
     "production_gate_evidence_invalid",
+    "NOT json_valid(NEW.evidence_refs_json)",
     "production_gate_material_exception_open",
     "production_gate_safety_stop_active",
     "production_gate_competency_required",

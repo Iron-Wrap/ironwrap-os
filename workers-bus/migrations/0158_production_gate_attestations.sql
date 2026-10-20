@@ -198,12 +198,15 @@ BEGIN
 
   -- One small typed shape per gate and no free text but a note of at most 300 characters.
   -- References are short identifiers, never prose. Times are UTC instants as the Worker writes
-  -- them, and a time something was observed, confirmed or assessed is never in the future.
+  -- them, and a time something was observed, confirmed or assessed is never in the future. A key
+  -- appears once: a second copy would escape every check below, which reads only the first.
   SELECT RAISE(ABORT, 'production_gate_attestation_invalid')
   WHERE NEW.basis = 'person_attestation'
     AND (
       (NEW.reason IS NOT NULL AND length(NEW.reason) > 300)
       OR json_type(NEW.attestation_json) IS NOT 'object'
+      OR (SELECT COUNT(*) FROM json_each(NEW.attestation_json))
+        != (SELECT COUNT(DISTINCT key) FROM json_each(NEW.attestation_json))
       OR EXISTS (
         SELECT 1
           FROM json_each(NEW.attestation_json) field
@@ -310,6 +313,11 @@ BEGIN
         OR json_type(NEW.attestation_json, '$.competency.state_digest_sha256') IS NOT 'text'
       ))
     );
+
+  -- The evidence list is plain JSON as the Worker writes it. JSON5 would pass json_each below and
+  -- then fail every reader that parses the stored list.
+  SELECT RAISE(ABORT, 'production_gate_evidence_invalid')
+  WHERE NEW.basis = 'person_attestation' AND NOT json_valid(NEW.evidence_refs_json);
 
   -- 0 to 10 distinct references, each resolved by the Worker against this job: exactly one
   -- verified, manifested, stored Work Package capture with the checksum of the stored object or,

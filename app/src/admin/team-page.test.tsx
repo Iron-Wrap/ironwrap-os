@@ -270,10 +270,13 @@ describe("TeamPage", () => {
     ).toBeInTheDocument();
     // The reload is the only action: nothing saves or removes over the access shown.
     expect(within(panel()).queryByRole("button", { name: /Save|Remove/ })).toBeNull();
+    // Save is gone, so the next action holds the focus rather than the top of the page.
+    expect(screen.getByRole("button", { name: "Reload Grace’s access" })).toHaveFocus();
 
     // 3 · After reload.
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
     expect(await screen.findByText("Chosen somewhere else a moment ago")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Grace’s access" })).toHaveFocus();
     expect(
       within(screen.getByText("Chosen somewhere else a moment ago").closest("label")!).getByRole(
         "radio",

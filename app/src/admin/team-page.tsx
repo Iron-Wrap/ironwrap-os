@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Info, UserPlus, Users } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -512,6 +512,20 @@ function AccessPanel({
   const pendingRole = change?.kind === "role" ? change.role : null;
   const pendingRemove = change?.kind === "remove";
 
+  // The button a person pressed is often gone in the state it leads to (Save becomes Reload,
+  // Reload becomes Save). Focus then falls to the page; hand it to this state's primary action,
+  // or the role choice, rather than to the top of the page. Focus held anywhere else is left alone.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const stateKey = `${person.active}:${change?.kind ?? "none"}:${conflict?.state ?? "none"}`;
+  useEffect(() => {
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const panel = panelRef.current;
+    const target =
+      panel?.querySelector<HTMLElement>('button[data-variant="primary"]:not(:disabled)') ??
+      panel?.querySelector<HTMLElement>("input[type=radio]:checked:not(:disabled)");
+    target?.focus();
+  }, [stateKey]);
+
   let body: ReactNode;
   if (person.is_self) {
     body = (
@@ -563,7 +577,12 @@ function AccessPanel({
         ) : null}
         <InfoLine>{statusLine}</InfoLine>
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" busy={unresolved.reloading} onClick={onReload}>
+          <Button
+            type="button"
+            className="whitespace-normal"
+            busy={unresolved.reloading}
+            onClick={onReload}
+          >
             {reloadLabel}
           </Button>
           {nextStep ? (
@@ -571,7 +590,7 @@ function AccessPanel({
               type="button"
               variant="secondary"
               disabled
-              className={pendingRemove ? "ml-auto" : undefined}
+              className={cn("whitespace-normal", pendingRemove && "ml-auto")}
             >
               {nextStep}
             </Button>
@@ -594,10 +613,15 @@ function AccessPanel({
         <hr className="border-border" />
         <InfoLine>{cannotApplyLine(person.display_name, conflict?.info ?? null)}</InfoLine>
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" busy={busy === "restore"} onClick={onRestore}>
+          <Button
+            type="button"
+            className="whitespace-normal"
+            busy={busy === "restore"}
+            onClick={onRestore}
+          >
             Give {first} access back
           </Button>
-          <Button type="button" variant="secondary" disabled>
+          <Button type="button" variant="secondary" className="whitespace-normal" disabled>
             Save {first}’s access · after they’re back
           </Button>
         </div>
@@ -609,7 +633,12 @@ function AccessPanel({
     ) : (
       <>
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" busy={busy === "restore"} onClick={onRestore}>
+          <Button
+            type="button"
+            className="whitespace-normal"
+            busy={busy === "restore"}
+            onClick={onRestore}
+          >
             Give {first} access back
           </Button>
         </div>
@@ -637,10 +666,16 @@ function AccessPanel({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
           {pendingRole ? (
             <>
-              <Button type="button" busy={busy === "save"} onClick={() => onSave(pendingRole)}>
+              <Button
+                type="button"
+                className="whitespace-normal"
+                busy={busy === "save"}
+                onClick={() => onSave(pendingRole)}
+              >
                 Save {first}’s access
               </Button>
-              <p className="text-sm">
+              {/* The line wraps before the buttons do, so Remove keeps its place at the end. */}
+              <p className="min-w-0 flex-1 basis-56 text-sm">
                 Your change is not saved yet:{" "}
                 {whatTheChangeDoes(`${first}’s`, person.role, pendingRole)}.
               </p>
@@ -649,7 +684,7 @@ function AccessPanel({
           <Button
             type="button"
             variant={pendingRemove ? "primary" : "secondary"}
-            className="ml-auto"
+            className="ml-auto whitespace-normal"
             busy={busy === "remove"}
             onClick={onRemove}
           >
@@ -662,6 +697,7 @@ function AccessPanel({
 
   return (
     <div
+      ref={panelRef}
       id={id}
       role="region"
       aria-label={`${person.display_name}’s access`}

@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 
+import AxeBuilder from "@axe-core/playwright";
 import { devices, expect, test, type Page } from "@playwright/test";
 
 import { assertNoFrappeDesk } from "./frappe-desk-guard";
@@ -210,6 +211,8 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await expect(page.getByRole("radio", { name: /^Sales/ })).toBeDisabled();
     await assertNoHorizontalScroll(page, "access conflict");
     await assertActionsAreReachable(page, "access conflict");
+    const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(axe.violations).toEqual([]);
     await page.screenshot({
       path: `${SHOT_DIR}/onboarding-05b-access-conflict.png`,
       fullPage: true,

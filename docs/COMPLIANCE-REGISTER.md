@@ -158,6 +158,22 @@ for the threshold calculation. Reverify at each reporting period.
 Customer evidence may never be committed to the source repository. Use synthetic fixtures in Git
 and approved private evidence stores for real records.
 
+### Customer portal first open of a proposal
+
+Migration `0163_customer_portal_proposal_views.sql` adds one customer data class: the first time
+someone holding a customer's portal link opened a published proposal.
+
+| Control | Record |
+|---|---|
+| Stored | Tenant, portal link, job, customer, proposal pack, revision and publication ids, and one timestamp |
+| Not stored | IP address, user agent, location, or any later visit |
+| Meaning | Someone holding the customer's link opened the proposal. It does not show that the customer read it, and a forwarded link opens it too |
+| Purpose | Evidence that the offer was opened through the customer's link, kept in the business's own record of the terms it offered |
+| Staff opens | Not recorded: a request with a live staff session, or from the device that issued the link, is skipped |
+| Retention | 3 years (owner decision), with the commercial record. The table is append-only, no prune deletes it, and the portal prune keeps every link a row names. Removing a row after its 3 years needs an explicit disposal step, which does not exist yet |
+| Notice | The portal privacy notice says that the first open is recorded and kept for 3 years. The owner and the privacy owner approve that text |
+| Switch | `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in every checked-in environment. It stays off until the owner approves the notice text |
+
 ## AI model providers
 
 Every model call that can carry customer, worker or job data names one provider account below by

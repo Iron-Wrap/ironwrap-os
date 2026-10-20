@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 135,
+      "count": 136,
       "latest": "0205_agent_step_pair_index.sql"
     }
   },
@@ -619,6 +619,23 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
 - `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.
+
+Customer portal first open of a proposal (B1, migration 0163):
+
+- `customer_portal_proposal_views` keeps one append-only row per portal link and proposal
+  publication: the first time someone holding the customer's link opened that published proposal.
+  It stores ids and one timestamp, never an IP address, user agent, location or later visit. D1
+  checks the link, job, customer and `published` publication, and holds the time to within 60
+  seconds of its own clock. The data class, its 3-year retention and its notice are recorded in
+  [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
+- Fail-closed by default. `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in production,
+  local and qa, and stays off until the owner approves the portal privacy notice text that says
+  the first open is recorded and kept for 3 years. A staff session or the device that issued the
+  link is never recorded, and a failed write never changes the customer's page.
+- `readProposalFirstViewedAt` (`workers-bus/src/customer-portal-store.ts`) is the staff read behind
+  frame 8(b): the earliest open of the revision's live publication, at or after its latest send
+  attempt started. No staff read model calls it yet; the delivery read model it belongs to is not
+  built.
 
 ELEC-133 legible authority refusals and a clean first boot (2026-08-21):
 

@@ -767,6 +767,15 @@ normalization function. This lets the owner see exactly which saved contact cust
 `null` means no public contact, while a null phone beside a valid email means the phone will not
 be shown. Defaults never become a public contact.
 
+### Customer portal first open
+
+When `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED=true`, a resolve that shows a published proposal
+keeps the first open of that publication through that link in `customer_portal_proposal_views`
+(0163): ids and one timestamp, nothing about the device. A request with a live staff session, or
+from the device that issued the link, is skipped, and a failed write is logged without changing
+the response. The flag is `false` in every checked-in environment until the owner approves the
+portal privacy notice that says the first open is recorded and kept for 3 years.
+
 ### Crew office contact
 
 Authenticated `GET /api/v1/jobs/{job}` and the universal work-object read include

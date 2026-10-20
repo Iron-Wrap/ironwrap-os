@@ -32,6 +32,11 @@ export const OWNER_REPORTS: Record<string, { title: string; delivery: "push" | "
 };
 
 const MAX_OBJECTS = 24;
+/**
+ * How long after an import run's start its failed items are read: longer than an import takes to
+ * write its issues (one Worker request). ponytail: raise it if imports grow past one request.
+ */
+export const IMPORT_SETTLE_MS = 10 * 60_000;
 const DURATION = /^P(?:(\d+)M|(\d+)D|T(\d+)H|T(\d+)M)$/;
 
 export interface ConditionOutcome {
@@ -108,6 +113,78 @@ async function earnedAutonomy(db: AgentDb, tenantId: string) {
 }
 
 export const WATCH_CONDITIONS: Record<string, Condition> = {
+  import_failed_items: {
+    version: "1",
+    // An import run with failed items: crm_import_issues rows of kind `row_error`, each by its source
+    // key. The face proposes retrying only those (import.retry_failed); there is no import-run object
+    // for the run to read, so the digest carries each run's keys. An import writes its run row first
+    // and its issues as it goes, under the run's start time, so each firing reads the runs that
+    // started one settle time before its window: consecutive windows meet, and none reads a run whose
+    // issues may still be arriving.
+    async evaluate(db, tenantId, since, now) {
+      const from = new Date(Date.parse(since) - IMPORT_SETTLE_MS).toISOString();
+      const to = new Date(Date.parse(now) - IMPORT_SETTLE_MS).toISOString();
+      const FAILED = "SELECT 1 FROM crm_import_issues i WHERE i.tenant_id = r.tenant_id AND i.run_id = r.run_id AND i.kind = 'row_error'";
+      const runs = await rows<{ run_id: string; adapter: string; pipeline_key: string; source_label: string | null; created_at: string; source_row_count: number }>(
+        db,
+        `SELECT r.run_id, r.adapter, r.pipeline_key, r.source_label, r.created_at, r.source_row_count FROM crm_import_runs r
+          WHERE r.tenant_id = ? AND r.created_at >= ? AND r.created_at < ? AND EXISTS (${FAILED})
+          ORDER BY r.created_at DESC, r.run_id ASC LIMIT ${MAX_OBJECTS}`,
+        tenantId,
+        from,
+        to,
+      );
+      const total = await count(
+        db,
+        `SELECT COUNT(*) AS n FROM crm_import_runs r WHERE r.tenant_id = ? AND r.created_at >= ? AND r.created_at < ? AND EXISTS (${FAILED})`,
+        tenantId,
+        from,
+        to,
+      );
+      const importRuns = [];
+      for (const run of runs) {
+        const failed = await count(db, "SELECT COUNT(*) AS n FROM crm_import_issues WHERE tenant_id = ? AND run_id = ? AND kind = 'row_error'", tenantId, run.run_id);
+        const keys = await rows<{ import_key: string }>(
+          db,
+          `SELECT DISTINCT import_key FROM crm_import_issues WHERE tenant_id = ? AND run_id = ? AND kind = 'row_error' AND import_key IS NOT NULL
+            ORDER BY import_key ASC LIMIT 100`,
+          tenantId,
+          run.run_id,
+        );
+        // The keys a retry can name, all of them (a retry takes at most 100), and the failures with no key.
+        const keyed = await count(
+          db,
+          "SELECT COUNT(DISTINCT import_key) AS n FROM crm_import_issues WHERE tenant_id = ? AND run_id = ? AND kind = 'row_error' AND import_key IS NOT NULL",
+          tenantId,
+          run.run_id,
+        );
+        const keyless = await count(
+          db,
+          "SELECT COUNT(*) AS n FROM crm_import_issues WHERE tenant_id = ? AND run_id = ? AND kind = 'row_error' AND import_key IS NULL",
+          tenantId,
+          run.run_id,
+        );
+        importRuns.push({
+          import_run_id: run.run_id,
+          adapter: run.adapter,
+          pipeline_key: run.pipeline_key,
+          source_label: run.source_label,
+          recorded_at: run.created_at,
+          source_row_count: run.source_row_count,
+          failed_items: failed,
+          source_keys: keys.map((key) => key.import_key),
+          source_keys_total: keyed,
+          keyless_failed: keyless,
+        });
+      }
+      return {
+        holds: total > 0,
+        objects: [],
+        digest: { import_runs: importRuns, total },
+        summary: `${total} import ${total === 1 ? "run has" : "runs have"} failed items`,
+      };
+    },
+  },
   new_leads: {
     version: "1",
     async evaluate(db, tenantId, since) {

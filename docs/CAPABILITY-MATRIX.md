@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 134,
-      "latest": "0204_agent_watch_firings.sql"
+      "count": 135,
+      "latest": "0205_agent_step_pair_index.sql"
     }
   },
   "test_observation_policy": {
@@ -239,8 +239,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   the decision's own transaction, with an owned-store readback on its receipt. Every other
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
-  step to the reviewer to do by hand, and `lead_fact.propose` has no registered arguments yet, so
-  its steps abstain. The app has no import screen, so the Retry a person would use for an import
+  step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event
+  the run answers and may cite only that event (`signal/<id>`); the host offers it once the
+  receptionist's allowlist names it. The app has no import screen, so the Retry a person would use for an import
   run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
   too, and never under Done for you; closing that draft when the matching act lands or a newer
@@ -273,11 +274,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   one in ten) is not built yet. An audit from the reviewed run's own model family is not
   accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
   v3 close keeps its output only on one of them; a close on an older close model is accepted and
-  is not held to a qualification. The host sends the v3 close only when the Worker names close
-  model 3 exactly, so the host half of the close-model rule (send the newest shape no newer than
-  the Worker's) is not built yet. A synthetic run closes only on a Worker whose
-  `AGENT_DATA_CLASS` is synthetic. Six cadence watches fire from the cron with deterministic
-  conditions (`0204`), the four owner reports and `delegation_review` among them; the other watches
+  is not held to a qualification. The host sends the newest close model it knows that is no newer
+  than the Worker's: the v3 close to a Worker naming close model 3 or later. A synthetic run closes only on a Worker whose
+  `AGENT_DATA_CLASS` is synthetic. Seven cadence watches fire from the cron with deterministic
+  conditions (`0204`), the four owner reports, `delegation_review` and `import_failed_items` among
+  them; the other watches
   and every event-triggered watch do not fire yet, and nothing emits `injection.flagged` yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
   takes signals in the order the Worker feeds them: the contract's queue priority is not

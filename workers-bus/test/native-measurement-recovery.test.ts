@@ -103,7 +103,7 @@ test("0084 native measurement authority is complete in backup and restore contra
     // claims and the AI team tables
     // and manual measurement history are included in both D1 inventories.
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 275);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 390);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 391);
     assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 749);
   }
 

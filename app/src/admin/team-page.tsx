@@ -516,7 +516,7 @@ function TeamRow({
 }
 
 /**
- * One person's access (SET-03 "Access conflict states", frozen build 7): the role choice saved by
+ * One person's access (SET-03 "Access conflict states"): the role choice saved by
  * an explicit Save, removing and giving access back, and the states a change refused because the
  * access moved elsewhere goes through. Each state has exactly one primary action; a next step that
  * waits on something is a disabled secondary button that says what it waits for.

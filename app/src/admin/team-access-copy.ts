@@ -2,11 +2,11 @@ import { roleLabel, type AppRole } from "../lib/roles";
 import type { AccessConflict, AccessState } from "./admin-contracts";
 
 // The derived parts of the access-conflict copy on Settings › People (SET-03 "Access conflict
-// states", frozen build 7, with Track B's rulings for #13). The frozen sentences live in
-// team-page.tsx; only what a person's one role and their access can say is composed here: what is
-// different now, what a pending change does, who made the other change and when. There is no
-// pronoun field, so a person is "they"; a clause that would open on a pronoun opens on the first
-// name. The Worker cannot name the device a change came from, so the viewer's own other change is
+// states", with Track B's rulings for #13). The design's own sentences live in team-page.tsx;
+// only what a person's one role and their access can say is composed here: what is different
+// now, what a pending change does, who made the other change and when. There is no pronoun
+// field, so a person is "they"; a clause that would open on a pronoun opens on the first name.
+// The Worker cannot name the device a change came from, so the viewer's own other change is
 // always "somewhere else".
 
 /** "Grace" for "Grace Obi". */

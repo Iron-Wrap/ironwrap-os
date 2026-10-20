@@ -4,6 +4,7 @@ import {
   type AuthorityRequirement,
 } from "./authority-records.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { firmStartGateEvidence } from "./production-firm-start.ts";
 
 export interface RecordOperatingJobAssignmentInput {
   tenantId: string;
@@ -111,37 +112,51 @@ export async function recordOperatingJobAssignment(
   );
   const assignmentId = `assignment:${(await sha256Hex(`${command.tenant_id}:${idempotencyKeyHash}`)).slice(0, 40)}`;
   const assignmentVersion = current ? current.assignment_version + 1 : 1;
+  // The gate evidence the firm start rests on, read live, and the Crew entries it appends by policy
+  // (migration 0159). This is the one check every firm start passes.
+  const gates = await firmStartGateEvidence(env, {
+    tenantId: command.tenant_id,
+    roofJobId: command.roof_job_id,
+    assignmentId,
+    crewId: command.crew_id,
+    crewVersion: command.expected_crew_version,
+    scheduledStart: command.scheduled_start,
+    scheduledEnd: command.scheduled_end,
+    actorUserId: command.actor_user_id,
+    createdAt,
+  });
+  if (!gates.ok) fail(gates.code);
+  const insert = env.DB.prepare(
+    `INSERT INTO operating_job_assignments (
+       assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version,
+       crew_id, crew_version, assigned_users_json, scheduled_start, scheduled_end,
+       authority_requirements_json, authority_requirements_sha256,
+       supersedes_assignment_id, correction_reason, actor_user_id,
+       command_fingerprint, idempotency_key_hash, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    assignmentId,
+    command.tenant_id,
+    command.roof_job_id,
+    assignmentVersion,
+    command.expected_roof_job_version,
+    command.crew_id,
+    command.expected_crew_version,
+    canonicalJson(roster),
+    command.scheduled_start,
+    command.scheduled_end,
+    canonicalJson(command.authority_requirements),
+    await sha256Hex(canonicalJson(command.authority_requirements)),
+    command.supersedes_assignment_id,
+    command.correction_reason,
+    command.actor_user_id,
+    commandFingerprint,
+    idempotencyKeyHash,
+    createdAt,
+  );
   try {
-    await env.DB.prepare(
-      `INSERT INTO operating_job_assignments (
-         assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version,
-         crew_id, crew_version, assigned_users_json, scheduled_start, scheduled_end,
-         authority_requirements_json, authority_requirements_sha256,
-         supersedes_assignment_id, correction_reason, actor_user_id,
-         command_fingerprint, idempotency_key_hash, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-      .bind(
-        assignmentId,
-        command.tenant_id,
-        command.roof_job_id,
-        assignmentVersion,
-        command.expected_roof_job_version,
-        command.crew_id,
-        command.expected_crew_version,
-        canonicalJson(roster),
-        command.scheduled_start,
-        command.scheduled_end,
-        canonicalJson(command.authority_requirements),
-        await sha256Hex(canonicalJson(command.authority_requirements)),
-        command.supersedes_assignment_id,
-        command.correction_reason,
-        command.actor_user_id,
-        commandFingerprint,
-        idempotencyKeyHash,
-        createdAt,
-      )
-      .run();
+    // One batch: the Crew entries and the assignment commit together or not at all.
+    await env.DB.batch([...gates.crewEntries, insert]);
   } catch (error) {
     const concurrent = await assignmentByIdempotency(
       env,
@@ -149,6 +164,10 @@ export async function recordOperatingJobAssignment(
       idempotencyKeyHash,
     );
     if (concurrent) return replay(concurrent, commandFingerprint);
+    // A gate that moved between the read above and the batch answers with the ledger's own code.
+    const message = error instanceof Error ? error.message : String(error);
+    const ledger = message.match(/\bproduction_gate_[a-z_]+/)?.[0];
+    if (ledger && !message.includes("operating_job_assignment_")) fail(ledger);
     throw error;
   }
   const assignment = await assignmentById(env, command.tenant_id, assignmentId);

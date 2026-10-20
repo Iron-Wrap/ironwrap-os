@@ -27,7 +27,7 @@
 --   * `reverse` / `person_reversal`: by an owner or production user, with a reason, of the entry
 --     that holds the gate's current state. The gate returns to `blocked` and nothing is deleted.
 -- 0158 re-creates the trigger 0155 re-creates, so it applies after 0155: D1 applies pending
--- migrations in name order, and qa and production receive both after 0156 and 0200-0204. Every time
+-- migrations in name order, and qa and production receive both after 0156 and 0200-0205. Every time
 -- rule reads D1's own clock, never the entry's `created_at`. 0153's replace guard is then re-created
 -- unchanged so that, firing newest first, a replayed key still reports itself before validation.
 -- Object counts are unchanged.
@@ -88,7 +88,7 @@ BEGIN
   WHERE NEW.actor_kind = 'policy'
     AND NOT (
       NEW.gate = 'Deposit'
-      AND NEW.policy_version = 'ironwrap.deposit-gate.v1'
+      AND NEW.policy_version IS 'ironwrap.deposit-gate.v1'
       AND NEW.actor_user_id IS NULL AND NEW.actor_role IS NULL
       AND NEW.requested_by IS NULL AND NEW.request_id IS NULL AND NEW.self_approval = 0
       AND NEW.reason IS NULL AND NEW.reason_redacted_at IS NULL AND NEW.attestation_json IS NULL
@@ -158,6 +158,7 @@ BEGIN
     );
 
   -- A person entry: an active user of this tenant holding the recorded role right now.
+  -- [0155] Scoped to person entries; a policy entry names no user.
   SELECT RAISE(ABORT, 'production_gate_clearance_actor_invalid')
   WHERE NEW.actor_kind = 'person' AND NOT EXISTS (
     SELECT 1

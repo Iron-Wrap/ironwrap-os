@@ -44,7 +44,7 @@ class SqliteD1 {
       );
       this.raw.exec(readFileSync(new URL("../migrations/0201_agent_delegation.sql", import.meta.url), "utf8"));
       // The operating core that shared-memory subjects resolve against, and the fact-version ledger.
-      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql", "0204_agent_watch_firings.sql"])
+      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql", "0204_agent_watch_firings.sql", "0205_agent_step_pair_index.sql"])
         this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     const user = this.raw.prepare(
@@ -218,7 +218,7 @@ test("a run opens once per key, resumes while open, and refuses a closed key", a
   assert.equal(opened.status, 201);
   assert.equal(opened.body.context.facts[0].fact_id, `signal/${id}`);
   assert.equal(opened.body.context.facts[0].trust, "untrusted_text");
-  assert.deepEqual(opened.body.tools.map((tool: { action_id: string }) => tool.action_id).sort(), ["exception.escalate", "fact.explain", "handoff.create", "lead_fact.confirm", "note.add"]);
+  assert.deepEqual(opened.body.tools.map((tool: { action_id: string }) => tool.action_id).sort(), ["exception.escalate", "fact.explain", "handoff.create", "lead_fact.confirm", "lead_fact.propose", "note.add"]);
   // The receptionist owns no people-only act; the face names its four, as names and not tools.
   assert.deepEqual(opened.body.people_only, []);
   const face = await signal(db, { specialist_id: "orchestrator", subject: null, dedupe_key: "owner-ask:people-only" });
@@ -241,7 +241,7 @@ test("steps are decided by policy, recorded as receipts, and a repeated step ans
   const id = await signal(db);
   const run = (await call("POST", "/api/v1/agents/runs", { signal_id: id, specialist_id: "lead_concierge", host_run_key: "r".repeat(40) })).body;
   const base = `/api/v1/agents/runs/${run.run_id}`;
-  assert.equal((await call("GET", `${base}/tools`)).body.tools.length, 5);
+  assert.equal((await call("GET", `${base}/tools`)).body.tools.length, 6);
 
   const read = await call("POST", `${base}/steps`, explain(`signal/${id}`));
   assert.equal(read.body.decision, "recorded");

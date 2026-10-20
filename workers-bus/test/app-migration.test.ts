@@ -2286,11 +2286,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // person attest Materials, Safety, Access and Weather and reverse a gate entry, all through the
     // gate ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 137);
+    assert.equal(migrations.length, 138);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0204_agent_watch_firings.sql",
+      "0205_agent_step_pair_index.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2429,7 +2429,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // append-only guards, and re-creates the projection guard and both 0143 guards under their names.
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
-    // three named indexes and six guards.
+    // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
+    // action.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
     // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
@@ -2441,7 +2442,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // guards under their names, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 277, indexes: 378, triggers: 760 },
+      { tables: 277, indexes: 379, triggers: 760 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3779,8 +3780,8 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155 and 0158 applied after 0156 and 0200-0204 on a database already through them give the sorted schema", async () => {
-  // qa and production applied 0156 and 0200-0204 first, so they receive 0155 and then 0158 after
+test("0155 and 0158 applied after 0156 and 0200-0205 on a database already through them give the sorted schema", async () => {
+  // qa and production applied 0156 and 0200-0205 first, so they receive 0155 and then 0158 after
   // them. 0158 re-creates the validate guard 0155 re-creates, so it must land after 0155.
   const late = ["0155_od01_deposit_policy.sql", "0158_production_gate_attestations.sql"];
   const migrations = await d1MigrationNames();

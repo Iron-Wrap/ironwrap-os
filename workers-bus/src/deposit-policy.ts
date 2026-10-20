@@ -4,8 +4,8 @@
 // The policy is the owner's append-only setting; the latest revision is in force and a tenant with
 // none is `od01_payment_on_completion`, because no prepaid licence is the safe default.
 //   * `od01_payment_on_completion` (OD-01): a contract has no deposit and is paid on completion,
-//     `deposit_percent: 0` with `payment_schedule: ["completion"]`. Its Deposit gate is recorded
-//     by policy as not required by the contract, with the contract version as evidence.
+//     `deposit_percent: 0` with `payment_schedule: ["completion"]`. The policy records its Deposit
+//     gate, with the contract version as evidence, and it reads "No deposit under this contract".
 //   * `md13_deposit` (MD-13): a contract carries a deposit of 1 to 100 percent, which clears
 //     Deposit once that contract's own deposit invoice is reconciled, or the owner waives it.
 // Terms the policy does not allow are refused by name, `deposit_terms_not_allowed_by_policy`, at
@@ -31,6 +31,8 @@ export type TenantDepositPolicy = (typeof TENANT_DEPOSIT_POLICIES)[number];
 export const DEFAULT_TENANT_DEPOSIT_POLICY: TenantDepositPolicy = "od01_payment_on_completion";
 export const DEPOSIT_GATE_POLICY_VERSION = "ironwrap.deposit-gate.v1";
 export const DEPOSIT_TERMS_REFUSAL = "deposit_terms_not_allowed_by_policy";
+/** How the Deposit gate reads once the policy recorded a contract with no deposit (OD-01). */
+export const NO_DEPOSIT_UNDER_CONTRACT = "No deposit under this contract";
 
 const MAX_BODY_BYTES = 4 * 1024;
 const MIN_REASON_LENGTH = 8;
@@ -508,15 +510,18 @@ export async function recordContractDepositGate(
     return { outcome: "not_applicable", reason: "contract_terms_invalid" };
   }
 
+  // The key is made of the binding. "/" is outside the alphabet a person's Idempotency-Key may
+  // use, so no person entry can take this key ahead of the policy.
   const keyHash = await sha256Hex(
-    `${DEPOSIT_GATE_POLICY_VERSION}:${entry.basis}:${facts.acceptance_binding_id}`,
+    `policy/${DEPOSIT_GATE_POLICY_VERSION}/${entry.basis}/${facts.acceptance_binding_id}`,
   );
   const clearanceId = `pgc_${(await sha256Hex(`${input.tenantId}:${keyHash}`)).slice(0, 40)}`;
   const recorded = async (): Promise<boolean> =>
     !!(await env.DB.prepare(
       `SELECT 1 AS found FROM production_gate_clearances
-        WHERE tenant_id = ? AND idempotency_key_hash = ?`,
-    ).bind(input.tenantId, keyHash).first());
+        WHERE tenant_id = ? AND idempotency_key_hash = ? AND actor_kind = 'policy'
+          AND basis = ? AND contract_binding_id = ?`,
+    ).bind(input.tenantId, keyHash, entry.basis, facts.acceptance_binding_id).first());
   if (await recorded()) {
     return { outcome: "already_recorded", basis: entry.basis, clearance_id: clearanceId };
   }
@@ -540,8 +545,8 @@ export async function recordContractDepositGate(
       customer_quote_id: facts.customer_quote_id,
       quote_revision_number: Number(facts.quote_revision_number),
       terms_hash: facts.terms_hash,
+      // The whole terms are bound by `terms_hash`; only the bounded deposit is copied here.
       deposit_percent: parsed.deposit_percent ?? null,
-      payment_schedule: parsed.payment_schedule ?? null,
       quote_approval: quoteApproval(facts),
       proposal_revision_id: facts.proposal_revision_id,
       publication_event_id: facts.publication_event_id,

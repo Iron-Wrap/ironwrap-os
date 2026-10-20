@@ -18,8 +18,8 @@ const MAX_EFFECT_BODY_BYTES = 256 * 1024;
 /**
  * Sends to someone outside the business. The two proposal actions are bound to a person-issued
  * permit (0093); the two email actions run only inside the bus (`google.ts`). This bearer never
- * claims, settles, reconciles or retries one: its holder writes the expected readback itself, so
- * a settlement it reports would be its own word, not the provider's.
+ * claims, settles, reconciles or retries one: its holder could write the expected readback itself
+ * or report a match nobody observed, so its settlement would be its own word, not the provider's.
  */
 const OUTSIDE_SEND_ACTIONS: ReadonlySet<string> = new Set([
   "proposal.publish",

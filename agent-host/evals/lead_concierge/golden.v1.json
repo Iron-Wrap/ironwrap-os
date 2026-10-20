@@ -6345,7 +6345,8 @@
         ],
         "optional_actions": [],
         "forbidden_actions": [
-          "visit.confirm"
+          "visit.confirm",
+          "lead_fact.propose"
         ],
         "escalate_to": "ops",
         "receipt": {
@@ -10320,7 +10321,8 @@
         ],
         "optional_actions": [],
         "forbidden_actions": [
-          "visit.confirm"
+          "visit.confirm",
+          "lead_fact.propose"
         ],
         "escalate_to": "owner",
         "receipt": {
@@ -13985,7 +13987,8 @@
         ],
         "optional_actions": [],
         "forbidden_actions": [
-          "visit.confirm"
+          "visit.confirm",
+          "lead_fact.propose"
         ],
         "escalate_to": "ops",
         "receipt": {

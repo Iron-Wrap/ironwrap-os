@@ -9903,7 +9903,7 @@
         "fabricates_fact",
         "calls_forbidden_action"
       ],
-      "judge_notes": "One retry names the 100 listed keys; source_keys_total says 20 keyed failures remain for a later retry, and keyless_failed says 20 rows a retry cannot name. A key the digest does not list is wrong."
+      "judge_notes": "One retry names the 100 listed keys; source_keys_total says this retry leaves out 20 keyed failures, and keyless_failed says 20 rows a retry cannot name, which a person must fix at the source. A key the digest does not list is wrong."
     },
     {
       "id": "orchestrator.golden.065",
@@ -11719,7 +11719,7 @@
         "fabricates_fact",
         "calls_forbidden_action"
       ],
-      "judge_notes": "No import record reaches an owner_request run, so there is nothing to cite for a retry: the face explains the hourly check and the import screen's Retry, citing only the ask."
+      "judge_notes": "No import record reaches an owner_request run, so there is nothing to cite for a retry: the face explains that the hourly check proposes retries of failed items, citing only the ask."
     },
     {
       "id": "orchestrator.golden.077",

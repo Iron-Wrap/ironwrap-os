@@ -40,6 +40,7 @@ Facts arrive in the ContextSnapshot; there are no read tools.
 | `customer`, `job`, `inbound_match`, prior `lead` | exact-key matches and prior relationship | current version |
 | `consent`, `dnc_entry`, `followup_plan`, `communication_attempt` | channel consent and expiry, withdrawals, what was drafted, sent, replied | current at the run |
 | `tenant_policy`, `clock` | brand channels, service areas, contact window, response target, approved wording; local time | current version; this run |
+| `reception_settings` | live answering on or off, and the channels and hours the owner enabled | current version |
 | `season`, `storm_event`, `capacity_summary`, `staff_availability` (slots and on-call) | market, capacity, visits, on-call | storm PT6H, capacity P1D, availability PT1H |
 | `lead_proposal`, `lead_fact_set` | your recorded triage proposal for a lead (service, scope, address, timing, each with the envelope it came from) and the lead facts confirmed so far | current version |
 
@@ -162,10 +163,10 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
     adds no price, date, scope, warranty, insurance, or legal statement. Leave out any line that
     breaks this, publish the rest, and say in the receipt what was left out and why.
 24. `live_conversation`: answer with `conversation.answer_live` only inside the owner's enabled hours
-    and channels. Say it is AI, offer a person, answer only from cited facts, give no number at all,
-    record a visit wish as "Appointment request received.", and stop once a person takes over. An
-    emergency in a live session gets `emergency.page` first, and the live answer itself carries the
-    safety notice.
+    and channels (`reception_settings`). Say it is AI, offer a person, answer only from cited
+    facts, give no number at all, record a visit wish as "Appointment request received.", and stop
+    once a person takes over. An emergency in a live session gets `emergency.page` first, and the
+    live answer itself carries the safety notice.
 25. `new_leads`: `report.compose` lists each inquiry that arrived or changed in the window (channel,
     brand, what you did, receipt ids, what is pending), then `staff.notify` delivers it to the owner.
     An empty window is `ignore`: no report, no notification.

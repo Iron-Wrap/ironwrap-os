@@ -237,6 +237,14 @@ describe("AppShell", () => {
     );
   });
 
+  it("names the team page People in the breadcrumb, as its title does", () => {
+    mocks.pathname = "/settings/team";
+    renderShell(ownerSession);
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(crumbs).toHaveTextContent("Settings/Settings/People");
+    expect(within(crumbs).getByText("People")).toHaveAttribute("aria-current", "page");
+  });
+
   it("selects Decisions for the validated decision view and Now for ordinary work", () => {
     mocks.search = { show: "decide" };
     mocks.searchStr = "?show=decide";

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -280,6 +280,12 @@ describe("TeamPage", () => {
     expect(within(panel()).queryByRole("button", { name: /Save|Remove/ })).toBeNull();
     // Save is gone, so the next action holds the focus rather than the top of the page.
     expect(screen.getByRole("button", { name: "Reload Grace’s access" })).toHaveFocus();
+    // The conflict line describes the action that answers it.
+    expect(
+      screen.getByRole("button", { name: "Reload Grace’s access" }),
+    ).toHaveAccessibleDescription(
+      "You changed Grace Obi’s access somewhere else a moment ago: their role is now Operations, not Sales.",
+    );
 
     // 3 · After reload.
     await user.click(screen.getByRole("button", { name: "Reload Grace’s access" }));
@@ -288,7 +294,8 @@ describe("TeamPage", () => {
         name: /^Operations · changed somewhere else a moment ago/,
       }),
     ).not.toBeChecked();
-    expect(screen.getByRole("button", { name: "Save Grace’s access" })).toHaveFocus();
+    // Only a refusal moves the focus; the reload leaves it where it was.
+    expect(screen.getByRole("button", { name: "Save Grace’s access" })).not.toHaveFocus();
     expect(screen.getByRole("radio", { name: /^Production/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /^Sales/ })).toBeEnabled();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
@@ -455,6 +462,11 @@ describe("TeamPage", () => {
     ).toBeInTheDocument();
     expect(within(panel()).queryByRole("radio")).toBeNull();
     expect(primaryButtons()).toEqual(["Give Grace access back"]);
+    expect(
+      screen.getByRole("button", { name: "Give Grace access back" }),
+    ).toHaveAccessibleDescription(
+      "Your change cannot apply: you removed Grace Obi from the team somewhere else a moment ago.",
+    );
     const later = screen.getByRole("button", { name: "Save Grace’s access · after they’re back" });
     expect(later).toBeDisabled();
     expect(later).toHaveAttribute("data-variant", "secondary");
@@ -692,6 +704,51 @@ describe("TeamPage", () => {
     expect(screen.getByRole("radio", { name: /^Production/ })).toBeChecked();
     expect(within(panel()).getByText("Not saved")).toBeInTheDocument();
   });
+
+  it("leaves the focus alone while a role is chosen on a browser that does not focus on click", async () => {
+    vi.mocked(listAppUsers).mockResolvedValue(people(ada, grace()) as never);
+    const user = userEvent.setup();
+    await openGrace(user);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    // Safari and iOS leave the focus on the page when a radio is pressed.
+    fireEvent.click(screen.getByRole("radio", { name: /^Production/ }));
+    expect(await screen.findByRole("button", { name: "Save Grace’s access" })).not.toHaveFocus();
+    expect(document.body).toHaveFocus();
+  });
+
+  it.each([
+    ["an address already on the team", 400, "expected_access_version_required"],
+    ["two people adding the same address at once", 409, "access_version_conflict"],
+  ])(
+    "says when %s is added again, keeps the address, and offers no retry",
+    async (_, status, code) => {
+      vi.mocked(listAppUsers).mockResolvedValue(people(ada, grace()) as never);
+      vi.mocked(provisionAppUser).mockRejectedValue(new ApiError({ status, code, message: code }));
+      const user = userEvent.setup();
+      renderWithSession(<TeamPage />, sessionFor("owner"));
+
+      await screen.findByRole("heading", { name: "People" });
+      await user.type(screen.getByLabelText("Their name"), "Grace Obi");
+      await user.type(screen.getByLabelText("Their work email"), "grace@freshco.example");
+      await user.click(screen.getByRole("button", { name: "Add to the company" }));
+
+      const line = await screen.findByText(
+        "grace@freshco.example is already on your team, so nothing was added.",
+      );
+      expect(
+        screen.getByText("To change their access, use “See access” on their row."),
+      ).toBeInTheDocument();
+      // Information, never an error, and no retry: the typed address stays to be corrected.
+      expect(line.closest("section")).toHaveAttribute("role", "status");
+      expect(screen.queryByText("That person was not added")).toBeNull();
+      expect(screen.queryByRole("button", { name: /try again|retry/i })).toBeNull();
+      expect(screen.getByLabelText("Their work email")).toHaveValue("grace@freshco.example");
+      // The list is read again, so the row it points to is there.
+      await waitFor(() => expect(listAppUsers).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole("button", { name: "See access for Grace Obi" })).toBeInTheDocument();
+    },
+  );
 
   it("explains a rejected addition instead of showing the server's code", async () => {
     vi.mocked(listAppUsers).mockResolvedValue(people(ada) as never);

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { AccessConflict } from "./admin-contracts";
 import {
+  ALREADY_ON_TEAM_NEXT,
+  alreadyOnTeam,
   cannotApplyLine,
   changedElsewhere,
   conflictLine,
@@ -164,5 +166,11 @@ describe("the derived access-conflict phrases", () => {
     );
     expect(changedElsewhere(conflict(nameless), NOW)).toBe("changed a moment ago");
     expect(changedElsewhere(conflict(null, ago(3 * DAY)), NOW)).toBe("changed on Sat at 15:30");
+  });
+
+  it("say an address is already on the team in Track B's words", () => {
+    expect(`${alreadyOnTeam("grace@freshco.example")} ${ALREADY_ON_TEAM_NEXT}`).toBe(
+      "grace@freshco.example is already on your team, so nothing was added. To change their access, use “See access” on their row.",
+    );
   });
 });

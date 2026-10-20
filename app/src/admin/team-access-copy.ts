@@ -146,3 +146,10 @@ export const REMOVING_EXPLAINS =
  * their access unpaired a crew phone (`crew_phone_unpaired`).
  */
 export const PAIR_AGAIN = "a crew phone must be paired again";
+
+/** Adding an address already on the list (or added by someone else a moment ago), Track B's line. */
+export function alreadyOnTeam(email: string): string {
+  return `${email} is already on your team, so nothing was added.`;
+}
+
+export const ALREADY_ON_TEAM_NEXT = "To change their access, use “See access” on their row.";

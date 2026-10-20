@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { ApiError } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
@@ -23,11 +24,13 @@ import {
 } from "./admin-contracts";
 import { AdminPageHeader } from "./admin-shell";
 import {
+  ALREADY_ON_TEAM_NEXT,
   MAY_BE_OUT_OF_DATE,
   OUT_OF_DATE_NOTE,
   PAIR_AGAIN,
   REMOVE_EXPLAINS,
   REMOVING_EXPLAINS,
+  alreadyOnTeam,
   cannotApplyLine,
   changedElsewhere,
   conflictLine,
@@ -180,7 +183,7 @@ function TeamContent() {
         title="People"
         description="Choose what each person can do. Nobody can change their own access."
       />
-      <AddTeammate onAdded={refresh} />
+      <AddTeammate onListChanged={refresh} />
       <TeamList
         users={users.data.users}
         drafts={drafts}
@@ -194,7 +197,7 @@ function TeamContent() {
   );
 }
 
-function AddTeammate({ onAdded }: { onAdded: () => void }) {
+function AddTeammate({ onListChanged }: { onListChanged: () => void }) {
   const session = useSession();
   const emailId = useId();
   const nameId = useId();
@@ -205,12 +208,17 @@ function AddTeammate({ onAdded }: { onAdded: () => void }) {
   const [added, setAdded] = useState<string>();
 
   const add = useMutation({
-    mutationFn: () => provisionAppUser(session, { email, displayName, role, active: true }),
+    mutationFn: (input: { email: string; displayName: string; role: AppRole }) =>
+      provisionAppUser(session, { ...input, active: true }),
     onSuccess: (result) => {
       setAdded(result.user.display_name);
       setEmail("");
       setDisplayName("");
-      onAdded();
+      onListChanged();
+    },
+    // Already on the list, or added by someone else a moment ago: the list shows their row.
+    onError: (error) => {
+      if (isAlreadyOnTeam(error)) onListChanged();
     },
   });
 
@@ -231,7 +239,7 @@ function AddTeammate({ onAdded }: { onAdded: () => void }) {
           onSubmit={(event) => {
             event.preventDefault();
             setAdded(undefined);
-            add.mutate();
+            add.mutate({ email: email.trim(), displayName, role });
           }}
         >
           <div className="grid gap-5 sm:grid-cols-2">
@@ -278,7 +286,12 @@ function AddTeammate({ onAdded }: { onAdded: () => void }) {
             <p className="text-xs leading-5 text-muted">{ROLE_HELP[role]}</p>
           </div>
 
-          {add.isError ? (
+          {/* No retry: the form keeps the typed address, so a typo can be fixed and sent again. */}
+          {add.isError && isAlreadyOnTeam(add.error) ? (
+            <Notice tone="info" title={alreadyOnTeam(add.variables?.email ?? email)}>
+              {ALREADY_ON_TEAM_NEXT}
+            </Notice>
+          ) : add.isError ? (
             <Notice tone="danger" title="That person was not added">
               {adminErrorMessage(add.error)}
             </Notice>
@@ -558,19 +571,20 @@ function AccessPanel({
   const pendingRole = change?.kind === "role" ? change.role : null;
   const pendingRemove = change?.kind === "remove";
 
-  // The button a person pressed is often gone in the state it leads to (Save becomes Reload,
-  // Reload becomes Save). Focus then falls to the page; hand it to this state's primary action,
-  // or the role choice, rather than to the top of the page. Focus held anywhere else is left alone.
+  // A refusal (409) replaces the button that was pressed (Save or Remove becomes Reload). When it
+  // arrives, focus goes to this state's primary action, unless it is held outside this panel.
+  // Only a refusal moves it: browsers that do not focus a pressed button or radio (Safari, iOS)
+  // leave focus on the page while someone is still choosing, and that must not pull it away.
   const panelRef = useRef<HTMLDivElement>(null);
-  const stateKey = `${person.active}:${change?.kind ?? "none"}:${conflict?.state ?? "none"}`;
+  const statusId = useId();
+  const refusedAt = conflict?.state === "stale" ? conflict.observedAt : null;
   useEffect(() => {
-    if (document.activeElement && document.activeElement !== document.body) return;
+    if (refusedAt === null) return;
     const panel = panelRef.current;
-    const target =
-      panel?.querySelector<HTMLElement>('button[data-variant="primary"]:not(:disabled)') ??
-      panel?.querySelector<HTMLElement>("input[type=radio]:checked:not(:disabled)");
-    target?.focus();
-  }, [stateKey]);
+    const held = document.activeElement;
+    if (held && held !== document.body && !panel?.contains(held)) return;
+    panel?.querySelector<HTMLElement>('button[data-variant="primary"]:not(:disabled)')?.focus();
+  }, [refusedAt]);
 
   const removeLine = <EditLine lead={`Remove ${first} from the team:`}>{REMOVE_EXPLAINS}</EditLine>;
   const hadAccess = `they can sign in again with the access they had (${roleLabel(person.role)})${
@@ -616,11 +630,12 @@ function AccessPanel({
             Your change: {whatTheChangeDoes(`${first}’s`, person.role, pendingRole)}.
           </PendingLine>
         ) : null}
-        <InfoLine>{statusLine}</InfoLine>
+        <InfoLine id={statusId}>{statusLine}</InfoLine>
         <div className="flex flex-wrap items-center gap-3">
           <Button
             type="button"
             className="whitespace-normal"
+            aria-describedby={statusId}
             busy={unresolved.reloading}
             onClick={onReload}
           >
@@ -653,11 +668,14 @@ function AccessPanel({
           Your change: {whatTheChangeDoes(`${first}’s`, person.role, pendingRole)}.
         </PendingLine>
         <hr className="border-border" />
-        <InfoLine>{cannotApplyLine(person.display_name, conflict?.info ?? null, now)}</InfoLine>
+        <InfoLine id={statusId}>
+          {cannotApplyLine(person.display_name, conflict?.info ?? null, now)}
+        </InfoLine>
         <div className="flex flex-wrap items-center gap-3">
           <Button
             type="button"
             className="whitespace-normal"
+            aria-describedby={statusId}
             busy={restoreBusy}
             onClick={onRestore}
           >
@@ -839,13 +857,21 @@ function PendingLine({ children }: { children: ReactNode }) {
   );
 }
 
+/** The address is already on the list: 400 for a known person, 409 when two adds race. */
+function isAlreadyOnTeam(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "expected_access_version_required" || error.code === "access_version_conflict")
+  );
+}
+
 function sentenceCase(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 /** Ink text with the info glyph: a conflict is information, never an error. */
-function InfoLine({ children }: { children: ReactNode }) {
+function InfoLine({ id, children }: { id?: string; children: ReactNode }) {
   return (
-    <p role="status" className="flex items-start gap-2.5">
+    <p id={id} role="status" className="flex items-start gap-2.5">
       <Info className="mt-0.5 size-[1.125rem] shrink-0" aria-hidden="true" />
       <span>{children}</span>
     </p>

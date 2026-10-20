@@ -171,7 +171,7 @@ someone holding a customer's portal link opened a published proposal.
 | Purpose | Evidence that the offer was opened through the customer's link, kept in the business's own record of the terms it offered |
 | Staff opens | Not recorded: a request with a live staff session, or from the device that issued the link, is skipped |
 | Retention | 3 years (owner decision), with the commercial record. The table is append-only, no prune deletes it, and the portal prune keeps every link a row names. Removing a row after its 3 years needs an explicit disposal step, which does not exist yet |
-| Notice | The portal privacy notice says that the first open is recorded and kept for 3 years. The owner and the privacy owner approve that text |
+| Notice | The portal privacy notice must say that the first open is recorded and kept for 3 years. The owner and the privacy owner approve that text before the switch goes on |
 | Switch | `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in every checked-in environment. It stays off until the owner approves the notice text |
 
 ## AI model providers

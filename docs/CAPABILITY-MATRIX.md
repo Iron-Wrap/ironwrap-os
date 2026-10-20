@@ -630,12 +630,13 @@ Customer portal first open of a proposal (B1, migration 0163):
   [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
 - Fail-closed by default. `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in production,
   local and qa, and stays off until the owner approves the portal privacy notice text that says
-  the first open is recorded and kept for 3 years. A staff session or the device that issued the
-  link is never recorded, and a failed write never changes the customer's page.
+  the first open is recorded and kept for 3 years. An open with a live staff session, or from the
+  device that issued the link, is never recorded, and a failed write never changes the customer's
+  page.
 - `readProposalFirstViewedAt` (`workers-bus/src/customer-portal-store.ts`) is the staff read behind
   frame 8(b): the earliest open of the revision's live publication, at or after its latest send
-  attempt started. No staff read model calls it yet; the delivery read model it belongs to is not
-  built.
+  attempt started, and none while that attempt has not started. No staff read model calls it yet;
+  the delivery read model it belongs to is not built.
 
 ELEC-133 legible authority refusals and a clean first boot (2026-08-21):
 

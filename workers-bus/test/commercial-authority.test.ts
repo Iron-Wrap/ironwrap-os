@@ -310,6 +310,7 @@ test("native commercial authority records a complete autonomous customer contrac
       "effect:commercial-publication:0001",
     );
     assert.equal(effect.effect.state, "succeeded");
+    // The first send succeeded but is not recorded yet, so D1 refuses a second send (0156).
     await assert.rejects(
       executePublicationEffect(
         env,
@@ -318,7 +319,7 @@ test("native commercial authority records a complete autonomous customer contrac
         PROPOSAL_REVISION_ID,
         "effect:commercial-publication:duplicate",
       ),
-      errorCode("effect_proposal_failed"),
+      errorCode("effect_proposal_delivery_unconfirmed"),
     );
 
     const publication = await recordCommercialProposalPublication(env, publicationInput, at(4));

@@ -281,7 +281,11 @@ export interface ReceiptWords {
   kind: StatusKind;
   /** Held: why it waits, in one sentence. */
   why?: string;
-  /** Done, with something the person should know: "This answer could not be shown as a page." */
+  /**
+   * Done, with something the person should know, such as `VIEW_REFUSED`: "IronWrap couldn't draw
+   * the layout you asked for, so the answer is in the text above. To try once more, type your
+   * request in other words in the box below."
+   */
   note?: string;
   /** Held: the one next step. */
   next?: string;
@@ -355,15 +359,15 @@ const HELD: Record<HeldReason, (where: string) => { why: string; next: string }>
 };
 const notItsJob = { why: "This is not something it may do.", next: "A person decides." };
 
+/** An answer whose generated view was refused: the answer text stands; asking again may draw it. */
+export const VIEW_REFUSED =
+  "IronWrap couldn't draw the layout you asked for, so the answer is in the text above. To try once more, type your request in other words in the box below.";
+
 /**
  * The state words of one receipt. `by` names the person who declined, undid or did the step;
  * `where` is the outside system in plain words ("QuickBooks"); `waitingFor` is where a person's
  * answer still has to arrive ("the phone").
  */
-/** An answer whose generated view was refused: the answer text stands; asking again may draw it. */
-export const VIEW_REFUSED =
-  "IronWrap couldn't draw the layout you asked for, so the answer is in the text above. To try once more, type your request in other words in the box below.";
-
 export function receiptWords(
   receipt: Pick<ContractReceipt, "outcome" | "policy" | "needs_from_you">,
   {

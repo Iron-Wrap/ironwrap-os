@@ -461,7 +461,7 @@ async function latestProposalDeliveryAnswer(
   env: AppEnv,
   tenantId: string,
   effectId: string,
-): Promise<{ answer_id: string; outcome: ProposalDeliveryOutcome } | null> {
+): Promise<{ answer_id: string; kind: "confirmation" | "correction"; outcome: ProposalDeliveryOutcome } | null> {
   const confirmation = await env.DB.prepare(
     `SELECT confirmation_id, outcome FROM proposal_delivery_confirmations
       WHERE tenant_id = ? AND effect_id = ?`,
@@ -479,9 +479,13 @@ async function latestProposalDeliveryAnswer(
   const successor = new Map(
     (corrections.results ?? []).map((row) => [row.supersedes_confirmation_id ?? row.supersedes_correction_id, row]),
   );
-  let latest = { answer_id: confirmation.confirmation_id, outcome: confirmation.outcome };
+  let latest: { answer_id: string; kind: "confirmation" | "correction"; outcome: ProposalDeliveryOutcome } = {
+    answer_id: confirmation.confirmation_id,
+    kind: "confirmation",
+    outcome: confirmation.outcome,
+  };
   for (let next = successor.get(latest.answer_id); next; next = successor.get(latest.answer_id)) {
-    latest = { answer_id: next.correction_id, outcome: next.outcome };
+    latest = { answer_id: next.correction_id, kind: "correction", outcome: next.outcome };
   }
   return latest;
 }
@@ -561,7 +565,7 @@ export async function recordProposalDeliveryCorrection(
       latest_answer_id: latest.answer_id,
     });
   }
-  const supersedesConfirmation = latest.answer_id.startsWith("delivery-confirmation:");
+  const supersedesConfirmation = latest.kind === "confirmation";
   const createdAt = input.now ?? new Date().toISOString();
   const correctionId = `delivery-correction:${keyHash.slice(0, 40)}`;
   try {
@@ -1049,8 +1053,9 @@ export async function recordCommercialProposalPublication(
   }
   const eventId = await recordId("commercial-publication", input.tenantId, idempotencyKeyHash);
   try {
-    // The recorder goes first, in the same batch: D1 refuses a new publication event without the
-    // person who recorded it (0161), and refuses a recorder added to an event already recorded.
+    // The person who recorded the event (0161), in the same batch and first: D1 refuses a recorder
+    // added to an event that already exists. Requiring one for every new event is a later contract
+    // migration, so a rolled-back Worker that does not write it keeps recording publications.
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO commercial_proposal_publication_recorders

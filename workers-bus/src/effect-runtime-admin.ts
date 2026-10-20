@@ -139,12 +139,15 @@ function effectError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
   // D1's single-flight guard (0156): this proposal revision's last send is not confirmed delivered.
   if (value.includes("proposal_delivery_unconfirmed")) return "proposal_delivery_unconfirmed";
+  // D1's late-answer guard (0161): an unknown proposal send is not "not executed" before its
+  // provider's answer can no longer arrive.
+  if (value.includes("proposal_delivery_answer_may_be_late")) return "proposal_delivery_answer_may_be_late";
   return /^effect_[a-z0-9_]+$/.test(value) ? value : "effect_runtime_error";
 }
 
 function effectErrorStatus(error: unknown): 400 | 409 | 422 | 500 {
   const code = effectError(error);
-  if (code === "proposal_delivery_unconfirmed") return 409;
+  if (code === "proposal_delivery_unconfirmed" || code === "proposal_delivery_answer_may_be_late") return 409;
   if (code === "effect_runtime_error") return 500;
   if (code.includes("conflict") || code.includes("in_flight") || code.includes("lease_lost")) return 409;
   if (code.includes("missing") || code.includes("invalid") || code.includes("expired") || code.includes("denied")) return 422;

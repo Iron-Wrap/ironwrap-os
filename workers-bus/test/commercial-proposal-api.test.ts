@@ -2253,7 +2253,7 @@ test("the settle and reconcile admin routes date what they record by the server'
   }
 });
 
-test("every new publication names the active person who recorded it, and D1 holds that rule", async () => {
+test("every new publication names the active person who recorded it, and D1 holds the recorder rules", async () => {
   const { db, env, prepare } = await publicationReady("recorded-by");
   const effectId = "effect:recorded-by:success";
   try {
@@ -2262,22 +2262,7 @@ test("every new publication names the active person who recorded it, and D1 hold
     await runSend(env, permit, effectId, "success");
     assert.equal(effectState(db, effectId).state, "succeeded");
 
-    // Without the person who recorded it, D1 refuses the publication event itself.
-    const stored = db.raw.prepare(
-      "SELECT command_fingerprint, evidence_digest FROM commercial_authority_permits WHERE permit_id = ?",
-    ).get(permit.permit_id) as { command_fingerprint: string; evidence_digest: string };
-    const eventId = "commercial-publication:direct-0161-recorder";
     const occurredAt = new Date().toISOString();
-    const insertEvent = () => db.raw.prepare(
-      `INSERT INTO commercial_proposal_publication_events (
-         publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
-         publication_version, previous_state, state, policy_permit_id,
-         proposal_publication_approval_id, external_effect_id, command_fingerprint,
-         idempotency_key_hash, evidence_digest, occurred_at
-       ) VALUES (?, ?, ?, ?, 1, 'draft', 'published', ?, NULL, ?, ?, ?, ?, ?)`,
-    ).run(eventId, TENANT, REVISION, PACK, permit.permit_id, effectId, stored.command_fingerprint,
-      "9".repeat(64), stored.evidence_digest, occurredAt);
-    assert.throws(insertEvent, /commercial_publication_recorder_required/);
     const insertRecorder = (publicationEventId: string, userId: string, recordedAt: string) =>
       db.raw.prepare(
         `INSERT INTO commercial_proposal_publication_recorders
@@ -2335,6 +2320,100 @@ test("every new publication names the active person who recorded it, and D1 hold
       () => db.raw.prepare("DELETE FROM commercial_proposal_publication_recorders").run(),
       /commercial_proposal_publication_recorders_append_only/,
     );
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 refuses moving an unknown send to not executed before its provider's late-answer window", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const { db, env, prepare } = await publicationReady("late-reconcile-d1");
+  const effectId = "effect:late-reconcile-d1:unknown";
+  try {
+    const prepared = await prepare("late-reconcile-d1-prepare");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "unknown");
+    const unknown = effectState(db, effectId);
+    assert.equal(unknown.state, "unknown");
+    const after = (ms: number) => new Date(Date.parse(unknown.updated_at) + ms).toISOString();
+    const notExecuted = (updatedAt: string) => db.raw.prepare(
+      `UPDATE external_effects SET state = 'reconciled', result_code = 'reconciled_not_executed',
+         updated_at = ? WHERE effect_id = ? AND state = 'unknown'`,
+    ).run(updatedAt, effectId);
+    // Any path, not only a person's record: inside the window the move itself is refused.
+    assert.throws(() => notExecuted(after(EFFECT_ATTEMPT_LEASE_MS - 1_000)), /proposal_delivery_answer_may_be_late/);
+    assert.equal(effectState(db, effectId).state, "unknown");
+    notExecuted(after(EFFECT_ATTEMPT_LEASE_MS + 1_000));
+    assert.equal(effectState(db, effectId).state, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
+test("the reconcile route cannot call an unknown send not executed before the late-answer window has passed", async () => {
+  const {
+    handleExternalEffectClaim,
+    handleExternalEffectReconciliation,
+    handleExternalEffectSettlement,
+  } = await import("../src/effect-runtime-admin.ts");
+  const { db, env, prepare } = await publicationReady("late-reconcile-route");
+  const adminPost = (path: string, body: Record<string, unknown>) =>
+    new Request(`https://worker.example.com${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+      body: JSON.stringify(body),
+    });
+  // A provider whose late answers stop after 1.5 seconds keeps this test fast; 0161 records only
+  // the default, and a provider adds its own row with its source.
+  db.raw.prepare(
+    "INSERT INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES (?, ?, ?)",
+  ).run("synthetic-quick-provider", 1_500, "Synthetic provider for this test: answers stop after 1.5 seconds.");
+  const unknownSend = async (key: string, effectId: string) => {
+    const prepared = await prepare(key);
+    assert.equal(prepared.status, 201, await prepared.clone().text());
+    const { permit } = await prepared.json() as { permit: Permit };
+    const send = { ...effectRequest(permit, effectId), provider: "synthetic-quick-provider" };
+    const claimed = await handleExternalEffectClaim(adminPost("/admin/effects/claim", {
+      effect: send,
+      authority: send.authority,
+    }), env);
+    assert.equal(claimed.status, 200, await claimed.clone().text());
+    const { attempt } = await claimed.json() as { attempt: { attempt_id: string } };
+    const settled = await handleExternalEffectSettlement(adminPost("/admin/effects/settle", {
+      effectId,
+      settlement: { attemptId: attempt.attempt_id, outcome: "unknown", detailCode: "provider_timeout" },
+    }), env);
+    assert.equal(settled.status, 200, await settled.clone().text());
+    assert.equal(effectState(db, effectId).state, "unknown");
+  };
+  const reconcile = (effectId: string, outcome: "executed" | "not_executed") =>
+    handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
+      effectId,
+      outcome,
+      evidence: { provider: `checked: ${outcome}` },
+      // Ignored: the route reconciles on the server's clock.
+      now: "2099-01-01T00:00:00.000Z",
+    }), env);
+  try {
+    const first = "effect:late-reconcile-route:first";
+    await unknownSend("late-reconcile-route-prepare-1", first);
+    const early = await reconcile(first, "not_executed");
+    assert.equal(early.status, 409);
+    assert.deepEqual(await early.json(), { error: "proposal_delivery_answer_may_be_late" });
+    assert.equal(effectState(db, first).state, "unknown");
+
+    const windowEnds = Date.parse(effectState(db, first).updated_at) + 1_500;
+    while (Date.now() <= windowEnds + 50) await new Promise((done) => setTimeout(done, 100));
+    const late = await reconcile(first, "not_executed");
+    assert.equal(late.status, 200, await late.clone().text());
+    assert.equal(effectState(db, first).state, "reconciled");
+
+    // The wait guards "not executed" only: a provider answer that it did go out settles at once.
+    const second = "effect:late-reconcile-route:second";
+    await unknownSend("late-reconcile-route-prepare-2", second);
+    const executed = await reconcile(second, "executed");
+    assert.equal(executed.status, 200, await executed.clone().text());
+    assert.equal(effectState(db, second).state, "succeeded");
   } finally {
     db.close();
   }

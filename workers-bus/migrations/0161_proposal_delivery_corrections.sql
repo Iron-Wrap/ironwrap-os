@@ -15,15 +15,21 @@
 --
 -- Late answers. "Not delivered" on an `unknown` send waits until the provider's own answer can no
 -- longer arrive. 0156 enforced that in the Worker alone, with EFFECT_ATTEMPT_LEASE_MS for every
--- provider. `proposal_delivery_confirmations_validate_insert` now refuses it in D1 too, with the
--- window of the send's provider from `proposal_delivery_late_answer_windows`, or the default row
--- `*`. The Worker reads the same rows, and each row says where its value comes from.
+-- provider. D1 now refuses it too, with the window of the send's provider from
+-- `proposal_delivery_late_answer_windows`, or the default row `*`: for a person's "not delivered"
+-- (`proposal_delivery_confirmations_validate_insert`), and for any other move of an unknown send
+-- to "not executed", the effect runtime's reconcile included
+-- (`external_effects_proposal_late_answer_guard`). The Worker reads the same rows, and each row
+-- says where its value comes from.
 --
--- Recorded by. A new `commercial_proposal_publication_events` row needs a
--- `commercial_proposal_publication_recorders` row, written just before it in the same batch, that
--- names the active person who recorded it. The recorder is a table of its own, not a column: the
--- final-invoice basis hashes whole publication rows (`SELECT *`), so a new column would change the
--- hash of every publication recorded before this migration. Older publications have no recorder.
+-- Recorded by. The Worker writes a `commercial_proposal_publication_recorders` row, naming the
+-- active person who recorded it, in the same batch as each new publication event. The recorder is
+-- a table of its own, not a column: the final-invoice basis hashes whole publication rows
+-- (`SELECT *`), so a new column would change the hash of every publication recorded before this
+-- migration. Older publications have no recorder. Requiring a recorder for every new publication
+-- event is the contract step of this expand/contract change: it lands in a later migration, once
+-- no Worker without the recorder write can be rolled back to. Until then the previous Worker keeps
+-- recording publications after this migration applies.
 --
 -- Re-created from 0156 under their names: `proposal_delivery_confirmations_validate_insert` and
 -- `external_effect_binding_guard`. Every 0156 line is carried over unchanged and in order, and
@@ -206,6 +212,23 @@ BEFORE DELETE ON proposal_delivery_corrections BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_corrections_append_only');
 END;
 
+-- No path moves an unknown proposal send to "not executed" before its provider's late-answer window
+-- has passed, counted from when the send became unknown to the time of the move: not a person's
+-- "not delivered" (checked at its insert as well), and not the effect runtime's reconcile.
+CREATE TRIGGER IF NOT EXISTS external_effects_proposal_late_answer_guard
+BEFORE UPDATE OF state ON external_effects
+WHEN OLD.state = 'unknown' AND NEW.state = 'reconciled'
+  AND OLD.action = 'proposal.publish' AND OLD.aggregate_type = 'proposal_publication'
+BEGIN
+  SELECT RAISE(ABORT, 'proposal_delivery_answer_may_be_late')
+    WHERE julianday(NEW.updated_at) < julianday(OLD.updated_at) + COALESCE(
+      (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late
+        WHERE late.provider = OLD.provider),
+      (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late
+        WHERE late.provider = '*')
+    ) / 86400000.0;
+END;
+
 -- `proposal_delivery_confirmations_validate_insert` (0156), re-created with one addition: the
 -- late-answer wait.
 DROP TRIGGER IF EXISTS proposal_delivery_confirmations_validate_insert;
@@ -375,16 +398,4 @@ END;
 CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_recorders_append_only_delete
 BEFORE DELETE ON commercial_proposal_publication_recorders BEGIN
   SELECT RAISE(ABORT, 'commercial_proposal_publication_recorders_append_only');
-END;
-
--- Every publication event recorded from now on names who recorded it, at the event's own time.
-CREATE TRIGGER IF NOT EXISTS commercial_publication_recorder_guard
-BEFORE INSERT ON commercial_proposal_publication_events BEGIN
-  SELECT RAISE(ABORT, 'commercial_publication_recorder_required')
-    WHERE NOT EXISTS (
-      SELECT 1 FROM commercial_proposal_publication_recorders recorder
-       WHERE recorder.publication_event_id = NEW.publication_event_id
-         AND recorder.tenant_id = NEW.tenant_id
-         AND recorder.recorded_at = NEW.occurred_at
-    );
 END;

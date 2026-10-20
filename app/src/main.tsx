@@ -1,13 +1,16 @@
 import "./styles.css";
+// First, so no contract module builds a schema before zod is told not to compile parsers.
+import "./lib/zod-jitless";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { StrictMode, useEffect } from "react";
+import { StrictMode, startTransition, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { primeFieldBootstrap } from "./auth/field-bootstrap";
+import { primeFieldBootstrap, settlePrimedFieldBootstrap } from "./auth/field-bootstrap";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
+import { sessionQueryKey } from "./auth/session-query";
 import { applyThemePreference, readThemePreference } from "./lib/theme";
 import { router } from "./router";
 import { primeStorageDurability } from "./storage/durability";
@@ -57,8 +60,38 @@ function App() {
   );
 }
 
-createRoot(rootElement).render(
+const root = createRoot(rootElement);
+const app = (
   <StrictMode>
     <App />
-  </StrictMode>,
+  </StrictMode>
 );
+
+if (window.location.pathname === "/today") {
+  // A paired phone's bootstrap usually lands while the bundle is still downloading. Rendering
+  // before reading it put two renders of the checking state on the phone's main thread ahead of
+  // the run sheet; rendering once it is read puts the verified screen first, and the boot shell
+  // covers the wait either way. A failed read is left for the session query and its retry
+  // policy. The verified screen is the whole shell, so it mounts as a transition and React
+  // yields between components instead of holding the main thread for the entire mount.
+  //
+  // The router resolves `/today` before that mount for the same reason: left to the router's
+  // mount effect, its first load lands inside the commit and re-renders the whole shell
+  // synchronously. A load that fails here is simply repeated by that effect.
+  void Promise.all([settlePrimedFieldBootstrap(), router.load().catch(() => undefined)]).then(
+    ([bootstrap]) => {
+      if (bootstrap) {
+        try {
+          queryClient.setQueryData(sessionQueryKey, bootstrap);
+        } catch (error) {
+          // Unseeded, the session query takes this same answer instead of reading it again.
+          primeFieldBootstrap(async () => bootstrap);
+          console.error("Could not hand the field bootstrap to the first render", error);
+        }
+      }
+      startTransition(() => root.render(app));
+    },
+  );
+} else {
+  root.render(app);
+}

@@ -314,12 +314,13 @@ BEFORE UPDATE ON external_effects BEGIN
       (OLD.state = 'compensating' AND NEW.state = 'compensated') OR
       -- [0161] A correction moves a hand-settled proposal send between delivered (succeeded) and
       -- [0161] not delivered (reconciled), only when that correction is the newest answer in the
-      -- [0161] send's chain and the move carries its time.
+      -- [0161] send's chain, the move carries its time, and the send has not moved on since.
       (OLD.state = 'succeeded' AND NEW.state = 'reconciled' AND EXISTS ( -- [0161]
         SELECT 1 FROM proposal_delivery_corrections correction -- [0161]
          WHERE correction.effect_id = OLD.effect_id -- [0161]
            AND correction.outcome = 'not_delivered' -- [0161]
            AND correction.created_at = NEW.updated_at -- [0161]
+           AND julianday(correction.created_at) >= julianday(OLD.updated_at) -- [0161]
            AND NOT EXISTS ( -- [0161]
              SELECT 1 FROM proposal_delivery_corrections later -- [0161]
               WHERE later.supersedes_correction_id = correction.correction_id))) OR -- [0161]
@@ -328,6 +329,7 @@ BEFORE UPDATE ON external_effects BEGIN
          WHERE correction.effect_id = OLD.effect_id -- [0161]
            AND correction.outcome = 'delivered' -- [0161]
            AND correction.created_at = NEW.updated_at -- [0161]
+           AND julianday(correction.created_at) >= julianday(OLD.updated_at) -- [0161]
            AND NOT EXISTS ( -- [0161]
              SELECT 1 FROM proposal_delivery_corrections later -- [0161]
               WHERE later.supersedes_correction_id = correction.correction_id))) OR -- [0161]

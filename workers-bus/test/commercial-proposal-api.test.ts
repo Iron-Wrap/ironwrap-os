@@ -1738,3 +1738,597 @@ test("single flight holds across publication versions, and any commercial person
     db.close();
   }
 });
+
+// ---------------------------------------------------------------------------------------------
+// #15b-1 (0161): corrections as superseding rows, the late-answer wait in D1 with a window per
+// provider, server time on the settle and reconcile admin routes, and who recorded a publication.
+
+const CORRECT_PATH = "/api/v1/commercial/proposal-publications/delivery-corrections";
+
+type Correction = {
+  correction_id: string;
+  supersedes_confirmation_id: string | null;
+  supersedes_correction_id: string | null;
+  outcome: string;
+};
+
+function effectState(db: SqliteD1, effectId: string): { state: string; updated_at: string; result_code: string | null } {
+  return db.raw.prepare("SELECT state, updated_at, result_code FROM external_effects WHERE effect_id = ?")
+    .get(effectId) as { state: string; updated_at: string; result_code: string | null };
+}
+
+test("a correction supersedes the newest answer, moves the send between delivered and not delivered, and is audited", async () => {
+  const { db, env, prepare } = await publicationReady("correction-chain");
+  const effectId = "effect:correction:conflict";
+  try {
+    const prepared = await prepare("correction-chain-prepare-1");
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "conflict");
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const other = await personSession(db, env, OTHER_OPS_ID, "sales");
+
+    // Nothing was recorded by hand yet, so there is nothing to change.
+    const tooEarly = await personPost(env, ops, CORRECT_PATH, "correction-chain-too-early", {
+      external_effect_id: effectId,
+      supersedes_id: "delivery-confirmation:not-recorded-0001",
+      outcome: "not_delivered",
+      note: "Nothing was recorded for this send yet.",
+    });
+    assert.equal(tooEarly.status, 409);
+    assert.deepEqual(await tooEarly.json(), {
+      error: "proposal_delivery_nothing_recorded",
+      delivery_state: "manual_exception",
+    });
+
+    const first = await personPost(env, ops, CONFIRM_PATH, "correction-chain-confirm", {
+      external_effect_id: effectId,
+      outcome: "delivered",
+      note: "Called the customer; the email is in their inbox.",
+    });
+    assert.equal(first.status, 201, await first.clone().text());
+    const confirmationId = (await first.json() as { confirmation: { confirmation_id: string } })
+      .confirmation.confirmation_id;
+    assert.equal(effectState(db, effectId).state, "succeeded");
+
+    // A malformed body is refused before anything is read.
+    const malformed = await personPost(env, ops, CORRECT_PATH, "correction-chain-malformed", {
+      external_effect_id: effectId,
+      supersedes_id: confirmationId,
+      outcome: "not_delivered",
+      note: "short",
+    });
+    assert.equal(malformed.status, 400);
+    assert.deepEqual(await malformed.json(), { error: "invalid_proposal_delivery_correction" });
+
+    const toNotDelivered = {
+      external_effect_id: effectId,
+      supersedes_id: confirmationId,
+      outcome: "not_delivered",
+      note: "They called back: that was an older email, not this proposal.",
+    };
+    const corrected = await personPost(env, ops, CORRECT_PATH, "correction-chain-1", toNotDelivered);
+    assert.equal(corrected.status, 201, await corrected.clone().text());
+    const firstCorrection = await corrected.json() as {
+      correction: Correction;
+      effect: { external_effect_id: string; state: string };
+      replayed: boolean;
+    };
+    assert.deepEqual(firstCorrection.effect, { external_effect_id: effectId, state: "reconciled" });
+    assert.equal(firstCorrection.correction.supersedes_confirmation_id, confirmationId);
+    assert.equal(firstCorrection.correction.supersedes_correction_id, null);
+    assert.equal(effectState(db, effectId).state, "reconciled");
+    assert.equal(effectState(db, effectId).result_code, "reconciled_not_executed");
+
+    // The same key and request replays; the same key with another request conflicts.
+    const replay = await personPost(env, ops, CORRECT_PATH, "correction-chain-1", toNotDelivered);
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+    const conflicting = await personPost(env, ops, CORRECT_PATH, "correction-chain-1", {
+      ...toNotDelivered,
+      note: "Another note under the same key.",
+    });
+    assert.equal(conflicting.status, 409);
+    assert.deepEqual(await conflicting.json(), { error: "proposal_delivery_correction_replay_conflict" });
+
+    // Correcting the first answer again would fork the history: only the newest is corrected.
+    const fork = await personPost(env, other, CORRECT_PATH, "correction-chain-fork", {
+      ...toNotDelivered,
+      outcome: "delivered",
+      note: "Correcting the answer someone already corrected.",
+    });
+    assert.equal(fork.status, 409);
+    assert.deepEqual(await fork.json(), {
+      error: "proposal_delivery_correction_not_latest",
+      latest_answer_id: firstCorrection.correction.correction_id,
+    });
+
+    const back = await personPost(env, other, CORRECT_PATH, "correction-chain-2", {
+      external_effect_id: effectId,
+      supersedes_id: firstCorrection.correction.correction_id,
+      outcome: "delivered",
+      note: "Found it in their spam folder after all.",
+    });
+    assert.equal(back.status, 201, await back.clone().text());
+    const secondCorrection = (await back.json() as { correction: Correction }).correction;
+    assert.equal(secondCorrection.supersedes_correction_id, firstCorrection.correction.correction_id);
+    assert.equal(secondCorrection.supersedes_confirmation_id, null);
+    assert.equal(effectState(db, effectId).state, "succeeded");
+    assert.equal(effectState(db, effectId).result_code, "delivery_confirmed_by_hand");
+
+    // Restating the same outcome with a new note is a record only; the send stays where it is.
+    const stateBefore = effectState(db, effectId);
+    const restated = await personPost(env, ops, CORRECT_PATH, "correction-chain-3", {
+      external_effect_id: effectId,
+      supersedes_id: secondCorrection.correction_id,
+      outcome: "delivered",
+      note: "Checked again with the customer; they have it.",
+    });
+    assert.equal(restated.status, 201, await restated.clone().text());
+    assert.deepEqual(effectState(db, effectId), stateBefore);
+
+    // The history: the first answer is unchanged and each correction names the one before it.
+    assert.deepEqual(
+      { ...db.raw.prepare("SELECT outcome, note FROM proposal_delivery_confirmations WHERE confirmation_id = ?").get(confirmationId) },
+      { outcome: "delivered", note: "Called the customer; the email is in their inbox." },
+    );
+    assert.deepEqual(
+      (db.raw.prepare(
+        `SELECT outcome, corrected_by_user_id, corrected_by_role FROM proposal_delivery_corrections
+          WHERE effect_id = ? ORDER BY created_at, correction_id`,
+      ).all(effectId) as Array<Record<string, string>>).map((row) => ({ ...row })),
+      [
+        { outcome: "not_delivered", corrected_by_user_id: OPS_ID, corrected_by_role: "ops" },
+        { outcome: "delivered", corrected_by_user_id: OTHER_OPS_ID, corrected_by_role: "sales" },
+        { outcome: "delivered", corrected_by_user_id: OPS_ID, corrected_by_role: "ops" },
+      ],
+    );
+    // One audit row per answer, written by the insert's own statement.
+    assert.deepEqual(
+      (db.raw.prepare(
+        `SELECT action, approved_by FROM audit_log WHERE automation = 'proposal_delivery'
+          ORDER BY rowid`,
+      ).all() as Array<Record<string, string>>).map((row) => ({ ...row })),
+      [
+        { action: "proposal_delivery_delivered", approved_by: OPS_ID },
+        { action: "proposal_delivery_correction_not_delivered", approved_by: OPS_ID },
+        { action: "proposal_delivery_correction_delivered", approved_by: OTHER_OPS_ID },
+        { action: "proposal_delivery_correction_delivered", approved_by: OPS_ID },
+      ],
+    );
+
+    // A caller that is not a person's own session is refused, as for the first answer.
+    const notPerson = await handleAuthenticatedRoute(
+      request(CORRECT_PATH, toNotDelivered, "correction-chain-not-person"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(notPerson.status, 403);
+    assert.deepEqual(await notPerson.json(), { error: "person_session_required" });
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 holds the correction chain: one successor per answer, moves only with their correction, append-only", async () => {
+  const { claimExternalEffect, retryExternalEffect, settleExternalEffect } = await import("../src/effect-runtime.ts");
+  const { recordProposalDeliveryConfirmation, recordProposalDeliveryCorrection } = await import("../src/commercial-store.ts");
+  const { db, env, prepare } = await publicationReady("correction-d1");
+  const effectId = "effect:correction-d1:conflict";
+  try {
+    const prepared = await prepare("correction-d1-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    // One retry allowed, so the send can move on after "not delivered".
+    await runExternalEffect(env, { ...effectRequest(permit, effectId), retryLimit: 1 }, {
+      async dispatch() {
+        return {
+          outcome: "accepted" as const,
+          value: { published: true },
+          providerExternalId: `provider:${effectId}`,
+          providerResponse: { id: `provider:${effectId}` },
+          readback: {
+            status: "match" as const,
+            providerExternalId: `provider:${effectId}`,
+            observed: { ...READBACK, state: "withdrawn" },
+          },
+        };
+      },
+      async replay() {
+        return { published: false };
+      },
+    }).catch(() => undefined);
+    assert.equal(effectState(db, effectId).state, "manual_exception");
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const person = { actorUserId: OPS_ID, actorRole: "ops" };
+    const { confirmation } = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "delivered", note: "The customer has the email.",
+      idempotencyKey: "correction-d1-confirm", ...person,
+    });
+    const first = await recordProposalDeliveryCorrection(env, {
+      tenantId: TENANT, effectId, supersedesId: confirmation.confirmation_id, outcome: "not_delivered",
+      note: "It was an older email after all.", idempotencyKey: "correction-d1-1", ...person,
+    });
+    assert.equal(first.effectState, "reconciled");
+
+    const direct = (correctionId: string, supersedes: { confirmation?: string; correction?: string }, outcome: string) =>
+      db.raw.prepare(
+        `INSERT INTO proposal_delivery_corrections
+           (correction_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id,
+            supersedes_confirmation_id, supersedes_correction_id, outcome, note, corrected_by_user_id,
+            corrected_by_role, idempotency_key_hash, request_sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+      ).run(
+        correctionId, TENANT, effectId, PACK, REVISION, supersedes.confirmation ?? null,
+        supersedes.correction ?? null, outcome, OPS_ID,
+        correctionId.slice(-1).repeat(64), "f".repeat(64), new Date().toISOString(),
+      );
+    // A second successor of the confirmation is a fork.
+    assert.throws(
+      () => direct("delivery-correction:direct-fork-a", { confirmation: confirmation.confirmation_id }, "delivered"),
+      /proposal_delivery_correction_not_latest/,
+    );
+    // An answer that is not about this send cannot be superseded.
+    assert.throws(
+      () => direct("delivery-correction:direct-orphan-b", { correction: "delivery-correction:no-such-answer" }, "delivered"),
+      /proposal_delivery_correction_chain_invalid/,
+    );
+    // The send cannot leave "not delivered" by a plain update, only by a correction that says so.
+    assert.throws(
+      () => db.raw.prepare(
+        "UPDATE external_effects SET state = 'succeeded', updated_at = ? WHERE effect_id = ?",
+      ).run(new Date().toISOString(), effectId),
+      /external_effect_invalid_transition/,
+    );
+    assert.equal(effectState(db, effectId).state, "reconciled");
+
+    // The next send closes the record: here the same send is tried again and goes out.
+    await retryExternalEffect(env, effectId);
+    const { attempt } = await claimExternalEffect(env, effectId, new Date());
+    await settleExternalEffect(env, effectId, {
+      attemptId: attempt.attempt_id,
+      outcome: "accepted",
+      providerExternalId: `provider:${effectId}:retry`,
+      readback: { status: "match", providerExternalId: `provider:${effectId}:retry`, observed: READBACK },
+    });
+    assert.equal(effectState(db, effectId).state, "succeeded");
+    await assert.rejects(
+      recordProposalDeliveryCorrection(env, {
+        tenantId: TENANT, effectId, supersedesId: first.correction.correction_id, outcome: "delivered",
+        note: "Trying to change it after the next send.", idempotencyKey: "correction-d1-after-send", ...person,
+      }),
+      { code: "proposal_delivery_correction_closed" },
+    );
+    // The old "not delivered" cannot be replayed onto the sent message, even at its own time.
+    assert.throws(
+      () => db.raw.prepare(
+        "UPDATE external_effects SET state = 'reconciled', updated_at = ? WHERE effect_id = ?",
+      ).run(first.correction.created_at, effectId),
+      /external_effect_invalid_transition/,
+    );
+
+    // Append-only.
+    assert.throws(
+      () => db.raw.prepare("UPDATE proposal_delivery_corrections SET note = 'Rewritten note text'").run(),
+      /proposal_delivery_corrections_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM proposal_delivery_corrections").run(),
+      /proposal_delivery_corrections_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("a correction is closed once the customer has decided on the proposal", async () => {
+  const { recordProposalDeliveryConfirmation, recordProposalDeliveryCorrection } = await import("../src/commercial-store.ts");
+  const { db, env, prepare } = await publicationReady("correction-decided");
+  const effectId = "effect:correction-decided:conflict";
+  try {
+    const prepared = await prepare("correction-decided-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "conflict");
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const person = { actorUserId: OPS_ID, actorRole: "ops" };
+    const { confirmation } = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "delivered", note: "The customer has the email.",
+      idempotencyKey: "correction-decided-confirm", ...person,
+    });
+    // The customer's decision is an acceptance on this proposal pack. Its portal link and email
+    // challenge are not what this rule reads, so they are left out of this synthetic row.
+    db.raw.exec("PRAGMA foreign_keys = OFF");
+    const now = new Date().toISOString();
+    db.raw.prepare(
+      `INSERT INTO customer_portal_acceptance_intents
+         (acceptance_id, idempotency_key_hash, request_fingerprint, challenge_id, tenant_id,
+          portal_link_id, roof_job_id, customer_id, email_hash, quote_id, quote_version,
+          proposal_pack_id, terms_hash, terms_json, signer_name, signer_ip_hash, accepted_at,
+          receipt_key, state, created_at, updated_at)
+       VALUES ('acceptance_0161decided0001', ?, ?, 'challenge:synthetic:0161', ?, 'portal-link:synthetic:0161',
+               ?, ?, ?, ?, 1, ?, ?, '{}', 'Synthetic Signer', ?, ?,
+               'customer-contract-acceptance/v1/synthetic/0161-decided.json', 'receipt_pending', ?, ?)`,
+    ).run(
+      "1".repeat(64), "2".repeat(64), TENANT, JOB_ID, CUSTOMER_ID, "3".repeat(64), QUOTE_ID, PACK,
+      "4".repeat(64), "5".repeat(64), now, now, now,
+    );
+    db.raw.exec("PRAGMA foreign_keys = ON");
+    await assert.rejects(
+      recordProposalDeliveryCorrection(env, {
+        tenantId: TENANT, effectId, supersedesId: confirmation.confirmation_id, outcome: "not_delivered",
+        note: "Changing it after the customer accepted.", idempotencyKey: "correction-decided-1", ...person,
+      }),
+      { code: "proposal_delivery_correction_closed" },
+    );
+    assert.equal(effectState(db, effectId).state, "succeeded");
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 refuses an early 'not delivered' on an unknown send, with the window of the send's provider", async () => {
+  const { proposalDeliveryLateAnswerWindowMs, recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  for (const { provider, windowMs } of [
+    { provider: "native-commercial-publication", windowMs: EFFECT_ATTEMPT_LEASE_MS },
+    { provider: "synthetic-slow-provider", windowMs: 600_000 },
+  ]) {
+    const { db, env, prepare } = await publicationReady(`late-answer-${provider}`);
+    const effectId = `effect:late-answer:${provider}`;
+    try {
+      // 0161 records the default only; a provider with its own window adds a row with its source.
+      db.raw.prepare(
+        "INSERT INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES (?, ?, ?)",
+      ).run("synthetic-slow-provider", 600_000, "Synthetic provider for this test: answers may come ten minutes late.");
+      assert.equal(await proposalDeliveryLateAnswerWindowMs(env, provider), windowMs);
+
+      const prepared = await prepare(`late-answer-${provider}-prepare`);
+      const { permit } = await prepared.json() as { permit: Permit };
+      await runExternalEffect(env, { ...effectRequest(permit, effectId), provider }, {
+        async dispatch() {
+          return { outcome: "unknown", detailCode: "provider_timeout" } as never;
+        },
+        async replay() {
+          return { published: false };
+        },
+      }).catch(() => undefined);
+      const unknown = effectState(db, effectId);
+      assert.equal(unknown.state, "unknown");
+      const after = (ms: number) => new Date(Date.parse(unknown.updated_at) + ms).toISOString();
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const direct = (confirmationId: string, createdAt: string) =>
+        db.raw.prepare(
+          `INSERT INTO proposal_delivery_confirmations
+             (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+              confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+           VALUES (?, ?, ?, ?, ?, 'not_delivered', 'Nothing in their inbox or spam.', ?, 'ops', ?, ?, ?)`,
+        ).run(confirmationId, TENANT, effectId, PACK, REVISION, OPS_ID,
+          confirmationId.slice(-1).repeat(64), "e".repeat(64), createdAt);
+
+      // D1 itself refuses it inside the provider's window, even past the default lease.
+      assert.throws(() => direct("delivery-confirmation:direct-early-1", after(60_000)), /proposal_delivery_answer_may_be_late/);
+      assert.throws(() => direct("delivery-confirmation:direct-early-2", after(windowMs - 1_000)), /proposal_delivery_answer_may_be_late/);
+      // The Worker names the same moment.
+      await assert.rejects(
+        recordProposalDeliveryConfirmation(env, {
+          tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
+          actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: `late-answer-${provider}-early`,
+          now: after(windowMs - 1_000),
+        }),
+        (error: { code?: string; detail?: { not_before?: string } }) =>
+          error.code === "proposal_delivery_answer_may_be_late" && error.detail?.not_before === after(windowMs),
+      );
+      assert.equal(effectState(db, effectId).state, "unknown");
+      // Once the window has passed, the answer is recorded.
+      direct("delivery-confirmation:direct-after-3", after(windowMs + 1_000));
+      assert.equal(effectState(db, effectId).state, "reconciled");
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("the late-answer windows are append-only and the default is the attempt lease", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const db = new SqliteD1();
+  try {
+    const rows = db.raw.prepare("SELECT provider, window_ms, source FROM proposal_delivery_late_answer_windows").all() as
+      Array<{ provider: string; window_ms: number; source: string }>;
+    assert.deepEqual(rows.map((row) => [row.provider, row.window_ms]), [["*", EFFECT_ATTEMPT_LEASE_MS]]);
+    assert.match(rows[0]!.source, /EFFECT_ATTEMPT_LEASE_MS/);
+    assert.throws(
+      () => db.raw.prepare("UPDATE proposal_delivery_late_answer_windows SET window_ms = 0").run(),
+      /proposal_delivery_late_answer_windows_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM proposal_delivery_late_answer_windows").run(),
+      /proposal_delivery_late_answer_windows_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("the settle and reconcile admin routes date what they record by the server's clock", async () => {
+  const {
+    handleExternalEffectClaim,
+    handleExternalEffectReconciliation,
+    handleExternalEffectSettlement,
+  } = await import("../src/effect-runtime-admin.ts");
+  const { db, env, prepare } = await publicationReady("server-time");
+  const effectId = "effect:server-time:send";
+  const adminPost = (path: string, body: Record<string, unknown>) =>
+    new Request(`https://worker.example.com${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+      body: JSON.stringify(body),
+    });
+  try {
+    const prepared = await prepare("server-time-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    const send = effectRequest(permit, effectId);
+    const claimed = await handleExternalEffectClaim(adminPost("/admin/effects/claim", {
+      effect: send,
+      authority: send.authority,
+    }), env);
+    assert.equal(claimed.status, 200, await claimed.clone().text());
+    const { attempt } = await claimed.json() as { attempt: { attempt_id: string } };
+
+    // A caller's time is ignored: a settlement dated years ago is recorded now.
+    const beforeSettle = Date.now();
+    const settled = await handleExternalEffectSettlement(adminPost("/admin/effects/settle", {
+      effectId,
+      settlement: {
+        attemptId: attempt.attempt_id,
+        outcome: "unknown",
+        detailCode: "provider_timeout",
+        now: "2020-01-01T00:00:00.000Z",
+      },
+    }), env);
+    assert.equal(settled.status, 200, await settled.clone().text());
+    const afterSettle = Date.now();
+    const unknown = effectState(db, effectId);
+    assert.equal(unknown.state, "unknown");
+    assert.ok(
+      Date.parse(unknown.updated_at) >= beforeSettle && Date.parse(unknown.updated_at) <= afterSettle,
+      `settled at ${unknown.updated_at}, not at the caller's time`,
+    );
+    const ended = db.raw.prepare("SELECT ended_at FROM external_effect_attempts WHERE attempt_id = ?")
+      .get(attempt.attempt_id) as { ended_at: string };
+    assert.equal(ended.ended_at, unknown.updated_at);
+
+    // Likewise a reconciliation dated far ahead is recorded now.
+    const beforeReconcile = Date.now();
+    const reconciled = await handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
+      effectId,
+      outcome: "executed",
+      evidence: { provider: "late answer: delivered" },
+      now: "2099-01-01T00:00:00.000Z",
+    }), env);
+    assert.equal(reconciled.status, 200, await reconciled.clone().text());
+    const afterReconcile = Date.now();
+    const executed = effectState(db, effectId);
+    assert.equal(executed.state, "succeeded");
+    assert.ok(
+      Date.parse(executed.updated_at) >= beforeReconcile && Date.parse(executed.updated_at) <= afterReconcile,
+      `reconciled at ${executed.updated_at}, not at the caller's time`,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("every new publication names the active person who recorded it, and D1 holds that rule", async () => {
+  const { db, env, prepare } = await publicationReady("recorded-by");
+  const effectId = "effect:recorded-by:success";
+  try {
+    const prepared = await prepare("recorded-by-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "success");
+    assert.equal(effectState(db, effectId).state, "succeeded");
+
+    // Without the person who recorded it, D1 refuses the publication event itself.
+    const stored = db.raw.prepare(
+      "SELECT command_fingerprint, evidence_digest FROM commercial_authority_permits WHERE permit_id = ?",
+    ).get(permit.permit_id) as { command_fingerprint: string; evidence_digest: string };
+    const eventId = "commercial-publication:direct-0161-recorder";
+    const occurredAt = new Date().toISOString();
+    const insertEvent = () => db.raw.prepare(
+      `INSERT INTO commercial_proposal_publication_events (
+         publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+         publication_version, previous_state, state, policy_permit_id,
+         proposal_publication_approval_id, external_effect_id, command_fingerprint,
+         idempotency_key_hash, evidence_digest, occurred_at
+       ) VALUES (?, ?, ?, ?, 1, 'draft', 'published', ?, NULL, ?, ?, ?, ?, ?)`,
+    ).run(eventId, TENANT, REVISION, PACK, permit.permit_id, effectId, stored.command_fingerprint,
+      "9".repeat(64), stored.evidence_digest, occurredAt);
+    assert.throws(insertEvent, /commercial_publication_recorder_required/);
+    const insertRecorder = (publicationEventId: string, userId: string, recordedAt: string) =>
+      db.raw.prepare(
+        `INSERT INTO commercial_proposal_publication_recorders
+           (publication_event_id, tenant_id, recorded_by_user_id, recorded_at) VALUES (?, ?, ?, ?)`,
+      ).run(publicationEventId, TENANT, userId, recordedAt);
+    // Only an active person of this tenant may be named.
+    assert.throws(
+      () => insertRecorder("commercial-publication:direct-0161-unknown", "appu_unknown_0161", occurredAt),
+      /commercial_publication_recorder_invalid/,
+    );
+    db.raw.prepare("UPDATE app_users SET active = 0 WHERE user_id = ?").run(OTHER_OPS_ID);
+    assert.throws(
+      () => insertRecorder("commercial-publication:direct-0161-inactive", OTHER_OPS_ID, occurredAt),
+      /commercial_publication_recorder_invalid/,
+    );
+    db.raw.prepare("UPDATE app_users SET active = 1 WHERE user_id = ?").run(OTHER_OPS_ID);
+
+    // Through the route, the person recording it is named, at the event's own time.
+    const other = await personSession(db, env, OTHER_OPS_ID, "ops");
+    const settlement = {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: effectId,
+    };
+    const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "recorded-by-record", settlement);
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+    const { publication } = await recorded.json() as {
+      publication: { publication_event_id: string; occurred_at: string; recorded_by_user_id: string };
+    };
+    assert.equal(publication.recorded_by_user_id, OTHER_OPS_ID);
+    assert.deepEqual(
+      { ...db.raw.prepare(
+        "SELECT recorded_by_user_id, recorded_at FROM commercial_proposal_publication_recorders WHERE publication_event_id = ?",
+      ).get(publication.publication_event_id) },
+      { recorded_by_user_id: OTHER_OPS_ID, recorded_at: publication.occurred_at },
+    );
+    const replay = await personPost(env, other, "/api/v1/commercial/proposal-publications", "recorded-by-record", settlement);
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json() as { publication: { recorded_by_user_id: string } }).publication.recorded_by_user_id, OTHER_OPS_ID);
+
+    // A recorder cannot be added to an event already recorded, and recorders are append-only.
+    assert.throws(
+      () => insertRecorder(publication.publication_event_id, OPS_ID, publication.occurred_at),
+      /commercial_publication_recorder_after_event/,
+    );
+    assert.throws(
+      () => db.raw.prepare("UPDATE commercial_proposal_publication_recorders SET recorded_by_user_id = ?").run(OPS_ID),
+      /commercial_proposal_publication_recorders_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM commercial_proposal_publication_recorders").run(),
+      /commercial_proposal_publication_recorders_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("0161 re-creates the 0156 triggers with every 0156 line kept in order and each addition marked", () => {
+  const db = new SqliteD1();
+  try {
+    const migration0156 = readFileSync(
+      new URL("../migrations/0156_proposal_delivery_confirmations.sql", import.meta.url),
+      "utf8",
+    );
+    for (const name of ["proposal_delivery_confirmations_validate_insert", "external_effect_binding_guard"]) {
+      const start = migration0156.search(new RegExp(`CREATE TRIGGER (?:IF NOT EXISTS )?${name}\\n`));
+      assert.ok(start >= 0, `0156 declares ${name}`);
+      const end = migration0156.indexOf("\nEND;", start);
+      // Body lines only: the CREATE line is normalized by SQLite, and the stored text ends at END.
+      const lines0156 = migration0156.slice(start, end).split("\n").slice(1).map((line) => line.trim()).concat("END");
+      const stored = (db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+        .get(name) as { sql: string }).sql;
+      const finalLines = stored.split("\n").slice(1).map((line) => line.trim());
+      let next = 0;
+      for (const line of finalLines) {
+        if (next < lines0156.length && line === lines0156[next]) next += 1;
+        else assert.match(line, /\[0161\]/, `${name}: a line that is not from 0156 must be marked [0161]: ${line}`);
+      }
+      assert.equal(next, lines0156.length, `${name}: every 0156 line is kept, in order`);
+      assert.ok(finalLines.some((line) => line.includes("[0161]")), `${name}: 0161 adds to it`);
+    }
+  } finally {
+    db.close();
+  }
+});

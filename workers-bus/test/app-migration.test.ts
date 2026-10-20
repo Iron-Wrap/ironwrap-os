@@ -2283,11 +2283,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // to a person's access, so a role or access change applies only against the version it was
     // decided on.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 135);
+    assert.equal(migrations.length, 136);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0204_agent_watch_firings.sql",
+      "0205_agent_step_pair_index.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2426,14 +2426,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // append-only guards, and re-creates the projection guard and both 0143 guards under their names.
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
-    // three named indexes and six guards.
+    // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
+    // action.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
     // name.
     assert.deepEqual(
       { ...counts },
-      { tables: 275, indexes: 377, triggers: 749 },
+      { tables: 275, indexes: 378, triggers: 749 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

@@ -12,7 +12,7 @@ import worker from "../src/index.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
-import { reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
+import { EFFECT_ATTEMPT_LEASE_MS, reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
 import { recordProposalDeliveryConfirmation } from "../src/commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
@@ -1809,10 +1809,17 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(resendBeforeCheck.status, 409);
     assert.equal((await resendBeforeCheck.json() as { error: string }).error, "proposal_delivery_unconfirmed");
-    await reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
+    // "Not executed" waits out the provider's late-answer window (0161): a check made at once is
+    // refused, the same check after the window settles the lost send.
+    const lostSince = (h.db.raw.prepare("SELECT updated_at FROM external_effects WHERE effect_id = ?")
+      .get("effect:iro208:lost") as { updated_at: string }).updated_at;
+    const notExecuted = (now?: string) => reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
       outcome: "not_executed",
       evidence: { checked: "provider has no publication for this proposal revision" },
+      ...(now ? { now } : {}),
     });
+    await assert.rejects(notExecuted(), /proposal_delivery_answer_may_be_late/);
+    await notExecuted(new Date(Date.parse(lostSince) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString());
     const mismatchPermit = await preparePublication(h, ids, "iro208-publication-prepare-mismatch-0001");
     await runPublicationEffect(h, mismatchPermit, ids, "effect:iro208:mismatch", "mismatch");
     const mismatch = await handleAuthenticatedRoute(

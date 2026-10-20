@@ -2432,8 +2432,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
     // name. 0161 adds three tables (delivery corrections, late-answer windows, publication
-    // recorders), one named index and ten guards, and re-creates the delivery confirmation insert
-    // guard and the external effect binding guard under their names.
+    // recorders), one named index and ten guards, and re-creates the external effect binding guard
+    // under its name.
     assert.deepEqual(
       { ...counts },
       { tables: 278, indexes: 379, triggers: 759 },

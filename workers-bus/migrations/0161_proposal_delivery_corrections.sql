@@ -15,12 +15,11 @@
 --
 -- Late answers. "Not delivered" on an `unknown` send waits until the provider's own answer can no
 -- longer arrive. 0156 enforced that in the Worker alone, with EFFECT_ATTEMPT_LEASE_MS for every
--- provider. D1 now refuses it too, with the window of the send's provider from
--- `proposal_delivery_late_answer_windows`, or the default row `*`: for a person's "not delivered"
--- (`proposal_delivery_confirmations_validate_insert`), and for any other move of an unknown send
--- to "not executed", the effect runtime's reconcile included
--- (`external_effects_proposal_late_answer_guard`). The Worker reads the same rows, and each row
--- says where its value comes from.
+-- provider. `external_effects_proposal_late_answer_guard` now refuses it in D1 on the send itself:
+-- no move of an unknown proposal send to "not executed" (reconciled) before the window of its
+-- provider has passed, whether a person's "not delivered" makes it or the effect runtime's
+-- reconcile. The window comes from `proposal_delivery_late_answer_windows`, or its default row
+-- `*`; the Worker reads the same rows, and each row says where its value comes from.
 --
 -- Recorded by. The Worker writes a `commercial_proposal_publication_recorders` row, naming the
 -- active person who recorded it, in the same batch as each new publication event. The recorder is
@@ -31,9 +30,8 @@
 -- no Worker without the recorder write can be rolled back to. Until then the previous Worker keeps
 -- recording publications after this migration applies.
 --
--- Re-created from 0156 under their names: `proposal_delivery_confirmations_validate_insert` and
--- `external_effect_binding_guard`. Every 0156 line is carried over unchanged and in order, and
--- each added line ends with `-- [0161]`.
+-- Re-created from 0156 under its name: `external_effect_binding_guard`. Every 0156 line is carried
+-- over unchanged and in order, and each added line ends with `-- [0161]`.
 
 CREATE TABLE IF NOT EXISTS proposal_delivery_late_answer_windows (
   provider TEXT PRIMARY KEY CHECK (length(provider) BETWEEN 1 AND 120),
@@ -213,8 +211,9 @@ BEFORE DELETE ON proposal_delivery_corrections BEGIN
 END;
 
 -- No path moves an unknown proposal send to "not executed" before its provider's late-answer window
--- has passed, counted from when the send became unknown to the time of the move: not a person's
--- "not delivered" (checked at its insert as well), and not the effect runtime's reconcile.
+-- has passed, counted from when the send became unknown to the time of the move: neither a person's
+-- "not delivered" (0156's apply makes that move, so the insert fails) nor the effect runtime's
+-- reconcile.
 CREATE TRIGGER IF NOT EXISTS external_effects_proposal_late_answer_guard
 BEFORE UPDATE OF state ON external_effects
 WHEN OLD.state = 'unknown' AND NEW.state = 'reconciled'
@@ -227,54 +226,6 @@ BEGIN
       (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late
         WHERE late.provider = '*')
     ) / 86400000.0;
-END;
-
--- `proposal_delivery_confirmations_validate_insert` (0156), re-created with one addition: the
--- late-answer wait.
-DROP TRIGGER IF EXISTS proposal_delivery_confirmations_validate_insert;
-CREATE TRIGGER IF NOT EXISTS proposal_delivery_confirmations_validate_insert
-BEFORE INSERT ON proposal_delivery_confirmations BEGIN
-  SELECT RAISE(ABORT, 'proposal_delivery_confirmation_exists')
-    WHERE EXISTS (
-      SELECT 1 FROM proposal_delivery_confirmations prior
-       WHERE prior.tenant_id = NEW.tenant_id
-         AND (prior.effect_id = NEW.effect_id
-              OR prior.idempotency_key_hash = NEW.idempotency_key_hash)
-    );
-  SELECT RAISE(ABORT, 'proposal_delivery_confirmation_effect_invalid')
-    WHERE NOT EXISTS (
-      SELECT 1 FROM external_effects effect
-       WHERE effect.effect_id = NEW.effect_id
-         AND effect.tenant_id = NEW.tenant_id
-         AND effect.state IN ('manual_exception', 'unknown')
-         AND effect.action = 'proposal.publish'
-         AND effect.aggregate_type = 'proposal_publication'
-         AND effect.aggregate_id = NEW.proposal_pack_id
-         AND effect.intent_id = NEW.proposal_revision_id
-    );
-  SELECT RAISE(ABORT, 'proposal_delivery_confirmation_actor_invalid')
-    WHERE NOT EXISTS (
-      SELECT 1 FROM app_users person
-       WHERE person.tenant_id = NEW.tenant_id
-         AND person.user_id = NEW.confirmed_by_user_id
-         AND person.active = 1
-         AND person.access_role = NEW.confirmed_by_role
-    );
-  -- [0161] "Not delivered" on an unknown send waits out the late-answer window of its provider
-  -- [0161] (that provider's row, else the default `*`), counted from when the send became unknown.
-  SELECT RAISE(ABORT, 'proposal_delivery_answer_may_be_late') -- [0161]
-    WHERE NEW.outcome = 'not_delivered' AND EXISTS ( -- [0161]
-      SELECT 1 FROM external_effects effect -- [0161]
-       WHERE effect.effect_id = NEW.effect_id -- [0161]
-         AND effect.tenant_id = NEW.tenant_id -- [0161]
-         AND effect.state = 'unknown' -- [0161]
-         AND julianday(NEW.created_at) < julianday(effect.updated_at) + COALESCE( -- [0161]
-           (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late -- [0161]
-             WHERE late.provider = effect.provider), -- [0161]
-           (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late -- [0161]
-             WHERE late.provider = '*') -- [0161]
-         ) / 86400000.0 -- [0161]
-    ); -- [0161]
 END;
 
 -- `external_effect_binding_guard` (0156), re-created with one addition: a correction moves a

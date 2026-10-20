@@ -2419,14 +2419,14 @@ test("the reconcile route cannot call an unknown send not executed before the la
   }
 });
 
-test("0161 re-creates the 0156 triggers with every 0156 line kept in order and each addition marked", () => {
+test("0161 re-creates the 0156 binding guard with every 0156 line kept in order and each addition marked", () => {
   const db = new SqliteD1();
   try {
     const migration0156 = readFileSync(
       new URL("../migrations/0156_proposal_delivery_confirmations.sql", import.meta.url),
       "utf8",
     );
-    for (const name of ["proposal_delivery_confirmations_validate_insert", "external_effect_binding_guard"]) {
+    for (const name of ["external_effect_binding_guard"]) {
       const start = migration0156.search(new RegExp(`CREATE TRIGGER (?:IF NOT EXISTS )?${name}\\n`));
       assert.ok(start >= 0, `0156 declares ${name}`);
       const end = migration0156.indexOf("\nEND;", start);

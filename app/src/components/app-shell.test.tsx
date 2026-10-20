@@ -237,6 +237,48 @@ describe("AppShell", () => {
     );
   });
 
+  it.each([
+    ["/settings", "Settings"],
+    ["/settings/company", "Settings/Company"],
+    ["/settings/team", "Settings/Team"],
+    ["/settings/devices", "Settings/Crew devices"],
+    ["/settings/integrations", "Settings/Integrations"],
+    ["/settings/configuration", "Settings/Configuration"],
+    ["/settings/configuration/pipelines", "Settings/Configuration"],
+    ["/settings/configuration/fields", "Settings/Configuration"],
+    ["/settings/configuration/automations", "Settings/Configuration"],
+    ["/settings/configuration/automations/recipients", "Settings/Configuration"],
+    ["/settings/configuration/documents", "Settings/Configuration"],
+    ["/accounting/quickbooks", "Settings/QuickBooks"],
+  ])("says Settings once in the breadcrumb on %s", (pathname, trail) => {
+    mocks.pathname = pathname;
+    renderShell(ownerSession);
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(crumbs.textContent).toBe(trail);
+    expect(within(crumbs).getByText(trail.split("/").at(-1)!)).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    // A settings page links its Settings crumb back to the settings desk.
+    if (pathname.startsWith("/settings/")) {
+      expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute(
+        "href",
+        "/settings",
+      );
+    }
+  });
+
+  it("says a destination named like its workspace once", () => {
+    mocks.pathname = "/now";
+    renderShell(ownerSession);
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" }).textContent).toBe("Now");
+
+    cleanup();
+    mocks.pathname = "/accounting/quickbooks";
+    renderShell({ ...ownerSession, user: { ...ownerSession.user, role: "accounting" } });
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" }).textContent).toBe("Settings");
+  });
+
   it("selects Decisions for the validated decision view and Now for ordinary work", () => {
     mocks.search = { show: "decide" };
     mocks.searchStr = "?show=decide";

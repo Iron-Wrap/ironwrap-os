@@ -55,6 +55,31 @@ export function shellPlace(
   return record ? { item, record } : { item };
 }
 
+/**
+ * The breadcrumb for a place: the workspace, the destination when a record is open, and the page
+ * itself. A destination named like its workspace ("Settings" in Settings, "Now" in Now) is said
+ * once, so a settings page reads "Settings / Company", never "Settings / Settings / Company"; with a
+ * record open the workspace crumb then links back to the destination.
+ */
+export function breadcrumbTrail({ item, record }: { item: NavigationItem; record?: string }): {
+  workspace?: { label: string; to?: string };
+  destination?: { label: string; to: string };
+  current: string;
+} {
+  const repeats = item.label === item.workspace;
+  if (!record)
+    return repeats
+      ? { current: item.label }
+      : { workspace: { label: item.workspace }, current: item.label };
+  return repeats
+    ? { workspace: { label: item.workspace, to: item.to }, current: record }
+    : {
+        workspace: { label: item.workspace },
+        destination: { label: item.label, to: item.to },
+        current: record,
+      };
+}
+
 export function navigationItemForPath(
   items: readonly NavigationItem[],
   pathname: string,

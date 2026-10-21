@@ -394,12 +394,11 @@ async function applySafetyAction(
       deviceActionId: submission.deviceActionId,
       now: nowIso,
     });
-    // The stop is already recorded: its scope is read only to flag it, never to refuse it.
-    const scopeUnresolved = await raisedScopeUnresolved(env, identity.tenantId, submission.scope);
     return {
       serverRef: result.occurrence.occurrence_id,
       cursor: `${result.occurrence.occurrence_id}:${result.occurrence.version}`,
-      ...(scopeUnresolved === undefined ? {} : { scopeUnresolved }),
+      // The stop is already recorded: its scope is read only to flag it, never to refuse it.
+      scopeUnresolved: await raisedScopeUnresolved(env, identity.tenantId, submission.scope),
     };
   }
   if (submission.kind === "make_safe") {

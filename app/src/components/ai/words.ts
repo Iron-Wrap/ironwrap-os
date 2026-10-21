@@ -371,11 +371,12 @@ export const VIEW_REFUSED =
 
 /**
  * A people-only draft a person made by hand (`applied_by_person`): who made it, to which record,
- * that the draft closed without undoing the change (gate f5: "closing this draft" read as a button
- * to find), and that nothing is left.
+ * that the draft is closed (gate f5: "closing this draft" read as a button to find), that the
+ * change stays in place (gate f5: "does not undo the change" left readers only fairly sure it
+ * still held), and that nothing is left.
  */
 export function appliedByPersonNote(by = "A person", record?: string): string {
-  return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. That does not undo the change, and nothing is left to do.`;
+  return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. The change stays in place, and nothing is left to do.`;
 }
 
 /** A people-only draft a newer one replaced (`superseded`): it changed nothing; where the newer one waits. */

@@ -14,7 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import { buildOwnerNowReadModel, STOP_JOB_UNKNOWN_TITLE } from "../src/app-read-models.ts";
+import { buildOwnerNowReadModel, STOP_JOB_UNKNOWN_TITLE, STOP_JOB_UNKNOWN_WHY } from "../src/app-read-models.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import {
   permissionsForRole,
@@ -1003,6 +1003,7 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
   const h = setup();
   const occurrenceId = "occurrence.attest.unknown-job";
   const step = (minutesAgo: number) => at(-minutesAgo * 60_000);
+  const reportedAt = step(50);
   // A person may always stop work: the stop is recorded though no job of the tenant has this id
   // (here the job's number, not its id).
   const reported = await reportSafetyOccurrence(h.env, {
@@ -1012,21 +1013,38 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
     severity: "high",
     scope: { type: "roof_job", id: "IW-ATTEST-0001" },
     reportedByUserId: USERS.field.id,
-    reportedAt: step(50),
+    reportedAt,
     summary: "Synthetic hazard on a mistyped job, for repository proof only.",
     rescueRequired: false,
     evidence: null,
     capturedOffline: false,
     deviceActionId: null,
-    now: step(50),
+    now: reportedAt,
   });
   assert.equal(reported.kind, "reported");
-  // The owner's exception list names it, and its id is the stop a one-click fix opens.
+  // The owner's exception list shows it in Track B's final copy, never the raw job id, with who
+  // raised it, when, and what they wrote; it has no job and no next step.
   const owner = await person(h, USERS.owner.id);
   const listed = async () => (await buildOwnerNowReadModel(h.env, owner)).exceptions
-    .filter((row) => row.kind === "stop_job_unknown")
-    .map((row) => [row.id, row.title, row.why, row.job_id]);
-  assert.deepEqual(await listed(), [[occurrenceId, STOP_JOB_UNKNOWN_TITLE, "Names job IW-ATTEST-0001", null]]);
+    .filter((row) => row.kind === "stop_job_unknown");
+  assert.deepEqual(await listed(), [{
+    id: occurrenceId,
+    kind: "stop_job_unknown",
+    severity: null,
+    title: "This work stop names a job that doesn\u2019t exist",
+    why: "Safety stays held on every job while this work stop is active.",
+    next_action: null,
+    job_id: null,
+    occurred_at: reportedAt,
+    due_at: null,
+    received_at: null,
+    bus_status: null,
+    triage_status: null,
+    mctb: null,
+    reported_by_name: "Synthetic field",
+    summary: "Synthetic hazard on a mistyped job, for repository proof only.",
+  }]);
+  assert.ok(!JSON.stringify(await listed()).includes("IW-ATTEST-0001"), "the raw job id is not shown");
   // It holds Safety on every job of the tenant: on the route by name, with the stop to open, and
   // in D1.
   const production = await person(h, USERS.production.id);
@@ -1089,6 +1107,43 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
   );
   const cleared = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+});
+
+test("the owner's item for a work stop on a job that doesn't exist names who raised it, or null, and keeps the summary raw", async () => {
+  const h = setup();
+  // A login whose display name is blank has no name to show.
+  h.sqlite.prepare("UPDATE app_users SET display_name = ' ' WHERE user_id = ?").run(USERS.ops.id);
+  const report = (occurrenceId: string, reportedByUserId: string, minutesAgo: number, summary: string) =>
+    reportSafetyOccurrence(h.env, {
+      occurrenceId,
+      tenantId: TENANT,
+      occurrenceKind: "hazard",
+      severity: "high",
+      scope: { type: "roof_job", id: `IW-MISSING-${minutesAgo}` },
+      reportedByUserId,
+      reportedAt: at(-minutesAgo * 60_000),
+      summary,
+      rescueRequired: false,
+      evidence: null,
+      capturedOffline: false,
+      deviceActionId: null,
+      now: at(-minutesAgo * 60_000),
+    });
+  const raw = '  Loose sheathing at the ridge - "do not walk" zone, 6/12 pitch.  ';
+  await report("occurrence.attest.named", USERS.field.id, 30, raw);
+  await report("occurrence.attest.unnamed", USERS.ops.id, 20, "Ladder foot slipping on the wet deck.");
+  const owner = await person(h, USERS.owner.id);
+  const items = (await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind === "stop_job_unknown")
+    .map((row) => ({ id: row.id, title: row.title, why: row.why, reported_by_name: row.reported_by_name, summary: row.summary }));
+  assert.deepEqual(items, [
+    { id: "occurrence.attest.named", title: STOP_JOB_UNKNOWN_TITLE, why: STOP_JOB_UNKNOWN_WHY, reported_by_name: "Synthetic field", summary: raw },
+    { id: "occurrence.attest.unnamed", title: STOP_JOB_UNKNOWN_TITLE, why: STOP_JOB_UNKNOWN_WHY, reported_by_name: null, summary: "Ladder foot slipping on the wet deck." },
+  ]);
+  // Every other kind carries the two fields as null.
+  assert.ok((await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind !== "stop_job_unknown")
+    .every((row) => row.reported_by_name === null && row.summary === null));
 });
 
 test("another job's stop, a shop or vehicle stop, or a lifted stop leaves Safety open on the route and in D1", async () => {

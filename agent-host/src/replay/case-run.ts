@@ -181,6 +181,8 @@ export interface ToolFile {
   clock: string;
   tools: ReplayTool[];
   facts: Fact[];
+  /** The signal the run answers, as policy reads it for an inbound-only action; absent in older files. */
+  requester?: { kind: string; source: string; subject: { aggregate: string; id: string } | null };
 }
 
 export interface ReplayRun {
@@ -198,7 +200,7 @@ export function replayRun(
   clockMs = caseClock(item),
   peopleOnly: PeopleOnlyAct[] = [],
 ): ReplayRun {
-  const { kind, source, watch_id, at, content, actor } = item.signal;
+  const { kind, source, watch_id, at, content, actor, subject } = item.signal;
   const signal: ReplaySignal = {
     // A case id names its suite, which the model must not see.
     signal_id: `sig_${sha256(item.id).slice(0, 32)}`,
@@ -206,7 +208,7 @@ export function replayRun(
     specialist_id: specialist.id,
     watch_id: watch_id ?? null,
     source,
-    subject: null,
+    subject: subject ?? null,
     content,
     received_at: caseTime(at, clockMs),
     ...(actor === undefined ? {} : { actor }),
@@ -238,7 +240,13 @@ export function replayRun(
     signal,
     run,
     input: buildRunInput(specialist, run, signal, tools),
-    toolFile: { schema_version: "ironwrap.eval-tool-file.v1", clock: new Date(clockMs).toISOString(), tools, facts },
+    toolFile: {
+      schema_version: "ironwrap.eval-tool-file.v1",
+      clock: new Date(clockMs).toISOString(),
+      tools,
+      facts,
+      requester: { kind, source, subject: signal.subject },
+    },
   };
 }
 
@@ -247,10 +255,11 @@ function contextFact(fact_id: string, kind: string, version: number, trust: Fact
   return { fact_id, kind, version, hash: `sha256:${sha256(canonicalJson(data))}`, trust, observed_at, fresh_until, data };
 }
 
-/** workers-bus/src/agents/store.ts goalFor, for a signal without a subject. */
+/** workers-bus/src/agents/store.ts goalFor, for a signal without an actor. */
 function goalFor(signal: Signal): string {
+  const subject = signal.subject ? ` about ${signal.subject.aggregate}/${signal.subject.id}` : "";
   const origin = signal.kind === "watch" ? `watch ${signal.watch_id}` : `${signal.kind.replace("_", " ")} from ${signal.source}`;
-  return `Act on the ${origin} (signal ${signal.signal_id}).`;
+  return `Act on the ${origin}${subject} (signal ${signal.signal_id}).`;
 }
 
 // mcp/ironwrap-bus-mcp/src/agent-server.mjs: a step is proposed as { args, citations }.
@@ -290,7 +299,8 @@ export interface ToolAnswer {
 
 /**
  * The Worker's answer to one proposed step, decided from the tool file alone and never executed.
- * Citations are checked as workers-bus/src/agents/policy.ts checks them; then an A0 read answers
+ * Citations are checked as workers-bus/src/agents/policy.ts checks them, and an inbound-only action
+ * stops as policy stops it off its inbound; then an A0 read answers
  * with the case facts it names, an A1 output is drafted, a protective step goes to its person, and
  * any other A2 or A3 step waits for approval, so the run can finish.
  */
@@ -312,12 +322,29 @@ export function answerCall(file: ToolFile, name: string, input: unknown, step: n
   if ((tool.requires_citations && cited.length === 0) || unverifiable) return decide("abstained", "abstained", ["citation_unverifiable"]);
   const clock = Date.parse(file.clock);
   if (cited.some((citation) => isStale(facts.get(citation.fact_id) as Fact, clock))) return decide("abstained", "abstained", ["fact_stale"]);
+  if (INBOUND_ONLY.has(tool.action_id) && !fromItsInbound(file.requester, input.args, cited)) return decide("abstained", "abstained", ["out_of_scope"]);
   if (tool.autonomy === "A0") return decide("recorded", "succeeded", [], read(input.args, cited, facts));
   if (tool.autonomy === "A1") return decide("drafted", "succeeded");
   return decide(tool.protective ? "escalated" : "awaiting_approval", null);
 }
 
 const isStale = (fact: Fact, clock: number) => fact.fresh_until !== null && Date.parse(fact.fresh_until) < clock;
+
+// workers-bus/src/agents/policy.ts INBOUND_ONLY and INBOUND_CHANNELS; a Worker test keeps them equal.
+export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
+export const INBOUND_CHANNELS: ReadonlySet<string> = new Set(["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]);
+
+/**
+ * policy.ts's inbound-only rule: the run answers an event from an inbound channel about a lead,
+ * the step names that lead (a missing lead id is the schema's to refuse), and it cites only the
+ * signal.
+ */
+function fromItsInbound(requester: ToolFile["requester"], args: unknown, cited: Array<{ fact_id: string }>): boolean {
+  if (!requester || requester.kind !== "event" || !INBOUND_CHANNELS.has(requester.source) || requester.subject?.aggregate !== "lead") return false;
+  const named = isObject(args) ? args.lead_id : undefined;
+  if (typeof named === "string" && named !== requester.subject.id) return false;
+  return cited.length > 0 && cited.every((citation) => citation.fact_id === "signal");
+}
 
 // A read returns the facts its citations and id arguments name, by full id or by the id after the
 // kind (`lead:L-1001` for `L-1001`); anything absent is not found (evals/README.md).

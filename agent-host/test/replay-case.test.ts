@@ -338,6 +338,38 @@ test("the Worker side serves reads from the case facts and captures every other 
   assert.equal(refused("comms__send", { args: {}, citations: [{ fact_id: 3, version: 1 }] }), "invalid_arguments");
 });
 
+test("an inbound-only proposal stops off its inbound, as the Worker's policy stops it", () => {
+  const catalog: Catalog = { ...CATALOG, actions: new Map([...CATALOG.actions, ["lead_fact.propose", action("lead_fact.propose", "A1", { aggregate: "lead" })]]) };
+  const specialist: Specialist = { ...SPECIALIST, allowlist: [...SPECIALIST.allowlist, { action_id: "lead_fact.propose", autonomy: "A1", purpose: "synthetic" }] };
+  const inboundTools = replayTools(specialist, catalog);
+  const subject = { aggregate: "lead", id: "L-1001" };
+  const inbound = (signal: Partial<EvalCase["signal"]>) => replayRun(specialist, inboundTools, { ...CASE, signal: { ...CASE.signal, actor: undefined, subject, ...signal } }, "run_test", 0);
+  const run = inbound({});
+  // The subject reaches the run's signal and goal as production words them, and the tool file.
+  assert.deepEqual(run.signal.subject, subject);
+  assert.equal(run.run.goal, `Act on the event from web_form about lead/L-1001 (signal ${run.signal.signal_id}).`);
+  assert.deepEqual(run.toolFile.requester, { kind: "event", source: "web_form", subject });
+  const fields = { service: "metal_roofing", scope: null, address: null, timing: null };
+  const propose = (file: typeof run.toolFile, args: unknown, citations = [{ fact_id: "signal", version: 1 }]) =>
+    body(answerCall(file, "lead_fact__propose", { args, citations }, 1));
+  assert.deepEqual(propose(run.toolFile, { lead_id: "L-1001", fields }), { step_id: "step_1", decision: "drafted", outcome: "succeeded", reason_codes: [] });
+  // A missing lead id is the schema's to refuse, not this rule's.
+  assert.equal(propose(run.toolFile, { fields }).decision, "drafted");
+  const stopped = (label: string, file: typeof run.toolFile, args: unknown = { lead_id: "L-1001", fields }, citations?: Array<{ fact_id: string; version: number }>) =>
+    assert.deepEqual(propose(file, args, citations), { step_id: "step_1", decision: "abstained", outcome: "abstained", reason_codes: ["out_of_scope"] }, label);
+  stopped("another lead", run.toolFile, { lead_id: "L-2002", fields });
+  stopped("a record cited beside the signal", run.toolFile, undefined, [{ fact_id: "signal", version: 1 }, { fact_id: "lead:L-1001", version: 2 }]);
+  stopped("an inbound about no lead", inbound({ subject: undefined }).toolFile);
+  stopped("an inbound about another record", inbound({ subject: { aggregate: "customer", id: "L-1001" } }).toolFile);
+  stopped("an envelope source, not a channel", inbound({ source: "website" }).toolFile);
+  stopped("a channel the Worker does not take", inbound({ source: "email" }).toolFile);
+  stopped("a watch", inbound({ kind: "watch", source: "scheduler", watch_id: "new_leads" }).toolFile);
+  const { requester: _, ...older } = run.toolFile;
+  stopped("a tool file with no requester", older);
+  // Every other action answers as before.
+  assert.equal(body(answerCall(older, "lead__qualify", { args: { lead_id: "L-2002" }, citations: [{ fact_id: "lead:L-1001", version: 2 }] }, 2)).decision, "drafted");
+});
+
 test("the stdio action server answers MCP requests from the tool file alone", async (t) => {
   const path = join(tempDir(t), "tools.json");
   writeFileSync(path, JSON.stringify(replay.toolFile));

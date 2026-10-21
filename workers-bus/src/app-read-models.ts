@@ -309,18 +309,28 @@ interface NativeOwnerFieldBlockerRow {
 
 interface NativeOwnerUnknownStopRow {
   occurrence_id: string;
-  scope_id: string;
   reported_at: string;
+  reported_by_name: string | null;
+  summary: string;
   updated_at: string;
 }
 
-/** The owner's exception for an active stop that names a job the tenant does not have. */
-export const STOP_JOB_UNKNOWN_TITLE =
-  "This stop names a job that doesn't exist — fix which job it is for";
+/**
+ * The owner's exception for an active work stop that names a job the tenant does not have (Track
+ * B's final copy). The stop's raw job id is not shown. The item has no controls and no link. From
+ * 0159 such a stop holds every schedule as well as Safety, so the item says both.
+ */
+export const STOP_JOB_UNKNOWN_TITLE = "This work stop names a job that doesn’t exist";
+export const STOP_JOB_UNKNOWN_WHY =
+  "Safety and scheduling stay held on every job while this work stop is active.";
 
-/** The owner's exception for an active stop that names a Work Package the tenant does not have. */
-export const STOP_WORK_PACKAGE_UNKNOWN_TITLE =
-  "This stop names a work package that doesn't exist — fix which job it is for";
+/**
+ * Its twin for an active work stop that names a Work Package the tenant does not have (0159), in
+ * Track B's final copy: the screen says "job plan", never "work package", and the stop's raw
+ * package id is not shown. The same fields, no controls and no link.
+ */
+export const STOP_WORK_PACKAGE_UNKNOWN_TITLE = "This work stop names a job plan that doesn’t exist";
+export const STOP_WORK_PACKAGE_UNKNOWN_WHY = STOP_JOB_UNKNOWN_WHY;
 
 interface NativeOwnerEffectExceptionRow {
   exception_id: string;
@@ -666,6 +676,17 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
     bus_status: string | null;
     triage_status: string | null;
     mctb: MctbStatus | null;
+    /**
+     * Who raised the work stop (`stop_job_unknown`, `stop_work_package_unknown`): their display
+     * name in this tenant, or null when they have none. When it was raised is `occurred_at`. Null
+     * on every other kind.
+     */
+    reported_by_name: string | null;
+    /**
+     * The work stop's own summary, raw as it was written (`stop_job_unknown`,
+     * `stop_work_package_unknown`); the UI wraps and truncates it. Null on every other kind.
+     */
+    summary: string | null;
   }>;
   /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
   partial_sources: string[];
@@ -2613,28 +2634,33 @@ export async function buildOwnerNowReadModel(
         occurredAt: text(row.submitted_at),
       }),
     ),
-    // The stop holds Safety on every job until someone opens it (its id) and fixes its job.
+    // The stop holds Safety on every job while it is active; the item names who raised it, when,
+    // and what they wrote.
     ...unknownJobStopSource.rows.flatMap((row) =>
       exceptionRow({}, {
         id: row.occurrence_id,
         kind: "stop_job_unknown",
         severity: null,
         title: STOP_JOB_UNKNOWN_TITLE,
-        why: `Names job ${row.scope_id}`,
+        why: STOP_JOB_UNKNOWN_WHY,
         jobId: null,
         occurredAt: row.reported_at,
+        reportedByName: text(row.reported_by_name),
+        summary: row.summary,
       }),
     ),
-    // So does a stop naming a Work Package the tenant does not have (0159).
+    // So does a stop naming a Work Package the tenant does not have (0159), with the same fields.
     ...unknownWorkPackageStopSource.rows.flatMap((row) =>
       exceptionRow({}, {
         id: row.occurrence_id,
         kind: "stop_work_package_unknown",
         severity: null,
         title: STOP_WORK_PACKAGE_UNKNOWN_TITLE,
-        why: `Names work package ${row.scope_id}`,
+        why: STOP_WORK_PACKAGE_UNKNOWN_WHY,
         jobId: null,
         occurredAt: row.reported_at,
+        reportedByName: text(row.reported_by_name),
+        summary: row.summary,
       }),
     ),
     ...gates.flatMap((row) =>
@@ -3601,9 +3627,12 @@ async function nativeOwnerUnknownJobStops(
 ): Promise<{ rows: NativeOwnerUnknownStopRow[]; partial: boolean }> {
   return await boundedNativeRows<NativeOwnerUnknownStopRow>(
     env,
-    `SELECT occurrence.occurrence_id, occurrence.scope_id, occurrence.reported_at,
-            occurrence.updated_at
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            reporter.display_name AS reported_by_name, occurrence.updated_at
        FROM safety_occurrences AS occurrence
+       LEFT JOIN app_users AS reporter
+         ON reporter.tenant_id = occurrence.tenant_id
+        AND reporter.user_id = occurrence.reported_by_user_id
       WHERE occurrence.tenant_id = ?
         AND occurrence.stop_active = 1
         AND occurrence.scope_type = 'roof_job'
@@ -3618,9 +3647,9 @@ async function nativeOwnerUnknownJobStops(
 }
 
 /**
- * Active safety stops that name a Work Package this tenant does not have. Like a stop on a job that
- * doesn't exist, such a stop is recorded and holds Safety on every job (0159) until it is opened
- * and fixed or lifted.
+ * Active safety stops that name a Work Package this tenant does not have, with who raised each.
+ * Like a stop on a job that doesn't exist, such a stop is recorded and holds Safety and every
+ * schedule on every job (0159) until it is lifted.
  */
 async function nativeOwnerUnknownWorkPackageStops(
   env: AppEnv,
@@ -3628,9 +3657,12 @@ async function nativeOwnerUnknownWorkPackageStops(
 ): Promise<{ rows: NativeOwnerUnknownStopRow[]; partial: boolean }> {
   return await boundedNativeRows<NativeOwnerUnknownStopRow>(
     env,
-    `SELECT occurrence.occurrence_id, occurrence.scope_id, occurrence.reported_at,
-            occurrence.updated_at
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            reporter.display_name AS reported_by_name, occurrence.updated_at
        FROM safety_occurrences AS occurrence
+       LEFT JOIN app_users AS reporter
+         ON reporter.tenant_id = occurrence.tenant_id
+        AND reporter.user_id = occurrence.reported_by_user_id
       WHERE occurrence.tenant_id = ?
         AND occurrence.stop_active = 1
         AND occurrence.scope_type = 'work_package'
@@ -4391,6 +4423,8 @@ function exceptionRow(
     busStatus?: string | null;
     triageStatus?: string | null;
     mctb?: MctbStatus | null;
+    reportedByName?: string | null;
+    summary?: string | null;
   },
 ): OwnerNowReadModel["exceptions"] {
   return input.id
@@ -4409,6 +4443,8 @@ function exceptionRow(
           bus_status: input.busStatus ?? null,
           triage_status: input.triageStatus ?? null,
           mctb: input.mctb ?? null,
+          reported_by_name: input.reportedByName ?? null,
+          summary: input.summary ?? null,
         },
       ]
     : [];

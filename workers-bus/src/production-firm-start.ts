@@ -14,7 +14,8 @@
 //     this job, so it holds every schedule, by its own code and with the stop's id;
 //   * Deposit does not stand on a contract with no deposit while the job's latest contract is
 //     another one with other terms;
-//   * Weather stands on a person's attestation whose window has not ended and holds the work;
+//   * Weather stands on a person's attestation whose window has not ended and holds the work; a
+//     gate recorded before the ledger names no window and is refused as missing, not as ended;
 //   * no active member of the crew shares a login coordinate with the person whose attestation
 //     Materials, Safety, Access or Weather stands on.
 // The time rules read the real clock, as D1 reads its own. The caller's `now` stamps only the
@@ -156,8 +157,8 @@ async function depositContractSuperseded(
 
 /**
  * Why Weather does not hold the work, or null. The window comes from the person's attestation the
- * gate stands on; a gate with none, or whose window has ended, holds nothing. A schedule with no
- * end is held to its start.
+ * gate stands on. A gate with none, as one recorded before the ledger, names no window (missing);
+ * a gate whose window has ended holds nothing (ended). A schedule with no end is held to its start.
  */
 function weatherRefusal(weather: GateInForce, input: FirmStartInput, nowMs: number): string | null {
   const attestation = weather.basis === "person_attestation"
@@ -169,9 +170,10 @@ function weatherRefusal(weather: GateInForce, input: FirmStartInput, nowMs: numb
   const end = typeof attestation?.window_end === "string"
     ? Date.parse(attestation.window_end)
     : Number.NaN;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= nowMs) {
-    return "operating_job_assignment_weather_window_ended";
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return "operating_job_assignment_weather_window_missing";
   }
+  if (end <= nowMs) return "operating_job_assignment_weather_window_ended";
   const workStart = Date.parse(input.scheduledStart);
   const workEnd = Date.parse(input.scheduledEnd ?? input.scheduledStart);
   return workStart >= start && workEnd <= end

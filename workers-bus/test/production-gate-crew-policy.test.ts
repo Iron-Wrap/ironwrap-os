@@ -863,7 +863,7 @@ test("D1 holds an assignment to its gate evidence after 0098's rules, each refus
   assert.equal(assignmentCount(db), 1);
 });
 
-test("a Weather gate that stands on no attested window, as one recorded before the ledger, never schedules", async () => {
+test("a Weather gate that stands on no attested window, as one recorded before the ledger, is refused as missing, never as ended", async () => {
   // A database through 0152 with a Weather gate already ready, migrated forward: the 0153 backfill
   // records it as a legacy entry, which names no window.
   const db = new DatabaseSync(":memory:");
@@ -896,10 +896,25 @@ test("a Weather gate that stands on no attested window, as one recorded before t
     ],
     "the backfill kept both gates; people cleared the four it left blocked",
   );
-  const env = envFor(new TestD1(db));
-  await rejectsWith(recordOperatingJobAssignment(env, command()), "operating_job_assignment_weather_window_ended");
+  const testD1 = new TestD1(db);
+  const env = envFor(testD1);
+  // The legacy entry names no window: the schedule is refused as missing, on the store and on the
+  // route. It never ended, so it is never refused as ended.
+  await rejectsWith(recordOperatingJobAssignment(env, command()), "operating_job_assignment_weather_window_missing");
+  const h: Harness = { env, db: testD1, sqlite: db, window: fixtureWeatherWindow() };
+  const routed = await schedule(h, await person(h, USERS.ops.id));
+  assert.deepEqual([routed.status, routed.body], [409, { error: "operating_job_assignment_weather_window_missing" }]);
   // In D1, a schedule written over the legacy Crew entry is refused by name, whatever its evidence.
   refused(() => insertAssignment(db), "operating_job_assignment_crew_gate_unbound");
+  // With Crew bound in the same transaction, as a schedule's batch binds it, D1 refuses the legacy
+  // Weather entry as missing too, and the transaction leaves nothing behind.
+  db.exec("BEGIN");
+  try {
+    bindCrewInLedger(db, { tenantId: TENANT, roofJobId: JOB, crewId: CREW_A, assignmentId: "assignment:crew:legacy-weather" });
+    refused(() => insertAssignment(db, { assignment_id: "assignment:crew:legacy-weather" }), "operating_job_assignment_weather_window_missing");
+  } finally {
+    db.exec("ROLLBACK");
+  }
   // Re-attested, Weather holds a window again; the legacy Crew entry is reversed and Crew bound.
   reverseGateInLedger(db, { tenantId: TENANT, roofJobId: JOB, gate: "Weather", actorUserId: USERS.owner.id, actorRole: "owner" });
   attestGateInLedger(db, { tenantId: TENANT, roofJobId: JOB, gate: "Weather", actorUserId: USERS.production.id, actorRole: "production" });
@@ -1160,6 +1175,7 @@ test("the triggers after every migration hold A1's to A4's clauses", () => {
     "operating_job_assignment_stop_active",
     "operating_job_assignment_crew_gate_unbound",
     "operating_job_assignment_deposit_contract_superseded",
+    "operating_job_assignment_weather_window_missing",
     "operating_job_assignment_weather_window_ended",
     "operating_job_assignment_outside_weather_window",
     "operating_job_assignment_crew_not_independent",

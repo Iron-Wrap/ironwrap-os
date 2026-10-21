@@ -2543,6 +2543,8 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
       bus_status: null,
       triage_status: null,
       mctb: null,
+      reported_by_name: null,
+      summary: null,
     });
     assert.deepEqual(model.exceptions[1], {
       id: "gate_job_a_materials",
@@ -2558,6 +2560,8 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
       bus_status: null,
       triage_status: null,
       mctb: null,
+      reported_by_name: null,
+      summary: null,
     });
     assert.ok(model.stale_fields.includes("exceptions.next_action"));
     assert.ok(model.stale_fields.includes("exceptions.due_at"));

@@ -66,7 +66,7 @@ export function SystemStatus({
   const crewChecking = variant === "crew" && outbox.readState === "checking";
   // Low space still blocks the next photo, so it shows even when everything went. Any other storage
   // doubt is said only while saved work could be lost, in one line with what to do; with nothing
-  // to protect there is nothing to act on, so the office sees nothing (gate #13: a bare "Storage
+  // to protect there is nothing to act on, so the office sees nothing (the People-page Z1 gate: a bare "Storage
   // warning" chip that nothing explained).
   const storageNeedsEscalation =
     Boolean(storageWarning) &&

@@ -45,7 +45,7 @@ const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string, { label: string; to
   [/^\/safety\/equipment$/, "Equipment"],
   [/^\/settings\/company$/, "Company details"],
   [/^\/settings\/team$/, "People"],
-  [/^\/settings\/devices$/, "Crew devices"],
+  [/^\/settings\/devices$/, "Crew phones"],
   [/^\/settings\/integrations$/, "Integration readiness"],
   [/^\/settings\/configuration\/pipelines$/, "Pipelines", OWNER_CONFIGURATION],
   [/^\/settings\/configuration\/fields$/, "Fields", OWNER_CONFIGURATION],

@@ -241,7 +241,7 @@ describe("AppShell", () => {
     ["/settings", "Settings"],
     ["/settings/company", "Settings/Company details"],
     ["/settings/team", "Settings/People"],
-    ["/settings/devices", "Settings/Crew devices"],
+    ["/settings/devices", "Settings/Crew phones"],
     ["/settings/integrations", "Settings/Integration readiness"],
     ["/settings/configuration", "Settings/Owner configuration"],
     ["/settings/configuration/pipelines", "Settings/Owner configuration/Pipelines"],

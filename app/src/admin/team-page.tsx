@@ -23,7 +23,7 @@ const ROLE_HELP: Readonly<Record<AppRole, string>> = {
   production: "The job runway and crew scheduling.",
   accounting: "The money desk and QuickBooks only.",
   field:
-    "The crew phone app on a paired phone. Give someone this role before you pair their phone.",
+    "The crew phone app on a paired phone. Add them first, then pair their phone on the Crew phones page in Settings.",
 };
 
 export function TeamPage() {

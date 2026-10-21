@@ -87,7 +87,7 @@ For each person who works here, enter their name and work email and choose what 
 | Sales | Leads and quotes |
 | Production | The job runway and crew scheduling |
 | Accounting | The money desk and QuickBooks |
-| Crew | The Field Companion on a paired phone |
+| Crew | The crew phone app on a paired phone |
 
 They can sign in as soon as you add them, from the same page you did, with their own email address.
 No password is created or shared.

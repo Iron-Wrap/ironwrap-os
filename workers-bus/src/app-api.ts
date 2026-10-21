@@ -257,6 +257,7 @@ import {
   type CommercialProposalRecord,
   ProposalDeliveryConfirmationError,
   recordProposalDeliveryConfirmation,
+  recordProposalDeliveryFinding,
   outstandingProposalPublishPermit,
   unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
@@ -1168,6 +1169,12 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/commercial/proposal-publications/delivery-confirmations"
   ) {
     return await confirmProposalDeliveryByHand(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-findings"
+  ) {
+    return await recordProposalDeliveryFindingByHand(req, env, auth);
   }
   if (
     req.method === "POST" &&
@@ -4675,6 +4682,69 @@ async function confirmProposalDeliveryByHand(
       return privateAppJson({ error: error.code, ...error.detail }, error.status);
     }
     return privateAppJson({ error: "proposal_delivery_confirmation_failed" }, 503);
+  }
+}
+
+/**
+ * A person records what they found about a settled proposal send, or corrects it (0161): an
+ * append-only finding that never changes the send. People only, as for the first confirmation: the
+ * commercial set in their own session, so no agent, connector or service token records one.
+ */
+async function recordProposalDeliveryFindingByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  const keys = isRecord(body) ? Object.keys(body) : [];
+  const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  if (
+    !isRecord(body) ||
+    keys.length !== 4 ||
+    !keys.every((name) => ["external_effect_id", "supersedes_finding_id", "finding", "note"].includes(name)) ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160) ||
+    (body.supersedes_finding_id !== null &&
+      (typeof body.supersedes_finding_id !== "string" || !idText(body.supersedes_finding_id, 16, 200))) ||
+    // A person finds "delivered" or "not received"; "not executed" is provider proof only.
+    (body.finding !== "delivered" && body.finding !== "not_received") ||
+    // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
+    [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_finding" }, 400);
+  }
+  try {
+    const result = await recordProposalDeliveryFinding(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      supersedesFindingId: body.supersedes_finding_id as string | null,
+      finding: body.finding,
+      note,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      finding: result.finding,
+      effect: { external_effect_id: result.finding.effect_id, state: result.effectState },
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_finding_failed" }, 503);
   }
 }
 

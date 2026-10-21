@@ -643,7 +643,7 @@ catastrophe ids, red-team coverage, relative times only, synthetic contact data,
 exclusion of every case that prepares a release or an acceptance, and delegability: a delegation
 record, a review digest pair, or a `delegation.propose_change` target names a delegable action of
 the specialist that owns it, and a within-limits permit on a never-delegable action appears only in
-a case that raises it as a finding. It runs
+a case whose expected actions include `finding.raise`. It runs
 without the contract catalog only in structural mode and says so. `--require-complete`, which
 `make validate` passes, also fails when a roster specialist has no playbook. When
 `qualification.v1.json` is required too, and its stages, ledger, pacing, and judge routing are

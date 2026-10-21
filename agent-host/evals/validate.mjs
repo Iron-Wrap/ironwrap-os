@@ -665,9 +665,14 @@ function checkDelegable(item, expected, catalog, fail, label) {
   };
   const raisesFinding = objects(expected.actions).some((action) => action.action_id === "finding.raise");
   for (const fact of objects(item.facts)) {
-    const record = fact.kind === "delegation" ? /^delegation\/([a-z_]+):([a-z_.]+)$/.exec(fact.fact_id ?? "") : null;
-    if (record) pair(record[1], record[2], `delegation record ${fact.fact_id}`);
     const data = fact.data ?? {};
+    if (fact.kind === "delegation" || String(fact.fact_id ?? "").startsWith("delegation/")) {
+      const record = /^delegation\/([a-z_]+):([a-z_.]+)$/.exec(fact.fact_id ?? "");
+      if (record) pair(record[1], record[2], `delegation record ${fact.fact_id}`);
+      if (data.action_id && (!record || data.action_id !== record[2] || (data.specialist_id && data.specialist_id !== record[1]))) {
+        pair(data.specialist_id, data.action_id, `delegation record ${fact.fact_id} (data)`);
+      }
+    }
     if (data.permit?.kind === "within_limits" && catalog.actions.get(data.action_id)?.delegable === false && !raisesFinding) {
       fail(`${label}: ${fact.fact_id} holds a within-limits permit on ${data.action_id}, which is never delegable; only a case that raises it as a finding may`);
     }

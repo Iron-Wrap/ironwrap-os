@@ -674,7 +674,9 @@ does.
 
 A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller who asked for a person
 and was not put through. It stays open until a person records how it ended; there is no lookback
-window, because a window would retire a failure nobody decided.
+window, because a window would retire a failure nobody decided. The receptionist is callback only
+and never transfers a call live, so every handoff it records is failed and becomes one of these
+urgent callbacks ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
 
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
   records `outcome` = `called_back`, `unreachable` or `not_needed` and an optional note, with

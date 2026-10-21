@@ -26,7 +26,7 @@ Receptionist routes:
 |---|---|---|
 | `POST /webhook/newo/lookup` | Verified caller lookup with minimal job state | `NEWO_WEBHOOK_TOKEN` |
 | `POST /webhook/newo` | Capture a distinct reception lead/session | `NEWO_WEBHOOK_TOKEN` |
-| `POST /webhook/newo/handoff` | Record handoff reason before transfer | `NEWO_WEBHOOK_TOKEN` |
+| `POST /webhook/newo/handoff` | Record the handoff reason and open the urgent callback incident | `NEWO_WEBHOOK_TOKEN` |
 | `POST /webhook/newo/report` | Structured terminal session report | `NEWO_WEBHOOK_TOKEN` |
 | `POST /webhook/newo/availability` | Request-only availability response | `NEWO_BOOKING_TOKEN` |
 | `POST /webhook/newo/booking` | Appointment request | `NEWO_BOOKING_TOKEN` |
@@ -37,6 +37,14 @@ The event adapter rejects extra properties, transcript text, and recording bodie
 The typed Worker client covers all 31 operations in the documented Newo API groups. Access and refresh tokens stay in Worker isolate memory. Governed mutations require an exact dry-run receipt, separately signed approval, one-time D1 claim, and applicable runtime gates. There is no raw Newo proxy.
 
 The `newo-mcp` exposes role-filtered Worker operations. It never receives `NEWO_API_KEY` or a Newo bearer token. `owner-operator` receives governed controls, `support-admin` receives operational/configuration reads, and `lead-concierge` receives bounded session/conversation reads. Other roles receive no Newo tools.
+
+## Handoff and SMS
+
+The release contract is callback only. The AKB forbids transferring a call live to a person, an owner line, or voicemail. Each immediate handoff calls `request_handoff` with the reason and handoff status `failed`, which means the caller was not put through. The Worker then alerts the owner, projects an urgent `Automation Incident`, and counts the session as a failed handoff until a person records how the callback ended ([AUTHORITY-AND-EVIDENCE-CONTRACT.md](AUTHORITY-AND-EVIDENCE-CONTRACT.md#failed-newo-handoffs)). No transfer number or transfer policy is configured.
+
+Newo's in-call SMS tool stays disabled, and the AKB forbids Newo SMS. SMS confirmations belong to IronWrap, and customer SMS stays record-only until the A2P/carrier gate passes.
+
+`production.expected.json` records both rules in its `handoff` and `sms` blocks. `node tools/validate-newo-config.mjs` fails if a transfer setting returns to the expected config, console proof, Worker config, AKB, or evaluation cases, or if Newo SMS is turned on. The matching Newo console settings are the `handoff_callback_only` and `newo_in_call_sms_disabled` proofs in `console-proof.json`; the repository does not prove them.
 
 ## Booking truth
 

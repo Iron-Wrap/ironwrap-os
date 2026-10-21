@@ -79,7 +79,7 @@ Fill the reviewed non-secret values in `wrangler.jsonc` and `config/newo/product
 
 - project ID and dedicated production agent ID;
 - report and handoff webhook IDs and exact Worker URLs;
-- Newo-owned number and owner transfer number;
+- Newo-owned number (no transfer number: the receptionist is callback only);
 - owner-approved usage limit and alert percent;
 - callback owner Frappe user;
 - expected tool, report, and AKB hashes.
@@ -111,7 +111,8 @@ Publish the dedicated production actor only after review of:
 - the structured report schema and immediate-handoff report;
 - the versioned AKB, with owner and legal wording approval;
 - AI and recording disclosure at call start;
-- owner transfer line and voicemail fallback;
+- callback-only handoff: no call-transfer action, transfer number, or voicemail transfer on the actor, and `request_handoff` sends handoff status `failed` (console proof `handoff_callback_only`);
+- Newo in-call SMS tool disabled (console proof `newo_in_call_sms_disabled`);
 - Newo-owned number and written portability/exit terms;
 - usage cap and threshold alert;
 - phone connector, scenario lifecycle, and AKB version.
@@ -122,15 +123,15 @@ The documented API does not cover the complete phone-connector, AKB-publishing, 
 
 Run the 26 cases in `config/newo/evaluation-cases.v1.json` against the exact actor and Worker version. Pass requires at least 85 percent capture-and-routing accuracy and zero catastrophic failures.
 
-Required failure evidence includes wrong job verification, prompt injection, exact replay and hash conflict, same-caller second session, report omission, and dependency outage. A dependency failure must preserve accepted D1/R2 state and must not produce a false booking, transfer, delivery, or downstream confirmation.
+Required failure evidence includes wrong job verification, prompt injection, exact replay and hash conflict, same-caller second session, report omission, and dependency outage. A dependency failure must preserve accepted D1/R2 state and must not produce a false booking, callback time, delivery, or downstream confirmation.
 
 Prove before forwarding:
 
 1. Wrong credentials create no R2/D1 business record.
 2. A valid controlled call creates an R2 object, event receipt, session, Frappe record, downstream outcome, and readable operator state.
 3. A missing report becomes one visible reconciliation exception.
-4. A failed transfer creates an urgent callback incident and owner alert.
-5. Transfer, voicemail fallback, and forwarding rollback work from the real number.
+4. Each immediate handoff creates an urgent callback incident and owner alert, and no call is transferred.
+5. Forwarding rollback works from the real number.
 
 ## 7. Booking gate
 
@@ -147,11 +148,11 @@ If the contract is absent or any test fails, remain request-only.
 
 ## 8. Cutover gates
 
-After-hours forwarding requires the repository gate, production config gate, 26-case evaluation, wrong-credential proof, owned landing proof, transfer/fallback proof, usage alert proof, and owner approval.
+After-hours forwarding requires the repository gate, production config gate, 26-case evaluation, wrong-credential proof, owned landing proof, urgent callback incident proof, usage alert proof, and owner approval.
 
 Selected inbound requires reviewed real-call evidence from after-hours operation, no unresolved catastrophic incident, acceptable capture/routing accuracy, and demonstrated rollback.
 
-All inbound requires owner sign-off, zero unresolved catastrophic incidents, working transfer and voicemail fallback, no missing reports or DLQ failures, and another demonstrated rollback.
+All inbound requires owner sign-off, zero unresolved catastrophic incidents, working urgent callback incidents, no missing reports or DLQ failures, and another demonstrated rollback.
 
 Record the exact Git commit, Worker version, D1 migration state, Newo actor ID, AKB hash, tool/report hashes, phone number, forwarding phase, reviewer, timestamps, and evidence references.
 

@@ -829,7 +829,7 @@ not Git fixtures, and not proof that a later deployment still runs the same exac
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
 | QuickBooks | Expected-realm signed event produces raw R2, a D1 receipt plus durable reconciliation/effect state, and any enabled Pending Frappe projection; invalid signatures and other realms are rejected, and provider facts remain unproven until authenticated readback |
-| Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, native lead/envelope state when applicable, downstream result, and operator status; any Frappe landing is a projection; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
+| Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, native lead/envelope state when applicable, downstream result, and operator status; any Frappe landing is a projection; same-caller second calls remain distinct sessions; report omission and every callback-only handoff become owned exceptions; no call is transferred live |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
 record-only until A2P/carrier approval. QuickBooks remains accounting truth.

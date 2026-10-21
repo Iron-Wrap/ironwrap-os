@@ -480,6 +480,39 @@ function checkProducerExclusion(item, expected, fail, label) {
   }
 }
 
+// An inbound envelope's signal, as the Worker writes it (new_inbound): exactly these content keys, no
+// actor, and the lead it becomes as its subject. Excerpt and form fields are untrusted text.
+const INBOUND_CHANNELS = new Set(["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]);
+const INBOUND_KEYS = ["envelope_id", "channel", "brand", "received_via", "sender", "has_phone", "has_email", "service", "excerpt", "form_fields"];
+const textUpTo = (value, max) => value === null || (typeof value === "string" && value.length <= max);
+function checkInboundSignal(signal, label, fail) {
+  const content = signal.content;
+  const keys = Object.keys(content);
+  if (keys.length !== INBOUND_KEYS.length || !INBOUND_KEYS.every((key) => keys.includes(key))) {
+    fail(`${label}: an inbound signal's content has exactly ${INBOUND_KEYS.join(", ")}`);
+  }
+  if (typeof content.envelope_id !== "string" || content.envelope_id === "") fail(`${label}: an inbound signal names its envelope_id`);
+  if (!INBOUND_CHANNELS.has(content.channel) || signal.source !== content.channel) {
+    fail(`${label}: an inbound signal's channel is one the Worker takes in (${[...INBOUND_CHANNELS].join(", ")}) and is its source`);
+  }
+  if (![null, "ironwrap", "iroof"].includes(content.brand)) fail(`${label}: an inbound signal's brand is ironwrap, iroof, or null`);
+  if (content.received_via !== null) fail(`${label}: an inbound signal's received_via is null: the Worker records none yet`);
+  const sender = content.sender;
+  const senderValid = sender && typeof sender === "object" && Object.keys(sender).length === 3 &&
+    (sender.customer_id === null || typeof sender.customer_id === "string") &&
+    [null, "email", "phone", "email_and_phone"].includes(sender.matched_on) && typeof sender.conflict === "boolean";
+  if (!senderValid) fail(`${label}: an inbound signal's sender is { customer_id, matched_on: email|phone|email_and_phone|null, conflict }`);
+  if (typeof content.has_phone !== "boolean" || typeof content.has_email !== "boolean") fail(`${label}: an inbound signal's has_phone and has_email are booleans`);
+  if (!textUpTo(content.service, 200)) fail(`${label}: an inbound signal's service is text of at most 200 characters, or null`);
+  if (!textUpTo(content.excerpt, 1000)) fail(`${label}: an inbound signal's excerpt is text of at most 1000 characters, or null`);
+  const fields = content.form_fields;
+  const fieldsValid = fields && typeof fields === "object" && Object.keys(fields).length === 3 &&
+    textUpTo(fields.address, 600) && textUpTo(fields.scope, 2000) && textUpTo(fields.timing, 600);
+  if (!fieldsValid) fail(`${label}: an inbound signal's form_fields are { address, scope, timing }, each text or null`);
+  if (signal.actor !== undefined && signal.actor !== null) fail(`${label}: an inbound signal has no actor`);
+  if (signal.subject?.aggregate !== "lead") fail(`${label}: an inbound signal's subject is the lead it becomes ({ aggregate: "lead", id })`);
+}
+
 function checkCase(item, context) {
   const { suite, id, granted, catalog, registry, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
@@ -502,8 +535,10 @@ function checkCase(item, context) {
       content.objects.every((object) => typeof object?.aggregate === "string" && typeof object?.id === "string");
     if (!objectsValid) fail(`${label}: a watch firing's objects are at most 24 { aggregate, id }`);
     if (content.period_key !== undefined) fail(`${label}: a watch firing's period_key is a calendar date; leave it out`);
+  } else if (signal.kind === "event" && content && Object.hasOwn(content, "envelope_id")) {
+    checkInboundSignal(signal, label, fail);
   } else if (!content || (typeof content.text !== "string" && !content.request)) {
-    fail(`${label}: signal.content needs text or request, or a watch firing's digest and summary`);
+    fail(`${label}: signal.content needs text or request, an inbound envelope's keys, or a watch firing's digest and summary`);
   }
   // The signal's actor, as the Worker writes it: who sent it, or null for the Worker's own watch
   // firings and specialist handoffs. Only an external sender is unauthenticated.
@@ -512,6 +547,12 @@ function checkCase(item, context) {
     fail(`${label}: signal.actor must be { type, role, ref, authenticated } as the Worker writes it (${[...ACTOR_TYPES.keys()].join(", ")})`);
   }
   if (["watch", "handoff"].includes(signal.kind) && actor !== null) fail(`${label}: a ${signal.kind} signal has no actor; its source says who`);
+  // A signal's subject, as the Worker writes it: { aggregate, id }, or absent.
+  const subject = signal.subject;
+  if (subject !== undefined && !(subject && typeof subject === "object" && Object.keys(subject).length === 2 &&
+    typeof subject.aggregate === "string" && subject.aggregate !== "" && typeof subject.id === "string" && subject.id !== "")) {
+    fail(`${label}: signal.subject is { aggregate, id }`);
+  }
   // A person's ask goes to the face (`ask`) and a press on a view action to the action's owning
   // specialist (`request`). Both name the signed-in person; crew can ask but cannot press.
   if (signal.kind === "owner_request") {

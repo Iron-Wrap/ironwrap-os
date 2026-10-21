@@ -441,7 +441,7 @@ test("a watch signal may carry the Worker's firing content instead of text", () 
   assert.match(failures, /\.002: a watch firing's content\.watch_id is its signal's watch_id/);
   for (const n of ["003", "004"]) assert.match(failures, new RegExp(`\\.${n}: a watch firing's objects are at most 24 \\{ aggregate, id \\}`));
   assert.match(failures, /\.005: a watch firing's period_key is a calendar date; leave it out/);
-  for (const n of ["006", "007"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.content needs text or request, or a watch firing's digest and summary`));
+  for (const n of ["006", "007"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.content needs text or request, an inbound envelope's keys, or a watch firing's digest and summary`));
 });
 
 test("a delegation names a delegable action its specialist owns; a within-limits permit on a never-delegable one is a finding", () => {
@@ -480,6 +480,59 @@ test("a delegation names a delegable action its specialist owns; a within-limits
   assert.match(failures, /\.012: delegation record delegation\/lead_concierge:lead\.triage \(data\) names comms\.send, which is never delegable/);
   assert.match(failures, /\.013: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
   assert.match(failures, /\.014: digest previewable names lead\.unknown, which is not in the catalog/);
+});
+
+test("an inbound signal carries exactly the Worker's envelope keys, no actor, and its lead as subject", () => {
+  const content = {
+    envelope_id: "ENV-1",
+    channel: "web_form",
+    brand: "ironwrap",
+    received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false },
+    has_phone: true,
+    has_email: false,
+    service: "gutters",
+    excerpt: "Gutters pulling away at the back.",
+    form_fields: { address: "123 Example Street NW", scope: null, timing: null },
+  };
+  const inbound = (overrides = {}, signalOverrides = {}) => ({
+    kind: "event",
+    source: "web_form",
+    watch_id: "new_inbound",
+    at: "PT0M",
+    subject: { aggregate: "lead", id: "L-1" },
+    content: { ...content, ...overrides },
+    ...signalOverrides,
+  });
+  const signals = [
+    inbound(),
+    inbound({ channel: "email" }, { source: "email" }),
+    inbound({ received_via: "ironwrap.example.invalid/contact" }),
+    inbound({ sender: { customer_id: "CU-1", matched_on: "name", conflict: false } }),
+    inbound({ excerpt: "x".repeat(1001) }),
+    inbound({ form_fields: { address: null, timing: null } }),
+    inbound({}, { actor: { type: "external", role: null, ref: "channel:web", authenticated: false } }),
+    inbound({}, { subject: { aggregate: "job", id: "J-1" } }),
+    inbound({ text: "extra" }),
+    inbound({}, { subject: { id: "L-1" } }),
+    inbound({ brand: "other" }),
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    signals.forEach((entry, index) => (cases[index].signal = entry));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: (an inbound signal|signal\.subject|signal\.content)/);
+  assert.match(failures, /\.002: an inbound signal's channel is one the Worker takes in/);
+  assert.match(failures, /\.003: an inbound signal's received_via is null/);
+  assert.match(failures, /\.004: an inbound signal's sender is \{ customer_id, matched_on/);
+  assert.match(failures, /\.005: an inbound signal's excerpt is text of at most 1000 characters/);
+  assert.match(failures, /\.006: an inbound signal's form_fields are \{ address, scope, timing \}/);
+  assert.match(failures, /\.007: an inbound signal has no actor/);
+  assert.match(failures, /\.008: an inbound signal's subject is the lead it becomes/);
+  assert.match(failures, /\.009: an inbound signal's content has exactly envelope_id/);
+  assert.match(failures, /\.010: signal\.subject is \{ aggregate, id \}/);
+  assert.match(failures, /\.011: an inbound signal's brand is ironwrap, iroof, or null/);
 });
 
 test("structural mode without the contract still checks shape", () => {

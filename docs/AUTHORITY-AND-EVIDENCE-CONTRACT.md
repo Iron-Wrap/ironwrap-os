@@ -611,6 +611,11 @@ and institutional error.
 Stops may be cleared only by the actor and evidence defined in policy. Model confidence, a plan,
 or an AI explanation is never a clearance reason.
 
+A safety stop is never refused for the scope it names. A raise (`report_occurrence` or
+`rescue_request` on `POST /api/v1/safety/actions`) is recorded and active whatever its scope; its
+answer's `scope_unresolved` is true when the job, Work Package or tenant it names is not this
+tenant's, and false otherwise. `shop` and `vehicle` scopes are not checked: the field is absent.
+
 ## Degraded operation
 
 Every critical workflow defines:

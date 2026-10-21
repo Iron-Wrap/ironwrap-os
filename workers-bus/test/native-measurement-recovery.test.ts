@@ -101,10 +101,11 @@ test("0084 native measurement authority is complete in backup and restore contra
     );
     // Pinned through 0200: privacy, crew-stop guards, the stop release record, durable writer
     // claims and the AI team tables, manual measurement history, the 0153 gate ledger, the
-    // 0155 tenant deposit policy and the 0205 step pair index are included in both D1 inventories.
+    // 0155 tenant deposit policy, the 0205 step pair index and the 0159 schedule guard are
+    // included in both D1 inventories.
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 277);
     assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 392);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 760);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 761);
   }
 
   for (const [name, table] of INDEXES) {

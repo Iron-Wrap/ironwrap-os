@@ -19,7 +19,7 @@ import {
   nativeWorkPackageAction,
   type NativeWorkPackageDefinition,
 } from "../src/work-package-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { bindCrewInLedger, clearScheduleGatesInLedger } from "./production-gate-ledger-fixture.ts";
 
 // Every fixture is synthetic: reserved example.invalid identities, and times relative to the run
 // rather than calendar dates.
@@ -328,7 +328,16 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
       .run(`gate:wp:${suffix}:${gate.toLowerCase()}`, packet.tenantId, packet.jobId, envelopeId,
         rawKey, gate, owner.id, now, packet.expiresAt, now, now);
   }
-  recordLegacyGateStates(sqlite, { tenantId: packet.tenantId, roofJobId: packet.jobId, at: now });
+  // People on no crew clear the five gates a schedule rests on: production in this tenant, the
+  // owner alone in the other one.
+  const attester = packet.tenantId === TENANT ? USERS.production : owner;
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    ownerUserId: owner.id,
+    attesterUserId: attester.id,
+    attesterRole: attester === owner ? "owner" : "production",
+  });
   sqlite
     .prepare(
       `INSERT OR IGNORE INTO fleet_crews
@@ -351,6 +360,13 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
       )
       .run(`membership:wp:${suffix}:${index + 1}`, packet.tenantId, crewId, workerId, now, now);
   }
+  // The schedule binds Crew by policy in the same write as its row (0159).
+  bindCrewInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    crewId,
+    assignmentId: packet.assignmentId,
+  });
   sqlite
     .prepare(
       `INSERT INTO operating_job_assignments
@@ -1669,7 +1685,13 @@ async function seedOfficeAssignment(env: TestEnv) {
       .run(`gate:stop-release:${gate.toLowerCase()}`, TENANT, OFFICE_JOB, gate, USERS.owner.id, now,
         at(24 * 60), now, now);
   }
-  recordLegacyGateStates(sqlite, { tenantId: TENANT, roofJobId: OFFICE_JOB, at: now });
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: TENANT,
+    roofJobId: OFFICE_JOB,
+    ownerUserId: USERS.owner.id,
+    attesterUserId: USERS.production.id,
+    attesterRole: "production",
+  });
   sqlite
     .prepare(
       `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
@@ -1886,4 +1908,60 @@ test("office reissue of a stopped package is refused until a person releases the
       .map((row) => ({ ...row })),
     [{ prior_work_package_id: v1, prior_work_package_version: 1, replacement_work_package_version: 2 }],
   );
+});
+
+// --- A4 (0159): a stop that applies to the job holds the next schedule ---------------------------
+
+/** The next schedule revision of a packet's job, by the owner, for the crew it was scheduled to. */
+function scheduleRevision(env: TestEnv, packet: NativeWorkPackageDefinition, key: string) {
+  const suffix = sha256(`${packet.tenantId}:${packet.assignmentId}`).slice(0, 16);
+  return recordOperatingJobAssignment(envFor(env, packet.tenantId), {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    expectedRoofJobVersion: 1,
+    crewId: `crew:wp:${suffix}`,
+    expectedCrewVersion: 1,
+    authorityRequirements: packet.authorityRequirements,
+    scheduledStart: at(24 * 60),
+    supersedesAssignmentId: packet.assignmentId,
+    correctionReason: "Synthetic schedule revision while a stop may hold the job.",
+    actorUserId: USERS.owner.id,
+    idempotencyKey: key,
+  });
+}
+
+async function scheduleRefused(action: Promise<unknown>, code: string): Promise<void> {
+  await assert.rejects(action, (error: unknown) => {
+    assert.match(String((error as Error).message), new RegExp(code));
+    return true;
+  });
+}
+
+test("a crew's stop on a Work Package of the job holds the next schedule until a person releases it", async () => {
+  const env = testEnv();
+  const stopped = await stoppedPackage(env);
+  const { packet } = stopped;
+  await scheduleRefused(scheduleRevision(env, packet, "schedule-crew-stop-0001"), "operating_job_assignment_stop_active");
+  const production = await personAuth(env, USERS.production.id);
+  const released = await postRelease(env, production, packet.workPackageId, releaseBody(stopped), {
+    key: "stop-release-schedule-0001",
+  });
+  assert.equal(released.status, 200, JSON.stringify(released.body));
+  const revised = await scheduleRevision(env, packet, "schedule-crew-stop-0002");
+  assert.equal(revised.kind, "created");
+});
+
+test("a safety stop on a Work Package of the job holds the next schedule", async () => {
+  const env = testEnv();
+  const packet = definition();
+  await issue(env, packet);
+  env.DB.sqlite.prepare(
+    `INSERT INTO safety_occurrences
+       (occurrence_id, tenant_id, occurrence_kind, severity, scope_type, scope_id,
+        reported_by_user_id, reported_at, summary, report_fingerprint_sha256, created_at,
+        updated_at)
+     VALUES ('occurrence.wp.schedule', ?, 'hazard', 'high', 'work_package', ?, ?, ?,
+             'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
+  ).run(TENANT, packet.workPackageId, USERS.crew.id, at(5), sha256("wp-schedule-stop"), at(5), at(5));
+  await scheduleRefused(scheduleRevision(env, packet, "schedule-wp-stop-0001"), "operating_job_assignment_stop_active");
 });

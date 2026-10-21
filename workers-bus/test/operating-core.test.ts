@@ -1,28 +1,37 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import type { EnvelopeRecord } from "../src/core.ts";
 import { materializeOperatingCore } from "../src/operating-core.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { bindCrewInLedger, clearScheduleGatesInLedger } from "./production-gate-ledger-fixture.ts";
 
 class TestD1 {
   readonly raw = new DatabaseSync(":memory:");
   private beforeBatchHook: (() => void | Promise<void>) | null;
 
-  constructor(beforeBatchHook: (() => void | Promise<void>) | null = null) {
+  constructor(
+    beforeBatchHook: (() => void | Promise<void>) | null = null,
+    options: { fullChain?: boolean } = {},
+  ) {
     this.beforeBatchHook = beforeBatchHook;
     this.raw.exec("PRAGMA foreign_keys = ON");
     // 0153 is here so a retried materialization meets the gate ledger's guards; 0009 and 0106
-    // carry the audit and gate clearance columns that migration reads and writes.
-    for (const name of [
-      "0001_init.sql",
-      "0009_replay_approval_audit.sql",
-      "0090_operating_core.sql",
-      "0106_native_gate_clearance_and_option_packages.sql",
-      "0153_production_gate_clearances.sql",
-    ]) {
+    // carry the audit and gate clearance columns that migration reads and writes. A case that
+    // clears gates through the ledger needs every migration the ledger's entries read.
+    const names = options.fullChain
+      ? readdirSync(new URL("../migrations/", import.meta.url))
+        .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+        .sort()
+      : [
+        "0001_init.sql",
+        "0009_replay_approval_audit.sql",
+        "0090_operating_core.sql",
+        "0106_native_gate_clearance_and_option_packages.sql",
+        "0153_production_gate_clearances.sql",
+      ];
+    for (const name of names) {
       this.raw.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
     }
   }
@@ -478,7 +487,7 @@ test("a changed source envelope cannot masquerade as an idempotent retry", async
 });
 
 test("retry cannot overwrite human-owned lifecycle decisions", async () => {
-  const db = new TestD1();
+  const db = new TestD1(null, { fullChain: true });
   const rec = envelope();
   seedEnvelope(db, rec);
   await materializeOperatingCore(env(db), rec);
@@ -490,11 +499,43 @@ test("retry cannot overwrite human-owned lifecycle decisions", async () => {
   const { roof_job_id: roofJobId } = db.raw.prepare("SELECT roof_job_id FROM operating_roof_jobs").get() as {
     roof_job_id: string;
   };
-  recordLegacyGateStates(db.raw, {
+  // People clear the five gates a schedule rests on and a schedule binds Crew, through the ledger.
+  const user = db.raw.prepare(
+    `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+        active, created_by, created_at, updated_at)
+     VALUES (?, 'ironwrap', ?, ?, ?, ?, ?, 1, 'test-seed', ?, ?)`,
+  );
+  const at = new Date().toISOString();
+  for (const [userId, role, access] of [
+    ["appu_owner_core_retry", "owner", "owner"],
+    ["appu_production_core_retry", "ops", "production"],
+    ["appu_field_core_retry", "field", "field"],
+  ] as const) {
+    const email = `${userId}@example.invalid`;
+    user.run(userId, email, userId, role, access, role === "field" ? email : null, at, at);
+  }
+  clearScheduleGatesInLedger(db.raw, {
     tenantId: "ironwrap",
     roofJobId,
-    gates: ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"],
+    ownerUserId: "appu_owner_core_retry",
+    attesterUserId: "appu_production_core_retry",
+    attesterRole: "production",
   });
+  db.raw.prepare(
+    `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
+     VALUES ('crew:core:retry', 'ironwrap', 'Synthetic Crew', 'Active', 1, ?, ?)`,
+  ).run(at, at);
+  db.raw.prepare(
+    `INSERT INTO fleet_crew_members
+       (membership_id, tenant_id, crew_id, user_id, active, version, created_at, updated_at)
+     VALUES ('membership:core:retry', 'ironwrap', 'crew:core:retry', 'appu_field_core_retry', 1, 1, ?, ?)`,
+  ).run(at, at);
+  bindCrewInLedger(db.raw, { tenantId: "ironwrap", roofJobId, crewId: "crew:core:retry", assignmentId: "assignment:core:retry" });
+  const gates = () => db.raw.prepare(
+    "SELECT gate, state, version, clearance_decision_id FROM operating_production_gates ORDER BY gate",
+  ).all().map((row) => ({ ...row }));
+  const cleared = gates();
   await materializeOperatingCore(env(db), rec);
   assert.equal((db.raw.prepare("SELECT lifecycle_status FROM operating_leads").get() as { lifecycle_status: string }).lifecycle_status, "qualified");
   const job = db.raw.prepare("SELECT job_status, current_gate_state FROM operating_roof_jobs").get() as {
@@ -503,11 +544,13 @@ test("retry cannot overwrite human-owned lifecycle decisions", async () => {
   };
   assert.equal(job.job_status, "in_progress");
   assert.equal(job.current_gate_state, "in_progress");
-  assert.equal((db.raw.prepare("SELECT state FROM operating_production_gates WHERE gate = 'Deposit'").get() as { state: string }).state, "ready");
-  assert.equal(
-    (db.raw.prepare("SELECT COUNT(*) AS n FROM operating_production_gates WHERE state = 'ready'").get() as { n: number }).n,
-    7,
-    "every cleared gate, Completion included, survives the retried materialization",
+  assert.deepEqual(gates(), cleared, "every cleared gate survives the retried materialization untouched");
+  assert.deepEqual(
+    cleared.map((row) => [row.gate, row.state]),
+    [
+      ["Access", "ready"], ["Completion", "blocked"], ["Crew", "complete"], ["Deposit", "waived"],
+      ["Materials", "ready"], ["Safety", "ready"], ["Weather", "ready"],
+    ],
   );
   assert.equal((db.raw.prepare("SELECT status FROM operating_instant_estimates").get() as { status: string }).status, "approved");
 });

@@ -15,7 +15,7 @@ import { sha256Hex } from "../app-auth.ts";
 import { catalogAction } from "./catalog.ts";
 import { APPLY_IN_OWN_SCREEN } from "./receipts.ts";
 import { canonicalJson } from "./schema.ts";
-import type { AgentDb, BoundStatement } from "./store.ts";
+import { changesOf, type AgentDb, type BoundStatement } from "./store.ts";
 
 /** What a person set on the record a draft prepared: the field, its stable key and who set it. */
 export interface Applied {
@@ -56,12 +56,20 @@ function record(actionId: string, args: Record<string, unknown>): { sql: string;
 }
 
 /** A person changed the record `args` names: its open drafts close `applied_by_person`. */
-async function applied(db: AgentDb, tenantId: string, actionId: string, args: Record<string, unknown>, reference: string, set: Applied): Promise<BoundStatement> {
+async function applied(
+  db: AgentDb,
+  tenantId: string,
+  actionId: string,
+  args: Record<string, unknown>,
+  reference: string,
+  set: Applied,
+  extra = { sql: "", values: [] as unknown[] },
+): Promise<BoundStatement> {
   const readback = canonicalJson({ source: "owned_store", reference, response_hash: await sha256Hex(canonicalJson({ [set.field]: set.value })), matched: true });
   const drafts = record(actionId, args)!;
   return db
-    .prepare(`${CLOSE} AND ${drafts.sql}`)
-    .bind("applied_by_person", "applied_by_person", readback, canonicalJson(set), canonicalJson(set), tenantId, actionId, ...drafts.values);
+    .prepare(`${CLOSE} AND ${drafts.sql}${extra.sql}`)
+    .bind("applied_by_person", "applied_by_person", readback, canonicalJson(set), canonicalJson(set), tenantId, actionId, ...drafts.values, ...extra.values);
 }
 
 /**
@@ -98,15 +106,25 @@ export async function closeDelegationDrafts(
 }
 
 /**
- * A person's role changed (access.change on the Access screen): that person's open role-change
- * drafts close `applied_by_person`, naming the person. Device drafts are left open. Never throws: a
- * draft that stays open is only stale.
+ * A person's role was set (the Access screen or provisioning): that person's open role-change drafts
+ * close `applied_by_person`, naming the person; true when any closed. Given the person's
+ * access version now, only drafts prepared against an older one close, so a draft written after the
+ * change stays. Device drafts are left open. Never throws: a draft that stays open is only stale.
  */
-export async function closeAccessDrafts(db: AgentDb, tenantId: string, userId: string, role: string, by: string): Promise<boolean> {
+export async function closeAccessDrafts(
+  db: AgentDb,
+  tenantId: string,
+  userId: string,
+  role: string,
+  by: string,
+  accessVersion: number | null = null,
+): Promise<boolean> {
   try {
     const person = `person:${userId}`;
-    await (await applied(db, tenantId, "access.prepare_change", { person_ref: person, change: "change_role", device_ref: null }, person, { field: "role", value: role, by })).run();
-    return true;
+    const older = { sql: " AND (? IS NULL OR json_extract(args_json, '$.expected_access_version') < ?)", values: [accessVersion, accessVersion] };
+    const set: Applied = { field: "role", value: role, by };
+    // D1's change count includes rows triggers touch, so it says only whether any closed.
+    return changesOf(await (await applied(db, tenantId, "access.prepare_change", { person_ref: person, change: "change_role", device_ref: null }, person, set, older)).run()) > 0;
   } catch (error) {
     console.error(JSON.stringify({ at: "agent_draft_close", action_id: "access.prepare_change", error: String(error) }));
     return false;

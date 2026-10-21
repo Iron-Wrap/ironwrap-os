@@ -810,11 +810,30 @@ test("a role change closes the AI team's open role-change drafts for that person
     ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }],
   );
   assert.equal(closed("step_device").reason_code, null, "a device draft stays open");
+  // Each close that closed a draft is audited, naming the role and who set it.
+  const audits = () =>
+    (h.db.raw.prepare("SELECT user_id, outcome, detail_code FROM app_auth_audit WHERE event = 'agent_draft_close' ORDER BY id").all() as Array<Record<string, string>>).map((row) => ({ ...row }));
+  assert.deepEqual(audits(), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
   // A draft left open after the change (a close that failed) closes on a repeat of the same change.
   draft("step_left", "change_role", "field", null);
   const repeat = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session, body: { role: "production" } });
   assert.equal(repeat.status, 200);
   assert.equal(closed("step_left").reason_code, "applied_by_person");
+  assert.equal(audits().length, 2);
+  // A repeat with nothing open closes nothing and leaves no audit row.
+  await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session, body: { role: "production" } });
+  assert.equal(audits().length, 2);
+  // Provisioning that re-grades an existing person closes their drafts too.
+  draft("step_provisioned", "change_role", "field", null);
+  const provisioned = await call(h, "POST", APP_USERS, {
+    session,
+    body: { tenant_id: TENANT, email: "mate@example.invalid", display_name: "Mate", role: "sales", frappe_user_id: "mate@example.invalid", active: true },
+  });
+  assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+  assert.deepEqual(
+    [closed("step_provisioned").reason_code, JSON.parse(closed("step_provisioned").do_it_myself_json).context.applied.value, audits().length],
+    ["applied_by_person", "sales", 3],
+  );
 });
 
 test("a role change is the server's decision, not the browser's", async () => {

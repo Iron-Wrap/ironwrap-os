@@ -1487,8 +1487,11 @@ test("a person's role change closes the open role-change drafts for them, whatev
   const device = await draft("ask-device", (ref) => pairing(ref));
   const row = (id: string) => t.db.raw.prepare("SELECT reason_code, needs_ask, readback_json, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(id) as Record<string, string | null>;
   const person = (pairing("signal/x").person_ref as string).slice("person:".length);
+  // Given the person's access version, only drafts prepared against an older one close.
+  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001", 1), false);
+  assert.equal(row(toSales).needs_ask, "apply_in_own_screen");
   // The owner sets the role the first draft proposed.
-  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001"), true);
+  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001", 2), true);
   const applied = row(toSales);
   assert.deepEqual(
     [applied.reason_code, applied.needs_ask, JSON.parse(applied.readback_json!).reference, JSON.parse(applied.do_it_myself_json!).context.applied],

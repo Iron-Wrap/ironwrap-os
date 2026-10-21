@@ -2,7 +2,6 @@ import {
   appPublicOrigin,
   authRequestContext,
   configuredTenantId,
-  hasLiveStaffSession,
   publicTenant,
   randomToken,
   sha256Hex,
@@ -126,9 +125,8 @@ export function customerPortalEnabled(env: AppEnv): boolean {
 }
 
 /**
- * Recording the first open of a proposal (0163) stays off until the retention sweep that deletes
- * rows older than 3 years exists, and the owner approves the portal privacy notice that says the
- * first open is recorded and kept for at most 3 years.
+ * Recording the first open of a proposal (0163) stays off until the owner approves the portal
+ * privacy notice that says the first open is recorded and kept for at most 3 years.
  */
 export function customerPortalProposalViewsEnabled(env: AppEnv): boolean {
   return String(env.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED) === "true";
@@ -156,11 +154,14 @@ export function customerPortalConfigured(env: AppEnv): boolean {
 
 /**
  * Resolve a customer capability without accepting office cookies or an arbitrary path token.
- * Every invalid state deliberately produces the same not-found response.
+ * Every invalid state deliberately produces the same not-found response. The app adds
+ * `staff_preview: true` while an office sign-in is live in that browser; it only ever stops a
+ * first-open record, so a forged flag can under-record and never over-record.
  */
 export async function handleCustomerPortalResolve(
   req: Request,
   env: AppEnv,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   if (req.method !== "POST" || !customerPortalEnabled(env))
     return portalNotFound();
@@ -173,12 +174,14 @@ export async function handleCustomerPortalResolve(
   const parsed = await readPortalBody(req);
   if (
     !parsed.ok ||
-    Object.keys(parsed.value).length !== 1 ||
-    typeof parsed.value.token !== "string"
+    typeof parsed.value.token !== "string" ||
+    Object.keys(parsed.value).some((key) => key !== "token" && key !== "staff_preview") ||
+    (parsed.value.staff_preview !== undefined && parsed.value.staff_preview !== true)
   ) {
     return portalNotFound();
   }
   const rawToken = parsed.value.token;
+  const staffPreview = parsed.value.staff_preview === true;
   if (!/^[A-Za-z0-9_-]{43}$/.test(rawToken)) return portalNotFound();
 
   const tenantId = configuredTenantId(env);
@@ -211,8 +214,10 @@ export async function handleCustomerPortalResolve(
       linkId: link.link_id,
       now: now.toISOString(),
     });
-    if (portal.publication) {
-      await recordFirstProposalOpen(req, env, link, request, portal.publication, now);
+    // The record is written after the response, so it can neither slow nor break the page.
+    const waitUntil = (ctx as Partial<ExecutionContext> | undefined)?.waitUntil;
+    if (portal.publication && customerPortalProposalViewsEnabled(env) && typeof waitUntil === "function") {
+      waitUntil.call(ctx, recordFirstProposalOpen(env, link, request, staffPreview, portal.publication, now));
     }
     return portalJson(portal.model);
   } catch {
@@ -223,27 +228,26 @@ export async function handleCustomerPortalResolve(
 
 /**
  * Record the first time someone holding the customer's link opened the proposal publication this
- * page shows (0163): ids and this request's time, nothing about the device. Staff never count: a
- * request carrying a live staff session, or from the device that issued the link, is skipped.
- * Nothing here can break the customer's page; a failure is logged and the page is still served.
+ * page shows (0163): ids and this request's time, nothing about the device. Staff are skipped: a
+ * request the app marks as a staff preview, or one from the device that issued the link. A failure
+ * is logged; the page was already served.
  */
 async function recordFirstProposalOpen(
-  req: Request,
   env: AppEnv,
   link: ActiveCustomerPortalLink,
   request: AuthRequestContext,
+  staffPreview: boolean,
   publication: PublishedCommercial["publication"],
   now: Date,
 ): Promise<void> {
-  if (!customerPortalProposalViewsEnabled(env)) return;
+  if (staffPreview) return;
+  if (
+    request.ip_hash === link.issued_ip_hash &&
+    request.user_agent_hash === link.issued_user_agent_hash
+  ) {
+    return;
+  }
   try {
-    if (
-      request.ip_hash === link.issued_ip_hash &&
-      request.user_agent_hash === link.issued_user_agent_hash
-    ) {
-      return;
-    }
-    if (await hasLiveStaffSession(req, env)) return;
     await recordCustomerPortalProposalView(env, {
       viewId: `portal-view:${await sha256Hex(
         `${link.tenant_id}|${link.link_id}|${publication.publication_event_id}`,

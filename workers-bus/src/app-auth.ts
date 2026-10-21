@@ -757,24 +757,6 @@ export async function personCookieSession(
   return { userId: live.user_id, role: live.role, identities: appUserIdentities(live) };
 }
 
-/**
- * True when the request carries the cookie of a live staff session of this tenant, in any role.
- * Read-only: unlike authenticateAppRequest it neither touches the session nor asks for a field
- * device proof, so a customer route can tell a staff browser apart without acting as that person.
- */
-export async function hasLiveStaffSession(req: Request, env: AppEnv): Promise<boolean> {
-  const rawSessionToken = cookieValue(req.headers.get("cookie"), APP_SESSION_COOKIE);
-  const tenantId = configuredTenantId(env);
-  if (!rawSessionToken || !tenantId || !/^[A-Za-z0-9_-]{43}$/.test(rawSessionToken)) return false;
-  const session = await authStore.findActiveSession(
-    env,
-    await sessionHashFor(env, rawSessionToken),
-    tenantId,
-    new Date().toISOString(),
-  );
-  return session !== null;
-}
-
 export function expiredSessionCookie(): string {
   return `${APP_SESSION_COOKIE}=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure; HttpOnly; SameSite=Strict; Priority=High`;
 }

@@ -118,7 +118,7 @@ REQUIRED_INDEX_BINDINGS+=",idx_agent_watch_firings_recent=agent_watch_firings,id
 REQUIRED_INDEX_BINDINGS+=",idx_operating_roof_jobs_tenant_lead=operating_roof_jobs,idx_commercial_deposit_derivations_tenant_job=commercial_deposit_derivations,idx_commercial_quotes_supersedes=commercial_quote_revisions,idx_commercial_proposals_supersedes=commercial_proposal_revisions"
 REQUIRED_INDEX_BINDINGS+=",idx_proposal_delivery_confirmations_pack=proposal_delivery_confirmations"
 REQUIRED_INDEX_BINDINGS+=",idx_agent_run_steps_pair=agent_run_steps"
-REQUIRED_INDEX_BINDINGS+=",idx_customer_portal_proposal_views_publication=customer_portal_proposal_views"
+REQUIRED_INDEX_BINDINGS+=",idx_customer_portal_proposal_views_first_viewed=customer_portal_proposal_views"
 REQUIRED_INDEX_COUNT=392
 # Name and target table are both release-state invariants. A backup that has the
 # rows but not these safeguards is not a recoverable production backup.

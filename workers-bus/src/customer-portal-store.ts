@@ -192,50 +192,6 @@ export async function recordCustomerPortalProposalView(
     .run();
 }
 
-/**
- * When someone holding the customer's link first opened this proposal revision (0163), or null.
- * Only the pack's live publication counts: its newest event, which a first-open row can name only
- * while it is `published` for this revision. When the revision has a send attempt (its newest
- * `proposal.publish` effect), only an open at or after that attempt started counts, and none while
- * it has not started, so an open of an earlier send never answers for a later one.
- */
-export async function readProposalFirstViewedAt(
-  env: Env,
-  input: { tenantId: string; proposalPackId: string; proposalRevisionId: string },
-): Promise<string | null> {
-  const row = await env.DB.prepare(
-    `WITH live AS (
-       SELECT publication_event_id
-         FROM commercial_proposal_publication_events
-        WHERE tenant_id = ?1 AND proposal_pack_id = ?2
-        ORDER BY publication_version DESC
-        LIMIT 1
-     ),
-     latest_attempt AS (
-       SELECT effect.effect_id
-         FROM external_effects effect
-        WHERE effect.tenant_id = ?1 AND effect.action = 'proposal.publish'
-          AND effect.aggregate_type = 'proposal_publication'
-          AND effect.aggregate_id = ?2 AND effect.intent_id = ?3
-        ORDER BY effect.created_at DESC, effect.effect_id DESC
-        LIMIT 1
-     )
-     SELECT MIN(view.first_viewed_at) AS viewed_at
-       FROM live
-       JOIN customer_portal_proposal_views view
-         ON view.tenant_id = ?1 AND view.publication_event_id = live.publication_event_id
-      WHERE view.proposal_revision_id = ?3
-        AND (NOT EXISTS (SELECT 1 FROM latest_attempt)
-             OR julianday(view.first_viewed_at) >= (
-               SELECT julianday(MIN(started.started_at))
-                 FROM external_effect_attempts started
-                WHERE started.effect_id = (SELECT effect_id FROM latest_attempt)))`,
-  )
-    .bind(input.tenantId, input.proposalPackId, input.proposalRevisionId)
-    .first<{ viewed_at: string | null }>();
-  return row?.viewed_at ?? null;
-}
-
 export async function claimCustomerPortalAccessThrottle(
   env: Env,
   input: {
@@ -274,6 +230,32 @@ export async function claimCustomerPortalAccessThrottle(
   return Number(row?.attempts ?? input.limit + 1) <= input.limit;
 }
 
+/**
+ * Delete first-open records (0163) older than 3 years, their maximum retention, 500 at a time. D1
+ * refuses to delete a younger row. The daily cron runs this whatever the recording flag says, and
+ * before the link prune, so a link it frees goes in the same run.
+ */
+export async function pruneCustomerPortalProposalViews(env: Env): Promise<number> {
+  let deleted = 0;
+  // ponytail: at most 20 batches (10,000 rows) a run; the next daily run takes the rest.
+  for (let batch = 0; batch < 20; batch += 1) {
+    const changes = d1Changes(
+      await env.DB.prepare(
+        `DELETE FROM customer_portal_proposal_views
+          WHERE view_id IN (
+            SELECT view_id FROM customer_portal_proposal_views
+             WHERE first_viewed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 years')
+             ORDER BY first_viewed_at
+             LIMIT 500
+          )`,
+      ).run(),
+    );
+    deleted += changes;
+    if (changes < 500) break;
+  }
+  return deleted;
+}
+
 export async function pruneCustomerPortalRecords(
   env: Env,
   now = new Date(),
@@ -283,14 +265,25 @@ export async function pruneCustomerPortalRecords(
     now.getTime() - 365 * 24 * 60 * 60_000,
   ).toISOString();
   await Promise.all([
-    // A link that a first-open record names (0163) is kept as long as that record, whose own
-    // retention (at most 3 years) is not this one-year portal window.
+    // A link stays while any row still names it. Each of those rows holds an ON DELETE RESTRICT key
+    // on the link, so deleting one such link would fail this whole statement and stop every other
+    // link from being pruned. A first-open record (0163) keeps its link for its own retention (at
+    // most 3 years), not this one-year window. A table that adds such a key adds its clause here
+    // (test/customer-portal-proposal-views.test.ts reads them from the schema).
     env.DB.prepare(
       `DELETE FROM customer_portal_links
        WHERE expires_at <= ? AND (revoked_at IS NULL OR revoked_at <= ?)
          AND NOT EXISTS (
            SELECT 1 FROM customer_portal_acceptance_challenges AS challenge
            WHERE challenge.portal_link_id = customer_portal_links.link_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_acceptance_intents AS acceptance
+           WHERE acceptance.portal_link_id = customer_portal_links.link_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_decision_intents AS decision
+           WHERE decision.portal_link_id = customer_portal_links.link_id
          )
          AND NOT EXISTS (
            SELECT 1 FROM customer_portal_proposal_views AS view

@@ -113,6 +113,7 @@ Field rules (the validator enforces them):
   the dialed line's brand, the caller's language or transfer outcome as data, or the
   `reception_session` watch. `pending_repeat_contact`: a repeat contact within 72 hours, which makes
   no envelope. `pending_proposal_record`: a recorded proposal reaching a later run.
+  `pending_record_access`: a record a new inquiry's run does not see yet, such as another lead.
 - `signal.kind`: `event`, `watch`, `owner_request`, or `handoff` (from another specialist).
   `signal.actor` is who sent it, as the Worker writes it, `{ "type", "role", "ref", "authenticated" }`:
   `owner` or `staff` (an app user: `role` the app role, `owner` only for the owner, `ref`

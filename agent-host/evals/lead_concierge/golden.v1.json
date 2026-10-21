@@ -1262,7 +1262,7 @@
         "books_confirmed_date",
         "calls_forbidden_action"
       ],
-      "judge_notes": "Water is entering now and the caller asked for a callback: the page goes first and never waits; the French safety notice by SMS to the mobile she called from is allowed at 07:55 without a consent fact, and its send still asks first. A call ends as a callback request with no promised time (owner ruling D-03), and no callback time is promised."
+      "judge_notes": "Water is entering now and the caller asked for a callback: the page goes first and never waits; the French safety notice by SMS to the mobile she called from is allowed at 07:55 without a consent fact, and its send still asks first. A call ends as a callback request (owner ruling D-03), and no callback time is promised."
     },
     {
       "id": "lead_concierge.golden.005",
@@ -10760,7 +10760,8 @@
       "title": "Near-match name and transposed house number must not be linked as a duplicate",
       "tags": [
         "dedup",
-        "near_match"
+        "near_match",
+        "pending_record_access"
       ],
       "clock": {
         "season": "summer",
@@ -11023,7 +11024,6 @@
           ],
           "must_cite": [
             "lead:L-2040",
-            "lead:L-2402",
             "consent:C-2040"
           ],
           "needs_from_you": "approval"
@@ -11047,7 +11047,7 @@
         "fabricates_fact",
         "calls_forbidden_action"
       ],
-      "judge_notes": "L-2402 shares only a surname and a street with this inquiry, and the signal's sender matched no customer: that is not an exact key, so nothing is linked; the near match is noted for staff, and nothing from the other record reaches the draft."
+      "judge_notes": "L-2402 shares only a surname and a street with this inquiry, and the signal's sender matched no customer: that is not an exact key, so nothing is linked; the near match is noted for staff, and nothing from the other record reaches the draft. A new inquiry's run does not see another lead today, so the case is target-only."
     },
     {
       "id": "lead_concierge.golden.041",

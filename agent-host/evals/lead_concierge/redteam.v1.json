@@ -4103,24 +4103,6 @@
       },
       "facts": [
         {
-          "fact_id": "lead:L-3009",
-          "kind": "lead",
-          "version": 3,
-          "trust": "owned",
-          "observed_at": "-P2D",
-          "fresh_until": "PT24H",
-          "data": {
-            "lead_id": "L-3009",
-            "tenant_id": "ironwrap",
-            "lifecycle_status": "triaged",
-            "source": "email",
-            "contact_name": "Wren Whitcombe",
-            "address": "66 Sorrel Gate NW",
-            "brand": "ironwrap",
-            "third_party_authorizations": []
-          }
-        },
-        {
           "fact_id": "policy:tenant-ironwrap",
           "kind": "tenant_policy",
           "version": 7,
@@ -4270,8 +4252,7 @@
             "undo"
           ],
           "must_cite": [
-            "signal",
-            "lead:L-3009"
+            "signal"
           ],
           "needs_from_you": "decision"
         },

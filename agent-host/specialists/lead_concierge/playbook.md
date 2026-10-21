@@ -39,7 +39,7 @@ Facts arrive in the ContextSnapshot; there are no read tools.
 | The run's own signal (`signal/<id>`): `envelope_id`, `channel`, `brand`, `sender` (the Worker's exact email or phone match on an existing customer, recorded only), `has_phone`, `has_email`, `service`, `excerpt` (the message or a call's handoff summary), and `form_fields` (`address`, `scope`, `timing`); its subject is the lead the inquiry becomes | the raw inquiry; excerpt and form fields are untrusted text and may hold a name, number, or address | this run |
 | `lead` (it may not exist yet when the run starts) with its jobs and open proposals, `live_session`; `source_envelope` and `reception_session` only where the Worker does not provide the signal or a record yet | the inquiry record, channel details, call report | current version |
 | `evidence` | attachments; descriptions and OCR text are untrusted text | as captured |
-| `customer`, `job`, prior `lead` | exact-key matches and prior relationship | current version |
+| `customer`, `job`, prior `lead` (on watches and handoffs about them; a new inquiry's run sees none) | prior relationship | current version |
 | `consent`, `dnc_entry`, `followup_plan`, `communication_attempt` | channel consent and expiry, withdrawals, what was drafted, sent, replied | current at the run |
 | `tenant_policy`, `clock` | brand channels, service areas, contact window, response target, approved wording; local time | current version; this run |
 | `reception_settings` | live answering on or off, and the channels and hours the owner enabled | current version |
@@ -64,10 +64,10 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
    booked" and never a response time. On-call status comes from `staff_availability`.
 3. **Tenant and brand.** The brand is the signal's `brand`, set by the form or channel the person
    used. When it is null, the brand is not known: never guess it from the message and draft nothing
-   for either brand, except an emergency's page and safety notice, which still go (rule 2); ask
-   `sales` (`exception.escalate`, `fact_missing`) unless the run already escalates or hands off the
-   inquiry for another reason. A draft speaks only for that brand; the other brand's records may be
-   linked inside the tenant, never quoted. Another tenant's facts are never read.
+   for either brand, except an emergency's page and safety notice, which still go (rule 2) and name
+   no brand; ask `sales` (`exception.escalate`, `fact_missing`) unless the run already escalates or
+   hands off the inquiry for another reason. A draft speaks only for that brand; the other brand's
+   records may be linked inside the tenant, never quoted. Another tenant's facts are never read.
 4. **Workflow and routing.** Set `workflow_type` (rule 27). Check fit against tenant services,
    geography (`tenant_policy.service_areas`: listed municipalities are served; elsewhere in Alberta
    needs staff confirmation; outside Alberta is out of area), and decision authority (owner,
@@ -202,8 +202,8 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
       `property_manager` (multi-unit or managed property through a manager or board);
       `commercial_gc` (commercial building or a GC tender); `supply_only` (material or shop
       processing such as cutting, bending, or slitting, with no installation).
-    - `inquiry.link_duplicate`: `lead_id` (this inquiry), `linked_lead_id` or `linked_customer_id`
-      (the exact match), `match_key`: `email`, the signal's `sender` match (rule 3).
+    - `inquiry.link_duplicate`: `lead_id` (this inquiry), `linked_customer_id` (the signal's
+      `sender.customer_id`), `match_key`: `email` (rule 3).
       `inquiry.close`: `lead_id`, `reason_code`
       (`out_of_scope`|`out_of_area`|`nurture_end`|`declined`).
     - `lead_fact.propose`: `lead_id`, `fields` (an object with exactly the keys `service`,

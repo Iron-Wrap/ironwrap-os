@@ -3577,7 +3577,7 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
         ...(["shown_at", "window_ends_at"].filter((column) => column in row).map((column) => row[column]) as never[]),
       );
     };
-    const insertReceipt = (receivedAt: string, windowEndsAt: string) => {
+    const insertReceipt = (receivedAt: string, windowEndsAt: string, contract = binding) => {
       n += 1;
       h.db.raw.prepare(
         `INSERT INTO production_cancellation_window_receipts (
@@ -3588,7 +3588,7 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
       ).run(
         `pcw_${String(n).padStart(40, "0")}`, TENANT, JOB_ID, receivedAt, windowEndsAt, ZONE,
-        binding.acceptance_binding_id, binding.accepted_at, OWNER_ID, "a".repeat(64), String(n).padStart(64, "0"),
+        contract.acceptance_binding_id, contract.accepted_at, OWNER_ID, "a".repeat(64), String(n).padStart(64, "0"),
       );
     };
     const now = () => new Date(d1Now(h.db.raw)).toISOString();
@@ -3640,10 +3640,9 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
     const later = now();
     // Ending after the earlier record's end but before the copy's end: only the copy refuses it.
     assert.throws(() => insertReceipt(later, plusHours(later, 240.75)), /cancellation_window_receipt_end_invalid/);
-    insertReceipt(later, event.window_ends_at);
-    assert.equal(count(h, "production_cancellation_window_receipts"), 2);
 
-    // A later contract's copy never ends before the earlier copy's end either.
+    // A later contract's copy never ends before the earlier copy's end either: here only the copy,
+    // not the record, ends after it.
     await inThePast(0.5, () => publishCorrectedContract(h, OD01_TERMS));
     const second = await inThePast(0.5, () => accept(h, portalToken, "acceptance-a5-direct-0002"));
     assert.equal(second.status, 200);
@@ -3665,6 +3664,12 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
       window_ends_at: event.window_ends_at,
     });
     assert.equal(count(h, "contract_signed_copy_events"), 2);
+    // A record after both copies keeps their end.
+    while (d1Now(h.db.raw) <= Date.parse(secondShown)) {
+      // Wait out the millisecond the second copy was shown in.
+    }
+    insertReceipt(now(), event.window_ends_at, secondBinding);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 2);
   } finally {
     h.restore();
   }

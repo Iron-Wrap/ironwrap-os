@@ -1,5 +1,5 @@
-// production-job-stops.ts - whether a stop applies to a roof job: the one read a Safety attestation
-// (migration 0158) and a schedule (migration 0159) share, on the route and in D1.
+// production-job-stops.ts - whether a stop applies to a roof job: the reads a Safety attestation
+// (migrations 0158 and 0159) and a schedule (migration 0159) share, on the route and in D1.
 
 import type { AppEnv } from "./app-types.ts";
 
@@ -73,6 +73,30 @@ export async function unknownJobStop(env: AppEnv, tenantId: string): Promise<str
         AND NOT EXISTS (
           SELECT 1 FROM operating_roof_jobs job
            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at, occurrence.occurrence_id
+      LIMIT 1`,
+  ).bind(tenantId).first<{ occurrence_id: string }>();
+  return row?.occurrence_id ?? null;
+}
+
+/**
+ * The oldest active safety stop that names a Work Package this tenant does not have (0159), or
+ * null. It maps to no job and may be meant for a package of any of them, so it holds Safety on
+ * every job of the tenant until it is lifted, as a stop on a job that doesn't exist does: the
+ * refusal names the stop, and the owner's exception list shows it.
+ */
+export async function unknownWorkPackageStop(env: AppEnv, tenantId: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `SELECT occurrence.occurrence_id
+       FROM safety_occurrences occurrence
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'work_package'
+        AND NOT EXISTS (
+          SELECT 1 FROM work_packages package
+           WHERE package.tenant_id = occurrence.tenant_id
+             AND package.work_package_id = occurrence.scope_id
         )
       ORDER BY occurrence.reported_at, occurrence.occurrence_id
       LIMIT 1`,

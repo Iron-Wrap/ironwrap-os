@@ -14,7 +14,11 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import { buildOwnerNowReadModel, STOP_JOB_UNKNOWN_TITLE } from "../src/app-read-models.ts";
+import {
+  buildOwnerNowReadModel,
+  STOP_JOB_UNKNOWN_TITLE,
+  STOP_WORK_PACKAGE_UNKNOWN_TITLE,
+} from "../src/app-read-models.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import {
   permissionsForRole,
@@ -912,14 +916,17 @@ test("Safety's permit is held with its number or not needed; unknown is refused 
  * and straight at D1 as a writer that skipped the route would. Both are refused by the stop, and
  * the gate stays blocked.
  */
-async function assertSafetyHeldByStop(h: Harness): Promise<void> {
+async function assertSafetyHeldByStop(
+  h: Harness,
+  code = "production_gate_safety_stop_active",
+): Promise<void> {
   const production = await person(h, USERS.production.id);
   const competency = insertCompetency(h.sqlite, USERS.production.id);
   const route = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
-  assert.deepEqual([route.status, route.body.error], [409, "production_gate_safety_stop_active"]);
+  assert.deepEqual([route.status, route.body.error], [409, code]);
   refused(
     () => append(h.sqlite, { gate: "Safety", attestation_json: safetyStored(competency) }),
-    "production_gate_safety_stop_active",
+    code,
   );
   assert.deepEqual({ state: gateRow(h.sqlite, "Safety").state, entries: ledgerRows(h.sqlite).length }, { state: "blocked", entries: 0 });
 }
@@ -984,10 +991,10 @@ function insertUnknownScopeStop(db: DatabaseSync): void {
 
 test("an unresolvable stop scope holds Safety, on the route and in D1", async () => {
   // A work_package stop naming a package this tenant does not have maps to no job: it may be this
-  // job's, so it holds.
+  // job's, so it holds, under its own code (0159).
   const h = setup();
   insertSafetyStop(h.sqlite, { type: "work_package", id: "wp:attest:unknown" });
-  await assertSafetyHeldByStop(h);
+  await assertSafetyHeldByStop(h, "production_gate_stop_work_package_unknown");
   // A scope type the rule does not know may cover this job, so it holds too.
   const unknownType = setup();
   insertUnknownScopeStop(unknownType.sqlite);
@@ -1090,6 +1097,103 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
 });
 
+test("a stop on a work package the tenant does not have is recorded, holds Safety on every job until it is lifted, and is on the owner's list", async () => {
+  const h = setup();
+  const occurrenceId = "occurrence.attest.unknown-package";
+  const step = (minutesAgo: number) => at(-minutesAgo * 60_000);
+  // The tenant has a real package, on the other job, so every read must match the stop's package
+  // id, not merely find the tenant without packages.
+  insertWorkPackage(h.sqlite, "wp:attest:real", OTHER_JOB);
+  // A person may always stop work: the stop is recorded though no Work Package of the tenant has
+  // this id.
+  const reported = await reportSafetyOccurrence(h.env, {
+    occurrenceId,
+    tenantId: TENANT,
+    occurrenceKind: "hazard",
+    severity: "high",
+    scope: { type: "work_package", id: "wp:attest:mistyped" },
+    reportedByUserId: USERS.field.id,
+    reportedAt: step(50),
+    summary: "Synthetic hazard on a mistyped work package, for repository proof only.",
+    rescueRequired: false,
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    now: step(50),
+  });
+  assert.equal(reported.kind, "reported");
+  // The owner's exception list names it, and its id is the stop a one-click fix opens.
+  const owner = await person(h, USERS.owner.id);
+  const listed = async () => (await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind === "stop_work_package_unknown")
+    .map((row) => [row.id, row.title, row.why, row.job_id]);
+  assert.deepEqual(await listed(), [
+    [occurrenceId, STOP_WORK_PACKAGE_UNKNOWN_TITLE, "Names work package wp:attest:mistyped", null],
+  ]);
+  // It holds Safety on every job of the tenant: on the route by name, with the stop to open, and
+  // in D1.
+  const production = await person(h, USERS.production.id);
+  const competency = insertCompetency(h.sqlite, USERS.production.id);
+  for (const job of [JOB, OTHER_JOB]) {
+    const routed = await call(h, production, "POST", CLEARANCE("Safety", job), attest("Safety"));
+    assert.deepEqual(
+      [routed.status, routed.body.error, routed.body.stop_id],
+      [409, "production_gate_stop_work_package_unknown", occurrenceId],
+      job,
+    );
+    refused(
+      () => append(h.sqlite, {
+        gate: "Safety",
+        gate_id: gateId("Safety", job),
+        roof_job_id: job,
+        attestation_json: safetyStored(competency),
+      }),
+      "production_gate_stop_work_package_unknown",
+    );
+  }
+  // A stop's scope cannot be corrected (0047 keeps it immutable), so the stop is recorded again on
+  // the real package, the other job's, and the mistyped one is lifted through its lifecycle.
+  insertSafetyStop(h.sqlite, { type: "work_package", id: "wp:attest:real" });
+  await recordMakeSafe(h.env, {
+    tenantId: TENANT,
+    occurrenceId,
+    actorUserId: USERS.field.id,
+    detail: "Area taped off.",
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    occurredAt: step(40),
+    now: step(40),
+  });
+  for (const [command, minutesAgo] of [["investigation_opened", 30], ["controlled", 20], ["released", 10]] as const) {
+    await recordSafetyResponse(h.env, {
+      tenantId: TENANT,
+      occurrenceId,
+      actorUserId: USERS.production.id,
+      command,
+      detail: "Synthetic response for repository proof only.",
+      evidence: null,
+      now: step(minutesAgo),
+    });
+  }
+  // The lifted stop leaves the owner's list, and a real package's stop never joins it.
+  assert.deepEqual(await listed(), []);
+  // The hold narrows to the one job whose package the stop is on, on the route and in D1.
+  const other = await call(h, production, "POST", CLEARANCE("Safety", OTHER_JOB), attest("Safety"));
+  assert.deepEqual([other.status, other.body.error], [409, "production_gate_safety_stop_active"]);
+  refused(
+    () => append(h.sqlite, {
+      gate: "Safety",
+      gate_id: gateId("Safety", OTHER_JOB),
+      roof_job_id: OTHER_JOB,
+      attestation_json: safetyStored(competency),
+    }),
+    "production_gate_safety_stop_active",
+  );
+  const cleared = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+});
+
 test("another job's stop, a shop or vehicle stop, or a lifted stop leaves Safety open on the route and in D1", async () => {
   const h = setup();
   insertWorkPackage(h.sqlite, "wp:attest:other-job", OTHER_JOB);
@@ -1157,7 +1261,7 @@ test("the route alone holds the site_safety scope, every stop and the permit ans
     ["stop on an unknown package", (db: DatabaseSync) => {
       insertCompetency(db, USERS.production.id);
       insertSafetyStop(db, { type: "work_package", id: "wp:attest:unknown" });
-    }, [409, "production_gate_safety_stop_active"]],
+    }, [409, "production_gate_stop_work_package_unknown"]],
     ["stop of an unknown scope type", (db: DatabaseSync) => {
       insertCompetency(db, USERS.production.id);
       insertUnknownScopeStop(db);

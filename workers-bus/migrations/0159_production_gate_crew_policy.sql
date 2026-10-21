@@ -14,10 +14,16 @@
 --    Crew has no waiver and no person clear. The Worker appends these entries in the same D1 batch
 --    as the assignment they belong to (operating-job-assignment-store.ts), so they commit together
 --    or not at all.
+--    The same re-created guard holds Safety on every job of the tenant while an active safety stop
+--    names a Work Package the tenant does not have, as 0158 does for a stop naming a job it does
+--    not have: `production_gate_stop_work_package_unknown`, marked [0159] after 0158's rule. Such
+--    a stop is still recorded; the owner's exception list shows it by its id.
 -- 2. `operating_job_assignments_gate_evidence_guard` refuses a schedule unless, read live with D1's
 --    own clock and never the row's `created_at`:
 --      * its actor is not the QA seed owner, which never clears a gate, Crew included;
---      * no active stop applies to the job;
+--      * no active stop names a job or a Work Package the tenant does not have, each by its own
+--        code, and no other active stop applies to the job: the stop rules a Safety attestation
+--        is held to;
 --      * Crew stands on the `crew_assignment` entry bound to the schedule's crew at its version,
 --        made by this schedule or an earlier one of the same job;
 --      * Deposit does not stand on a contract with no deposit while the job's latest contract is
@@ -602,6 +608,27 @@ BEGIN
          )
     );
 
+  -- [0159] An active safety stop naming a Work Package this tenant does not have maps to no job: it
+  -- may be meant for a package of any of its jobs, so it holds Safety on every job of the tenant
+  -- until it is lifted. Its own code says a stop names a work package that doesn't exist. Nothing
+  -- refuses such a stop when it is recorded: a person may always stop work.
+  SELECT RAISE(ABORT, 'production_gate_stop_work_package_unknown')
+  WHERE NEW.basis = 'person_attestation'
+    AND NEW.gate = 'Safety'
+    AND EXISTS (
+      SELECT 1
+        FROM safety_occurrences occurrence
+       WHERE occurrence.tenant_id = NEW.tenant_id
+         AND occurrence.stop_active = 1
+         AND occurrence.scope_type = 'work_package'
+         AND NOT EXISTS (
+           SELECT 1
+             FROM work_packages package
+            WHERE package.tenant_id = occurrence.tenant_id
+              AND package.work_package_id = occurrence.scope_id
+         )
+    );
+
   -- [0158] Safety is never attested while an active stop applies to the job: a safety stop on the
   -- whole tenant, on the job, or on any Work Package of the job in any status, Superseded included;
   -- or a crew's stop_work on any Work Package of the job that no release has lifted (0145). A
@@ -985,6 +1012,39 @@ BEGIN
        AND actor.user_id = NEW.actor_user_id
        AND actor.created_by = 'system:owner_directed_qa_seed_grant'
   );
+
+  -- A stop naming a job this tenant does not have may be a typo for any of its jobs, so it holds
+  -- every schedule of the tenant until it is lifted, as it holds every Safety attestation. This is
+  -- 0158's rule, carried here unchanged; a test pins the two together.
+  SELECT RAISE(ABORT, 'operating_job_assignment_stop_job_unknown')
+  WHERE EXISTS (
+      SELECT 1
+        FROM safety_occurrences occurrence
+       WHERE occurrence.tenant_id = NEW.tenant_id
+         AND occurrence.stop_active = 1
+         AND occurrence.scope_type = 'roof_job'
+         AND NOT EXISTS (
+           SELECT 1 FROM operating_roof_jobs job
+            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+         )
+    );
+
+  -- So does a stop naming a Work Package this tenant does not have: the rule the validate guard
+  -- above holds a Safety attestation to, carried unchanged.
+  SELECT RAISE(ABORT, 'operating_job_assignment_stop_work_package_unknown')
+  WHERE EXISTS (
+      SELECT 1
+        FROM safety_occurrences occurrence
+       WHERE occurrence.tenant_id = NEW.tenant_id
+         AND occurrence.stop_active = 1
+         AND occurrence.scope_type = 'work_package'
+         AND NOT EXISTS (
+           SELECT 1
+             FROM work_packages package
+            WHERE package.tenant_id = occurrence.tenant_id
+              AND package.work_package_id = occurrence.scope_id
+         )
+    );
 
   -- No active stop applies to the job: a safety stop on the tenant, on the job or on any Work
   -- Package of the job, Superseded included; a crew's stop_work on one of them that no release has

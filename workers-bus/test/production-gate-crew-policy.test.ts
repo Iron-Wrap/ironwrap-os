@@ -314,16 +314,18 @@ function refused(action: () => unknown, code: string): void {
 
 let stopCounter = 0;
 
-/** An active safety stop, as a field worker reports one. */
-function stop(h: Harness, scopeType: string, scopeId: string): void {
+/** An active safety stop, as a field worker reports one. Its id is the stop a person opens. */
+function stop(h: Harness, scopeType: string, scopeId: string): string {
   stopCounter += 1;
+  const occurrenceId = `occurrence.crew.${stopCounter}`;
   h.sqlite.prepare(
     `INSERT INTO safety_occurrences
        (occurrence_id, tenant_id, occurrence_kind, severity, scope_type, scope_id,
         reported_by_user_id, reported_at, summary, report_fingerprint_sha256, created_at,
         updated_at)
      VALUES (?, ?, 'hazard', 'high', ?, ?, ?, ?, 'Synthetic hazard report for repository proof only.', ?, ?, ?)`,
-  ).run(`occurrence.crew.${stopCounter}`, TENANT, scopeType, scopeId, USERS.fieldA.id, at(-HOUR), sha(`stop:${stopCounter}`), at(-HOUR), at(-HOUR));
+  ).run(occurrenceId, TENANT, scopeType, scopeId, USERS.fieldA.id, at(-HOUR), sha(`stop:${stopCounter}`), at(-HOUR), at(-HOUR));
+  return occurrenceId;
 }
 
 // --- The schedule binds Crew by policy ----------------------------------------------------------
@@ -558,10 +560,6 @@ test("an active stop on the job or the tenant holds the schedule; another job's 
     refused(() => insertAssignment(h.sqlite, { assignment_id: "assignment:crew:stopped" }), "operating_job_assignment_stop_active");
     assert.equal(assignmentCount(h.sqlite), 0, scopeType);
   }
-  // A stop whose Work Package maps to no job cannot be placed, so it holds every job.
-  const unresolved = setup();
-  stop(unresolved, "work_package", "wp:crew:unknown");
-  await rejectsWith(recordOperatingJobAssignment(unresolved.env, command()), "operating_job_assignment_stop_active");
   // A stop on another job, a shop or a vehicle does not apply here.
   const h = setup();
   stop(h, "roof_job", OTHER_JOB);
@@ -570,28 +568,65 @@ test("an active stop on the job or the tenant holds the schedule; another job's 
   assert.equal((await recordOperatingJobAssignment(h.env, command())).kind, "created");
 });
 
-test("0159's stop rule is the one 0158 holds a Safety attestation to, carried unchanged", () => {
+test("a stop naming a job or a work package the tenant does not have holds every schedule by its own code, with the stop's id", async () => {
+  // Each case holds the stops from the one before it but one: the first named rule answers.
+  const cases = [
+    ["roof_job", "IW-CREW-0001", "operating_job_assignment_stop_job_unknown"],
+    ["work_package", "wp:crew:unknown", "operating_job_assignment_stop_work_package_unknown"],
+  ] as const;
+  for (const [index, [scopeType, scopeId, code]] of cases.entries()) {
+    const h = setup();
+    // Both jobs are ready before the stops: once they stand, no Safety is attested on either.
+    ready(h.sqlite, OTHER_JOB, h.window);
+    const stopId = stop(h, scopeType, scopeId);
+    for (const [laterType, laterId] of cases.slice(index + 1)) stop(h, laterType, laterId);
+    // A stop on the job itself would hold the schedule too; the named rule answers first.
+    stop(h, "roof_job", JOB);
+    // The QA seed owner is refused before any stop is read.
+    await rejectsWith(recordOperatingJobAssignment(h.env, command({ actorUserId: USERS.seed.id })), "operating_job_assignment_seed_identity_refused");
+    await assert.rejects(recordOperatingJobAssignment(h.env, command()), (error: unknown) => {
+      assert.ok(error instanceof OperatingJobAssignmentError, String(error));
+      assert.deepEqual([error.code, error.detail], [code, { stop_id: stopId }]);
+      return true;
+    });
+    bindCrewInLedger(h.sqlite, { tenantId: TENANT, roofJobId: JOB, crewId: CREW_A, assignmentId: "assignment:crew:unknown" });
+    refused(() => insertAssignment(h.sqlite, { assignment_id: "assignment:crew:unknown", actor_user_id: USERS.seed.id }), "operating_job_assignment_seed_identity_refused");
+    refused(() => insertAssignment(h.sqlite, { assignment_id: "assignment:crew:unknown" }), code);
+    // It holds the other job's schedule as well: it may be meant for either.
+    await rejectsWith(recordOperatingJobAssignment(h.env, command({ roofJobId: OTHER_JOB })), code);
+    assert.equal(assignmentCount(h.sqlite) + assignmentCount(h.sqlite, OTHER_JOB), 0, scopeType);
+  }
+});
+
+test("0159's stop rules are the ones a Safety attestation is held to, carried unchanged", () => {
   const body = (sql: string, open: string) => {
     const at = sql.indexOf(open);
     assert.ok(at >= 0, open);
     return sql.slice(at + open.length, sql.indexOf("\n    );\n", at) + 1);
   };
-  const attestation = body(
-    triggerText(read("0158_production_gate_attestations.sql"), "production_gate_clearances_validate_insert"),
-    [
-      "  SELECT RAISE(ABORT, 'production_gate_safety_stop_active')",
-      "  WHERE NEW.basis = 'person_attestation'",
-      "    AND NEW.gate = 'Safety'",
-      "    AND (\n",
-    ].join("\n"),
-  );
-  const schedule = body(
-    triggerText(read("0159_production_gate_crew_policy.sql"), "operating_job_assignments_gate_evidence_guard"),
-    "  SELECT RAISE(ABORT, 'operating_job_assignment_stop_active')\n  WHERE (\n",
-  );
-  assert.equal(schedule, attestation);
-  assert.match(schedule, /scope_type = 'tenant'/);
-  assert.match(schedule, /work_package_stop_releases/);
+  const validate = triggerText(read("0159_production_gate_crew_policy.sql"), "production_gate_clearances_validate_insert");
+  const guard = triggerText(read("0159_production_gate_crew_policy.sql"), "operating_job_assignments_gate_evidence_guard");
+  const safety = (code: string, opener: string) => body(validate, [
+    `  SELECT RAISE(ABORT, '${code}')`,
+    "  WHERE NEW.basis = 'person_attestation'",
+    "    AND NEW.gate = 'Safety'",
+    opener,
+  ].join("\n"));
+  for (const [attestation, schedule, opener] of [
+    ["production_gate_stop_job_unknown", "operating_job_assignment_stop_job_unknown", "    AND EXISTS (\n"],
+    ["production_gate_stop_work_package_unknown", "operating_job_assignment_stop_work_package_unknown", "    AND EXISTS (\n"],
+    ["production_gate_safety_stop_active", "operating_job_assignment_stop_active", "    AND (\n"],
+  ] as const) {
+    // The schedule's rule opens on WHERE where the attestation's adds AND to its gate.
+    const held = body(guard, `  SELECT RAISE(ABORT, '${schedule}')\n  WHERE ${opener.trim().replace(/^AND /, "")}\n`);
+    assert.equal(held, safety(attestation, opener), schedule);
+  }
+  // 0158's own rules are the ones 0159 carries.
+  const shipped = triggerText(read("0158_production_gate_attestations.sql"), "production_gate_clearances_validate_insert");
+  assert.ok(shipped.includes(safety("production_gate_stop_job_unknown", "    AND EXISTS (\n")));
+  assert.ok(shipped.includes(safety("production_gate_safety_stop_active", "    AND (\n")));
+  assert.match(guard, /scope_type = 'tenant'/);
+  assert.match(guard, /work_package_stop_releases/);
 });
 
 test("a Weather gate left ready after its window ended no longer schedules, read on D1's clock", async () => {
@@ -1004,8 +1039,17 @@ test("the route answers the window, independence, blocked-gate and stop refusals
   stop(stopped, "tenant", TENANT);
   const held = await schedule(stopped, await person(stopped, USERS.ops.id));
   assert.deepEqual([held.status, held.body], [409, { error: "operating_job_assignment_stop_active" }]);
+  // A stop naming a package the tenant does not have answers with the stop to open.
+  const unknown = setup();
+  const stopId = stop(unknown, "work_package", "wp:crew:unknown");
+  const named = await schedule(unknown, await person(unknown, USERS.ops.id));
+  assert.deepEqual(
+    [named.status, named.body],
+    [409, { error: "operating_job_assignment_stop_work_package_unknown", stop_id: stopId }],
+  );
   assert.deepEqual(crewEntries(h.sqlite), []);
   assert.deepEqual(crewEntries(stopped.sqlite), []);
+  assert.deepEqual(crewEntries(unknown.sqlite), []);
 });
 
 // --- The migration ------------------------------------------------------------------------------------
@@ -1036,7 +1080,7 @@ test("0159 re-creates the validate guard with every 0158 line carried, in order"
   assert.deepEqual(
     [...new Set(codes(read("0159_production_gate_crew_policy.sql")))]
       .filter((code) => !codes(read("0158_production_gate_attestations.sql")).includes(code)),
-    ["production_gate_crew_binding_invalid"],
+    ["production_gate_crew_binding_invalid", "production_gate_stop_work_package_unknown"],
   );
 });
 
@@ -1092,6 +1136,8 @@ test("the triggers after every migration hold A1's to A4's clauses", () => {
     "'person_attestation'",
     "'person_reversal'",
     "production_gate_attester_on_crew",
+    "production_gate_stop_job_unknown",
+    "production_gate_stop_work_package_unknown",
     "production_gate_safety_stop_active",
     "production_gate_competency_required",
     "production_gate_weather_window_invalid",
@@ -1107,6 +1153,8 @@ test("the triggers after every migration hold A1's to A4's clauses", () => {
   const guard = sql("operating_job_assignments_gate_evidence_guard");
   for (const clause of [
     "operating_job_assignment_seed_identity_refused",
+    "operating_job_assignment_stop_job_unknown",
+    "operating_job_assignment_stop_work_package_unknown",
     "operating_job_assignment_stop_active",
     "operating_job_assignment_crew_gate_unbound",
     "operating_job_assignment_deposit_contract_superseded",

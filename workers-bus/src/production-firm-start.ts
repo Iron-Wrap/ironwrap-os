@@ -6,7 +6,9 @@
 // `operating_job_assignments_gate_evidence_guard` is read here first, so the route answers each
 // refusal by name:
 //   * the QA seed owner never schedules, because a schedule clears Crew;
-//   * no active stop applies to the job, read as a Safety attestation reads it (0158);
+//   * no active stop applies to the job, read as a Safety attestation reads it (0158), and no
+//     active stop names a job or a Work Package the tenant does not have: either may be meant for
+//     this job, so it holds every schedule, by its own code and with the stop's id;
 //   * Deposit does not stand on a contract with no deposit while the job's latest contract is
 //     another one with other terms;
 //   * Weather stands on a person's attestation whose window has not ended and holds the work;
@@ -27,7 +29,7 @@
 
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
-import { safetyStopActive } from "./production-job-stops.ts";
+import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 
 export const CREW_GATE_POLICY_VERSION = "ironwrap.crew-gate.v1";
 /** D1's clock, in the form `Date.toISOString` writes: the policy's own rows take D1's time. */
@@ -52,7 +54,7 @@ export interface FirmStartInput {
 
 export type FirmStartGateEvidence =
   | { ok: true; crewEntries: D1PreparedStatement[] }
-  | { ok: false; code: string };
+  | { ok: false; code: string; detail?: Readonly<Record<string, string>> };
 
 /** A scheduling gate and the entry it stands on now: the one its current version was produced by. */
 interface GateInForce {
@@ -74,7 +76,8 @@ interface CrewBinding {
   crew_version: number;
 }
 
-const refused = (code: string): FirmStartGateEvidence => ({ ok: false, code });
+const refused = (code: string, detail?: Readonly<Record<string, string>>): FirmStartGateEvidence =>
+  detail ? { ok: false, code, detail } : { ok: false, code };
 
 function parsedObject(value: string | null): Record<string, unknown> | null {
   if (!value) return null;
@@ -358,6 +361,12 @@ export async function firmStartGateEvidence(
   // 0159's rules, in its order.
   if (actor?.created_by === QA_SEED_OWNER_CREATED_BY) {
     return refused("operating_job_assignment_seed_identity_refused");
+  }
+  const unknownJob = await unknownJobStop(env, input.tenantId);
+  if (unknownJob) return refused("operating_job_assignment_stop_job_unknown", { stop_id: unknownJob });
+  const unknownPackage = await unknownWorkPackageStop(env, input.tenantId);
+  if (unknownPackage) {
+    return refused("operating_job_assignment_stop_work_package_unknown", { stop_id: unknownPackage });
   }
   if (await safetyStopActive(env, input.tenantId, input.roofJobId)) {
     return refused("operating_job_assignment_stop_active");

@@ -7929,8 +7929,9 @@ function operatingJobAssignmentErrorResponse(error: unknown): Response {
     return privateAppJson({ error: code }, 403);
   }
   // Every other refusal is named, including the gate ledger's own code when a gate moved while
-  // the schedule was written (0159).
-  return privateAppJson({ error: code }, 409);
+  // the schedule was written (0159), with the stop to open when a stop names no job or package.
+  const detail = error instanceof OperatingJobAssignmentError ? error.detail : {};
+  return privateAppJson({ ...detail, error: code }, 409);
 }
 
 function operatingWorkObjectAssignmentErrorResponse(error: unknown): Response {

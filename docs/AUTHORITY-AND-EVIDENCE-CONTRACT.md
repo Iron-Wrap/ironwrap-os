@@ -661,8 +661,11 @@ release has lifted; or an active stop whose scope cannot be resolved, meaning an
 or a Work Package id that maps to no job. An active stop that names a job the tenant does not have
 holds Safety on every job of the tenant, refused as `production_gate_stop_job_unknown` with the
 stop's id, and the owner's exception list shows it: "This stop names a job that doesn't exist — fix
-which job it is for". Nothing refuses such a stop when it is recorded, because a person may always
-stop work, and a stop's scope cannot be corrected today, so it holds until it is lifted. Another
+which job it is for". An active stop that names a Work Package the tenant does not have is treated
+the same way (migration `0159`): `production_gate_stop_work_package_unknown` with the stop's id, and
+the owner's item "This stop names a work package that doesn't exist — fix which job it is for".
+Nothing refuses such a stop when it is recorded, because a person may always stop work, and a
+stop's scope cannot be corrected today, so it holds until it is lifted. Another
 job's stop, a shop or a vehicle stop does not hold it. The entry names the competency record, D1 checks both rules again at insert with the same
 predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
 reversal, takes D1's clock, as the policy's entries do.
@@ -676,7 +679,8 @@ has no waiver and no person clear. The schedule rests on the gate evidence as it
 written, read with D1's own clock, and each refusal is named on the route and repeated in D1:
 
 - no stop applies to the job, read exactly as a Safety attestation reads it, so a Safety gate
-  attested before a new stop schedules nothing;
+  attested before a new stop schedules nothing; a stop naming a job or a Work Package the tenant
+  does not have holds every schedule of the tenant, answered by its own code with the stop's id;
 - Deposit does not stand on a contract with no deposit while the job's latest contract is another
   one with other terms: the window before the policy's `contract_superseded` lands;
 - Weather stands on a person's attestation whose window has not ended and holds the scheduled work

@@ -52,10 +52,13 @@ interface AssignmentRow extends Omit<
 
 export class OperatingJobAssignmentError extends Error {
   readonly code: string;
+  /** What a one-click fix needs beside the code, such as the stop to open. */
+  readonly detail: Readonly<Record<string, string>>;
 
-  constructor(code: string) {
+  constructor(code: string, detail: Readonly<Record<string, string>> = {}) {
     super(code);
     this.code = code;
+    this.detail = detail;
     this.name = "OperatingJobAssignmentError";
   }
 }
@@ -125,7 +128,7 @@ export async function recordOperatingJobAssignment(
     scheduledEnd: command.scheduled_end,
     actorUserId: command.actor_user_id,
   });
-  if (!gates.ok) fail(gates.code);
+  if (!gates.ok) fail(gates.code, gates.detail);
   const insert = env.DB.prepare(
     `INSERT INTO operating_job_assignments (
        assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version,
@@ -483,6 +486,6 @@ function nullableInstant(value: unknown, code: string): string | null {
   return value === undefined || value === null ? null : instant(value, code);
 }
 
-function fail(code: string): never {
-  throw new OperatingJobAssignmentError(code);
+function fail(code: string, detail?: Readonly<Record<string, string>>): never {
+  throw new OperatingJobAssignmentError(code, detail);
 }

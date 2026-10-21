@@ -32,6 +32,8 @@
 //       one of them that no release has lifted, or a safety stop whose scope cannot be resolved.
 //       An active stop naming a job the tenant does not have holds Safety on every job: 409
 //       `production_gate_stop_job_unknown` with its `stop_id`, so a person opens the stop.
+//       So does one naming a Work Package the tenant does not have (0159): 409
+//       `production_gate_stop_work_package_unknown` with its `stop_id`.
 //       The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
@@ -57,7 +59,7 @@ import { listAccountingIntents, type AccountingIntentRecord } from "./accounting
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { listJobEvidenceItemsFromD1, r2ObjectStore } from "./field-actions.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
-import { safetyStopActive, unknownJobStop } from "./production-job-stops.ts";
+import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 import {
   fieldEvidenceId,
   isAttestableProductionGate,
@@ -195,6 +197,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_material_exception_open: 409,
   production_gate_safety_permit_unknown: 409,
   production_gate_stop_job_unknown: 409,
+  production_gate_stop_work_package_unknown: 409,
   production_gate_safety_stop_active: 409,
   production_gate_competency_required: 403,
   production_gate_forecast_stale: 409,
@@ -1056,6 +1059,10 @@ async function attestGate(
     }
     const unknownJob = await unknownJobStop(env, tenantId);
     if (unknownJob) throw refusal("production_gate_stop_job_unknown", 409, { stop_id: unknownJob });
+    const unknownPackage = await unknownWorkPackageStop(env, tenantId);
+    if (unknownPackage) {
+      throw refusal("production_gate_stop_work_package_unknown", 409, { stop_id: unknownPackage });
+    }
     if (await safetyStopActive(env, tenantId, roofJobId)) {
       throw refusal("production_gate_safety_stop_active", 409);
     }

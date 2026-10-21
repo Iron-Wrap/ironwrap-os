@@ -134,14 +134,13 @@ export function stopTime(iso: string, timeZone: string): string {
 
 /**
  * The job to stop while `active` (the help sheet is open), resolved from this phone's own data.
- * `resolved` is false until the lookup for this screen ends, so the sheet never shows another
- * screen's job and does not flash the no-job view first.
+ * Undefined until the lookup for this screen ends, so the sheet never shows another screen's job.
  */
 export function useStopJob(
   session: AuthenticatedSession,
   pathname: string,
   active: boolean,
-): { job: StopJob | undefined; resolved: boolean } {
+): StopJob | undefined {
   const [state, setState] = useState<{ job?: StopJob; for?: string }>({});
   const lookup = `${pathname}|${active}`;
   useEffect(() => {
@@ -159,6 +158,5 @@ export function useStopJob(
       cancelled = true;
     };
   }, [session, pathname, active, lookup]);
-  const resolved = active && state.for === lookup;
-  return { job: resolved ? state.job : undefined, resolved };
+  return active && state.for === lookup ? state.job : undefined;
 }

@@ -26,6 +26,8 @@ const DETAIL_MAX_LENGTH = 4_000;
 const DETAIL_MIN_LENGTH = 3;
 /** How often an unsent stop looks again for the office's answer while the sheet is open. */
 const DELIVERY_RECHECK_MS = 5_000;
+/** The safety panel read returns at most this many open stops (safety-lifecycle.ts, panel read). */
+const OPEN_STOPS_READ_LIMIT = 50;
 
 /** Saved on the phone, not yet confirmed by the office (the panel's own words for this). */
 const SAVED_ON_DEVICE =
@@ -54,9 +56,11 @@ export function JobStopSheet({
   session: AuthenticatedSession;
   job: StopJob;
   fetcher?: typeof fetch;
-  onStage?: (stage: "stop" | "stopped") => void;
+  onStage?: (stage: "loading" | "stop" | "stopped") => void;
 }) {
   const [raised, setRaised] = useState<RaisedStop>();
+  // Until this phone has looked for a stop it already raised, offer nothing: never a second stop.
+  const [loaded, setLoaded] = useState(false);
   const [delivery, setDelivery] = useState<Delivery>("saved");
   const [unsafe, setUnsafe] = useState("");
   const [done, setDone] = useState("");
@@ -68,23 +72,31 @@ export function JobStopSheet({
   const timeZone = session.tenant.time_zone;
 
   useEffect(() => {
-    onStage?.(raised ? "stopped" : "stop");
-  }, [raised, onStage]);
+    onStage?.(!loaded ? "loading" : raised ? "stopped" : "stop");
+  }, [loaded, raised, onStage]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const stop = await loadRaisedStop(session, job.id);
-      if (cancelled || !stop) return;
-      const answer = await deliveryOf(stop.deviceActionId);
-      // A stop the office has lifted is over: the job offers a new stop again.
-      if (answer === "sent" && (await stopLifted(session, stop.occurrenceId, fetcher))) {
-        await saveRaisedStop(session, job.id, null);
+      const answer = stop ? await deliveryOf(stop.deviceActionId) : undefined;
+      if (cancelled) return;
+      setLoaded(true);
+      if (!stop || !answer) return;
+      // A stop the office refused is not in force: offer the stop again, and say why.
+      if (answer === "attention") {
+        await forgetStop(session, job.id, stop);
+        setError(NOT_CONFIRMED);
         return;
       }
-      if (cancelled) return;
+      // Show the stop at once, so nobody raises it twice while the office's read is on its way.
       setRaised(stop);
       setDelivery(answer);
+      // A stop the office has lifted is over: the job offers a new stop again.
+      if (answer === "sent" && (await stopLifted(session, stop.occurrenceId, fetcher))) {
+        await forgetStop(session, job.id, stop);
+        if (!cancelled) setRaised((current) => (current === stop ? undefined : current));
+      }
     })();
     return () => {
       cancelled = true;
@@ -95,10 +107,15 @@ export function JobStopSheet({
   useEffect(() => {
     if (!raised || delivery !== "saved") return;
     const timer = window.setInterval(() => {
-      void deliveryOf(raised.deviceActionId).then(setDelivery);
+      void deliveryOf(raised.deviceActionId).then(async (answer) => {
+        if (answer !== "attention") return setDelivery(answer);
+        await forgetStop(session, job.id, raised);
+        setRaised(undefined);
+        setError(NOT_CONFIRMED);
+      });
     }, DELIVERY_RECHECK_MS);
     return () => window.clearInterval(timer);
-  }, [raised, delivery]);
+  }, [raised, delivery, session, job.id]);
 
   async function record(payload: SafetyActionPayload): Promise<string> {
     const saved = await saveOutboxAction({
@@ -144,9 +161,15 @@ export function JobStopSheet({
         raisedAt,
         unsafe: sent,
       };
+      const answer = await deliveryOf(deviceActionId);
+      if (answer === "attention") {
+        // Refused at once (a word the office does not take): the stop is not in force.
+        setError(NOT_CONFIRMED);
+        return;
+      }
       await saveRaisedStop(session, job.id, stop);
       setRaised(stop);
-      setDelivery(await deliveryOf(deviceActionId));
+      setDelivery(answer);
     } catch (caught) {
       setError(messageFor(caught, { fallback: NOT_CONFIRMED }));
     } finally {
@@ -182,6 +205,8 @@ export function JobStopSheet({
   }
 
   const jobLine = job.address ? `Job ${job.code}, ${job.address}` : `Job ${job.code}`;
+
+  if (!loaded) return null;
 
   if (raised) {
     return (
@@ -286,6 +311,12 @@ export function JobStopSheet({
   );
 }
 
+/** Clears the kept stop, but only if it is still this one: a stop raised meanwhile stays. */
+async function forgetStop(session: AuthenticatedSession, jobId: string, stop: RaisedStop) {
+  const kept = await loadRaisedStop(session, jobId);
+  if (kept?.deviceActionId === stop.deviceActionId) await saveRaisedStop(session, jobId, null);
+}
+
 /** Whether the office has the stop yet, or it needs a person. */
 async function deliveryOf(deviceActionId: string): Promise<Delivery> {
   const action = await getOutboxAction(deviceActionId);
@@ -311,9 +342,10 @@ async function stopLifted(
       fetcher: fetcher ?? fetch,
       deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
     });
-    return !panel.open_occurrences.some(
-      (stop) => stop.occurrence_id === occurrenceId && stop.stop_active,
-    );
+    const listed = panel.open_occurrences.find((stop) => stop.occurrence_id === occurrenceId);
+    if (listed) return !listed.stop_active;
+    // The read lists at most 50 open stops: missing from a full list proves nothing.
+    return panel.open_occurrences.length < OPEN_STOPS_READ_LIMIT;
   } catch {
     return false;
   }

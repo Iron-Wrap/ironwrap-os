@@ -105,7 +105,7 @@ describe("JobStopSheet", () => {
 
   it("S20: names the job, says what sending does, and offers 911 and the stop", async () => {
     render(<JobStopSheet session={session} job={job} />);
-    expect(screen.getByText("Job J-ELENA · 118 Larkspur Way NW")).toBeVisible();
+    expect(await screen.findByText("Job J-ELENA · 118 Larkspur Way NW")).toBeVisible();
     expect(screen.getByLabelText("What is unsafe (optional)")).toBeVisible();
     expect(
       screen.getByText(
@@ -125,7 +125,7 @@ describe("JobStopSheet", () => {
     officeAnswers();
     const user = userEvent.setup();
     render(<JobStopSheet session={session} job={job} />);
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     await waitFor(async () => expect(await safetyActions()).toHaveLength(1));
     const [saved] = await safetyActions();
     expect(saved?.payload).toMatchObject({
@@ -144,7 +144,10 @@ describe("JobStopSheet", () => {
     officeAnswers();
     const user = userEvent.setup();
     render(<JobStopSheet session={session} job={job} />);
-    await user.type(screen.getByLabelText("What is unsafe (optional)"), "Ice on the north slope");
+    await user.type(
+      await screen.findByLabelText("What is unsafe (optional)"),
+      "Ice on the north slope",
+    );
     await user.click(screen.getByRole("button", { name: "Send stop report" }));
 
     expect(await screen.findByText("Stop sent. When the area is safe, say so here.")).toBeVisible();
@@ -183,7 +186,7 @@ describe("JobStopSheet", () => {
     noSignal();
     const user = userEvent.setup();
     render(<JobStopSheet session={session} job={job} />);
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     expect(
       await screen.findByText(
         "Saved on this device. It uploads on its own and keeps the same record if you retry.",
@@ -196,7 +199,7 @@ describe("JobStopSheet", () => {
     officeAnswers();
     const user = userEvent.setup();
     const first = render(<JobStopSheet session={session} job={job} />);
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     await screen.findByText("Stop sent. When the area is safe, say so here.");
     first.unmount();
     render(<JobStopSheet session={session} job={job} fetcher={panelFetcher([])} />);
@@ -207,7 +210,7 @@ describe("JobStopSheet", () => {
     officeAnswers();
     const user = userEvent.setup();
     const first = render(<JobStopSheet session={session} job={job} />);
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     await screen.findByText("Stop sent. When the area is safe, say so here.");
     first.unmount();
     const [raise] = await safetyActions();
@@ -228,7 +231,7 @@ describe("JobStopSheet", () => {
     });
     const user = userEvent.setup();
     render(<JobStopSheet session={session} job={job} />);
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     expect(
       await screen.findByText(
         "This phone could not confirm it saved this report. Tell your supervisor directly.",
@@ -241,7 +244,7 @@ describe("JobStopSheet", () => {
     officeAnswers();
     const user = userEvent.setup();
     render(<JobStopSheet session={session} job={job} />);
-    await user.type(screen.getByLabelText("What is unsafe (optional)"), "ok");
+    await user.type(await screen.findByLabelText("What is unsafe (optional)"), "ok");
     await user.click(screen.getByRole("button", { name: "Send stop report" }));
     await screen.findByText("Stop sent. When the area is safe, say so here.");
     expect(screen.getByText(/^Stop · /)).not.toHaveTextContent("· ok ·");
@@ -253,7 +256,7 @@ describe("JobStopSheet", () => {
     officeAnswers();
     const user = userEvent.setup();
     const first = render(<JobStopSheet session={session} job={job} />);
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     await screen.findByText("Stop sent. When the area is safe, say so here.");
     first.unmount();
     render(<JobStopSheet session={session} job={job} />);

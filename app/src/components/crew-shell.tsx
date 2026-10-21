@@ -33,8 +33,8 @@ export function CrewShell() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpMounted, setHelpMounted] = useState(false);
   // On a job (open, or the only one today) a stop holds that job, not the whole company.
-  const { job: stopJob } = useStopJob(session, pathname, helpOpen);
-  const [stopStage, setStopStage] = useState<"stop" | "stopped">("stop");
+  const stopJob = useStopJob(session, pathname, helpOpen);
+  const [stopStage, setStopStage] = useState<"loading" | "stop" | "stopped">("loading");
   // Sun is the default even when the phone is set to dark: a phone left in dark mode would be
   // unreadable on a roof at noon. Night is only ever this explicit choice.
   const [night, setNight] = useState(() => {

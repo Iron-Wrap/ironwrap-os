@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,6 +78,11 @@ describe("CrewShell", () => {
     await user.click(screen.getByRole("button", { name: "Help" }));
     expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();
     expect(screen.getByText("Safety panel scope: roof_job JOB-ELENA")).toBeInTheDocument();
+    // S20 carries its own "Call 911"; the shell's second one would only repeat it.
+    expect(screen.getByRole("link", { name: "Call 911" })).toHaveAttribute("href", "tel:911");
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "Emergency: call 911" })).toBeNull(),
+    );
   });
 
   it("keeps the company-wide panel when no job is known", async () => {
@@ -89,6 +94,10 @@ describe("CrewShell", () => {
     );
     await user.click(screen.getByRole("button", { name: "Help" }));
     expect(await screen.findByText("Safety panel scope: company")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Emergency: call 911" })).toHaveAttribute(
+      "href",
+      "tel:911",
+    );
     expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
   });
 

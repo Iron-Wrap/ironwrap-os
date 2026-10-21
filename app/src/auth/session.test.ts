@@ -133,6 +133,9 @@ describe("officeSessionIsLive", () => {
     await persistAuthenticatedSession({
       ...authenticatedSession,
       user: { ...authenticatedSession.user, role: "owner" },
+      permissions: [...authenticatedSession.permissions],
+      allowed_actions: [...authenticatedSession.allowed_actions],
+      stale_fields: [],
       session_expires_at: new Date(expiresAt).toISOString(),
     });
     expect(await officeSessionIsLive()).toBe(true);

@@ -10,11 +10,12 @@ import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal 
 import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
-import { OBJECT_MODELS } from "./read-models.ts";
+import { OBJECT_MODELS, REPORT_MODELS } from "./read-models.ts";
 import { CANDIDATE_BAR, currentQualifications, delegationCandidates, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
+import { LEAD_FACT_KEYS, leadProposal, type LeadFacts } from "./lead-proposals.ts";
 import { supersedeDrafts } from "./drafts.ts";
 
 export interface BoundStatement {
@@ -298,8 +299,10 @@ export async function openRun(
   if (asker !== null && Date.parse(now) - Date.parse(signal.received_at) > ASK_UNANSWERED_MS) return { error: "ask_expired", status: 409 };
   // A watch names the objects its condition found; the run starts from each of them.
   const watchObjects = watchSubjects(signal);
+  // An owner report's run writes for a wider audience: it reads no lead proposal.
+  const reportRun = signal.kind === "watch" && signal.source === WATCH_SIGNAL_SOURCE && signal.watch_id !== null && Object.hasOwn(OWNER_REPORTS, signal.watch_id);
   const memory = watchObjects
-    ? await subjectsFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
+    ? await subjectsFacts(db, reportRun ? REPORT_MODELS : OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
     : await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
   // A handoff run also starts from the person's ask or request at the root of its chain.
   const root = signal.kind === "handoff" ? await rootOf(db, tenantId, signal) : null;
@@ -730,6 +733,32 @@ export async function proposeStep(
           reviewer_role: null,
         };
   }
+  // A confirm names an open proposal of the same lead and tenant and confirms only what it proposed
+  // (a non-null value equals the proposal's); a person who wants another value edits the lead by hand.
+  if (decision.result !== "deny" && input.action_id === "lead_fact.confirm") {
+    const confirm = input.args as { lead_id: string; proposal_id: string; fields: LeadFacts };
+    const proposal = await leadProposal(db, tenantId, confirm.proposal_id);
+    const refusal =
+      !proposal || proposal.lead_id !== confirm.lead_id
+        ? "fact_missing"
+        : !proposal.open
+          ? "fact_stale"
+          : LEAD_FACT_KEYS.some((key) => confirm.fields[key] !== null && confirm.fields[key] !== proposal.fields[key])
+            ? "fact_conflict"
+            : null;
+    decision = refusal
+      ? {
+          ...decision,
+          result: "deny",
+          outcome: "abstained",
+          reason_codes: [refusal],
+          checks: [...decision.checks, { check: "proposal", passed: false }],
+          permit_kind: "none",
+          delegation_id: null,
+          reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
+        }
+      : { ...decision, checks: [...decision.checks, { check: "proposal", passed: true }] };
+  }
   const now = new Date(nowMs).toISOString();
   // An admitted read reads now. One its reader may not make, or that fails, stops as an
   // abstention instead of being recorded as done.
@@ -781,6 +810,7 @@ export async function proposeStep(
           delegatedPermitId: decision.delegation_id,
           windowSince: delegatedCeiling ? new Date(nowMs - windowMs[delegatedCeiling.count.per]).toISOString() : null,
           windowMax: delegatedCeiling?.count.max ?? null,
+          proposalId: input.action_id === "lead_fact.confirm" ? (input.args as { proposal_id: string }).proposal_id : null,
         };
   try {
     // An admitted step counts against the run's step ceiling inside the insert itself, so parallel
@@ -841,14 +871,17 @@ export async function proposeStep(
           latestDelegation?.delegation_id !== delegation?.delegation_id ||
           latestDelegation?.setting !== delegation?.setting ||
           latestDelegation?.fallback !== delegation?.fallback);
+      // Another confirm of the same proposal landed first: the proposal is used, so this one stops
+      // as a confirm of a proposal no longer open.
+      const proposalTaken = admission?.proposalId ? (await leadProposal(db, tenantId, admission.proposalId))?.open === false : false;
       // A proposal overtaken by a committed owner control fails `superseded` (contract reason codes):
       // the owner's own change decided it, so no person is handed a task. A ceiling loser abstains.
       const capped = askReviewer(run, input.action_id, {
         ...decision,
         result: "deny",
         outcome: superseded ? "failed" : "abstained",
-        reason_codes: [superseded ? "superseded" : "ceiling_reached"],
-        checks: [...decision.checks, { check: superseded ? "delegation" : "budget", passed: false }],
+        reason_codes: [superseded ? "superseded" : proposalTaken ? "fact_stale" : "ceiling_reached"],
+        checks: [...decision.checks, { check: superseded ? "delegation" : proposalTaken ? "proposal" : "budget", passed: false }],
         permit_kind: "none",
         delegation_id: null,
         reviewer_role: superseded ? null : reviewer,
@@ -987,6 +1020,8 @@ interface AdmissionSnapshot {
   delegatedPermitId: string | null;
   windowSince: string | null;
   windowMax: number | null;
+  /** A confirm's proposal: no other admitted confirm may name it by the time this one lands. */
+  proposalId: string | null;
 }
 
 function stepInsert(
@@ -1058,7 +1093,10 @@ function stepInsert(
            AND action_id=? AND created_at>=? AND json_extract(permit_json,'$.kind')='within_limits') < ?)
          AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=? AND specialist_id=? AND action_id=?
            AND json_extract(permit_json,'$.delegation_id')=?
-           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))`,
+           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))
+         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=? AND specialist_id='lead_concierge'
+           AND action_id='lead_fact.confirm' AND json_extract(args_json,'$.proposal_id')=?
+           AND json_extract(policy_json,'$.result')<>'deny'))`,
     )
     .bind(
       stepId,
@@ -1126,6 +1164,9 @@ function stepInsert(
       run.specialist_id,
       input.action_id,
       admission?.delegatedPermitId ?? null,
+      admission?.proposalId ?? null,
+      tenantId,
+      admission?.proposalId ?? null,
     );
 }
 

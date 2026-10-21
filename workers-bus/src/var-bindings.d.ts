@@ -3,7 +3,7 @@
  *
  * IRO-268 groups these vars into CFG_* JSON bindings (see env-bindings.ts and wrangler.jsonc) so
  * the Worker stays under the Cloudflare variable-count limit; wrangler types then emits CFG_* as
- * an opaque object and the 137 flat names below vanish from the generated Env. flattenEnv()
+ * an opaque object and the 136 flat names below vanish from the generated Env. flattenEnv()
  * restores them at runtime; this file restores them for tsc. Keep this list in sync with the
  * flattened key set that tools/wrangler-binding-budget.test.mjs pins.
  */
@@ -80,7 +80,6 @@ interface Env {
   NEWO_USAGE_LIMIT_MINUTES: string;
   NEWO_USAGE_ALERT_PERCENT: string;
   NEWO_JOBNIMBUS_BOOKING_PROVEN: string;
-  NEWO_CALLBACK_OWNER_USER: string;
   NEWO_BOOKING_HORIZON_DAYS: string;
   NEWO_REPORT_TIMEOUT_MINUTES: string;
   NEWO_SYNC_RETRY_MINUTES: string;
@@ -222,7 +221,6 @@ declare namespace Cloudflare {
     NEWO_USAGE_LIMIT_MINUTES: string;
     NEWO_USAGE_ALERT_PERCENT: string;
     NEWO_JOBNIMBUS_BOOKING_PROVEN: string;
-    NEWO_CALLBACK_OWNER_USER: string;
     NEWO_BOOKING_HORIZON_DAYS: string;
     NEWO_REPORT_TIMEOUT_MINUTES: string;
     NEWO_SYNC_RETRY_MINUTES: string;

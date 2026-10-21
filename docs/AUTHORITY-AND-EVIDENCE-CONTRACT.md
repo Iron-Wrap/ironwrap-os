@@ -694,6 +694,38 @@ written, read with D1's own clock, and each refusal is named on the route and re
 - no member of the crew shares a login (user id, email or Frappe user) with the person whose
   attestation Materials, Safety, Access or Weather stands on.
 
+### OD-01 cancellation window
+
+The customer may cancel until 10 days after they receive their copy of the signed contract
+(owner's register OD-01; counsel confirms the wording through the owner). Inside that window nothing
+is ordered from a supplier, no shop work starts and no start is confirmed. The register scopes it to
+private dwellings; D1 cannot tell a private dwelling from a commercial job, so the window applies to
+every contract. It is a System state next to the gates (`cancellation_window` on
+`GET /api/v1/production/jobs/{job}/gates`), not a gate: it has no ledger and no waiver, and a
+Materials waiver lifts none of its holds (migration `0160`).
+
+- It starts from the copy the portal showed at signing, which counts as received: the confirm
+  route appends a `contract_signed_copy_events` row in the acceptance's own batch, with D1's time,
+  only when the client renders the copy on that screen (`signed_copy: true`) and the answer returns
+  it. Nothing else writes or moves that event.
+- Otherwise an owner or ops person records when the customer received the copy
+  (`POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy`), from their own cookie
+  session, with a reason and an evidence reference. The time is not before the job's latest contract
+  signature (equal is allowed), not after D1's now, and never earlier than one already recorded or
+  shown: a record only moves the window later, and the same time is a no-op. A job with no contract
+  in D1 records with no floor, and its record says so. D1 stamps the record with its own clock and
+  writes its audit row in the same statement; each refusal has its own code.
+- It ends at the later of its start + 240 hours and the same local clock time 10 calendar days
+  later in the business time zone, never before the job's previous end, so a DST change never ends
+  the hold early in local time. D1 holds every end to [start + 240 hours, start + 241 hours].
+- It is unknown until the job's latest contract has a copy shown or a record at or after its
+  signature, open until it ends, then ended. While it is unknown or open, D1 and the routes refuse,
+  each by name: a schedule (the firm start), the Materials attestation, and a purchase order line
+  for the job or one moving back to `ordered`. A line with no job (stock) is never held.
+- `GET /api/v1/production/cancellation-window/signed-copy-missing` lists, for owner and ops, the open
+  signed jobs whose window is unknown, and their count: signed means a contract in D1, or a Deposit
+  gate that has cleared for a contract signed outside D1.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

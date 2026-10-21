@@ -25,6 +25,7 @@ import {
   recordContractDepositGate,
   type DepositTermsRefusal,
 } from "./deposit-policy.ts";
+import { signedCopyShownStatement } from "./production-cancellation-window.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -257,12 +258,17 @@ export async function handleCustomerPortalAcceptanceConfirm(
   if (!customerAcceptanceConfigured(env)) return portalUnavailable();
   if (!trustedPortalOrigin(req, env)) return portalNotFound();
 
-  const request = await parseExactJson(req, [
-    "token",
-    "signer_name",
-    "accepted",
-  ]);
+  const request = await parseExactJson(
+    req,
+    ["token", "signer_name", "accepted"],
+    ["signed_copy"],
+  );
   if (!request || !validToken(request.token)) return portalNotFound();
+  // A client sends `signed_copy: true` only when it shows the signed copy (terms plus receipt) on
+  // this same screen. Only then does the answer carry the copy, and only then is the copy recorded
+  // as shown, which starts the OD-01 cancellation window (0160). Without it nothing changes.
+  if ("signed_copy" in request && request.signed_copy !== true) return portalNotFound();
+  const signedCopy = request.signed_copy === true;
   if (request.accepted !== true || !validSignerName(request.signer_name)) {
     return acceptanceJson({ error: "invalid_acceptance_attestation" }, 400);
   }
@@ -288,6 +294,8 @@ export async function handleCustomerPortalAcceptanceConfirm(
           accepted: true,
           signer_name: request.signer_name,
           token: request.token,
+          // Part of the fingerprint, so a replay asks for the copy exactly as the first request did.
+          ...(signedCopy ? { signed_copy: true } : {}),
         }),
       ),
       tokenHash: await sha256Hex(request.token),
@@ -304,7 +312,7 @@ export async function handleCustomerPortalAcceptanceConfirm(
     return acceptanceJson({ error: "acceptance_challenge_used" }, 409);
   if (claim.kind === "challenge_missing") return portalNotFound();
 
-  return await settleAcceptanceIntent(env, claim.intent, requestContext);
+  return await settleAcceptanceIntent(env, claim.intent, requestContext, signedCopy);
 }
 
 /** The emailed token can only preview the still-current contract it was issued for. */
@@ -455,6 +463,7 @@ async function settleAcceptanceIntent(
   env: AppEnv,
   initial: AcceptanceIntent,
   requestContext: AuthRequestContext,
+  signedCopy: boolean,
 ): Promise<Response> {
   let intent = initial;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -466,7 +475,8 @@ async function settleAcceptanceIntent(
           acceptanceId: intent.acceptance_id,
         }).catch(() => null);
       }
-      return terminal;
+      // A replay asked for the copy as the first request did: the same copy, nothing written.
+      return signedCopy ? await withSignedCopy(env, intent, terminal) : terminal;
     }
     if (intent.state === "receipt_pending") {
       if (intent.signer_ip_hash !== requestContext.ip_hash) {
@@ -582,6 +592,7 @@ async function settleAcceptanceIntent(
       contract,
       challenge.created_at,
       now,
+      signedCopy,
     );
   }
   return acceptanceJson({ error: "acceptance_in_progress" }, 503);
@@ -861,6 +872,7 @@ async function commitNativeAcceptance(
   contract: NativeContract,
   challengeCreatedAt: string,
   now: Date,
+  signedCopy: boolean,
 ): Promise<Response> {
   const receipt = await receiptFor(intent);
   if (
@@ -881,6 +893,15 @@ async function commitNativeAcceptance(
   const bindingId = `commercial-acceptance:${await sha256Hex(
     `${intent.tenant_id}:${await sha256Hex(intent.acceptance_id)}`,
   )}`;
+  // The answer to this request returns the signed copy, so the copy is recorded as shown in the
+  // acceptance's own batch (0160): only for the binding this batch writes, never for an attempt
+  // that is rejected or does not commit.
+  const shown = signedCopy
+    ? [await signedCopyShownStatement(env, {
+      tenantId: intent.tenant_id,
+      acceptanceBindingId: bindingId,
+    })]
+    : [];
   try {
     await env.DB.batch([
       env.DB.prepare(
@@ -1017,6 +1038,7 @@ async function commitNativeAcceptance(
         attemptedAt,
         intent.acceptance_id,
       ),
+      ...shown,
       env.DB.prepare(
         `UPDATE customer_portal_acceptance_intents
          SET state = 'rejected', frappe_attempt_lease_expires_at = NULL, result_json = ?,
@@ -1057,7 +1079,7 @@ async function commitNativeAcceptance(
   if (deposit.outcome === "refused") {
     log({ at: "contract_deposit_gate", acceptance_id: intent.acceptance_id, reason: deposit.reason });
   }
-  return await nativeTerminalResponse(env, intent.acceptance_id, contract);
+  return await nativeTerminalResponse(env, intent.acceptance_id, contract, signedCopy);
 }
 
 /**
@@ -1128,6 +1150,7 @@ async function nativeTerminalResponse(
   env: AppEnv,
   acceptanceId: string,
   contract: NativeContract,
+  signedCopy: boolean,
 ): Promise<Response> {
   const current = await getAcceptanceIntent(env, acceptanceId);
   if (!current) return portalUnavailable();
@@ -1155,7 +1178,107 @@ async function nativeTerminalResponse(
     tenantId: current.tenant_id,
     acceptanceId,
   }).catch(() => null);
-  return storedTerminalResponse(current) ?? portalUnavailable();
+  const terminal = storedTerminalResponse(current) ?? portalUnavailable();
+  return signedCopy ? await withSignedCopy(env, current, terminal) : terminal;
+}
+
+/** The signed copy the confirm screen shows: the contract's terms as signed, and its receipt. */
+interface SignedCopy {
+  acceptance_id: string;
+  quote_version: number;
+  proposal_title: string;
+  total_cents: number;
+  currency: string;
+  terms: Record<string, unknown>;
+  terms_hash: string;
+  signer_name: string;
+  accepted_at: string;
+  /** The SHA-256 of the immutable acceptance receipt kept in R2. */
+  receipt_sha256: string;
+  /** When the copy was shown, by D1's clock: the start of the OD-01 cancellation window. */
+  shown_at: string;
+  /** When that window ends, as stored: never early in local time across a DST change (0160). */
+  window_ends_at: string;
+}
+
+/**
+ * The copy recorded as shown for this acceptance, read back from its binding, its event and its
+ * intent, or null when no copy was recorded as shown. A copy whose terms do not match the binding's
+ * hash is never served.
+ */
+async function signedCopyFor(env: AppEnv, intent: AcceptanceIntent): Promise<SignedCopy | null> {
+  const row = await env.DB.prepare(
+    `SELECT shown.shown_at, shown.window_ends_at, binding.terms_hash, binding.receipt_hash,
+            binding.accepted_at,
+            acceptance.signer_name, acceptance.terms_json, acceptance.terms_hash AS signed_terms_hash,
+            quote.revision_number AS quote_version, quote.total_cents, quote.currency,
+            proposal.title AS proposal_title
+       FROM commercial_acceptance_bindings binding
+       JOIN contract_signed_copy_events shown
+         ON shown.tenant_id = binding.tenant_id
+        AND shown.acceptance_binding_id = binding.acceptance_binding_id
+       JOIN customer_portal_acceptance_intents acceptance
+         ON acceptance.acceptance_id = binding.acceptance_id
+       JOIN commercial_quote_revisions quote
+         ON quote.tenant_id = binding.tenant_id
+        AND quote.quote_revision_id = binding.quote_revision_id
+       JOIN commercial_proposal_revisions proposal
+         ON proposal.tenant_id = binding.tenant_id
+        AND proposal.proposal_revision_id = binding.proposal_revision_id
+      WHERE binding.tenant_id = ? AND binding.acceptance_id = ?
+      LIMIT 1`,
+  ).bind(intent.tenant_id, intent.acceptance_id).first<{
+    shown_at: string;
+    window_ends_at: string;
+    terms_hash: string;
+    receipt_hash: string;
+    accepted_at: string;
+    signer_name: string;
+    terms_json: string;
+    signed_terms_hash: string;
+    quote_version: number;
+    total_cents: number;
+    currency: string;
+    proposal_title: string;
+  }>();
+  if (!row || row.signed_terms_hash !== row.terms_hash) return null;
+  let terms: unknown;
+  try {
+    terms = JSON.parse(row.terms_json) as unknown;
+  } catch {
+    return null;
+  }
+  if (!isRecord(terms) || (await sha256Hex(canonicalJson(terms))) !== row.terms_hash) return null;
+  return {
+    acceptance_id: intent.acceptance_id,
+    quote_version: Number(row.quote_version),
+    proposal_title: row.proposal_title,
+    total_cents: Number(row.total_cents),
+    currency: row.currency,
+    terms,
+    terms_hash: row.terms_hash,
+    signer_name: row.signer_name,
+    accepted_at: row.accepted_at,
+    receipt_sha256: row.receipt_hash,
+    shown_at: row.shown_at,
+    window_ends_at: row.window_ends_at,
+  };
+}
+
+/**
+ * An accepted answer with the signed copy added, for a client that asked for it. No copy recorded
+ * as shown means none is served: the answer is the plain accepted one.
+ */
+async function withSignedCopy(
+  env: AppEnv,
+  intent: AcceptanceIntent,
+  response: Response,
+): Promise<Response> {
+  if (response.status !== 200 || intent.state !== "accepted") return response;
+  const copy = await signedCopyFor(env, intent).catch(() => null);
+  if (!copy) return response;
+  const body = (await response.clone().json()) as Record<string, unknown>;
+  return acceptanceJson({ ...body, signed_copy: copy }, 200);
 }
 
 async function sendChallengeEmail(
@@ -1518,6 +1641,7 @@ function storedTerminalResponse(intent: AcceptanceIntent): Response | null {
 async function parseExactJson(
   req: Request,
   keys: readonly string[],
+  optional: readonly string[] = [],
 ): Promise<Record<string, unknown> | null> {
   if (
     !req.headers
@@ -1537,7 +1661,10 @@ async function parseExactJson(
   if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) return null;
   try {
     const value = JSON.parse(raw) as unknown;
-    if (!isRecord(value) || !sameKeys(value, keys)) return null;
+    if (
+      !isRecord(value) ||
+      !sameKeys(value, [...keys, ...optional.filter((key) => key in value)])
+    ) return null;
     return value;
   } catch {
     return null;

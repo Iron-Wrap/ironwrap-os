@@ -34,6 +34,9 @@
 //       `production_gate_stop_job_unknown` with its `stop_id`, so a person opens the stop.
 //       So does one naming a Work Package the tenant does not have (0159): 409
 //       `production_gate_stop_work_package_unknown` with its `stop_id`.
+//       Materials does not clear while the job's OD-01 cancellation window is unknown or open
+//       (0160): 409 `production_gate_cancellation_window_unknown` with `unknown_reason`, or
+//       `production_gate_cancellation_window_open` with `window_ends_at`. A waiver is not held.
 //       The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
@@ -46,7 +49,8 @@
 //   GET /api/v1/production/jobs/{job}/gates
 //     The office's read: each scheduling gate with its state, version, ledger entries and open
 //     waiver requests, whose `request_id` is what a waiver decision answers and whose
-//     `is_own_request` says whether the reader made it.
+//     `is_own_request` says whether the reader made it; and next to the gates the job's
+//     `cancellation_window`, a System state (production-cancellation-window.ts).
 //
 // Every write is people-only: the CSRF token, then the person's own cookie session, then the
 // operation set of their live role. Agents, connectors, service tokens and the effect runtime
@@ -59,6 +63,7 @@ import { listAccountingIntents, type AccountingIntentRecord } from "./accounting
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { listJobEvidenceItemsFromD1, r2ObjectStore } from "./field-actions.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { cancellationWindowHold, readCancellationWindow } from "./production-cancellation-window.ts";
 import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 import {
   fieldEvidenceId,
@@ -204,6 +209,8 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_weather_window_invalid: 409,
   production_gate_reversal_target_invalid: 409,
   production_gate_contract_no_deposit_not_reversible: 409,
+  production_gate_cancellation_window_unknown: 409,
+  production_gate_cancellation_window_open: 409,
 };
 
 interface GateRow {
@@ -1036,6 +1043,14 @@ async function attestGate(
   }));
   const existing = await entryByKey(env, tenantId, idempotency.keyHash);
   if (existing) return await entryResponse(env, tenantId, replayOf(existing, requestSha256), true);
+  // 0160: nothing is ordered inside the cancellation window, so Materials does not clear while it
+  // is unknown or open. D1's hold fires after the replace guard and before the validate trigger.
+  if (gate === "Materials") {
+    const window = await cancellationWindowHold(env, tenantId, roofJobId);
+    if (window) {
+      throw refusal(`production_gate_cancellation_window_${window.state}`, 409, window.detail);
+    }
+  }
   if (current.version !== input.expectedGateVersion) {
     throw refusal("production_gate_version_conflict", 409);
   }
@@ -1458,12 +1473,12 @@ export async function handleProductionGatesRead(
       (rows.results ?? []).filter((row) => row.gate === name)
     );
     if (gates.length === 0) return json({ error: "production_gate_job_not_found" }, 404);
-    return json({
-      roof_job: roofJobId,
-      gates: await Promise.all(
-        gates.map((gate) => gateRead(env, tenantId, auth.session.user_id, gate)),
-      ),
-    });
+    const [window, gateReads] = await Promise.all([
+      readCancellationWindow(env, tenantId, roofJobId),
+      Promise.all(gates.map((gate) => gateRead(env, tenantId, auth.session.user_id, gate))),
+    ]);
+    // The OD-01 cancellation window is a System state next to the gates, not a gate (0160).
+    return json({ roof_job: roofJobId, cancellation_window: window, gates: gateReads });
   } catch {
     return json({ error: "production_gates_unavailable" }, 502);
   }

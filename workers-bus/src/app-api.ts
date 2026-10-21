@@ -275,6 +275,10 @@ import {
 import { readAccountingIntent } from "./accounting-intents.ts";
 import { readCommercialJobPhase } from "./commercial-job-phase.ts";
 import { depositTermsRefusal, handleTenantDepositPolicy } from "./deposit-policy.ts";
+import {
+  handleCancellationWindowSignedCopy,
+  handleCancellationWindowSignedCopyMissing,
+} from "./production-cancellation-window.ts";
 import { readCommercialContext } from "./commercial-context.ts";
 import {
   OperatingJobAssignmentError,
@@ -1987,6 +1991,19 @@ export async function handleAuthenticatedRoute(
     const roofJobId = decodedPathSegment(productionGatesMatch[1]);
     if (!roofJobId) return privateAppJson({ error: "not_found" }, 404);
     return await handleProductionGatesRead(env, auth, roofJobId);
+  }
+  // The OD-01 cancellation window (migration 0160): when the customer received their copy of the
+  // signed contract, recorded by an owner or ops person, and the jobs still missing that time.
+  const signedCopyMatch = url.pathname.match(
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/cancellation-window\/signed-copy$/,
+  );
+  if (req.method === "POST" && signedCopyMatch) {
+    const roofJobId = decodedPathSegment(signedCopyMatch[1]);
+    if (!roofJobId) return privateAppJson({ error: "not_found" }, 404);
+    return await handleCancellationWindowSignedCopy(req, env, auth, roofJobId);
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/production/cancellation-window/signed-copy-missing") {
+    return await handleCancellationWindowSignedCopyMissing(env, auth);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
     if (!hasPermission(auth, "production:read")) {

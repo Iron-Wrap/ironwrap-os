@@ -200,7 +200,10 @@ needs all six production gates cleared, and a gate clears only by an entry in th
 Deposit, Materials or Access only, is the owner's decision. Safety and Weather are never waivable,
 and Crew has no waiver: it clears by policy when a person schedules the job (migration `0159`). D1
 refuses every such entry from the seed identity, and a schedule from it, so the seed clears no
-gate. It never writes D1 directly, calls only an
+gate. The job's OD-01 cancellation window reads unknown (migration `0160`): nothing shows the tester
+a signed copy, and D1 refuses the seed identity's record of one, so the window holds the schedule,
+the Materials attestation and the job's purchase orders, as intended. It never writes D1 directly,
+calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.
 

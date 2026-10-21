@@ -46,7 +46,16 @@ import {
   OperatingJobAssignmentError,
   recordOperatingJobAssignment,
 } from "../src/operating-job-assignment-store.ts";
-import { attestGateInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
+import {
+  cancellationWindowEndsAt,
+  readCancellationWindow,
+} from "../src/production-cancellation-window.ts";
+import {
+  attestGateInLedger,
+  d1Now,
+  fixtureSchedule,
+  waiveGateInLedger,
+} from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 /**
@@ -2968,6 +2977,21 @@ function readyToSchedule(h: Harness): (key: string) => Promise<unknown> {
   };
 }
 
+/**
+ * Run `act` with the Worker's clock `days` days behind D1's, so a contract signed in it was signed
+ * that long ago. Its OD-01 cancellation window (0160) can then have ended, by D1's clock, by the
+ * time the job is scheduled: a person records that the customer received the signed copy eleven
+ * days ago (`attestGateInLedger` on Materials does it for the fixture).
+ */
+async function inThePast<T>(days: number, act: () => Promise<T>): Promise<T> {
+  mock.timers.enable({ apis: ["Date"], now: Date.now() - days * 24 * 60 * 60_000 });
+  try {
+    return await act();
+  } finally {
+    mock.timers.reset();
+  }
+}
+
 async function refusedSchedule(action: Promise<unknown>, code: string): Promise<void> {
   await assert.rejects(action, (error: unknown) => {
     const message = error instanceof OperatingJobAssignmentError ? error.code : String((error as Error).message);
@@ -2977,11 +3001,12 @@ async function refusedSchedule(action: Promise<unknown>, code: string): Promise<
 }
 
 test("no schedule rests on a contract with no deposit once a later contract with a deposit is signed, before or after the policy re-blocks Deposit", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // The contracts were signed weeks ago, so their cancellation windows have ended (0160).
+  const h = await inThePast(40, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
   try {
     seedGates(h);
-    const portalToken = await seedPortalLink(h.db);
-    const first = await accept(h, portalToken, "acceptance-od01-schedule-0001");
+    const portalToken = await inThePast(40, () => seedPortalLink(h.db));
+    const first = await inThePast(40, () => accept(h, portalToken, "acceptance-od01-schedule-0001"));
     assert.equal(first.status, 200, await first.clone().text());
     assert.equal(depositEntries(h)[0]!.basis, "contract_no_deposit");
     const schedule = readyToSchedule(h);
@@ -2990,9 +3015,9 @@ test("no schedule rests on a contract with no deposit once a later contract with
     // MD-13's input arrives and the customer signs a contract with a deposit. The policy's
     // reversal does not land after that commit, so Deposit still stands on the first contract.
     recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
-    await publishCorrectedContract(h, TERMS);
+    await inThePast(20, () => publishCorrectedContract(h, TERMS));
     h.db.failNextLedgerAppend = true;
-    const second = await accept(h, portalToken, "acceptance-md13-schedule-0001");
+    const second = await inThePast(20, () => accept(h, portalToken, "acceptance-md13-schedule-0001"));
     assert.equal(second.status, 200, await second.clone().text());
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
     await refusedSchedule(schedule("schedule-acceptance-0002"), "operating_job_assignment_deposit_contract_superseded");
@@ -3030,18 +3055,19 @@ test("no schedule rests on a contract with no deposit once a later contract with
 });
 
 test("a later contract that again has no deposit leaves Deposit standing, and the job schedules", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // The contracts were signed weeks ago, so their cancellation windows have ended (0160).
+  const h = await inThePast(40, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
   try {
     seedGates(h);
-    const portalToken = await seedPortalLink(h.db);
-    const first = await accept(h, portalToken, "acceptance-od01-again-0001");
+    const portalToken = await inThePast(40, () => seedPortalLink(h.db));
+    const first = await inThePast(40, () => accept(h, portalToken, "acceptance-od01-again-0001"));
     assert.equal(first.status, 200, await first.clone().text());
     const schedule = readyToSchedule(h);
     await schedule("schedule-acceptance-again-0001");
     // A corrected contract with no deposit either: the policy never re-binds one contract with no
     // deposit to another, so refusing here would leave the job with no way to schedule.
-    await publishCorrectedContract(h, OD01_TERMS);
-    const second = await accept(h, portalToken, "acceptance-od01-again-0002");
+    await inThePast(20, () => publishCorrectedContract(h, OD01_TERMS));
+    const second = await inThePast(20, () => accept(h, portalToken, "acceptance-od01-again-0002"));
     assert.equal(second.status, 200, await second.clone().text());
     assert.equal(depositEntries(h).length, 1);
     assert.equal(depositGate(h).state, "complete");
@@ -3056,20 +3082,21 @@ test("a later contract that again has no deposit leaves Deposit standing, and th
 });
 
 test("only the job's latest contract counts: a deposit contract superseded in turn by one with no deposit leaves the job schedulable", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // The contracts were signed weeks ago, so their cancellation windows have ended (0160).
+  const h = await inThePast(40, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
   try {
     seedGates(h);
-    const portalToken = await seedPortalLink(h.db);
-    const first = await accept(h, portalToken, "acceptance-od01-latest-0001");
+    const portalToken = await inThePast(40, () => seedPortalLink(h.db));
+    const first = await inThePast(40, () => accept(h, portalToken, "acceptance-od01-latest-0001"));
     assert.equal(first.status, 200, await first.clone().text());
     const schedule = readyToSchedule(h);
     await schedule("schedule-acceptance-latest-0001");
 
     // A deposit contract under MD-13 whose policy reversal never lands...
     recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
-    await publishCorrectedContract(h, TERMS);
+    await inThePast(30, () => publishCorrectedContract(h, TERMS));
     h.db.failNextLedgerAppend = true;
-    const second = await accept(h, portalToken, "acceptance-md13-latest-0001");
+    const second = await inThePast(30, () => accept(h, portalToken, "acceptance-md13-latest-0001"));
     assert.equal(second.status, 200, await second.clone().text());
     await refusedSchedule(schedule("schedule-acceptance-latest-0002"), "operating_job_assignment_deposit_contract_superseded");
 
@@ -3077,8 +3104,8 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
     // contract, so nothing will ever reverse the first contract's entry: refusing here would hold
     // the job forever.
     recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "od01_payment_on_completion" });
-    await publishCorrectedContract(h, OD01_TERMS, 3);
-    const third = await accept(h, portalToken, "acceptance-od01-latest-0002");
+    await inThePast(20, () => publishCorrectedContract(h, OD01_TERMS, 3));
+    const third = await inThePast(20, () => accept(h, portalToken, "acceptance-od01-latest-0002"));
     assert.equal(third.status, 200, await third.clone().text());
     assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
@@ -3087,6 +3114,619 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
       2,
     );
+  } finally {
+    h.restore();
+  }
+});
+
+// --- A5 (0160): the copy shown at signing starts the OD-01 cancellation window ----------------------
+//
+// By the owner's ruling a signed copy the portal shows at signing counts as received. A client
+// that shows the copy (terms plus receipt) on its confirm screen sends `signed_copy: true`; only
+// then does the answer carry the copy, and only then is the copy recorded as shown, in the
+// acceptance's own batch. Today's confirm page never sends it.
+
+const ZONE = "America/Edmonton";
+const MINUTE_MS = 60_000;
+
+function confirmShowingCopyRequest(token: string, idempotencyKey: string, signedCopy: unknown = true): Request {
+  return new Request(`${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/confirm`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: PUBLIC_ORIGIN,
+      "cf-connecting-ip": "203.0.113.9",
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify({ token, signer_name: "Ada Customer", accepted: true, signed_copy: signedCopy }),
+  });
+}
+
+/** A challenge for the current contract, then the customer's confirmation on a screen that shows the copy. */
+async function acceptShowingCopy(h: Harness, portalToken: string, idempotencyKey: string): Promise<Response> {
+  const challenge = await issueChallenge(h.env, portalToken);
+  assert.equal(challenge.status, 200, await challenge.clone().text());
+  return await worker.fetch(
+    confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), idempotencyKey),
+    h.env as never,
+    {} as never,
+  );
+}
+
+function shownEvents(h: Harness): Array<Record<string, string>> {
+  return h.db.raw.prepare("SELECT * FROM contract_signed_copy_events ORDER BY shown_at")
+    .all().map((row) => ({ ...row }) as Record<string, string>);
+}
+
+async function recordReceivedCopy(
+  h: Harness,
+  person: AuthContext,
+  receivedAt: string,
+  idempotencyKey: string,
+): Promise<{ status: number; body: Record<string, any> }> {
+  const response = await handleAuthenticatedRoute(
+    new Request(
+      `${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/cancellation-window/signed-copy`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+          "x-csrf-token": person.csrfToken,
+        },
+        body: JSON.stringify({
+          received_at: receivedAt,
+          reason: "The signed copy was emailed; the delivery receipt shows it arrived.",
+          evidence_ref: "Delivered email · signed copy.pdf",
+        }),
+      },
+    ),
+    h.env,
+    person,
+  );
+  return { status: response.status, body: await response.json() as Record<string, any> };
+}
+
+/** A purchase order line for this job, placed straight in D1 as any writer places one. */
+function placeJobOrderLine(h: Harness): void {
+  const now = new Date().toISOString();
+  h.db.raw.prepare(
+    `INSERT OR IGNORE INTO inventory_uoms (uom_id, tenant_id, code, dimension, scale, status, created_at, updated_at)
+     VALUES ('uom_acceptance_each', ?, 'EA', 'count', 0, 'active', ?, ?)`,
+  ).run(TENANT, now, now);
+  h.db.raw.prepare(
+    `INSERT OR IGNORE INTO inventory_items
+       (item_id, tenant_id, item_code, status, item_kind, base_uom_id, quantity_scale,
+        lot_controlled, valuation_method, source_ref, created_at, updated_at)
+     VALUES ('item_acceptance_panel', ?, 'PANEL-24', 'active', 'raw_material', 'uom_acceptance_each',
+             0, 0, 'fifo', 'seed', ?, ?)`,
+  ).run(TENANT, now, now);
+  h.db.raw.prepare(
+    `INSERT INTO inventory_po_lines
+       (po_line_id, tenant_id, supplier_order_id, line_no, item_id, uom_id, ordered_quantity_scaled,
+        unit_price_minor, line_identity_sha256, status, created_at, updated_at, roof_job_id)
+     VALUES ('po_line_acceptance_1', ?, 'SO-ACCEPTANCE-1', 1, 'item_acceptance_panel',
+             'uom_acceptance_each', 10, 500, ?, 'ordered', ?, ?, ?)`,
+  ).run(TENANT, "b".repeat(64), now, now, JOB_ID);
+}
+
+test("without signed_copy the confirm answer is unchanged and no copy is recorded as shown: the window is unknown", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    // A value other than true is not a request for the copy: the body is refused unread.
+    const challenge = await issueChallenge(h.env, portalToken);
+    assert.equal(challenge.status, 200);
+    const malformed = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-plain-0002", false),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(malformed.status, 404);
+    assert.equal(count(h, "customer_portal_acceptance_intents"), 0);
+
+    const response = await accept(h, portalToken, "acceptance-a5-plain-0001");
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    const acceptanceId = (JSON.parse(text) as { acceptance_id: string }).acceptance_id;
+    // Byte for byte the answer this route always gave: its stored canonical JSON.
+    assert.equal(text, JSON.stringify({ acceptance_id: acceptanceId, status: "accepted" }));
+    assert.deepEqual(shownEvents(h), []);
+    const binding = bindingFor(h, acceptanceId);
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.equal(window.state, "unknown");
+    assert.equal(window.unknown_reason, "signed_copy_time_missing");
+    assert.deepEqual(window.contract, {
+      acceptance_binding_id: binding.acceptance_binding_id,
+      signed_at: binding.accepted_at,
+    });
+  } finally {
+    h.restore();
+  }
+});
+
+test("with signed_copy the answer carries the signed copy, recorded as shown in the acceptance's batch, and the window opens", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const response = await acceptShowingCopy(h, portalToken, "acceptance-a5-copy-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    const body = await response.json() as Record<string, any>;
+    const binding = bindingFor(h, body.acceptance_id);
+    const [event, ...more] = shownEvents(h);
+    assert.ok(event);
+    assert.deepEqual(more, []);
+    const proposal = h.db.raw.prepare(
+      "SELECT title FROM commercial_proposal_revisions WHERE proposal_revision_id = ?",
+    ).get(binding.proposal_revision_id) as { title: string };
+    const quote = h.db.raw.prepare(
+      "SELECT revision_number, total_cents, currency FROM commercial_quote_revisions WHERE quote_revision_id = ?",
+    ).get(binding.quote_revision_id) as { revision_number: number; total_cents: number; currency: string };
+    assert.deepEqual(body, {
+      status: "accepted",
+      acceptance_id: body.acceptance_id,
+      signed_copy: {
+        acceptance_id: body.acceptance_id,
+        quote_version: Number(quote.revision_number),
+        proposal_title: proposal.title,
+        total_cents: Number(quote.total_cents),
+        currency: quote.currency,
+        terms: OD01_TERMS,
+        terms_hash: binding.terms_hash,
+        signer_name: "Ada Customer",
+        accepted_at: binding.accepted_at,
+        receipt_sha256: binding.receipt_hash,
+        shown_at: event.shown_at,
+        // The stored, DST-safe end the confirm screen's "You can cancel until ..." reads.
+        window_ends_at: event.window_ends_at,
+      },
+    });
+    // The copy is the contract the binding holds: the same terms hash.
+    assert.equal(body.signed_copy.terms_hash, binding.terms_hash);
+    assert.equal(body.signed_copy.terms_hash, OD01_TERMS_HASH);
+    // D1's own time, linked to the binding, and the window's fail-safe end.
+    assert.ok(Math.abs(Date.parse(event.shown_at) - d1Now(h.db.raw)) < MINUTE_MS, event.shown_at);
+    assert.deepEqual(
+      { ...event, event_id: undefined },
+      {
+        event_id: undefined,
+        tenant_id: TENANT,
+        acceptance_binding_id: binding.acceptance_binding_id,
+        roof_job_id: JOB_ID,
+        contract_signed_at: binding.accepted_at,
+        shown_at: event.shown_at,
+        window_ends_at: cancellationWindowEndsAt(event.shown_at, ZONE),
+        time_zone: ZONE,
+      },
+    );
+    assert.deepEqual(
+      h.db.raw.prepare("SELECT ts, automation, trigger, action, approved_by FROM audit_log WHERE run_id = ?")
+        .all(event.event_id).map((row) => ({ ...row })),
+      [{
+        ts: event.shown_at,
+        automation: "production_cancellation_window",
+        trigger: "customer_portal",
+        action: "shown:signed_copy",
+        approved_by: null,
+      }],
+    );
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.equal(window.state, "open");
+    assert.equal(window.started_from, "signed_copy_shown");
+    assert.equal(window.starts_at, event.shown_at);
+    assert.equal(window.ends_at, event.window_ends_at);
+    assert.equal(window.signed_copy_shown?.id, event.event_id);
+    // The window it starts holds ordering in D1 at once.
+    assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_open/);
+
+    // An exact replay answers with the same copy, and records nothing more.
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-copy-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), body);
+    assert.deepEqual(shownEvents(h), [event]);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).ends_at, event.window_ends_at);
+    // The same key without the request for the copy is another request: a fingerprint conflict.
+    const mismatch = await worker.fetch(
+      confirmRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-copy-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(mismatch.status, 409);
+    assert.deepEqual(await mismatch.json(), { error: "acceptance_idempotency_conflict" });
+    assert.deepEqual(shownEvents(h), [event]);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a rejected attempt with signed_copy records no copy as shown", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    const portalToken = await seedPortalLink(h.db);
+    assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+    const challenge = h.db.raw
+      .prepare("SELECT created_at FROM customer_portal_acceptance_challenges")
+      .get() as { created_at: string };
+    await recordPublicationTransition(h.env, h.chain!, "withdrawn", new Date(Date.parse(challenge.created_at) + 1));
+    const rejected = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-rejected-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(rejected.status, 409);
+    assert.deepEqual(await rejected.json(), { error: "acceptance_rejected" });
+    assert.equal(count(h, "commercial_acceptance_bindings"), 0);
+    assert.deepEqual(shownEvents(h), []);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a person's record after the copy was shown only moves the window later", async () => {
+  // The Worker's clock runs a minute behind D1's, so the customer's signature is a minute before
+  // the copy's D1 time and the two never fall in the same millisecond.
+  const behind = 1 / (24 * 60);
+  const h = await inThePast(behind, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
+  try {
+    seedGates(h);
+    const portalToken = await inThePast(behind, () => seedPortalLink(h.db));
+    const accepted = await inThePast(behind, () => acceptShowingCopy(h, portalToken, "acceptance-a5-later-0001"));
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    const binding = bindingFor(h, (await accepted.json() as { acceptance_id: string }).acceptance_id);
+    const [event] = shownEvents(h);
+    assert.ok(Date.parse(binding.accepted_at) < Date.parse(event!.shown_at));
+    const owner = await personAuth(h, OWNER_ID);
+
+    // At the signature, the floor allows it, but it is earlier than the copy shown: refused.
+    const earlier = await recordReceivedCopy(h, owner, binding.accepted_at, "receipt-a5-later-0001");
+    assert.equal(earlier.status, 409);
+    assert.deepEqual(earlier.body, {
+      received_at: binding.accepted_at,
+      recorded_received_at: event!.shown_at,
+      recorded_source: "signed_copy_shown",
+      window_ends_at: event!.window_ends_at,
+      time_zone: ZONE,
+      error: "cancellation_window_receipt_earlier_than_recorded",
+    });
+    // D1 holds a writer that skips the Worker to the same line, before any person's record exists.
+    const direct = (receivedAt: string, windowEndsAt: string) => h.db.raw.prepare(
+      `INSERT INTO production_cancellation_window_receipts (
+         receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+         acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
+         recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Synthetic direct record.', 'fixture://copy', ?, 'owner',
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+    ).run(
+      `pcw_${"9".repeat(40)}`, TENANT, JOB_ID, receivedAt, windowEndsAt, ZONE,
+      binding.acceptance_binding_id, binding.accepted_at, OWNER_ID, "a".repeat(64), "9".repeat(64),
+    );
+    assert.throws(
+      () => direct(binding.accepted_at, new Date(Date.parse(binding.accepted_at) + 240 * 60 * MINUTE_MS).toISOString()),
+      /cancellation_window_receipt_earlier_than_recorded/,
+    );
+    // The copy's own time changes nothing.
+    const same = await recordReceivedCopy(h, owner, event!.shown_at, "receipt-a5-later-0002");
+    assert.equal(same.status, 200);
+    assert.equal(same.body.unchanged, true);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 0);
+    // A later time moves the window later.
+    while (d1Now(h.db.raw) <= Date.parse(event!.shown_at)) {
+      // Wait out the millisecond the copy was shown in.
+    }
+    const later = new Date(d1Now(h.db.raw)).toISOString();
+    const moved = await recordReceivedCopy(h, owner, later, "receipt-a5-later-0003");
+    assert.equal(moved.status, 201, JSON.stringify(moved.body));
+    assert.equal(moved.body.cancellation_window.started_from, "manual_record");
+    assert.equal(moved.body.cancellation_window.signed_copy_received.no_d1_contract, false);
+    assert.equal(moved.body.cancellation_window.signed_copy_received.contract_signed_at, binding.accepted_at);
+    assert.ok(moved.body.cancellation_window.ends_at >= event!.window_ends_at);
+  } finally {
+    h.restore();
+  }
+});
+
+test("the floor is the contract signature: a time before it is refused with both times, the signature itself is allowed", async () => {
+  // Signed a day ago, so a time a minute before the signature is in the past too.
+  const h = await inThePast(1, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
+  try {
+    seedGates(h);
+    const portalToken = await inThePast(1, () => seedPortalLink(h.db));
+    const accepted = await inThePast(1, () => accept(h, portalToken, "acceptance-a5-floor-0001"));
+    assert.equal(accepted.status, 200);
+    const binding = bindingFor(h, (await accepted.json() as { acceptance_id: string }).acceptance_id);
+    const owner = await personAuth(h, OWNER_ID);
+    const before = new Date(Date.parse(binding.accepted_at) - MINUTE_MS).toISOString();
+    const refused = await recordReceivedCopy(h, owner, before, "receipt-a5-floor-0001");
+    assert.equal(refused.status, 409);
+    assert.deepEqual(refused.body, {
+      received_at: before,
+      contract_signed_at: binding.accepted_at,
+      time_zone: ZONE,
+      error: "cancellation_window_receipt_before_contract",
+    });
+    assert.equal(count(h, "production_cancellation_window_receipts"), 0);
+    const atSignature = await recordReceivedCopy(h, owner, binding.accepted_at, "receipt-a5-floor-0002");
+    assert.equal(atSignature.status, 201, JSON.stringify(atSignature.body));
+    assert.deepEqual(
+      h.db.raw.prepare(
+        "SELECT received_at, acceptance_binding_id, contract_signed_at FROM production_cancellation_window_receipts",
+      ).all().map((row) => ({ ...row })),
+      [{
+        received_at: binding.accepted_at,
+        acceptance_binding_id: binding.acceptance_binding_id,
+        contract_signed_at: binding.accepted_at,
+      }],
+    );
+    // D1 refuses a record that names no contract while the job has one, and one before it.
+    const direct = (receivedAt: string, bindingId: string | null, signedAt: string | null, n: string) => h.db.raw.prepare(
+      `INSERT INTO production_cancellation_window_receipts (
+         receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+         acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
+         recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Synthetic direct record.', 'fixture://copy', ?, 'owner',
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+    ).run(
+      `pcw_${n.repeat(40)}`, TENANT, JOB_ID, receivedAt,
+      new Date(Date.parse(receivedAt) + 240 * 60 * MINUTE_MS).toISOString(), ZONE, bindingId, signedAt,
+      OWNER_ID, "a".repeat(64), n.repeat(64),
+    );
+    const later = new Date(Date.parse(binding.accepted_at) + MINUTE_MS).toISOString();
+    assert.throws(() => direct(later, null, null, "7"), /cancellation_window_receipt_contract_changed/);
+    assert.throws(
+      () => direct(before, binding.acceptance_binding_id, binding.accepted_at, "8"),
+      /cancellation_window_receipt_before_contract/,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("a later contract needs its own copy: the window is unknown again until it is shown or recorded", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-again-0001");
+    assert.equal(first.status, 200);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "open");
+    // A corrected contract, signed on today's page, which shows no copy.
+    await publishCorrectedContract(h, OD01_TERMS);
+    const second = await accept(h, portalToken, "acceptance-a5-again-0002");
+    assert.equal(second.status, 200);
+    const binding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.equal(window.state, "unknown");
+    assert.equal(window.unknown_reason, "signed_copy_before_contract");
+    assert.equal(window.contract?.acceptance_binding_id, binding.acceptance_binding_id);
+    assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_unknown/);
+    // The work queue lists it: signed in D1, with no copy of this contract on record.
+    const owner = await personAuth(h, OWNER_ID);
+    const missing = await handleAuthenticatedRoute(
+      new Request(`${PUBLIC_ORIGIN}/api/v1/production/cancellation-window/signed-copy-missing`),
+      h.env,
+      owner,
+    );
+    assert.equal(missing.status, 200);
+    assert.deepEqual(await missing.json(), {
+      count: 1,
+      complete: true,
+      jobs: [{
+        roof_job_id: JOB_ID,
+        job_number: (h.db.raw.prepare("SELECT job_number FROM operating_roof_jobs WHERE roof_job_id = ?")
+          .get(JOB_ID) as { job_number: string | null }).job_number,
+        customer_display_name: (h.db.raw.prepare("SELECT display_name FROM operating_customers WHERE customer_id = ?")
+          .get(CUSTOMER_ID) as { display_name: string }).display_name,
+        address_line1: null,
+        unknown_reason: "signed_copy_before_contract",
+        contract_on_record: true,
+        contract_signed_at: binding.accepted_at,
+      }],
+    });
+    // A person records when this copy was received: the window opens again, and the job leaves the list.
+    const recorded = await recordReceivedCopy(h, owner, binding.accepted_at, "receipt-a5-again-0001");
+    assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+    assert.equal(recorded.body.cancellation_window.state, "open");
+    const after = await handleAuthenticatedRoute(
+      new Request(`${PUBLIC_ORIGIN}/api/v1/production/cancellation-window/signed-copy-missing`),
+      h.env,
+      owner,
+    );
+    assert.deepEqual(await after.json(), { count: 0, complete: true, jobs: [] });
+  } finally {
+    h.restore();
+  }
+});
+
+test("D1 holds a signed-copy event to its contract, its clock and its bounds, and a record to the event", async () => {
+  // Signed a day ago on today's page: a contract with no copy shown.
+  const h = await inThePast(1, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
+  try {
+    seedGates(h);
+    const portalToken = await inThePast(1, () => seedPortalLink(h.db));
+    const accepted = await inThePast(1, () => accept(h, portalToken, "acceptance-a5-direct-0001"));
+    assert.equal(accepted.status, 200);
+    const binding = bindingFor(h, (await accepted.json() as { acceptance_id: string }).acceptance_id);
+    const plusHours = (iso: string, hours: number) =>
+      new Date(Date.parse(iso) + hours * 60 * MINUTE_MS).toISOString();
+    let n = 0;
+    const insertEvent = (overrides: Record<string, unknown> = {}) => {
+      n += 1;
+      const row: Record<string, unknown> = {
+        event_id: `scs_${String(n).padStart(40, "0")}`,
+        tenant_id: TENANT,
+        acceptance_binding_id: binding.acceptance_binding_id,
+        roof_job_id: JOB_ID,
+        contract_signed_at: binding.accepted_at,
+        time_zone: ZONE,
+        ...overrides,
+      };
+      const shown = "shown_at" in row ? "?" : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+      const ends = "window_ends_at" in row ? "?" : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+240 hours')";
+      const columns = Object.keys(row).filter((column) => column !== "shown_at" && column !== "window_ends_at");
+      h.db.raw.prepare(
+        `INSERT INTO contract_signed_copy_events (${columns.join(", ")}, shown_at, window_ends_at)
+         VALUES (${columns.map(() => "?").join(", ")}, ${shown}, ${ends})`,
+      ).run(
+        ...(columns.map((column) => row[column]) as never[]),
+        ...(["shown_at", "window_ends_at"].filter((column) => column in row).map((column) => row[column]) as never[]),
+      );
+    };
+    const insertReceipt = (receivedAt: string, windowEndsAt: string, contract = binding) => {
+      n += 1;
+      h.db.raw.prepare(
+        `INSERT INTO production_cancellation_window_receipts (
+           receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+           acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
+           recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Synthetic direct record.', 'fixture://copy', ?, 'owner',
+                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+      ).run(
+        `pcw_${String(n).padStart(40, "0")}`, TENANT, JOB_ID, receivedAt, windowEndsAt, ZONE,
+        contract.acceptance_binding_id, contract.accepted_at, OWNER_ID, "a".repeat(64), String(n).padStart(64, "0"),
+      );
+    };
+    const now = () => new Date(d1Now(h.db.raw)).toISOString();
+
+    // The copy is of this contract, exactly as its binding holds it, shown now by D1's clock.
+    assert.throws(() => insertEvent({ acceptance_binding_id: "commercial-acceptance:other" }), /contract_signed_copy_event_binding_invalid/);
+    assert.throws(() => insertEvent({ roof_job_id: "job:acceptance:other" }), /contract_signed_copy_event_binding_invalid/);
+    assert.throws(
+      () => insertEvent({ contract_signed_at: new Date(Date.parse(binding.accepted_at) + 1).toISOString() }),
+      /contract_signed_copy_event_binding_invalid/,
+    );
+    assert.throws(() => insertEvent({ shown_at: plusHours(now(), -24) }), /contract_signed_copy_event_shown_at_invalid/);
+    const shownAt = now();
+    assert.throws(
+      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 240)) - 1).toISOString() }),
+      /contract_signed_copy_event_end_invalid/,
+    );
+    assert.throws(
+      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 241)) + 1).toISOString() }),
+      /contract_signed_copy_event_end_invalid/,
+    );
+    assert.equal(count(h, "contract_signed_copy_events"), 0);
+
+    // A person's record half an hour ago, ending at its 241st hour: an event ending before that
+    // end is refused, and one at its own 241st hour is written.
+    const receivedAt = plusHours(now(), -0.5);
+    insertReceipt(receivedAt, plusHours(receivedAt, 241));
+    assert.throws(() => insertEvent(), /contract_signed_copy_event_end_invalid/);
+    const firstShown = now();
+    insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 241) });
+    const [event] = shownEvents(h);
+    assert.ok(event);
+    // One event per contract; it is never updated or deleted.
+    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 241) }), /contract_signed_copy_event_append_only/);
+    assert.throws(
+      () => h.db.raw.prepare("UPDATE contract_signed_copy_events SET time_zone = 'UTC' WHERE event_id = ?").run(event.event_id),
+      /contract_signed_copy_event_append_only/,
+    );
+    assert.throws(
+      () => h.db.raw.prepare("DELETE FROM contract_signed_copy_events WHERE event_id = ?").run(event.event_id),
+      /contract_signed_copy_event_append_only/,
+    );
+
+    // A record at the copy's own time changes nothing, and one after it never ends sooner.
+    assert.throws(() => insertReceipt(event.shown_at, plusHours(event.shown_at, 240)), /cancellation_window_receipt_unchanged/);
+    while (d1Now(h.db.raw) <= Date.parse(event.shown_at)) {
+      // Wait out the millisecond the copy was shown in.
+    }
+    const later = now();
+    // Ending after the earlier record's end but before the copy's end: only the copy refuses it.
+    assert.throws(() => insertReceipt(later, plusHours(later, 240.75)), /cancellation_window_receipt_end_invalid/);
+
+    // A later contract's copy never ends before the earlier copy's end either: here only the copy,
+    // not the record, ends after it.
+    await inThePast(0.5, () => publishCorrectedContract(h, OD01_TERMS));
+    const second = await inThePast(0.5, () => accept(h, portalToken, "acceptance-a5-direct-0002"));
+    assert.equal(second.status, 200);
+    const secondBinding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    const secondShown = now();
+    assert.throws(
+      () => insertEvent({
+        acceptance_binding_id: secondBinding.acceptance_binding_id,
+        contract_signed_at: secondBinding.accepted_at,
+        shown_at: secondShown,
+        window_ends_at: plusHours(secondShown, 240.75),
+      }),
+      /contract_signed_copy_event_end_invalid/,
+    );
+    insertEvent({
+      acceptance_binding_id: secondBinding.acceptance_binding_id,
+      contract_signed_at: secondBinding.accepted_at,
+      shown_at: secondShown,
+      window_ends_at: event.window_ends_at,
+    });
+    assert.equal(count(h, "contract_signed_copy_events"), 2);
+    // A record after both copies keeps their end.
+    while (d1Now(h.db.raw) <= Date.parse(secondShown)) {
+      // Wait out the millisecond the second copy was shown in.
+    }
+    insertReceipt(now(), event.window_ends_at, secondBinding);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 2);
+  } finally {
+    h.restore();
+  }
+});
+
+const WINDOW_PREFLIGHT = readFileSync(new URL("../../tools/cancellation-window-preflight.sql", import.meta.url), "utf8");
+
+test("the cancellation window pre-flight counts the open signed jobs, in D1 or outside it, and no other", async () => {
+  // It runs before 0160: the chain stops at 0159.
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of readdirSync(new URL("../migrations/", import.meta.url))
+      .filter((value) => /^\d{4}_.+\.sql$/.test(value) && value < "0160")
+      .sort()) {
+      db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+    }
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'production_cancellation_window_receipts'").get() as { n: number }).n,
+      0,
+    );
+    assert.deepEqual(db.prepare(WINDOW_PREFLIGHT).all(), []);
+  } finally {
+    db.close();
+  }
+
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    const preflightRows = () => h.db.raw.prepare(WINDOW_PREFLIGHT).all().map((row) => ({ ...row }));
+    seedGates(h);
+    // Not signed: no contract and Deposit blocked.
+    assert.deepEqual(preflightRows(), []);
+    const portalToken = await seedPortalLink(h.db);
+    assert.equal((await accept(h, portalToken, "acceptance-a5-preflight-0001")).status, 200);
+    assert.deepEqual(preflightRows(), [{ tenant_id: TENANT, open_signed_jobs: 1, with_d1_contract: 1, signed_outside_d1: 0 }]);
+    // A job signed outside D1: no contract, but its Deposit has cleared.
+    seedSecondJob(h, "job:acceptance:imported");
+    const now = new Date(Date.now() - 120_000).toISOString();
+    for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) {
+      h.db.raw.prepare(
+        `INSERT INTO operating_production_gates
+           (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, owner_user, assigned_at,
+            due_at, blocker_reason, created_at, updated_at)
+         VALUES (?, ?, 'job:acceptance:imported', ?, ?, 'worker', ?, ?, 'Imported.', ?, ?)`,
+      ).run(`gate:imported:${gate.toLowerCase()}`, TENANT, ENVELOPE_ID, gate, now, now, now, now);
+    }
+    assert.deepEqual(preflightRows(), [{ tenant_id: TENANT, open_signed_jobs: 1, with_d1_contract: 1, signed_outside_d1: 0 }]);
+    waiveGateInLedger(h.db.raw, {
+      tenantId: TENANT, roofJobId: "job:acceptance:imported", gate: "Deposit", ownerUserId: OWNER_ID,
+    });
+    assert.deepEqual(preflightRows(), [{ tenant_id: TENANT, open_signed_jobs: 2, with_d1_contract: 1, signed_outside_d1: 1 }]);
+    // A job no longer open is not counted.
+    h.db.raw.prepare(
+      `UPDATE operating_roof_jobs SET job_status = 'cancelled', version = version + 1, updated_at = ?
+        WHERE tenant_id = ? AND roof_job_id = ?`,
+    ).run(new Date().toISOString(), TENANT, "job:acceptance:imported");
+    assert.deepEqual(preflightRows(), [{ tenant_id: TENANT, open_signed_jobs: 1, with_d1_contract: 1, signed_outside_d1: 0 }]);
   } finally {
     h.restore();
   }

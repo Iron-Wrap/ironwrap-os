@@ -59,9 +59,9 @@ export async function safetyStopActive(
 
 /**
  * The oldest active safety stop that names a job this tenant does not have (0158), or null. It may
- * be a typo for any job, so it holds Safety on every job of the tenant until it is lifted; the
- * refusal names the stop, and the owner's exception list shows it, so a person opens it and fixes
- * which job it is for. A stop is always recorded: nothing refuses it when it is raised.
+ * be a typo for any job, so it holds Safety on every job of the tenant until it is lifted. The
+ * refusal names the stop (`stop_id`), and the owner's exception list shows it. A stop is always
+ * recorded: nothing refuses it when it is raised.
  */
 export async function unknownJobStop(env: AppEnv, tenantId: string): Promise<string | null> {
   const row = await env.DB.prepare(

@@ -472,9 +472,10 @@ describe("TeamPage", () => {
     });
     expect(later).toBeDisabled();
     expect(later).toHaveAttribute("data-variant", "secondary");
+    // The removal unpaired a crew phone, but Save leaves her off Crew, so the line asks for none.
     expect(
       paragraph(
-        "Give Grace access back: they can sign in again with the access they had (Sales); a crew phone must be paired again. Then save to add your change: their role changes from Sales to Production.",
+        "Give Grace access back: it returns the access they had (Sales) right away. Then save to add your change: their role moves from Sales to Production. You don’t need to wait for them to sign in.",
       ),
     ).toBeInTheDocument();
 
@@ -499,6 +500,36 @@ describe("TeamPage", () => {
       active: true,
       expectedAccessVersion: 3,
     });
+  });
+
+  it("5 · when Save makes them Crew, the give-back line asks for the crew phone a removal unpaired", async () => {
+    // An earlier removal unpaired Grace's crew phone and none has been paired since.
+    const before = { role: "production", crew_phone_unpaired: true } as const;
+    vi.mocked(listAppUsers)
+      .mockResolvedValueOnce(people(ada, grace(before)) as never)
+      .mockResolvedValueOnce(
+        people(ada, grace({ ...before, active: false, access_version: 2 })) as never,
+      );
+    vi.mocked(provisionAppUser).mockRejectedValueOnce(
+      refused({
+        change: {
+          before: { role: "production", active: true },
+          after: { role: "production", active: false },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    await openGrace(user);
+    await user.click(screen.getByRole("radio", { name: /^Crew/ }));
+    await user.click(screen.getByRole("button", { name: "Save Grace’s access" }));
+    await user.click(await screen.findByRole("button", { name: "Reload Grace’s access" }));
+
+    expect(await screen.findByRole("button", { name: "Give Grace access back" })).toBeEnabled();
+    expect(
+      paragraph(
+        "Give Grace access back: it returns the access they had (Production) right away; a crew phone must be paired again. Then save to add your change: their role moves from Production to Crew. You don’t need to wait for them to sign in.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("a give-back refused because they have access again says so, and the held role change waits for Save", async () => {

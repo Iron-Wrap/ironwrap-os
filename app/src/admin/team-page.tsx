@@ -35,6 +35,7 @@ import {
   changedElsewhere,
   conflictLine,
   firstName,
+  giveBackThenSave,
   saveAfterAccessBack,
   whatTheChangeDoes,
 } from "./team-access-copy";
@@ -687,8 +688,7 @@ function AccessPanel({
           </Button>
         </div>
         <EditLine lead={`Give ${first} access back:`}>
-          {hadAccess} Then save to add your change:{" "}
-          {whatTheChangeDoes("their", person.role, pendingRole)}.
+          {giveBackThenSave(person.role, pendingRole, person.crew_phone_unpaired)}
         </EditLine>
       </>
     ) : (

@@ -335,6 +335,11 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await expect(
       page.getByRole("button", { name: "Save Sam’s access · after their access is back" }),
     ).toBeDisabled();
+    await expect(
+      page.getByText(
+        "Give Sam access back: it returns the access they had (Sales) right away. Then save to add your change: their role moves from Sales to Accounting. You don’t need to wait for them to sign in.",
+      ),
+    ).toBeVisible();
     await assertNoHorizontalScroll(page, "cannot apply");
     await assertActionsAreReachable(page, "cannot apply");
     await assertAxeClean(page);

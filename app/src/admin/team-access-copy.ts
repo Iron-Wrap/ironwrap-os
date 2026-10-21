@@ -54,8 +54,9 @@ export function whatIsDifferentNow(before: AccessState, after: AccessState): str
 }
 
 /**
- * {what the change does} for a pending role choice. `whose` opens the clause: the first name with
- * its possessive ("Grace’s") where the clause starts a sentence's point, "their" inside one.
+ * {what the change does} for a pending role choice, in the pending and next-to-Save lines. `whose`
+ * opens the clause: the first name with its possessive ("Grace’s"). Frame 5's give-back line says
+ * it its own way ({@link giveBackThenSave}).
  */
 export function whatTheChangeDoes(whose: string, saved: AppRole, pending: AppRole): string {
   return `${whose} role changes from ${roleLabel(saved)} to ${roleLabel(pending)}`;
@@ -151,9 +152,26 @@ export const REMOVING_EXPLAINS =
 
 /**
  * In the "Give {First} access back:" line, after "the access they had ({Role})", only when removing
- * their access unpaired a crew phone (`crew_phone_unpaired`).
+ * their access unpaired a crew phone (`crew_phone_unpaired`); on frame 5, also only when their role
+ * after Save is Crew.
  */
 export const PAIR_AGAIN = "a crew phone must be paired again";
+
+/**
+ * Frame 5's line after the "Give {First} access back:" lead (the lead's ruling for #13): giving
+ * access back returns it at once, and the held role change then needs only Save, not their next
+ * sign-in. The crew-phone clause shows only when removing them unpaired a crew phone and their role
+ * after Save is Crew: only the field role pairs a phone, so once Save moves them off Crew it stops
+ * mattering. "moves from" is this line's alone; the other lines say "changes from".
+ */
+export function giveBackThenSave(
+  had: AppRole,
+  pending: AppRole,
+  crewPhoneUnpaired: boolean,
+): string {
+  const phone = crewPhoneUnpaired && pending === "field" ? `; ${PAIR_AGAIN}` : "";
+  return `it returns the access they had (${roleLabel(had)}) right away${phone}. Then save to add your change: their role moves from ${roleLabel(had)} to ${roleLabel(pending)}. You don’t need to wait for them to sign in.`;
+}
 
 /** Adding an address already on the list (or added by someone else a moment ago), Track B's line. */
 export function alreadyOnTeam(email: string): string {

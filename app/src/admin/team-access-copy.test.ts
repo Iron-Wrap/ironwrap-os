@@ -9,6 +9,7 @@ import {
   changedElsewhere,
   conflictLine,
   firstName,
+  giveBackThenSave,
   whatIsDifferentNow,
   whatTheChangeDoes,
   whenChanged,
@@ -177,5 +178,20 @@ describe("the derived access-conflict phrases", () => {
 
   it("label frame 5's waiting Save by their access coming back, not by them signing in", () => {
     expect(saveAfterAccessBack("Grace")).toBe("Save Grace’s access · after their access is back");
+  });
+
+  it("give access back right away on frame 5, and ask for a crew phone only when Save keeps them Crew", () => {
+    // Removing Tom unpaired his crew phone, but Save moves him off Crew: no phone to pair.
+    expect(`Give Tom access back: ${giveBackThenSave("field", "production", true)}`).toBe(
+      "Give Tom access back: it returns the access they had (Crew) right away. Then save to add your change: their role moves from Crew to Production. You don’t need to wait for them to sign in.",
+    );
+    // A crew phone a removal unpaired, and Save makes them Crew: it must be paired again.
+    expect(`Give Ray access back: ${giveBackThenSave("production", "field", true)}`).toBe(
+      "Give Ray access back: it returns the access they had (Production) right away; a crew phone must be paired again. Then save to add your change: their role moves from Production to Crew. You don’t need to wait for them to sign in.",
+    );
+    // No crew phone was unpaired: no clause, even when Save makes them Crew.
+    expect(`Give Grace access back: ${giveBackThenSave("sales", "field", false)}`).toBe(
+      "Give Grace access back: it returns the access they had (Sales) right away. Then save to add your change: their role moves from Sales to Crew. You don’t need to wait for them to sign in.",
+    );
   });
 });

@@ -515,7 +515,6 @@ export async function recordSafetyResponse(
       "A safety command needs a detail of 3 to 4000 characters.",
     );
   }
-  assertEvidence(input.evidence);
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
   requireRole(
     actor,

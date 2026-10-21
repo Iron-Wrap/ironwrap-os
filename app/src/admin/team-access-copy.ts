@@ -142,9 +142,14 @@ export const MAY_BE_OUT_OF_DATE = "may be out of date";
 export const OUT_OF_DATE_NOTE =
   "Values marked “may be out of date” update when their access reloads.";
 
+/**
+ * Where a crew phone is paired, at the end of every phone clause (Track B's ruling for #13). The
+ * non-breaking spaces keep "Settings › Crew phones" on one line; a line may still break before it.
+ */
+const CREW_PHONES_PAGE = "Settings\u00a0›\u00a0Crew\u00a0phones";
+
 /** Under Remove on frames 1 and 3, after the "Remove {First} from the team:" lead. */
-export const REMOVE_EXPLAINS =
-  "signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.";
+export const REMOVE_EXPLAINS = `signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again in ${CREW_PHONES_PAGE}.`;
 
 /** Frame 4, after the reload's line: what the held remove will do. */
 export const REMOVING_EXPLAINS =
@@ -158,7 +163,7 @@ export const REMOVING_EXPLAINS =
  */
 function pairAgain(role: AppRole, crewPhoneUnpaired: boolean, afterSave = false): string {
   if (!crewPhoneUnpaired || role !== "field") return "";
-  return `; a crew phone must ${afterSave ? "then " : ""}be paired again in Settings › Crew phones`;
+  return `; a crew phone must ${afterSave ? "then " : ""}be paired again in ${CREW_PHONES_PAGE}`;
 }
 
 /**

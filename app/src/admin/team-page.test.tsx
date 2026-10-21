@@ -191,7 +191,7 @@ describe("TeamPage", () => {
     // Pending Track B's re-gate (build 9): what removing does, under the buttons.
     expect(
       paragraph(
-        "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.",
+        "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again in Settings\u00a0›\u00a0Crew\u00a0phones.",
       ),
     ).toBeInTheDocument();
 
@@ -408,7 +408,7 @@ describe("TeamPage", () => {
     expect(paragraph("Your change: remove Grace from the team. Not saved.")).toBeInTheDocument();
     expect(
       paragraph(
-        "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again.",
+        "Remove Grace from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again in Settings\u00a0›\u00a0Crew\u00a0phones.",
       ),
     ).toBeInTheDocument();
     await user.click(remove);
@@ -527,7 +527,7 @@ describe("TeamPage", () => {
     expect(await screen.findByRole("button", { name: "Give Grace access back" })).toBeEnabled();
     expect(
       paragraph(
-        "Give Grace access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must then be paired again in Settings › Crew phones. You don’t need to wait for them to sign in.",
+        "Give Grace access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must then be paired again in Settings\u00a0›\u00a0Crew\u00a0phones. You don’t need to wait for them to sign in.",
       ),
     ).toBeInTheDocument();
   });
@@ -724,7 +724,7 @@ describe("TeamPage", () => {
   it.each([
     [
       "field",
-      "Give Grace access back: it returns the access they had (Crew) right away; a crew phone must be paired again in Settings › Crew phones.",
+      "Give Grace access back: it returns the access they had (Crew) right away; a crew phone must be paired again in Settings\u00a0›\u00a0Crew\u00a0phones.",
     ],
     ["sales", "Give Grace access back: it returns the access they had (Sales) right away."],
   ] as const)(

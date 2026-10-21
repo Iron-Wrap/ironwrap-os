@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AccessConflict } from "./admin-contracts";
 import {
   ALREADY_ON_TEAM_NEXT,
+  REMOVE_EXPLAINS,
   alreadyOnTeam,
   cannotApplyLine,
   saveAfterAccessBack,
@@ -189,7 +190,7 @@ describe("the derived access-conflict phrases", () => {
     // A crew phone a removal unpaired, and Save makes them Crew: the clause follows the save
     // sentence, because it belongs to the role after Save.
     expect(`Give Ray access back: ${giveBackThenSave("production", "field", true)}`).toBe(
-      "Give Ray access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must then be paired again in Settings › Crew phones. You don’t need to wait for them to sign in.",
+      "Give Ray access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must then be paired again in Settings\u00a0›\u00a0Crew\u00a0phones. You don’t need to wait for them to sign in.",
     );
     // No crew phone was unpaired: no clause, even when Save makes them Crew.
     expect(`Give Grace access back: ${giveBackThenSave("sales", "field", false)}`).toBe(
@@ -200,7 +201,7 @@ describe("the derived access-conflict phrases", () => {
   it("give access back with nothing held in the same words, asking for a crew phone only when Crew comes back", () => {
     // Crew restored, and the removal unpaired their crew phone.
     expect(`Give Tom access back: ${giveBack("field", true)}`).toBe(
-      "Give Tom access back: it returns the access they had (Crew) right away; a crew phone must be paired again in Settings › Crew phones.",
+      "Give Tom access back: it returns the access they had (Crew) right away; a crew phone must be paired again in Settings\u00a0›\u00a0Crew\u00a0phones.",
     );
     // Another role restored: the unpaired phone belongs to a Crew role they do not get back.
     expect(`Give Grace access back: ${giveBack("sales", true)}`).toBe(
@@ -210,5 +211,21 @@ describe("the derived access-conflict phrases", () => {
     expect(`Give Ray access back: ${giveBack("field", false)}`).toBe(
       "Give Ray access back: it returns the access they had (Crew) right away.",
     );
+  });
+
+  it("point every crew-phone clause to Settings › Crew phones, which never breaks across lines", () => {
+    expect(`Remove Tom from the team: ${REMOVE_EXPLAINS}`).toBe(
+      "Remove Tom from the team: signs them out everywhere and unpairs any crew phone they use. Giving them access back undoes it; a crew phone must then be paired again in Settings\u00a0›\u00a0Crew\u00a0phones.",
+    );
+    const clauses = [
+      REMOVE_EXPLAINS,
+      giveBack("field", true),
+      giveBackThenSave("production", "field", true),
+    ];
+    for (const line of clauses) {
+      expect(line).toContain("in Settings\u00a0›\u00a0Crew\u00a0phones");
+      // An ordinary space anywhere in the place's name would let a line break inside it.
+      expect(line).not.toMatch(/Settings ›|› Crew|Crew phones/);
+    }
   });
 });

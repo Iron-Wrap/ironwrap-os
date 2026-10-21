@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import { SCHEDULING_GATES } from "./production-gate-ledger-fixture.ts";
+import { endCancellationWindow, SCHEDULING_GATES } from "./production-gate-ledger-fixture.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities.
 const TENANT = "ironwrap";
@@ -122,6 +122,9 @@ function ledger(): DatabaseSync {
   insertUser(db, SEED_OWNER, "owner", "owner", SEED_CREATED_BY);
   seedJob(db);
   for (const gate of SCHEDULING_GATES) insertGate(db, gate);
+  // The OD-01 cancellation window holds every `clear` on Materials until it ends (0160). It ended
+  // here, so each rule below answers by its own code.
+  endCancellationWindow(db, { tenantId: TENANT, roofJobId: JOB });
   return db;
 }
 
@@ -817,6 +820,7 @@ test("both D1 recovery inventories carry the ledger, its index and every guard",
       "trigger:production_gate_clearances_append_only_delete",
       "trigger:production_gate_clearances_append_only_update",
       "trigger:production_gate_clearances_apply",
+      "trigger:production_gate_clearances_cancellation_window_hold",
       "trigger:production_gate_clearances_no_insert_replace",
       "trigger:production_gate_clearances_validate_insert",
     ],

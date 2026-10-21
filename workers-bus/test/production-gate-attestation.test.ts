@@ -39,6 +39,7 @@ import {
   SITE_SAFETY_AUTHORITY_SCOPE,
 } from "../src/production-gate-clearance.ts";
 import { recordMakeSafe, recordSafetyResponse, reportSafetyOccurrence } from "../src/safety-lifecycle.ts";
+import { endCancellationWindow } from "./production-gate-ledger-fixture.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times. D1 checks
 // every time rule against its own clock, so the fixtures are relative to the real one.
@@ -183,6 +184,10 @@ function setup(): Harness {
   }
   seedJob(db.sqlite, JOB, "0001");
   seedJob(db.sqlite, OTHER_JOB, "0002");
+  // The customers received their signed copies eleven days ago, so the OD-01 cancellation window,
+  // which holds Materials (0160), has ended on both jobs.
+  endCancellationWindow(db.sqlite, { tenantId: TENANT, roofJobId: JOB });
+  endCancellationWindow(db.sqlite, { tenantId: TENANT, roofJobId: OTHER_JOB });
   db.sqlite.prepare(
     `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
      VALUES ('crew:attest:0001', ?, 'Attest Crew', 'Active', 1, ?, ?)`,

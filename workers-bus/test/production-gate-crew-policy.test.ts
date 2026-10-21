@@ -1113,6 +1113,8 @@ test("0159 re-creates 0153's replace guard and 0098's validate trigger unchanged
       "operating_job_assignments_append_only_update",
       "operating_job_assignments_append_only_delete",
       "operating_job_assignments_gate_evidence_guard",
+      // 0160's cancellation window hold, after which 0160 re-creates 0098's trigger once more.
+      "operating_job_assignments_cancellation_window_hold",
       "operating_job_assignments_validate_insert",
     ],
   );

@@ -2285,9 +2285,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // a person record whether an unconfirmed proposal send reached the customer. 0158 lets a
     // person attest Materials, Safety, Access and Weather and reverse a gate entry, all through the
     // gate ledger. 0159 binds Crew by policy when a job is scheduled and holds the schedule to the
-    // gate evidence as it stands when it is written.
+    // gate evidence as it stands when it is written. 0160 holds a firm start, the Materials
+    // attestation and a job's purchase order lines while the OD-01 cancellation window is unknown
+    // or open, and records when the customer received the signed copy.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 139);
+    assert.equal(migrations.length, 140);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2442,10 +2444,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // effect binding guard under its name. 0158 re-creates the gate ledger's validate and replace
     // guards under their names, so counts are unchanged. 0159 adds the schedule's gate evidence
     // guard and re-creates the gate ledger's validate and replace guards and 0098's assignment
-    // validate trigger under their names: one trigger more.
+    // validate trigger under their names: one trigger more. 0160 adds the signed-copy event and
+    // cancellation-window record tables with four guards each (validate, audit, two append-only),
+    // the window's holds on schedules, Materials clears and purchase order lines (four triggers)
+    // and the lines' job link column; it re-creates 0098's assignment validate trigger and 0153's
+    // replace guard under their names: two tables and twelve triggers more, no named index.
     assert.deepEqual(
       { ...counts },
-      { tables: 277, indexes: 379, triggers: 761 },
+      { tables: 279, indexes: 379, triggers: 773 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3783,14 +3789,16 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155, 0158 and 0159 applied after 0156 and 0200-0205 on a database already through them give the sorted schema", async () => {
-  // qa and production applied 0156 and 0200-0205 first, so they receive 0155, 0158 and then 0159
-  // after them. 0158 re-creates the validate guard 0155 re-creates, and 0159 re-creates it once
-  // more and 0098's assignment validate trigger, so each must land after the one before it.
+test("0155, 0158, 0159 and 0160 applied after 0156 and 0200-0205 on a database already through them give the sorted schema", async () => {
+  // qa and production applied 0156 and 0200-0205 first, so they receive 0155, 0158, 0159 and then
+  // 0160 after them. 0158 re-creates the validate guard 0155 re-creates, 0159 re-creates it once
+  // more and 0098's assignment validate trigger, and 0160 re-creates that trigger and 0153's replace
+  // guard again, so each must land after the one before it.
   const late = [
     "0155_od01_deposit_policy.sql",
     "0158_production_gate_attestations.sql",
     "0159_production_gate_crew_policy.sql",
+    "0160_production_cancellation_window.sql",
   ];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));

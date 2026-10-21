@@ -2968,6 +2968,21 @@ function readyToSchedule(h: Harness): (key: string) => Promise<unknown> {
   };
 }
 
+/**
+ * Run `act` with the Worker's clock `days` days behind D1's, so a contract signed in it was signed
+ * that long ago. Its OD-01 cancellation window (0160) can then have ended, by D1's clock, by the
+ * time the job is scheduled: a person records that the customer received the signed copy eleven
+ * days ago (`attestGateInLedger` on Materials does it for the fixture).
+ */
+async function inThePast<T>(days: number, act: () => Promise<T>): Promise<T> {
+  mock.timers.enable({ apis: ["Date"], now: Date.now() - days * 24 * 60 * 60_000 });
+  try {
+    return await act();
+  } finally {
+    mock.timers.reset();
+  }
+}
+
 async function refusedSchedule(action: Promise<unknown>, code: string): Promise<void> {
   await assert.rejects(action, (error: unknown) => {
     const message = error instanceof OperatingJobAssignmentError ? error.code : String((error as Error).message);
@@ -2977,11 +2992,12 @@ async function refusedSchedule(action: Promise<unknown>, code: string): Promise<
 }
 
 test("no schedule rests on a contract with no deposit once a later contract with a deposit is signed, before or after the policy re-blocks Deposit", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // The contracts were signed weeks ago, so their cancellation windows have ended (0160).
+  const h = await inThePast(40, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
   try {
     seedGates(h);
-    const portalToken = await seedPortalLink(h.db);
-    const first = await accept(h, portalToken, "acceptance-od01-schedule-0001");
+    const portalToken = await inThePast(40, () => seedPortalLink(h.db));
+    const first = await inThePast(40, () => accept(h, portalToken, "acceptance-od01-schedule-0001"));
     assert.equal(first.status, 200, await first.clone().text());
     assert.equal(depositEntries(h)[0]!.basis, "contract_no_deposit");
     const schedule = readyToSchedule(h);
@@ -2990,9 +3006,9 @@ test("no schedule rests on a contract with no deposit once a later contract with
     // MD-13's input arrives and the customer signs a contract with a deposit. The policy's
     // reversal does not land after that commit, so Deposit still stands on the first contract.
     recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
-    await publishCorrectedContract(h, TERMS);
+    await inThePast(20, () => publishCorrectedContract(h, TERMS));
     h.db.failNextLedgerAppend = true;
-    const second = await accept(h, portalToken, "acceptance-md13-schedule-0001");
+    const second = await inThePast(20, () => accept(h, portalToken, "acceptance-md13-schedule-0001"));
     assert.equal(second.status, 200, await second.clone().text());
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
     await refusedSchedule(schedule("schedule-acceptance-0002"), "operating_job_assignment_deposit_contract_superseded");
@@ -3030,18 +3046,19 @@ test("no schedule rests on a contract with no deposit once a later contract with
 });
 
 test("a later contract that again has no deposit leaves Deposit standing, and the job schedules", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // The contracts were signed weeks ago, so their cancellation windows have ended (0160).
+  const h = await inThePast(40, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
   try {
     seedGates(h);
-    const portalToken = await seedPortalLink(h.db);
-    const first = await accept(h, portalToken, "acceptance-od01-again-0001");
+    const portalToken = await inThePast(40, () => seedPortalLink(h.db));
+    const first = await inThePast(40, () => accept(h, portalToken, "acceptance-od01-again-0001"));
     assert.equal(first.status, 200, await first.clone().text());
     const schedule = readyToSchedule(h);
     await schedule("schedule-acceptance-again-0001");
     // A corrected contract with no deposit either: the policy never re-binds one contract with no
     // deposit to another, so refusing here would leave the job with no way to schedule.
-    await publishCorrectedContract(h, OD01_TERMS);
-    const second = await accept(h, portalToken, "acceptance-od01-again-0002");
+    await inThePast(20, () => publishCorrectedContract(h, OD01_TERMS));
+    const second = await inThePast(20, () => accept(h, portalToken, "acceptance-od01-again-0002"));
     assert.equal(second.status, 200, await second.clone().text());
     assert.equal(depositEntries(h).length, 1);
     assert.equal(depositGate(h).state, "complete");
@@ -3056,20 +3073,21 @@ test("a later contract that again has no deposit leaves Deposit standing, and th
 });
 
 test("only the job's latest contract counts: a deposit contract superseded in turn by one with no deposit leaves the job schedulable", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // The contracts were signed weeks ago, so their cancellation windows have ended (0160).
+  const h = await inThePast(40, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
   try {
     seedGates(h);
-    const portalToken = await seedPortalLink(h.db);
-    const first = await accept(h, portalToken, "acceptance-od01-latest-0001");
+    const portalToken = await inThePast(40, () => seedPortalLink(h.db));
+    const first = await inThePast(40, () => accept(h, portalToken, "acceptance-od01-latest-0001"));
     assert.equal(first.status, 200, await first.clone().text());
     const schedule = readyToSchedule(h);
     await schedule("schedule-acceptance-latest-0001");
 
     // A deposit contract under MD-13 whose policy reversal never lands...
     recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
-    await publishCorrectedContract(h, TERMS);
+    await inThePast(30, () => publishCorrectedContract(h, TERMS));
     h.db.failNextLedgerAppend = true;
-    const second = await accept(h, portalToken, "acceptance-md13-latest-0001");
+    const second = await inThePast(30, () => accept(h, portalToken, "acceptance-md13-latest-0001"));
     assert.equal(second.status, 200, await second.clone().text());
     await refusedSchedule(schedule("schedule-acceptance-latest-0002"), "operating_job_assignment_deposit_contract_superseded");
 
@@ -3077,8 +3095,8 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
     // contract, so nothing will ever reverse the first contract's entry: refusing here would hold
     // the job forever.
     recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "od01_payment_on_completion" });
-    await publishCorrectedContract(h, OD01_TERMS, 3);
-    const third = await accept(h, portalToken, "acceptance-od01-latest-0002");
+    await inThePast(20, () => publishCorrectedContract(h, OD01_TERMS, 3));
+    const third = await inThePast(20, () => accept(h, portalToken, "acceptance-od01-latest-0002"));
     assert.equal(third.status, 200, await third.clone().text());
     assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });

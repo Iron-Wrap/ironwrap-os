@@ -2,7 +2,9 @@
 //
 // The database is the full migration chain and the commercial chain is recorded through the real
 // permit, effect and ledger code, so every 0163 guard runs against the deployed schema. Nothing
-// here mocks the clock: the guard compares `first_viewed_at` with D1's own clock.
+// here mocks the clock: the guards compare `first_viewed_at` with D1's own clock. Portal requests
+// are built the way the app builds them (app/src/portal/portal-api.ts): credentials omitted, so a
+// request never carries the office cookie.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -10,7 +12,6 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { mock, test } from "node:test";
 
 import worker from "../src/index.ts";
-import { randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AuthContext } from "../src/app-types.ts";
 import {
   admitCommercialPermit,
@@ -29,10 +30,10 @@ import {
 } from "../src/commercial-store.ts";
 import { handleCustomerPortalLinks } from "../src/customer-portal.ts";
 import {
+  pruneCustomerPortalProposalViews,
   pruneCustomerPortalRecords,
-  readProposalFirstViewedAt,
 } from "../src/customer-portal-store.ts";
-import { proposeExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
+import { runExternalEffect } from "../src/effect-runtime.ts";
 
 const TENANT = "ironwrap";
 const ORIGIN = "https://app.example.com";
@@ -430,33 +431,53 @@ async function issueLink(env: TestEnv): Promise<{ token: string; linkId: string 
   return { token, linkId: body.link.id };
 }
 
-async function open(
-  env: TestEnv,
-  token: string,
-  device = CUSTOMER,
-  cookie?: string,
-): Promise<Response> {
-  return await worker.fetch(
-    new Request(`${ORIGIN}/api/v1/customer-portal/resolve`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        origin: ORIGIN,
-        "cf-connecting-ip": device.ip,
-        "user-agent": device.userAgent,
-        ...(cookie ? { cookie } : {}),
+/** An ExecutionContext that keeps what the Worker hands to waitUntil, so a test can await it. */
+function executionContext() {
+  const pending: Promise<unknown>[] = [];
+  return {
+    ctx: {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
       },
-      body: JSON.stringify({ token }),
-    }),
-    env as never,
-    {} as never,
-  );
+      passThroughOnException() {},
+    },
+    pending,
+    settled: () => Promise.allSettled(pending),
+  };
 }
 
-async function openPortal(env: TestEnv, token: string, device = CUSTOMER, cookie?: string) {
-  const response = await open(env, token, device, cookie);
+/**
+ * The resolve request exactly as the app sends it: JSON, no cookie (credentials are omitted), and
+ * `staff_preview: true` only when the app knows an office sign-in is live in that browser. The
+ * address and the user agent are what the browser and Cloudflare add.
+ */
+function resolveRequest(token: string, options: { device?: { ip: string; userAgent: string }; staffPreview?: boolean } = {}) {
+  const device = options.device ?? CUSTOMER;
+  return new Request(`${ORIGIN}/api/v1/customer-portal/resolve`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      origin: ORIGIN,
+      "cf-connecting-ip": device.ip,
+      "user-agent": device.userAgent,
+    },
+    body: JSON.stringify(options.staffPreview ? { token, staff_preview: true } : { token }),
+  });
+}
+
+/** Open the page and wait for whatever the Worker left running after the response. */
+async function openPortal(
+  env: TestEnv,
+  token: string,
+  options: { device?: { ip: string; userAgent: string }; staffPreview?: boolean } = {},
+) {
+  const run = executionContext();
+  const response = await worker.fetch(resolveRequest(token, options), env as never, run.ctx as never);
   assert.equal(response.status, 200, await response.clone().text());
-  return (await response.json()) as { proposal: unknown; read_model_generated_at: string };
+  const model = (await response.json()) as { proposal: unknown; read_model_generated_at: string };
+  await run.settled();
+  return model;
 }
 
 function views(db: SqliteD1): Array<Record<string, string>> {
@@ -595,15 +616,6 @@ test("only the first open of a published proposal through a link is kept", async
     const second = await issueLink(h.env);
     await openPortal(h.env, second.token);
     assert.deepEqual(views(h.db).map((view) => view.link_id), [first.linkId, second.linkId]);
-    assert.equal(
-      await readProposalFirstViewedAt(h.env, {
-        tenantId: TENANT,
-        proposalPackId: h.chain.proposalPackId,
-        proposalRevisionId: h.chain.proposalRevisionId,
-      }),
-      row!.first_viewed_at,
-      "the staff read gives the earliest open",
-    );
   } finally {
     logged.mock.restore();
     h.close();
@@ -623,40 +635,46 @@ test("no first open is recorded when the page shows no proposal", async () => {
   }
 });
 
-test("a request carrying a live staff session is not a customer's open", async () => {
+test("only a request the app sends without the staff flag, from another device, is a customer's open", async () => {
   const h = await setup();
   try {
     const { token } = await issueLink(h.env);
-    const sessionToken = randomToken();
-    h.db.raw
-      .prepare(
-        `INSERT INTO app_sessions
-           (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
-            created_ip_hash, created_user_agent_hash, device_id)
-         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
-      )
-      .run(
-        await sessionHashFor(h.env, sessionToken),
-        OWNER_ID,
-        TENANT,
-        new Date(Date.now() - 60_000).toISOString(),
-        new Date(Date.now() + 60 * 60_000).toISOString(),
-        new Date(Date.now() - 60_000).toISOString(),
-        "d".repeat(64),
-        "e".repeat(64),
-      );
-    const lastSeen = () =>
-      (h.db.raw.prepare("SELECT last_seen_at FROM app_sessions").get() as { last_seen_at: string }).last_seen_at;
-    const seenBefore = lastSeen();
-
-    const staffPage = await openPortal(h.env, token, CUSTOMER, `__Host-ironwrap_session=${sessionToken}`);
-    assert.ok(staffPage.proposal, "staff still see the page");
-    assert.deepEqual(views(h.db), []);
-    assert.equal(lastSeen(), seenBefore, "the check reads the session without touching it");
-
-    // A cookie that names no live session is not staff.
-    await openPortal(h.env, token, CUSTOMER, `__Host-ironwrap_session=${randomToken()}`);
+    // An office sign-in is live in the browser, so the app marks the request as a staff preview.
+    assert.ok((await openPortal(h.env, token, { staffPreview: true })).proposal, "staff still see the page");
+    assert.deepEqual(views(h.db), [], "staff_preview never records");
+    // No flag, but the device that issued the link.
+    assert.ok((await openPortal(h.env, token, { device: OFFICE })).proposal);
+    assert.deepEqual(views(h.db), [], "the issuer device never records");
+    // No flag and another device: the customer's open.
+    await openPortal(h.env, token);
     assert.equal(views(h.db).length, 1);
+  } finally {
+    h.close();
+  }
+});
+
+test("the resolve body takes the token and, at most, staff_preview: true", async () => {
+  const h = await setup();
+  try {
+    const { token } = await issueLink(h.env);
+    for (const body of [
+      { token, staff_preview: false },
+      { token, staff_preview: "true" },
+      { token, staff_preview: true, extra: 1 },
+      { token, viewed: true },
+    ]) {
+      const response = await worker.fetch(
+        new Request(`${ORIGIN}/api/v1/customer-portal/resolve`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: ORIGIN },
+          body: JSON.stringify(body),
+        }),
+        h.env as never,
+        executionContext().ctx as never,
+      );
+      assert.equal(response.status, 404, JSON.stringify(body));
+    }
+    assert.deepEqual(views(h.db), []);
   } finally {
     h.close();
   }
@@ -666,10 +684,10 @@ test("an open from the device that issued the link is not a customer's open", as
   const h = await setup();
   try {
     const { token } = await issueLink(h.env);
-    assert.ok((await openPortal(h.env, token, OFFICE)).proposal);
+    assert.ok((await openPortal(h.env, token, { device: OFFICE })).proposal);
     assert.deepEqual(views(h.db), []);
     // Both hashes must match: the same address with another browser counts.
-    await openPortal(h.env, token, { ip: OFFICE.ip, userAgent: CUSTOMER.userAgent });
+    await openPortal(h.env, token, { device: { ip: OFFICE.ip, userAgent: CUSTOMER.userAgent } });
     assert.equal(views(h.db).length, 1);
   } finally {
     h.close();
@@ -689,7 +707,8 @@ test("a revoked link opens nothing and records nothing", async () => {
       ownerAuth(),
     );
     assert.equal(revoked.status, 200);
-    assert.equal((await open(h.env, token)).status, 404);
+    const response = await worker.fetch(resolveRequest(token), h.env as never, executionContext().ctx as never);
+    assert.equal(response.status, 404);
     assert.deepEqual(views(h.db), []);
   } finally {
     h.close();
@@ -709,28 +728,55 @@ test("with the flag off or absent, an open records nothing", async () => {
   }
 });
 
-test("a failed first-open write never breaks the customer's page", async () => {
+test("the first-open write runs after the response, so a slow or failing write never touches the page", async () => {
   const h = await setup();
   const logged = mock.method(console, "log", () => {});
   try {
     const { token } = await issueLink(h.env);
     const expected = await openPortal({ ...h.env, APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED: "false" }, token);
-
-    // D1 failing on the write itself.
-    const failingDb = {
+    const sameModel = (model: { read_model_generated_at: string }) =>
+      assert.deepEqual({ ...model, read_model_generated_at: null }, { ...expected, read_model_generated_at: null });
+    const writing = (run: (statement: SqliteStatement) => Promise<unknown>) => ({
       prepare(sql: string) {
-        if (sql.includes("INSERT INTO customer_portal_proposal_views")) throw new Error("D1_ERROR: simulated outage");
-        return h.db.prepare(sql);
+        const statement = h.db.prepare(sql);
+        if (!sql.includes("INSERT INTO customer_portal_proposal_views")) return statement;
+        return { bind: (...args: unknown[]) => ({ run: () => run(statement.bind(...args)) }) };
       },
       batch: (statements: SqliteStatement[]) => h.db.batch(statements),
-    };
-    const page = await openPortal({ ...h.env, DB: failingDb as never }, token);
-    assert.deepEqual({ ...page, read_model_generated_at: null }, { ...expected, read_model_generated_at: null });
+    });
 
+    // A write that has not finished: the page is already served, and the row lands later.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = executionContext();
+    const response = await worker.fetch(
+      resolveRequest(token),
+      { ...h.env, DB: writing(async (statement) => {
+        await gate;
+        return await statement.run();
+      }) } as never,
+      slow.ctx as never,
+    );
+    assert.equal(response.status, 200);
+    sameModel((await response.json()) as { read_model_generated_at: string });
+    assert.equal(slow.pending.length, 1, "the write was handed to waitUntil");
+    assert.deepEqual(views(h.db), [], "the page did not wait for the write");
+    release();
+    await slow.settled();
+    assert.equal(views(h.db).length, 1);
+
+    // A write that fails: the page is the same, and the failure is logged.
+    const second = await issueLink(h.env);
+    sameModel(await openPortal({ ...h.env, DB: writing(async () => {
+      throw new Error("D1_ERROR: simulated outage");
+    }) } as never, second.token));
+    assert.equal(views(h.db).length, 1);
     // A database without 0163 at all.
     h.db.raw.exec("DROP TABLE customer_portal_proposal_views");
-    const withoutTable = await openPortal(h.env, token);
-    assert.deepEqual({ ...withoutTable, read_model_generated_at: null }, { ...expected, read_model_generated_at: null });
+    const third = await issueLink(h.env);
+    sameModel(await openPortal(h.env, third.token));
 
     const failures = logged.mock.calls
       .map((call) => {
@@ -851,7 +897,7 @@ test("D1 holds first_viewed_at to its own clock, within 60 seconds", async () =>
   }
 });
 
-test("first-open rows are append-only and REPLACE cannot rewrite them", async () => {
+test("first-open rows are never updated, and REPLACE cannot rewrite them", async () => {
   const h = await setup();
   try {
     const linkId = insertLink(h.db);
@@ -874,109 +920,186 @@ test("first-open rows are append-only and REPLACE cannot rewrite them", async ()
   }
 });
 
-test("the daily portal prune keeps a link that a first open names and never deletes the record", async () => {
+/**
+ * A row written before today's clock allows it: the open D1 would have accepted at `firstViewedAt`.
+ * The insert guard holds every new row to D1's own clock, so the test sets it aside for this one
+ * insert and restores the exact trigger D1 had.
+ */
+function insertHistoricView(db: SqliteD1, row: Record<(typeof VIEW_COLUMNS)[number], string>): void {
+  const guard = db.raw
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'customer_portal_proposal_views_validate_insert'")
+    .get() as { sql: string };
+  db.raw.exec("DROP TRIGGER customer_portal_proposal_views_validate_insert");
+  try {
+    insertView(db, row);
+  } finally {
+    db.raw.exec(guard.sql);
+  }
+}
+
+test("a first open younger than 3 years survives the retention prune and refuses a direct DELETE", async () => {
   const h = await setup();
   try {
-    const viewed = await issueLink(h.env);
-    await openPortal(h.env, viewed.token);
-    const unviewed = insertLink(h.db);
-    const recorded = views(h.db);
-    assert.equal(recorded.length, 1);
-
-    // Past the portal's one-year link window for both links.
-    await pruneCustomerPortalRecords(h.env, new Date(Date.now() + 2 * A_YEAR));
-    const links = (h.db.raw.prepare("SELECT link_id FROM customer_portal_links ORDER BY link_id").all() as Array<{ link_id: string }>)
-      .map((link) => link.link_id);
-    assert.deepEqual(links, [viewed.linkId]);
-    assert.equal(links.includes(unviewed), false);
-    assert.deepEqual(views(h.db), recorded);
-    assert.deepEqual(h.db.raw.prepare("SELECT * FROM customer_portal_access_throttles").all(), []);
+    const { token } = await issueLink(h.env);
+    await openPortal(h.env, token);
+    const kept = views(h.db);
+    assert.equal(kept.length, 1);
+    assert.equal(await pruneCustomerPortalProposalViews(h.env), 0);
+    assert.deepEqual(views(h.db), kept);
+    refused(() => h.db.raw.prepare("DELETE FROM customer_portal_proposal_views WHERE view_id = ?").run(kept[0]!.view_id),
+      "customer_portal_proposal_views_append_only");
+    // Days short of 3 years (3 calendar years are 1095 or 1096 days) is still young.
+    const young = insertLink(h.db, { createdAt: new Date(Date.now() - 3 * A_YEAR).toISOString() });
+    insertHistoricView(h.db, viewRow(h.db, h.chain, young, {
+      first_viewed_at: new Date(Date.now() - 3 * A_YEAR + 2 * 24 * 60 * 60_000).toISOString(),
+    }));
+    refused(() => h.db.raw.prepare("DELETE FROM customer_portal_proposal_views WHERE link_id = ?").run(young),
+      "customer_portal_proposal_views_append_only");
+    assert.equal(await pruneCustomerPortalProposalViews(h.env), 0);
+    assert.equal(views(h.db).length, 2);
   } finally {
     h.close();
   }
 });
 
-test("the staff read counts only the live publication, at or after the latest send attempt started", async () => {
+test("a first open older than 3 years is deleted by the retention prune, and then its link prunes", async () => {
   const h = await setup();
   try {
-    const read = () =>
-      readProposalFirstViewedAt(h.env, {
-        tenantId: TENANT,
-        proposalPackId: h.chain.proposalPackId,
-        proposalRevisionId: h.chain.proposalRevisionId,
-      });
-    assert.equal(await read(), null, "nothing opened yet");
+    // A link the customer opened just over 3 years ago (days past any leap day), which ended soon after.
+    const old = insertLink(h.db, {
+      createdAt: new Date(Date.now() - 3 * A_YEAR - 20 * 24 * 60 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() - 3 * A_YEAR + 20 * 24 * 60 * 60_000).toISOString(),
+    });
+    insertHistoricView(h.db, viewRow(h.db, h.chain, old, {
+      first_viewed_at: new Date(Date.now() - 3 * A_YEAR - 10 * 24 * 60 * 60_000).toISOString(),
+    }));
     const { token } = await issueLink(h.env);
     await openPortal(h.env, token);
-    const firstOpen = views(h.db)[0]!.first_viewed_at;
-    assert.equal(await read(), firstOpen);
+    assert.equal(views(h.db).length, 2);
+    const linkIds = () =>
+      (h.db.raw.prepare("SELECT link_id FROM customer_portal_links").all() as Array<{ link_id: string }>).map((row) => row.link_id);
 
-    // Withdrawn: no live publication, so no open counts.
-    await recordPublicationTransition(h.env, h.chain, "withdrawn", "published", new Date(Date.now() + 1_000));
-    assert.equal(await read(), null);
+    // While the row lives, the link prune keeps its link.
+    await pruneCustomerPortalRecords(h.env);
+    assert.ok(linkIds().includes(old));
 
-    // Republished as version 3 by a send that starts after the customer's open.
-    const republishAt = new Date(Date.now() + 5_000);
-    await recordPublicationTransition(h.env, h.chain, "published", "withdrawn", republishAt);
-    assert.equal(await read(), null, "an open of version 1 does not answer for version 3");
-    await openPortal(h.env, token);
-    const beforeAttempt = views(h.db).filter((view) => view.publication_event_id === publicationEventId(h.db, h.chain, 3));
-    assert.equal(beforeAttempt.length, 1);
-    assert.ok(beforeAttempt[0]!.first_viewed_at < republishAt.toISOString());
-    assert.equal(await read(), null, "an open before the latest attempt started does not count");
+    assert.equal(await pruneCustomerPortalProposalViews(h.env), 1);
+    assert.deepEqual(views(h.db).map((view) => view.link_id).includes(old), false);
+    assert.equal(views(h.db).length, 1, "the fresh open stays");
+    await pruneCustomerPortalRecords(h.env);
+    assert.equal(linkIds().includes(old), false, "its link prunes once the row is gone");
+  } finally {
+    h.close();
+  }
+});
 
-    const afterAttempt = new Date(republishAt.getTime() + 10_000).toISOString();
-    insertView(h.db, viewRow(h.db, h.chain, insertLink(h.db), {
-      publication_event_id: publicationEventId(h.db, h.chain, 3),
-      first_viewed_at: afterAttempt,
-    }));
-    assert.equal(await read(), afterAttempt);
-    assert.equal(
-      await readProposalFirstViewedAt(h.env, {
-        tenantId: TENANT,
-        proposalPackId: h.chain.proposalPackId,
-        proposalRevisionId: "proposal-revision:portal-views:other",
-      }),
-      null,
-      "an open counts only for the revision the live publication publishes",
+/**
+ * One row naming `linkId` in each table that references a portal link. A seeder writes only its own
+ * table's row; anything else it needs (an acceptance's challenge) names a separate long-lived link,
+ * so the link under test is kept for this table's row alone.
+ */
+const LINK_REFERENCE_SEEDERS: Record<string, (h: Awaited<ReturnType<typeof setup>>, linkId: string) => void> = {
+  customer_portal_acceptance_challenges: (h, linkId) => {
+    insertChallenge(h.db, linkId);
+  },
+  customer_portal_acceptance_intents: (h, linkId) => {
+    const challengeId = insertChallenge(h.db, insertLink(h.db, { expiresAt: new Date(Date.now() + 5 * A_YEAR).toISOString() }));
+    const acceptanceId = `acceptance_${hex(`acceptance|${linkId}`).slice(0, 32)}`;
+    h.db.raw.prepare(
+      `INSERT INTO customer_portal_acceptance_intents
+         (acceptance_id, idempotency_key_hash, request_fingerprint, challenge_id, tenant_id,
+          portal_link_id, roof_job_id, customer_id, email_hash, quote_id, quote_version,
+          proposal_pack_id, terms_hash, terms_json, signer_name, signer_ip_hash, accepted_at,
+          receipt_key, state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'quote:portal-views', 1, ?, ?, '{}', 'Synthetic Signer', ?,
+               ?, ?, 'receipt_pending', ?, ?)`,
+    ).run(
+      acceptanceId, hex(`key|${acceptanceId}`), hex(`request|${acceptanceId}`), challengeId, TENANT, linkId,
+      JOB_ID, CUSTOMER_ID, hex("email"), h.chain.proposalPackId, hex("terms"), hex("ip"), new Date().toISOString(),
+      `customer-contract-acceptance/v1/${TENANT}/${acceptanceId}.json`, new Date().toISOString(), new Date().toISOString(),
     );
-    assert.equal(
-      await readProposalFirstViewedAt(h.env, {
-        tenantId: "other-tenant",
-        proposalPackId: h.chain.proposalPackId,
-        proposalRevisionId: h.chain.proposalRevisionId,
-      }),
-      null,
+  },
+  customer_portal_decision_intents: (h, linkId) => {
+    const decisionId = `decision_${hex(`decision|${linkId}`).slice(0, 32)}`;
+    h.db.raw.prepare(
+      `INSERT INTO customer_portal_decision_intents
+         (decision_id, idempotency_key_hash, request_fingerprint, tenant_id, portal_link_id,
+          roof_job_id, customer_id, option_package_id, option_tier, option_label, selected_at,
+          selector_ip_hash, receipt_key, state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'option:portal-views', 'Better', 'Synthetic charcoal standing seam',
+               ?, ?, ?, 'receipt_pending', ?, ?)`,
+    ).run(
+      decisionId, hex(`key|${decisionId}`), hex(`request|${decisionId}`), TENANT, linkId, JOB_ID, CUSTOMER_ID,
+      new Date().toISOString(), hex("ip"), `customer-portal-decision/v1/${TENANT}/${decisionId}.json`,
+      new Date().toISOString(), new Date().toISOString(),
+    );
+  },
+  customer_portal_proposal_views: (h, linkId) => {
+    insertView(h.db, viewRow(h.db, h.chain, linkId));
+  },
+};
+
+function hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function insertChallenge(db: SqliteD1, linkId: string): string {
+  const challengeId = `acceptance_challenge_${hex(`challenge|${linkId}`).slice(0, 32)}`;
+  const createdAt = new Date().toISOString();
+  db.raw.prepare(
+    `INSERT INTO customer_portal_acceptance_challenges
+       (challenge_id, token_hash, tenant_id, portal_link_id, roof_job_id, customer_id, email_hash,
+        quote_id, quote_version, proposal_pack_id, terms_hash, terms_json, request_ip_hash,
+        request_user_agent_hash, state, created_at, expires_at, sent_at, provider_message_id,
+        consumed_at, invalidated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'quote:portal-views', 1, 'proposal-pack:portal-views', ?, '{}', ?, ?,
+             'invalidated', ?, ?, NULL, NULL, NULL, ?)`,
+  ).run(
+    challengeId, hex(`token|${challengeId}`), TENANT, linkId, JOB_ID, CUSTOMER_ID, hex("email"), hex("terms"),
+    hex("ip"), hex("ua"), createdAt, new Date(Date.now() + 60 * 60_000).toISOString(), createdAt,
+  );
+  return challengeId;
+}
+
+test("the daily link prune keeps every link a RESTRICT key names, read from the schema, and deletes the rest", async () => {
+  const h = await setup();
+  try {
+    const referencers = h.db.raw
+      .prepare(
+        `SELECT m.name AS child, fk."from" AS column, fk.on_delete
+           FROM sqlite_master m, pragma_foreign_key_list(m.name) fk
+          WHERE m.type = 'table' AND fk."table" = 'customer_portal_links'
+          ORDER BY m.name, fk."from"`,
+      )
+      .all() as Array<{ child: string; column: string; on_delete: string }>;
+    assert.ok(referencers.length >= 4, "the schema has tables that reference a portal link");
+    for (const { child, on_delete } of referencers) assert.equal(on_delete, "RESTRICT", child);
+    assert.deepEqual(
+      referencers.map(({ child }) => child).filter((child) => !(child in LINK_REFERENCE_SEEDERS)),
+      [],
+      "every table that references a portal link needs a seeder here, and the prune must keep its links",
     );
 
-    // A newer send of the live version that has not started yet: no open answers for it.
-    const resendAt = new Date(republishAt.getTime() + 20_000);
-    const aggregate = { type: "proposal_publication" as const, id: h.chain.proposalPackId, version: 3 };
-    const resend = await admitFor(h.env, "proposal.publish", aggregate, { delivery_kind: "repeat" },
-      "permit:portal-views:resend", resendAt);
-    await proposeExternalEffect(h.env, {
-      effectId: "effect:portal-views:resend",
-      tenantId: TENANT,
-      actor: { type: "agent", id: "sales-orchestrator" },
-      taskId: "commercial:effect:portal-views:resend",
-      authority: commercialEffectAuthority(resend),
-      aggregate,
-      intentId: h.chain.proposalRevisionId,
-      action: "proposal.publish",
-      request: { proposal_revision_id: h.chain.proposalRevisionId, state: "published" },
-      provider: "customer-portal",
-      providerAccountRef: TENANT,
-      idempotencyKey: "effect:portal-views:resend",
-      deadlineAt: new Date(resendAt.getTime() + 5 * 60_000).toISOString(),
-      preconditions: {},
-      evidenceRefs: EVIDENCE.map(({ ref }) => ref),
-      expectedReadback: { state: "published" },
-      retryLimit: 1,
-      compensationPlan: {},
-      correlationId: "effect:portal-views:resend",
-      now: resendAt.toISOString(),
-    });
-    assert.equal(await read(), null, "no open counts for an attempt that has not started");
+    // Every link below ends within the hour; the prune runs as if two years had passed.
+    const named = new Map<string, string>();
+    for (const { child, column } of referencers) {
+      const linkId = insertLink(h.db);
+      LINK_REFERENCE_SEEDERS[child]!(h, linkId);
+      const count = h.db.raw.prepare(`SELECT COUNT(*) AS count FROM ${child} WHERE ${column} = ?`).get(linkId) as { count: number };
+      assert.equal(count.count, 1, `${child} names its own link`);
+      named.set(child, linkId);
+    }
+    const unreferenced = insertLink(h.db);
+    const linkIds = () =>
+      (h.db.raw.prepare("SELECT link_id FROM customer_portal_links").all() as Array<{ link_id: string }>).map((row) => row.link_id);
+    const before = linkIds();
+
+    await pruneCustomerPortalRecords(h.env, new Date(Date.now() + 2 * A_YEAR));
+
+    const after = linkIds();
+    for (const [child, linkId] of named) assert.ok(after.includes(linkId), `the link ${child} names is kept`);
+    assert.equal(after.includes(unreferenced), false, "a link nothing names is deleted");
+    assert.deepEqual(after.sort(), before.filter((linkId) => linkId !== unreferenced).sort());
   } finally {
     h.close();
   }

@@ -22,7 +22,7 @@ export function CrewDevicesPage() {
         <ChevronLeft className="size-4" aria-hidden="true" />
         Settings
       </Link>
-      <Suspense fallback={<LoadingState label="Loading device setup…" />}>
+      <Suspense fallback={<LoadingState label="Loading crew phones…" />}>
         <DevicePairingSettings />
       </Suspense>
     </div>

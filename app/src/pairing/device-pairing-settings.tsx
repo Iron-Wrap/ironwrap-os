@@ -127,17 +127,17 @@ function OfficeDevicePairingSettings() {
     return (
       <ErrorState
         title="Reconnect before managing devices"
-        message="Pairing and revoking a crew device require a current office session. Existing saved field work remains on its original device."
+        message="Pairing or removing a crew phone needs you signed in to the office. Work already saved on a phone stays on that phone."
       />
     );
   }
   if (fieldUsers.isPending || devices.isPending) {
-    return <LoadingState label="Loading crew device controls…" />;
+    return <LoadingState label="Loading crew phones…" />;
   }
   if (fieldUsers.isError || devices.isError) {
     return (
       <ErrorState
-        title="Crew device controls could not load"
+        title="Crew phones could not load"
         message={messageForLoad(fieldUsers.error ?? devices.error)}
         error={fieldUsers.error ?? devices.error}
         onRetry={() => {
@@ -253,7 +253,7 @@ function OfficeDevicePairingSettings() {
         <CardContent className="space-y-5">
           {fieldUsers.data.users.length === 0 ? (
             <EmptyState
-              title="No active field accounts"
+              title="No crew accounts yet"
               message="Add someone with the crew role on the People page before you pair a phone."
             />
           ) : (
@@ -366,7 +366,7 @@ function IssuedPairingCard({
     try {
       await share({
         title: "IronWrap OS device pairing",
-        text: `Pair ${pairing.field_user.display_name}'s field device before the code expires.`,
+        text: `Pair ${pairing.field_user.display_name}'s phone before the code expires.`,
         url: pairingUrl,
       });
       setNotice("Pairing link shared.");
@@ -426,7 +426,7 @@ function IssuedPairingCard({
                 ) : null}
               </div>
               <label className="block text-sm font-bold" htmlFor="pairing-link">
-                No camera? Copy or open this one-time link on the crew device.
+                No camera? Copy or open this one-time link on the crew phone.
               </label>
               <Input
                 id="pairing-link"
@@ -447,7 +447,7 @@ function IssuedPairingCard({
           <div
             className="mx-auto rounded-xl border bg-white p-4 shadow-inner"
             role="img"
-            aria-label="One-time crew device pairing QR code"
+            aria-label="One-time crew phone pairing QR code"
           >
             <QRCodeSVG value={pairingUrl} size={208} level="M" includeMargin />
           </div>
@@ -489,7 +489,7 @@ function DeviceList({
       <CardContent className="space-y-3">
         {devices.length === 0 ? (
           <EmptyState
-            title="No field devices paired"
+            title="No crew phones paired yet"
             message="Issued codes become devices only after the crew phone completes pairing."
           />
         ) : (

@@ -155,7 +155,9 @@ describe("portalStaffPreview", () => {
         throw new Error("storage disabled");
       }),
     ).resolves.toBe(false);
-    await expect(portalStaffPreview(() => Promise.reject(new Error("broken")))).resolves.toBe(false);
+    await expect(portalStaffPreview(() => Promise.reject(new Error("broken")))).resolves.toBe(
+      false,
+    );
     await expect(portalStaffPreview(() => false)).resolves.toBe(false);
     await expect(portalStaffPreview(() => true)).resolves.toBe(true);
   });

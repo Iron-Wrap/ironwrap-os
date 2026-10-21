@@ -83,7 +83,9 @@ export function inboundFrom(raw: string | undefined): string | null {
   const wall = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   if (wall.getUTCMonth() !== month - 1 || wall.getUTCDate() !== day || wall.getUTCHours() !== hour || wall.getUTCMinutes() !== minute || wall.getUTCSeconds() !== second)
     return null;
-  return new Date(Date.parse(value)).toISOString();
+  // A zone offset out of range (+24:00, +05:60) parses to nothing: off too.
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? null : new Date(at).toISOString();
 }
 
 /**

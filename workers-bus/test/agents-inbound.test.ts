@@ -336,7 +336,8 @@ test("intake waits on the hook at most two seconds; the sweep produces what that
 test("the producer is off until AGENT_INBOUND_FROM names an instant, and a release smoke never produces", async () => {
   for (const raw of [undefined, "", "   ", "yes", "2026-10-20", "2026-10-20T15:52:43", "2026-10-20 15:52:43Z", "2026-13-45T15:52:43Z",
     // Dates the calendar lacks are off, never rolled forward to another instant.
-    "2026-02-30T00:00:00Z", "2026-11-31T00:00:00Z", "2026-10-20T24:00:00Z", "2026-10-20T23:60:00Z", "2026-10-20T23:59:60Z"])
+    "2026-02-30T00:00:00Z", "2026-11-31T00:00:00Z", "2026-10-20T24:00:00Z", "2026-10-20T23:60:00Z", "2026-10-20T23:59:60Z",
+    "2026-10-20T15:52:43+24:00", "2026-10-20T15:52:43-99:99", "2026-10-20T15:52:43+05:60"])
     assert.equal(inboundFrom(raw), null, String(raw));
   assert.equal(inboundFrom("2026-10-20T15:52:43Z"), "2026-10-20T15:52:43.000Z");
   assert.equal(inboundFrom(" 2026-10-20T17:52:43.250+02:00 "), "2026-10-20T15:52:43.250Z");

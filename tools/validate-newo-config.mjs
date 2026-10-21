@@ -5,7 +5,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// `--root <dir>` validates a copy of the tree; the tests use it to show each gate fails.
+const rootFlag = process.argv.indexOf("--root");
+const root = rootFlag === -1
+  ? resolve(dirname(fileURLToPath(import.meta.url)), "..")
+  : resolve(process.argv[rootFlag + 1]);
 const productionRequired = process.argv.includes("--production");
 
 const read = (path) => readFileSync(join(root, path));
@@ -32,7 +36,18 @@ assert.equal(expected.runtime.outbound_enabled, false);
 assert.deepEqual(expected.runtime.enabled_channels, ["voice"]);
 assert.equal(expected.booking.request_only_spoken_receipt, "Appointment request received.");
 assert.equal(expected.booking.jobnimbus_appointment_contract_proven, false);
-assert.equal(expected.transfer.policy, "owner_then_voicemail");
+// Owner decision MD-05: callback only, never a live transfer. Every handoff carries
+// handoff_status "failed" (the caller was not put through), which opens the urgent callback
+// incident a person resolves (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md, "Failed Newo handoffs").
+assert.deepEqual(
+  expected.handoff,
+  { policy: "callback_only", tool: "request_handoff", handoff_status: "failed" },
+  "Newo handoff must stay callback only",
+);
+assert.equal(/transfer/i.test(JSON.stringify(expected)), false, "Newo config must not set up a live transfer");
+// Owner decision MD-08: IronWrap sends SMS confirmations; Newo's in-call SMS tool stays disabled.
+assert.equal(expected.sms?.newo_in_call_sms_enabled, false, "Newo in-call SMS tool must stay disabled");
+assert.equal(expected.sms?.confirmation_sender, "ironwrap", "SMS confirmations come from IronWrap, not Newo");
 assert.equal(expected.storage.raw_prefix, "raw/newo/");
 assert.equal(expected.storage.raw_lifecycle_days, 30);
 
@@ -65,6 +80,7 @@ for (const exact of [
 ]) {
   assert.ok(wrangler.includes(exact), `missing safe launch default ${exact}`);
 }
+assert.equal(/NEWO_[A-Z0-9_]*TRANSFER/.test(wrangler), false, "Worker config must not set up a live transfer");
 
 const requiredTools = [
   "lookup_caller",
@@ -123,6 +139,13 @@ assert.equal(new Set(proofControls).size, consoleProof.proofs.length);
 assert.ok(proofControls.includes("r2_raw_newo_30_day_lifecycle"));
 assert.ok(proofControls.includes("usage_limit_and_threshold_alert"));
 assert.ok(proofControls.includes("after_hours_forwarding_and_rollback"));
+assert.ok(proofControls.includes("handoff_callback_only"));
+assert.ok(proofControls.includes("newo_in_call_sms_disabled"));
+assert.deepEqual(
+  proofControls.filter((control) => /transfer/i.test(control)),
+  [],
+  "console proof must not carry a live-transfer control",
+);
 for (const proof of consoleProof.proofs) {
   assert.ok(["pending", "verified"].includes(proof.status), `${proof.control} status`);
   if (proof.status === "verified") {
@@ -142,6 +165,7 @@ assert.equal(evaluation.cases.filter((item) => item.group === "required_failure"
 for (const item of evaluation.cases) {
   assert.ok(item.expected_outcome.length >= 20, `${item.id} outcome too short`);
   assert.ok(Array.isArray(item.catastrophic_if) && item.catastrophic_if.length > 0, `${item.id} catastrophic gate`);
+  assert.equal(/transfer/i.test(`${item.persona} ${item.expected_outcome}`), false, `${item.id} expects a live transfer`);
 }
 
 for (const heading of [
@@ -159,6 +183,12 @@ for (const heading of [
 }
 assert.ok(akb.includes("Appointment request received."));
 assert.ok(akb.includes("NEWO_OUTBOUND_ENABLED=false"));
+assert.deepEqual(
+  akb.split("\n").filter((line) => /transfer/i.test(line)),
+  ["- Callback only. Never transfer the call live to a person, an owner line, or voicemail."],
+  "AKB may mention transfer only to forbid it",
+);
+assert.ok(akb.includes("Newo never sends SMS, and its in-call SMS tool stays disabled."), "AKB must keep Newo SMS off");
 
 const configFiles = [
   "config/newo/production.expected.json",

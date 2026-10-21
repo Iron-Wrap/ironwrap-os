@@ -822,7 +822,7 @@ function scheduleNotifications(
     ctx.waitUntil(sendOwnerAlert(
       env,
       "Urgent Newo callback required",
-      `<p>Transfer or session failed for ${escapeHtml(event.contact.name ?? event.contact.phone ?? event.session_id)}.</p>`,
+      `<p>Call back ${escapeHtml(event.contact.name ?? event.contact.phone ?? event.session_id)}: the caller was not put through to a person, or the session failed.</p>`,
     ).catch((error) => console.log(JSON.stringify({ at: "newo_failure_alert", event_id: event.event_id, error: String(error) }))));
   }
 }

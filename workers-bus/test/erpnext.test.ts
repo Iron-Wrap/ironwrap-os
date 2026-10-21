@@ -640,7 +640,7 @@ test("pushNewoSessionToErpNext creates one owned urgent-callback incident for a 
     appointment_request_id: null,
     handoff_status: "failed",
     booking_status: null,
-    summary: "Owner transfer failed; urgent callback required.",
+    summary: "Caller asked for a person; urgent callback required.",
     transcript_ref: "newo:transcript:session-failed",
     recording_ref: "newo:recording:session-failed",
     ai_disclosed: 1,

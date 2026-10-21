@@ -6,7 +6,8 @@
     { "control": "akb_version_published", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
     { "control": "scenario_and_tool_lifecycle", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
     { "control": "ai_recording_disclosure", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
-    { "control": "owner_transfer_and_voicemail_fallback", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "handoff_callback_only", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "newo_in_call_sms_disabled", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
     { "control": "usage_limit_and_threshold_alert", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
     { "control": "after_hours_forwarding_and_rollback", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
     { "control": "r2_raw_newo_30_day_lifecycle", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null }

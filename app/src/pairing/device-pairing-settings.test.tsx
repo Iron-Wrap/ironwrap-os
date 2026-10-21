@@ -123,7 +123,7 @@ describe("DevicePairingSettings", () => {
     await user.click(screen.getByRole("button", { name: "Issue one-time QR code" }));
 
     expect(
-      await screen.findByRole("img", { name: "One-time crew device pairing QR code" }),
+      await screen.findByRole("img", { name: "One-time crew phone pairing QR code" }),
     ).toBeVisible();
     const fallback = screen.getByLabelText(/No camera\? Copy or open this one-time link/i);
     expect(fallback).toHaveValue(`${window.location.origin}/auth/pair#token=${pairingToken}`);
@@ -157,7 +157,7 @@ describe("DevicePairingSettings", () => {
     await user.click(await screen.findByRole("button", { name: "Issue one-time QR code" }));
     expect(issueDevicePairing).toHaveBeenCalledWith(opsSession, "appu_crew");
     expect(
-      await screen.findByRole("img", { name: "One-time crew device pairing QR code" }),
+      await screen.findByRole("img", { name: "One-time crew phone pairing QR code" }),
     ).toBeVisible();
   });
 

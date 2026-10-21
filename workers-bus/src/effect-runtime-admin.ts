@@ -58,7 +58,12 @@ export async function handleExternalEffectSettlement(req: Request, env: AppEnv):
   const settlement = record(body.settlement);
   if (!effectId || !settlement) return json({ error: "effect_settlement_invalid" }, 400);
   try {
-    const settled = await settleExternalEffect(env, effectId, settlement as ExternalEffectSettlement);
+    // Settled now, by the server's clock: a caller's `now` is ignored, so a settlement is dated when
+    // the Worker records it, never when the caller says it was.
+    const settled = await settleExternalEffect(env, effectId, {
+      ...settlement,
+      now: new Date().toISOString(),
+    } as ExternalEffectSettlement);
     return json({ effect: settled.effect, attempt: settled.attempt, value: settled.value });
   } catch (error) {
     return json({ error: effectError(error) }, effectErrorStatus(error));
@@ -79,7 +84,8 @@ export async function handleExternalEffectReconciliation(req: Request, env: AppE
       outcome: outcome as "executed" | "not_executed" | "inconclusive",
       evidence: body.evidence,
       detailCode: text(body.detailCode) ?? undefined,
-      now: text(body.now) ?? undefined,
+      // Reconciled now, by the server's clock; a caller's `now` is ignored.
+      now: new Date().toISOString(),
     });
     return json({ effect });
   } catch (error) {
@@ -133,12 +139,15 @@ function effectError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
   // D1's single-flight guard (0156): this proposal revision's last send is not confirmed delivered.
   if (value.includes("proposal_delivery_unconfirmed")) return "proposal_delivery_unconfirmed";
+  // D1's late-answer guard (0161): an unknown proposal send is not "not executed" before its
+  // provider's answer can no longer arrive.
+  if (value.includes("proposal_delivery_answer_may_be_late")) return "proposal_delivery_answer_may_be_late";
   return /^effect_[a-z0-9_]+$/.test(value) ? value : "effect_runtime_error";
 }
 
 function effectErrorStatus(error: unknown): 400 | 409 | 422 | 500 {
   const code = effectError(error);
-  if (code === "proposal_delivery_unconfirmed") return 409;
+  if (code === "proposal_delivery_unconfirmed" || code === "proposal_delivery_answer_may_be_late") return 409;
   if (code === "effect_runtime_error") return 500;
   if (code.includes("conflict") || code.includes("in_flight") || code.includes("lease_lost")) return 409;
   if (code.includes("missing") || code.includes("invalid") || code.includes("expired") || code.includes("denied")) return 422;

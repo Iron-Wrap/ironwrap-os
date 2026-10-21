@@ -1,7 +1,10 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CustomerPortalView } from "./customer-portal-page";
+import { clearPendingMagicLinkToken } from "../auth/magic-link-fragment";
+import { persistAuthenticatedSession } from "../auth/session";
+import { resetDatabaseForTests } from "../storage/db";
+import { CustomerPortalPage, CustomerPortalView } from "./customer-portal-page";
 import type { CustomerPortalResponse } from "./portal-contracts";
 
 const model: CustomerPortalResponse = {
@@ -235,5 +238,61 @@ describe("CustomerPortalView", () => {
     );
 
     expect(screen.getByRole("button", { name: /send acceptance email/i })).toBeInTheDocument();
+  });
+});
+
+describe("CustomerPortalPage", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    clearPendingMagicLinkToken();
+    window.history.replaceState(null, "", "/");
+    await resetDatabaseForTests();
+  });
+
+  it.each([
+    ["no office sign-in", false, { token: "p".repeat(43) }],
+    ["a live office sign-in", true, { token: "p".repeat(43), staff_preview: true }],
+  ])("with %s, the resolve request is %j", async (_label, signedIn, body) => {
+    if (signedIn) {
+      await persistAuthenticatedSession({
+        version: 1,
+        authenticated: true,
+        user: {
+          id: "appu_owner_0001",
+          email: "owner@example.invalid",
+          display_name: "Owner",
+          role: "owner",
+          frappe_user_id: null,
+        },
+        tenant: {
+          id: "ironwrap",
+          name: "IronWrap Exteriors",
+          brand: "IronWrap Exteriors",
+          locale: "en-CA",
+          time_zone: "America/Edmonton",
+          currency: "CAD",
+        },
+        permissions: [],
+        allowed_actions: [],
+        csrf_token: "csrf-token",
+        session_expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+        source_updated_at: null,
+        read_model_generated_at: new Date().toISOString(),
+        stale_fields: [],
+      });
+    }
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(model));
+    vi.stubGlobal("fetch", fetcher);
+    clearPendingMagicLinkToken();
+    window.history.replaceState(null, "", `/portal#token=${"p".repeat(43)}`);
+
+    render(<CustomerPortalPage />);
+
+    expect(await screen.findByText(/IW-100/)).toBeVisible();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [path, init] = fetcher.mock.calls[0]!;
+    expect(path).toBe("/api/v1/customer-portal/resolve");
+    expect(JSON.parse(String(init?.body))).toEqual(body);
+    expect(init?.credentials).toBe("omit");
   });
 });

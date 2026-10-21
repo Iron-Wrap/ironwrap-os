@@ -41,6 +41,19 @@ describe("customer portal API", () => {
     );
   });
 
+  it("adds staff_preview: true only when an office sign-in is live, and still omits credentials", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(portal));
+
+    await loadCustomerPortal("a".repeat(43), fetcher, true);
+    await loadCustomerPortal("a".repeat(43), fetcher, false);
+
+    expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { token: "a".repeat(43), staff_preview: true },
+      { token: "a".repeat(43) },
+    ]);
+    for (const [, init] of fetcher.mock.calls) expect(init?.credentials).toBe("omit");
+  });
+
   it("keeps both acceptance steps on fixed public paths with omitted credentials", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

@@ -2,6 +2,7 @@ import { BadgeCheck, ClipboardList, FileCheck2, Hammer, Wrench } from "lucide-re
 import { useEffect, useState } from "react";
 
 import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
+import { officeSessionIsLive } from "../auth/session";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
@@ -25,14 +26,19 @@ export function CustomerPortalPage() {
   useEffect(() => {
     if (!token) return;
     let active = true;
-    void loadCustomerPortal(token).then(
-      (model) => {
-        if (active) setState({ kind: "ready", model });
-      },
-      () => {
-        if (active) setState({ kind: "error" });
-      },
-    );
+    // Staff opening a customer's link from a signed-in browser preview it; the first open the
+    // server records stays the customer's own.
+    void officeSessionIsLive()
+      .catch(() => false)
+      .then((staffPreview) => loadCustomerPortal(token, undefined, staffPreview))
+      .then(
+        (model) => {
+          if (active) setState({ kind: "ready", model });
+        },
+        () => {
+          if (active) setState({ kind: "error" });
+        },
+      );
     return () => {
       active = false;
     };

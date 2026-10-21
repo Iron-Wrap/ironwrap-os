@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getDeviceSecret, storeDeviceSecret } from "./device-credential";
 import { resetDatabaseForTests } from "../storage/db";
-import { fetchSession, sessionResponseSchema } from "./session";
+import {
+  clearSessionSnapshot,
+  fetchSession,
+  officeSessionIsLive,
+  persistAuthenticatedSession,
+  sessionResponseSchema,
+} from "./session";
 
 const authenticatedSession = {
   version: 1,
@@ -111,5 +117,31 @@ describe("sessionResponseSchema", () => {
       stale_fields: ["field_device_repair_required"],
     });
     expect(await getDeviceSecret()).toBeUndefined();
+  });
+});
+
+describe("officeSessionIsLive", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDatabaseForTests();
+  });
+
+  it("is true only while this browser keeps an unexpired sign-in", async () => {
+    expect(await officeSessionIsLive()).toBe(false);
+
+    const expiresAt = Date.now() + 60 * 60_000;
+    await persistAuthenticatedSession({
+      ...authenticatedSession,
+      user: { ...authenticatedSession.user, role: "owner" },
+      session_expires_at: new Date(expiresAt).toISOString(),
+    });
+    expect(await officeSessionIsLive()).toBe(true);
+
+    vi.spyOn(Date, "now").mockReturnValue(expiresAt + 1);
+    expect(await officeSessionIsLive()).toBe(false);
+    vi.restoreAllMocks();
+
+    await clearSessionSnapshot();
+    expect(await officeSessionIsLive()).toBe(false);
   });
 });

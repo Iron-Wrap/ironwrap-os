@@ -124,6 +124,16 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
   };
 }
 
+/**
+ * True while this browser holds an unexpired sign-in: the snapshot every successful session read
+ * keeps until it expires or a sign-out clears it. Read locally, so the customer portal can mark a
+ * staff preview without sending the office cookie anywhere.
+ */
+export async function officeSessionIsLive(): Promise<boolean> {
+  const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
+  return snapshot !== undefined && snapshot.expiresAt > Date.now();
+}
+
 export async function clearSessionSnapshot(): Promise<void> {
   await deleteMeta(SNAPSHOT_KEY);
 }

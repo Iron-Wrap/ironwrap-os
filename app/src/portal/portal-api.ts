@@ -13,15 +13,20 @@ import {
   type CustomerPortalResponse,
 } from "./portal-contracts";
 
-/** Public capability resolver: never attach an office/session cookie to this request. */
+/**
+ * Public capability resolver: never attach an office/session cookie to this request. With
+ * `staffPreview` (an office sign-in is live in this browser) the server does not record the open as
+ * the customer's; the flag can only stop that record, never make one.
+ */
 export async function loadCustomerPortal(
   token: string,
   fetcher?: typeof fetch,
+  staffPreview = false,
 ): Promise<CustomerPortalResponse> {
   return await apiRequest({
     path: API_PATHS.customerPortalResolve,
     method: "POST",
-    body: { token },
+    body: staffPreview ? { token, staff_preview: true } : { token },
     schema: customerPortalResponseSchema,
     credentials: "omit",
     fetcher,

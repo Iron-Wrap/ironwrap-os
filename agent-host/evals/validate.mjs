@@ -502,6 +502,9 @@ function checkInboundSignal(signal, label, fail) {
     (sender.customer_id === null || typeof sender.customer_id === "string") &&
     [null, "email", "phone", "email_and_phone"].includes(sender.matched_on) && typeof sender.conflict === "boolean";
   if (!senderValid) fail(`${label}: an inbound signal's sender is { customer_id, matched_on: email|phone|email_and_phone|null, conflict }`);
+  else if ((sender.customer_id === null) !== (sender.matched_on === null) || (sender.conflict && sender.customer_id !== null)) {
+    fail(`${label}: an inbound signal's sender names a customer exactly when it says what matched, and a conflict names none`);
+  }
   if (typeof content.has_phone !== "boolean" || typeof content.has_email !== "boolean") fail(`${label}: an inbound signal's has_phone and has_email are booleans`);
   if (!textUpTo(content.service, 200)) fail(`${label}: an inbound signal's service is text of at most 200 characters, or null`);
   if (!textUpTo(content.excerpt, 1000)) fail(`${label}: an inbound signal's excerpt is text of at most 1000 characters, or null`);

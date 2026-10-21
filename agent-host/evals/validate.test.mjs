@@ -537,6 +537,49 @@ test("an inbound signal carries exactly the Worker's envelope keys, no actor, an
   assert.match(failures, /\.012: an event on an inbound channel names the lead it becomes as its subject/);
 });
 
+test("each inbound-signal check fails on its own", () => {
+  const content = {
+    envelope_id: "ENV-1",
+    channel: "web_form",
+    brand: "ironwrap",
+    received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false },
+    has_phone: true,
+    has_email: false,
+    service: "gutters",
+    excerpt: "Gutters pulling away.",
+    form_fields: { address: null, scope: null, timing: null },
+  };
+  const base = { kind: "event", source: "web_form", watch_id: "new_inbound", at: "PT0M", subject: { aggregate: "lead", id: "L-1" } };
+  const rows = [
+    [{ ...base, source: "phone", content }, /channel is one the Worker takes in .* and is its source/],
+    [{ ...base, content: { ...content, has_phone: "yes" } }, /has_phone and has_email are booleans/],
+    [{ ...base, content: { ...content, sender: { ...content.sender, conflict: "no" } } }, /sender is \{ customer_id, matched_on/],
+    [{ ...base, content: { ...content, sender: { ...content.sender, extra: 1 } } }, /sender is \{ customer_id, matched_on/],
+    [{ ...base, content: { ...content, sender: { customer_id: "CU-1", matched_on: null, conflict: false } } }, /sender names a customer exactly when it says what matched/],
+    [{ ...base, content: { ...content, sender: { customer_id: "CU-1", matched_on: "email", conflict: true } } }, /a conflict names none/],
+    [{ ...base, content: { ...content, service: "x".repeat(201) } }, /service is text of at most 200 characters/],
+    [{ ...base, content: { ...content, form_fields: { address: "x".repeat(601), scope: null, timing: null } } }, /form_fields are \{ address, scope, timing \}/],
+    [{ ...base, content: { ...content, form_fields: { address: null, scope: "x".repeat(2001), timing: null } } }, /form_fields are \{ address, scope, timing \}/],
+    [{ ...base, content: { ...content, form_fields: { address: null, scope: null, timing: "x".repeat(601) } } }, /form_fields are \{ address, scope, timing \}/],
+    [{ ...base, content: { ...content, envelope_id: "" } }, /names its envelope_id/],
+    [{ ...base, subject: { aggregate: "lead", id: "" }, content }, /signal\.subject is \{ aggregate, id \}/],
+    [{ ...base, subject: null, content }, /signal\.subject is \{ aggregate, id \}/],
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    rows.forEach(([signal], index) => (cases[index].signal = signal));
+    cases[rows.length].signal = { kind: "event", source: "sms", watch_id: "new_inbound", at: "PT0M", content: { text: "Hi" } };
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures;
+  rows.forEach(([, pattern], index) => {
+    const n = String(index + 1).padStart(3, "0");
+    assert.ok(failures.some((failure) => failure.includes(`.${n}: `) && pattern.test(failure)), `case ${n} should fail ${pattern}`);
+  });
+  const n = String(rows.length + 1).padStart(3, "0");
+  assert.ok(!failures.some((failure) => failure.includes(`.${n}: `) && /subject/.test(failure)), "an event on a channel not taken in needs no subject");
+});
+
 test("structural mode without the contract still checks shape", () => {
   const result = validate(fixture({ withCatalog: false }));
   assert.deepEqual(result.failures, []);

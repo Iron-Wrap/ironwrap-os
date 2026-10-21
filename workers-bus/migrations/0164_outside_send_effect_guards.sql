@@ -9,24 +9,25 @@
 -- keeps its 0156 exit, and the 0156 apply trigger inserts the confirmation before it moves the
 -- effect, so the person path passes this guard.
 --
--- A send whose readback conflicted went straight from `reconciling` to `manual_exception`: the
--- provider answered, so it did something. A person may record that the customer has it
--- (`delivered`), but never `not_delivered`, which would make the send "not executed" and open the
--- way to a second send. That needs provider evidence; until then the send stays an exception. A
--- send that went `unknown` first (a provider that never answered) keeps the 0156 person path. This
--- guard runs on the confirmation insert, before 0156's apply trigger moves the effect. A send whose
--- readback conflicted never went `unknown`, so a late-answer wait has nothing to hold for it: the
--- refusal is this guard's, whatever order the insert guards run in.
+-- A send whose readback conflicted went straight from `reconciling` to `manual_exception` (its
+-- latest move into the exception, the same event 0161's late-answer wait reads): the provider
+-- answered, so it did something. A person may record that the customer has it (`delivered`), but
+-- never `not_delivered`, which would make the send "not executed" and open the way to a second
+-- send. That needs provider evidence; until then the send stays an exception. A send whose latest
+-- move came from `unknown` (a provider that never answered) keeps the 0156 person path, after
+-- 0161's wait. This guard runs on the confirmation insert, before 0156's apply trigger moves the
+-- effect and before 0161's wait is read, so the refusal is this guard's at any time.
 --
 -- New triggers with distinct names only. No 0042, 0156 or 0161 trigger is re-created. Each uses
--- CREATE TRIGGER IF NOT EXISTS and references only 0042 and 0156 objects, so this file is
--- safe whether it is applied before 0161 and 0162 (production order) or after them (a fresh
--- database, filename order).
+-- CREATE TRIGGER IF NOT EXISTS and references only 0042 and 0156 objects, so this file applies the
+-- same before or after 0161 and 0162. 0161's late-answer wait and this file's evidence guard both
+-- refuse an unknown send's early move to "not executed"; which answers first is not part of either
+-- contract.
 --
--- PR-A (0162) and, only if needed, the reworked 0161 extend the evidence guard. They DROP TRIGGER
--- IF EXISTS and CREATE it again under the same name, carrying this clause unchanged. On a fresh
--- database their CREATE runs first and this file's IF NOT EXISTS skips; in production this file
--- runs first and theirs replaces it. Both end with the same trigger.
+-- PR-A (0162) extends the evidence guard. It DROPs TRIGGER IF EXISTS and CREATEs it again under the
+-- same name, carrying this clause unchanged. On a fresh database its CREATE runs first and this
+-- file's IF NOT EXISTS skips; where this file ran first, its CREATE replaces this one. Both end with
+-- the same trigger.
 --
 -- Existing rows need no data step: every proposal send so far was created with the default retry
 -- limit of 0, and `proposal.withdraw` has no creator yet. `customer.email.send` and
@@ -66,10 +67,9 @@ BEFORE INSERT ON proposal_delivery_confirmations
 WHEN NEW.outcome = 'not_delivered'
 BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_confirmation_conflict_needs_provider_evidence')
-    WHERE EXISTS (
-      SELECT 1 FROM external_effect_events event
-       WHERE event.effect_id = NEW.effect_id
-         AND event.event_type = 'manual_exception'
-         AND event.from_state = 'reconciling'
-    );
+    WHERE (
+      SELECT event.from_state FROM external_effect_events event
+       WHERE event.effect_id = NEW.effect_id AND event.to_state = 'manual_exception'
+       ORDER BY event.event_seq DESC LIMIT 1
+    ) = 'reconciling';
 END;

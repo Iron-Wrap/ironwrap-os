@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 136,
+      "count": 137,
       "latest": "0205_agent_step_pair_index.sql"
     }
   },
@@ -334,8 +334,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
     operation-sets slice builds the four sets.
   - Closing a prepared people-only draft: the receipt codes `applied_by_person` and `superseded`
-    (under `succeeded`) and the app's words and notes for them exist, but nothing closes the draft,
-    and no receipt renders a note yet (`words.note`, `VIEW_REFUSED` included).
+    (under `succeeded`) and the app's words and notes for them exist, and the receipt shows the
+    note on its "Since then" row, but nothing closes the draft yet. No screen hosts the answer
+    message that shows `VIEW_REFUSED` under the answer.
   - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
     tenant policy lists no company pages.
   - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its
@@ -615,7 +616,7 @@ IRO-38 branch-local side-effect substrate:
   them, and no production path sends a proposal yet. A `qa-synthetic-*` provider passes only on a
   Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local); elsewhere it answers 403
   `effect_provider_not_allowed`. A proposal send claimed with a retry answers 422
-  `effect_outside_send_retry_forbidden`. The retry route runs on the server's clock. The MCP host's
+  `effect_outside_send_retry_forbidden`. Settle, reconcile and retry run on the server's clock. The MCP host's
   `mcp.*` effects keep the token, as do the remaining actions. Migration
   `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
   never `retry`) and moves an `unknown` `proposal.publish` to `succeeded` or `reconciled` only with

@@ -175,9 +175,11 @@ function insertEffect(db: D1, id: string, action: string, retryLimit: number): v
   );
 }
 
-const moveTo = (db: D1, effectId: string, state: string) =>
+const moveTo = (db: D1, effectId: string, state: string, at = new Date().toISOString()) =>
   db.raw.prepare("UPDATE external_effects SET state = ?, updated_at = ? WHERE effect_id = ?")
-    .run(state, new Date().toISOString(), effectId);
+    .run(state, at, effectId);
+/** Past the default late-answer window (0161), so a refusal there is this file's rule alone. */
+const afterLateAnswerWindow = () => new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
 
 // ---------------------------------------------------------------------------------------------
 // The routes
@@ -524,11 +526,13 @@ test("D1 keeps an unknown proposal send unknown until a person records what they
   const before = effectRow(db, effectId);
   const eventCount = events(db, effectId);
 
+  // "Not executed" is dated past the late-answer window, so the wait (0161) has no say and the
+  // refusal is this rule's whichever guard runs first.
   assert.throws(() => moveTo(db, effectId, "succeeded"), /proposal_delivery_settle_evidence_missing/);
-  assert.throws(() => moveTo(db, effectId, "reconciled"), /proposal_delivery_settle_evidence_missing/);
+  assert.throws(() => moveTo(db, effectId, "reconciled", afterLateAnswerWindow()), /proposal_delivery_settle_evidence_missing/);
   for (const outcome of ["executed", "not_executed"] as const) {
     await assert.rejects(
-      reconcileExternalEffect(env, effectId, { outcome, evidence: { provider: "says so" } }),
+      reconcileExternalEffect(env, effectId, { outcome, evidence: { provider: "says so" }, now: afterLateAnswerWindow() }),
       /proposal_delivery_settle_evidence_missing/,
     );
   }

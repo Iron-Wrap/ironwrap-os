@@ -75,7 +75,7 @@ test.describe("Onboarding v0 mobile acceptance", () => {
 
   test("setup lists what a new company has to do, in order", async ({ page }) => {
     await page.goto("/settings");
-    await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
 
     await expect(page.getByRole("link", { name: /Company details/ })).toBeVisible();
     await expect(page.getByRole("link", { name: /People/ })).toBeVisible();
@@ -162,7 +162,7 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await assertActionsAreReachable(page, "people");
     await page.screenshot({ path: `${SHOT_DIR}/onboarding-04-people-form.png`, fullPage: true });
 
-    await page.getByRole("button", { name: "Add to the company" }).click();
+    await page.getByRole("button", { name: "Add to the team" }).click();
     await expect(page.getByText("Sam Sales can sign in now")).toBeVisible();
     await expect(page.getByText("sam@freshco.example")).toBeVisible();
 

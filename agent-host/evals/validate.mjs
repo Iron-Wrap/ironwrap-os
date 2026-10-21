@@ -649,6 +649,42 @@ function checkCase(item, context) {
     if (!catastropheIds.has(catastrophe)) fail(`${label}: unknown catastrophe ${catastrophe}`);
   }
   checkProducerExclusion(item, expected, fail, label);
+  if (catalog) checkDelegable(item, expected, catalog, fail, label);
+}
+
+// A delegation names a delegable action of the specialist that owns it. The Worker serves no
+// delegation record for any other action, lists none in a review digest, and refuses to propose
+// one (contract Delegation item 8). A within-limits permit on a never-delegable action is a
+// violation, so only a case that raises it as a finding may hold one.
+function checkDelegable(item, expected, catalog, fail, label) {
+  const pair = (specialistId, actionId, where) => {
+    const action = catalog.actions.get(actionId);
+    if (!action) fail(`${label}: ${where} names ${actionId}, which is not in the catalog`);
+    else if (action.delegable !== true) fail(`${label}: ${where} names ${actionId}, which is never delegable`);
+    else if (specialistId && !(action.owners ?? []).includes(specialistId)) fail(`${label}: ${where} names ${actionId} for ${specialistId}, which does not own it`);
+  };
+  const raisesFinding = objects(expected.actions).some((action) => action.action_id === "finding.raise");
+  for (const fact of objects(item.facts)) {
+    const data = fact.data ?? {};
+    if (fact.kind === "delegation" || String(fact.fact_id ?? "").startsWith("delegation/")) {
+      const record = /^delegation\/([a-z_]+):([a-z_.]+)$/.exec(fact.fact_id ?? "");
+      if (record) pair(record[1], record[2], `delegation record ${fact.fact_id}`);
+      if (data.action_id && (!record || data.action_id !== record[2] || (data.specialist_id && data.specialist_id !== record[1]))) {
+        pair(data.specialist_id, data.action_id, `delegation record ${fact.fact_id} (data)`);
+      }
+    }
+    if (data.permit?.kind === "within_limits" && catalog.actions.get(data.action_id)?.delegable === false && !raisesFinding) {
+      fail(`${label}: ${fact.fact_id} holds a within-limits permit on ${data.action_id}, which is never delegable; only a case that raises it as a finding may`);
+    }
+  }
+  const digest = item.signal?.content?.digest;
+  for (const key of ["delegation_candidates", "previewable", "awaiting_owner"]) {
+    for (const entry of objects(digest?.[key])) pair(entry.specialist_id, entry.action_id, `digest ${key}`);
+  }
+  for (const action of objects(expected.actions)) {
+    const args = action.action_id === "delegation.propose_change" ? (action.args_must_include ?? {}) : {};
+    if (args.action_id) pair(args.specialist_id, args.action_id, "delegation.propose_change");
+  }
 }
 
 function checkSuite(dir, suite, context) {

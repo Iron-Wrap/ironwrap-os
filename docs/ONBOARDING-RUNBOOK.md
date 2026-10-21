@@ -60,7 +60,7 @@ Time: about 10 minutes. Works on a phone.
 > Land on `/settings`, not on `/`. `/` is the crew's Field Companion entry point and asks an
 > unpaired phone to pair a device rather than showing the sign-in form.
 
-### 2.2 Company details — **Setup → Company details**
+### 2.2 Company details — **Settings → Company details**
 
 Fill in and save:
 
@@ -76,7 +76,7 @@ screen.
 The company name and short name start out as whatever the engineer set in step 1.1. Changing them
 here is what the customer sees from then on; nobody has to touch a configuration file.
 
-### 2.3 People — **Setup → People**
+### 2.3 People — **Settings → People**
 
 For each person who works here, enter their name and work email and choose what they can see:
 
@@ -87,7 +87,7 @@ For each person who works here, enter their name and work email and choose what 
 | Sales | Leads and quotes |
 | Production | The job runway and crew scheduling |
 | Accounting | The money desk and QuickBooks |
-| Crew | The Field Companion on a paired phone |
+| Crew | The crew phone app on a paired phone |
 
 They can sign in as soon as you add them, from the same page you did, with their own email address.
 No password is created or shared.
@@ -99,7 +99,7 @@ cannot remove your own access; that is deliberate.
 **Create at least one Crew account before step 2.4** — a phone can only be paired to an existing
 crew account.
 
-### 2.4 Crew phones — **Setup → Crew phones**
+### 2.4 Crew phones — **Settings → Crew phones**
 
 Pick the crew member, show them the QR code, and have them scan it on the phone they will use on
 site. That phone then works offline: it keeps its assigned jobs, check-ins and photos on the device

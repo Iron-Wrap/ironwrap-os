@@ -151,7 +151,7 @@ POSTed. It is never placed in TanStack Query state, route search state, IndexedD
 the server. Link scanners therefore cannot consume a sign-in token with a passive GET.
 
 Field crew cannot receive a magic-link session. An owner or operations user instead issues a
-short-lived `/auth/pair#token=...` QR from **Settings -> Crew devices**. The pairing fragment is
+short-lived `/auth/pair#token=...` QR from **Settings -> Crew phones**. The pairing fragment is
 scrubbed before a POST; a fresh 256-bit device proof stays only in memory until the Worker returns
 an authenticated `field` session, then persists in IndexedDB. Every field session, field read,
 outbox flush, and logout sends `X-IronWrap-Device-Proof` alongside the session cookie. The proof is

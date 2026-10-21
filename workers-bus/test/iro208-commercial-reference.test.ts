@@ -1799,15 +1799,19 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(resendBeforeCheck.status, 409);
     assert.equal((await resendBeforeCheck.json() as { error: string }).error, "proposal_delivery_unconfirmed");
-    // A reconcile to "not executed" is refused in D1 (0164): only a person's record settles a lost
-    // send, and "not delivered" waits until the provider's own answer can no longer arrive.
-    await assert.rejects(
-      reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
-        outcome: "not_executed",
-        evidence: { checked: "provider has no publication for this proposal revision" },
-      }),
-      /proposal_delivery_settle_evidence_missing/,
-    );
+    // A lost send moves to "not executed" only on a person's record (0164), and that record waits out
+    // the provider's late-answer window (0161). A reconcile made at once is refused by both rules; the
+    // same reconcile after the window is still no person's record, so it is refused too.
+    const lostSince = (h.db.raw.prepare("SELECT updated_at FROM external_effects WHERE effect_id = ?")
+      .get("effect:iro208:lost") as { updated_at: string }).updated_at;
+    const afterLostWindow = new Date(Date.parse(lostSince) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
+    const notExecuted = (now?: string) => reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
+      outcome: "not_executed",
+      evidence: { checked: "provider has no publication for this proposal revision" },
+      ...(now ? { now } : {}),
+    });
+    await assert.rejects(notExecuted(), /proposal_delivery_answer_may_be_late|proposal_delivery_settle_evidence_missing/);
+    await assert.rejects(notExecuted(afterLostWindow), /proposal_delivery_settle_evidence_missing/);
     const lostChecked = await recordProposalDeliveryConfirmation(h.env as never, {
       tenantId: TENANT,
       effectId: "effect:iro208:lost",
@@ -1816,7 +1820,7 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
       actorUserId: OPS_ID,
       actorRole: "ops",
       idempotencyKey: "iro208-delivery-confirmation-lost-0001",
-      now: new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
+      now: afterLostWindow,
     });
     assert.equal(lostChecked.effectState, "reconciled");
     const mismatchPermit = await preparePublication(h, ids, "iro208-publication-prepare-mismatch-0001");

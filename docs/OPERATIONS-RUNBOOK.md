@@ -572,14 +572,14 @@ not prove this live gate.
 
 ## Field Device Loss, Replacement, And Revocation
 
-This procedure applies only after the Field Companion BFF and the office **Crew devices** setting
+This procedure applies only after the Field Companion BFF and the office **Crew phones** setting
 are deployed. It is intentionally an office action: a field account cannot issue, list, or revoke
 devices, and crew members never receive a passwordless magic-link session.
 
 1. Treat a lost or reassigned phone as a credential incident. Record the field user, device id,
    reporter, and UTC time in the incident record. Do not copy a QR image, pairing URL, token, or
    device proof into the record.
-2. An owner or operations user opens **Settings -> Crew devices**, identifies the active device,
+2. An owner or operations user opens **Settings -> Crew phones**, identifies the active device,
    and selects **Revoke lost device**. Confirm the resulting `device_id` and `revoked_at` response.
 3. Verify the device appears as revoked on a freshly loaded office list. The old device must fail a
    current `/api/v1/session` request even if it still has its session cookie and local proof; a

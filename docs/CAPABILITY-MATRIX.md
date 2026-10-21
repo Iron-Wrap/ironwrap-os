@@ -339,8 +339,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
     operation-sets slice builds the four sets.
   - Closing a prepared people-only draft: the receipt codes `applied_by_person` and `superseded`
-    (under `succeeded`) and the app's words and notes for them exist, but nothing closes the draft,
-    and no receipt renders a note yet (`words.note`, `VIEW_REFUSED` included).
+    (under `succeeded`) and the app's words and notes for them exist, and the receipt shows the
+    note on its "Since then" row, but nothing closes the draft yet. No screen hosts the answer
+    message that shows `VIEW_REFUSED` under the answer.
   - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
     tenant policy lists no company pages.
   - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its

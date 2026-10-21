@@ -1198,8 +1198,9 @@ matches a cited fact.
 `view_spec_invalid`, which the face's answer receipt carries when it refused a view (see "Requests
 through the face"), and `applied_by_person` and `superseded`, which close a prepared people-only
 draft when a person made the change or a newer draft replaced it (see "Action classes"). The app's
-words for each of the three carry a note for the person (`app/src/components/ai/words.ts`), shown
-once the receipt renders its note; no receipt renders it yet. An `unknown` outcome becomes
+words for each of the three carry a note for the person (`app/src/components/ai/words.ts`): a
+closed draft's receipt shows its note as what happened since, and an answer whose view was refused
+shows it under the answer in the conversation, never on a receipt. An `unknown` outcome becomes
 `succeeded` or `failed` only through reconciliation, recorded as a new receipt version.
 
 ### Undo

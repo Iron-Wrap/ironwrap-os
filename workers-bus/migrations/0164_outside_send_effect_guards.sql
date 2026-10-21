@@ -9,6 +9,15 @@
 -- keeps its 0156 exit, and the 0156 apply trigger inserts the confirmation before it moves the
 -- effect, so the person path passes this guard.
 --
+-- A send whose readback conflicted went straight from `reconciling` to `manual_exception`: the
+-- provider answered, so it did something. A person may record that the customer has it
+-- (`delivered`), but never `not_delivered`, which would make the send "not executed" and open the
+-- way to a second send. That needs provider evidence; until then the send stays an exception. A
+-- send that went `unknown` first (a provider that never answered) keeps the 0156 person path. This
+-- guard runs on the confirmation insert, before 0156's apply trigger moves the effect. A send whose
+-- readback conflicted never went `unknown`, so a late-answer wait has nothing to hold for it: the
+-- refusal is this guard's, whatever order the insert guards run in.
+--
 -- New triggers with distinct names only. No 0042, 0156 or 0161 trigger is re-created. Each uses
 -- CREATE TRIGGER IF NOT EXISTS and references only 0042 and 0156 objects, so this file is
 -- safe whether it is applied before 0161 and 0162 (production order) or after them (a fresh
@@ -49,5 +58,18 @@ BEGIN
          AND confirmation.tenant_id = OLD.tenant_id
          AND confirmation.outcome =
            CASE NEW.state WHEN 'succeeded' THEN 'delivered' ELSE 'not_delivered' END
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS proposal_delivery_confirmations_conflict_guard
+BEFORE INSERT ON proposal_delivery_confirmations
+WHEN NEW.outcome = 'not_delivered'
+BEGIN
+  SELECT RAISE(ABORT, 'proposal_delivery_confirmation_conflict_needs_provider_evidence')
+    WHERE EXISTS (
+      SELECT 1 FROM external_effect_events event
+       WHERE event.effect_id = NEW.effect_id
+         AND event.event_type = 'manual_exception'
+         AND event.from_state = 'reconciling'
     );
 END;

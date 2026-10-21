@@ -379,6 +379,22 @@ export async function recordProposalDeliveryConfirmation(
       delivery_state: effect.state,
     });
   }
+  // A readback that conflicted means the provider answered, so it did something: "not delivered"
+  // would make the send "not executed" and open the way to a second send. That needs provider
+  // evidence, never a person's word; D1 refuses it as well (0164). "Delivered" stays open.
+  if (input.outcome === "not_delivered" && effect.state === "manual_exception") {
+    const conflicted = await env.DB.prepare(
+      `SELECT 1 AS found FROM external_effect_events
+        WHERE effect_id = ? AND event_type = 'manual_exception' AND from_state = 'reconciling' LIMIT 1`,
+    ).bind(effect.effect_id).first();
+    if (conflicted) {
+      throw new ProposalDeliveryConfirmationError(
+        "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+        409,
+        { delivery_state: effect.state },
+      );
+    }
+  }
   const createdAt = input.now ?? new Date().toISOString();
   // A fresh unknown may only be late: "not delivered" waits until the provider's own answer could no
   // longer arrive inside an attempt lease, so a person cannot clear the way for a second send early.

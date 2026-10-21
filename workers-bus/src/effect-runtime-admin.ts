@@ -62,8 +62,8 @@ async function existingEffectRefusal(env: AppEnv, effectId: string): Promise<Res
 
 /**
  * The MCP host claims its `mcp.*` effects here: it keeps its provider credentials and executes the
- * claimed Frappe request locally. An outside send is never claimed here, since only the bus
- * executes one; the QA seed's `qa-synthetic-*` stand-in is, on a synthetic Worker only. The Worker
+ * claimed Frappe request locally. An outside send is never claimed here: only the bus may execute
+ * one. The QA seed's `qa-synthetic-*` stand-in is claimed, on a synthetic Worker only. The Worker
  * owns the durable proposal/lease/readback state; this endpoint never accepts provider credentials
  * or performs a provider call.
  */
@@ -153,7 +153,9 @@ export async function handleExternalEffectRetry(req: Request, env: AppEnv): Prom
   const refused = await existingEffectRefusal(env, effectId);
   if (refused) return refused;
   try {
-    const effect = await retryExternalEffect(env, effectId, text(body.now) ?? undefined);
+    // Retried now, by the server's clock: a caller's `now` is ignored, so a backdated retry cannot
+    // pass an effect's deadline.
+    const effect = await retryExternalEffect(env, effectId, new Date().toISOString());
     return json({ effect });
   } catch (error) {
     return json({ error: effectError(error) }, effectErrorStatus(error));

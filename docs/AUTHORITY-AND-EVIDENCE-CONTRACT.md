@@ -676,7 +676,8 @@ A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller's reque
 that did not arrive or could not be processed. It stays open until a person records how it ended;
 there is no lookback window, because a window would retire a failure nobody decided. The
 receptionist is callback only and never transfers a call live: a callback it requests is
-`requested`, opens a callback incident, and is not a failed handoff
+recorded as `requested` on its session and is not a failed handoff, while an emergency session
+that closes without a handoff request is recorded as failed
 ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
 
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)

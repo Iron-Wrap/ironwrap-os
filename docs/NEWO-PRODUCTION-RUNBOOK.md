@@ -81,7 +81,6 @@ Fill the reviewed non-secret values in `wrangler.jsonc` and `config/newo/product
 - report and handoff webhook IDs and exact Worker URLs;
 - Newo-owned number (no transfer number: the receptionist is callback only);
 - owner-approved usage limit and alert percent;
-- callback owner Frappe user;
 - expected tool, report, and AKB hashes.
 
 Keep these launch values:
@@ -92,6 +91,8 @@ NEWO_OUTBOUND_ENABLED=false
 NEWO_CONTROL_WRITE_ENABLED=false
 NEWO_JOBNIMBUS_BOOKING_PROVEN=false
 ```
+
+`NEWO_ENABLED=true` is refused by `node tools/validate-newo-config.mjs` and the readiness contract until a D1 callback record exists: the slice that builds it adds the migration `NNNN_newo_callback_records.sql`.
 
 Control writes may be enabled later without enabling customer sends. Outbound customer operations require both governed approval and `NEWO_OUTBOUND_ENABLED=true`.
 
@@ -121,16 +122,16 @@ The documented API does not cover the complete phone-connector, AKB-publishing, 
 
 ## 6. Staging and failure proof
 
-Run the 26 cases in `config/newo/evaluation-cases.v1.json` against the exact actor and Worker version. Pass requires at least 85 percent capture-and-routing accuracy and zero catastrophic failures.
+Run the 31 cases in `config/newo/evaluation-cases.v1.json` against the exact actor and Worker version. Pass requires at least 85 percent capture-and-routing accuracy and zero catastrophic failures.
 
 Required failure evidence includes wrong job verification, prompt injection, exact replay and hash conflict, same-caller second session, report omission, and dependency outage. A dependency failure must preserve accepted D1/R2 state and must not produce a false booking, callback time, delivery, or downstream confirmation.
 
 Prove before forwarding:
 
 1. Wrong credentials create no R2/D1 business record.
-2. A valid controlled call creates an R2 object, event receipt, session, Frappe record, downstream outcome, and readable operator state.
+2. A valid controlled call creates an R2 object, event receipt, session, D1 operating-core record, downstream outcome, and readable operator state.
 3. A missing report becomes one visible reconciliation exception.
-4. A requested handoff creates a callback incident and owner alert, urgent when the caller's urgency is urgent or emergency, and no call is transferred. A handoff request that cannot be processed is reported as `failed` and raises the urgent failure path.
+4. A requested handoff records the callback request on its D1 session (handoff status `requested`, highest urgency kept) and emails the owner the caller's name, phone, address, and reason; the email is best effort. No call is transferred. A handoff request that cannot be processed, or an emergency session that closes without one, is recorded as `failed` and raises the urgent failure email and the failed-handoff exception.
 5. Forwarding rollback works from the real number.
 
 ## 7. Booking gate
@@ -148,11 +149,11 @@ If the contract is absent or any test fails, remain request-only.
 
 ## 8. Cutover gates
 
-After-hours forwarding requires the repository gate, production config gate, 26-case evaluation, wrong-credential proof, owned landing proof, callback incident proof, usage alert proof, and owner approval.
+After-hours forwarding requires the repository gate, production config gate, 31-case evaluation, wrong-credential proof, owned landing proof, callback request proof, usage alert proof, and owner approval.
 
 Selected inbound requires reviewed real-call evidence from after-hours operation, no unresolved catastrophic incident, acceptable capture/routing accuracy, and demonstrated rollback.
 
-All inbound requires owner sign-off, zero unresolved catastrophic incidents, working callback incidents, no missing reports or DLQ failures, and another demonstrated rollback.
+All inbound requires owner sign-off, zero unresolved catastrophic incidents, working callback requests, no missing reports or DLQ failures, and another demonstrated rollback.
 
 Record the exact Git commit, Worker version, D1 migration state, Newo actor ID, AKB hash, tool/report hashes, phone number, forwarding phase, reviewer, timestamps, and evidence references.
 
@@ -164,7 +165,7 @@ Use the admin bearer for diagnostic readiness. The unauthenticated route intenti
 curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" https://<worker-origin>/ready
 ```
 
-The five-minute cron retries Newo landing and detects missing reports. The daily cron checks actor/webhook/config drift, Frappe callback incidents, downstream failures, and records that call-minute usage is unavailable from the documented API. Provider-console usage alerts remain required evidence.
+The five-minute cron retries Newo landing and detects missing reports. The daily cron checks actor/webhook/config drift, open Newo `Automation Incident` records in Frappe (no Worker code writes them since the native D1 cutover), downstream failures, and records that call-minute usage is unavailable from the documented API. Provider-console usage alerts remain required evidence.
 
 ## 10. Rollback
 

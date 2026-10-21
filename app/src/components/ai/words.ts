@@ -159,8 +159,10 @@ export const RECEIPT_FIELDS = [
 ] as const satisfies readonly (keyof ContractReceipt)[];
 
 export const REASON_CODES = {
-  // An answer that stands although its generated view was refused (contract f4.1).
-  succeeded: ["view_spec_invalid"],
+  // An answer that stands although its generated view was refused (contract f4.1), and a
+  // people-only draft that leaves Needs you because a person made the change or a newer draft
+  // replaced it (contract f5).
+  succeeded: ["view_spec_invalid", "applied_by_person", "superseded"],
   failed: [
     "policy_denied",
     "declined",
@@ -282,9 +284,8 @@ export interface ReceiptWords {
   /** Held: why it waits, in one sentence. */
   why?: string;
   /**
-   * Done, with something the person should know, such as `VIEW_REFUSED`: "IronWrap couldn't draw
-   * the layout you asked for, so the answer is in the text above. To try once more, type your
-   * request in other words in the box below."
+   * Something the person should know: on Done, `VIEW_REFUSED` ("IronWrap couldn't draw the layout
+   * you asked for, …"); on a closed people-only draft, `appliedByPersonNote` or `supersededNote`.
    */
   note?: string;
   /** Held: the one next step. */
@@ -295,7 +296,12 @@ export interface ReceiptWords {
 
 type HeldReason = Exclude<
   ReasonCode,
-  "declined" | "superseded" | "done_by_person" | "no_readback_yet" | "view_spec_invalid"
+  | "declined"
+  | "superseded"
+  | "done_by_person"
+  | "no_readback_yet"
+  | "view_spec_invalid"
+  | "applied_by_person"
 >;
 
 /** Why a held step waits, in one sentence, and the one next step (AI-PRIMITIVES outcome table). */
@@ -364,9 +370,24 @@ export const VIEW_REFUSED =
   "IronWrap couldn't draw the layout you asked for, so the answer is in the text above. To try once more, type your request in other words in the box below.";
 
 /**
+ * A people-only draft a person made by hand (`applied_by_person`): who made it, to which record,
+ * that the draft closed without undoing the change (gate f5: "closing this draft" read as a button
+ * to find), and that nothing is left.
+ */
+export function appliedByPersonNote(by = "A person", record?: string): string {
+  return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. That does not undo the change, and nothing is left to do.`;
+}
+
+/** A people-only draft a newer one replaced (`superseded`): it changed nothing; where the newer one waits. */
+export function supersededNote(record?: string): string {
+  return `A newer draft ${record ? `for ${record}` : "of the same change"} replaced this one. This draft changed nothing; the newer draft is in Needs you.`;
+}
+
+/**
  * The state words of one receipt. `by` names the person who declined, undid or did the step;
  * `where` is the outside system in plain words ("QuickBooks"); `waitingFor` is where a person's
- * answer still has to arrive ("the phone").
+ * answer still has to arrive ("the phone"); `record` is what a people-only draft changes ("Grace
+ * Obi's access").
  */
 export function receiptWords(
   receipt: Pick<ContractReceipt, "outcome" | "policy" | "needs_from_you">,
@@ -374,7 +395,8 @@ export function receiptWords(
     by,
     where = "the other system",
     waitingFor,
-  }: { by?: string; where?: string; waitingFor?: string } = {},
+    record,
+  }: { by?: string; where?: string; waitingFor?: string; record?: string } = {},
 ): ReceiptWords {
   const [reason] = receipt.policy.reason_codes;
   const as = (state: ReceiptState, words?: string): ReceiptWords => ({
@@ -393,7 +415,18 @@ export function receiptWords(
   switch (receipt.outcome) {
     case "succeeded":
       // The answer stands; only its generated view was refused, so say what to do instead.
-      return reason === "view_spec_invalid" ? { ...as("done"), note: VIEW_REFUSED } : as("done");
+      if (reason === "view_spec_invalid") return { ...as("done"), note: VIEW_REFUSED };
+      // A people-only draft leaves Needs you, never for Done for you: a person made the change,
+      // or a newer draft replaced it.
+      if (reason === "applied_by_person")
+        return {
+          ...(by
+            ? { state: "done_by_person" as const, ...personDoneWords(by) }
+            : as("done_by_person")),
+          note: appliedByPersonNote(by, record),
+        };
+      if (reason === "superseded") return { ...as("replaced"), note: supersededNote(record) };
+      return as("done");
     case "unknown":
       return { ...as("working"), waiting: `Waiting for ${where} to confirm.` };
     case "failed":

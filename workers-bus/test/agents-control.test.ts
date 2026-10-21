@@ -5,7 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.ts";
 import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
+import { catalogAction, earnable } from "../src/agents/catalog.ts";
 import { currentDelegation, specialistControl } from "../src/agents/control.ts";
+import { effectiveDelegation } from "../src/agents/policy.ts";
 import { CATASTROPHE_IDS, SHADOW_COMPARE_WINDOW_MS, sweepShadow } from "../src/agents/shadow.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import { WATCH_CONDITIONS } from "../src/agents/watches.ts";
@@ -383,6 +385,60 @@ test("H, protective and never-delegable actions cannot receive owner delegation"
     (await s.app("/specialists/lead_concierge/delegation", setting({ ceiling: null }))).body.error,
     "ceiling_required",
   );
+});
+
+test("the owner's caps keep every outside send and price commitment at asks first", async () => {
+  const s = setup();
+  // Every send outside IronWrap, every price commitment and every commitment of money to an outside
+  // party asks first (D-05, D-09, Q4, L04): the twenty-four actions the catalog caps, with
+  // customer_message.send for two of its owners.
+  const capped = [
+    ["estimator", "quote.commit_revision"],
+    ["estimator", "quote.apply_discount"],
+    ["estimator", "change_order.commit"],
+    ["lead_concierge", "customer_message.send"],
+    ["billing_reconciliation", "customer_message.send"],
+    ["lead_concierge", "visit.confirm"],
+    ["proposal_contract", "portal_link.send"],
+    ["proposal_contract", "proposal.publish"],
+    ["proposal_contract", "change_order.send_for_decision"],
+    ["customer_care_warranty", "remedy.offer"],
+    ["marketing_reputation", "campaign.send"],
+    ["billing_reconciliation", "invoice.commit_intent"],
+    ["marketing_reputation", "review_response.publish"],
+    ["estimator", "insurance_supplement.send"],
+    ["purchasing_inventory", "rfq.send"],
+    ["purchasing_inventory", "purchase_order.place"],
+    ["purchasing_inventory", "purchase_order.change"],
+    ["purchasing_inventory", "purchase_order.expedite"],
+    ["billing_reconciliation", "supplier_message.send"],
+    ["purchasing_inventory", "supplier_return.request"],
+    ["compliance", "document.request"],
+    ["customer_care_warranty", "cost_recovery.claim"],
+    ["marketing_reputation", "content.publish"],
+    ["marketing_reputation", "ad_spend.commit"],
+    ["billing_reconciliation", "supplier_bill.approve"],
+  ] as const;
+  for (const [specialist, actionId] of capped) {
+    const action = catalogAction(actionId);
+    assert.ok(action, actionId);
+    assert.equal(action.delegable, false, actionId);
+    // Never a delegation candidate, so the face never proposes acting within limits for it.
+    assert.equal(earnable(action), false, actionId);
+    for (const [key, body] of [
+      ["within", setting({ action_id: actionId })],
+      ["asks", setting({ action_id: actionId, setting: "asks_first", ceiling: null })],
+      ["off", setting({ action_id: actionId, setting: "off", ceiling: null })],
+    ] as const) {
+      const r = await s.app(`/specialists/${specialist}/delegation`, body, "owner", `cap-${key}-${specialist}-${actionId}`);
+      assert.equal(r.status, 422, `${actionId} ${key}`);
+      assert.equal(r.body.error, "not_delegable", `${actionId} ${key}`);
+    }
+    // A within-limits setting recorded before the cap no longer applies: the step asks first.
+    const before = { delegation_id: "dlg_recorded_before_the_cap", setting: "within_limits" } as const;
+    assert.equal(effectiveDelegation(action, { delegation: before, specialistState: { paused: false, held: false } }), "asks_first");
+  }
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_delegation_settings").n, 0);
 });
 
 test("auditor holds execute once, cannot target the auditor, and clearing requires per-action reconfirmation", async () => {

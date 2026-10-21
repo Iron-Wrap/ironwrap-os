@@ -851,8 +851,12 @@ them and follows these conventions:
   proposals stay open by one rule: a newer proposal for the same lead that sets every key an older
   open one set supersedes it, while one that sets only some of those keys leaves the older one
   open. A proposal closes for good once any `lead_fact.confirm` that policy admitted names it,
-  whether the reviewer approved it, declined it or did it by hand. Not built yet: the Worker records
-  each proposal as its step, but serves no `lead_proposal` fact and applies no open rule.
+  whether the reviewer approved it, declined it or did it by hand.
+- `lead_fact.confirm` names an open proposal of the same lead and tenant in `proposal_id`
+  (`lead_proposal/<step_id>`) and may only repeat its values: a `null` leaves a field unconfirmed,
+  and a value that differs from the proposal's stops it (`fact_conflict`, check `proposal`), as does
+  a proposal that does not exist or is another lead's (`fact_missing`) or that is no longer open
+  (`fact_stale`). A person who wants another value edits the lead by hand.
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:
@@ -1192,8 +1196,9 @@ matches a cited fact.
 `view_spec_invalid`, which the face's answer receipt carries when it refused a view (see "Requests
 through the face"), and `applied_by_person` and `superseded`, which close a prepared people-only
 draft when a person made the change or a newer draft replaced it (see "Action classes"). The app's
-words for each of the three carry a note for the person (`app/src/components/ai/words.ts`), shown
-once the receipt renders its note; no receipt renders it yet. An `unknown` outcome becomes
+words for each of the three carry a note for the person (`app/src/components/ai/words.ts`): a
+closed draft's receipt shows its note as what happened since, and an answer whose view was refused
+shows it under the answer in the conversation, never on a receipt. An `unknown` outcome becomes
 `succeeded` or `failed` only through reconciliation, recorded as a new receipt version.
 
 ### Undo
@@ -1272,11 +1277,12 @@ Worker takes the `close_model` 3 block, the routed block of a gateway config v2 
 tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
 with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
 to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
-host. A host sends the newest close model it knows that is no newer than the Worker's: today's
-host sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still
-gets the block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on
-a later close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block records the effort, run class, qualification, release and
-data class, so only its live or shadow output is held to a qualification (see "Qualification").
+host. A host sends the newest close model it knows that is no newer than the Worker's: today's host
+sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still gets the
+block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on a later
+close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block
+records the effort, run class, qualification, release and data class, so only its live or shadow
+output is held to a qualification (see "Qualification").
 
 ## Shared memory
 
@@ -1323,6 +1329,16 @@ evidence.
   fell back, practice and whether it stopped, the counted window and the bar (see "Delegation"),
   the qualification it relies on, the decision history, failed readbacks, and the most proposals in
   any hour, day or week. Its version moves with every proposal of the pair.
+- An open lead proposal is the fact `lead_proposal/<step_id>`, readable at `sales:read` (the owner,
+  ops and sales) and owned: the `lead_id`, the proposed `fields`, `proposed_at`, and the `source` it
+  was cited to (`signal/<id>`). Its fields carry customer details, so only runs and screens with
+  that view read them; they never reach the snapshot of a run that writes an owner report, nor a
+  watch digest. A lead links its five newest open proposals, so a later run about the lead holds
+  them. A proposal stays open until a `lead_fact.confirm` that policy admitted names it, whether a
+  person then approves it, declines it or does it by hand, or until a newer proposal for the same
+  lead (by time, then by the order they were recorded) sets every key it set; a newer one that sets
+  only some of them leaves it open. A closed proposal reads as no fact, and of two confirms of one
+  proposal only the first to land is admitted.
 - `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
   changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
   is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.

@@ -580,6 +580,44 @@ test("each inbound-signal check fails on its own", () => {
   assert.ok(!failures.some((failure) => failure.includes(`.${n}: `) && /subject/.test(failure)), "an event on a channel not taken in needs no subject");
 });
 
+test("a delegation names a delegable action its specialist owns; a within-limits permit on a never-delegable one is a finding", () => {
+  const record = (actionId, specialistId = ID) => ({ fact_id: `delegation/${specialistId}:${actionId}`, kind: "delegation", version: 1, trust: "owned", observed_at: "-PT1M", data: {} });
+  const permit = { fact_id: "receipt/RC-1", kind: "receipt", version: 1, trust: "owned", observed_at: "-PT1M", data: { action_id: "comms.send", permit: { kind: "within_limits", delegation_id: "dlg_1" } } };
+  const review = (key, actionId) => ({ kind: "watch", source: "scheduler", watch_id: "new_inbound", at: "PT0M", content: { watch_id: "new_inbound", objects: [], digest: { [key]: [{ specialist_id: ID, action_id: actionId }] }, summary: "1 pair" } });
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].facts.push(record("comms.send"));
+    cases[1].signal = review("previewable", "comms.send");
+    cases[2].expected.actions.push({ action_id: "delegation.propose_change", args_must_include: { specialist_id: ID, action_id: "comms.send", proposed: "within_limits" } });
+    cases[3].facts.push(permit);
+    cases[4].facts.push(permit);
+    cases[4].expected.actions.push({ action_id: "finding.raise" });
+    cases[5].facts.push(record("lead.triage"));
+    cases[6].facts.push(record("lead.triage", "estimator"));
+    cases[7].signal = review("delegation_candidates", "lead.triage");
+    cases[8].signal = review("awaiting_owner", "comms.send");
+    cases[9].expected.actions.push({ action_id: "delegation.propose_change", args_must_include: { specialist_id: ID, action_id: "lead.triage", proposed: "within_limits" } });
+    cases[10].facts.push({ ...permit, data: { ...permit.data, action_id: "lead.triage" } });
+    cases[11].facts.push({ ...record("lead.triage"), data: { specialist_id: ID, action_id: "comms.send" } });
+    cases[12].facts.push({ ...record("comms.send"), kind: "delegation_setting" });
+    cases[13].signal = review("previewable", "lead.unknown");
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.match(failures, /\.001: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
+  assert.match(failures, /\.002: digest previewable names comms\.send, which is never delegable/);
+  assert.match(failures, /\.003: delegation\.propose_change names comms\.send, which is never delegable/);
+  assert.match(failures, /\.004: receipt\/RC-1 holds a within-limits permit on comms\.send, which is never delegable; only a case that raises it as a finding may/);
+  assert.doesNotMatch(failures, /\.005: receipt\/RC-1 holds a within-limits permit/);
+  for (const n of ["006", "008"]) assert.doesNotMatch(failures, new RegExp(`\\.${n}: (delegation record|digest)`));
+  assert.match(failures, /\.007: delegation record delegation\/estimator:lead\.triage names lead\.triage for estimator, which does not own it/);
+  assert.match(failures, /\.009: digest awaiting_owner names comms\.send, which is never delegable/);
+  assert.doesNotMatch(failures, /\.010: delegation\.propose_change names/);
+  assert.doesNotMatch(failures, /\.011: receipt\/RC-1 holds a within-limits permit/);
+  assert.match(failures, /\.012: delegation record delegation\/lead_concierge:lead\.triage \(data\) names comms\.send, which is never delegable/);
+  assert.match(failures, /\.013: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
+  assert.match(failures, /\.014: digest previewable names lead\.unknown, which is not in the catalog/);
+});
+
 test("structural mode without the contract still checks shape", () => {
   const result = validate(fixture({ withCatalog: false }));
   assert.deepEqual(result.failures, []);

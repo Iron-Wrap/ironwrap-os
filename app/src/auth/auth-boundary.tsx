@@ -94,7 +94,7 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
         ) : fieldCompanionPath ? (
           <ErrorState
             title="Pair this crew phone"
-            message="Ask an owner or ops user to open Settings, then Crew devices. Scan the new QR code on this phone."
+            message="Ask an owner or ops user to open Settings, then Crew phones. Scan the new QR code on this phone."
           />
         ) : unifiedEntry ? (
           <UnifiedEntryAuth />
@@ -156,7 +156,7 @@ function UnifiedEntryAuth() {
         </CardHeader>
         <CardContent>
           <p className="text-sm leading-6 text-muted">
-            Ask an owner or ops user to open Settings, then Crew devices. Scan the QR code on this
+            Ask an owner or ops user to open Settings, then Crew phones. Scan the QR code on this
             phone. Your work will open.
           </p>
         </CardContent>

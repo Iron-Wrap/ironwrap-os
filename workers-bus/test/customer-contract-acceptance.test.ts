@@ -3394,6 +3394,22 @@ test("a person's record after the copy was shown only moves the window later", a
       time_zone: ZONE,
       error: "cancellation_window_receipt_earlier_than_recorded",
     });
+    // D1 holds a writer that skips the Worker to the same line, before any person's record exists.
+    const direct = (receivedAt: string, windowEndsAt: string) => h.db.raw.prepare(
+      `INSERT INTO production_cancellation_window_receipts (
+         receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+         acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
+         recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Synthetic direct record.', 'fixture://copy', ?, 'owner',
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+    ).run(
+      `pcw_${"9".repeat(40)}`, TENANT, JOB_ID, receivedAt, windowEndsAt, ZONE,
+      binding.acceptance_binding_id, binding.accepted_at, OWNER_ID, "a".repeat(64), "9".repeat(64),
+    );
+    assert.throws(
+      () => direct(binding.accepted_at, new Date(Date.parse(binding.accepted_at) + 240 * 60 * MINUTE_MS).toISOString()),
+      /cancellation_window_receipt_earlier_than_recorded/,
+    );
     // The copy's own time changes nothing.
     const same = await recordReceivedCopy(h, owner, event!.shown_at, "receipt-a5-later-0002");
     assert.equal(same.status, 200);
@@ -3410,23 +3426,6 @@ test("a person's record after the copy was shown only moves the window later", a
     assert.equal(moved.body.cancellation_window.signed_copy_received.no_d1_contract, false);
     assert.equal(moved.body.cancellation_window.signed_copy_received.contract_signed_at, binding.accepted_at);
     assert.ok(moved.body.cancellation_window.ends_at >= event!.window_ends_at);
-
-    // D1 holds a writer that skips the Worker to the same line.
-    const direct = (receivedAt: string, windowEndsAt: string) => h.db.raw.prepare(
-      `INSERT INTO production_cancellation_window_receipts (
-         receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
-         acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
-         recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Synthetic direct record.', 'fixture://copy', ?, 'owner',
-                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
-    ).run(
-      `pcw_${"9".repeat(40)}`, TENANT, JOB_ID, receivedAt, windowEndsAt, ZONE,
-      binding.acceptance_binding_id, binding.accepted_at, OWNER_ID, "a".repeat(64), "9".repeat(64),
-    );
-    assert.throws(
-      () => direct(binding.accepted_at, new Date(Date.parse(binding.accepted_at) + 240 * 60 * MINUTE_MS).toISOString()),
-      /cancellation_window_receipt_earlier_than_recorded/,
-    );
   } finally {
     h.restore();
   }
@@ -3639,7 +3638,8 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
       // Wait out the millisecond the copy was shown in.
     }
     const later = now();
-    assert.throws(() => insertReceipt(later, plusHours(later, 240)), /cancellation_window_receipt_end_invalid/);
+    // Ending after the earlier record's end but before the copy's end: only the copy refuses it.
+    assert.throws(() => insertReceipt(later, plusHours(later, 240.75)), /cancellation_window_receipt_end_invalid/);
     insertReceipt(later, event.window_ends_at);
     assert.equal(count(h, "production_cancellation_window_receipts"), 2);
 

@@ -491,6 +491,8 @@ export function bindCrewInLedger(
     crewVersion?: number;
     assignmentId: string;
     at?: string;
+    /** Leave the cancellation window as it is, for a case that proves it holds the assignment. */
+    keepCancellationWindow?: boolean;
   },
 ): string {
   const at = input.at ?? new Date().toISOString();
@@ -515,7 +517,7 @@ export function bindCrewInLedger(
       ...row,
     });
   // The assignment this Crew entry belongs to waits for the cancellation window to end (0160).
-  endCancellationWindow(db, input);
+  if (!input.keepCancellationWindow) endCancellationWindow(db, input);
   const crew = currentGate(db, { ...input, gate: "Crew" });
   if (crew.state !== "blocked") {
     const target = db.prepare(

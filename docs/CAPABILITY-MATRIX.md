@@ -335,9 +335,10 @@ Current source tracing distinguishes implemented modules from reachable producti
     (#17, not merged) records it for production gate waiver decisions.
   - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
     operation-sets slice builds the four sets.
-  - A prepared people-only draft: "Not now" is not built, `payee.unfreeze_prepare` and
-    `safety_stop.release_prepare` drafts (no registered arguments) do not close, and no receipt
-    renders a note yet (`words.note`, `VIEW_REFUSED` included).
+  - A prepared people-only draft: "Not now" is not built, and `payee.unfreeze_prepare` and
+    `safety_stop.release_prepare` drafts (no registered arguments) do not close. A closed draft's
+    receipt shows its note on its "Since then" row; no screen hosts the answer message that shows
+    `VIEW_REFUSED` under the answer.
   - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
     tenant policy lists no company pages.
   - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its

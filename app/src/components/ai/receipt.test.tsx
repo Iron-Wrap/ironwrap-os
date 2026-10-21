@@ -688,3 +688,91 @@ describe("a step a person did", () => {
     expect(within(card).getByText(/Approved by a person/)).toBeVisible();
   });
 });
+
+describe("a people-only draft that left Needs you", () => {
+  const draft = (reason: "applied_by_person" | "superseded") =>
+    receipt({
+      specialist_id: "compliance",
+      action_id: "access.prepare_change",
+      did: "Prepared a role change for Grace Obi: from Field to Sales.",
+      tool: null,
+      readback: null,
+      permit: { ...receipt().permit, kind: "draft", approved_by: null, approval_id: null },
+      policy: { ...receipt().policy, reason_codes: [reason] },
+    });
+  const closed: ReceiptDisplay = {
+    title: "Move from Field to Sales",
+    when: { text: "Yesterday 16:20" },
+    sources: [{ kind: "message", label: "Request from Grace Obi", code: "RQ-311" }],
+    people: { person_dana: "Dana Whitford" },
+    record: "Grace Obi's role",
+  };
+
+  it("says who made the change, that it stays and that nothing is left, with no button", () => {
+    render(
+      <Receipt receipt={draft("applied_by_person")} display={{ ...closed, by: "person_dana" }} />,
+    );
+    const card = screen.getByRole("article");
+    expect(card).toHaveAttribute("data-state", "done_by_person");
+    expect(within(card).getByText("Done by Dana Whitford")).toBeVisible();
+    expect(within(card).getByText("Since then")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "Dana Whitford already made this change to Grace Obi's role, so this draft is closed. The change stays in place, and nothing is left to do.",
+      ),
+    ).toBeVisible();
+    expect(within(card).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
+    render(<Receipt receipt={draft("superseded")} display={closed} />);
+    const card = screen.getByRole("article");
+    expect(card).toHaveAttribute("data-state", "replaced");
+    expect(within(card).getByText("Replaced")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "A newer draft for Grace Obi's role replaced this one. This draft changed nothing; the newer draft is in Needs you.",
+      ),
+    ).toBeVisible();
+    expect(within(card).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("keeps the screen's own line when it passes one", () => {
+    render(
+      <Receipt receipt={draft("superseded")} display={{ ...closed, since: "Replaced on Mon." }} />,
+    );
+    expect(screen.getByText("Replaced on Mon.")).toBeVisible();
+    expect(screen.queryByText(/This draft changed nothing/)).toBeNull();
+  });
+
+  it("never puts an answer's refused-view line on a receipt card", () => {
+    render(
+      <Receipt
+        receipt={receipt({ policy: { ...receipt().policy, reason_codes: ["view_spec_invalid"] } })}
+        display={display}
+        onUndo={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Since then")).toBeNull();
+    expect(screen.queryByText(/couldn't draw the layout/)).toBeNull();
+  });
+});
+
+describe("a step a newer one replaced or a person did, with no line from the screen", () => {
+  it.each(["superseded", "done_by_person"] as const)(
+    "shows no empty Since then row: failed/%s",
+    (reason) => {
+      render(
+        <Receipt
+          receipt={receipt({
+            outcome: "failed",
+            readback: null,
+            policy: { ...receipt().policy, reason_codes: [reason] },
+          })}
+          display={{ ...display, people: { person_dana: "Dana Whitford" } }}
+        />,
+      );
+      expect(screen.queryByText("Since then")).toBeNull();
+    },
+  );
+});

@@ -1244,23 +1244,41 @@ test("a person records whether a proposal send that could not be confirmed reach
         );
       const tooShort = await confirm(`delivery-confirm-short-${outcome}`, { ...confirmation, note: "ok" });
       assert.equal(tooShort.status, 400);
+      const audits = () =>
+        (db.raw.prepare("SELECT count(*) AS n FROM audit_log WHERE automation = 'proposal_delivery'").get() as { n: number }).n;
+      const openExceptions = () =>
+        (db.raw.prepare("SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'")
+          .get(effectId) as { n: number }).n;
+
+      if (outcome === "not_delivered") {
+        // The provider answered with a readback that conflicts, so it did something: a person cannot
+        // record "not delivered" (0164), which would clear the way for a second send. The send stays
+        // an exception, nothing is recorded, and the proposal is still not sent again.
+        const refused = await confirm(`delivery-confirm-${outcome}`, confirmation);
+        assert.equal(refused.status, 409, await refused.clone().text());
+        assert.deepEqual(await refused.json(), {
+          error: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+          delivery_state: "manual_exception",
+        });
+        assert.equal(effectState(), "manual_exception");
+        assert.equal(audits(), 0);
+        assert.equal(openExceptions(), 1);
+        const stillBlocked = await handleAuthenticatedRoute(
+          request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-3-${outcome}`),
+          env,
+          auth("ops"),
+        );
+        assert.equal(stillBlocked.status, 409);
+        assert.equal((await stillBlocked.json() as { next_step: string }).next_step, "confirm_delivery_by_hand");
+        continue;
+      }
 
       const recorded = await confirm(`delivery-confirm-${outcome}`, confirmation);
       assert.equal(recorded.status, 201, await recorded.clone().text());
-      const expectedState = outcome === "delivered" ? "succeeded" : "reconciled";
-      assert.equal((await recorded.json() as { effect: { state: string } }).effect.state, expectedState);
-      assert.equal(effectState(), expectedState);
-      assert.equal(
-        (db.raw.prepare("SELECT count(*) AS n FROM audit_log WHERE automation = 'proposal_delivery'").get() as { n: number }).n,
-        1,
-        "one audit row per confirmation",
-      );
-      assert.equal(
-        (db.raw.prepare("SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'")
-          .get(effectId) as { n: number }).n,
-        0,
-        "the exception the send opened is resolved by the confirmation",
-      );
+      assert.equal((await recorded.json() as { effect: { state: string } }).effect.state, "succeeded");
+      assert.equal(effectState(), "succeeded");
+      assert.equal(audits(), 1, "one audit row per confirmation");
+      assert.equal(openExceptions(), 0, "the exception the send opened is resolved by the confirmation");
       const replay = await confirm(`delivery-confirm-${outcome}`, confirmation);
       assert.equal(replay.status, 200);
       assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
@@ -1273,18 +1291,14 @@ test("a person records whether a proposal send that could not be confirmed reach
         env,
         auth("ops"),
       );
-      if (outcome === "not_delivered") {
-        assert.equal(next.status, 201, "not delivered: the proposal may be sent again");
-      } else {
-        // Delivered: record that send as the publication instead of sending it a second time.
-        assert.equal(next.status, 409);
-        assert.deepEqual(await next.json(), {
-          error: "proposal_delivery_not_recorded",
-          delivery_state: "succeeded",
-          external_effect_id: effectId,
-          next_step: "record_publication",
-        });
-      }
+      // Delivered: record that send as the publication instead of sending it a second time.
+      assert.equal(next.status, 409);
+      assert.deepEqual(await next.json(), {
+        error: "proposal_delivery_not_recorded",
+        delivery_state: "succeeded",
+        external_effect_id: effectId,
+        next_step: "record_publication",
+      });
     } finally {
       db.close();
     }
@@ -1657,10 +1671,37 @@ test("the confirmation ledger refuses what it must, in the route and in D1", asy
       ).run(new Date().toISOString()),
       /external_effect_terminal/,
     );
-    const confirmed = await personPost(env, ops, CONFIRM_PATH, "ledger-confirm", {
+    // A readback that conflicted means the provider answered: "not delivered" is not a person's to
+    // record, on the route or in D1 (0164), and the send keeps blocking the next one.
+    const notDelivered = await personPost(env, ops, CONFIRM_PATH, "ledger-not-delivered", {
       external_effect_id: "effect:ledger:conflict",
       outcome: "not_delivered",
       note: "The customer has not received anything.",
+    });
+    assert.equal(notDelivered.status, 409, await notDelivered.clone().text());
+    assert.deepEqual(await notDelivered.json(), {
+      error: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+      delivery_state: "manual_exception",
+    });
+    assert.throws(
+      () => db.raw.prepare(
+        `INSERT INTO proposal_delivery_confirmations
+           (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+            confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+         VALUES ('delivery-confirmation:direct-conflict-0001', ?, 'effect:ledger:conflict', ?, ?, 'not_delivered',
+                 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+      ).run(TENANT, PACK, REVISION, OPS_ID, "c".repeat(64), "d".repeat(64), new Date().toISOString()),
+      /proposal_delivery_confirmation_conflict_needs_provider_evidence/,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT state FROM external_effects WHERE effect_id = 'effect:ledger:conflict'").get() as { state: string }).state,
+      "manual_exception",
+    );
+    assert.equal((await prepare("ledger-prepare-after-refusal")).status, 409);
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "ledger-confirm", {
+      external_effect_id: "effect:ledger:conflict",
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
     });
     assert.equal(confirmed.status, 201);
     assert.throws(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
@@ -31,6 +32,7 @@ import { SqliteD1, TENANT, USERS, type SqliteStatement } from "./company-setup-f
 const TOKEN = "outside-send-guards-effect-runtime-token-0123456789abcdef";
 const REAL_PROVIDER = "native-commercial-publication";
 const QA_PROVIDER = "qa-synthetic-publication";
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 /** D1 answers a batch with `{ meta: { changes } }` per statement, as the lease claim reads it. */
 class D1 extends SqliteD1 {
@@ -336,6 +338,38 @@ test("an existing stand-in passes the routes only on a synthetic Worker", async 
   assert.deepEqual(await post(synthetic, "retry", { effectId: effect.effect_id }), { status: 400, body: { error: "effect_reconciliation_required" } });
 });
 
+test("the retry route runs on the server's clock: a caller's now changes nothing", async () => {
+  const db = new D1();
+  const env = workerEnv(db, "business");
+  // An mcp.* effect that may run twice, settled unknown and reconciled as not executed: retryable.
+  const reconciled = async (id: string, deadlineInMs: number) => {
+    const body = envelope(id, { action: "mcp.test_write", provider: "frappe", retryLimit: 1, maxAttempts: 2 });
+    const deadlineAt = new Date(Date.now() + deadlineInMs).toISOString();
+    body.effect.deadlineAt = deadlineAt;
+    body.authority.expiresAt = deadlineAt;
+    const claimed = await post(env, "claim", body);
+    assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+    const effectId = claimed.body.effect.effect_id as string;
+    await post(env, "settle", { effectId, settlement: { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" } });
+    const answer = await post(env, "reconcile", { effectId, outcome: "not_executed", evidence: { provider: "frappe", found: false } });
+    assert.equal(answer.body.effect.state, "reconciled");
+    return { effectId, deadlineAt };
+  };
+
+  // A caller's "now" past the deadline does not refuse a retry the server's clock allows.
+  const live = await reconciled("clock:live", 30 * 60_000);
+  const forward = await post(env, "retry", { effectId: live.effectId, now: new Date(Date.parse(live.deadlineAt) + 60_000).toISOString() });
+  assert.equal(forward.status, 200, JSON.stringify(forward.body));
+  assert.equal(forward.body.effect.state, "retry");
+
+  // A backdated "now" does not carry a retry past a deadline the server's clock has passed.
+  const lapsing = await reconciled("clock:lapsed", 1_500);
+  await new Promise((done) => setTimeout(done, Math.max(0, Date.parse(lapsing.deadlineAt) - Date.now() + 50)));
+  const backdated = await post(env, "retry", { effectId: lapsing.effectId, now: new Date(Date.parse(lapsing.deadlineAt) - 60_000).toISOString() });
+  assert.deepEqual(backdated, { status: 422, body: { error: "effect_deadline_expired" } });
+  assert.equal(stateOf(db, lapsing.effectId), "reconciled");
+});
+
 test("a claim that would let a proposal send run twice is refused on the route", async () => {
   const db = new D1();
   const env = workerEnv(db, "synthetic");
@@ -551,6 +585,81 @@ test("a person's record still settles an unknown or conflicting send, with its a
   assert.equal(audits("delivered"), 2);
 });
 
+test("a conflicting readback is never recorded as not delivered, before or after the late-answer window", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const afterWindow = () => new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
+  const confirm = (effectId: string, outcome: "delivered" | "not_delivered", key: string, now?: string) =>
+    recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT,
+      effectId,
+      outcome,
+      note: "Checked with the customer by phone.",
+      actorUserId: USERS.ops,
+      actorRole: "ops",
+      idempotencyKey: key,
+      now,
+    });
+  // The same confirmation written straight to D1, past the Worker's own check.
+  const insert = (effectId: string, id: string, createdAt: string) => {
+    const effect = effectRow(db, effectId);
+    db.raw.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, 'not_delivered', 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+    ).run(
+      `delivery-confirmation:${id}`, TENANT, effectId, effect.aggregate_id, effect.intent_id, USERS.ops,
+      sha256(`${id}:key`), sha256(`${id}:request`), createdAt,
+    );
+  };
+  const confirmations = (effectId: string) =>
+    count(db, "SELECT count(*) AS n FROM proposal_delivery_confirmations WHERE effect_id = ?", effectId);
+
+  // The provider answered, but its readback conflicts: reconciling -> manual_exception.
+  const conflict = await busSend(env, "readback:conflict", "conflict");
+  const conflictId = conflict.effect.effect_id;
+  assert.equal(conflict.effect.state, "manual_exception");
+  assert.equal(count(db, `SELECT count(*) AS n FROM external_effect_events
+    WHERE effect_id = ? AND from_state = 'reconciling' AND to_state = 'manual_exception'`, conflictId), 1);
+  for (const [label, now] of [["before", undefined], ["after", afterWindow()]] as const) {
+    await assert.rejects(
+      confirm(conflictId, "not_delivered", `conflict-${label}`, now),
+      { code: "proposal_delivery_confirmation_conflict_needs_provider_evidence", status: 409 },
+      `the Worker refuses ${label} the window`,
+    );
+    assert.throws(
+      () => insert(conflictId, `conflict-direct-${label}`, now ?? new Date().toISOString()),
+      /proposal_delivery_confirmation_conflict_needs_provider_evidence/,
+      `D1 refuses ${label} the window`,
+    );
+  }
+  assert.equal(stateOf(db, conflictId), "manual_exception");
+  assert.equal(confirmations(conflictId), 0);
+  // So it keeps blocking a second send of the same revision.
+  const second = envelope("readback:conflict");
+  second.effect.effectId = "effect:outside-send:readback:conflict:second";
+  second.effect.idempotencyKey = "outside-send:readback:conflict:second";
+  await assert.rejects(
+    proposeExternalEffect(env, second.effect as ExternalEffectRequest),
+    { code: "effect_proposal_delivery_unconfirmed" },
+  );
+  // "Delivered" stays open on a conflict.
+  assert.equal((await confirm(conflictId, "delivered", "conflict-delivered")).effectState, "succeeded");
+
+  // A provider that never answered: unknown, then an inconclusive check made it an exception.
+  const silentException = async (id: string) => {
+    const lost = await busSend(env, id, "lost");
+    await reconcileExternalEffect(env, lost.effect.effect_id, { outcome: "inconclusive", evidence: { provider: "no answer" } });
+    assert.equal(stateOf(db, lost.effect.effect_id), "manual_exception");
+    return lost.effect.effect_id;
+  };
+  const silent = await silentException("readback:silent");
+  assert.equal((await confirm(silent, "not_delivered", "silent-not-delivered", afterWindow())).effectState, "reconciled");
+  const silentDelivered = await silentException("readback:silent-delivered");
+  assert.equal((await confirm(silentDelivered, "delivered", "silent-delivered")).effectState, "succeeded");
+});
+
 test("other effects reconcile from unknown as before", async () => {
   const db = new D1();
   const env = workerEnv(db, "business");
@@ -570,7 +679,7 @@ test("other effects reconcile from unknown as before", async () => {
   assert.equal(mailReconciled.state, "succeeded");
 });
 
-test("0164 adds three named guards that reference only 0042 and 0156 objects, and applying it again changes nothing", () => {
+test("0164 adds four named guards that reference only 0042 and 0156 objects, and applying it again changes nothing", () => {
   const db = new D1();
   const guards = () =>
     (db.raw.prepare(
@@ -578,7 +687,8 @@ test("0164 adds three named guards that reference only 0042 and 0156 objects, an
         WHERE type = 'trigger' AND name IN (
           'external_effects_outside_send_retry_limit_guard',
           'external_effects_outside_send_no_retry_guard',
-          'external_effects_proposal_settle_evidence_guard')
+          'external_effects_proposal_settle_evidence_guard',
+          'proposal_delivery_confirmations_conflict_guard')
         ORDER BY name`,
     ).all() as Array<{ name: string; tbl_name: string; sql: string }>).map((row) => ({ ...row }));
   const applied = guards();
@@ -586,13 +696,17 @@ test("0164 adds three named guards that reference only 0042 and 0156 objects, an
     ["external_effects_outside_send_no_retry_guard", "external_effects"],
     ["external_effects_outside_send_retry_limit_guard", "external_effects"],
     ["external_effects_proposal_settle_evidence_guard", "external_effects"],
+    ["proposal_delivery_confirmations_conflict_guard", "proposal_delivery_confirmations"],
   ]);
+  const references: Record<string, string[]> = {
+    external_effects_outside_send_no_retry_guard: ["external_effects"],
+    external_effects_outside_send_retry_limit_guard: ["external_effects"],
+    external_effects_proposal_settle_evidence_guard: ["external_effects", "proposal_delivery_confirmations"],
+    proposal_delivery_confirmations_conflict_guard: ["external_effect_events", "proposal_delivery_confirmations"],
+  };
   for (const row of applied) {
     const tables = new Set([...row.sql.matchAll(/\b(?:FROM|JOIN|ON)\s+([a-z_]+)/gi)].map((match) => match[1]));
-    const expected = row.name === "external_effects_proposal_settle_evidence_guard"
-      ? ["external_effects", "proposal_delivery_confirmations"]
-      : ["external_effects"];
-    assert.deepEqual([...tables].sort(), expected, row.name);
+    assert.deepEqual([...tables].sort(), references[row.name], row.name);
   }
 
   const migration = readFileSync(new URL("../migrations/0164_outside_send_effect_guards.sql", import.meta.url), "utf8");

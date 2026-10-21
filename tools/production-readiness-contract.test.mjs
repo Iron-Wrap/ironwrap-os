@@ -122,6 +122,28 @@ test("contract mode catches a capability quietly becoming available", async (t) 
   assert.equal(checkFor("contract.capability.facet_native_projection.state")?.status, "fail");
 });
 
+test("contract mode refuses NEWO_ENABLED=true until the D1 callback record exists", async (t) => {
+  const gate = async ({ enable, marker }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-newo-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await mkdir(path.join(root, "workers-bus/migrations"), { recursive: true });
+    const source = await readFile(path.join(DEFAULT_REPO_ROOT, "workers-bus/wrangler.jsonc"), "utf8");
+    await writeFile(
+      path.join(root, "workers-bus/wrangler.jsonc"),
+      enable ? source.replace('"NEWO_ENABLED": "false"', '"NEWO_ENABLED": "true"') : source,
+    );
+    // The marker the callback-record slice adds; this synthetic file only names it.
+    if (marker) await writeFile(path.join(root, "workers-bus/migrations/0999_newo_callback_records.sql"), "SELECT 1;\n");
+    const result = await validateContract({ repoRoot: root });
+    return result.checks.find((item) => item.id === "contract.newo.callback_record_gate");
+  };
+  assert.equal((await gate({ enable: false, marker: false }))?.status, "pass");
+  const refused = await gate({ enable: true, marker: false });
+  assert.equal(refused?.status, "fail");
+  assert.match(refused.message, /NEWO_ENABLED=true \(production\) is refused until the D1 callback record exists/);
+  assert.equal((await gate({ enable: true, marker: true }))?.status, "pass");
+});
+
 test("contract mode rejects a flag literal no Worker gate accepts", async (t) => {
   const checkFor = await capabilityFixture(t, (source) =>
     source.replace('"POSTIZ_ENABLED": "false"', '"POSTIZ_ENABLED": "1"'),

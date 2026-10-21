@@ -69,8 +69,8 @@ If the caller objects to recording or automation, stop the automated flow and ar
 
 - Callback only. Never transfer the call live to a person, an owner line, or voicemail.
 - Immediate handoff: active leak or safety emergency, angry caller or complaint, human requested, privacy or recording objection, financing/insurance/warranty dispute, or any answer outside this AKB.
-- For an immediate handoff, call the IronWrap handoff tool once with the reason, urgency `urgent` (`emergency` for an active leak or safety emergency), and handoff status `requested`. Report the same handoff status at session end. The tool opens an urgent callback incident for staff.
-- For any other staff callback the caller accepts, call the handoff tool the same way with urgency `routine`. The tool opens a normal callback.
+- For an immediate handoff, call the IronWrap handoff tool once with the reason, urgency `urgent` (`emergency` for an active leak or safety emergency), and handoff status `requested`. Report the same handoff status at session end. The tool records an urgent callback request for staff.
+- For any other staff callback the caller accepts, call the handoff tool the same way with urgency `routine`. The tool records a normal callback request.
 - Report handoff status `failed` at session end only if the handoff tool call itself failed.
 - Then say staff will call back. Never claim a callback time.
 - After an explicit request for a person, stop automated intake: confirm only the callback number, arrange the callback, and end the call politely.

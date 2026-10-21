@@ -82,7 +82,7 @@ test("a live transfer fails wherever it comes back", async (t) => {
       (copy) => editJson(copy, "config/newo/production.expected.json", (expected) => {
         expected.transfer = { policy: "owner_then_voicemail", owner_line_env: "NEWO_OWNER_TRANSFER_NUMBER" };
       }),
-      /Newo config must not set up a live transfer/,
+      /Newo config must not set up a live handoff/,
     ],
     [
       "handoff policy other than callback only",
@@ -102,7 +102,7 @@ test("a live transfer fails wherever it comes back", async (t) => {
           expires_at: null,
         });
       }),
-      /console proof must not carry a live-transfer control/,
+      /console proof must not carry a live-handoff control/,
     ],
     [
       "transfer number in the Worker config",
@@ -113,7 +113,7 @@ test("a live transfer fails wherever it comes back", async (t) => {
           '"NEWO_ENABLED_CHANNELS": "voice",\n      "NEWO_OWNER_TRANSFER_NUMBER": "",',
         ));
       },
-      /Worker config must not set up a live transfer/,
+      /Worker config must not set up a live handoff/,
     ],
     [
       "transfer instruction in the AKB",
@@ -121,7 +121,7 @@ test("a live transfer fails wherever it comes back", async (t) => {
         "- Callback only.",
         "- Transfer policy: configured owner line first, then configured voicemail fallback.\n- Callback only.",
       )),
-      /AKB may mention transfer only to forbid it/,
+      /AKB may mention a live handoff only to forbid it/,
     ],
     [
       "evaluation case that expects a transfer",
@@ -129,9 +129,112 @@ test("a live transfer fails wherever it comes back", async (t) => {
         /("id": "call-18".*?"expected_outcome": ")[^"]*/,
         "$1Record reason and attempt immediate transfer with voicemail and callback fallback",
       )),
-      /call-18 expects a live transfer/,
+      /call-18 expects a live handoff/,
     ],
   ]);
+});
+
+test("a live handoff fails however the config spells it, and so does texting the caller", async (t) => {
+  await assertEachFails(t, [
+    ...["owner_line", "forward_the_call", "forwarding_number"].map((key) => [
+      `${key} key in the expected config`,
+      (copy) => editJson(copy, "config/newo/production.expected.json", (expected) => {
+        expected.telephony[key] = "NEWO_OWNER_PHONE";
+      }),
+      /Newo config must not set up a live handoff/,
+    ]),
+    [
+      "forwarding number in a tool definition",
+      (copy) => editPinned(copy, "config/newo/tools.v1.json", (tools) => tools.replace(
+        '"outbound_customer_send": false\n  },\n  "check_availability"',
+        '"outbound_customer_send": false,\n    "forwarding_number_env": "NEWO_OWNER_PHONE"\n  },\n  "check_availability"',
+      )),
+      /Newo tools must not set up a live handoff/,
+    ],
+    [
+      "call-forwarding control in the console proof",
+      (copy) => editJson(copy, "config/newo/console-proof.json", (proof) => {
+        proof.proofs.push({ control: "forward_call_to_owner", status: "pending", evidence_ref: null, observed_at: null, expires_at: null });
+      }),
+      /console proof must not carry a live-handoff control/,
+    ],
+    [
+      "owner line in the Worker config",
+      (copy) => {
+        const file = join(copy, "workers-bus/wrangler.jsonc");
+        writeFileSync(file, readFileSync(file, "utf8").replace(
+          '"NEWO_ENABLED_CHANNELS": "voice",',
+          '"NEWO_ENABLED_CHANNELS": "voice",\n      "NEWO_OWNER_LINE": "",',
+        ));
+      },
+      /Worker config must not set up a live handoff/,
+    ],
+    [
+      "AKB forwards the call",
+      (copy) => editPinned(copy, "config/newo/akb/ironwrap-receptionist.v1.md", (akb) => akb.replace(
+        "- Then say staff will call back.",
+        "- If the owner is free, forward the call.\n- Then say staff will call back.",
+      )),
+      /AKB may mention a live handoff only to forbid it/,
+    ],
+    [
+      "AKB texts the caller",
+      (copy) => editPinned(copy, "config/newo/akb/ironwrap-receptionist.v1.md", (akb) => akb.replace(
+        "- Then say staff will call back.",
+        "- Text the caller a confirmation.\n- Then say staff will call back.",
+      )),
+      /AKB must not text the caller/,
+    ],
+    [
+      "evaluation case expects Newo to text the caller",
+      (copy) => editPinned(copy, "config/newo/evaluation-cases.v1.json", (evaluation) => evaluation.replace(
+        /("id": "call-19".*?"expected_outcome": ")[^"]*/,
+        "$1Record consent, then text the caller a confirmation",
+      )),
+      /call-19 expects Newo to text the caller/,
+    ],
+    [
+      "baseline case without the promised-callback-time catastrophe",
+      (copy) => editPinned(copy, "config/newo/evaluation-cases.v1.json", (evaluation) => evaluation.replace(
+        /("id": "call-09".*?), "claims_callback_time"/,
+        "$1",
+      )),
+      /call-09 must treat claims_callback_time as catastrophic/,
+    ],
+    [
+      "report schema accepts any handoff status",
+      (copy) => editPinned(copy, "config/newo/schemas/session-report.v1.schema.json", (schema) => schema.replace(
+        '"handoff_status": { "enum": ["requested", "failed", null] }',
+        '"handoff_status": { "type": ["string", "null"], "maxLength": 80 }',
+      )),
+      /the report schema must accept only handoff status requested, failed, or null/,
+    ],
+  ]);
+});
+
+test("NEWO_ENABLED=true is refused until the D1 callback record exists", async (t) => {
+  const enable = (copy) => {
+    const file = join(copy, "workers-bus/wrangler.jsonc");
+    writeFileSync(file, readFileSync(file, "utf8").replace('"NEWO_ENABLED": "false"', '"NEWO_ENABLED": "true"'));
+  };
+  await assertEachFails(t, [
+    ["Worker config enables Newo", enable, /NEWO_ENABLED=true \(production\) is refused until the D1 callback record exists/],
+    [
+      "expected config enables Newo",
+      (copy) => editJson(copy, "config/newo/production.expected.json", (expected) => {
+        expected.runtime.enabled = true;
+      }),
+      /NEWO_ENABLED=true \(production.expected.json\) is refused until the D1 callback record exists/,
+    ],
+  ]);
+  // The slice that builds the record adds the marker migration, and the gate opens.
+  const opened = validateCopy(t, (copy) => {
+    enable(copy);
+    mkdirSync(join(copy, "workers-bus/migrations"), { recursive: true });
+    writeFileSync(join(copy, "workers-bus/migrations/0999_newo_callback_records.sql"), "SELECT 1;\n");
+  });
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.match(opened.stdout, /ok Newo staging config validated/);
 });
 
 test("callback only fails when failed becomes the routine handoff status", async (t) => {

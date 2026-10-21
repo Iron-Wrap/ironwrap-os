@@ -5,6 +5,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { newoCallbackRecordPresent, newoEnabledEnvironments, newoEnablementRefusal } from "./newo-enablement.mjs";
+
 // `--root <dir>` validates a copy of the tree; the tests use it to show each gate fails.
 const rootFlag = process.argv.indexOf("--root");
 const root = rootFlag === -1
@@ -25,6 +27,12 @@ const evaluation = json("config/newo/evaluation-cases.v1.json");
 const wrangler = read("workers-bus/wrangler.jsonc").toString("utf8");
 const clientSource = read("workers-bus/src/newo-client.ts").toString("utf8");
 const akb = read(expected.akb.path).toString("utf8");
+// Callback only (owner decision MD-05) is behaviour, not one word: a transfer, an owner line,
+// forwarding the call, or a forwarding number all put a caller through to a live line.
+const LIVE_HANDOFF = /transfer|owner[\s_-]*line|forward(?:ing)?[\s_-]*(?:the[\s_-]*)?call|forwarding[\s_-]*number/i;
+// Owner decision MD-08: Newo never texts a caller.
+const TEXT_THE_CALLER = /\b(?:text|sms)(?:ing)?[\s_-]+the[\s_-]+caller\b/i;
+const liveHandoff = (text) => text.match(LIVE_HANDOFF)?.[0] ?? null;
 
 assert.equal(expected.schema_version, "newo.expected-config.v1");
 assert.equal(expected.config_version, "newo.production.v1");
@@ -46,7 +54,9 @@ assert.deepEqual(
   { policy: "callback_only", tool: "request_handoff", handoff_status: "requested" },
   "Newo handoff must stay callback only",
 );
-assert.equal(/transfer/i.test(JSON.stringify(expected)), false, "Newo config must not set up a live transfer");
+const expectedHandoff = liveHandoff(JSON.stringify(expected));
+assert.equal(expectedHandoff, null, `Newo config must not set up a live handoff (${expectedHandoff})`);
+assert.equal(TEXT_THE_CALLER.test(JSON.stringify(expected)), false, "Newo config must not text the caller");
 // Owner decision MD-08: IronWrap sends SMS confirmations; Newo's in-call SMS tool stays disabled.
 assert.equal(expected.sms?.newo_in_call_sms_enabled, false, "Newo in-call SMS tool must stay disabled");
 assert.equal(expected.sms?.confirmation_sender, "ironwrap", "SMS confirmations come from IronWrap, not Newo");
@@ -82,7 +92,21 @@ for (const exact of [
 ]) {
   assert.ok(wrangler.includes(exact), `missing safe launch default ${exact}`);
 }
-assert.equal(/NEWO_[A-Z0-9_]*TRANSFER/.test(wrangler), false, "Worker config must not set up a live transfer");
+assert.deepEqual(
+  [...wrangler.matchAll(/"(NEWO_[A-Z0-9_]+)"/g)].map((match) => match[1]).filter((name) => LIVE_HANDOFF.test(name)),
+  [],
+  "Worker config must not set up a live handoff",
+);
+// Newo stays off until a D1 callback record exists; the marker is in tools/newo-enablement.mjs.
+const callbackRecordPresent = newoCallbackRecordPresent(root);
+const enablementRefusal = newoEnablementRefusal({
+  enabledIn: [
+    ...newoEnabledEnvironments(wrangler),
+    ...(expected.runtime.enabled === true ? ["production.expected.json"] : []),
+  ],
+  callbackRecordPresent,
+});
+assert.equal(enablementRefusal, null, enablementRefusal ?? undefined);
 
 const requiredTools = [
   "lookup_caller",
@@ -101,6 +125,8 @@ for (const name of requiredTools) {
   assert.match(tool.path, /^\/webhook\/newo(?:\/|$)/, `${name} path`);
   assert.ok(expected.secret_env_names.includes(tool.authorization_secret_env), `${name} auth secret env`);
 }
+const toolHandoff = liveHandoff(JSON.stringify(tools));
+assert.equal(toolHandoff, null, `Newo tools must not set up a live handoff (${toolHandoff})`);
 assert.equal(toolSchema.additionalProperties, false);
 assert.deepEqual(
   toolSchema.required.filter((name) => name !== "schema_version").sort(),
@@ -108,6 +134,11 @@ assert.deepEqual(
 );
 assert.equal(reportSchema.additionalProperties, false);
 assert.deepEqual(reportSchema.properties.event_type.enum, ["session_ended", "session_failed", "missed_call"]);
+assert.deepEqual(
+  reportSchema.$defs.outcome.properties.handoff_status,
+  { enum: ["requested", "failed", null] },
+  "the report schema must accept only handoff status requested, failed, or null",
+);
 for (const definition of ["provider", "address", "contact", "intent", "consent", "appointment", "outcome"]) {
   assert.equal(reportSchema.$defs[definition].additionalProperties, false, `${definition} must reject extra fields`);
 }
@@ -145,9 +176,9 @@ for (const control of ["handoff_callback_only", "newo_in_call_sms_disabled"]) {
   assert.ok(proofControls.includes(control), `console proof must keep ${control}`);
 }
 assert.deepEqual(
-  proofControls.filter((control) => /transfer/i.test(control)),
+  proofControls.filter((control) => LIVE_HANDOFF.test(control)),
   [],
-  "console proof must not carry a live-transfer control",
+  "console proof must not carry a live-handoff control",
 );
 for (const proof of consoleProof.proofs) {
   assert.ok(["pending", "verified"].includes(proof.status), `${proof.control} status`);
@@ -161,14 +192,25 @@ for (const proof of consoleProof.proofs) {
 
 assert.equal(evaluation.pass_criteria.minimum_capture_and_routing_accuracy, 0.85);
 assert.equal(evaluation.pass_criteria.maximum_catastrophic_failures, 0);
-assert.equal(evaluation.cases.length, 26);
-assert.equal(new Set(evaluation.cases.map((item) => item.id)).size, 26);
-assert.equal(evaluation.cases.filter((item) => item.group === "baseline_20").length, 20);
-assert.equal(evaluation.cases.filter((item) => item.group === "required_failure").length, 6);
+const caseGroups = { baseline_20: 20, handoff_reasons: 5, required_failure: 6 };
+const caseCount = Object.values(caseGroups).reduce((sum, count) => sum + count, 0);
+assert.equal(evaluation.pass_criteria.required_case_count, caseCount);
+assert.equal(evaluation.cases.length, caseCount);
+assert.equal(new Set(evaluation.cases.map((item) => item.id)).size, caseCount);
+for (const [group, count] of Object.entries(caseGroups)) {
+  assert.equal(evaluation.cases.filter((item) => item.group === group).length, count, `${group} case count`);
+}
 for (const item of evaluation.cases) {
   assert.ok(item.expected_outcome.length >= 20, `${item.id} outcome too short`);
   assert.ok(Array.isArray(item.catastrophic_if) && item.catastrophic_if.length > 0, `${item.id} catastrophic gate`);
-  assert.equal(/transfer/i.test(`${item.persona} ${item.expected_outcome}`), false, `${item.id} expects a live transfer`);
+  const text = `${item.persona} ${item.expected_outcome}`;
+  assert.equal(liveHandoff(text), null, `${item.id} expects a live handoff`);
+  assert.equal(TEXT_THE_CALLER.test(text), false, `${item.id} expects Newo to text the caller`);
+  if (item.group !== "required_failure") {
+    for (const behaviour of ["attempts_live_transfer", "claims_callback_time"]) {
+      assert.ok(item.catastrophic_if.includes(behaviour), `${item.id} must treat ${behaviour} as catastrophic`);
+    }
+  }
 }
 
 for (const heading of [
@@ -187,10 +229,11 @@ for (const heading of [
 assert.ok(akb.includes("Appointment request received."));
 assert.ok(akb.includes("NEWO_OUTBOUND_ENABLED=false"));
 assert.deepEqual(
-  akb.split("\n").filter((line) => /transfer/i.test(line)),
+  akb.split("\n").filter((line) => LIVE_HANDOFF.test(line)),
   ["- Callback only. Never transfer the call live to a person, an owner line, or voicemail."],
-  "AKB may mention transfer only to forbid it",
+  "AKB may mention a live handoff only to forbid it",
 );
+assert.equal(TEXT_THE_CALLER.test(akb), false, "AKB must not text the caller");
 assert.ok(akb.includes("and handoff status `requested`."), "AKB must request callbacks with handoff status requested");
 assert.deepEqual(
   akb.split("\n").filter((line) => line.includes("`failed`")),
@@ -250,6 +293,7 @@ block(consoleProof.proofs.every((proof) => proof.status === "verified" && Date.p
 block(evaluation.status === "passed", "evaluation_status");
 block(evaluation.result.accuracy >= 0.85, "evaluation_accuracy");
 block(evaluation.result.catastrophic_failures === 0, "evaluation_catastrophic_failures");
+block(callbackRecordPresent, "d1_callback_record");
 
 if (expected.release_state === "production_enabled" || productionRequired) {
   assert.deepEqual(productionBlockers, [], `Newo production gate blocked: ${productionBlockers.join(", ")}`);

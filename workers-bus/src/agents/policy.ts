@@ -105,6 +105,22 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
 export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
 
 /**
+ * The channels an inbound event comes by: the source of every signal the inbound producer writes
+ * from an envelope (inbound.ts). An event from any other source is not inbound.
+ */
+export const INBOUND_CHANNELS: ReadonlySet<string> = new Set([
+  "web_form",
+  "instant_estimate",
+  "phone",
+  "newo_call",
+  "walk_in",
+  "office",
+  "gbp",
+  "ad",
+  "referral",
+]);
+
+/**
  * `A1` actions that prepare a people-only act (contract "Autonomy classes"): the draft is stored as
  * proposed and names the person who performs the act in their own screen, so it lands in their
  * Needs you rather than among finished work. The agent never performs the act.

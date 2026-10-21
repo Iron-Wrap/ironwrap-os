@@ -107,6 +107,14 @@ test("each environment declares the data class of the data it holds", () => {
   assert.deepEqual(dataClass, { production: "business", local: "synthetic", qa: "synthetic" });
 });
 
+// The inbound producer (workers-bus/src/agents/inbound.ts) gives the AI team a signal for each
+// envelope recorded from AGENT_INBOUND_FROM on; blank keeps it off. Production stays off until the
+// owner decides to go live; local and qa hold synthetic data and are on from the recorded instant.
+test("the inbound producer is off in production and on in local and qa from its recorded instant", () => {
+  const from = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_INBOUND_FROM]));
+  assert.deepEqual(from, { production: "", local: "2026-10-20T15:52:43Z", qa: "2026-10-20T15:52:43Z" });
+});
+
 test("the flattened key set equals the flat names declared in var-bindings.d.ts", () => {
   const flatKeys = new Set(Object.keys(flattenWranglerVars(config.vars)));
   assert.deepEqual([...flatKeys].sort(), [...declaredFlatNames].sort());

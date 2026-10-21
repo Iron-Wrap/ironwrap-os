@@ -688,7 +688,9 @@ written, read with D1's own clock, and each refusal is named on the route and re
   one with other terms: the window before the policy's `contract_superseded` lands;
 - Weather stands on a person's attestation whose window has not ended and holds the scheduled work
   (a schedule with no end is held to its start), so a Weather gate left `ready` after its window
-  ended, or one recorded before the ledger, schedules nothing until it is attested again;
+  ended (`operating_job_assignment_weather_window_ended`), or one recorded before the ledger, which
+  names no window (`operating_job_assignment_weather_window_missing`), schedules nothing until it
+  is attested again;
 - no member of the crew shares a login (user id, email or Frappe user) with the person whose
   attestation Materials, Safety, Access or Weather stands on.
 

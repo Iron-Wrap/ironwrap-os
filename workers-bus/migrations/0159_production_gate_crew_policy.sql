@@ -29,7 +29,8 @@
 --      * Deposit does not stand on a contract with no deposit while the job's latest contract is
 --        another one with other terms, the window before the policy's `contract_superseded`;
 --      * Weather stands on a person's attestation whose window has not ended and holds the
---        scheduled work;
+--        scheduled work; a Weather gate recorded before the ledger names no window and is refused
+--        as missing, not as ended;
 --      * no active member of the crew shares a login coordinate (user id, email or Frappe user)
 --        with the person whose attestation Materials, Safety, Access or Weather stands on.
 --    0098's `operating_job_assignments_validate_insert` is re-created unchanged after it: triggers
@@ -1179,8 +1180,31 @@ BEGIN
        )
   );
 
-  -- Weather stands on a person's attestation whose window has not ended by D1's clock. A Weather
-  -- gate left `ready` after its window ended, or one recorded before the ledger, holds no window.
+  -- Weather stands on a person's attestation, which names a work window. A Weather gate recorded
+  -- before the ledger stands on a legacy entry that names none: it is refused as missing, never
+  -- as ended, until a person attests Weather again. Weather has no waiver, so no other entry holds
+  -- it open.
+  SELECT RAISE(ABORT, 'operating_job_assignment_weather_window_missing')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM operating_production_gates gate
+      JOIN production_gate_clearances weather
+        ON weather.tenant_id = gate.tenant_id
+       AND weather.gate_id = gate.gate_id
+       AND weather.from_gate_version + 1 = gate.version
+       AND weather.to_state = gate.state
+     WHERE gate.tenant_id = NEW.tenant_id
+       AND gate.roof_job_id = NEW.roof_job_id
+       AND gate.gate = 'Weather'
+       AND weather.basis = 'person_attestation'
+       AND CASE WHEN json_valid(weather.attestation_json) THEN
+         julianday(json_extract(weather.attestation_json, '$.window_start')) IS NOT NULL
+         AND julianday(json_extract(weather.attestation_json, '$.window_end')) IS NOT NULL
+       END
+  );
+
+  -- ... whose window has not ended by D1's clock. A Weather gate left `ready` after its window
+  -- ended holds the work no longer.
   SELECT RAISE(ABORT, 'operating_job_assignment_weather_window_ended')
   WHERE NOT EXISTS (
     SELECT 1

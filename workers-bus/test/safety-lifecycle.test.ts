@@ -1272,6 +1272,46 @@ test("a shop or vehicle raise carries no scope answer, since nothing checks thos
   }
 });
 
+test("a raise whose scope lookup fails is recorded and answered without a scope answer", async (t) => {
+  const db = new SqliteD1();
+  const healthy = env(db);
+  // The job lookup fails as a D1 read can; every other statement of the raise runs as usual.
+  const failing = {
+    ...healthy,
+    DB: {
+      prepare: (sql: string) =>
+        sql.includes("FROM operating_roof_jobs")
+          ? {
+              bind: () => ({
+                first: async () => {
+                  throw new Error("D1_ERROR: synthetic read failure");
+                },
+              }),
+            }
+          : db.prepare(sql),
+    } as never,
+  } as AppEnv;
+  const logged = t.mock.method(console, "error", () => undefined);
+  const envelope = raiseEnvelope("dev-scope-fail-0001", { type: "roof_job", id: "job-missing-0001" });
+
+  const first = await raise(failing, envelope);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.status, "verified");
+  assert.equal("scope_unresolved" in first.body, false);
+  assert.deepEqual(
+    { ...raisedStop(db, first.body) },
+    { state: "reported", stop_active: 1, scope_type: "roof_job", scope_id: "job-missing-0001" },
+  );
+  assert.equal(logged.mock.callCount(), 1);
+  assert.equal(logged.mock.calls[0]?.arguments[0], "safety_scope_lookup_failed");
+
+  // The replay answers from the stored response: still no flag, though the lookup works now and
+  // would find no such job.
+  const replay = await raise(healthy, envelope);
+  assert.equal(replay.status, 200);
+  assert.deepEqual(replay.body, first.body);
+});
+
 test("the safety route enforces CSRF and rejects an unknown command", async () => {
   const db = new SqliteD1();
   const app = env(db);

@@ -65,7 +65,7 @@ export interface VerifiedSafetyActionResponse {
   /**
    * Raises only (`report_occurrence`, `rescue_request`): true when the scope names no job, Work
    * Package or tenant of this tenant. The stop is recorded and active either way. Absent for `shop`
-   * and `vehicle` scopes, which nothing checks yet.
+   * and `vehicle` scopes, which nothing checks yet, and when the scope could not be read.
    */
   scope_unresolved?: boolean;
 }
@@ -443,7 +443,7 @@ const SCOPE_EXISTS_SQL: Partial<Record<SafetyScopeRef["type"], string>> = {
 /**
  * Whether a raised stop's scope names nothing this tenant has: another tenant's id, a job with no
  * `operating_roof_jobs` row, or a Work Package with no `work_packages` row in any status.
- * Undefined for `shop` and `vehicle`, which nothing checks yet.
+ * Undefined for `shop` and `vehicle`, which nothing checks yet, and when the read fails.
  */
 async function raisedScopeUnresolved(
   env: AppEnv,
@@ -453,7 +453,13 @@ async function raisedScopeUnresolved(
   if (scope.type === "tenant") return scope.id !== tenantId;
   const sql = SCOPE_EXISTS_SQL[scope.type];
   if (!sql) return undefined;
-  return (await env.DB.prepare(sql).bind(tenantId, scope.id).first()) === null;
+  try {
+    return (await env.DB.prepare(sql).bind(tenantId, scope.id).first()) === null;
+  } catch (error) {
+    // The stop is already recorded, so a failed read costs the answer its flag, never the answer.
+    console.error("safety_scope_lookup_failed", { scope_type: scope.type, scope_id: scope.id }, error);
+    return undefined;
+  }
 }
 
 function submissionEvidence(submission: SafetyDeviceActionSubmission): SafetyEvidence | null {

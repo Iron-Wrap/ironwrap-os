@@ -290,8 +290,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   appends one `event` signal for `lead_concierge`, watch `new_inbound`, per inbound envelope from
   generic ingest, office capture, the estimator and Newo: at the end of `insertEnvelope`, best
   effort and waited on at most two seconds, so intake never fails on it, and from the five-minute
-  cron's sweep for any envelope of the last two days still without one; its dedupe key `inbound:<envelope_id>` keeps it to one. A CRM import's envelopes and
-  release-smoke rows give none. Its source is the channel, its subject the lead the envelope
+  cron's sweep for any envelope of the last two days still without one; its dedupe key
+  `inbound:<envelope_id>` keeps it to one. A CRM import's envelopes, release-smoke rows and
+  envelopes with neither a phone nor an email give none. Its source is the channel, its subject the lead the envelope
   becomes, and its content exactly `envelope_id`, `channel`, `brand`, `received_via`, `sender`,
   `has_phone`, `has_email`, `service`, `excerpt` and `form_fields` (contract "The inbound signal");
   the sender's match to an existing customer is recorded only and links nothing. The excerpt and
@@ -299,8 +300,10 @@ Current source tracing distinguishes implemented modules from reachable producti
   `untrusted_text` inside its run and reach no watch digest or owner report snapshot, since no
   watch condition reads an inbound signal and a report run reads only its own watch signal and the
   objects that signal names.
-  `AGENT_INBOUND_FROM` switches the producer: blank in production, so off until the owner's
-  go-live decision, and 2026-10-20T15:52:43Z in qa and local, so on from that instant there.
+  `AGENT_INBOUND_FROM` switches the producer: blank in production, pinned by a test, until agent
+  signals have a retention and erasure path aligned with envelope retention and then the owner's
+  go-live decision; 2026-10-20T15:52:43Z in qa and local (synthetic data), so on from that
+  instant there.
   Repository tests only; no deploy has run it yet. Not built yet: email, SMS, WhatsApp and social
   inbound do not exist in the Worker, and WhatsApp, a first-class channel for the owner, is a named
   gap; `newo_call` is built but no Newo call makes an envelope while `NEWO_ENABLED` is false; a

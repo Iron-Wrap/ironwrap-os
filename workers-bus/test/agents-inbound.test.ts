@@ -24,6 +24,7 @@ import { canonicalJson } from "../src/agents/schema.ts";
 import type { BoundStatement } from "../src/agents/store.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
 import worker from "../src/index.ts";
+import { flattenEnv } from "../src/env-bindings.ts";
 import { ingestLead } from "../src/lead-intake.ts";
 import { materializeOperatingCore } from "../src/operating-core.ts";
 
@@ -333,6 +334,17 @@ test("intake waits on the hook at most two seconds; the sweep produces what that
   assert.deepEqual(logged.map((line) => JSON.parse(line)), [{ at: "agent_inbound", envelope_id: rec.envelope_id, error: "Error: inbound_hook_timeout" }]);
 });
 
+test("production keeps the producer off until agent signals have retention and erasure", () => {
+  // agent_signals is append-only and would hold an inbound's excerpt and its address, scope and
+  // timing text with no erasure or retention; the compliance register requires minimisation and
+  // destruction (COMPLIANCE-REGISTER.md, "Collect/use/disclose customer … data"). AGENT_INBOUND_FROM
+  // stays blank in production until a retention and erasure path for agent signals lands, aligned
+  // with envelope retention. qa and local hold synthetic data only, so they run.
+  const config = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""));
+  assert.equal(flattenEnv(config.vars).AGENT_INBOUND_FROM, "");
+  for (const name of ["local", "qa"]) assert.notEqual(inboundFrom(flattenEnv(config.env[name].vars).AGENT_INBOUND_FROM), null, name);
+});
+
 test("the producer is off until AGENT_INBOUND_FROM names an instant, and a release smoke never produces", async () => {
   for (const raw of [undefined, "", "   ", "yes", "2026-10-20", "2026-10-20T15:52:43", "2026-10-20 15:52:43Z", "2026-13-45T15:52:43Z",
     // Dates the calendar lacks are off, never rolled forward to another instant.
@@ -347,11 +359,14 @@ test("the producer is off until AGENT_INBOUND_FROM names an instant, and a relea
   const untouchable = { prepare: (sql: string) => void touched.push(sql) };
   for (const vars of [{}, { AGENT_INBOUND_FROM: "" }, { AGENT_INBOUND_FROM: "not an instant" }])
     await inboundAfterInsert({ DB: untouchable, ...vars }, TENANT, envelope());
-  // On, it reads nothing for a release smoke, an import, a row with no raw body, or a row before the instant.
+  // On, it reads nothing for a release smoke, an import, a row with no raw body, one with neither a
+  // phone nor an email (intake refuses it after the insert), or a row before the instant.
   for (const rec of [
     envelope({ release_smoke: 1 }),
     envelope({ envelope_id: "ow_imp_0123456789abcdef", source: "manual" }),
     envelope({ raw_key: null }),
+    envelope({ contact_phone: null, contact_email: null }),
+    envelope({ contact_phone: " ", contact_email: "" }),
     envelope({ created_at: "2025-12-31T23:59:59.999Z" }),
   ])
     await inboundAfterInsert({ DB: untouchable, AGENT_INBOUND_FROM: ON }, TENANT, rec);
@@ -472,6 +487,13 @@ test("the sender is matched exactly, by email, phone or both, never to its own c
   assert.deepEqual(await sender("email.only@example.invalid", "+15875550199"), { customer_id: "customer:ironwrap:email-only", matched_on: "email", conflict: false });
   assert.deepEqual(await sender(" Email.Only@Example.Invalid ", null), { customer_id: "customer:ironwrap:email-only", matched_on: "email", conflict: false });
   assert.deepEqual(await sender("new@example.invalid", "(587) 555-0150"), { customer_id: "customer:ironwrap:phone-only", matched_on: "phone", conflict: false });
+  // The operating core keeps a phone's digits with the sender's own plus; core's normaliser reads
+  // each stored form of the same number as the sender's.
+  customer(db, "customer:ironwrap:bare", { phone: "5875550160" });
+  customer(db, "customer:ironwrap:eleven", { phone: "15875550161" });
+  assert.equal((await sender(null, "+1 587 555 0160")).customer_id, "customer:ironwrap:bare");
+  assert.equal((await sender(null, "587-555-0161")).customer_id, "customer:ironwrap:eleven");
+  assert.equal((await sender(null, "+44 20 7946 0160")).customer_id, null);
   assert.deepEqual(await sender("both@example.invalid", "+15875550151"), { customer_id: "customer:ironwrap:both", matched_on: "email_and_phone", conflict: false });
   assert.deepEqual(await sender("email.only@example.invalid", "+15875550150"), { customer_id: null, matched_on: null, conflict: true });
   assert.deepEqual(await sender("elsewhere@example.invalid", null), NO_MATCH);
@@ -506,6 +528,7 @@ test("the sweep takes inbound envelopes from the switch's instant on, oldest fir
     before: envelope({ envelope_id: id(7), created_at: "2025-12-31T23:59:59.999Z" }),
     elsewhere: envelope({ envelope_id: id(8), created_at: at(0), tenant_id: "northside" }),
     unknown: envelope({ envelope_id: id(9), created_at: at(0), source: "quickbooks" }),
+    contactless: envelope({ envelope_id: id(12), created_at: at(0), contact_phone: null, contact_email: null }),
   };
   for (const rec of Object.values(rows)) insertRow(db, rec);
   const swept = () => inboundSignals(db).map((row) => row.dedupe_key.slice("inbound:".length));
@@ -576,7 +599,7 @@ test("the sender match and the sweep read by index, since intake and every tick 
     assert.ok(sql, needle);
     return (db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((row) => row.detail).join(" | ");
   };
-  assert.match(plan("FROM operating_customers"), /MULTI-INDEX OR.*\(tenant_id=\? AND contact_email=\?\).*\(tenant_id=\? AND contact_phone=\?\)/);
+  assert.match(plan("FROM operating_customers"), /\(tenant_id=\? AND contact_email=\?\).*UNION.*\(tenant_id=\? AND contact_phone=\?\)/);
   assert.match(plan("FROM envelopes e"), /SEARCH e USING INDEX idx_env_day \(created_at>\?\)/);
   assert.match(plan("FROM envelopes e"), /SEARCH s USING COVERING INDEX \S+ \(tenant_id=\? AND dedupe_key=\?\)/);
 });

@@ -1534,7 +1534,8 @@ channel the envelope came by, its subject is the lead the envelope becomes (whet
 lead exists yet), and its dedupe key is `inbound:<envelope_id>`, so it counts once: the envelope's
 insert appends it, best effort (intake waits on it at most two seconds), and a five-minute sweep
 appends any from the last two days that is still missing. An
-envelope a CRM import wrote is never inbound, and a release-smoke envelope gives no signal.
+envelope a CRM import wrote is never inbound, and a release-smoke envelope, or one with neither a
+phone nor an email (intake refuses it after the insert), gives no signal.
 
 The channel follows the envelope's source: `web_form`, or `instant_estimate` for an instant
 estimate, from the website; `phone`, or `newo_call` for a Newo call; `walk_in` for an office
@@ -1546,8 +1547,9 @@ they are. The content holds exactly these keys:
 - `received_via`: which of the tenant's addresses or numbers the inbound reached; `null` until
   intake records that;
 - `sender`: `customer_id`, `matched_on` (`email`, `phone`, `email_and_phone` or `null`) and
-  `conflict`. It names the tenant's customer whose email or phone equals the sender's, both
-  normalized, and never the customer this envelope itself created. The match is recorded only and
+  `conflict`. It names the tenant's customer whose email or phone equals the sender's, both read
+  by one normaliser (a stored `5875550150` is the sender's `+15875550150`), and never the
+  customer this envelope itself created. The match is recorded only and
   links nothing. An email and a phone that belong to two different customers are a conflict, which
   names neither;
 - `has_phone` and `has_email`;
@@ -1565,8 +1567,11 @@ an owner report's snapshot: no watch condition reads an inbound signal, and a re
 its own watch signal and the objects that signal names.
 
 `AGENT_INBOUND_FROM` switches the producer: envelopes are inbound from that instant on, and while
-it is unset or blank nothing is produced. Production stays off until the owner decides to go live;
-QA is on from its recorded instant.
+it is unset or blank nothing is produced. Production stays off until agent signals have a
+retention and erasure path aligned with envelope retention (`agent_signals` is append-only and
+would hold the excerpt and the form fields; `COMPLIANCE-REGISTER.md` requires minimisation and
+destruction), and then until the owner decides to go live; a test pins it blank. QA and local hold
+synthetic data only and are on from their recorded instant.
 
 Not built yet (see `CAPABILITY-MATRIX.md`):
 

@@ -320,7 +320,8 @@
       // refused. Only a Worker on seed data says "synthetic".
       "AGENT_DATA_CLASS": "business",
       // The instant from which inbound envelopes become AI team signals (src/agents/inbound.ts);
-      // blank keeps the producer off. Production stays off until the owner decides to go live.
+      // blank keeps the producer off. Production stays off until agent signals have retention and
+      // erasure (a test pins it blank), then until the owner decides to go live.
       "AGENT_INBOUND_FROM": ""
     }
   },

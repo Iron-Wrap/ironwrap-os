@@ -99,14 +99,18 @@ export async function senderMatch(db: AgentDb, tenantId: string, envelope: Envel
   if (email === null && phone === null) return NO_MATCH;
   const rows = await db
     .prepare(
+      // A UNION, so each side reads its own unique index (one OR across both reads the tenant).
       `SELECT customer_id, contact_email, contact_phone FROM operating_customers
-        WHERE tenant_id = ? AND source_envelope_id <> ? AND (contact_email = ? OR contact_phone = ?)`,
+        WHERE tenant_id = ?1 AND source_envelope_id <> ?2 AND contact_email = ?3
+       UNION
+       SELECT customer_id, contact_email, contact_phone FROM operating_customers
+        WHERE tenant_id = ?1 AND source_envelope_id <> ?2 AND contact_phone IN (?4, ?5, ?6)`,
     )
-    .bind(tenantId, envelope.envelope_id, email, phone)
+    .bind(tenantId, envelope.envelope_id, email, ...storedPhones(phone))
     .all<{ customer_id: string; contact_email: string | null; contact_phone: string | null }>();
   const found = rows.results ?? [];
   const byEmail = email === null ? undefined : found.find((row) => row.contact_email === email)?.customer_id;
-  const byPhone = phone === null ? undefined : found.find((row) => row.contact_phone === phone)?.customer_id;
+  const byPhone = phone === null ? undefined : found.find((row) => normalizePhone(row.contact_phone) === phone)?.customer_id;
   if (byEmail && byPhone)
     return byEmail === byPhone ? { customer_id: byEmail, matched_on: "email_and_phone", conflict: false } : { customer_id: null, matched_on: null, conflict: true };
   if (byEmail) return { customer_id: byEmail, matched_on: "email", conflict: false };
@@ -215,6 +219,7 @@ export async function sweepInbound(
     .prepare(
       `SELECT * FROM envelopes e
         WHERE e.tenant_id = ? AND e.created_at >= ? AND e.release_smoke <> 1 AND e.raw_key IS NOT NULL
+          AND (TRIM(COALESCE(e.contact_phone, '')) <> '' OR TRIM(COALESCE(e.contact_email, '')) <> '')
           AND e.envelope_id NOT LIKE 'ow\\_imp\\_%' ESCAPE '\\' AND e.source IN (${SOURCES.map(() => "?").join(", ")})
           AND NOT EXISTS (SELECT 1 FROM agent_signals s WHERE s.tenant_id = e.tenant_id AND s.dedupe_key = 'inbound:' || e.envelope_id)
         ORDER BY e.created_at ASC, e.envelope_id ASC LIMIT ?`,
@@ -235,13 +240,14 @@ export async function sweepInbound(
 }
 
 /**
- * An envelope is inbound from `from` on, unless it is a release smoke, has no raw body, or a CRM
- * import wrote it.
+ * An envelope is inbound from `from` on, unless it is a release smoke, has no raw body, carries
+ * neither a phone nor an email (intake refuses it after the insert), or a CRM import wrote it.
  */
 function isInbound(envelope: EnvelopeRecord, from: string): boolean {
   return (
     envelope.release_smoke !== 1 &&
     envelope.raw_key !== null &&
+    ((envelope.contact_phone ?? "").trim() !== "" || (envelope.contact_email ?? "").trim() !== "") &&
     !envelope.envelope_id.startsWith("ow_imp_") &&
     SOURCES.includes(envelope.source) &&
     envelope.created_at >= from
@@ -309,6 +315,15 @@ function payloadOf(json: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * The stored forms of a phone that core.ts normalizePhone reads as `phone`: operating_customers
+ * keeps digits with the sender's own plus (operating-core.ts), so a North American number may sit
+ * there as `+1NXX…`, `1NXX…` or `NXX…`. Both sides then compare by one normaliser, core's.
+ */
+function storedPhones(phone: string | null): Array<string | null> {
+  return phone !== null && /^\+1\d{10}$/.test(phone) ? [phone, phone.slice(1), phone.slice(2)] : [phone, null, null];
 }
 
 function objectOf(value: unknown): Record<string, unknown> | null {

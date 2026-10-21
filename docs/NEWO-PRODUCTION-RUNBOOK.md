@@ -111,7 +111,7 @@ Publish the dedicated production actor only after review of:
 - the structured report schema and immediate-handoff report;
 - the versioned AKB, with owner and legal wording approval;
 - AI and recording disclosure at call start;
-- callback-only handoff: no call-transfer action, transfer number, or voicemail transfer on the actor, and `request_handoff` sends handoff status `failed` (console proof `handoff_callback_only`);
+- callback-only handoff: no call-transfer action, transfer number, or voicemail transfer on the actor, and `request_handoff` sends handoff status `requested` (console proof `handoff_callback_only`);
 - Newo in-call SMS tool disabled (console proof `newo_in_call_sms_disabled`);
 - Newo-owned number and written portability/exit terms;
 - usage cap and threshold alert;
@@ -130,7 +130,7 @@ Prove before forwarding:
 1. Wrong credentials create no R2/D1 business record.
 2. A valid controlled call creates an R2 object, event receipt, session, Frappe record, downstream outcome, and readable operator state.
 3. A missing report becomes one visible reconciliation exception.
-4. Each immediate handoff creates an urgent callback incident and owner alert, and no call is transferred.
+4. A requested handoff creates a callback incident and owner alert, urgent when the caller's urgency is urgent or emergency, and no call is transferred. A handoff request that cannot be processed is reported as `failed` and raises the urgent failure path.
 5. Forwarding rollback works from the real number.
 
 ## 7. Booking gate
@@ -148,11 +148,11 @@ If the contract is absent or any test fails, remain request-only.
 
 ## 8. Cutover gates
 
-After-hours forwarding requires the repository gate, production config gate, 26-case evaluation, wrong-credential proof, owned landing proof, urgent callback incident proof, usage alert proof, and owner approval.
+After-hours forwarding requires the repository gate, production config gate, 26-case evaluation, wrong-credential proof, owned landing proof, callback incident proof, usage alert proof, and owner approval.
 
 Selected inbound requires reviewed real-call evidence from after-hours operation, no unresolved catastrophic incident, acceptable capture/routing accuracy, and demonstrated rollback.
 
-All inbound requires owner sign-off, zero unresolved catastrophic incidents, working urgent callback incidents, no missing reports or DLQ failures, and another demonstrated rollback.
+All inbound requires owner sign-off, zero unresolved catastrophic incidents, working callback incidents, no missing reports or DLQ failures, and another demonstrated rollback.
 
 Record the exact Git commit, Worker version, D1 migration state, Newo actor ID, AKB hash, tool/report hashes, phone number, forwarding phase, reviewer, timestamps, and evidence references.
 

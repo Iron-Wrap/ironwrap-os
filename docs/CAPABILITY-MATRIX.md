@@ -321,9 +321,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   - Voice reception (D-02, D-03): `config/newo/production.expected.json` books in `request_only`
     mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
     webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration
-    in `config/newo` are callback only (D-03): a hand-off records a failed handoff that opens the
-    urgent callback incident, no transfer setting remains, and `tools/validate-newo-config.mjs`
-    refuses one (`tools/validate-newo-config.test.mjs`). The Newo console proof of it
+    in `config/newo` are callback only (D-03): a hand-off is `requested` and opens a callback
+    incident, urgent when the caller's urgency is urgent or emergency, while `failed` keeps the
+    failure path (`workers-bus/test/newo.test.ts`, `erpnext.test.ts`,
+    `newo-handoff-resolution.test.ts`); no transfer setting remains, and
+    `tools/validate-newo-config.mjs` refuses one (`tools/validate-newo-config.test.mjs`). The Newo console proof of it
     (`handoff_callback_only`) is pending, and no person can take over the record yet
     (`conversation.assign_person` is not registered).
   - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI

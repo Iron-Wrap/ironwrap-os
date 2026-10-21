@@ -26,7 +26,7 @@ Receptionist routes:
 |---|---|---|
 | `POST /webhook/newo/lookup` | Verified caller lookup with minimal job state | `NEWO_WEBHOOK_TOKEN` |
 | `POST /webhook/newo` | Capture a distinct reception lead/session | `NEWO_WEBHOOK_TOKEN` |
-| `POST /webhook/newo/handoff` | Record the handoff reason and open the urgent callback incident | `NEWO_WEBHOOK_TOKEN` |
+| `POST /webhook/newo/handoff` | Record the handoff reason and open a callback incident | `NEWO_WEBHOOK_TOKEN` |
 | `POST /webhook/newo/report` | Structured terminal session report | `NEWO_WEBHOOK_TOKEN` |
 | `POST /webhook/newo/availability` | Request-only availability response | `NEWO_BOOKING_TOKEN` |
 | `POST /webhook/newo/booking` | Appointment request | `NEWO_BOOKING_TOKEN` |
@@ -40,11 +40,19 @@ The `newo-mcp` exposes role-filtered Worker operations. It never receives `NEWO_
 
 ## Handoff and SMS
 
-The release contract is callback only. The AKB forbids transferring a call live to a person, an owner line, or voicemail. Each immediate handoff calls `request_handoff` with the reason and handoff status `failed`, which means the caller was not put through. The Worker then alerts the owner, projects an urgent `Automation Incident`, and counts the session as a failed handoff until a person records how the callback ended ([AUTHORITY-AND-EVIDENCE-CONTRACT.md](AUTHORITY-AND-EVIDENCE-CONTRACT.md#failed-newo-handoffs)). No transfer number or transfer policy is configured.
+The release contract is callback only. The AKB forbids transferring a call live to a person, an owner line, or voicemail. Each handoff calls `request_handoff` with the reason, the caller's urgency, and handoff status `requested`; the Worker records a handoff request that arrives without a status as `requested`. The Worker maps the status as follows:
+
+| Handoff status | Owner alert | Callback incident (`Automation Incident`) | Failed-handoff exception |
+|---|---|---|---|
+| `requested`, urgency `urgent` or `emergency` | "Urgent Newo callback requested" | Urgent: severity `High`, or `Critical` for an emergency | No |
+| `requested`, urgency `routine` | "Newo callback requested" | Normal: severity `Medium` | No |
+| `failed` (the handoff request did not arrive or could not be processed), or a failed session | "Urgent Newo callback required" | Urgent: severity `High`, or `Critical` for an emergency | Yes for `failed`, until a person records how it ended ([AUTHORITY-AND-EVIDENCE-CONTRACT.md](AUTHORITY-AND-EVIDENCE-CONTRACT.md#failed-newo-handoffs)) |
+
+The incident is created only when the Frappe projection is enabled. No transfer number or transfer policy is configured.
 
 Newo's in-call SMS tool stays disabled, and the AKB forbids Newo SMS. SMS confirmations belong to IronWrap, and customer SMS stays record-only until the A2P/carrier gate passes.
 
-`production.expected.json` records both rules in its `handoff` and `sms` blocks. `node tools/validate-newo-config.mjs` fails if a transfer setting returns to the expected config, console proof, Worker config, AKB, or evaluation cases, or if Newo SMS is turned on. The matching Newo console settings are the `handoff_callback_only` and `newo_in_call_sms_disabled` proofs in `console-proof.json`; the repository does not prove them.
+`production.expected.json` records both rules in its `handoff` and `sms` blocks. `node tools/validate-newo-config.mjs` fails if a transfer setting returns to the expected config, console proof, Worker config, AKB, or evaluation cases, if callback only uses `failed` as the routine handoff status, or if Newo SMS is turned on. The matching Newo console settings are the `handoff_callback_only` and `newo_in_call_sms_disabled` proofs in `console-proof.json`; the repository does not prove them.
 
 ## Booking truth
 

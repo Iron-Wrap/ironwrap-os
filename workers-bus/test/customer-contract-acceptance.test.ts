@@ -3614,15 +3614,16 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
     assert.equal(count(h, "contract_signed_copy_events"), 0);
 
     // A person's record half an hour ago, ending at its 241st hour: an event ending before that
-    // end is refused, and one keeping it is written.
+    // end is refused, and one at its own 241st hour is written.
     const receivedAt = plusHours(now(), -0.5);
     insertReceipt(receivedAt, plusHours(receivedAt, 241));
     assert.throws(() => insertEvent(), /contract_signed_copy_event_end_invalid/);
-    insertEvent({ window_ends_at: plusHours(receivedAt, 241) });
+    const firstShown = now();
+    insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 241) });
     const [event] = shownEvents(h);
     assert.ok(event);
     // One event per contract; it is never updated or deleted.
-    assert.throws(() => insertEvent({ window_ends_at: plusHours(receivedAt, 241) }), /contract_signed_copy_event_append_only/);
+    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 241) }), /contract_signed_copy_event_append_only/);
     assert.throws(
       () => h.db.raw.prepare("UPDATE contract_signed_copy_events SET time_zone = 'UTC' WHERE event_id = ?").run(event.event_id),
       /contract_signed_copy_event_append_only/,
@@ -3641,6 +3642,29 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
     assert.throws(() => insertReceipt(later, plusHours(later, 240)), /cancellation_window_receipt_end_invalid/);
     insertReceipt(later, event.window_ends_at);
     assert.equal(count(h, "production_cancellation_window_receipts"), 2);
+
+    // A later contract's copy never ends before the earlier copy's end either.
+    await inThePast(0.5, () => publishCorrectedContract(h, OD01_TERMS));
+    const second = await inThePast(0.5, () => accept(h, portalToken, "acceptance-a5-direct-0002"));
+    assert.equal(second.status, 200);
+    const secondBinding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    const secondShown = now();
+    assert.throws(
+      () => insertEvent({
+        acceptance_binding_id: secondBinding.acceptance_binding_id,
+        contract_signed_at: secondBinding.accepted_at,
+        shown_at: secondShown,
+        window_ends_at: plusHours(secondShown, 240.75),
+      }),
+      /contract_signed_copy_event_end_invalid/,
+    );
+    insertEvent({
+      acceptance_binding_id: secondBinding.acceptance_binding_id,
+      contract_signed_at: secondBinding.accepted_at,
+      shown_at: secondShown,
+      window_ends_at: event.window_ends_at,
+    });
+    assert.equal(count(h, "contract_signed_copy_events"), 2);
   } finally {
     h.restore();
   }

@@ -731,7 +731,13 @@ test("a job's purchase order line waits for the window; a stock line never does;
   const legacy = placeOrderLine(h, JOB, "backordered");
   const other = placeOrderLine(h, JOB, "backordered");
   const unknownLine = placeOrderLine(h, OTHER_JOB, "backordered");
+  const stillOrdered = placeOrderLine(h, JOB, "ordered");
   h.sqlite.exec(guard.sql);
+  // A line already ordered stays as it is: only a move back to ordered is held.
+  h.sqlite.prepare(
+    "UPDATE inventory_po_lines SET provider_po_id = 'PO-WINDOW-1', version = version + 1 WHERE po_line_id = ?",
+  ).run(stillOrdered);
+  moveOrderLine(h, stillOrdered, "partially_received");
   refusedWith(() => moveOrderLine(h, legacy, "ordered"), "inventory_po_line_cancellation_window_open");
   refusedWith(() => moveOrderLine(h, unknownLine, "ordered"), "inventory_po_line_cancellation_window_unknown");
   moveOrderLine(h, unknownLine, "cancelled");
@@ -764,6 +770,7 @@ test("a job's purchase order line waits for the window; a stock line never does;
       { roof_job_id: JOB, status: "cancelled" },
       { roof_job_id: JOB, status: "exception" },
       { roof_job_id: OTHER_JOB, status: "cancelled" },
+      { roof_job_id: JOB, status: "partially_received" },
       { roof_job_id: ENDED_JOB, status: "ordered" },
     ],
   );
@@ -993,32 +1000,51 @@ test("across a DST change the window never ends early in local time, and D1 boun
   });
   assert.equal(springRecord.status, 201);
   assert.equal(receipts(h, OTHER_JOB)[0]!.window_ends_at, "2026-03-13T01:26:00.000Z");
+  // Two times either side of the hour the clocks fall back: 01:30 MDT, then 01:10 MST forty minutes
+  // later. The later time's own end, 01:10 ten days on, would come before the first's 01:30, so the
+  // window keeps the first end: later only, never shorter.
+  const beforeFallBack = await recordReceipt(h, owner, ENDED_JOB, {
+    received_at: "2025-11-02T01:30:00-06:00", reason: REASON, evidence_ref: EVIDENCE,
+  });
+  assert.equal(beforeFallBack.status, 201);
+  assert.equal(beforeFallBack.body.cancellation_window.ends_at, "2025-11-12T08:30:00.000Z");
+  const afterFallBack = await recordReceipt(h, owner, ENDED_JOB, {
+    received_at: "2025-11-02T01:10:00-07:00", reason: REASON, evidence_ref: EVIDENCE,
+  });
+  assert.equal(afterFallBack.status, 201, JSON.stringify(afterFallBack.body));
+  assert.equal(cancellationWindowEndsAt("2025-11-02T08:10:00.000Z", ZONE), "2025-11-12T08:10:00.000Z");
+  assert.deepEqual(receipts(h, ENDED_JOB).map((row) => row.window_ends_at), [
+    "2025-11-12T08:30:00.000Z",
+    "2025-11-12T08:30:00.000Z",
+  ]);
 
   // D1 has no time zone database: it holds any writer to [received + 240 h, received + 241 h],
   // and to no earlier than the job's previous end.
+  const BOUNDS_JOB = "job:window:0005";
+  seedJob(h.sqlite, BOUNDS_JOB, "0005");
   const base = Date.parse(d1At(h, -30 * DAY));
   const end = (receivedMs: number, hours: number, ms = 0) =>
     new Date(receivedMs + hours * HOUR + ms).toISOString();
   const received = (offset: number) => new Date(base + offset * HOUR).toISOString();
   refusedWith(
-    () => insertReceipt(h, { roof_job_id: ENDED_JOB, received_at: received(0), window_ends_at: end(base, 240, -1) }),
+    () => insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 240, -1) }),
     "cancellation_window_receipt_end_invalid",
   );
   refusedWith(
-    () => insertReceipt(h, { roof_job_id: ENDED_JOB, received_at: received(0), window_ends_at: end(base, 241, 1) }),
+    () => insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 241, 1) }),
     "cancellation_window_receipt_end_invalid",
   );
-  insertReceipt(h, { roof_job_id: ENDED_JOB, received_at: received(0), window_ends_at: end(base, 241) });
+  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 241) });
   // A later receipt whose own end would come before the previous end is refused...
   refusedWith(
-    () => insertReceipt(h, { roof_job_id: ENDED_JOB, received_at: received(0.5), window_ends_at: end(base + 0.5 * HOUR, 240) }),
+    () => insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0.5), window_ends_at: end(base + 0.5 * HOUR, 240) }),
     "cancellation_window_receipt_end_invalid",
   );
   // ...and stands with the previous end kept.
-  insertReceipt(h, { roof_job_id: ENDED_JOB, received_at: received(0.5), window_ends_at: end(base, 241) });
-  insertReceipt(h, { roof_job_id: ENDED_JOB, received_at: received(2), window_ends_at: end(base + 2 * HOUR, 240) });
+  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0.5), window_ends_at: end(base, 241) });
+  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(2), window_ends_at: end(base + 2 * HOUR, 240) });
   assert.deepEqual(
-    receipts(h, ENDED_JOB).map((row) => row.window_ends_at),
+    receipts(h, BOUNDS_JOB).map((row) => row.window_ends_at),
     [end(base, 241), end(base, 241), end(base + 2 * HOUR, 240)],
   );
 });

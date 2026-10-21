@@ -158,7 +158,7 @@ export const REMOVING_EXPLAINS =
  */
 function pairAgain(role: AppRole, crewPhoneUnpaired: boolean, afterSave = false): string {
   if (!crewPhoneUnpaired || role !== "field") return "";
-  return `; a crew phone must ${afterSave ? "then " : ""}be paired again in Settings › Crew devices`;
+  return `; a crew phone must ${afterSave ? "then " : ""}be paired again in Settings › Crew phones`;
 }
 
 /**

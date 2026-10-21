@@ -527,7 +527,7 @@ describe("TeamPage", () => {
     expect(await screen.findByRole("button", { name: "Give Grace access back" })).toBeEnabled();
     expect(
       paragraph(
-        "Give Grace access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must then be paired again in Settings › Crew devices. You don’t need to wait for them to sign in.",
+        "Give Grace access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must then be paired again in Settings › Crew phones. You don’t need to wait for them to sign in.",
       ),
     ).toBeInTheDocument();
   });
@@ -724,7 +724,7 @@ describe("TeamPage", () => {
   it.each([
     [
       "field",
-      "Give Grace access back: it returns the access they had (Crew) right away; a crew phone must be paired again in Settings › Crew devices.",
+      "Give Grace access back: it returns the access they had (Crew) right away; a crew phone must be paired again in Settings › Crew phones.",
     ],
     ["sales", "Give Grace access back: it returns the access they had (Sales) right away."],
   ] as const)(

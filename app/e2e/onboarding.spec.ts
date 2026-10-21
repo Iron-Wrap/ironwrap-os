@@ -300,6 +300,11 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await page.getByRole("button", { name: "Remove Sam from the team", exact: true }).click();
     await expect(page.getByText("No access", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Give Sam access back" })).toBeVisible();
+    await expect(
+      page.getByText(
+        "Give Sam access back: it returns the access they had (Production) right away.",
+      ),
+    ).toBeVisible();
     await assertAxeClean(page);
   });
 

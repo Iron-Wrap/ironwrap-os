@@ -9,6 +9,7 @@ import {
   changedElsewhere,
   conflictLine,
   firstName,
+  giveBack,
   giveBackThenSave,
   whatIsDifferentNow,
   whatTheChangeDoes,
@@ -185,13 +186,29 @@ describe("the derived access-conflict phrases", () => {
     expect(`Give Tom access back: ${giveBackThenSave("field", "production", true)}`).toBe(
       "Give Tom access back: it returns the access they had (Crew) right away. Then save to add your change: their role moves from Crew to Production. You don’t need to wait for them to sign in.",
     );
-    // A crew phone a removal unpaired, and Save makes them Crew: it must be paired again.
+    // A crew phone a removal unpaired, and Save makes them Crew: the clause follows the save
+    // sentence, because it belongs to the role after Save.
     expect(`Give Ray access back: ${giveBackThenSave("production", "field", true)}`).toBe(
-      "Give Ray access back: it returns the access they had (Production) right away; a crew phone must be paired again. Then save to add your change: their role moves from Production to Crew. You don’t need to wait for them to sign in.",
+      "Give Ray access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must be paired again. You don’t need to wait for them to sign in.",
     );
     // No crew phone was unpaired: no clause, even when Save makes them Crew.
     expect(`Give Grace access back: ${giveBackThenSave("sales", "field", false)}`).toBe(
       "Give Grace access back: it returns the access they had (Sales) right away. Then save to add your change: their role moves from Sales to Crew. You don’t need to wait for them to sign in.",
+    );
+  });
+
+  it("give access back with nothing held in the same words, asking for a crew phone only when Crew comes back", () => {
+    // Crew restored, and the removal unpaired their crew phone.
+    expect(`Give Tom access back: ${giveBack("field", true)}`).toBe(
+      "Give Tom access back: it returns the access they had (Crew) right away; a crew phone must be paired again.",
+    );
+    // Another role restored: the unpaired phone belongs to a Crew role they do not get back.
+    expect(`Give Grace access back: ${giveBack("sales", true)}`).toBe(
+      "Give Grace access back: it returns the access they had (Sales) right away.",
+    );
+    // No crew phone was unpaired: no clause, even for Crew.
+    expect(`Give Ray access back: ${giveBack("field", false)}`).toBe(
+      "Give Ray access back: it returns the access they had (Crew) right away.",
     );
   });
 });

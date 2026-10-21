@@ -151,26 +151,35 @@ export const REMOVING_EXPLAINS =
   "Removing them signs them out everywhere and unpairs any crew phone they use.";
 
 /**
- * In the "Give {First} access back:" line, after "the access they had ({Role})", only when removing
- * their access unpaired a crew phone (`crew_phone_unpaired`); on frame 5, also only when their role
- * after Save is Crew.
+ * The crew-phone clause belongs to the role they end up with (Track B's ruling for #13): it shows
+ * only when removing their access unpaired a crew phone (`crew_phone_unpaired`) and that role is
+ * Crew. Only the field role pairs a phone, so a phone they had as Crew does not matter once they
+ * get any other role.
  */
-export const PAIR_AGAIN = "a crew phone must be paired again";
+function pairAgain(role: AppRole, crewPhoneUnpaired: boolean): string {
+  return crewPhoneUnpaired && role === "field" ? "; a crew phone must be paired again" : "";
+}
+
+/**
+ * The line after the "Give {First} access back:" lead when no change is held: giving access back
+ * returns the role they had at once, so the clause follows that role.
+ */
+export function giveBack(had: AppRole, crewPhoneUnpaired: boolean): string {
+  return `it returns the access they had (${roleLabel(had)}) right away${pairAgain(had, crewPhoneUnpaired)}.`;
+}
 
 /**
  * Frame 5's line after the "Give {First} access back:" lead (the lead's ruling for #13): giving
  * access back returns it at once, and the held role change then needs only Save, not their next
- * sign-in. The crew-phone clause shows only when removing them unpaired a crew phone and their role
- * after Save is Crew: only the field role pairs a phone, so once Save moves them off Crew it stops
- * mattering. "moves from" is this line's alone; the other lines say "changes from".
+ * sign-in. The crew-phone clause follows the save sentence, for the role after Save. "moves from" is
+ * this line's alone; the other lines say "changes from".
  */
 export function giveBackThenSave(
   had: AppRole,
   pending: AppRole,
   crewPhoneUnpaired: boolean,
 ): string {
-  const phone = crewPhoneUnpaired && pending === "field" ? `; ${PAIR_AGAIN}` : "";
-  return `it returns the access they had (${roleLabel(had)}) right away${phone}. Then save to add your change: their role moves from ${roleLabel(had)} to ${roleLabel(pending)}. You don’t need to wait for them to sign in.`;
+  return `it returns the access they had (${roleLabel(had)}) right away. Then save to add your change: their role moves from ${roleLabel(had)} to ${roleLabel(pending)}${pairAgain(pending, crewPhoneUnpaired)}. You don’t need to wait for them to sign in.`;
 }
 
 /** Adding an address already on the list (or added by someone else a moment ago), Track B's line. */

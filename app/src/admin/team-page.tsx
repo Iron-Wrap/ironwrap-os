@@ -27,7 +27,6 @@ import {
   ALREADY_ON_TEAM_NEXT,
   MAY_BE_OUT_OF_DATE,
   OUT_OF_DATE_NOTE,
-  PAIR_AGAIN,
   REMOVE_EXPLAINS,
   REMOVING_EXPLAINS,
   alreadyOnTeam,
@@ -35,6 +34,7 @@ import {
   changedElsewhere,
   conflictLine,
   firstName,
+  giveBack,
   giveBackThenSave,
   saveAfterAccessBack,
   whatTheChangeDoes,
@@ -589,9 +589,6 @@ function AccessPanel({
   }, [refusedAt]);
 
   const removeLine = <EditLine lead={`Remove ${first} from the team:`}>{REMOVE_EXPLAINS}</EditLine>;
-  const hadAccess = `they can sign in again with the access they had (${roleLabel(person.role)})${
-    person.crew_phone_unpaired ? `; ${PAIR_AGAIN}` : ""
-  }.`;
 
   let body: ReactNode;
   if (unresolved) {
@@ -703,7 +700,9 @@ function AccessPanel({
             Give {first} access back
           </Button>
         </div>
-        <EditLine lead={`Give ${first} access back:`}>{hadAccess}</EditLine>
+        <EditLine lead={`Give ${first} access back:`}>
+          {giveBack(person.role, person.crew_phone_unpaired)}
+        </EditLine>
       </>
     );
   } else {

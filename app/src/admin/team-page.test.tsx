@@ -527,7 +527,7 @@ describe("TeamPage", () => {
     expect(await screen.findByRole("button", { name: "Give Grace access back" })).toBeEnabled();
     expect(
       paragraph(
-        "Give Grace access back: it returns the access they had (Production) right away; a crew phone must be paired again. Then save to add your change: their role moves from Production to Crew. You don’t need to wait for them to sign in.",
+        "Give Grace access back: it returns the access they had (Production) right away. Then save to add your change: their role moves from Production to Crew; a crew phone must be paired again. You don’t need to wait for them to sign in.",
       ),
     ).toBeInTheDocument();
   });
@@ -707,7 +707,7 @@ describe("TeamPage", () => {
     expect(screen.getByText("No access")).toBeInTheDocument();
     expect(primaryButtons()).toEqual(["Give Grace access back"]);
     expect(
-      paragraph("Give Grace access back: they can sign in again with the access they had (Sales)."),
+      paragraph("Give Grace access back: it returns the access they had (Sales) right away."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Give Grace access back" }));
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledOnce());
@@ -720,6 +720,26 @@ describe("TeamPage", () => {
     expect(screen.getAllByText("Active")).toHaveLength(2);
     expect(screen.getByRole("radio", { name: /^Sales/ })).toBeChecked();
   });
+
+  it.each([
+    [
+      "field",
+      "Give Grace access back: it returns the access they had (Crew) right away; a crew phone must be paired again.",
+    ],
+    ["sales", "Give Grace access back: it returns the access they had (Sales) right away."],
+  ] as const)(
+    "asks for the crew phone a removal unpaired only when giving access back restores Crew (%s)",
+    async (role, line) => {
+      vi.mocked(listAppUsers).mockResolvedValue(
+        people(ada, grace({ role, active: false, crew_phone_unpaired: true })) as never,
+      );
+      const user = userEvent.setup();
+      await openGrace(user);
+
+      expect(primaryButtons()).toEqual(["Give Grace access back"]);
+      expect(paragraph(line)).toBeInTheDocument();
+    },
+  );
 
   it("explains a refusal that is not a conflict and keeps the change", async () => {
     vi.mocked(listAppUsers).mockResolvedValue(people(ada, grace()) as never);

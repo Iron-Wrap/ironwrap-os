@@ -1500,4 +1500,18 @@ test("a person's role change closes the open role-change drafts for them, whatev
   await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001");
   const other = row(toProduction);
   assert.deepEqual([other.reason_code, JSON.parse(other.do_it_myself_json!).context.applied.value], ["applied_by_person", "sales"]);
+  // A newer draft replaces only a draft of the same person, change and device: revoking the tablet
+  // leaves the phone's revoke open, and a second revoke of the phone replaces the first.
+  const revoke = (key: string, device: string) => {
+    t.tick(15 * 60_000); // past the ask rate window and the pending-ask cap
+    return draft(key, (ref) => ({ ...pairing(ref), change: "revoke_device", device_ref: device }));
+  };
+  const phone = await revoke("ask-revoke-phone", "device:synthetic_phone");
+  const tablet = await revoke("ask-revoke-tablet", "device:synthetic_tablet");
+  assert.deepEqual([row(phone).needs_ask, row(tablet).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
+  const phoneAgain = await revoke("ask-revoke-phone-again", "device:synthetic_phone");
+  assert.deepEqual(
+    [row(phone).reason_code, JSON.parse(row(phone).readback_json!).reference, row(tablet).needs_ask, row(device).needs_ask],
+    ["superseded", `step/${phoneAgain}`, "apply_in_own_screen", "apply_in_own_screen"],
+  );
 });

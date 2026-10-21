@@ -608,6 +608,8 @@ export async function changeAppUserRole(
   const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
   if (authority) return authority;
   if (user.role === parsed.value.role) {
+    // A repeat closes any role-change draft a failed close left open after the first request.
+    await closeAccessDrafts(env.DB as unknown as AgentDb, auth.session.tenant_id, user.user_id, user.role, auth.session.user_id);
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
   }
 

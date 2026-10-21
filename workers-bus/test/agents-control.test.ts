@@ -2483,6 +2483,26 @@ test("migration 0206: the decided-step guard is 0200's plus one exception that o
     "needs_ask = 'apply_in_own_screen'",
   ])
     assert.throws(update(`${CLOSE}, ${change}`), /agent_step_decided/, change);
+  // No other people-only draft closes: a payee unfreeze draft, otherwise the same, is refused.
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_run_steps SELECT 'step_synthetic_payee', tenant_id, run_id, step_seq + 1000, 'synthetic-payee', specialist_id, 'payee.unfreeze_prepare',
+        autonomy, args_json, args_sha256, sources_json, policy_json, permit_json, tool_json, readback_json, outcome, reason_code, needs_reviewer_role,
+        needs_person_id, needs_ask, undo_json, do_it_myself_json, created_at, decided_at, version FROM agent_run_steps WHERE step_id = ?`,
+    )
+    .run(draft.step_id);
+  assert.throws(() => s.db.raw.prepare(`UPDATE agent_run_steps SET ${CLOSE} WHERE step_id = 'step_synthetic_payee'`).run(), /agent_step_decided/);
+
+  // The closing code leaves the draft open when its own condition fails: a newer draft that was
+  // never recorded, another tenant, or an owner setting refused as stale.
+  const { closeDelegationDrafts, supersedeDrafts } = await import("../src/agents/drafts.ts");
+  const args = { specialist_id: "lead_concierge", action_id: "note.add", proposed: "asks_first", ceiling: null, reason: "Synthetic." };
+  await (await supersedeDrafts(s.db, TENANT, { step_id: "step_never_recorded", action_id: "delegation.propose_change", args, args_sha256: "synthetic" }))!.run();
+  await (await closeDelegationDrafts(s.db, "tenant_synthetic", args, "asks_first", "appu_test_owner")).run();
+  const stale = await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 7 }), "owner", "close-stale");
+  assert.equal(stale.status, 409);
+  assert.equal(s.scalar("SELECT needs_ask FROM agent_run_steps WHERE step_id = ?", draft.step_id).needs_ask, "apply_in_own_screen");
+
   const before = s.scalar("SELECT version FROM agent_run_steps WHERE step_id = ?", draft.step_id).version as number;
   assert.equal(update(CLOSE)().changes, 1);
   const closed = s.scalar("SELECT version, decided_at FROM agent_run_steps WHERE step_id = ?", draft.step_id);

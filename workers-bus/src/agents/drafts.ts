@@ -12,6 +12,7 @@
 // close past the decided-step guard; `decided_at` comes from D1's clock.
 
 import { sha256Hex } from "../app-auth.ts";
+import { catalogAction } from "./catalog.ts";
 import { APPLY_IN_OWN_SCREEN } from "./receipts.ts";
 import { canonicalJson } from "./schema.ts";
 import type { AgentDb, BoundStatement } from "./store.ts";
@@ -35,20 +36,31 @@ const DRAFT_KEYS: Record<string, { sql: string; values: (args: Record<string, un
     sql: "json_extract(args_json, '$.specialist_id') = ? AND json_extract(args_json, '$.action_id') = ?",
     values: (args) => [args.specialist_id, args.action_id],
   },
-  // One person's change of one kind: a newer device pairing does not replace a role change.
+  // One person's change of one kind to one device: a newer device pairing does not replace a role
+  // change, nor a revoke of the tablet one of the phone.
   "access.prepare_change": {
-    sql: "json_extract(args_json, '$.person_ref') = ? AND json_extract(args_json, '$.change') = ?",
-    values: (args) => [args.person_ref, args.change],
+    sql: "json_extract(args_json, '$.person_ref') = ? AND json_extract(args_json, '$.change') = ? AND json_extract(args_json, '$.device_ref') IS ?",
+    values: (args) => [args.person_ref, args.change, args.device_ref ?? null],
   },
 };
+
+/** The open drafts of one record. Null for an action whose drafts never close here. */
+function record(actionId: string, args: Record<string, unknown>): { sql: string; values: unknown[] } | null {
+  const key = DRAFT_KEYS[actionId];
+  if (!key) return null;
+  // A draft's specialist is one of the action's owners (policy scope), which keeps the close on the
+  // pair index instead of every succeeded step of the tenant.
+  const owners = catalogAction(actionId)?.owners ?? [];
+  return { sql: `specialist_id IN (${owners.map(() => "?").join(", ")}) AND ${key.sql}`, values: [...owners, ...key.values(args)] };
+}
 
 /** A person changed the record `args` names: its open drafts close `applied_by_person`. */
 async function applied(db: AgentDb, tenantId: string, actionId: string, args: Record<string, unknown>, reference: string, set: Applied): Promise<BoundStatement> {
   const readback = canonicalJson({ source: "owned_store", reference, response_hash: await sha256Hex(canonicalJson({ [set.field]: set.value })), matched: true });
-  const key = DRAFT_KEYS[actionId];
+  const drafts = record(actionId, args)!;
   return db
-    .prepare(`${CLOSE} AND ${key.sql}`)
-    .bind("applied_by_person", "applied_by_person", readback, canonicalJson(set), canonicalJson(set), tenantId, actionId, ...key.values(args));
+    .prepare(`${CLOSE} AND ${drafts.sql}`)
+    .bind("applied_by_person", "applied_by_person", readback, canonicalJson(set), canonicalJson(set), tenantId, actionId, ...drafts.values);
 }
 
 /**
@@ -60,13 +72,13 @@ export async function supersedeDrafts(
   tenantId: string,
   newer: { step_id: string; action_id: string; args: unknown; args_sha256: string },
 ): Promise<BoundStatement | null> {
-  const key = DRAFT_KEYS[newer.action_id];
-  if (!key) return null;
-  const record = canonicalJson({ source: "owned_store", reference: `step/${newer.step_id}`, response_hash: newer.args_sha256, matched: true });
+  const drafts = record(newer.action_id, newer.args as Record<string, unknown>);
+  if (!drafts) return null;
+  const reference = canonicalJson({ source: "owned_store", reference: `step/${newer.step_id}`, response_hash: newer.args_sha256, matched: true });
   return db
     // Only once the newer draft is recorded: a retry that records nothing replaces nothing.
-    .prepare(`${CLOSE} AND ${key.sql} AND step_id <> ? AND EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id = ? AND step_id = ?)`)
-    .bind("superseded", "superseded", record, null, null, tenantId, newer.action_id, ...key.values(newer.args as Record<string, unknown>), newer.step_id, tenantId, newer.step_id);
+    .prepare(`${CLOSE} AND ${drafts.sql} AND step_id <> ? AND EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id = ? AND step_id = ?)`)
+    .bind("superseded", "superseded", reference, null, null, tenantId, newer.action_id, ...drafts.values, newer.step_id, tenantId, newer.step_id);
 }
 
 /**
@@ -92,9 +104,10 @@ export async function closeDelegationDrafts(
 export async function closeAccessDrafts(db: AgentDb, tenantId: string, userId: string, role: string, by: string): Promise<boolean> {
   try {
     const person = `person:${userId}`;
-    await (await applied(db, tenantId, "access.prepare_change", { person_ref: person, change: "change_role" }, person, { field: "role", value: role, by })).run();
+    await (await applied(db, tenantId, "access.prepare_change", { person_ref: person, change: "change_role", device_ref: null }, person, { field: "role", value: role, by })).run();
     return true;
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify({ at: "agent_draft_close", action_id: "access.prepare_change", error: String(error) }));
     return false;
   }
 }

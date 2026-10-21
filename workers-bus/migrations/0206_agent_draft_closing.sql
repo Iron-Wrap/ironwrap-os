@@ -1,8 +1,9 @@
 -- AI team: closing a prepared people-only draft (Track A, AI-TEAM-CONTRACT.md "Action classes",
 -- contract f5).
 --
--- A decided step is final (0200). One exception: a draft that prepared a people-only act and still
--- waits in its person's Needs you closes once, still `succeeded`, when a person acts on its record
+-- A decided step is final (0200). One exception: a draft that prepared a people-only act (a
+-- delegation proposal or an access change; no other draft closes yet) and still waits in its
+-- person's Needs you closes once, still `succeeded`, when a person acts on its record
 -- by hand (`applied_by_person`) or a newer draft replaces it (`superseded`). The trigger body is
 -- 0200's plus that one clause. Only the closing fields move: the reason code, the policy's reason
 -- codes, the ask (to NULL, so a closed draft never closes again or reopens), the readback naming
@@ -17,6 +18,7 @@ BEFORE UPDATE ON agent_run_steps
 WHEN OLD.outcome IS NOT NULL AND OLD.outcome <> 'unknown'
   AND NOT (
     OLD.outcome IS 'succeeded'
+    AND OLD.action_id IN ('delegation.propose_change', 'access.prepare_change')
     AND OLD.needs_ask IS 'apply_in_own_screen'
     AND NEW.needs_ask IS NULL
     AND COALESCE(NEW.reason_code IN ('applied_by_person', 'superseded'), 0)

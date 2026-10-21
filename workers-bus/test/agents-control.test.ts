@@ -206,7 +206,8 @@ function setup(fullSchema = false, workerVars: Record<string, string> = {}) {
         kind: "event",
         specialist_id: specialist,
         watch_id: null,
-        source: "synthetic-test",
+        // An inbound by web form, as the inbound producer records one (agents/inbound.ts).
+        source: "web_form",
         subject: { aggregate: "lead", id: "synthetic-lead" },
         content: { text: "Untrusted customer request" },
         dedupe_key: `signal:${++sequence}`,

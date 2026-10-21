@@ -572,6 +572,7 @@ async function runRequest(db: AgentDb, tenantId: string, run: RunRow): Promise<S
     source: actor ? actorWord(root) : root.source,
     actor,
     expected_action_id: typeof expected === "string" ? expected : null,
+    subject: root.subject_aggregate && root.subject_id ? { aggregate: root.subject_aggregate, id: root.subject_id } : null,
   };
 }
 

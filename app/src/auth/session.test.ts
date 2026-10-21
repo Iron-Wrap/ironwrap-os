@@ -123,11 +123,12 @@ describe("sessionResponseSchema", () => {
 describe("officeSessionIsLive", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
     await resetDatabaseForTests();
   });
 
-  it("is true only while this browser keeps an unexpired sign-in", async () => {
-    expect(await officeSessionIsLive()).toBe(false);
+  it("is true only while this browser keeps an unexpired sign-in, read without the local database", async () => {
+    expect(officeSessionIsLive()).toBe(false);
 
     const expiresAt = Date.now() + 60 * 60_000;
     await persistAuthenticatedSession({
@@ -138,13 +139,22 @@ describe("officeSessionIsLive", () => {
       stale_fields: [],
       session_expires_at: new Date(expiresAt).toISOString(),
     });
-    expect(await officeSessionIsLive()).toBe(true);
+    const open = vi.spyOn(indexedDB, "open");
+    expect(officeSessionIsLive()).toBe(true);
+    expect(open).not.toHaveBeenCalled();
 
     vi.spyOn(Date, "now").mockReturnValue(expiresAt + 1);
-    expect(await officeSessionIsLive()).toBe(false);
+    expect(officeSessionIsLive()).toBe(false);
     vi.restoreAllMocks();
 
     await clearSessionSnapshot();
-    expect(await officeSessionIsLive()).toBe(false);
+    expect(officeSessionIsLive()).toBe(false);
+  });
+
+  it("answers false when storage cannot be read", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("SecurityError: storage disabled");
+    });
+    expect(officeSessionIsLive()).toBe(false);
   });
 });

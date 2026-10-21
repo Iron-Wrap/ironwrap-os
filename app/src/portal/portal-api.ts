@@ -1,3 +1,4 @@
+import { officeSessionIsLive } from "../auth/session";
 import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import {
@@ -31,6 +32,33 @@ export async function loadCustomerPortal(
     credentials: "omit",
     fetcher,
   });
+}
+
+/**
+ * Whether the resolve request carries `staff_preview`: an office sign-in is live in this browser.
+ * The page never waits longer than `timeoutMs` for the answer; a check that fails or is slow answers
+ * false, which only lets the open be recorded.
+ */
+export async function portalStaffPreview(
+  check: () => boolean | Promise<boolean> = officeSessionIsLive,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(check)
+        .then(
+          (live) => live === true,
+          () => false,
+        ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Start an email-verified contract confirmation; a portal capability alone cannot accept terms. */

@@ -244,8 +244,10 @@ describe("CustomerPortalView", () => {
 describe("CustomerPortalPage", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     clearPendingMagicLinkToken();
     window.history.replaceState(null, "", "/");
+    window.localStorage.clear();
     await resetDatabaseForTests();
   });
 
@@ -283,6 +285,7 @@ describe("CustomerPortalPage", () => {
     }
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(model));
     vi.stubGlobal("fetch", fetcher);
+    const open = vi.spyOn(indexedDB, "open");
     clearPendingMagicLinkToken();
     window.history.replaceState(null, "", `/portal#token=${"p".repeat(43)}`);
 
@@ -294,5 +297,7 @@ describe("CustomerPortalPage", () => {
     expect(path).toBe("/api/v1/customer-portal/resolve");
     expect(JSON.parse(String(init?.body))).toEqual(body);
     expect(init?.credentials).toBe("omit");
+    // Neither a customer's device nor a staff one opens the local database to decide the flag.
+    expect(open).not.toHaveBeenCalled();
   });
 });

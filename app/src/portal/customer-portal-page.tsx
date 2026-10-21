@@ -2,14 +2,17 @@ import { BadgeCheck, ClipboardList, FileCheck2, Hammer, Wrench } from "lucide-re
 import { useEffect, useState } from "react";
 
 import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
-import { officeSessionIsLive } from "../auth/session";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { useCustomerScope } from "../lib/theme";
 import { describeInstallWindow } from "./install-window";
 import { MaterialComparisonSection } from "./material-comparison-section";
-import { loadCustomerPortal, requestCustomerContractAcceptanceChallenge } from "./portal-api";
+import {
+  loadCustomerPortal,
+  portalStaffPreview,
+  requestCustomerContractAcceptanceChallenge,
+} from "./portal-api";
 import type { CustomerPortalResponse } from "./portal-contracts";
 
 type PortalState =
@@ -27,9 +30,8 @@ export function CustomerPortalPage() {
     if (!token) return;
     let active = true;
     // Staff opening a customer's link from a signed-in browser preview it; the first open the
-    // server records stays the customer's own.
-    void officeSessionIsLive()
-      .catch(() => false)
+    // server records stays the customer's own. The check never holds the page for more than 1 s.
+    void portalStaffPreview()
       .then((staffPreview) => loadCustomerPortal(token, undefined, staffPreview))
       .then(
         (model) => {

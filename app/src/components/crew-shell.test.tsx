@@ -7,6 +7,7 @@ import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
 import { CrewShell } from "./crew-shell";
 
+const route = vi.hoisted(() => ({ pathname: "/today" }));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
     <a href={to} {...props}>
@@ -14,7 +15,12 @@ vi.mock("@tanstack/react-router", () => ({
     </a>
   ),
   Outlet: () => <p>Assigned field work</p>,
-  useRouterState: () => "/today",
+  useRouterState: () => route.pathname,
+}));
+vi.mock("../field/safety-action-panel", () => ({
+  SafetyActionPanel: ({ scope }: { scope?: { type: string; id: string } }) => (
+    <p>Safety panel scope: {scope ? `${scope.type} ${scope.id}` : "company"}</p>
+  ),
 }));
 vi.mock("./shell-hooks", () => ({
   useCompanyLogoUrl: () => null,
@@ -56,7 +62,35 @@ const session = {
 } satisfies AuthenticatedSession;
 
 describe("CrewShell", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    route.pathname = "/today";
+  });
+
+  it("stops work on the open job from Help, never the whole company", async () => {
+    route.pathname = "/jobs/JOB-ELENA";
+    const user = userEvent.setup();
+    render(
+      <SessionProvider session={session}>
+        <CrewShell />
+      </SessionProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Help" }));
+    expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();
+    expect(screen.getByText("Safety panel scope: roof_job JOB-ELENA")).toBeInTheDocument();
+  });
+
+  it("keeps the company-wide panel when no job is known", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionProvider session={session}>
+        <CrewShell />
+      </SessionProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Help" }));
+    expect(await screen.findByText("Safety panel scope: company")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
+  });
 
   it("opens in Sun mode on a touch scope, even when the phone is set to dark", () => {
     const darkPhone = vi.spyOn(window, "matchMedia").mockImplementation(

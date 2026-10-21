@@ -118,6 +118,41 @@ describe("offline outbox", () => {
     expect(JSON.stringify(saved)).not.toContain("current-device-proof");
   });
 
+  it("keeps that a safety stop's job was not found, so the phone can say it holds every job", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "stop-action-1",
+      kind: "safety_action",
+      endpoint: "/api/v1/safety/actions",
+      payload: {
+        kind: "report_occurrence",
+        scope_type: "roof_job",
+        scope_id: "JOB-GONE",
+        captured_at: "2026-08-17T12:00:00.000Z",
+        detail: "Work stopped on J-GONE",
+        occurrence_kind: "hazard",
+        severity: "high",
+      },
+    });
+    await queueOutboxAction("stop-action-1", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          device_action_id: "stop-action-1",
+          status: "verified",
+          server_ref: "so_0001",
+          scope_unresolved: true,
+        },
+        { status: 201 },
+      ),
+    );
+    await flushOutbox({ ...principal, fetcher, csrfToken: "csrf", now: () => 3_000 });
+    expect(await getOutboxAction("stop-action-1")).toMatchObject({
+      state: "verified",
+      verification: { serverRef: "so_0001", scopeUnresolved: true },
+    });
+  });
+
   it("replays inventory intent and scan bodies unchanged with durable identities", async () => {
     await saveOutboxAction({
       ...principal,

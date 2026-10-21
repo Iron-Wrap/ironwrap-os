@@ -46,7 +46,8 @@ const ROLE_HELP: Readonly<Record<AppRole, string>> = {
   sales: "Leads and quotes only.",
   production: "The job runway and crew scheduling.",
   accounting: "The money desk and QuickBooks only.",
-  field: "The Field Companion on a paired phone. Needed before you can pair a device.",
+  field:
+    "The crew phone app on a paired phone. Add them first, then pair their phone on the Crew phones page in Settings.",
 };
 
 export function TeamPage() {
@@ -313,7 +314,7 @@ function AddTeammate({ onListChanged }: { onListChanged: () => void }) {
             disabled={!ready}
           >
             <UserPlus aria-hidden="true" />
-            Add to the company
+            Add to the team
           </Button>
         </form>
       </CardContent>

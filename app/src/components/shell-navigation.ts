@@ -18,9 +18,14 @@ export function groupNavigation(items: readonly NavigationItem[]) {
 
 /**
  * Records opened from a destination keep that destination named in the breadcrumb, so a job
- * packet reads "Plan / Production / Job" rather than losing its place.
+ * packet reads "Plan / Production / Job" rather than losing its place. A settings page is named
+ * as its own heading names it; a page inside Owner configuration names that page as its parent.
  */
-const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string]> = [
+const OWNER_CONFIGURATION = {
+  label: "Owner configuration",
+  to: "/settings/configuration",
+} as const;
+const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string, { label: string; to: string }?]> = [
   [/^\/jobs\/[^/]+\/history$/, "Job history"],
   [/^\/jobs\/[^/]+/, "Job"],
   [/^\/work-objects\//, "Work"],
@@ -38,21 +43,66 @@ const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^\/safety\/corrective-actions\//, "Corrective action"],
   [/^\/safety\/equipment\/[^/]+/, "Equipment item"],
   [/^\/safety\/equipment$/, "Equipment"],
-  [/^\/settings\/company$/, "Company"],
+  [/^\/settings\/company$/, "Company details"],
   [/^\/settings\/team$/, "People"],
-  [/^\/settings\/devices$/, "Crew devices"],
-  [/^\/settings\/integrations$/, "Integrations"],
-  [/^\/settings\/configuration/, "Configuration"],
+  [/^\/settings\/devices$/, "Crew phones"],
+  [/^\/settings\/integrations$/, "Integration readiness"],
+  [/^\/settings\/configuration\/pipelines$/, "Pipelines", OWNER_CONFIGURATION],
+  [/^\/settings\/configuration\/fields$/, "Fields", OWNER_CONFIGURATION],
+  [/^\/settings\/configuration\/automations\/recipients$/, "Recipients", OWNER_CONFIGURATION],
+  [/^\/settings\/configuration\/automations$/, "Automations", OWNER_CONFIGURATION],
+  [/^\/settings\/configuration\/documents$/, "Documents", OWNER_CONFIGURATION],
+  [/^\/settings\/configuration/, "Owner configuration"],
 ];
 
 export function shellPlace(
   items: readonly NavigationItem[],
   pathname: string,
-): { item: NavigationItem; record?: string } {
+): { item: NavigationItem; record?: string; parent?: { label: string; to: string } } {
   const item = navigationItemForPath(items, pathname);
   if (pathname === item.to) return { item };
-  const record = RECORD_LABELS.find(([pattern]) => pattern.test(pathname))?.[1];
-  return record ? { item, record } : { item };
+  const match = RECORD_LABELS.find(([pattern]) => pattern.test(pathname));
+  if (!match) return { item };
+  const [, record, parent] = match;
+  return parent ? { item, record, parent } : { item, record };
+}
+
+/**
+ * The breadcrumb for a place: the workspace, the destination when a record is open, the record's
+ * parent page when it has one, and the page itself. A destination named like its workspace
+ * ("Settings" in Settings, "Now" in Now) is said once, so a settings page reads "Settings / Company
+ * details", never "Settings / Settings / Company"; with a record open the workspace crumb then
+ * links back to the destination.
+ */
+export function breadcrumbTrail({
+  item,
+  record,
+  parent,
+}: {
+  item: NavigationItem;
+  record?: string;
+  parent?: { label: string; to: string };
+}): {
+  workspace?: { label: string; to?: string };
+  destination?: { label: string; to: string };
+  parent?: { label: string; to: string };
+  current: string;
+} {
+  const repeats = item.label === item.workspace;
+  if (!record)
+    return repeats
+      ? { current: item.label }
+      : { workspace: { label: item.workspace }, current: item.label };
+  return {
+    ...(repeats
+      ? { workspace: { label: item.workspace, to: item.to } }
+      : {
+          workspace: { label: item.workspace },
+          destination: { label: item.label, to: item.to },
+        }),
+    ...(parent ? { parent } : {}),
+    current: record,
+  };
 }
 
 export function navigationItemForPath(

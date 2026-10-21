@@ -138,7 +138,7 @@ describe("TeamPage", () => {
     await user.type(screen.getByLabelText("Their name"), "Sam Sales");
     await user.type(screen.getByLabelText("Their work email"), "sam@freshco.example");
     await user.selectOptions(screen.getByLabelText("What they can see"), "production");
-    await user.click(screen.getByRole("button", { name: "Add to the company" }));
+    await user.click(screen.getByRole("button", { name: "Add to the team" }));
 
     await waitFor(() => expect(provisionAppUser).toHaveBeenCalledOnce());
     expect(vi.mocked(provisionAppUser).mock.calls[0]![1]).toEqual({
@@ -784,7 +784,7 @@ describe("TeamPage", () => {
       await screen.findByRole("heading", { name: "People" });
       await user.type(screen.getByLabelText("Their name"), "Grace Obi");
       await user.type(screen.getByLabelText("Their work email"), "grace@freshco.example");
-      await user.click(screen.getByRole("button", { name: "Add to the company" }));
+      await user.click(screen.getByRole("button", { name: "Add to the team" }));
 
       const line = await screen.findByText(
         "grace@freshco.example is already on your team, so nothing was added.",
@@ -814,7 +814,7 @@ describe("TeamPage", () => {
     await screen.findByRole("heading", { name: "People" });
     await user.type(screen.getByLabelText("Their name"), "Sam Sales");
     await user.type(screen.getByLabelText("Their work email"), "sam@nope");
-    await user.click(screen.getByRole("button", { name: "Add to the company" }));
+    await user.click(screen.getByRole("button", { name: "Add to the team" }));
 
     expect(await screen.findByText("Enter a valid email address.")).toBeInTheDocument();
   });

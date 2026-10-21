@@ -83,8 +83,13 @@ export interface ReceiptDisplay {
    * to them ("You may change this invoice. You cannot approve it; Dana Whitford approves it.").
    */
   viewerPart?: string;
-  /** Undone, replaced or done by a person: what happened since, in one sentence. */
+  /**
+   * Undone, replaced or done by a person: what happened since, in one sentence. By default a
+   * closed people-only draft says it in its own words (`supersededNote`, `appliedByPersonNote`).
+   */
   since?: string;
+  /** What a people-only draft changes, for that closing line: "Grace Obi's role". */
+  record?: string;
 }
 
 function Row({
@@ -154,8 +159,17 @@ export function Receipt({
     person ? (people[person] ?? undefined) : undefined;
   const where = display.where ?? "the other system";
   const by = display.by ? (people[display.by] ?? display.by) : undefined;
-  const words = receiptWords(receipt, { by, where, waitingFor: display.waitingFor });
+  const words = receiptWords(receipt, {
+    by,
+    where,
+    waitingFor: display.waitingFor,
+    record: display.record,
+  });
   const { state } = words;
+  // A closed draft's note is what happened since. A done answer's note (VIEW_REFUSED) points at the
+  // answer text above it, so it stands under the answer in the conversation, never on this card.
+  const since =
+    display.since ?? (state === "replaced" || state === "done_by_person" ? words.note : undefined);
   const Heading = `h${headingLevel}` as const;
   const when = display.when.at ? (
     <time dateTime={display.when.at}>{display.when.text}</time>
@@ -366,7 +380,7 @@ export function Receipt({
           </Row>
         ) : null}
         {state === "held" ? <Row label="Next step">{display.nextStep ?? words.next}</Row> : null}
-        {display.since ? <Row label="Since then">{display.since}</Row> : null}
+        {since ? <Row label="Since then">{since}</Row> : null}
         {checked ? <Row label="Checked">{checked}</Row> : null}
       </dl>
       {actions.length ? (

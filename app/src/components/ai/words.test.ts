@@ -124,12 +124,12 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       state: "done_by_person",
       words: "Done by Dana Whitford",
       kind: "done",
-      note: "Dana Whitford already made this change to Grace Obi's access, so this draft is closed. That does not undo the change, and nothing is left to do.",
+      note: "Dana Whitford already made this change to Grace Obi's access, so this draft is closed. The change stays in place, and nothing is left to do.",
     });
     expect(receiptWords(closed("succeeded", "applied_by_person"))).toMatchObject({
       state: "done_by_person",
       words: "Done by a person",
-      note: "A person already made this change, so this draft is closed. That does not undo the change, and nothing is left to do.",
+      note: "A person already made this change, so this draft is closed. The change stays in place, and nothing is left to do.",
     });
   });
 

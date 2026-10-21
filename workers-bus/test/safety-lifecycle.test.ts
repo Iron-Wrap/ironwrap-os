@@ -1054,6 +1054,224 @@ test("the replayed offline envelope reaches the safety rail through the route", 
   });
 });
 
+// A raise is never refused for the scope it names. When that scope is not a job, Work Package or
+// tenant of this tenant, the stop is recorded and active as always, and the answer says so.
+
+const SCOPE_SEED_AT = "2026-08-17T10:00:00.000Z";
+const OTHER_TENANT = "other-tenant";
+
+/** A native job, with the envelope, lead and customer its keys need, in the given tenant. */
+function seedRoofJob(db: SqliteD1, roofJobId: string, tenantId = TENANT): void {
+  const at = SCOPE_SEED_AT;
+  // ON CONFLICT skips only a row seeded earlier; a CHECK the seed breaks still fails loudly.
+  db.raw
+    .prepare(
+      `INSERT INTO envelopes (envelope_id, source, payload_json, ts, status, created_at, updated_at)
+       VALUES ('env-scope-seed', 'website', '{}', ?, 'received', ?, ?) ON CONFLICT DO NOTHING`,
+    )
+    .run(at, at, at);
+  db.raw
+    .prepare(
+      `INSERT INTO operating_leads (lead_id, tenant_id, source_envelope_id, source, created_at, updated_at)
+       VALUES (?, ?, 'env-scope-seed', 'website', ?, ?) ON CONFLICT DO NOTHING`,
+    )
+    .run(`lead-${tenantId}`, tenantId, at, at);
+  db.raw
+    .prepare(
+      `INSERT INTO operating_customers
+         (customer_id, tenant_id, source_envelope_id, display_name, contact_email, created_at, updated_at)
+       VALUES (?, ?, 'env-scope-seed', 'Synthetic Customer', ?, ?, ?) ON CONFLICT DO NOTHING`,
+    )
+    .run(`customer-${tenantId}`, tenantId, `customer-${tenantId}@example.invalid`, at, at);
+  db.raw
+    .prepare(
+      `INSERT INTO operating_roof_jobs (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id, service_type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'env-scope-seed', 'Metal re-roof', ?, ?)`,
+    )
+    .run(roofJobId, tenantId, `lead-${tenantId}`, `customer-${tenantId}`, at, at);
+}
+
+/** A released first version of a Work Package; its definition repeats the row, as D1 requires. */
+function seedWorkPackage(db: SqliteD1, workPackageId: string, tenantId = TENANT): void {
+  const definition = {
+    work_package_id: workPackageId,
+    tenant_id: tenantId,
+    version: 1,
+    job_id: "job-scope-0001",
+    assignment_id: "assignment-scope-0001",
+    work_object_type: "Roof Job",
+    work_object_id: "job-scope-0001",
+    physical_context_type: "Roof Site",
+    physical_context_id: "job-scope-0001",
+    title: "Tear off the north slope",
+    objective: "Remove the old shingles from the north slope.",
+    boundaries: "North slope only.",
+    prerequisites: "Anchors installed and inspected.",
+    expected_result: "Deck bare and swept.",
+    stop_conditions: "Lightning within ten kilometres.",
+    make_safe_procedure: "Tarp the open deck and clear the drop zone.",
+    issued_at: SCOPE_SEED_AT,
+    expires_at: "2026-08-18T10:00:00.000Z",
+    released_at: SCOPE_SEED_AT,
+    release_attempt_id: "release-scope-0001",
+  };
+  const row = { ...definition, status: "Released", created_at: SCOPE_SEED_AT, updated_at: SCOPE_SEED_AT };
+  db.raw
+    .prepare(
+      `INSERT INTO work_packages (${Object.keys(row).join(", ")}, definition_json)
+       VALUES (${Object.keys(row).map(() => "?").join(", ")}, ?)`,
+    )
+    .run(...Object.values(row), JSON.stringify(definition));
+}
+
+/** The offline envelope a raise replays to the route, as the PWA outbox sends it. */
+function raiseEnvelope(
+  deviceActionId: string,
+  scope: { type: string; id: string },
+  kind: "report_occurrence" | "rescue_request" = "report_occurrence",
+) {
+  return {
+    device_action_id: deviceActionId,
+    payload: {
+      kind,
+      scope_type: scope.type,
+      scope_id: scope.id,
+      captured_at: "2026-08-17T11:45:00.000Z",
+      detail: "Unguarded skylight opening on the east slope.",
+      ...(kind === "report_occurrence" ? { occurrence_kind: "hazard", severity: "high" } : {}),
+    },
+  };
+}
+
+async function raise(
+  app: AppEnv,
+  envelope: ReturnType<typeof raiseEnvelope>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await handleSafetyRoute(
+    request("/api/v1/safety/actions", envelope, { deviceActionId: envelope.device_action_id }),
+    app,
+    auth(USERS.crew),
+  );
+  assert.ok(response);
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+}
+
+/** The recorded stop behind a raise's answer. */
+function raisedStop(db: SqliteD1, body: Record<string, unknown>) {
+  return db.raw
+    .prepare(
+      "SELECT state, stop_active, scope_type, scope_id FROM safety_occurrences WHERE occurrence_id = ?",
+    )
+    .get(String(body.server_ref));
+}
+
+test("a raise on a job that exists answers scope_unresolved false", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  seedRoofJob(db, "job-scope-0001");
+  const raised = await raise(app, raiseEnvelope("dev-scope-job-0001", { type: "roof_job", id: "job-scope-0001" }));
+  assert.equal(raised.status, 200);
+  assert.equal(raised.body.status, "verified");
+  assert.equal(raised.body.scope_unresolved, false);
+});
+
+test("a raise naming a job this tenant does not have is recorded, active and flagged", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  seedRoofJob(db, "job-scope-0001");
+  seedRoofJob(db, "job-other-0001", OTHER_TENANT);
+  for (const [deviceActionId, jobId, kind] of [
+    ["dev-scope-nojob-0001", "job-missing-0001", "report_occurrence"],
+    ["dev-scope-nojob-0002", "job-other-0001", "rescue_request"],
+  ] as const) {
+    const raised = await raise(app, raiseEnvelope(deviceActionId, { type: "roof_job", id: jobId }, kind));
+    assert.equal(raised.status, 200, jobId);
+    assert.equal(raised.body.status, "verified", jobId);
+    assert.equal(raised.body.scope_unresolved, true, jobId);
+    assert.deepEqual(
+      { ...raisedStop(db, raised.body) },
+      { state: "reported", stop_active: 1, scope_type: "roof_job", scope_id: jobId },
+    );
+  }
+});
+
+test("a raise on a Work Package that exists answers scope_unresolved false", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  seedWorkPackage(db, "wp-scope-0001");
+  const raised = await raise(app, raiseEnvelope("dev-scope-wp-0001", { type: "work_package", id: "wp-scope-0001" }));
+  assert.equal(raised.status, 200);
+  assert.equal(raised.body.status, "verified");
+  assert.equal(raised.body.scope_unresolved, false);
+});
+
+test("a raise naming a Work Package this tenant does not have is recorded, active and flagged", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  seedWorkPackage(db, "wp-scope-0001");
+  seedWorkPackage(db, "wp-other-0001", OTHER_TENANT);
+  for (const [deviceActionId, workPackageId, kind] of [
+    ["dev-scope-nowp-0001", "wp-missing-0001", "report_occurrence"],
+    ["dev-scope-nowp-0002", "wp-other-0001", "rescue_request"],
+  ] as const) {
+    const raised = await raise(
+      app,
+      raiseEnvelope(deviceActionId, { type: "work_package", id: workPackageId }, kind),
+    );
+    assert.equal(raised.status, 200, workPackageId);
+    assert.equal(raised.body.status, "verified", workPackageId);
+    assert.equal(raised.body.scope_unresolved, true, workPackageId);
+    assert.deepEqual(
+      { ...raisedStop(db, raised.body) },
+      { state: "reported", stop_active: 1, scope_type: "work_package", scope_id: workPackageId },
+    );
+  }
+});
+
+test("a tenant raise resolves only to this tenant's own id", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  const own = await raise(app, raiseEnvelope("dev-scope-tenant-0001", { type: "tenant", id: TENANT }));
+  assert.equal(own.status, 200);
+  assert.equal(own.body.scope_unresolved, false);
+
+  const other = await raise(app, raiseEnvelope("dev-scope-tenant-0002", { type: "tenant", id: OTHER_TENANT }));
+  assert.equal(other.status, 200);
+  assert.equal(other.body.scope_unresolved, true);
+  assert.equal((raisedStop(db, other.body) as { stop_active: number }).stop_active, 1);
+});
+
+test("a replayed raise repeats the scope answer it first gave, even after the job appears", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  const envelope = raiseEnvelope("dev-scope-replay-0001", { type: "roof_job", id: "job-late-0001" });
+  const first = await raise(app, envelope);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.scope_unresolved, true);
+
+  seedRoofJob(db, "job-late-0001");
+  const replay = await raise(app, envelope);
+  assert.equal(replay.status, 200);
+  assert.deepEqual(replay.body, first.body);
+  // A new raise on the same job reads it now, so only the stored answer kept the replay at true.
+  const fresh = await raise(app, raiseEnvelope("dev-scope-replay-0002", { type: "roof_job", id: "job-late-0001" }));
+  assert.equal(fresh.body.scope_unresolved, false);
+});
+
+test("a shop or vehicle raise carries no scope answer, since nothing checks those scopes yet", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  for (const [deviceActionId, type] of [
+    ["dev-scope-shop-0001", "shop"],
+    ["dev-scope-vehicle-0001", "vehicle"],
+  ] as const) {
+    const raised = await raise(app, raiseEnvelope(deviceActionId, { type, id: `${type}-unit-0001` }));
+    assert.equal(raised.status, 200, type);
+    assert.equal(raised.body.status, "verified", type);
+    assert.equal("scope_unresolved" in raised.body, false, type);
+  }
+});
+
 test("the safety route enforces CSRF and rejects an unknown command", async () => {
   const db = new SqliteD1();
   const app = env(db);

@@ -263,6 +263,44 @@ describe("JobStopSheet", () => {
     expect(await screen.findByText("Stop sent. When the area is safe, say so here.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
   });
+
+  it("S21: a stop whose job was not found says it holds every job", async () => {
+    officeAnswers({ scopeUnresolved: true });
+    const user = userEvent.setup();
+    render(<JobStopSheet session={session} job={job} />);
+    await user.type(
+      await screen.findByLabelText("What is unsafe (optional)"),
+      "Ice on the north slope",
+    );
+    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    expect(
+      await screen.findByText(
+        "Work is stopped on every job: this stop's job wasn't found. The office is told and fixes the job on it.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByText(/^Stop · \w{3} \d{1,2}:\d{2}/)).toHaveTextContent(
+      "· Sam Keewatin · Ice on the north slope",
+    );
+    expect(screen.getByText("Job: not found · The owner fixes it")).toBeVisible();
+    expect(screen.queryByText(/Stop sent/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
+  });
+
+  it("S21: comes back on the next open while the stop holds", async () => {
+    officeAnswers({ scopeUnresolved: true });
+    const user = userEvent.setup();
+    const first = render(<JobStopSheet session={session} job={job} />);
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
+    await screen.findByText(/Work is stopped on every job/);
+    first.unmount();
+    const [raise] = await safetyActions();
+    const active = [
+      { occurrence_id: await occurrenceIdFor(raise!.deviceActionId), stop_active: true },
+    ];
+    render(<JobStopSheet session={session} job={job} fetcher={panelFetcher(active)} />);
+    expect(await screen.findByText(/Work is stopped on every job/)).toBeVisible();
+  });
 });
 
 describe("resolveStopJob", () => {

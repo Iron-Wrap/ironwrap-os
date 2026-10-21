@@ -597,7 +597,8 @@ export async function signedCopyShownStatement(
         )`,
   ).bind(
     eventId,
-    `+${Math.max(0, dstMinutes)} minutes`,
+    // Clamped to D1's bound of 241 hours, so the event never fails the acceptance's batch.
+    `+${Math.min(60, Math.max(0, dstMinutes))} minutes`,
     zone.timeZone,
     input.tenantId,
     input.acceptanceBindingId,

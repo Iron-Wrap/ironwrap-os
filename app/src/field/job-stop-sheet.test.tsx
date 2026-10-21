@@ -264,10 +264,11 @@ describe("JobStopSheet", () => {
     expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
   });
 
-  it("S21: a stop whose job was not found says it holds every job", async () => {
+  it("S21: a stop whose job was not found says it holds every job, then asks for the made-safe step", async () => {
     officeAnswers({ scopeUnresolved: true });
     const user = userEvent.setup();
-    render(<JobStopSheet session={session} job={job} />);
+    const onStage = vi.fn();
+    render(<JobStopSheet session={session} job={job} onStage={onStage} />);
     await user.type(
       await screen.findByLabelText("What is unsafe (optional)"),
       "Ice on the north slope",
@@ -283,8 +284,24 @@ describe("JobStopSheet", () => {
     );
     expect(screen.getByText("Job: not found · The owner fixes it")).toBeVisible();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
+    expect(onStage).toHaveBeenLastCalledWith("stopped");
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
+    expect(screen.getByRole("button", { name: "I've made the area safe" })).toBeVisible();
+    expect(screen.queryByText(/Stop sent/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
+    expect(onStage).toHaveBeenLastCalledWith("stopped");
+  });
+
+  it("S21: a stop the office has lifted is over, and the job offers a new stop", async () => {
+    officeAnswers({ scopeUnresolved: true });
+    const user = userEvent.setup();
+    const first = render(<JobStopSheet session={session} job={job} />);
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
+    await screen.findByText(/Work is stopped on every job/);
+    first.unmount();
+    render(<JobStopSheet session={session} job={job} fetcher={panelFetcher([])} />);
+    expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();
   });
 
   it("S21: comes back on the next open while the stop holds", async () => {

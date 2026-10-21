@@ -62,7 +62,8 @@ export function JobStopSheet({
   const [raised, setRaised] = useState<RaisedStop>();
   // Until this phone has looked for a stop it already raised, offer nothing: never a second stop.
   const [loaded, setLoaded] = useState(false);
-  // S21 is read and closed with Done; it comes back on the next open while the stop holds.
+  // S21 is read and closed with Done, which leads on to the made-safe step; S21 comes back on the
+  // next open while the stop holds.
   const [acknowledged, setAcknowledged] = useState(false);
   const [delivery, setDelivery] = useState<Delivery>("saved");
   const [unsafe, setUnsafe] = useState("");
@@ -172,6 +173,7 @@ export function JobStopSheet({
         return;
       }
       await saveRaisedStop(session, job.id, stop);
+      setAcknowledged(false);
       setRaised(stop);
       setDelivery(answer);
     } catch (caught) {
@@ -212,8 +214,7 @@ export function JobStopSheet({
 
   if (!loaded) return null;
 
-  if (raised && delivery === "unresolved") {
-    if (acknowledged) return null;
+  if (raised && delivery === "unresolved" && !acknowledged) {
     return (
       <section className="space-y-3" aria-label="Stop work">
         <Notice
@@ -243,9 +244,9 @@ export function JobStopSheet({
           <Notice tone="info" title="Stop sent. When the area is safe, say so here." />
         ) : delivery === "attention" ? (
           <Notice tone="danger" title={NOT_CONFIRMED} />
-        ) : (
+        ) : delivery === "saved" ? (
           <Notice tone="local" title={SAVED_ON_DEVICE} />
-        )}
+        ) : null}
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
           {["Stop", stopTime(raised.raisedAt, timeZone), raised.unsafe, jobLine]
             .filter(Boolean)

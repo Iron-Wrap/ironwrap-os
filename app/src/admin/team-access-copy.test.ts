@@ -180,7 +180,7 @@ describe("the derived access-conflict phrases", () => {
     expect(saveAfterAccessBack("Grace")).toBe("Save Grace’s access · after their access is back");
   });
 
-  it("give access back right away on frame 5, and ask for a crew phone only when Save keeps them Crew", () => {
+  it("give access back right away on frame 5, and ask for a crew phone only when Save leaves them Crew", () => {
     // Removing Tom unpaired his crew phone, but Save moves him off Crew: no phone to pair.
     expect(`Give Tom access back: ${giveBackThenSave("field", "production", true)}`).toBe(
       "Give Tom access back: it returns the access they had (Crew) right away. Then save to add your change: their role moves from Crew to Production. You don’t need to wait for them to sign in.",

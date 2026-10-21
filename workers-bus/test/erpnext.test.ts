@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   pushNewoSessionToErpNext,
@@ -693,3 +693,129 @@ test("pushNewoSessionToErpNext creates one owned urgent-callback incident for a 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }
+
+// Callback only (owner decisions MD-05 and D-03): a requested handoff opens a callback incident
+// whose severity follows the caller's urgency; a failed handoff or session stays an urgent failure.
+function newoSession(overrides: Partial<NewoSessionRecord> = {}): NewoSessionRecord {
+  return {
+    session_id: "session-callback",
+    project_id: "project-001",
+    agent_id: "agent-001",
+    user_actor_id: "actor-001",
+    conversation_id: "conversation-callback",
+    channel: "phone",
+    direction: "inbound",
+    status: "handoff_requested",
+    outcome: null,
+    contact_name: "Callback Caller",
+    contact_phone: "+15875557799",
+    contact_email: null,
+    address_line1: "456 Main Street",
+    city: "Edmonton",
+    province: "AB",
+    postal_code: "T5J 0N4",
+    division: "residential",
+    service: "Roof repair",
+    urgency: "routine",
+    lead_envelope_id: null,
+    appointment_request_id: null,
+    handoff_status: "requested",
+    booking_status: null,
+    summary: "Caller asked for a person.",
+    transcript_ref: null,
+    recording_ref: null,
+    ai_disclosed: 1,
+    recording_disclosed: 1,
+    structured_json: JSON.stringify({ handoff: { reason: "Caller asked for a person" } }),
+    raw_key: "raw/newo/events/2026-07-18/event-callback.json",
+    payload_hash: "c".repeat(64),
+    started_at: "2026-07-18T19:00:00.000Z",
+    ended_at: null,
+    duration_seconds: null,
+    report_expected_at: "2026-07-18T19:30:00.000Z",
+    report_received_at: null,
+    report_event_id: null,
+    missing_report_detected_at: null,
+    sync_status: "pending",
+    sync_attempts: 0,
+    last_error: null,
+    sync_updated_at: "2026-07-18T19:00:30.000Z",
+    created_at: "2026-07-18T19:00:00.000Z",
+    updated_at: "2026-07-18T19:00:00.000Z",
+    ...overrides,
+  };
+}
+
+async function projectNewoSession(
+  t: TestContext,
+  session: NewoSessionRecord,
+): Promise<{ incidentName: string | undefined; incident: Record<string, unknown> | null }> {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const reception = `RS-${session.session_id}`;
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Reception%20Session?")) return json({ data: [{ name: reception }] });
+    if (url.endsWith(`/api/resource/Reception%20Session/${reception}`)) return json({ data: { name: reception } });
+    if (url.includes("/api/resource/Automation%20Incident?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Automation%20Incident")) {
+      return json({ data: { name: `incident:newo-callback:${session.session_id}` } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }));
+  const result = await pushNewoSessionToErpNext(effectEnv({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+  }), session);
+  const post = calls.find((call) =>
+    call.url.endsWith("/api/resource/Automation%20Incident") && call.init.method === "POST");
+  return {
+    incidentName: result?.automationIncidentName,
+    incident: post ? JSON.parse(String(post.init.body)) as Record<string, unknown> : null,
+  };
+}
+
+test("a requested Newo handoff opens one callback incident whose severity follows the caller's urgency", async (t) => {
+  for (const [urgency, severity, summary] of [
+    ["routine", "Medium", "Callback requested by a Newo caller"],
+    ["urgent", "High", "Urgent callback requested by a Newo caller"],
+    ["emergency", "Critical", "Urgent callback requested by a Newo caller"],
+  ] as const) {
+    await t.test(urgency, async (subtest) => {
+      const { incidentName, incident } = await projectNewoSession(subtest, newoSession({ urgency }));
+      assert.equal(incidentName, "incident:newo-callback:session-callback");
+      assert.equal(incident?.incident_id, "incident:newo-callback:session-callback");
+      assert.equal(incident?.status, "Open");
+      assert.equal(incident?.severity, severity);
+      assert.equal(incident?.summary, summary);
+    });
+  }
+});
+
+test("a failed Newo handoff or session keeps the urgent failure incident", async (t) => {
+  for (const [name, overrides] of [
+    ["failed handoff", { status: "ended", handoff_status: "failed" }],
+    ["failed session", { status: "failed", handoff_status: null }],
+  ] as const) {
+    await t.test(name, async (subtest) => {
+      const { incident } = await projectNewoSession(subtest, newoSession({ urgency: "routine", ...overrides }));
+      assert.equal(incident?.severity, "High");
+      assert.equal(incident?.summary, "Urgent callback required after a failed Newo handoff or session");
+    });
+  }
+});
+
+test("a Newo session with no requested or failed handoff opens no callback incident", async (t) => {
+  for (const handoffStatus of [null, "connected"]) {
+    await t.test(String(handoffStatus), async (subtest) => {
+      const { incidentName, incident } = await projectNewoSession(
+        subtest,
+        newoSession({ status: "ended", handoff_status: handoffStatus }),
+      );
+      assert.equal(incidentName, undefined);
+      assert.equal(incident, null);
+    });
+  }
+});

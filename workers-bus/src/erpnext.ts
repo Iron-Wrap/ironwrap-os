@@ -394,7 +394,13 @@ async function ensureNewoCallbackIncident(
   receptionSessionName: string,
   links: ErpNextNewoLinks,
 ): Promise<ErpNextResult | null> {
-  if (session.status !== "session_failed" && session.handoff_status !== "failed") return null;
+  // A failed handoff or session stays an urgent failure. A requested handoff (the receptionist
+  // is callback only) opens a callback whose severity follows the caller's urgency. A
+  // session_failed report is stored with status "failed".
+  const failed = session.status === "failed" || session.status === "session_failed" ||
+    session.handoff_status === "failed";
+  if (!failed && session.handoff_status !== "requested") return null;
+  const urgent = failed || session.urgency === "urgent" || session.urgency === "emergency";
   const incidentId = `incident:newo-callback:${session.session_id}`;
   return await createIfMissingByField(
     env,
@@ -405,11 +411,17 @@ async function ensureNewoCallbackIncident(
     {
       incident_id: incidentId,
       status: "Open",
-      severity: session.urgency === "emergency" ? "Critical" : "High",
+      severity: session.urgency === "emergency" ? "Critical" : urgent ? "High" : "Medium",
       source_system: "Newo",
       category: "Integration",
-      summary: "Urgent callback required for a Newo receptionist caller",
-      details: "The caller was not put through to a person. Contact the caller using the verified reception session details.",
+      summary: failed
+        ? "Urgent callback required after a failed Newo handoff or session"
+        : urgent
+          ? "Urgent callback requested by a Newo caller"
+          : "Callback requested by a Newo caller",
+      details: failed
+        ? "The handoff request did not arrive or could not be processed, or the session failed. Contact the caller using the verified reception session details."
+        : "The caller asked for a person to call back. Contact the caller using the verified reception session details.",
       roof_job: links.roofJobName ?? undefined,
       lead_envelope: links.leadEnvelopeName ?? undefined,
       record_ref: `Reception Session:${receptionSessionName}`,

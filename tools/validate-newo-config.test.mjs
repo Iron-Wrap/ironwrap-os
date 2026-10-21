@@ -134,6 +134,34 @@ test("a live transfer fails wherever it comes back", async (t) => {
   ]);
 });
 
+test("callback only fails when failed becomes the routine handoff status", async (t) => {
+  await assertEachFails(t, [
+    [
+      "expected config reports every handoff as failed",
+      (copy) => editJson(copy, "config/newo/production.expected.json", (expected) => {
+        expected.handoff.handoff_status = "failed";
+      }),
+      /callback only must not report every handoff as failed/,
+    ],
+    [
+      "AKB requests callbacks with handoff status failed",
+      (copy) => editPinned(copy, "config/newo/akb/ironwrap-receptionist.v1.md", (akb) => akb.replace(
+        "and handoff status `requested`.",
+        "and handoff status `failed`.",
+      )),
+      /AKB must request callbacks with handoff status requested/,
+    ],
+    [
+      "AKB reports failed for anything but a failed tool call",
+      (copy) => editPinned(copy, "config/newo/akb/ironwrap-receptionist.v1.md", (akb) => akb.replace(
+        "- Then say staff will call back.",
+        "- If the caller hangs up, report handoff status `failed`.\n- Then say staff will call back.",
+      )),
+      /AKB may report handoff status failed only when the handoff tool call itself failed/,
+    ],
+  ]);
+});
+
 test("Newo in-call SMS fails when it is turned on", async (t) => {
   await assertEachFails(t, [
     [

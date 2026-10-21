@@ -6,6 +6,8 @@ import worker from "../src/index.ts";
 import {
   canonicalJson,
   handleNewoQueueMessage,
+  newoHandoffStatus,
+  newoOwnerAlerts,
   parseNewoEvent,
   sha256Hex,
   type NewoEventV1,
@@ -877,4 +879,75 @@ test("caller lookup requires address or postal verification before any durable w
   assert.equal(state.raw.length, 0);
   assert.equal(state.receipts.size, 0);
   assert.equal(state.sessions.size, 0);
+});
+
+// Callback only (owner decisions MD-05 and D-03): "requested" is the routine handoff status and
+// opens a callback; "failed" means the handoff request did not arrive or could not be processed.
+function handoffEvent(overrides: Partial<NewoEventV1> = {}): NewoEventV1 {
+  return newoEvent({
+    event_id: "event-handoff-001",
+    event_type: "handoff_requested",
+    handoff_summary: "Caller asked for a person.",
+    ...overrides,
+  });
+}
+
+function alertSubjects(event: NewoEventV1): Array<[string, string]> {
+  return newoOwnerAlerts(event).map((alert) => [alert.kind, alert.subject]);
+}
+
+test("a requested handoff alerts staff to call back, urgently only when the caller's urgency says so", () => {
+  for (const [urgency, subject] of [
+    ["routine", "Newo callback requested"],
+    ["urgent", "Urgent Newo callback requested - urgent"],
+    ["emergency", "Urgent Newo callback requested - emergency"],
+  ] as const) {
+    const event = handoffEvent({
+      intent: { ...newoEvent().intent, urgency },
+      outcome: { ...newoEvent().outcome, handoff_status: "requested" },
+    });
+    assert.equal(newoHandoffStatus(event), "requested", urgency);
+    assert.deepEqual(alertSubjects(event), [["handoff", subject]], urgency);
+  }
+});
+
+test("a failed handoff or a failed session still raises the urgent failure alert", () => {
+  const report = (handoffStatus: string | null, eventType: NewoEventV1["event_type"] = "session_ended") =>
+    newoEvent({
+      event_id: "event-report-001",
+      event_type: eventType,
+      outcome: { ...newoEvent().outcome, handoff_status: handoffStatus },
+    });
+  assert.deepEqual(alertSubjects(report("failed")), [["failure", "Urgent Newo callback required"]]);
+  assert.deepEqual(alertSubjects(report(null, "session_failed")), [["failure", "Urgent Newo callback required"]]);
+  assert.deepEqual(alertSubjects(report("requested")), []);
+  assert.deepEqual(alertSubjects(report(null)), []);
+});
+
+test("a handoff request is stored as requested, never failed, and a reported failure stays failed", async () => {
+  for (const handoffStatus of [null, "requested"]) {
+    const state = fakeNewoEnv();
+    const response = await worker.fetch(
+      request("/webhook/newo/handoff", handoffEvent({ outcome: { ...newoEvent().outcome, handoff_status: handoffStatus } })),
+      state.env as never,
+      ctx as never,
+    );
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(state.sessions.get("session-001")?.handoff_status, "requested", String(handoffStatus));
+  }
+
+  const state = fakeNewoEnv();
+  const report = newoEvent({
+    event_id: "event-report-001",
+    event_type: "session_ended",
+    outcome: {
+      ...newoEvent().outcome,
+      handoff_status: "failed",
+      ended_at: "2026-07-18T18:05:00.000Z",
+      duration_seconds: 420,
+    },
+  });
+  const response = await worker.fetch(request("/webhook/newo/report", report), state.env as never, ctx as never);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(state.sessions.get("session-001")?.handoff_status, "failed");
 });

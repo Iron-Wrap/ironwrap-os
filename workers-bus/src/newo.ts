@@ -753,7 +753,7 @@ function sessionRecord(
     urgency: event.intent.urgency,
     lead_envelope_id: envelopeId,
     appointment_request_id: appointmentRequestId,
-    handoff_status: event.outcome.handoff_status,
+    handoff_status: newoHandoffStatus(event),
     booking_status: bookingStatus(event),
     summary: event.outcome.summary,
     transcript_ref: event.outcome.transcript_ref,
@@ -811,20 +811,43 @@ function scheduleNotifications(
     ctx.waitUntil(sendInstantAck(env, envelope).catch((error) =>
       console.log(JSON.stringify({ at: "newo_missed_call_ack", event_id: event.event_id, error: String(error) }))));
   }
+  for (const alert of newoOwnerAlerts(event)) {
+    ctx.waitUntil(sendOwnerAlert(env, alert.subject, alert.html).catch((error) =>
+      console.log(JSON.stringify({ at: `newo_${alert.kind}_alert`, event_id: event.event_id, error: String(error) }))));
+  }
+}
+
+/**
+ * The receptionist is callback only (owner decisions MD-05 and D-03). A handoff request that
+ * reaches the Worker is a requested callback, so one sent without a status is recorded as
+ * "requested". "failed" keeps its meaning: the handoff request did not arrive or could not be
+ * processed, and only that opens the failed-handoff exception a person resolves.
+ */
+export function newoHandoffStatus(event: NewoEventV1): string | null {
+  return event.outcome.handoff_status ?? (event.event_type === "handoff_requested" ? "requested" : null);
+}
+
+/** The owner alerts one accepted event raises: a callback request, or a failed handoff or session. */
+export function newoOwnerAlerts(
+  event: NewoEventV1,
+): Array<{ kind: "handoff" | "failure"; subject: string; html: string }> {
+  const alerts: Array<{ kind: "handoff" | "failure"; subject: string; html: string }> = [];
   if (event.event_type === "handoff_requested") {
-    ctx.waitUntil(sendOwnerAlert(
-      env,
-      `Newo handoff requested - ${event.intent.urgency}`,
-      `<p>Session ${escapeHtml(event.session_id)} requested a handoff.</p><p>${escapeHtml(event.handoff_summary ?? "No reason supplied")}</p>`,
-    ).catch((error) => console.log(JSON.stringify({ at: "newo_handoff_alert", event_id: event.event_id, error: String(error) }))));
+    const urgent = event.intent.urgency !== "routine";
+    alerts.push({
+      kind: "handoff",
+      subject: urgent ? `Urgent Newo callback requested - ${event.intent.urgency}` : "Newo callback requested",
+      html: `<p>Session ${escapeHtml(event.session_id)} asked for a callback.</p><p>${escapeHtml(event.handoff_summary ?? "No reason supplied")}</p>`,
+    });
   }
-  if (event.event_type === "session_failed" || event.outcome.handoff_status === "failed") {
-    ctx.waitUntil(sendOwnerAlert(
-      env,
-      "Urgent Newo callback required",
-      `<p>Call back ${escapeHtml(event.contact.name ?? event.contact.phone ?? event.session_id)}: the caller was not put through to a person, or the session failed.</p>`,
-    ).catch((error) => console.log(JSON.stringify({ at: "newo_failure_alert", event_id: event.event_id, error: String(error) }))));
+  if (event.event_type === "session_failed" || newoHandoffStatus(event) === "failed") {
+    alerts.push({
+      kind: "failure",
+      subject: "Urgent Newo callback required",
+      html: `<p>Handoff or session failed for ${escapeHtml(event.contact.name ?? event.contact.phone ?? event.session_id)}.</p>`,
+    });
   }
+  return alerts;
 }
 
 async function recordConflict(

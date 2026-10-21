@@ -36,12 +36,14 @@ assert.equal(expected.runtime.outbound_enabled, false);
 assert.deepEqual(expected.runtime.enabled_channels, ["voice"]);
 assert.equal(expected.booking.request_only_spoken_receipt, "Appointment request received.");
 assert.equal(expected.booking.jobnimbus_appointment_contract_proven, false);
-// Owner decision MD-05: callback only, never a live transfer. Every handoff carries
-// handoff_status "failed" (the caller was not put through), which opens the urgent callback
-// incident a person resolves (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md, "Failed Newo handoffs").
+// Owner decision MD-05: callback only, never a live transfer. A handoff carries handoff_status
+// "requested", which opens a callback. "failed" means the handoff request did not arrive or could
+// not be processed (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md, "Failed Newo handoffs"); as the
+// routine status it would report every callback as a failure.
+assert.notEqual(expected.handoff?.handoff_status, "failed", "callback only must not report every handoff as failed");
 assert.deepEqual(
   expected.handoff,
-  { policy: "callback_only", tool: "request_handoff", handoff_status: "failed" },
+  { policy: "callback_only", tool: "request_handoff", handoff_status: "requested" },
   "Newo handoff must stay callback only",
 );
 assert.equal(/transfer/i.test(JSON.stringify(expected)), false, "Newo config must not set up a live transfer");
@@ -188,6 +190,12 @@ assert.deepEqual(
   akb.split("\n").filter((line) => /transfer/i.test(line)),
   ["- Callback only. Never transfer the call live to a person, an owner line, or voicemail."],
   "AKB may mention transfer only to forbid it",
+);
+assert.ok(akb.includes("and handoff status `requested`."), "AKB must request callbacks with handoff status requested");
+assert.deepEqual(
+  akb.split("\n").filter((line) => line.includes("`failed`")),
+  ["- Report handoff status `failed` at session end only if the handoff tool call itself failed."],
+  "AKB may report handoff status failed only when the handoff tool call itself failed",
 );
 assert.ok(akb.includes("Newo never sends SMS, and its in-call SMS tool stays disabled."), "AKB must keep Newo SMS off");
 

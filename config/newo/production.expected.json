@@ -44,7 +44,7 @@
   "akb": {
     "version": "ironwrap-receptionist.v1",
     "path": "config/newo/akb/ironwrap-receptionist.v1.md",
-    "sha256": "ca3890cb38240dc9de07999236cd8c1d01cf5cbc8eafd89f46d6fd9b244eda07",
+    "sha256": "560cdabdf83ddadec6402961ec3dded22686ebbff7ae89984573087541664812",
     "owner_approval": "pending",
     "legal_wording_approval": "pending"
   },
@@ -57,7 +57,7 @@
   "handoff": {
     "policy": "callback_only",
     "tool": "request_handoff",
-    "handoff_status": "failed"
+    "handoff_status": "requested"
   },
   "sms": {
     "newo_in_call_sms_enabled": false,
@@ -84,6 +84,6 @@
     "sandbox_fixture_index": "config/newo/sandbox-fixtures.json",
     "console_proof_index": "config/newo/console-proof.json",
     "evaluation_path": "config/newo/evaluation-cases.v1.json",
-    "evaluation_sha256": "c14553f7c3697ae1acf0307e5bbfab69ab5797b36acaacc417e67a6480bad87d"
+    "evaluation_sha256": "545b143435699eeabee8802ab49dd6c7ddb277c16fc85bcfd9f12af56201f945"
   }
 }

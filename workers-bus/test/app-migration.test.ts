@@ -126,6 +126,19 @@ test("document generation stays disabled in production and local, and is on in q
   assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
 });
 
+test("the proposal first-open record stays off until its retention sweep exists", async () => {
+  // 3 years is the maximum retention of a first-open row (0163), and nothing deletes one yet. The
+  // flag stays off in every environment until the retention sweep that deletes rows older than 3
+  // years exists, and until the owner approves the portal privacy notice that says so.
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
+  for (const environment of [config, config.env.local, config.env.qa]) {
+    assert.equal(environment.vars.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED, "false");
+  }
+});
+
 test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
   const source = await readFile(
     new URL("../wrangler.jsonc", import.meta.url),
@@ -183,11 +196,6 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
   // turns `/ready` red and blocks the release; the loop below keeps that pair.
   assert.equal(config.env.qa.vars.APP_BFF_ENABLED, "true");
   assert.equal(config.env.qa.vars.APP_CUSTOMER_PORTAL_DECISION_ENABLED, "true");
-  // Recording a proposal's first open (0163) waits for the owner to approve the portal privacy
-  // notice that says it is recorded and kept for 3 years, so it is off in every environment.
-  for (const environment of [config, config.env.local, config.env.qa]) {
-    assert.equal(environment.vars.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED, "false");
-  }
   // The coupling itself, so a future flip of either flag alone cannot pass review.
   for (const environment of [config, config.env.local, config.env.qa]) {
     if (environment.vars.APP_CUSTOMER_PORTAL_ENABLED === "true") {

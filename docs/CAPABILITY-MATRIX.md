@@ -626,11 +626,13 @@ Customer portal first open of a proposal (B1, migration 0163):
   publication: the first time someone holding the customer's link opened that published proposal.
   It stores ids and one timestamp, never an IP address, user agent, location or later visit. D1
   checks the link, job, customer and `published` publication, and holds the time to within 60
-  seconds of its own clock. The data class, its 3-year retention and its notice are recorded in
+  seconds of its own clock. The data class, its retention (at most 3 years) and its notice are
+  recorded in
   [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
 - Fail-closed by default. `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in production,
-  local and qa, and stays off until the owner approves the portal privacy notice text that says
-  the first open is recorded and kept for 3 years. An open with a live staff session, or from the
+  local and qa. It stays off until the retention sweep that deletes rows older than 3 years exists
+  and the owner approves the portal privacy notice text that says the first open is recorded and
+  kept for at most 3 years. An open with a live staff session, or from the
   device that issued the link, is never recorded, and a failed write never changes the customer's
   page.
 - `readProposalFirstViewedAt` (`workers-bus/src/customer-portal-store.ts`) is the staff read behind

@@ -126,8 +126,9 @@ export function customerPortalEnabled(env: AppEnv): boolean {
 }
 
 /**
- * Recording the first open of a proposal (0163) stays off until the owner approves the portal
- * privacy notice that says the first open is recorded and kept for 3 years.
+ * Recording the first open of a proposal (0163) stays off until the retention sweep that deletes
+ * rows older than 3 years exists, and the owner approves the portal privacy notice that says the
+ * first open is recorded and kept for at most 3 years.
  */
 export function customerPortalProposalViewsEnabled(env: AppEnv): boolean {
   return String(env.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED) === "true";

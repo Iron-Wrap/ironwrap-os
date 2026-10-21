@@ -10,13 +10,14 @@
 --
 -- It stores ids and one timestamp. It stores no IP address, user agent or location, and no history
 -- of later visits. The Worker writes it only while APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED is
--- "true", which stays off until the owner approves the portal privacy notice that says the first
--- open is recorded and kept for 3 years.
+-- "true". That flag stays off until two things exist: the retention sweep that deletes rows older
+-- than 3 years, and the owner-approved portal privacy notice that says the first open is recorded
+-- and kept for at most 3 years.
 --
--- Retention: 3 years (owner decision), with the commercial record. Nothing prunes this table: its
--- rows are append-only, and the daily portal prune keeps every link that a row names, so the
--- foreign key below never blocks that prune. Removing a row after its 3 years is an explicit
--- disposal step that does not exist yet; no schedule deletes it.
+-- Retention: at most 3 years (owner decision). The portal prune never deletes these rows, and it
+-- keeps every link that a row names, so the foreign key below never blocks that prune. Deleting a
+-- row after its 3 years is the retention sweep's job, a later migration; until it exists, this
+-- table is strictly append-only and the flag stays off.
 --
 -- D1 repeats what the writer checks:
 -- - the link is the row's own: same tenant, job and customer, and not revoked or expired when the

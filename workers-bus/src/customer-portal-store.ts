@@ -283,8 +283,8 @@ export async function pruneCustomerPortalRecords(
     now.getTime() - 365 * 24 * 60 * 60_000,
   ).toISOString();
   await Promise.all([
-    // A link that a first-open record names (0163) is kept with that record, which follows the
-    // 3-year commercial retention rather than this one-year portal window.
+    // A link that a first-open record names (0163) is kept as long as that record, whose own
+    // retention (at most 3 years) is not this one-year portal window.
     env.DB.prepare(
       `DELETE FROM customer_portal_links
        WHERE expires_at <= ? AND (revoked_at IS NULL OR revoked_at <= ?)

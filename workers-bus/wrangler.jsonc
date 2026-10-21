@@ -136,8 +136,8 @@
       "APP_CUSTOMER_PORTAL_ENABLED": "true",
       "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
       "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
-      // Off until the owner approves the portal privacy notice that says the first open of a
-      // proposal is recorded and kept for 3 years (0163).
+      // Off until the retention sweep that deletes first opens older than 3 years exists and the
+      // owner approves the portal privacy notice that says so (0163).
       "APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED": "false",
       "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
       "APP_PROPOSAL_PUBLICATION_ENABLED": "false",

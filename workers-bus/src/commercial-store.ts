@@ -441,8 +441,10 @@ export async function proposalDeliveryLateAnswerWindowMs(env: AppEnv, provider: 
 
 /**
  * Until when an unknown proposal send may not be called "not executed": the end of its last attempt
- * plus its provider's late-answer window, or null when the wait does not apply (a send that never
- * went unknown). D1 holds the same rule (0161, `external_effects_proposal_late_answer_guard`).
+ * plus its provider's late-answer window, or null when the wait does not apply. It applies to an
+ * unknown send, and to a manual exception that came straight from unknown (the latest move into
+ * manual_exception left `unknown`); a manual exception reached any other way, such as a readback
+ * conflict, is not held. D1 holds the same rule (0161, `external_effects_proposal_late_answer_guard`).
  */
 async function proposalDeliveryLateAnswerUntil(
   env: AppEnv,
@@ -450,10 +452,12 @@ async function proposalDeliveryLateAnswerUntil(
 ): Promise<number | null> {
   if (effect.state !== "unknown") {
     if (effect.state !== "manual_exception") return null;
-    const wentUnknown = await env.DB.prepare(
-      "SELECT 1 AS found FROM external_effect_events WHERE effect_id = ? AND to_state = 'unknown' LIMIT 1",
-    ).bind(effect.effect_id).first<{ found: number }>();
-    if (!wentUnknown) return null;
+    const entered = await env.DB.prepare(
+      `SELECT from_state FROM external_effect_events
+        WHERE effect_id = ? AND to_state = 'manual_exception'
+        ORDER BY event_seq DESC LIMIT 1`,
+    ).bind(effect.effect_id).first<{ from_state: string | null }>();
+    if (entered?.from_state !== "unknown") return null;
   }
   const attempt = await env.DB.prepare(
     "SELECT ended_at FROM external_effect_attempts WHERE effect_id = ? AND attempt_number = ?",
@@ -472,7 +476,11 @@ export interface ProposalDeliveryFindingRecord {
   proposal_pack_id: string;
   proposal_revision_id: string;
   finding: ProposalDeliveryFindingKind;
-  /** The send's last attempt when the finding was recorded: the provider confirmed it, or never answered. */
+  /**
+   * The send's last attempt when the finding was recorded: `succeeded` (the provider confirmed the
+   * send) or `unknown` (the provider's answer is not confirmed: no answer, or a readback that did not
+   * match what was sent).
+   */
   attempt_state: "succeeded" | "unknown";
   supersedes_finding_id: string | null;
   note: string;
@@ -564,8 +572,8 @@ export async function recordProposalDeliveryFinding(
     attempt_state: string | null;
   }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
-  // A finding is about a send the provider confirmed or never answered; a refused or unstarted send
-  // has nothing a customer could have received.
+  // A finding is about a send the provider confirmed (`succeeded`) or whose answer is not confirmed
+  // (`unknown`: no answer, or a readback that did not match); a refused send reached no one.
   if (effect.attempt_state !== "succeeded" && effect.attempt_state !== "unknown") {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_effect_invalid", 409, {
       attempt_state: effect.attempt_state,

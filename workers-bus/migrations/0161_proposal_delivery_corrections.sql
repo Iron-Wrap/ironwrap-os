@@ -9,7 +9,8 @@
 -- is never a person's finding: it comes only from provider proof, in the effect ledger. Each
 -- finding keeps the state of the send's last attempt when it was recorded (`succeeded` or
 -- `unknown`), so a reader can tell "they say they did not get it, and the provider confirmed the
--- send" from "they say they did not get it, and the provider never answered". The first finding
+-- send" from "they say they did not get it, and the provider's answer is not confirmed" (it never
+-- answered, or its readback did not match what was sent). The first finding
 -- of a send supersedes nothing; a correction supersedes the newest finding of the same send, so
 -- each finding can be superseded once and a fork is refused. Earlier findings stay as the history.
 -- A finding can be recorded until the next send of that proposal or the customer's decision on
@@ -18,16 +19,17 @@
 --
 -- Late answers. Nothing moves an unknown proposal send to "not executed" (`reconciled`) before its
 -- provider's own answer can no longer arrive: neither a person's "not delivered" (0156's apply
--- makes that move) nor the effect runtime's reconcile. That covers a send that went from unknown
--- to a manual exception first. The window is counted from the end of the send's last attempt. It
--- comes from `proposal_delivery_late_answer_windows`, the one place that holds it: the provider's
--- row, else the default row `*`. Each row says where its value comes from.
+-- makes that move) nor the effect runtime's reconcile. That covers a send whose current manual
+-- exception came straight from unknown. The window is counted from the end of the send's last
+-- attempt. It comes from `proposal_delivery_late_answer_windows`, the one place that holds it: the
+-- provider's row, else the default row `*`. Each row says where its value comes from.
 --
--- Recorded by. For every new publication event recorded under a permit, D1 writes a
--- `commercial_proposal_publication_recorders` row in the insert's own statement. It names the
--- person who holds that permit, read from the permit itself. The recorder is a table of its own,
--- not a column, because the final-invoice basis hashes whole publication rows (`SELECT *`). Older
--- publications have no recorder.
+-- Permit holder. For every new publication event recorded under a permit, D1 writes a
+-- `commercial_proposal_publication_permit_holders` row in the insert's own statement. It names the
+-- person who holds that permit, read from the permit itself, never from a request: the person
+-- whose authority the publication rests on, whoever pressed record. It is a table of its own, not
+-- a column, because the final-invoice basis hashes whole publication rows (`SELECT *`). Older
+-- publications have no permit-holder row.
 --
 -- 0161 only adds objects: it re-creates no trigger from 0042 or 0156, or from any other migration.
 
@@ -63,9 +65,14 @@ BEFORE DELETE ON proposal_delivery_late_answer_windows BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_late_answer_windows_append_only');
 END;
 
--- The send has not answered and its provider's late answer could still arrive: it went unknown
--- (now or before a manual exception), and the end of its last attempt plus the window is later
--- than the move.
+-- The send has not answered and its provider's late answer could still arrive: it is unknown, or
+-- its current manual exception came straight from unknown (the latest move into manual_exception
+-- left `unknown`), and the end of its last attempt plus the window is later than the move. A
+-- manual exception reached any other way (a readback conflict) is not held.
+-- The move's time is NEW.updated_at: every Worker path sets it from the server's clock; a direct
+-- UPDATE could set it into the future, which nothing in the Worker does.
+-- Fails closed: with no row for the provider and no default row, the window is 120000 ms
+-- (EFFECT_ATTEMPT_LEASE_MS).
 CREATE TRIGGER IF NOT EXISTS external_effects_proposal_late_answer_guard
 BEFORE UPDATE OF state ON external_effects
 WHEN NEW.state = 'reconciled' AND OLD.state IN ('unknown', 'manual_exception')
@@ -74,10 +81,11 @@ BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_answer_may_be_late')
     WHERE (
       OLD.state = 'unknown'
-      OR EXISTS (
-        SELECT 1 FROM external_effect_events event
-         WHERE event.effect_id = OLD.effect_id AND event.to_state = 'unknown'
-      )
+      OR (
+        SELECT event.from_state FROM external_effect_events event
+         WHERE event.effect_id = OLD.effect_id AND event.to_state = 'manual_exception'
+         ORDER BY event.event_seq DESC LIMIT 1
+      ) = 'unknown'
     )
     AND julianday(NEW.updated_at) < julianday(COALESCE(
       (SELECT attempt.ended_at FROM external_effect_attempts attempt
@@ -87,7 +95,8 @@ BEGIN
       (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late
         WHERE late.provider = OLD.provider),
       (SELECT late.window_ms FROM proposal_delivery_late_answer_windows late
-        WHERE late.provider = '*')
+        WHERE late.provider = '*'),
+      120000
     ) / 86400000.0;
 END;
 
@@ -220,7 +229,7 @@ BEFORE DELETE ON proposal_delivery_findings BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_findings_append_only');
 END;
 
-CREATE TABLE IF NOT EXISTS commercial_proposal_publication_recorders (
+CREATE TABLE IF NOT EXISTS commercial_proposal_publication_permit_holders (
   publication_event_id TEXT PRIMARY KEY CHECK (
     length(publication_event_id) BETWEEN 20 AND 120
     AND publication_event_id NOT GLOB '*[^A-Za-z0-9._:-]*'
@@ -229,19 +238,19 @@ CREATE TABLE IF NOT EXISTS commercial_proposal_publication_recorders (
     length(tenant_id) BETWEEN 2 AND 64
     AND tenant_id NOT GLOB '*[^a-z0-9-]*'
   ),
-  recorded_by_user_id TEXT NOT NULL CHECK (length(recorded_by_user_id) BETWEEN 1 AND 160),
-  recorded_at TEXT NOT NULL CHECK (length(recorded_at) BETWEEN 20 AND 40)
+  permit_holder_user_id TEXT NOT NULL CHECK (length(permit_holder_user_id) BETWEEN 1 AND 160),
+  occurred_at TEXT NOT NULL CHECK (length(occurred_at) BETWEEN 20 AND 40)
 );
 
--- A recorder row is exactly the permit holder of an existing publication event, at its time.
-CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_recorders_validate_insert
-BEFORE INSERT ON commercial_proposal_publication_recorders BEGIN
-  SELECT RAISE(ABORT, 'commercial_publication_recorder_exists')
+-- A permit-holder row is exactly the permit holder of an existing publication event, at its time.
+CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_permit_holders_validate_insert
+BEFORE INSERT ON commercial_proposal_publication_permit_holders BEGIN
+  SELECT RAISE(ABORT, 'commercial_publication_permit_holder_exists')
     WHERE EXISTS (
-      SELECT 1 FROM commercial_proposal_publication_recorders prior
+      SELECT 1 FROM commercial_proposal_publication_permit_holders prior
        WHERE prior.publication_event_id = NEW.publication_event_id
     );
-  SELECT RAISE(ABORT, 'commercial_publication_recorder_invalid')
+  SELECT RAISE(ABORT, 'commercial_publication_permit_holder_invalid')
     WHERE NOT EXISTS (
       SELECT 1 FROM commercial_proposal_publication_events publication
         JOIN commercial_authority_permits permit
@@ -249,29 +258,29 @@ BEFORE INSERT ON commercial_proposal_publication_recorders BEGIN
          AND permit.tenant_id = publication.tenant_id
        WHERE publication.publication_event_id = NEW.publication_event_id
          AND publication.tenant_id = NEW.tenant_id
-         AND publication.occurred_at = NEW.recorded_at
-         AND permit.actor_id = NEW.recorded_by_user_id
+         AND publication.occurred_at = NEW.occurred_at
+         AND permit.actor_id = NEW.permit_holder_user_id
     );
 END;
 
-CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_recorders_append_only_update
-BEFORE UPDATE ON commercial_proposal_publication_recorders BEGIN
-  SELECT RAISE(ABORT, 'commercial_proposal_publication_recorders_append_only');
+CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_permit_holders_append_only_update
+BEFORE UPDATE ON commercial_proposal_publication_permit_holders BEGIN
+  SELECT RAISE(ABORT, 'commercial_proposal_publication_permit_holders_append_only');
 END;
 
-CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_recorders_append_only_delete
-BEFORE DELETE ON commercial_proposal_publication_recorders BEGIN
-  SELECT RAISE(ABORT, 'commercial_proposal_publication_recorders_append_only');
+CREATE TRIGGER IF NOT EXISTS commercial_proposal_publication_permit_holders_append_only_delete
+BEFORE DELETE ON commercial_proposal_publication_permit_holders BEGIN
+  SELECT RAISE(ABORT, 'commercial_proposal_publication_permit_holders_append_only');
 END;
 
 -- Each publication event recorded under a permit names its permit holder, in the insert's own
 -- statement, whichever Worker inserts it.
-CREATE TRIGGER IF NOT EXISTS commercial_publication_recorder_from_permit
+CREATE TRIGGER IF NOT EXISTS commercial_publication_permit_holder_from_permit
 AFTER INSERT ON commercial_proposal_publication_events
 WHEN NEW.policy_permit_id IS NOT NULL
 BEGIN
-  INSERT INTO commercial_proposal_publication_recorders
-    (publication_event_id, tenant_id, recorded_by_user_id, recorded_at)
+  INSERT INTO commercial_proposal_publication_permit_holders
+    (publication_event_id, tenant_id, permit_holder_user_id, occurred_at)
   SELECT NEW.publication_event_id, NEW.tenant_id, permit.actor_id, NEW.occurred_at
     FROM commercial_authority_permits permit
    WHERE permit.permit_id = NEW.policy_permit_id AND permit.tenant_id = NEW.tenant_id;

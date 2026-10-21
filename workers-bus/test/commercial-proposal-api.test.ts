@@ -1742,7 +1742,8 @@ test("single flight holds across publication versions, and any commercial person
 
 // ---------------------------------------------------------------------------------------------
 // #15b-1 (0161): findings that never change the send, the late-answer wait in D1 with a window per
-// provider, server time on the settle and reconcile admin routes, and the recorder of a publication.
+// provider, server time on the settle and reconcile admin routes, and the permit holder of a
+// publication.
 
 const FINDINGS_PATH = "/api/v1/commercial/proposal-publications/delivery-findings";
 
@@ -1859,7 +1860,8 @@ test("a person records findings about a settled send and corrects only the newes
       replayed: boolean;
     };
     assert.equal(firstFinding.finding.finding, "not_received");
-    // The provider's readback never matched this send, so its last attempt is unknown.
+    // The provider's readback did not match this send, so its last attempt is unknown: the answer is
+    // not confirmed.
     assert.equal(firstFinding.finding.attempt_state, "unknown");
     assert.equal(firstFinding.finding.supersedes_finding_id, null);
     // A finding never changes the send: same state, result and time, and no state event.
@@ -2048,7 +2050,7 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
   }
 });
 
-test("each finding keeps whether the provider confirmed the send or never answered", async () => {
+test("each finding keeps whether the provider confirmed the send or its answer is not confirmed", async () => {
   const { recordProposalDeliveryFinding } = await import("../src/commercial-store.ts");
   for (const mode of ["success", "rejected"] as const) {
     const { db, env, prepare } = await publicationReady(`findings-attempt-${mode}`);
@@ -2282,6 +2284,82 @@ test("the late-answer wait also holds after an unknown send became a manual exce
   }
 });
 
+test("the late-answer wait fails closed when no window row is left", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const { db, env, prepare } = await publicationReady("late-answer-no-window");
+  const effectId = "effect:late-answer-no-window:unknown";
+  try {
+    // Only a schema change can remove the default row; with none left the wait is still the lease.
+    db.raw.exec("DROP TRIGGER proposal_delivery_late_answer_windows_append_only_delete");
+    db.raw.exec("DELETE FROM proposal_delivery_late_answer_windows");
+    const prepared = await prepare("late-answer-no-window-prepare");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "unknown");
+    const ended = lastAttemptEnd(db, effectId);
+    const notExecuted = (afterMs: number) => db.raw.prepare(
+      `UPDATE external_effects SET state = 'reconciled', result_code = 'reconciled_not_executed',
+         updated_at = ? WHERE effect_id = ? AND state = 'unknown'`,
+    ).run(new Date(Date.parse(ended) + afterMs).toISOString(), effectId);
+    assert.throws(() => notExecuted(60_000), /proposal_delivery_answer_may_be_late/);
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    notExecuted(EFFECT_ATTEMPT_LEASE_MS + 1_000);
+    assert.equal(effectRow(db, effectId).state, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
+test("a manual exception that did not come straight from unknown is not held, even after an earlier unknown", async () => {
+  const { claimExternalEffect, EFFECT_ATTEMPT_LEASE_MS, reconcileExternalEffect, retryExternalEffect, settleExternalEffect } =
+    await import("../src/effect-runtime.ts");
+  const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+  const { db, env, prepare } = await publicationReady("late-answer-not-from-unknown");
+  const effectId = "effect:late-answer-not-from-unknown:send";
+  try {
+    const prepared = await prepare("late-answer-not-from-unknown-prepare");
+    const { permit } = await prepared.json() as { permit: Permit };
+    // The first attempt goes unknown, and the provider later shows nothing went out.
+    await runExternalEffect(env, { ...effectRequest(permit, effectId), retryLimit: 1 }, {
+      async dispatch() {
+        return { outcome: "unknown", detailCode: "provider_timeout" } as never;
+      },
+      async replay() {
+        return { published: false };
+      },
+    }).catch(() => undefined);
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    await reconcileExternalEffect(env, effectId, {
+      outcome: "not_executed",
+      evidence: { provider: "no message for this send" },
+      now: new Date(Date.parse(lastAttemptEnd(db, effectId)) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
+    });
+    // The second attempt is answered, but the readback does not match: a manual exception that
+    // came from reconciling, not from unknown.
+    await retryExternalEffect(env, effectId);
+    const { attempt } = await claimExternalEffect(env, effectId, new Date());
+    await settleExternalEffect(env, effectId, {
+      attemptId: attempt.attempt_id,
+      outcome: "accepted",
+      providerExternalId: `provider:${effectId}:retry`,
+      readback: {
+        status: "match",
+        providerExternalId: `provider:${effectId}:retry`,
+        observed: { ...READBACK, state: "withdrawn" },
+      },
+    });
+    assert.equal(effectRow(db, effectId).state, "manual_exception");
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    // Not held: the person's answer is recorded at once, as 0156 settles a readback conflict.
+    const recorded = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
+      actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: "late-answer-not-from-unknown-1",
+    });
+    assert.equal(recorded.effectState, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
 test("the late-answer windows are append-only and the default is the attempt lease", async () => {
   const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
   const db = new SqliteD1();
@@ -2426,7 +2504,7 @@ test("the reconcile route cannot call an unknown send not executed inside its pr
   }
 });
 
-test("D1 names the permit holder as the recorder of every new publication, whoever records it", async () => {
+test("D1 names the permit holder of every new publication, whoever records it", async () => {
   const { db, env, prepare } = await publicationReady("recorded-by");
   const effectId = "effect:recorded-by:success";
   try {
@@ -2450,36 +2528,36 @@ test("D1 names the permit holder as the recorder of every new publication, whoev
     const { publication } = await recorded.json() as {
       publication: { publication_event_id: string; occurred_at: string };
     };
-    // D1 wrote the recorder in the insert's own statement: the permit holder, not the person who
-    // pressed record, and no Worker field supplied it.
+    // D1 wrote the permit holder in the insert's own statement: not the person who pressed record,
+    // and no Worker field supplied it.
     assert.deepEqual(
       { ...db.raw.prepare(
-        "SELECT recorded_by_user_id, recorded_at FROM commercial_proposal_publication_recorders WHERE publication_event_id = ?",
+        "SELECT permit_holder_user_id, occurred_at FROM commercial_proposal_publication_permit_holders WHERE publication_event_id = ?",
       ).get(publication.publication_event_id) },
-      { recorded_by_user_id: OPS_ID, recorded_at: publication.occurred_at },
+      { permit_holder_user_id: OPS_ID, occurred_at: publication.occurred_at },
     );
 
-    // A recorder row is only ever the permit holder of an existing event; it is never rewritten.
-    const insertRecorder = (publicationEventId: string, userId: string, recordedAt: string) =>
+    // A permit-holder row is only ever the permit holder of an existing event; it is never rewritten.
+    const insertHolder = (publicationEventId: string, userId: string, occurredAt: string) =>
       db.raw.prepare(
-        `INSERT INTO commercial_proposal_publication_recorders
-           (publication_event_id, tenant_id, recorded_by_user_id, recorded_at) VALUES (?, ?, ?, ?)`,
-      ).run(publicationEventId, TENANT, userId, recordedAt);
+        `INSERT INTO commercial_proposal_publication_permit_holders
+           (publication_event_id, tenant_id, permit_holder_user_id, occurred_at) VALUES (?, ?, ?, ?)`,
+      ).run(publicationEventId, TENANT, userId, occurredAt);
     assert.throws(
-      () => insertRecorder(publication.publication_event_id, OTHER_OPS_ID, publication.occurred_at),
-      /commercial_publication_recorder_exists/,
+      () => insertHolder(publication.publication_event_id, OTHER_OPS_ID, publication.occurred_at),
+      /commercial_publication_permit_holder_exists/,
     );
     assert.throws(
-      () => insertRecorder("commercial-publication:no-such-event-0161", OPS_ID, publication.occurred_at),
-      /commercial_publication_recorder_invalid/,
+      () => insertHolder("commercial-publication:no-such-event-0161", OPS_ID, publication.occurred_at),
+      /commercial_publication_permit_holder_invalid/,
     );
     assert.throws(
-      () => db.raw.prepare("UPDATE commercial_proposal_publication_recorders SET recorded_by_user_id = ?").run(OTHER_OPS_ID),
-      /commercial_proposal_publication_recorders_append_only/,
+      () => db.raw.prepare("UPDATE commercial_proposal_publication_permit_holders SET permit_holder_user_id = ?").run(OTHER_OPS_ID),
+      /commercial_proposal_publication_permit_holders_append_only/,
     );
     assert.throws(
-      () => db.raw.prepare("DELETE FROM commercial_proposal_publication_recorders").run(),
-      /commercial_proposal_publication_recorders_append_only/,
+      () => db.raw.prepare("DELETE FROM commercial_proposal_publication_permit_holders").run(),
+      /commercial_proposal_publication_permit_holders_append_only/,
     );
   } finally {
     db.close();
@@ -2501,11 +2579,11 @@ test("0161 only adds objects: it re-creates or drops nothing an earlier migratio
   const objects = created(migration0161);
   assert.deepEqual(objects.filter((name) => earlier.has(name)), []);
   assert.deepEqual(objects.sort(), [
-    "commercial_proposal_publication_recorders",
-    "commercial_proposal_publication_recorders_append_only_delete",
-    "commercial_proposal_publication_recorders_append_only_update",
-    "commercial_proposal_publication_recorders_validate_insert",
-    "commercial_publication_recorder_from_permit",
+    "commercial_proposal_publication_permit_holders",
+    "commercial_proposal_publication_permit_holders_append_only_delete",
+    "commercial_proposal_publication_permit_holders_append_only_update",
+    "commercial_proposal_publication_permit_holders_validate_insert",
+    "commercial_publication_permit_holder_from_permit",
     "external_effects_proposal_late_answer_guard",
     "idx_proposal_delivery_findings_effect",
     "proposal_delivery_findings",

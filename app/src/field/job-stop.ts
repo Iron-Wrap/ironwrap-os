@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
+import { z } from "zod";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { cacheFieldModel, getCachedFieldModel } from "./field-cache";
-import { jobResponseSchema, todayResponseSchema } from "./field-contracts";
 
 /** The job a crew phone stops work on: the scope it sends and what the sheet names. */
 export interface StopJob {
@@ -17,42 +17,78 @@ export interface RaisedStop {
   deviceActionId: string;
   occurrenceId: string;
   raisedAt: string;
-  /** What the person typed as unsafe, or null when they sent the stop without words. */
+  /** What the person typed as unsafe and was sent, or null when the stop went without words. */
   unsafe: string | null;
   madeSafeAt?: string;
 }
 
-const JOB_PATH = /^\/jobs\/([^/]+)(?:\/|$)/;
+/**
+ * A live job's own screens: its packet and its check-in. A finished job's history is not one: a
+ * stop there would hold nothing.
+ */
+const LIVE_JOB_PATH = /^\/(?:jobs|check-in)\/([^/]+)\/?$/;
+/** The crew's home screens, where the one job on today's run sheet is the job they are on. */
+const HOME_PATHS = new Set(["/today", "/now", "/"]);
 
-/** The open job's id, from the route alone. */
+/** The open live job's id, from the route alone. */
 export function jobIdFromPath(pathname: string): string | undefined {
-  const open = JOB_PATH.exec(pathname)?.[1];
+  const open = LIVE_JOB_PATH.exec(pathname)?.[1];
   return open ? decodeURIComponent(open) : undefined;
 }
+
+// Only the fields the sheet names: a packet or run sheet saved by an older release still names it.
+const cachedJobSchema = z.object({
+  job: z.object({
+    id: z.string().min(1),
+    job_number: z.string().nullable(),
+    address: z.string().nullable(),
+  }),
+});
+const cachedTodaySchema = z.object({
+  date: z.string().min(1),
+  jobs: z.array(
+    z.object({
+      id: z.string().min(1),
+      job_number: z.string().nullable(),
+      address: z.string().nullable(),
+    }),
+  ),
+});
 
 function key(session: AuthenticatedSession, suffix: string): string {
   return `${session.tenant.id}:${session.user.id}:${suffix}`;
 }
 
+/** Today's date where the company works, as the run sheet's `date` writes it. */
+function todayIn(timeZone: string, now: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
 /**
- * The job the person is on, from what this phone already holds: the open job, or the one job on
- * today's run sheet. With no job, or more than one, there is no job to stop, and the caller keeps
- * the panel that reports without one.
+ * The job the person is on, from what this phone already holds: the open live job, or on a home
+ * screen the one job on today's run sheet. With no job, more than one, or a run sheet from another
+ * day, there is no job to stop, and the caller keeps the panel that reports without one.
  */
 export async function resolveStopJob(
   session: AuthenticatedSession,
   pathname: string,
+  now: Date = new Date(),
 ): Promise<StopJob | undefined> {
   const id = jobIdFromPath(pathname);
   if (id) {
-    const cached = jobResponseSchema.safeParse(
-      await getCachedFieldModel(key(session, `job:${id}`)),
-    );
+    const cached = cachedJobSchema.safeParse(await getCachedFieldModel(key(session, `job:${id}`)));
     const job = cached.success ? cached.data.job : undefined;
     return { id, code: job?.job_number ?? id, address: job?.address ?? null };
   }
-  const today = todayResponseSchema.safeParse(await getCachedFieldModel(key(session, "today")));
+  if (!HOME_PATHS.has(pathname)) return undefined;
+  const today = cachedTodaySchema.safeParse(await getCachedFieldModel(key(session, "today")));
   if (!today.success || today.data.jobs.length !== 1) return undefined;
+  if (today.data.date !== todayIn(session.tenant.time_zone, now)) return undefined;
   const [job] = today.data.jobs;
   return { id: job!.id, code: job!.job_number ?? job!.id, address: job!.address };
 }
@@ -71,14 +107,14 @@ export async function loadRaisedStop(
   jobId: string,
 ): Promise<RaisedStop | undefined> {
   const value = (await getCachedFieldModel(key(session, `job-stop:${jobId}`))) as
-    RaisedStop | undefined;
+    RaisedStop | null | undefined;
   return value && typeof value.occurrenceId === "string" ? value : undefined;
 }
 
 export async function saveRaisedStop(
   session: AuthenticatedSession,
   jobId: string,
-  stop: RaisedStop,
+  stop: RaisedStop | null,
 ): Promise<void> {
   await cacheFieldModel(key(session, `job-stop:${jobId}`), stop, null);
 }
@@ -96,27 +132,33 @@ export function stopTime(iso: string, timeZone: string): string {
   return `${weekday} ${time}`;
 }
 
-/** The job to stop while `active` (the help sheet is open), resolved from this phone's own data. */
+/**
+ * The job to stop while `active` (the help sheet is open), resolved from this phone's own data.
+ * `resolved` is false until the lookup for this screen ends, so the sheet never shows another
+ * screen's job and does not flash the no-job view first.
+ */
 export function useStopJob(
   session: AuthenticatedSession,
   pathname: string,
   active: boolean,
-): StopJob | undefined {
-  const [job, setJob] = useState<StopJob>();
+): { job: StopJob | undefined; resolved: boolean } {
+  const [state, setState] = useState<{ job?: StopJob; for?: string }>({});
+  const lookup = `${pathname}|${active}`;
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
     void resolveStopJob(session, pathname).then(
-      (resolved) => {
-        if (!cancelled) setJob(resolved);
+      (job) => {
+        if (!cancelled) setState({ job, for: lookup });
       },
       () => {
-        if (!cancelled) setJob(undefined);
+        if (!cancelled) setState({ for: lookup });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [session, pathname, active]);
-  return active ? job : undefined;
+  }, [session, pathname, active, lookup]);
+  const resolved = active && state.for === lookup;
+  return { job: resolved ? state.job : undefined, resolved };
 }

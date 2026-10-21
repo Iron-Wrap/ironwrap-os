@@ -6,6 +6,7 @@ import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Notice } from "../components/ui/notice";
+import { apiRequest } from "../lib/api";
 import { messageFor } from "../lib/plain-error";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
@@ -18,32 +19,45 @@ import {
   type RaisedStop,
   type StopJob,
 } from "./job-stop";
-import type { SafetyActionPayload } from "./safety-contracts";
+import { safetyPanelResponseSchema, type SafetyActionPayload } from "./safety-contracts";
 
 const SAFETY_ENDPOINT = "/api/v1/safety/actions";
 const DETAIL_MAX_LENGTH = 4_000;
+const DETAIL_MIN_LENGTH = 3;
+/** How often an unsent stop looks again for the office's answer while the sheet is open. */
+const DELIVERY_RECHECK_MS = 5_000;
 
 /** Saved on the phone, not yet confirmed by the office (the panel's own words for this). */
 const SAVED_ON_DEVICE =
   "Saved on this device. It uploads on its own and keeps the same record if you retry.";
+/** The office refused it or the phone could not send it (the panel's own words for this). */
+const NOT_CONFIRMED =
+  "This phone could not confirm it saved this report. Tell your supervisor directly.";
+
+type Delivery = "saved" | "sent" | "attention";
 
 /**
  * Stop work on one job from a crew phone (P33 S20), then say the area is safe (S23). Every action
  * goes to the durable outbox first, so a stop survives no signal; the stop is scoped to this job,
  * never the whole company. A stop whose job the office could not find (S21, `scope_unresolved`)
  * waits for the owner items and Track C's slice, in a follow-up.
+ *
+ * `onStage` tells the host which view shows, so it can keep its own 911 call beside the made-safe
+ * view (S20 carries its own).
  */
 export function JobStopSheet({
   session,
   job,
   fetcher,
+  onStage,
 }: {
   session: AuthenticatedSession;
   job: StopJob;
   fetcher?: typeof fetch;
+  onStage?: (stage: "stop" | "stopped") => void;
 }) {
   const [raised, setRaised] = useState<RaisedStop>();
-  const [delivery, setDelivery] = useState<"saved" | "sent">("saved");
+  const [delivery, setDelivery] = useState<Delivery>("saved");
   const [unsafe, setUnsafe] = useState("");
   const [done, setDone] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,17 +68,37 @@ export function JobStopSheet({
   const timeZone = session.tenant.time_zone;
 
   useEffect(() => {
+    onStage?.(raised ? "stopped" : "stop");
+  }, [raised, onStage]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       const stop = await loadRaisedStop(session, job.id);
       if (cancelled || !stop) return;
+      const answer = await deliveryOf(stop.deviceActionId);
+      // A stop the office has lifted is over: the job offers a new stop again.
+      if (answer === "sent" && (await stopLifted(session, stop.occurrenceId, fetcher))) {
+        await saveRaisedStop(session, job.id, null);
+        return;
+      }
+      if (cancelled) return;
       setRaised(stop);
-      setDelivery(await deliveryOf(stop.deviceActionId));
+      setDelivery(answer);
     })();
     return () => {
       cancelled = true;
     };
-  }, [session, job.id]);
+  }, [session, job.id, fetcher]);
+
+  // While the stop waits on this phone, look again for the office's answer.
+  useEffect(() => {
+    if (!raised || delivery !== "saved") return;
+    const timer = window.setInterval(() => {
+      void deliveryOf(raised.deviceActionId).then(setDelivery);
+    }, DELIVERY_RECHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [raised, delivery]);
 
   async function record(payload: SafetyActionPayload): Promise<string> {
     const saved = await saveOutboxAction({
@@ -92,14 +126,15 @@ export function JobStopSheet({
     setError(undefined);
     try {
       const words = unsafe.trim().slice(0, DETAIL_MAX_LENGTH);
+      const sent = words.length >= DETAIL_MIN_LENGTH ? words : null;
       const raisedAt = new Date().toISOString();
-      // An empty field still sends a stop: the Worker needs a detail, kind and severity.
+      // With no words the phone still sends a stop: the Worker needs a detail, kind and severity.
       const deviceActionId = await record({
         kind: "report_occurrence",
         scope_type: "roof_job",
         scope_id: job.id,
         captured_at: raisedAt,
-        detail: words.length >= 3 ? words : `Work stopped on ${job.code}`,
+        detail: sent ?? `Work stopped on ${job.code}`,
         occurrence_kind: "hazard",
         severity: "high",
       });
@@ -107,18 +142,13 @@ export function JobStopSheet({
         deviceActionId,
         occurrenceId: await occurrenceIdFor(deviceActionId),
         raisedAt,
-        unsafe: words.length > 0 ? words : null,
+        unsafe: sent,
       };
       await saveRaisedStop(session, job.id, stop);
       setRaised(stop);
       setDelivery(await deliveryOf(deviceActionId));
     } catch (caught) {
-      setError(
-        messageFor(caught, {
-          fallback:
-            "This phone could not confirm it saved this report. Tell your supervisor directly.",
-        }),
-      );
+      setError(messageFor(caught, { fallback: NOT_CONFIRMED }));
     } finally {
       setBusy(false);
     }
@@ -136,7 +166,7 @@ export function JobStopSheet({
         scope_type: "roof_job",
         scope_id: job.id,
         captured_at: new Date().toISOString(),
-        detail: words.length >= 3 ? words : `Area made safe on ${job.code}`,
+        detail: words.length >= DETAIL_MIN_LENGTH ? words : `Area made safe on ${job.code}`,
         occurrence_id: raised.occurrenceId,
       });
       const stop = { ...raised, madeSafeAt: new Date().toISOString() };
@@ -145,12 +175,7 @@ export function JobStopSheet({
       setDone("");
       setStatus(SAVED_ON_DEVICE);
     } catch (caught) {
-      setError(
-        messageFor(caught, {
-          fallback:
-            "This phone could not confirm it saved this report. Tell your supervisor directly.",
-        }),
-      );
+      setError(messageFor(caught, { fallback: NOT_CONFIRMED }));
     } finally {
       setBusy(false);
     }
@@ -163,6 +188,8 @@ export function JobStopSheet({
       <section className="space-y-3" aria-label="Work stopped">
         {delivery === "sent" ? (
           <Notice tone="info" title="Stop sent. When the area is safe, say so here." />
+        ) : delivery === "attention" ? (
+          <Notice tone="danger" title={NOT_CONFIRMED} />
         ) : (
           <Notice tone="local" title={SAVED_ON_DEVICE} />
         )}
@@ -171,16 +198,18 @@ export function JobStopSheet({
             .filter(Boolean)
             .join(" · ")}
         </p>
-        <label htmlFor={doneId} className="block text-sm text-muted">
-          What you did (optional)
-          <Input
-            id={doneId}
-            className="mt-1"
-            value={done}
-            maxLength={DETAIL_MAX_LENGTH}
-            onChange={(event) => setDone(event.target.value)}
-          />
-        </label>
+        {raised.madeSafeAt ? null : (
+          <label htmlFor={doneId} className="block text-sm text-muted">
+            What you did (optional)
+            <Input
+              id={doneId}
+              className="mt-1"
+              value={done}
+              maxLength={DETAIL_MAX_LENGTH}
+              onChange={(event) => setDone(event.target.value)}
+            />
+          </label>
+        )}
         <p className="text-sm">This doesn't restart work. The office releases the stop.</p>
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="secondary" size="field">
@@ -189,9 +218,11 @@ export function JobStopSheet({
               Take photo
             </a>
           </Button>
-          <Button type="button" size="field" busy={busy} onClick={() => void madeSafe()}>
-            I've made the area safe
-          </Button>
+          {raised.madeSafeAt ? null : (
+            <Button type="button" size="field" busy={busy} onClick={() => void madeSafe()}>
+              I've made the area safe
+            </Button>
+          )}
         </div>
         {status ? (
           <p className="text-sm font-semibold text-ok" role="status">
@@ -255,8 +286,35 @@ export function JobStopSheet({
   );
 }
 
-/** Whether the office has the stop yet. */
-async function deliveryOf(deviceActionId: string): Promise<"saved" | "sent"> {
+/** Whether the office has the stop yet, or it needs a person. */
+async function deliveryOf(deviceActionId: string): Promise<Delivery> {
   const action = await getOutboxAction(deviceActionId);
-  return action?.state === "verified" ? "sent" : "saved";
+  if (action?.state === "verified") return "sent";
+  if (action?.state === "needs_attention") return "attention";
+  return "saved";
+}
+
+/**
+ * True only when the office's own read says this stop no longer holds work. With no signal, or a
+ * read that fails, the stop stays on screen: a stop is never cleared on a guess.
+ */
+async function stopLifted(
+  session: AuthenticatedSession,
+  occurrenceId: string,
+  fetcher: typeof fetch | undefined,
+): Promise<boolean> {
+  if (!navigator.onLine || isOfflineSession(session)) return false;
+  try {
+    const { panel } = await apiRequest({
+      path: "/api/v1/safety/panel",
+      schema: safetyPanelResponseSchema,
+      fetcher: fetcher ?? fetch,
+      deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
+    });
+    return !panel.open_occurrences.some(
+      (stop) => stop.occurrence_id === occurrenceId && stop.stop_active,
+    );
+  } catch {
+    return false;
+  }
 }

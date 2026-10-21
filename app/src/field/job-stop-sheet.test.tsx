@@ -62,6 +62,30 @@ function officeAnswers(answer: { scopeUnresolved?: boolean } = {}) {
   });
 }
 
+/** The office's safety read, with these stops open. */
+function panelFetcher(open: Array<{ occurrence_id: string; stop_active: boolean }>): typeof fetch {
+  return (async () =>
+    Response.json({
+      version: 1,
+      panel: {
+        version: 1,
+        actor_role: "field",
+        assigned_equipment: [],
+        open_occurrences: open.map((stop) => ({
+          ...stop,
+          occurrence_kind: "hazard",
+          severity: "high",
+          state: "reported",
+          scope_type: "roof_job",
+          scope_id: "JOB-ELENA",
+          summary: "Work stopped on J-ELENA",
+        })),
+        my_corrective_actions: [],
+        allowed_actions: [],
+      },
+    })) as unknown as typeof fetch;
+}
+
 function noSignal() {
   vi.mocked(flushOutbox).mockResolvedValue({
     processed: 0,
@@ -168,6 +192,63 @@ describe("JobStopSheet", () => {
     expect(screen.queryByText(/Stop sent/)).toBeNull();
   });
 
+  it("S23: a stop the office has lifted is over, and the job offers a new stop", async () => {
+    officeAnswers();
+    const user = userEvent.setup();
+    const first = render(<JobStopSheet session={session} job={job} />);
+    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await screen.findByText("Stop sent. When the area is safe, say so here.");
+    first.unmount();
+    render(<JobStopSheet session={session} job={job} fetcher={panelFetcher([])} />);
+    expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();
+  });
+
+  it("S23: a stop still in force stays on screen", async () => {
+    officeAnswers();
+    const user = userEvent.setup();
+    const first = render(<JobStopSheet session={session} job={job} />);
+    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await screen.findByText("Stop sent. When the area is safe, say so here.");
+    first.unmount();
+    const [raise] = await safetyActions();
+    const active = [
+      { occurrence_id: await occurrenceIdFor(raise!.deviceActionId), stop_active: true },
+    ];
+    render(<JobStopSheet session={session} job={job} fetcher={panelFetcher(active)} />);
+    expect(await screen.findByText("Stop sent. When the area is safe, say so here.")).toBeVisible();
+  });
+
+  it("S23: a stop the office refused says so, never that it uploads on its own", async () => {
+    vi.mocked(flushOutbox).mockImplementation(async () => {
+      const database = await getDatabase();
+      for (const action of await database.getAll("outbox_actions")) {
+        await database.put("outbox_actions", { ...action, state: "needs_attention" });
+      }
+      return { processed: 1, verified: 0, requeued: 0, needsAttention: 1 };
+    });
+    const user = userEvent.setup();
+    render(<JobStopSheet session={session} job={job} />);
+    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    expect(
+      await screen.findByText(
+        "This phone could not confirm it saved this report. Tell your supervisor directly.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/uploads on its own/)).toBeNull();
+  });
+
+  it("S23: words too short to send are not shown as sent", async () => {
+    officeAnswers();
+    const user = userEvent.setup();
+    render(<JobStopSheet session={session} job={job} />);
+    await user.type(screen.getByLabelText("What is unsafe (optional)"), "ok");
+    await user.click(screen.getByRole("button", { name: "Send stop report" }));
+    await screen.findByText("Stop sent. When the area is safe, say so here.");
+    expect(screen.getByText(/^Stop · /)).not.toHaveTextContent("· ok ·");
+    const [saved] = await safetyActions();
+    expect(saved?.payload).toMatchObject({ detail: "Work stopped on J-ELENA" });
+  });
+
   it("S23: shows the stop again after the sheet reopens", async () => {
     officeAnswers();
     const user = userEvent.setup();
@@ -186,60 +267,57 @@ describe("resolveStopJob", () => {
     await resetDatabaseForTests();
   });
 
-  const packet = (id: string) => ({
-    version: 1,
-    source_updated_at: null,
-    read_model_generated_at: "2026-08-17T12:00:00.000Z",
-    stale_fields: [],
-    job: {
-      id,
-      roof_job_id: null,
-      job_number: "J-ELENA",
-      brand: null,
-      service_type: null,
-      status: null,
-      address: "118 Larkspur Way NW",
-      current_gate_state: null,
-    },
+  // Noon in Calgary on 2026-08-17.
+  const noon = new Date("2026-08-17T18:00:00.000Z");
+  const packet = {
+    job: { id: "JOB-ELENA", job_number: "J-ELENA", address: "118 Larkspur Way NW" },
+  };
+  const today = (count: number, date = "2026-08-17") => ({
+    date,
+    jobs: Array.from({ length: count }, (_, index) => ({
+      id: `JOB-${index}`,
+      job_number: `J-${index}`,
+      address: `${index} Main St`,
+    })),
   });
 
   it("stops the open job, named from the packet on this phone", async () => {
-    await cacheFieldModel(`ironwrap:appu_sam:job:JOB-ELENA`, packet("JOB-ELENA"), null);
-    const resolved = await resolveStopJob(session, "/jobs/JOB-ELENA");
-    // A packet this test does not fully build still gives the job its id from the route.
-    expect(resolved?.id).toBe("JOB-ELENA");
+    await cacheFieldModel("ironwrap:appu_sam:job:JOB-ELENA", packet, null);
+    expect(await resolveStopJob(session, "/jobs/JOB-ELENA", noon)).toEqual(job);
+    expect(await resolveStopJob(session, "/check-in/JOB-ELENA", noon)).toEqual(job);
   });
 
-  it("stops the only job on today's run sheet, and none when there are two", async () => {
-    const today = (count: number) => ({
-      version: 1,
-      source_updated_at: null,
-      read_model_generated_at: "2026-08-17T12:00:00.000Z",
-      stale_fields: [],
-      permissions: [],
-      allowed_actions: [],
-      date: "2026-08-17",
-      jobs: Array.from({ length: count }, (_, index) => ({
-        id: `JOB-${index}`,
-        job_number: `J-${index}`,
-        brand: null,
-        status: null,
-        address: `${index} Main St`,
-        scheduled_start: null,
-        scheduled_end: null,
-        blocked_gate_count: 0,
-        next_action: "Start",
-        assignment: null,
-      })),
-      work_objects: [],
+  it("names the job by its id when this phone has no packet for it", async () => {
+    expect(await resolveStopJob(session, "/jobs/JOB-X", noon)).toEqual({
+      id: "JOB-X",
+      code: "JOB-X",
+      address: null,
     });
+  });
+
+  it("never stops a finished job's history or a screen that is not a job", async () => {
     await cacheFieldModel("ironwrap:appu_sam:today", today(1), null);
-    expect(await resolveStopJob(session, "/today")).toEqual({
+    expect(await resolveStopJob(session, "/jobs/JOB-ELENA/history", noon)).toBeUndefined();
+    expect(await resolveStopJob(session, "/vehicle", noon)).toBeUndefined();
+    expect(await resolveStopJob(session, "/work-objects/a/b", noon)).toBeUndefined();
+  });
+
+  it("on a home screen stops the only job on today's run sheet, and none otherwise", async () => {
+    await cacheFieldModel("ironwrap:appu_sam:today", today(1), null);
+    expect(await resolveStopJob(session, "/today", noon)).toEqual({
       id: "JOB-0",
       code: "J-0",
       address: "0 Main St",
     });
     await cacheFieldModel("ironwrap:appu_sam:today", today(2), null);
-    expect(await resolveStopJob(session, "/today")).toBeUndefined();
+    expect(await resolveStopJob(session, "/today", noon)).toBeUndefined();
+    // Yesterday's run sheet is not today's job.
+    await cacheFieldModel("ironwrap:appu_sam:today", today(1, "2026-08-16"), null);
+    expect(await resolveStopJob(session, "/today", noon)).toBeUndefined();
+  });
+
+  it("derives the occurrence id the way the Worker does", async () => {
+    // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    expect(await occurrenceIdFor("abc")).toBe("so_ba7816bf8f01cfea414140de5dae2223");
   });
 });

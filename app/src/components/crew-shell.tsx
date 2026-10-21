@@ -33,7 +33,8 @@ export function CrewShell() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpMounted, setHelpMounted] = useState(false);
   // On a job (open, or the only one today) a stop holds that job, not the whole company.
-  const stopJob = useStopJob(session, pathname, helpOpen);
+  const { job: stopJob } = useStopJob(session, pathname, helpOpen);
+  const [stopStage, setStopStage] = useState<"stop" | "stopped">("stop");
   // Sun is the default even when the phone is set to dark: a phone left in dark mode would be
   // unreadable on a roof at noon. Night is only ever this explicit choice.
   const [night, setNight] = useState(() => {
@@ -164,11 +165,11 @@ export function CrewShell() {
         side="end"
         className="[&>div:nth-child(2)]:px-0"
       >
-        <div className="px-5">
-          {stopJob ? (
-            <JobStopSheet session={session} job={stopJob} />
-          ) : (
-            <>
+        <div className="space-y-4 px-5">
+          {/* 911 never waits for the job lookup. S20 carries its own call; every other view keeps
+              the shell's. */}
+          {!(stopJob && stopStage === "stop") ? (
+            <div>
               <Button asChild variant="danger" size="field" fullWidth>
                 <a href="tel:911">
                   <Phone aria-hidden="true" />
@@ -178,8 +179,11 @@ export function CrewShell() {
               <p className="mt-2 text-sm text-muted">
                 A call uses the phone’s normal service and works without the app.
               </p>
-            </>
-          )}
+            </div>
+          ) : null}
+          {stopJob ? (
+            <JobStopSheet key={stopJob.id} session={session} job={stopJob} onStage={setStopStage} />
+          ) : null}
         </div>
         {/* Keep the code available offline; mount on first use and retain unsent drafts on close. */}
         {helpMounted ? (

@@ -366,6 +366,14 @@ test("an inbound-only proposal stops off its inbound, as the Worker's policy sto
   stopped("a watch", inbound({ kind: "watch", source: "scheduler", watch_id: "new_leads" }).toolFile);
   const { requester: _, ...older } = run.toolFile;
   stopped("a tool file with no requester", older);
+  // The requester comes before the citations, as in policy: off its inbound, nothing cited or an
+  // unknown or stale fact cited beside the signal stops out_of_scope, never as a citation.
+  const offInbound = inbound({ source: "email" }).toolFile;
+  stopped("nothing cited", offInbound, undefined, []);
+  stopped("an unknown fact beside the signal", offInbound, undefined, [{ fact_id: "signal", version: 1 }, { fact_id: "lead:L-9999", version: 1 }]);
+  stopped("a stale fact beside the signal", offInbound, undefined, [{ fact_id: "signal", version: 1 }, { fact_id: "quote:Q-77", version: 1 }]);
+  // On its inbound, a wrong signal version is still the citation's to refuse.
+  assert.deepEqual(propose(run.toolFile, { lead_id: "L-1001", fields }, [{ fact_id: "signal", version: 2 }]).reason_codes, ["citation_unverifiable"]);
   // Every other action answers as before.
   assert.equal(body(answerCall(older, "lead__qualify", { args: { lead_id: "L-2002" }, citations: [{ fact_id: "lead:L-1001", version: 2 }] }, 2)).decision, "drafted");
 });

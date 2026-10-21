@@ -484,9 +484,11 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   executed, and answered with the Worker's deterministic decision: drafted for A1, escalated for a
   protective action, awaiting approval for other A2 and A3 actions, abstained for an unknown,
   wrong-version or stale citation. An inbound-only action (`lead_fact.propose`) stops `out_of_scope`
-  as the Worker's policy stops it: unless the case signal is an event from an inbound channel about
-  a lead, the step names that lead and it cites only the signal. The tool file carries the signal's
-  kind, source and subject for that (`requester`); no other requester rule is mirrored.
+  as the Worker's policy stops it, before its citations are checked: unless the case signal is an
+  event from an inbound channel about a lead, the step names that lead and it cites only the
+  signal. A case on an inbound channel therefore carries the lead as `signal.subject`, as the
+  producer sets it. The tool file carries the signal's kind, source and subject for that
+  (`requester`); no other requester rule is mirrored.
 - Runs go through an eval gateway (`qualification` option, `scope: "eval"`) whose state directory
   is `<output_dir>/<stage>/gateway` (`<output_dir>/replay/gateway` for a single-case replay, and
   `<output_dir>/gateway` when `ledger.per_stage` is false), so each stage books in its own

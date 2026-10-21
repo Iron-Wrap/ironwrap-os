@@ -299,8 +299,8 @@ export interface ToolAnswer {
 
 /**
  * The Worker's answer to one proposed step, decided from the tool file alone and never executed.
- * Citations are checked as workers-bus/src/agents/policy.ts checks them, and an inbound-only action
- * stops as policy stops it off its inbound; then an A0 read answers
+ * An inbound-only action stops as workers-bus/src/agents/policy.ts stops it off its inbound, before
+ * citations are checked as policy checks them; then an A0 read answers
  * with the case facts it names, an A1 output is drafted, a protective step goes to its person, and
  * any other A2 or A3 step waits for approval, so the run can finish.
  */
@@ -318,11 +318,12 @@ export function answerCall(file: ToolFile, name: string, input: unknown, step: n
   const facts = new Map(file.facts.map((fact) => [fact.fact_id, fact]));
   const decide = (decision: string, outcome: string | null, reasonCodes: string[] = [], extra: object = {}) =>
     answer({ step_id: `step_${step}`, decision, outcome, reason_codes: reasonCodes, ...extra });
+  // As policy orders it: the requester is checked before the citations are verified.
+  if (INBOUND_ONLY.has(tool.action_id) && !fromItsInbound(file.requester, input.args, cited)) return decide("abstained", "abstained", ["out_of_scope"]);
   const unverifiable = cited.some((citation) => facts.get(citation.fact_id)?.version !== citation.version);
   if ((tool.requires_citations && cited.length === 0) || unverifiable) return decide("abstained", "abstained", ["citation_unverifiable"]);
   const clock = Date.parse(file.clock);
   if (cited.some((citation) => isStale(facts.get(citation.fact_id) as Fact, clock))) return decide("abstained", "abstained", ["fact_stale"]);
-  if (INBOUND_ONLY.has(tool.action_id) && !fromItsInbound(file.requester, input.args, cited)) return decide("abstained", "abstained", ["out_of_scope"]);
   if (tool.autonomy === "A0") return decide("recorded", "succeeded", [], read(input.args, cited, facts));
   if (tool.autonomy === "A1") return decide("drafted", "succeeded");
   return decide(tool.protective ? "escalated" : "awaiting_approval", null);
@@ -330,7 +331,8 @@ export function answerCall(file: ToolFile, name: string, input: unknown, step: n
 
 const isStale = (fact: Fact, clock: number) => fact.fresh_until !== null && Date.parse(fact.fresh_until) < clock;
 
-// workers-bus/src/agents/policy.ts INBOUND_ONLY and INBOUND_CHANNELS; a Worker test keeps them equal.
+// workers-bus/src/agents/policy.ts INBOUND_ONLY and INBOUND_CHANNELS; workers-bus/test/agents-inbound.test.ts
+// keeps them equal.
 export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
 export const INBOUND_CHANNELS: ReadonlySet<string> = new Set(["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]);
 

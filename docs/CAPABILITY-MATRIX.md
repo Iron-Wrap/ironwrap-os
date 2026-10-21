@@ -241,8 +241,12 @@ Current source tracing distinguishes implemented modules from reachable producti
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
   step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event
   the run answers and may cite only that event (`signal/<id>`); the receptionist's allowlist names
-  it, so the host offers it. The app has no import screen, so the Retry a person would use for an
-  import run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
+  it, so the host offers it. An open proposal is the fact `lead_proposal/<step_id>` (read at
+  `sales:read`), linked from its lead, so a later run about the lead can confirm it; a
+  `lead_fact.confirm` must name an open proposal of the same lead and tenant (else `fact_missing`
+  or, once used or superseded, `fact_stale`) and may only repeat its values (else `fact_conflict`).
+  The app has no import screen, so the Retry a person would use for an import run's failed items is
+  not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
   too, and never under Done for you; closing that draft when the matching act lands or a newer
   draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.
@@ -275,11 +279,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
   v3 close keeps its output only on one of them; a close on an older close model is accepted and
   is not held to a qualification. The host sends the newest close model it knows that is no newer
-  than the Worker's: the v3 close to a Worker naming close model 3 or later. A synthetic run closes only on a Worker whose
-  `AGENT_DATA_CLASS` is synthetic. Seven cadence watches fire from the cron with deterministic
-  conditions (`0204`), the four owner reports, `delegation_review` and `import_failed_items` among
-  them; the other watches
-  and every event-triggered watch do not fire yet, and nothing emits `injection.flagged` yet.
+  than the Worker's: the v3 close to a Worker naming close model 3 or later. A synthetic run closes
+  only on a Worker whose `AGENT_DATA_CLASS` is synthetic. Seven cadence watches fire from the cron
+  with deterministic conditions (`0204`), the four owner reports, `delegation_review` and
+  `import_failed_items` among them; the other watches and every event-triggered watch do not fire
+  yet, and nothing emits `injection.flagged` yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
   takes signals in the order the Worker feeds them: the contract's queue priority is not
   implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,
@@ -333,7 +337,6 @@ Current source tracing distinguishes implemented modules from reachable producti
     (under `succeeded`) and the app's words and notes for them exist, and the receipt shows the
     note on its "Since then" row, but nothing closes the draft yet. No screen hosts the answer
     message that shows `VIEW_REFUSED` under the answer.
-  - The lead proposal open rule: the Worker serves no `lead_proposal` fact.
   - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
     tenant policy lists no company pages.
   - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its

@@ -639,8 +639,11 @@ history bar fails the release, and advisory bars or a missing history score neve
 
 `node agent-host/evals/validate.mjs` (tests: `validate.test.mjs`, `score.test.mjs`, `report.test.mjs`) checks every playbook, allowlist, case file, and rubric: required
 headings, catalog membership and autonomy of every action id, case counts and required fields,
-catastrophe ids, red-team coverage, relative times only, synthetic contact data, and the producer
-exclusion of every case that prepares a release or an acceptance. It runs
+catastrophe ids, red-team coverage, relative times only, synthetic contact data, the producer
+exclusion of every case that prepares a release or an acceptance, and delegability: a delegation
+record, a review digest pair, or a `delegation.propose_change` target names a delegable action of
+the specialist that owns it, and a within-limits permit on a never-delegable action appears only in
+a case that raises it as a finding. It runs
 without the contract catalog only in structural mode and says so. `--require-complete`, which
 `make validate` passes, also fails when a roster specialist has no playbook. When
 `qualification.v1.json` is required too, and its stages, ledger, pacing, and judge routing are

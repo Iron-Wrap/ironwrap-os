@@ -291,7 +291,7 @@ export async function setDelegation(
   if (control.held && input.setting === "within_limits") return { error: "specialist_held", status: 409 };
   const settingId = `dlg_${crypto.randomUUID()}`;
   // The owner's own change answers the face's open proposals for the pair (contract f5).
-  const answered = await closeDelegationDrafts(db, tenantId, input, input.setting, actor.user_id, now);
+  const answered = await closeDelegationDrafts(db, tenantId, input, input.setting, actor.user_id);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),

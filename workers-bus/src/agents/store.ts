@@ -822,7 +822,7 @@ export async function proposeStep(
       // A people-only draft replaces the open drafts of the same record, in the same transaction.
       const replaces =
         PREPARES_PEOPLE_ONLY.has(input.action_id) && decision.permit_kind === "draft" && decision.outcome === "succeeded"
-          ? await supersedeDrafts(db, tenantId, { step_id: stepId, action_id: input.action_id, args: input.args, args_sha256: argsSha }, now)
+          ? await supersedeDrafts(db, tenantId, { step_id: stepId, action_id: input.action_id, args: input.args, args_sha256: argsSha })
           : null;
       if (replaces) await db.batch([insert, replaces]);
       else await insert.run();

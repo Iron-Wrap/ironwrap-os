@@ -632,7 +632,7 @@ export async function changeAppUserRole(
     detailCode: `${user.role}->${updated.role}:${auth.session.user_id}`,
   });
   // The person's change answers the AI team's open role-change drafts for them (best effort).
-  await closeAccessDrafts(env.DB as unknown as AgentDb, auth.session.tenant_id, updated.user_id, updated.role, auth.session.user_id, new Date().toISOString());
+  await closeAccessDrafts(env.DB as unknown as AgentDb, auth.session.tenant_id, updated.user_id, updated.role, auth.session.user_id);
   return {
     ok: true,
     body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },

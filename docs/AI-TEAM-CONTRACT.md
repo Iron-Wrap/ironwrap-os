@@ -475,13 +475,15 @@ owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfree
 production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
 receipt asks the person to check it and apply it in their own screen. The draft leaves Needs you
 when the matching act lands or a newer draft for the same record replaces it: its receipt closes,
-still `succeeded`, with exactly one reason code that names what happened. A person's role change on
-the Access screen closes that person's role-change drafts, and the owner's delegation or practice
-setting closes that pair's `delegation.propose_change` drafts: `applied_by_person` when the draft
-proposed what the person set, else `superseded`. `readback.reference` names the changed record
-(`person:<user_id>` or `delegation/<specialist>:<action>`), or the newer draft's step
-(`step/<step_id>`) when one replaced it; `do_it_myself.context.applied` (`{field, value, by}`) says
-what is set now and by whom; `permit.approved_by` stays null. Needs you is to offer "Not now",
+still `succeeded`, with exactly one reason code that names what happened. `applied_by_person` means
+a person acted on the same record by hand, whether or not they set what the draft proposed: a role
+change on the Access screen closes that person's role-change drafts, and the owner's delegation
+setting, or turning practice on or off, closes that pair's `delegation.propose_change` drafts.
+`readback.reference` names the changed record (`person:<user_id>` or
+`delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by}`) says
+what is set now and by whom. `superseded` means only that a newer draft for the same record
+replaced it; `readback.reference` names that draft's step (`step/<step_id>`). `permit.approved_by`
+stays null, and a draft closes once. Needs you is to offer "Not now",
 which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
 `safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns
 as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.

@@ -1471,7 +1471,7 @@ test("a refused ask says when to come back: the oldest of the window leaves, and
   assert.deepEqual([both.body.error, both.retryAfter], ["too_many_pending_asks", String(15 * 60)]);
 });
 
-test("a person's role change closes the open role-change drafts for them, and leaves device drafts open", async () => {
+test("a person's role change closes the open role-change drafts for them, whatever role they set, and leaves device drafts open", async () => {
   const t = setup();
   const { closeAccessDrafts } = await import("../src/agents/drafts.ts");
   const draft = async (key: string, args: (ref: string) => Record<string, unknown>) => {
@@ -1488,7 +1488,7 @@ test("a person's role change closes the open role-change drafts for them, and le
   const row = (id: string) => t.db.raw.prepare("SELECT reason_code, needs_ask, readback_json, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(id) as Record<string, string | null>;
   const person = (pairing("signal/x").person_ref as string).slice("person:".length);
   // The owner sets the role the first draft proposed.
-  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001", new Date().toISOString()), true);
+  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001"), true);
   const applied = row(toSales);
   assert.deepEqual(
     [applied.reason_code, applied.needs_ask, JSON.parse(applied.readback_json!).reference, JSON.parse(applied.do_it_myself_json!).context.applied],
@@ -1496,8 +1496,8 @@ test("a person's role change closes the open role-change drafts for them, and le
   );
   // The device draft for the same person, and another person's role draft, stay open.
   assert.deepEqual([row(device).needs_ask, row(toProduction).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
-  // A different role than proposed closes it superseded, naming what is set now.
-  await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001", new Date().toISOString());
+  // A different role than proposed is still the person's own change: applied, naming what is set now.
+  await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001");
   const other = row(toProduction);
-  assert.deepEqual([other.reason_code, JSON.parse(other.do_it_myself_json!).context.applied.value], ["superseded", "sales"]);
+  assert.deepEqual([other.reason_code, JSON.parse(other.do_it_myself_json!).context.applied.value], ["applied_by_person", "sales"]);
 });

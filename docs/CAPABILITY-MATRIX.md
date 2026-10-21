@@ -244,10 +244,10 @@ Current source tracing distinguishes implemented modules from reachable producti
   it, so the host offers it. The app has no import screen, so the Retry a person would use for an
   import run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
-  too, and never under Done for you. It closes (`applied_by_person` or `superseded`) when the
-  person's role change or the owner's delegation or practice setting lands, or a newer draft for
-  the same record replaces it; migration 0206 lets only that close past the decided-step guard. A
-  "Not now" for it is not built yet.
+  too, and never under Done for you. It closes once: `applied_by_person` when the person's role
+  change or the owner's delegation or practice setting for its record lands, `superseded` when a
+  newer draft for the same record replaces it; migration 0206 lets only that close past the
+  decided-step guard. A "Not now" for it is not built yet.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: no inbound

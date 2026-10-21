@@ -2402,13 +2402,23 @@ test("a delegation proposal closes when the owner sets the pair, or when a newer
     [applied.reason_codes, applied.needs_ask, applied.readback.reference, applied.readback.matched, applied.applied, applied.approved_by],
     [["applied_by_person"], null, "delegation/lead_concierge:note.add", true, { field: "delegation_setting", value: "shadow", by: "appu_test_owner" }, null],
   );
-  // The owner sets something else than a proposal asked for: it closes superseded, naming what is set.
+  // The owner sets something else than a proposal asked for: still the owner's own change, so
+  // applied, naming what is set now.
   s.tick(1_000);
   const third = await propose("shadow", "Synthetic: practise again.");
   s.tick(1_000);
   assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null }), "owner", "close-asks")).status, 200);
   const other = step(third);
-  assert.deepEqual([other.reason_codes, other.readback.reference, other.applied], [["superseded"], "delegation/lead_concierge:note.add", { field: "delegation_setting", value: "asks_first", by: "appu_test_owner" }]);
+  assert.deepEqual(
+    [other.reason_codes, other.readback.reference, other.applied],
+    [["applied_by_person"], "delegation/lead_concierge:note.add", { field: "delegation_setting", value: "asks_first", by: "appu_test_owner" }],
+  );
+  // Turning practice off closes it too, naming the setting back in force.
+  const fourth = await propose("shadow", "Synthetic: practise once more.");
+  s.tick(1_000);
+  const off = await s.app("/specialists/lead_concierge/shadow", shadowBody({ shadow: false, expected_revision: s.scalar("SELECT MAX(revision) r FROM agent_shadow_settings WHERE action_id = 'note.add'").r }), "owner", "close-shadow-off");
+  assert.equal(off.status, 200, JSON.stringify(off.body));
+  assert.deepEqual([step(fourth).reason_codes, step(fourth).applied?.value], [["applied_by_person"], "asks_first"]);
   // Another pair's proposal is untouched.
   const elsewhere = (await s.propose(await face(), "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "lead.qualify", proposed: "shadow", ceiling: null, reason: "Synthetic: another action." })).body;
   if (elsewhere.decision === "drafted") assert.equal(step(elsewhere.step_id).needs_ask, "apply_in_own_screen");
@@ -2418,16 +2428,70 @@ test("a delegation proposal closes when the owner sets the pair, or when a newer
   const once = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
   const again = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
   assert.deepEqual([again, step(once).needs_ask], [once, "apply_in_own_screen"]);
-  // Only that close moves a decided step: any other change to it, or a close that also touches its
-  // permit or carries another code, is refused as before (migration 0206).
-  const close = (set: string) => () => s.db.raw.prepare(`UPDATE agent_run_steps SET ${set} WHERE step_id = ?`).run(once);
-  for (const set of [
-    "permit_json = json_set(permit_json, '$.approved_by', 'appu_test_owner'), needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded'))",
-    "needs_ask = NULL, reason_code = 'declined', policy_json = json_set(policy_json, '$.reason_codes', json_array('declined'))",
-    "needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('applied_by_person'))",
-    "outcome = 'failed', needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded'))",
-    "reason_code = 'superseded'",
+});
+
+test("migration 0206: the decided-step guard is 0200's plus one exception that only closes an open draft, once", async () => {
+  const s = setup(true);
+  const face = await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+  const draft = (await s.propose(face, "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "note.add", proposed: "shadow", ceiling: null, reason: "Synthetic: guard." })).body;
+  assert.equal(draft.decision, "drafted", JSON.stringify(draft));
+
+  // The trigger body is 0200's with exactly the one exception clause added.
+  const live = s.db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_decided_agent_step_update'").get() as { sql: string };
+  const migration = (file: string) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+  const base = /CREATE TRIGGER IF NOT EXISTS prevent_decided_agent_step_update\n[\s\S]*?\nEND/.exec(migration("0200_agent_coordination.sql"))![0];
+  const exception = /\n {2}AND NOT \([\s\S]*?\n {2}\)/.exec(migration("0206_agent_draft_closing.sql"))![0];
+  assert.equal(live.sql.split(exception).length, 2, "the exception appears once");
+  assert.equal(live.sql.replace(exception, ""), base.replace("IF NOT EXISTS ", ""));
+
+  // The close: the ask clears, one fixed reason code, version +1, decision time from D1's clock.
+  const CLOSE =
+    "needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded')), " +
+    "readback_json = '{}', decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), version = version + 1";
+  const update = (set: string) => () => s.db.raw.prepare(`UPDATE agent_run_steps SET ${set} WHERE step_id = ?`).run(draft.step_id);
+  // Each frozen field, moved alone alongside an otherwise valid close, is refused (the last
+  // assignment to a column wins in SQLite).
+  for (const change of [
+    "permit_json = json_set(permit_json, '$.approved_by', 'appu_test_owner')",
+    "tool_json = '{}'",
+    "undo_json = json_set(undo_json, '$.synthetic', 1)",
+    "needs_reviewer_role = 'production'",
+    "needs_person_id = 'appu_synthetic'",
+    "policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded'), '$.result', 'synthetic')",
+    "outcome = 'failed'",
+    "args_json = json_set(args_json, '$.proposed', 'off')",
+    "args_sha256 = 'synthetic'",
+    "sources_json = '[]'",
+    "step_key = 'synthetic'",
+    "step_seq = step_seq + 100",
+    "action_id = 'access.prepare_change'",
+    "specialist_id = 'estimator'",
+    "autonomy = 'A2'",
+    "tenant_id = 'tenant_synthetic'",
+    "created_at = '2000-01-01T00:00:00.000Z'",
+    "do_it_myself_json = json_set(do_it_myself_json, '$.synthetic', 1)",
+    "decided_at = '2000-01-01T00:00:00.000Z'",
+    "version = version",
+    "version = version + 2",
+    "reason_code = 'declined', policy_json = json_set(policy_json, '$.reason_codes', json_array('declined'))",
+    "policy_json = json_set(policy_json, '$.reason_codes', json_array('applied_by_person'))",
+    "policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded', 'superseded'))",
+    "needs_ask = 'apply_in_own_screen'",
   ])
-    assert.throws(close(set), /agent_step_decided/, set);
-  assert.throws(() => s.db.raw.prepare("UPDATE agent_run_steps SET readback_json = '{}' WHERE step_id = ?").run(first), /agent_step_decided/, "a closed draft is final");
+    assert.throws(update(`${CLOSE}, ${change}`), /agent_step_decided/, change);
+  const before = s.scalar("SELECT version FROM agent_run_steps WHERE step_id = ?", draft.step_id).version as number;
+  assert.equal(update(CLOSE)().changes, 1);
+  const closed = s.scalar("SELECT version, decided_at FROM agent_run_steps WHERE step_id = ?", draft.step_id);
+  assert.equal(closed.version, before + 1);
+  assert.ok(Math.abs(Date.parse(closed.decided_at as string) - Date.now()) < 60_000, "decided_at is D1's clock");
+  // Closed once: it never closes again or reopens.
+  assert.throws(update(CLOSE), /agent_step_decided/, "a closed draft does not close again");
+  assert.throws(update("needs_ask = 'apply_in_own_screen'"), /agent_step_decided/, "a closed draft does not reopen");
+  assert.throws(update("readback_json = '{}'"), /agent_step_decided/, "a closed draft is final");
+  // Only the closing path in agents/drafts.ts writes this transition, with its reason codes fixed.
+  const src = new URL("../src/", import.meta.url);
+  const writers = (readdirSync(src, { recursive: true }) as string[])
+    .filter((file) => file.endsWith(".ts") && /needs_ask\s*=\s*NULL|applied_by_person/i.test(readFileSync(new URL(file, src), "utf8")))
+    .sort();
+  assert.deepEqual(writers, ["agents/contract-catalog.ts", "agents/drafts.ts"]);
 });

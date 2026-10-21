@@ -20,7 +20,7 @@ export async function pairDevice(
   const deviceProof = (dependencies.createDeviceProof ?? createDeviceSecret)();
   const session = await (dependencies.consume ?? consumeDevicePairing)(token, deviceProof);
   if (session.user.role !== "field") {
-    throw new Error("The pairing response did not create a Field Companion session.");
+    throw new Error("This phone could not finish pairing. Ask the office for a new code.");
   }
   await (dependencies.storeDeviceProof ?? storeDeviceSecret)(deviceProof);
 }

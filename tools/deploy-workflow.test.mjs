@@ -484,22 +484,52 @@ function validateProductionWorkflow(workflow) {
   const production = section(workflow, "production");
 
   // --- the trigger -------------------------------------------------------
-  // A release tag, or an explicit dispatch of one. Never a branch push (that is
-  // qa's job and would promote every commit) and never a workflow_run (which
-  // would promote whatever Deploy happened to finish).
-  assert.match(
-    workflow,
-    /^on:\n\s+push:\n\s+tags: \["v\*"\]\n\s+workflow_dispatch:/m,
-  );
+  // Only a dispatch, which iron-wrap-infra's promote-production.yml sends after a
+  // promotion PR merges. Never a tag push (a tag alone would bypass the
+  // declaration), never a branch push (that is qa's job and would promote every
+  // commit) and never a workflow_run (which would promote whatever Deploy
+  // happened to finish).
+  assert.match(workflow, /^on:\n {2}workflow_dispatch:\n {4}inputs:\n/m);
+  assert.doesNotMatch(workflow, /^ {2}push:/m);
+  assert.doesNotMatch(workflow, /^ {2,4}tags:/m);
   assert.doesNotMatch(workflow, /^ {2,4}branches:/m);
   assert.doesNotMatch(workflow, /workflow_run/);
-  // The dispatch path still has to name a tag, and the job still has to check it.
+  // The dispatch has to name a tag and the declaration commit, and the job still
+  // has to check the tag.
   assert.match(workflow, /inputs:\n\s+tag:\n(?:\s+[a-z-]+:.*\n)*\s+required: true/);
+  assert.match(workflow, /\n {6}declaration_sha:\n(?: {8}[a-z-]+:.*\n)* {8}required: true/);
   assert.match(production, /github\.ref_type.*!= "tag"|REF_TYPE" != "tag"/);
   assert.match(production, /release_production_ref_not_a_tag/);
   assert.match(production, /\^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$/);
   assert.match(production, /release_production_tag_format_invalid/);
-  assert.match(production, /release_production_dispatch_tag_mismatch/);
+  assert.match(production, /if \[\[ "\$DISPATCH_TAG" != "\$REF_NAME" \]\]; then\n\s+echo "release_production_dispatch_tag_mismatch"/);
+
+  // --- the declaration ---------------------------------------------------
+  // The gate is the merged promotion PR in iron-wrap-infra. Before anything is
+  // checked out, the declaration at declaration_sha and the one on main must
+  // both name this tag, and declaration_sha must be an ancestor of main.
+  assert.match(workflow, /RELEASE_DECLARATION_REPOSITORY: Iron-Wrap\/iron-wrap-infra\n/);
+  assert.match(workflow, /RELEASE_DECLARATION_PATH: environments\/production\/stand\.yml\n/);
+  const declaration = production.slice(
+    production.indexOf("- name: Require the production declaration to name this tag"),
+    production.indexOf("- uses: actions/checkout@"),
+  );
+  assert.ok(declaration.length > 0, "the declaration check runs before the checkout");
+  assert.match(declaration, /GH_TOKEN: \$\{\{ secrets\.RELEASE_DECLARATION_READ_TOKEN \}\}\n/);
+  assert.match(declaration, /DECLARATION_SHA: \$\{\{ inputs\.declaration_sha \}\}\n/);
+  assert.match(declaration, /release_production_declaration_mismatch:/);
+  assert.match(declaration, /test -n "\$GH_TOKEN" \|\| mismatch token_missing/);
+  assert.match(declaration, /\[\[ "\$DECLARATION_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\] \|\| mismatch sha_invalid/);
+  assert.match(declaration, /\.components\["ironwrap-os"\]\.policy[\s\S]*== "pin"/);
+  assert.match(declaration, /declared="\$\(declared_ref "\$DECLARATION_SHA"\)"\n\s+\[\[ "\$declared" == "\$REF_NAME" \]\] \|\| mismatch/);
+  assert.match(declaration, /compare\/\$DECLARATION_SHA\.\.\.main/);
+  assert.match(declaration, /\[\[ "\$status" == "ahead" \|\| "\$status" == "identical" \]\] \|\| mismatch/);
+  assert.match(declaration, /current="\$\(declared_ref main\)"\n\s+\[\[ "\$current" == "\$REF_NAME" \]\] \|\| mismatch "superseded/);
+  ordered(production, [
+    "- name: Require a release tag",
+    "- name: Require the production declaration to name this tag",
+    "- uses: actions/checkout@",
+  ]);
 
   // --- the boundary ------------------------------------------------------
   assert.match(production, /environment: production\n/);
@@ -748,20 +778,26 @@ test("the production release promotes qa-proven bytes from a tag, behind the pre
   validateProductionWorkflow(await readFile(productionWorkflowUrl, "utf8"));
 });
 
-test("production workflow validation rejects a trigger that is not a release tag", async () => {
+test("production workflow validation rejects a trigger that is not a declared dispatch", async () => {
   const workflow = await readFile(productionWorkflowUrl, "utf8");
+  // A tag push would deploy without the declaration.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace("on:\n", 'on:\n  push:\n    tags: ["v*"]\n'),
+    ),
+  );
   // A branch push would promote every commit to production.
   assert.throws(() =>
     validateProductionWorkflow(
-      workflow.replace('  push:\n    tags: ["v*"]', "  push:\n    branches: [main]"),
+      workflow.replace("on:\n", "on:\n  push:\n    branches: [main]\n"),
     ),
   );
   // A workflow_run trigger would promote whatever Deploy last finished.
   assert.throws(() =>
     validateProductionWorkflow(
       workflow.replace(
-        '  push:\n    tags: ["v*"]',
-        "  workflow_run:\n    workflows: [Deploy]\n    types: [completed]",
+        "on:\n",
+        "on:\n  workflow_run:\n    workflows: [Deploy]\n    types: [completed]\n",
       ),
     ),
   );
@@ -779,6 +815,67 @@ test("production workflow validation rejects a trigger that is not a release tag
   assert.throws(() =>
     validateProductionWorkflow(
       workflow.replace("release_production_dispatch_tag_mismatch", "release_production_dispatch_trusted"),
+    ),
+  );
+});
+
+test("production workflow validation rejects a relaxed declaration check", async () => {
+  const workflow = await readFile(productionWorkflowUrl, "utf8");
+  // Without the input, nothing ties the run to a merged promotion PR.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace(/\n {6}declaration_sha:\n(?: {8}.*\n)+/, "\n"),
+    ),
+  );
+  // The step removed entirely.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace(
+        "- name: Require the production declaration to name this tag",
+        "- name: Note the production declaration",
+      ),
+    ),
+  );
+  // A declaration that names another tag accepted.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace('[[ "$declared" == "$REF_NAME" ]] || mismatch', 'true || mismatch'),
+    ),
+  );
+  // A declaration commit from an unmerged branch accepted.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace(
+        '[[ "$status" == "ahead" || "$status" == "identical" ]] || mismatch',
+        '[[ -n "$status" ]] || mismatch',
+      ),
+    ),
+  );
+  // An old declaration replayed after a newer promotion or a revert.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace('[[ "$current" == "$REF_NAME" ]] || mismatch "superseded', 'true || mismatch "superseded'),
+    ),
+  );
+  // The read token swapped for the job token, which cannot read iron-wrap-infra.
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow.replace(
+        "GH_TOKEN: ${{ secrets.RELEASE_DECLARATION_READ_TOKEN }}",
+        "GH_TOKEN: ${{ github.token }}",
+      ),
+    ),
+  );
+  // The check moved after the checkout of the candidate tree.
+  const step = workflow.slice(
+    workflow.indexOf("      # The production gate is a merged promotion PR"),
+    workflow.indexOf("      - uses: actions/checkout@"),
+  );
+  assert.throws(() =>
+    validateProductionWorkflow(
+      workflow
+        .replace(step, "")
+        .replace("      - name: Load generation N policy enforcement", `${step}      - name: Load generation N policy enforcement`),
     ),
   );
 });

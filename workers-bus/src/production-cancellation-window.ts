@@ -1,19 +1,23 @@
-// production-cancellation-window.ts - the OD-01 cancellation window (migration 0160): when it ends,
-// what it holds, and a person's record of when the customer received their signed copy.
+// production-cancellation-window.ts - the OD-01 cancellation window (migration 0160): when it starts
+// and ends, what it holds, and a person's record of when the customer received their signed copy.
 //
 // The customer may cancel until 10 days after they receive their copy of the signed contract.
 // Inside that window nothing is ordered from a supplier, no shop work starts and no start is
-// confirmed. Nothing in D1 records that receipt (the portal's confirm step keeps its receipt in R2,
-// and no email or effect delivers a signed copy), so an owner or ops person records it here. The
-// register scopes the window to private dwellings, but D1 cannot tell a private dwelling from a
-// commercial job, so it applies to every contract. The 15-day refund intent belongs to the
-// cancellation flow (P13), not here.
+// confirmed. The register scopes the window to private dwellings, but D1 cannot tell a private
+// dwelling from a commercial job, so it applies to every contract. Pending counsel, through the
+// owner. The 15-day refund intent belongs to the cancellation flow (P13), not here.
 //
+// The window starts from one of two records:
+//   * the portal showed the signed copy at signing (owner's ruling: that counts as received). The
+//     confirm route appends `contract_signed_copy_events` in the acceptance's own batch, only for a
+//     client that renders the copy on that screen (customer-contract-acceptance.ts,
+//     `signedCopyShownStatement` below);
+//   * otherwise an owner or ops person records when the customer received it (the route below).
 // The window is a read-only System state next to the gates, not a gate: it has no ledger and no
 // waiver, so nothing a person waives lifts it. Its state is read with D1's own clock:
-//   * `unknown`, with `unknown_reason`: `signed_copy_time_missing` when nothing is recorded, or
-//     `signed_copy_before_contract` when every record is from before the job's latest contract
-//     signature (a later contract needs its own copy's time). The UI offers the one fix, "Add when
+//   * `unknown`, with `unknown_reason`: `signed_copy_time_missing` when there is no record of
+//     either kind, or `signed_copy_before_contract` when every record is from before the job's
+//     latest contract (a later contract needs its own copy). The UI offers the one fix, "Add when
 //     {name} received the signed copy";
 //   * `open` until `ends_at`;
 //   * `ended` at `ends_at`.
@@ -27,6 +31,11 @@
 // Inside the window a person still assesses hazards, clears Safety and Access, asks for or decides
 // a waiver (a Materials waiver lifts no hold) and drafts the plan.
 //
+// Every window ends at the later of its start + 240 hours and the same local clock time 10
+// calendar days later in the business time zone, and never before the job's previous end, so a DST
+// change never ends the hold early in local time. D1 holds every end to [start + 240 hours,
+// start + 241 hours].
+//
 //   POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy
 //     `{received_at, reason, evidence_ref}`: when the customer received their copy of the signed
 //     contract. Owner or ops, people only: the CSRF token, then the person's own cookie session.
@@ -38,17 +47,16 @@
 //         `contract_signed_at` (frame 21). The signature time itself is allowed;
 //       * 409 `cancellation_window_receipt_in_future`, with `received_at` and the server's `now`
 //         (frame 22);
-//       * 409 `cancellation_window_receipt_earlier_than_recorded`, with `received_at` and
-//         `recorded_received_at` (frame 23). Nothing is saved, and the same time again is a no-op.
-//     The window ends at the later of received + 240 hours and the same local clock time 10
-//     calendar days later in the business time zone, never before the job's previous end, so a DST
-//     change never ends the hold early in local time. D1 stamps the record with its own clock and
-//     writes its audit row in the same statement.
+//       * 409 `cancellation_window_receipt_earlier_than_recorded`, with `received_at`,
+//         `recorded_received_at` and its `recorded_source` (frame 23): earlier than a record or than
+//         the copy the portal showed. Nothing is saved, and the same time again is a no-op.
+//     D1 stamps the record with its own clock and writes its audit row in the same statement.
 //   GET /api/v1/production/jobs/{job}/gates
 //     Carries `cancellation_window` next to the gates.
 //   GET /api/v1/production/cancellation-window/signed-copy-missing
-//     Owner and ops: the tenant's open jobs whose window is unknown, and their count. A job leaves
-//     the list once its time is recorded.
+//     Owner and ops: the tenant's open signed jobs whose window is unknown, and their count. Signed
+//     means a contract in D1, or a Deposit gate that has cleared for a contract signed outside D1.
+//     A job leaves the list once its copy is shown or its time is recorded.
 
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -63,6 +71,7 @@ export const CANCELLATION_WINDOW_HOLDS = ["firm_start", "materials_attestation",
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
+const WINDOW_MS = CANCELLATION_WINDOW_DAYS * DAY_MS;
 /** D1's clock, in the form `Date.toISOString` writes. */
 const D1_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const MAX_BODY_BYTES = 4 * 1024;
@@ -85,16 +94,30 @@ export interface CancellationWindowState {
   state: "unknown" | "open" | "ended";
   waivable: false;
   unknown_reason: CancellationWindowUnknownReason | null;
+  /** The latest start on record, and which record it is. */
+  starts_at: string | null;
+  started_from: "signed_copy_shown" | "manual_record" | null;
   ends_at: string | null;
   /** The job's latest contract, when D1 holds one. */
   contract: { acceptance_binding_id: string; signed_at: string } | null;
-  /** The latest record of when the customer received their signed copy. */
+  /** The latest copy the portal showed at signing. */
+  signed_copy_shown: SignedCopyShown | null;
+  /** The latest person's record of when the customer received their signed copy. */
   signed_copy_received: SignedCopyReceipt | null;
   holds: readonly string[];
   /** The business time zone, to read every time here on the business clock. */
   time_zone: string;
   /** D1's clock when this was read. */
   as_of: string;
+}
+
+export interface SignedCopyShown {
+  id: string;
+  acceptance_binding_id: string;
+  contract_signed_at: string;
+  shown_at: string;
+  window_ends_at: string;
+  time_zone: string;
 }
 
 export interface SignedCopyReceipt {
@@ -173,11 +196,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // ------------------------------------------------------------------------------- the derived state
 
 /**
- * The window's two predicates, exactly as 0160's holds read them, over `job`. Unknown: no record at
- * or after the job's latest contract signature. Open: a record whose end is after D1's now; ends
- * never move earlier, so that is the latest record's end.
+ * The window's two predicates over `job`, exactly as 0160's holds read them. Unknown: neither a
+ * copy shown for the job's latest contract nor a record at or after its signature. Open: an end on
+ * the job after D1's now; ends never move earlier, so that is the latest end.
  */
-const UNKNOWN_SQL = `NOT EXISTS (
+const UNKNOWN_SQL = `(NOT EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = job.tenant_id
+       AND shown.roof_job_id = job.roof_job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+       )
+  )
+    AND NOT EXISTS (
     SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = job.tenant_id
@@ -189,14 +225,21 @@ const UNKNOWN_SQL = `NOT EXISTS (
             AND contract.roof_job_id = receipt.roof_job_id
             AND julianday(contract.accepted_at) > julianday(receipt.received_at)
        )
-  )`;
-const OPEN_SQL = `EXISTS (
+  ))`;
+const OPEN_SQL = `(EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = job.tenant_id
+       AND shown.roof_job_id = job.roof_job_id
+       AND julianday(shown.window_ends_at) > julianday('now')
+  )
+     OR EXISTS (
     SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = job.tenant_id
        AND receipt.roof_job_id = job.roof_job_id
        AND julianday(receipt.window_ends_at) > julianday('now')
-  )`;
+  ))`;
 /** The job's latest contract as A2 reads it: the latest signature, then the binding id. */
 const LATEST_CONTRACT_SQL = `NOT EXISTS (
       SELECT 1
@@ -207,6 +250,16 @@ const LATEST_CONTRACT_SQL = `NOT EXISTS (
               OR (later.accepted_at = contract.accepted_at
                   AND later.acceptance_binding_id > contract.acceptance_binding_id))
     )`;
+/** A signed job: a contract in D1, or a Deposit gate cleared for a contract signed outside D1. */
+const SIGNED_SQL = `(EXISTS (
+      SELECT 1 FROM commercial_acceptance_bindings contract
+       WHERE contract.tenant_id = job.tenant_id AND contract.roof_job_id = job.roof_job_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM operating_production_gates deposit
+       WHERE deposit.tenant_id = job.tenant_id AND deposit.roof_job_id = job.roof_job_id
+         AND deposit.gate = 'Deposit' AND deposit.state != 'blocked'
+    ))`;
 
 interface WindowFacts {
   now: string;
@@ -214,9 +267,16 @@ interface WindowFacts {
   open: number;
   binding_id: string | null;
   contract_signed_at: string | null;
+  ends_at: string | null;
+  shown_id: string | null;
+  shown_binding_id: string | null;
+  shown_contract_signed_at: string | null;
+  shown_at: string | null;
+  shown_ends_at: string | null;
+  shown_time_zone: string | null;
   receipt_id: string | null;
   received_at: string | null;
-  window_ends_at: string | null;
+  received_ends_at: string | null;
   receipt_time_zone: string | null;
   receipt_binding_id: string | null;
   receipt_contract_signed_at: string | null;
@@ -239,7 +299,18 @@ async function windowFacts(
             ${OPEN_SQL} AS open,
             contract.acceptance_binding_id AS binding_id,
             contract.accepted_at AS contract_signed_at,
-            latest.receipt_id, latest.received_at, latest.window_ends_at,
+            max(
+              COALESCE((SELECT MAX(window_ends_at) FROM contract_signed_copy_events every
+                         WHERE every.tenant_id = job.tenant_id
+                           AND every.roof_job_id = job.roof_job_id), ''),
+              COALESCE((SELECT MAX(window_ends_at) FROM production_cancellation_window_receipts every
+                         WHERE every.tenant_id = job.tenant_id
+                           AND every.roof_job_id = job.roof_job_id), '')
+            ) AS ends_at,
+            shown.event_id AS shown_id, shown.acceptance_binding_id AS shown_binding_id,
+            shown.contract_signed_at AS shown_contract_signed_at, shown.shown_at,
+            shown.window_ends_at AS shown_ends_at, shown.time_zone AS shown_time_zone,
+            latest.receipt_id, latest.received_at, latest.window_ends_at AS received_ends_at,
             latest.time_zone AS receipt_time_zone,
             latest.acceptance_binding_id AS receipt_binding_id,
             latest.contract_signed_at AS receipt_contract_signed_at,
@@ -250,6 +321,17 @@ async function windowFacts(
          ON contract.tenant_id = job.tenant_id
         AND contract.roof_job_id = job.roof_job_id
         AND ${LATEST_CONTRACT_SQL}
+       LEFT JOIN contract_signed_copy_events shown
+         ON shown.tenant_id = job.tenant_id
+        AND shown.roof_job_id = job.roof_job_id
+        AND NOT EXISTS (
+          SELECT 1
+            FROM contract_signed_copy_events newer
+           WHERE newer.tenant_id = shown.tenant_id
+             AND newer.roof_job_id = shown.roof_job_id
+             AND (newer.shown_at > shown.shown_at
+                  OR (newer.shown_at = shown.shown_at AND newer.event_id > shown.event_id))
+        )
        LEFT JOIN production_cancellation_window_receipts latest
          ON latest.tenant_id = job.tenant_id
         AND latest.roof_job_id = job.roof_job_id
@@ -267,12 +349,24 @@ async function windowFacts(
   ).bind(tenantId, roofJobId).first<WindowFacts>();
 }
 
+function shownOf(facts: WindowFacts): SignedCopyShown | null {
+  if (!facts.shown_id) return null;
+  return {
+    id: facts.shown_id,
+    acceptance_binding_id: facts.shown_binding_id!,
+    contract_signed_at: facts.shown_contract_signed_at!,
+    shown_at: facts.shown_at!,
+    window_ends_at: facts.shown_ends_at!,
+    time_zone: facts.shown_time_zone!,
+  };
+}
+
 function receiptOf(facts: WindowFacts): SignedCopyReceipt | null {
   if (!facts.receipt_id) return null;
   return {
     id: facts.receipt_id,
     received_at: facts.received_at!,
-    window_ends_at: facts.window_ends_at!,
+    window_ends_at: facts.received_ends_at!,
     time_zone: facts.receipt_time_zone!,
     contract_signed_at: facts.receipt_contract_signed_at,
     acceptance_binding_id: facts.receipt_binding_id,
@@ -284,6 +378,17 @@ function receiptOf(facts: WindowFacts): SignedCopyReceipt | null {
   };
 }
 
+/** The latest start on record and which record it is: a later time wins, as later only requires. */
+function latestStart(facts: WindowFacts): {
+  at: string;
+  from: "signed_copy_shown" | "manual_record";
+} | null {
+  const shown = facts.shown_at ? Date.parse(facts.shown_at) : Number.NEGATIVE_INFINITY;
+  const received = facts.received_at ? Date.parse(facts.received_at) : Number.NEGATIVE_INFINITY;
+  if (facts.received_at && received >= shown) return { at: facts.received_at, from: "manual_record" };
+  return facts.shown_at ? { at: facts.shown_at, from: "signed_copy_shown" } : null;
+}
+
 function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): CancellationWindowState {
   if (!facts) {
     return {
@@ -291,15 +396,18 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
       state: "unknown",
       waivable: false,
       unknown_reason: "signed_copy_time_missing",
+      starts_at: null,
+      started_from: null,
       ends_at: null,
       contract: null,
+      signed_copy_shown: null,
       signed_copy_received: null,
       holds: CANCELLATION_WINDOW_HOLDS,
       time_zone: timeZone,
       as_of: asOf,
     };
   }
-  const receipt = receiptOf(facts);
+  const start = latestStart(facts);
   const state = Number(facts.unknown) === 1 ? "unknown" : Number(facts.open) === 1 ? "open" : "ended";
   return {
     kind: "system_state",
@@ -307,12 +415,15 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
     waivable: false,
     unknown_reason: state !== "unknown"
       ? null
-      : receipt ? "signed_copy_before_contract" : "signed_copy_time_missing",
-    ends_at: state === "unknown" ? null : receipt!.window_ends_at,
+      : start ? "signed_copy_before_contract" : "signed_copy_time_missing",
+    starts_at: start?.at ?? null,
+    started_from: start?.from ?? null,
+    ends_at: state === "unknown" ? null : facts.ends_at,
     contract: facts.binding_id
       ? { acceptance_binding_id: facts.binding_id, signed_at: facts.contract_signed_at! }
       : null,
-    signed_copy_received: receipt,
+    signed_copy_shown: shownOf(facts),
+    signed_copy_received: receiptOf(facts),
     holds: state === "ended" ? [] : CANCELLATION_WINDOW_HOLDS,
     time_zone: timeZone,
     as_of: facts.now,
@@ -428,23 +539,69 @@ function instantOfWallClock(wall: number, timeZone: string): number {
 }
 
 /**
- * When the window ends: the later of `receivedAt` + 240 hours and the same local clock time 10
- * calendar days later in `timeZone`, and never earlier than the job's previous end. D1 holds the
- * result to [received + 240 hours, received + 241 hours].
+ * When a window that starts at `startsAt` ends: the later of the start + 240 hours and the same
+ * local clock time 10 calendar days later in `timeZone`, and never earlier than the job's previous
+ * end. D1 holds the result to [start + 240 hours, start + 241 hours].
  */
 export function cancellationWindowEndsAt(
-  receivedAt: string,
+  startsAt: string,
   timeZone: string,
   previousEndsAt: string | null = null,
 ): string {
-  const received = Date.parse(receivedAt);
-  const elapsed = received + CANCELLATION_WINDOW_DAYS * DAY_MS;
-  const local = instantOfWallClock(
-    wallClock(received, timeZone) + CANCELLATION_WINDOW_DAYS * DAY_MS,
-    timeZone,
-  );
+  const start = Date.parse(startsAt);
+  const local = instantOfWallClock(wallClock(start, timeZone) + WINDOW_MS, timeZone);
   const previous = previousEndsAt ? Date.parse(previousEndsAt) : Number.NEGATIVE_INFINITY;
-  return new Date(Math.max(elapsed, local, previous)).toISOString();
+  return new Date(Math.max(start + WINDOW_MS, local, previous)).toISOString();
+}
+
+/**
+ * The statement that appends the "signed copy shown" event for the acceptance binding the same D1
+ * batch writes just before it, and nothing when that batch wrote no binding. `shown_at` is D1's
+ * clock; so is the end, plus the DST hour read here with Intl for a window starting now, and never
+ * before the job's previous end. The confirm route adds it only for a client that renders the copy.
+ */
+export async function signedCopyShownStatement(
+  env: AppEnv,
+  input: { tenantId: string; acceptanceBindingId: string },
+): Promise<D1PreparedStatement> {
+  const zone = await businessTimeZone(env, input.tenantId);
+  const now = new Date();
+  const dstMinutes = Math.round(
+    (Date.parse(cancellationWindowEndsAt(now.toISOString(), zone.timeZone)) - now.getTime() - WINDOW_MS) /
+      60_000,
+  );
+  const eventId = `scs_${(await sha256Hex(`${input.tenantId}:${input.acceptanceBindingId}`)).slice(0, 40)}`;
+  return env.DB.prepare(
+    `INSERT INTO contract_signed_copy_events (
+       event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at,
+       shown_at, window_ends_at, time_zone
+     )
+     SELECT ?, binding.tenant_id, binding.acceptance_binding_id, binding.roof_job_id,
+            binding.accepted_at, ${D1_NOW},
+            max(
+              strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+240 hours', ?),
+              COALESCE((SELECT MAX(shown.window_ends_at) FROM contract_signed_copy_events shown
+                         WHERE shown.tenant_id = binding.tenant_id
+                           AND shown.roof_job_id = binding.roof_job_id), ''),
+              COALESCE((SELECT MAX(receipt.window_ends_at) FROM production_cancellation_window_receipts receipt
+                         WHERE receipt.tenant_id = binding.tenant_id
+                           AND receipt.roof_job_id = binding.roof_job_id), '')
+            ),
+            ?
+       FROM commercial_acceptance_bindings binding
+      WHERE binding.tenant_id = ? AND binding.acceptance_binding_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM contract_signed_copy_events shown
+           WHERE shown.tenant_id = binding.tenant_id
+             AND shown.acceptance_binding_id = binding.acceptance_binding_id
+        )`,
+  ).bind(
+    eventId,
+    `+${Math.max(0, dstMinutes)} minutes`,
+    zone.timeZone,
+    input.tenantId,
+    input.acceptanceBindingId,
+  );
 }
 
 // ------------------------------------------------------------------------------- the record step
@@ -472,15 +629,11 @@ export function receivedAtInstant(value: unknown): string | null {
   if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > days || h > 23 || mi > 59 || s > 59) {
     return null;
   }
-  const offset = zulu ? 0 : (Number(offsetHour) * 60 + Number(offsetMinute)) * (sign === "-" ? -1 : 1);
   if (!zulu && (Number(offsetHour) > 23 || Number(offsetMinute) > 59)) return null;
+  const offset = zulu ? 0 : (Number(offsetHour) * 60 + Number(offsetMinute)) * (sign === "-" ? -1 : 1);
   const ms = Number((fraction ?? "0").padEnd(3, "0"));
   const instant = Date.UTC(y, mo - 1, d, h, mi, s, ms) - offset * 60_000;
   return Number.isFinite(instant) ? new Date(instant).toISOString() : null;
-}
-
-function singleLine(value: string): boolean {
-  return !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 /** The body, with each missing piece refused by its own code. */
@@ -501,7 +654,9 @@ function parseReceipt(body: unknown): ReceiptRequest {
   if (reasonMissing) throw refused("cancellation_window_receipt_reason_required", 400);
   if (evidenceMissing) throw refused("cancellation_window_receipt_evidence_required", 400);
   if (reason.length > MAX_REASON_LENGTH || /[\u0000\r]/.test(reason)) throw invalid;
-  if (evidenceRef.length > MAX_EVIDENCE_LENGTH || !singleLine(evidenceRef)) throw invalid;
+  if (evidenceRef.length > MAX_EVIDENCE_LENGTH || /[\u0000-\u001f\u007f]/.test(evidenceRef)) {
+    throw invalid;
+  }
   const receivedAt = receivedAtInstant(body.received_at);
   if (!receivedAt) throw refused("cancellation_window_receipt_time_invalid", 400);
   return { receivedAt, reason, evidenceRef };
@@ -604,13 +759,20 @@ export async function handleCancellationWindowSignedCopy(
         times({ contract_signed_at: facts.contract_signed_at }),
       );
     }
-    if (facts.received_at) {
-      const recorded = Date.parse(facts.received_at);
+    // Later only, against the latest start on record: a person's record or the copy the portal
+    // showed at signing.
+    const start = latestStart(facts);
+    if (start) {
+      const recorded = Date.parse(start.at);
       if (received < recorded) {
         throw refused(
           "cancellation_window_receipt_earlier_than_recorded",
           409,
-          times({ recorded_received_at: facts.received_at, window_ends_at: facts.window_ends_at! }),
+          times({
+            recorded_received_at: start.at,
+            recorded_source: start.from,
+            window_ends_at: facts.ends_at ?? "",
+          }),
         );
       }
       if (received === recorded) {
@@ -618,7 +780,7 @@ export async function handleCancellationWindowSignedCopy(
       }
     }
 
-    const windowEndsAt = cancellationWindowEndsAt(input.receivedAt, zone.timeZone, facts.window_ends_at);
+    const windowEndsAt = cancellationWindowEndsAt(input.receivedAt, zone.timeZone, facts.ends_at || null);
     try {
       // D1 re-checks every rule, stamps `recorded_at` with its own clock and writes the audit row.
       await env.DB.prepare(
@@ -667,14 +829,13 @@ interface MissingRow {
   address_line1: string | null;
   contract_signed_at: string | null;
   has_record: number;
-  from_old_system: number;
 }
 
 /**
  * `GET /api/v1/production/cancellation-window/signed-copy-missing`: owner and ops. The tenant's
- * open jobs whose window is unknown, oldest first, and how many there are. Each row says why: no
- * record at all, or only one from before a later contract; and whether D1 holds a contract for the
- * job and whether it came from the old system.
+ * open signed jobs whose window is unknown, oldest first, and how many there are. Signed means a
+ * contract in D1, or a Deposit gate that has cleared for a contract signed outside D1. Each row says
+ * why the window is unknown, and whether D1 holds a contract for the job.
  */
 export async function handleCancellationWindowSignedCopyMissing(
   env: AppEnv,
@@ -685,19 +846,21 @@ export async function handleCancellationWindowSignedCopyMissing(
   }
   try {
     const tenantId = auth.session.tenant_id;
-    const open = `job.tenant_id = ? AND job.job_status IN ('qualified', 'in_progress')
-        AND ${UNKNOWN_SQL}`;
+    const missing = `job.tenant_id = ? AND job.job_status IN ('qualified', 'in_progress')
+        AND ${SIGNED_SQL} AND ${UNKNOWN_SQL}`;
     const [count, rows] = await Promise.all([
-      env.DB.prepare(`SELECT COUNT(*) AS n FROM operating_roof_jobs job WHERE ${open}`)
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM operating_roof_jobs job WHERE ${missing}`)
         .bind(tenantId).first<{ n: number }>(),
       env.DB.prepare(
         `SELECT job.roof_job_id, job.job_number, customer.display_name AS customer_display_name,
                 property.address_line1, contract.accepted_at AS contract_signed_at,
-                EXISTS (
+                (EXISTS (
                   SELECT 1 FROM production_cancellation_window_receipts receipt
                    WHERE receipt.tenant_id = job.tenant_id AND receipt.roof_job_id = job.roof_job_id
-                ) AS has_record,
-                job.jobnimbus_job_id IS NOT NULL AS from_old_system
+                ) OR EXISTS (
+                  SELECT 1 FROM contract_signed_copy_events shown
+                   WHERE shown.tenant_id = job.tenant_id AND shown.roof_job_id = job.roof_job_id
+                )) AS has_record
            FROM operating_roof_jobs job
            JOIN operating_customers customer
              ON customer.tenant_id = job.tenant_id AND customer.customer_id = job.customer_id
@@ -707,7 +870,7 @@ export async function handleCancellationWindowSignedCopyMissing(
              ON contract.tenant_id = job.tenant_id
             AND contract.roof_job_id = job.roof_job_id
             AND ${LATEST_CONTRACT_SQL}
-          WHERE ${open}
+          WHERE ${missing}
           ORDER BY job.created_at ASC, job.roof_job_id ASC
           LIMIT ?`,
       ).bind(tenantId, MISSING_LIST_LIMIT + 1).all<MissingRow>(),
@@ -724,8 +887,8 @@ export async function handleCancellationWindowSignedCopyMissing(
         unknown_reason: Number(row.has_record) === 1
           ? "signed_copy_before_contract"
           : "signed_copy_time_missing",
+        contract_on_record: row.contract_signed_at !== null,
         contract_signed_at: row.contract_signed_at,
-        from_old_system: Number(row.from_old_system) === 1,
       })),
     });
   } catch {

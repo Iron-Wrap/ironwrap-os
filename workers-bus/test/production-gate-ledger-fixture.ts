@@ -11,6 +11,10 @@
 //   * `bindCrewInLedger`: Crew bound by policy the way a schedule binds it (0159), for a fixture
 //     that writes its assignment row with direct SQL; `recordOperatingJobAssignment` appends the
 //     same entries itself.
+//   * `endCancellationWindow`: an owner or ops person records that the customer received the
+//     signed copy eleven days ago (0160), so the OD-01 window that holds a schedule and the
+//     Materials attestation has ended. Attesting Materials, clearing the schedule's gates and
+//     binding Crew call it first for a job whose window has not ended.
 // A schedule must fall inside the Weather window, which D1 checks against its own clock, so the
 // window and the schedules inside it are relative to that clock (`fixtureWeatherWindow`,
 // `fixtureSchedule`); the helpers read it from the database itself, so a test that mocks `Date`
@@ -71,6 +75,109 @@ function currentGate(
     | undefined;
   if (!row) throw new Error(`fixture gate ${input.gate} is missing`);
   return row;
+}
+
+/**
+ * Whether the job's OD-01 cancellation window has ended (0160): a copy shown for the job's latest
+ * contract, or a record at or after its signature, and no end on the job after D1's now.
+ */
+export function cancellationWindowEnded(
+  db: DatabaseSync,
+  input: { tenantId: string; roofJobId: string },
+): boolean {
+  const row = db.prepare(
+    `SELECT (EXISTS (
+              SELECT 1 FROM contract_signed_copy_events shown
+               WHERE shown.tenant_id = :tenant AND shown.roof_job_id = :job
+                 AND NOT EXISTS (
+                   SELECT 1 FROM commercial_acceptance_bindings contract
+                    WHERE contract.tenant_id = shown.tenant_id
+                      AND contract.roof_job_id = shown.roof_job_id
+                      AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+                 )
+            ) OR EXISTS (
+              SELECT 1 FROM production_cancellation_window_receipts receipt
+               WHERE receipt.tenant_id = :tenant AND receipt.roof_job_id = :job
+                 AND NOT EXISTS (
+                   SELECT 1 FROM commercial_acceptance_bindings contract
+                    WHERE contract.tenant_id = receipt.tenant_id
+                      AND contract.roof_job_id = receipt.roof_job_id
+                      AND julianday(contract.accepted_at) > julianday(receipt.received_at)
+                 )
+            )) AS known,
+            (EXISTS (
+              SELECT 1 FROM contract_signed_copy_events shown
+               WHERE shown.tenant_id = :tenant AND shown.roof_job_id = :job
+                 AND julianday(shown.window_ends_at) > julianday('now')
+            ) OR EXISTS (
+              SELECT 1 FROM production_cancellation_window_receipts receipt
+               WHERE receipt.tenant_id = :tenant AND receipt.roof_job_id = :job
+                 AND julianday(receipt.window_ends_at) > julianday('now')
+            )) AS open`,
+  ).get({ tenant: input.tenantId, job: input.roofJobId }) as { known: number; open: number };
+  return Number(row.known) === 1 && Number(row.open) === 0;
+}
+
+/**
+ * Record, the way an owner or ops person does on the record route (0160), that the customer
+ * received their copy of the signed contract `daysAgo` days before D1's now (eleven by default), so
+ * the job's cancellation window has ended. The floor is the job's latest contract, as D1 checks it;
+ * a contract signed too recently for its window to have ended is a fixture error. The recorder is
+ * `recorderUserId`, or the tenant's first active owner or ops person who is not the QA seed owner.
+ * Nothing is recorded when the window has already ended.
+ */
+export function endCancellationWindow(
+  db: DatabaseSync,
+  input: { tenantId: string; roofJobId: string; recorderUserId?: string; daysAgo?: number },
+): string | null {
+  if (cancellationWindowEnded(db, input)) return null;
+  const receivedAt = new Date(d1Now(db) - (input.daysAgo ?? 11) * DAY_MS).toISOString();
+  const contract = db.prepare(
+    `SELECT acceptance_binding_id, accepted_at FROM commercial_acceptance_bindings
+      WHERE tenant_id = ? AND roof_job_id = ?
+      ORDER BY accepted_at DESC, acceptance_binding_id DESC LIMIT 1`,
+  ).get(input.tenantId, input.roofJobId) as
+    | { acceptance_binding_id: string; accepted_at: string }
+    | undefined;
+  if (contract && Date.parse(contract.accepted_at) > Date.parse(receivedAt)) {
+    throw new Error(
+      `fixture job ${input.roofJobId} was signed ${contract.accepted_at}: its cancellation window cannot have ended`,
+    );
+  }
+  const recorder = db.prepare(
+    `SELECT user_id, access_role FROM app_users
+      WHERE tenant_id = ? AND active = 1 AND access_role IN ('owner', 'ops')
+        AND created_by != 'system:owner_directed_qa_seed_grant'
+        AND (? IS NULL OR user_id = ?)
+      ORDER BY access_role = 'owner' DESC, user_id LIMIT 1`,
+  ).get(input.tenantId, input.recorderUserId ?? null, input.recorderUserId ?? null) as
+    | { user_id: string; access_role: string }
+    | undefined;
+  if (!recorder) throw new Error(`fixture tenant ${input.tenantId} has no owner or ops person to record the signed copy`);
+  const receiptId = `pcw_${randomBytes(20).toString("hex")}`;
+  db.prepare(
+    `INSERT INTO production_cancellation_window_receipts (
+       receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+       acceptance_binding_id, contract_signed_at, reason, evidence_ref,
+       recorded_by_user_id, recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+     ) VALUES (?, ?, ?, ?, ?, 'America/Edmonton', ?, ?, ?, ?, ?, ?,
+               strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+  ).run(
+    receiptId,
+    input.tenantId,
+    input.roofJobId,
+    receivedAt,
+    new Date(Date.parse(receivedAt) + 10 * DAY_MS).toISOString(),
+    contract?.acceptance_binding_id ?? null,
+    contract?.accepted_at ?? null,
+    "Synthetic fixture: the customer received the signed copy.",
+    "fixture://signed-copy",
+    recorder.user_id,
+    recorder.access_role,
+    hex64(),
+    hex64(),
+  );
+  return receiptId;
 }
 
 function append(db: DatabaseSync, row: Record<string, unknown>): string {
@@ -188,6 +295,8 @@ export function attestGateInLedger(
       hazard_assessment_ref: "FLHA-FIXTURE-0001",
       permit: { answer: "not_needed" },
     };
+  // Materials is held while the cancellation window is unknown or open (0160).
+  if (input.gate === "Materials") endCancellationWindow(db, input);
   const gate = currentGate(db, input);
   return append(db, {
     tenant_id: input.tenantId,
@@ -346,6 +455,8 @@ export function clearScheduleGatesInLedger(
 ): { start: string; end: string } {
   const window = input.window ?? fixtureWeatherWindow(d1Now(db));
   const job = { tenantId: input.tenantId, roofJobId: input.roofJobId };
+  // A schedule and the Materials attestation wait for the cancellation window to end (0160).
+  endCancellationWindow(db, job);
   waiveGateInLedger(db, {
     ...job,
     gate: "Deposit",
@@ -403,6 +514,8 @@ export function bindCrewInLedger(
       created_at: at,
       ...row,
     });
+  // The assignment this Crew entry belongs to waits for the cancellation window to end (0160).
+  endCancellationWindow(db, input);
   const crew = currentGate(db, { ...input, gate: "Crew" });
   if (crew.state !== "blocked") {
     const target = db.prepare(

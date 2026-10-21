@@ -1,53 +1,90 @@
 -- 0160_production_cancellation_window.sql - the OD-01 cancellation window holds ordering and a
 -- firm start until it ends.
 --
--- OD-01 (the owner's register, as the lead ruled it): the customer may cancel until 10 days after
--- they receive their copy of the signed contract. Inside that window nothing is ordered from a
--- supplier, no shop work starts and no start is confirmed. The register scopes it to private
--- dwellings; D1 cannot tell a private dwelling from a commercial job, so the window applies to
--- every contract. How the 10 days are counted in law is still with the lawyer.
+-- OD-01 (the owner's register, as the lead ruled it, pending counsel through the owner): the
+-- customer may cancel until 10 days after they receive their copy of the signed contract. Inside
+-- that window nothing is ordered from a supplier, no shop work starts and no start is confirmed.
+-- The register scopes it to private dwellings; D1 cannot tell a private dwelling from a commercial
+-- job, so the window applies to every contract.
 --
--- Nothing in D1 records the customer's receipt of the signed copy: the portal's confirm step
--- answers "accepted" and keeps its receipt in R2, and no email or effect delivers a signed copy.
--- So a person records it:
+-- The window starts from one of two records of that receipt:
 --
--- 1. `production_cancellation_window_receipts`, append-only. An active owner or ops person, never
---    the QA seed owner, records when the customer received the copy, with a reason and an evidence
---    reference. The Worker takes the person's own session, so no agent records one. Each record
---    writes one `audit_log` row as it lands and takes D1's clock as `recorded_at`. D1 refuses:
+-- 1. `contract_signed_copy_events`: the portal showed the customer the signed copy. By the owner's
+--    ruling a copy shown in the portal at signing counts as received. The Worker appends the event
+--    in the same D1 batch as the acceptance it belongs to, only when the confirm response returns
+--    the signed copy (terms plus receipt), never from the acceptance alone. One per acceptance
+--    binding; `shown_at` is D1's own clock; each event writes one `audit_log` row as it lands.
+-- 2. `production_cancellation_window_receipts`: a person's record, for a contract whose copy the
+--    portal did not show (every contract signed before this, or one signed outside D1). An active
+--    owner or ops person, never the QA seed owner, records when the customer received the copy,
+--    with a reason and an evidence reference. The Worker takes the person's own session, so no
+--    agent records one. `recorded_at` is D1's own clock; each record writes one `audit_log` row.
+--    D1 refuses:
 --      * a time D1 cannot read back exactly, or one after D1's now;
 --      * a time before the job's latest contract signature (the `accepted_at` of its latest
 --        acceptance binding; equal is allowed), and a record whose floor is not that binding. A job
 --        with no binding, such as one imported from the old system, records with no floor;
---      * a time earlier than one already recorded for the job, or the same time again: a record
---        only ever moves the window later;
---      * a window end outside [received + 240 hours, received + 241 hours], or earlier than the
---        job's previous end. The Worker stores the later of received + 240 hours and the same local
---        clock time 10 calendar days later in the business time zone, so across a DST change the
---        hold never ends early in local time.
--- 2. The window is derived and read-only. It is not a gate: it has no ledger and no waiver.
---      * Unknown while the job has no record at or after its latest contract signature: no record
---        at all, or only records from before a later contract.
---      * Open while the latest record's end is after D1's now.
---      * Ended otherwise.
--- 3. While a job's window is unknown or open, D1 refuses each of these by its own code, read with
---    D1's own clock:
---      * a schedule, the firm start (`operating_job_assignments_cancellation_window_hold`). 0098's
---        validate trigger is re-created unchanged after it, so 0098's refusals still answer first,
---        then the window, then 0159's gate evidence guard;
---      * a `clear` entry on Materials, its attestation
---        (`production_gate_clearances_cancellation_window_hold`). 0153's replace guard is
---        re-created unchanged after it, so a replayed key still answers first. A Materials waiver
---        is allowed, and it lifts no hold;
---      * a purchase order line for the job. `inventory_po_lines` gains `roof_job_id`, the line's job
---        link. A line with no job (stock, such as coil into stock) is never held. A job's line is
---        refused while that job's window holds, and so is a move back to `ordered`; the link never
---        changes once written. Placing a supplier order is that insert: a line is born `ordered`.
+--      * a time earlier than one already recorded or shown for the job, or the same time again: a
+--        record only ever moves the window later.
+--
+-- Both carry `window_ends_at`: the later of the start + 240 hours and the same local clock time 10
+-- calendar days later in the business time zone, and never earlier than the job's previous end, so
+-- across a DST change the hold never ends early in local time. D1 has no time zone database, so it
+-- holds every end to [start + 240 hours, start + 241 hours] and to no earlier than the job's
+-- previous end: no writer can shorten a window. The Worker reads the DST hour with Intl.
+--
+-- The window is derived and read-only. It is not a gate: it has no ledger and no waiver.
+--   * Unknown while the job has neither a copy event for its latest contract nor a record at or
+--     after that contract's signature: nothing at all, or only from before a later contract.
+--   * Open while any end on the job is after D1's now (ends never move earlier).
+--   * Ended otherwise.
+-- While a job's window is unknown or open, D1 refuses each of these by its own code, read with
+-- D1's own clock:
+--   * a schedule, the firm start (`operating_job_assignments_cancellation_window_hold`). 0098's
+--     validate trigger is re-created unchanged after it, so 0098's refusals still answer first, then
+--     the window, then 0159's gate evidence guard;
+--   * a `clear` entry on Materials, its attestation
+--     (`production_gate_clearances_cancellation_window_hold`). 0153's replace guard is re-created
+--     unchanged after it, so a replayed key still answers first. A Materials waiver is allowed, and
+--     it lifts no hold;
+--   * a purchase order line for the job. `inventory_po_lines` gains `roof_job_id`, the line's job
+--     link. A line with no job (stock, such as coil into stock) is never held. A job's line is
+--     refused while that job's window holds, and so is a move back to `ordered`; the link never
+--     changes once written. Placing a supplier order is that insert: a line is born `ordered`.
 --
 -- This file may apply after higher-numbered migrations already on a database (0200-0205 on qa and
--- production). It creates one table and eight triggers, adds one column, and re-creates 0098's
+-- production). It creates two tables and twelve triggers, adds one column, and re-creates 0098's
 -- assignment validate trigger and 0153's replace guard under their names; no higher-numbered
 -- migration touches any of them.
+
+CREATE TABLE IF NOT EXISTS contract_signed_copy_events (
+  event_id TEXT PRIMARY KEY CHECK (
+    length(event_id) = 44
+    AND substr(event_id, 1, 4) = 'scs_'
+    AND substr(event_id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  tenant_id TEXT NOT NULL CHECK (
+    length(tenant_id) BETWEEN 2 AND 64
+    AND tenant_id NOT GLOB '*[^a-z0-9-]*'
+  ),
+  acceptance_binding_id TEXT NOT NULL,
+  roof_job_id TEXT NOT NULL,
+  -- The signature time of the contract whose copy was shown, as its binding holds it.
+  contract_signed_at TEXT NOT NULL CHECK (length(contract_signed_at) BETWEEN 20 AND 40),
+  -- D1's time when the confirm response returned the signed copy, in the form `Date.toISOString`
+  -- writes.
+  shown_at TEXT NOT NULL CHECK (length(shown_at) = 24),
+  window_ends_at TEXT NOT NULL CHECK (length(window_ends_at) = 24),
+  -- The business time zone the local clock end was read in.
+  time_zone TEXT NOT NULL CHECK (
+    length(time_zone) BETWEEN 3 AND 64 AND time_zone NOT GLOB '*[^A-Za-z0-9_/+-]*'
+  ),
+  UNIQUE (tenant_id, acceptance_binding_id),
+  FOREIGN KEY (acceptance_binding_id, tenant_id)
+    REFERENCES commercial_acceptance_bindings(acceptance_binding_id, tenant_id) ON DELETE RESTRICT,
+  FOREIGN KEY (roof_job_id, tenant_id)
+    REFERENCES operating_roof_jobs(roof_job_id, tenant_id) ON DELETE RESTRICT
+);
 
 CREATE TABLE IF NOT EXISTS production_cancellation_window_receipts (
   receipt_id TEXT PRIMARY KEY CHECK (
@@ -63,7 +100,6 @@ CREATE TABLE IF NOT EXISTS production_cancellation_window_receipts (
   -- When the customer received their copy of the signed contract, as the person recorded it, in
   -- the form `Date.toISOString` writes.
   received_at TEXT NOT NULL CHECK (length(received_at) = 24),
-  -- When the window ends, in the same form (section 1 above).
   window_ends_at TEXT NOT NULL CHECK (length(window_ends_at) = 24),
   -- The business time zone the local clock end was read in.
   time_zone TEXT NOT NULL CHECK (
@@ -100,6 +136,94 @@ CREATE TABLE IF NOT EXISTS production_cancellation_window_receipts (
   FOREIGN KEY (recorded_by_user_id, tenant_id)
     REFERENCES app_users(user_id, tenant_id) ON DELETE RESTRICT
 );
+
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_events_validate_insert
+BEFORE INSERT ON contract_signed_copy_events
+BEGIN
+  -- REPLACE would delete the event or binding it collides with before inserting.
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_append_only')
+  WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events existing
+     WHERE existing.event_id = NEW.event_id
+        OR (existing.tenant_id = NEW.tenant_id
+            AND existing.acceptance_binding_id = NEW.acceptance_binding_id)
+  );
+
+  -- The copy is of this tenant's accepted contract on this job, exactly as its binding holds it.
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_binding_invalid')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM commercial_acceptance_bindings binding
+      JOIN customer_portal_acceptance_intents acceptance
+        ON acceptance.tenant_id = binding.tenant_id
+       AND acceptance.acceptance_id = binding.acceptance_id
+       AND acceptance.state = 'accepted'
+     WHERE binding.tenant_id = NEW.tenant_id
+       AND binding.acceptance_binding_id = NEW.acceptance_binding_id
+       AND binding.roof_job_id = NEW.roof_job_id
+       AND binding.accepted_at = NEW.contract_signed_at
+  );
+
+  -- D1 stamps when the copy was shown, from its own clock.
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_shown_at_invalid')
+  WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at) IS NOT NEW.shown_at
+     OR abs(julianday(NEW.shown_at) - julianday('now')) * 86400 > 60;
+
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_end_invalid')
+  WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.window_ends_at) IS NOT NEW.window_ends_at
+     OR NEW.window_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+240 hours')
+     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+241 hours')
+     OR EXISTS (
+       SELECT 1
+         FROM contract_signed_copy_events shown
+        WHERE shown.tenant_id = NEW.tenant_id
+          AND shown.roof_job_id = NEW.roof_job_id
+          AND shown.window_ends_at > NEW.window_ends_at
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM production_cancellation_window_receipts recorded
+        WHERE recorded.tenant_id = NEW.tenant_id
+          AND recorded.roof_job_id = NEW.roof_job_id
+          AND recorded.window_ends_at > NEW.window_ends_at
+     );
+END;
+
+-- One audit row per event, keyed by `run_id = event_id`.
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_events_audit
+AFTER INSERT ON contract_signed_copy_events
+BEGIN
+  INSERT INTO audit_log (
+    ts, automation, trigger, envelope_id, source_ids, target_ids, action, result,
+    run_id, approved_by
+  )
+  VALUES (
+    NEW.shown_at,
+    'production_cancellation_window',
+    'customer_portal',
+    NULL,
+    'job:' || NEW.roof_job_id || ',contract:' || NEW.acceptance_binding_id
+      || ',shown_at:' || NEW.shown_at || ',window_ends_at:' || NEW.window_ends_at,
+    'contract_signed_copy_event:' || NEW.event_id,
+    'shown:signed_copy',
+    'ok',
+    NEW.event_id,
+    NULL
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_events_append_only_update
+BEFORE UPDATE ON contract_signed_copy_events
+BEGIN
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_append_only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_events_append_only_delete
+BEFORE DELETE ON contract_signed_copy_events
+BEGIN
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_append_only');
+END;
 
 CREATE TRIGGER IF NOT EXISTS production_cancellation_window_receipts_validate_insert
 BEFORE INSERT ON production_cancellation_window_receipts
@@ -191,7 +315,8 @@ BEGIN
   WHERE NEW.contract_signed_at IS NOT NULL
     AND julianday(NEW.received_at) < julianday(NEW.contract_signed_at);
 
-  -- Later only: an earlier time would end the window sooner, and the same time changes nothing.
+  -- Later only, against both records: an earlier time would end the window sooner, and the same
+  -- time changes nothing.
   SELECT RAISE(ABORT, 'cancellation_window_receipt_earlier_than_recorded')
   WHERE EXISTS (
     SELECT 1
@@ -199,6 +324,13 @@ BEGIN
      WHERE recorded.tenant_id = NEW.tenant_id
        AND recorded.roof_job_id = NEW.roof_job_id
        AND recorded.received_at > NEW.received_at
+  )
+     OR EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND shown.shown_at > NEW.received_at
   );
   SELECT RAISE(ABORT, 'cancellation_window_receipt_unchanged')
   WHERE EXISTS (
@@ -207,11 +339,15 @@ BEGIN
      WHERE recorded.tenant_id = NEW.tenant_id
        AND recorded.roof_job_id = NEW.roof_job_id
        AND recorded.received_at = NEW.received_at
+  )
+     OR EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND shown.shown_at = NEW.received_at
   );
 
-  -- D1 has no time zone database, so it holds the end the Worker read on the business clock to
-  -- [received + 240 hours, received + 241 hours], and never earlier than the job's previous end:
-  -- no writer can shorten the window, and a DST change lengthens it by an hour at most.
   SELECT RAISE(ABORT, 'cancellation_window_receipt_end_invalid')
   WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.window_ends_at) IS NOT NEW.window_ends_at
      OR NEW.window_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+240 hours')
@@ -222,6 +358,13 @@ BEGIN
         WHERE recorded.tenant_id = NEW.tenant_id
           AND recorded.roof_job_id = NEW.roof_job_id
           AND recorded.window_ends_at > NEW.window_ends_at
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM contract_signed_copy_events shown
+        WHERE shown.tenant_id = NEW.tenant_id
+          AND shown.roof_job_id = NEW.roof_job_id
+          AND shown.window_ends_at > NEW.window_ends_at
      );
 
   -- D1 stamps when the record was made, from its own clock.
@@ -244,9 +387,8 @@ BEGIN
     'production_cancellation_window',
     'person',
     NULL,
-    'job:' || NEW.roof_job_id || ',received_at:' || NEW.received_at
-      || ',window_ends_at:' || NEW.window_ends_at
-      || ',contract:' || COALESCE(NEW.acceptance_binding_id, 'none'),
+    'job:' || NEW.roof_job_id || ',contract:' || COALESCE(NEW.acceptance_binding_id, 'none')
+      || ',received_at:' || NEW.received_at || ',window_ends_at:' || NEW.window_ends_at,
     'production_cancellation_window_receipt:' || NEW.receipt_id,
     'record:signed_copy_received',
     'ok',
@@ -267,12 +409,26 @@ BEGIN
   SELECT RAISE(ABORT, 'cancellation_window_receipt_append_only');
 END;
 
--- The firm start. Unknown is checked first: it holds until a person records the time.
+-- The firm start. Unknown is checked first: it holds until the copy is shown or a person records
+-- when it was received.
 CREATE TRIGGER IF NOT EXISTS operating_job_assignments_cancellation_window_hold
 BEFORE INSERT ON operating_job_assignments
 BEGIN
   SELECT RAISE(ABORT, 'operating_job_assignment_cancellation_window_unknown')
   WHERE NOT EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+       )
+  )
+    AND NOT EXISTS (
     SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
@@ -287,6 +443,13 @@ BEGIN
   );
   SELECT RAISE(ABORT, 'operating_job_assignment_cancellation_window_open')
   WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND julianday(shown.window_ends_at) > julianday('now')
+  )
+     OR EXISTS (
     SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
@@ -304,6 +467,19 @@ BEGIN
   SELECT RAISE(ABORT, 'production_gate_cancellation_window_unknown')
   WHERE NOT EXISTS (
     SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+       )
+  )
+    AND NOT EXISTS (
+    SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
        AND receipt.roof_job_id = NEW.roof_job_id
@@ -317,6 +493,13 @@ BEGIN
   );
   SELECT RAISE(ABORT, 'production_gate_cancellation_window_open')
   WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND julianday(shown.window_ends_at) > julianday('now')
+  )
+     OR EXISTS (
     SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
@@ -344,6 +527,19 @@ BEGIN
   SELECT RAISE(ABORT, 'inventory_po_line_cancellation_window_unknown')
   WHERE NOT EXISTS (
     SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+       )
+  )
+    AND NOT EXISTS (
+    SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
        AND receipt.roof_job_id = NEW.roof_job_id
@@ -358,6 +554,13 @@ BEGIN
   SELECT RAISE(ABORT, 'inventory_po_line_cancellation_window_open')
   WHERE EXISTS (
     SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND julianday(shown.window_ends_at) > julianday('now')
+  )
+     OR EXISTS (
+    SELECT 1
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
        AND receipt.roof_job_id = NEW.roof_job_id
@@ -365,7 +568,7 @@ BEGIN
   );
 END;
 
--- The link never changes once written, and a job's line that leaves `ordered` (backordered,
+-- The link never changes once written, and a job's line that left `ordered` (backordered,
 -- cancelled) does not move back to `ordered` while the job's window holds. Receiving, cancelling
 -- and every other move are not held.
 CREATE TRIGGER IF NOT EXISTS inventory_po_lines_cancellation_window_update_hold
@@ -377,6 +580,19 @@ BEGIN
   WHERE NEW.roof_job_id IS NOT NULL
     AND NEW.status = 'ordered'
     AND OLD.status IS NOT 'ordered'
+    AND NOT EXISTS (
+      SELECT 1
+        FROM contract_signed_copy_events shown
+       WHERE shown.tenant_id = NEW.tenant_id
+         AND shown.roof_job_id = NEW.roof_job_id
+         AND NOT EXISTS (
+           SELECT 1
+             FROM commercial_acceptance_bindings contract
+            WHERE contract.tenant_id = shown.tenant_id
+              AND contract.roof_job_id = shown.roof_job_id
+              AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+         )
+    )
     AND NOT EXISTS (
       SELECT 1
         FROM production_cancellation_window_receipts receipt
@@ -394,12 +610,21 @@ BEGIN
   WHERE NEW.roof_job_id IS NOT NULL
     AND NEW.status = 'ordered'
     AND OLD.status IS NOT 'ordered'
-    AND EXISTS (
-      SELECT 1
-        FROM production_cancellation_window_receipts receipt
-       WHERE receipt.tenant_id = NEW.tenant_id
-         AND receipt.roof_job_id = NEW.roof_job_id
-         AND julianday(receipt.window_ends_at) > julianday('now')
+    AND (
+      EXISTS (
+        SELECT 1
+          FROM contract_signed_copy_events shown
+         WHERE shown.tenant_id = NEW.tenant_id
+           AND shown.roof_job_id = NEW.roof_job_id
+           AND julianday(shown.window_ends_at) > julianday('now')
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM production_cancellation_window_receipts receipt
+         WHERE receipt.tenant_id = NEW.tenant_id
+           AND receipt.roof_job_id = NEW.roof_job_id
+           AND julianday(receipt.window_ends_at) > julianday('now')
+      )
     );
 END;
 

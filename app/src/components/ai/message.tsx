@@ -20,7 +20,9 @@ export interface MessagePart {
  * An answer can hold one receipt row for an action.
  *
  * `working`: the answer is being written. `unavailable`: it could not answer, so the person does
- * it themselves. `not-sent`: the person's message is waiting on this device for signal.
+ * it themselves. `not-sent`: the person's message is waiting on this device for signal. `note`:
+ * what the person should know about the answer, under it (`receiptWords(receipt).note`, such as
+ * `VIEW_REFUSED` when its generated view was refused).
  */
 export function Message({
   from,
@@ -28,6 +30,7 @@ export function Message({
   parts,
   children,
   status,
+  note,
 }: {
   from: "person" | "ironwrap" | "specialist";
   /** The specialist that answers; the face for IronWrap. */
@@ -36,6 +39,7 @@ export function Message({
   /** A person's words, or one receipt row under an answer. */
   children?: ReactNode;
   status?: "working" | "unavailable" | "not-sent";
+  note?: string;
 }) {
   if (from === "person")
     return (
@@ -81,6 +85,7 @@ export function Message({
             {part.sources?.length ? <SourceList sources={part.sources} /> : null}
           </div>
         ))}
+        {note ? <p className={cn(type.body, "text-text-secondary")}>{note}</p> : null}
         {children}
       </div>
     </div>

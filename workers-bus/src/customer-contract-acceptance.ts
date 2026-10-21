@@ -1197,6 +1197,8 @@ interface SignedCopy {
   receipt_sha256: string;
   /** When the copy was shown, by D1's clock: the start of the OD-01 cancellation window. */
   shown_at: string;
+  /** When that window ends, as stored: never early in local time across a DST change (0160). */
+  window_ends_at: string;
 }
 
 /**
@@ -1206,7 +1208,8 @@ interface SignedCopy {
  */
 async function signedCopyFor(env: AppEnv, intent: AcceptanceIntent): Promise<SignedCopy | null> {
   const row = await env.DB.prepare(
-    `SELECT shown.shown_at, binding.terms_hash, binding.receipt_hash, binding.accepted_at,
+    `SELECT shown.shown_at, shown.window_ends_at, binding.terms_hash, binding.receipt_hash,
+            binding.accepted_at,
             acceptance.signer_name, acceptance.terms_json, acceptance.terms_hash AS signed_terms_hash,
             quote.revision_number AS quote_version, quote.total_cents, quote.currency,
             proposal.title AS proposal_title
@@ -1226,6 +1229,7 @@ async function signedCopyFor(env: AppEnv, intent: AcceptanceIntent): Promise<Sig
       LIMIT 1`,
   ).bind(intent.tenant_id, intent.acceptance_id).first<{
     shown_at: string;
+    window_ends_at: string;
     terms_hash: string;
     receipt_hash: string;
     accepted_at: string;
@@ -1257,6 +1261,7 @@ async function signedCopyFor(env: AppEnv, intent: AcceptanceIntent): Promise<Sig
     accepted_at: row.accepted_at,
     receipt_sha256: row.receipt_hash,
     shown_at: row.shown_at,
+    window_ends_at: row.window_ends_at,
   };
 }
 

@@ -553,6 +553,9 @@ function checkCase(item, context) {
     typeof subject.aggregate === "string" && subject.aggregate !== "" && typeof subject.id === "string" && subject.id !== "")) {
     fail(`${label}: signal.subject is { aggregate, id }`);
   }
+  if (signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate !== "lead") {
+    fail(`${label}: an event on an inbound channel names the lead it becomes as its subject`);
+  }
   // A person's ask goes to the face (`ask`) and a press on a view action to the action's owning
   // specialist (`request`). Both name the signed-in person; crew can ask but cannot press.
   if (signal.kind === "owner_request") {

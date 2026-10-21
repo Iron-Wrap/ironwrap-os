@@ -992,6 +992,10 @@
         "source": "newo_call",
         "watch_id": "new_inbound",
         "at": "PT0M",
+        "subject": {
+          "aggregate": "lead",
+          "id": "L-2004"
+        },
         "content": {
           "text": "Session S-3104 callback request: Bonjour, l'eau coule du plafond de la chambre depuis ce matin et il pleut encore. J'ai mis des seaux. Rappelez-moi vite au 780-555-0142, s'il vous plaît. C'est au 2210 Fernhill Road NW."
         }
@@ -2541,6 +2545,10 @@
         "source": "newo_call",
         "watch_id": "new_inbound",
         "at": "PT0M",
+        "subject": {
+          "aggregate": "lead",
+          "id": "L-2091"
+        },
         "content": {
           "text": "Session S-3121 report: caller from 780-555-0123 called again about the roof at 615 Copperleaf Way SW; adds that the back gutters overflow and asks that gutters be included in the estimate."
         }
@@ -2807,6 +2815,10 @@
         "source": "newo_call",
         "watch_id": "new_inbound",
         "at": "PT0M",
+        "subject": {
+          "aggregate": "lead",
+          "id": "L-2010"
+        },
         "content": {
           "text": "Session S-3130: missed call from 780-555-0131 to the iRoof Alberta line; no voicemail left."
         }
@@ -3031,6 +3043,10 @@
         "source": "newo_call",
         "watch_id": "reception_session",
         "at": "PT0M",
+        "subject": {
+          "aggregate": "lead",
+          "id": "L-2011"
+        },
         "content": {
           "text": "Session S-3140 transcript excerpt: Caller: Hi, is this Bright Smile Dental? I need to move my cleaning appointment. Assistant: You've reached IronWrap Exteriors. Caller: Oh, sorry, wrong number."
         }
@@ -11368,6 +11384,10 @@
         "source": "newo_call",
         "watch_id": "new_inbound",
         "at": "PT0M",
+        "subject": {
+          "aggregate": "lead",
+          "id": "L-2042"
+        },
         "content": {
           "text": "Session S-3242 report: caller from 780-555-0108 says she is returning a call from IronWrap Exteriors about her roof estimate and asks when it will be ready."
         }

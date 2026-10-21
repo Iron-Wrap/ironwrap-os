@@ -516,6 +516,7 @@ test("an inbound signal carries exactly the Worker's envelope keys, no actor, an
     inbound({ text: "extra" }),
     inbound({}, { subject: { id: "L-1" } }),
     inbound({ brand: "other" }),
+    { kind: "event", source: "phone", watch_id: "new_inbound", at: "PT0M", content: { text: "Call back please." } },
   ];
   const golden = suiteFile("golden", 20, (cases) => {
     signals.forEach((entry, index) => (cases[index].signal = entry));
@@ -533,6 +534,7 @@ test("an inbound signal carries exactly the Worker's envelope keys, no actor, an
   assert.match(failures, /\.009: an inbound signal's content has exactly envelope_id/);
   assert.match(failures, /\.010: signal\.subject is \{ aggregate, id \}/);
   assert.match(failures, /\.011: an inbound signal's brand is ironwrap, iroof, or null/);
+  assert.match(failures, /\.012: an event on an inbound channel names the lead it becomes as its subject/);
 });
 
 test("structural mode without the contract still checks shape", () => {

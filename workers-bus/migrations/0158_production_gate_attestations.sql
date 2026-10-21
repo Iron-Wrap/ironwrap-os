@@ -18,13 +18,13 @@
 --       - Safety is the `production.gates.safety` set ("checks site safety"), carried today by owner
 --         and production. Its proof answers the permit: `needed_and_held` with the permit number,
 --         or `not_needed`; `unknown` is well formed and refused by name. It names the attester's
---         current internal Worker Competency whose
---         `authority_scope` is exactly `site_safety`, the closed token this migration names for
---         site safety, verified, in force today and not bound to another job. It is refused while
---         a stop applies to the job: a safety stop on the tenant, the job or any of its Work
---         Packages (Superseded included), a crew stop_work on one of them that no release has
---         lifted, or a safety stop whose scope cannot be resolved. Only a person ever clears
---         Safety, and it is never waived.
+--         current internal Worker Competency whose `authority_scope` is exactly `site_safety`, the
+--         closed token this migration names for site safety, verified, in force today and not
+--         bound to another job. It is refused while a stop applies to the job: a safety stop on the
+--         tenant, the job or any of its Work Packages (Superseded included), a crew stop_work on one
+--         of them that no release has lifted, or a safety stop whose scope cannot be resolved. An
+--         active safety stop on a job the tenant does not have holds Safety on every job of the
+--         tenant, under its own code. Only a person ever clears Safety, and it is never waived.
 --       - Weather names a work window of at most 14 days that has not ended and ends within 14 days
 --         of the forecast it rests on, which was observed at most 72 hours ago.
 --   * `reverse` / `person_reversal`: by an owner or production user, with a reason, of the entry
@@ -471,6 +471,25 @@ BEGIN
   WHERE NEW.basis = 'person_attestation'
     AND NEW.gate = 'Safety'
     AND json_extract(NEW.attestation_json, '$.permit.answer') = 'unknown';
+
+  -- [0158] An active safety stop naming a job this tenant does not have may be a typo for any of its
+  -- jobs, so it holds Safety on every job of the tenant until it is lifted. Its own code says a
+  -- stop names a job that doesn't exist. Nothing refuses such a stop when it is recorded: a person
+  -- may always stop work.
+  SELECT RAISE(ABORT, 'production_gate_stop_job_unknown')
+  WHERE NEW.basis = 'person_attestation'
+    AND NEW.gate = 'Safety'
+    AND EXISTS (
+      SELECT 1
+        FROM safety_occurrences occurrence
+       WHERE occurrence.tenant_id = NEW.tenant_id
+         AND occurrence.stop_active = 1
+         AND occurrence.scope_type = 'roof_job'
+         AND NOT EXISTS (
+           SELECT 1 FROM operating_roof_jobs job
+            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+         )
+    );
 
   -- [0158] Safety is never attested while an active stop applies to the job: a safety stop on the
   -- whole tenant, on the job, or on any Work Package of the job in any status, Superseded included;

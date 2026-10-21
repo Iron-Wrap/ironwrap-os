@@ -34,7 +34,14 @@ import {
   recordContractDepositGate,
   sweepContractDepositGates,
 } from "../src/deposit-policy.ts";
+import { recordTaxPolicySnapshot } from "../src/accounting-tax-snapshots.ts";
+import {
+  deriveNativeFinalInvoiceForJob,
+  readAcceptedCommercialPaymentTerms,
+  recordNativeFinalInvoiceProviderBinding,
+} from "../src/native-final-invoice-producer.ts";
 import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
+import { recordCompletedRoofJobWork } from "./native-completion-fixture.ts";
 import {
   OperatingJobAssignmentError,
   recordOperatingJobAssignment,
@@ -398,8 +405,16 @@ async function seedNativeContract(
   env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string },
   suffix: string,
   terms: Record<string, unknown> = TERMS,
+  /** Another job, a quote short of approval (recorded alone), or a contract recorded in the past. */
+  options: {
+    roofJobId?: string;
+    status?: "draft" | "needs_review" | "approved" | "rejected";
+    validUntil?: string;
+    base?: Date;
+  } = {},
 ): Promise<NativeChain> {
-  const base = new Date(Date.now() - 60_000);
+  const base = options.base ?? new Date(Date.now() - 60_000);
+  const roofJobId = options.roofJobId ?? JOB_ID;
   const quoteId = `customer-quote:acceptance:${suffix}`;
   const quoteRevisionId = `quote-revision:acceptance:${suffix}:1`;
   const proposalPackId = `proposal-pack:acceptance:${suffix}`;
@@ -409,11 +424,11 @@ async function seedNativeContract(
     quoteRevisionId,
     customerQuoteId: quoteId,
     revisionNumber: 1,
-    roofJobId: JOB_ID,
+    roofJobId,
     customerId: CUSTOMER_ID,
-    status: "approved",
+    status: options.status ?? "approved",
     currency: "CAD",
-    validUntil: QUOTE_VALID_UNTIL,
+    validUntil: options.validUntil ?? QUOTE_VALID_UNTIL,
     terms,
     evidence: EVIDENCE,
     lines: [
@@ -448,6 +463,15 @@ async function seedNativeContract(
     quote,
     new Date(base.getTime() + 1_000),
   );
+  const chain = {
+    quoteId,
+    quoteRevisionId,
+    proposalPackId,
+    proposalRevisionId,
+    publicationVersion: 1,
+  };
+  // A proposal is made only of an approved quote.
+  if ((options.status ?? "approved") !== "approved") return chain;
 
   const proposal: RecordCommercialProposalInput = {
     tenantId: TENANT,
@@ -455,7 +479,7 @@ async function seedNativeContract(
     proposalPackId,
     revisionNumber: 1,
     quoteRevisionId,
-    roofJobId: JOB_ID,
+    roofJobId,
     customerId: CUSTOMER_ID,
     title: "Complete roof replacement proposal",
     summary: "Approved scope, price, schedule assumptions, and warranty.",
@@ -485,13 +509,6 @@ async function seedNativeContract(
     new Date(base.getTime() + 3_000),
   );
 
-  const chain = {
-    quoteId,
-    quoteRevisionId,
-    proposalPackId,
-    proposalRevisionId,
-    publicationVersion: 1,
-  };
   await recordPublicationTransition(
     env,
     chain,
@@ -1815,18 +1832,20 @@ async function reviseQuote(
   return quoteRevisionId;
 }
 
-/** Quote revision 2 (or `revision`) and its proposal, published in place of the contract before. */
-async function publishCorrectedContract(
+/**
+ * Proposal revision 2 (or `revision`) of the chain's pack, made of the given quote revision,
+ * unpublished. The chain moves onto both.
+ */
+async function reviseProposal(
   h: Harness,
+  chain: NativeChain,
+  quoteRevisionId: string,
   terms: Record<string, unknown>,
+  base: Date,
   revision = 2,
 ): Promise<void> {
-  const chain = h.chain!;
-  // Each later revision's events start later, after the ones the revision before it recorded.
-  const base = new Date(Date.now() - 20_000 + (revision - 2) * 10_000);
-  const quoteRevisionId = await reviseQuote(h, chain, terms, base, revision);
-
-  const proposalRevisionId = `proposal-revision:acceptance:primary:${revision}`;
+  const suffix = chain.quoteId.split(":").at(-1)!;
+  const proposalRevisionId = `proposal-revision:acceptance:${suffix}:${revision}`;
   const proposal: RecordCommercialProposalInput = {
     tenantId: TENANT,
     proposalRevisionId,
@@ -1839,11 +1858,11 @@ async function publishCorrectedContract(
     title: "Corrected roof replacement proposal",
     summary: "Corrected scope, price and payment terms.",
     terms,
-    contentRef: "r2://commercial/proposals/primary-corrected.pdf",
+    contentRef: `r2://commercial/proposals/${suffix}-corrected.pdf`,
     contentHash: "d".repeat(64),
     evidence: EVIDENCE,
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: `acceptance:proposal:primary:${revision}`,
+    idempotencyKey: `acceptance:proposal:${suffix}:${revision}`,
   };
   const preparedProposal = await prepareCommercialProposal(proposal);
   const proposalPermit = await admitFor(
@@ -1851,16 +1870,29 @@ async function publishCorrectedContract(
     "proposal.revision.record",
     { type: "proposal", id: chain.proposalPackId, version: revision },
     preparedProposal.command,
-    `permit:acceptance:proposal:primary:${revision}`,
+    `permit:acceptance:proposal:${suffix}:${revision}`,
     new Date(base.getTime() + 2_000),
   );
   proposal.authority = { kind: "policy_permit", permitId: proposalPermit.permit_id };
   await recordCommercialProposalRevision(h.env, proposal, new Date(base.getTime() + 3_000));
+  chain.quoteRevisionId = quoteRevisionId;
+  chain.proposalRevisionId = proposalRevisionId;
+}
+
+/** Quote revision 2 (or `revision`) and its proposal, published in place of the contract before. */
+async function publishCorrectedContract(
+  h: Harness,
+  terms: Record<string, unknown>,
+  revision = 2,
+): Promise<void> {
+  const chain = h.chain!;
+  // Each later revision's events start later, after the ones the revision before it recorded.
+  const base = new Date(Date.now() - 20_000 + (revision - 2) * 10_000);
+  const quoteRevisionId = await reviseQuote(h, chain, terms, base, revision);
+  await reviseProposal(h, chain, quoteRevisionId, terms, base, revision);
 
   // The lead converted at the first acceptance, so only the correction's revision may move the
   // publication: withdraw the pack under it, then publish it.
-  chain.quoteRevisionId = quoteRevisionId;
-  chain.proposalRevisionId = proposalRevisionId;
   await recordPublicationTransition(h.env, chain, "withdrawn", new Date(base.getTime() + 4_000));
   await recordPublicationTransition(
     h.env,
@@ -2642,44 +2674,232 @@ test("the policy's Deposit entry takes D1's time, not the Worker's, and so do th
 });
 
 
-test("the OD-01 pre-flight counts each open quote and proposal OD-01 would refuse, and nothing else", async () => {
-  const preflight = readFileSync(new URL("../../tools/od01-preflight.sql", import.meta.url), "utf8");
-  const run = (h: Harness) => h.db.raw.prepare(preflight).all().map((row) => ({ ...row }));
+// The OD-01 pre-flight (tools/od01-preflight.sql) decides whether the production train may start,
+// so a case below fails for every way it could count too few, and for every way it could count
+// too many. Each case checks the count after every fixture, so two errors cannot cancel out in a
+// total. The PR lists each mutant of the query and the case that catches it.
+const PREFLIGHT = readFileSync(new URL("../../tools/od01-preflight.sql", import.meta.url), "utf8");
 
-  // The primary 25% contract is open and published, until its customer accepts it.
+function preflight(h: Harness): Array<Record<string, unknown>> {
+  return h.db.raw.prepare(PREFLIGHT).all().map((row) => ({ ...row }));
+}
+
+function counted(openQuotes: number, openProposals: number, publishedProposals: number) {
+  return [{
+    tenant_id: TENANT,
+    open_quotes: openQuotes,
+    open_proposals: openProposals,
+    published_proposals: publishedProposals,
+  }];
+}
+
+/** A second job of the same customer and lead, which a case can cancel. */
+function seedSecondJob(h: Harness, roofJobId: string): void {
+  const now = new Date(Date.now() - 120_000).toISOString();
+  h.db.raw.prepare(
+    `INSERT INTO operating_roof_jobs
+     (roof_job_id, tenant_id, lead_id, customer_id, property_id, source_envelope_id,
+      source_raw_key, brand, service_type, job_status, current_gate_state, version,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, ?, 'raw/acceptance/0001.json', 'ironwrap', 'roof_replacement',
+             'qualified', 'qualification', 1, ?, ?)`,
+  ).run(roofJobId, TENANT, LEAD_ID, CUSTOMER_ID, ENVELOPE_ID, now, now);
+}
+
+test("the OD-01 pre-flight counts every contract term OD-01 refuses, and never payment on completion", async () => {
+  const h = await setup({ contracts: 0 });
+  try {
+    assert.deepEqual(preflight(h), []);
+    // Payment on completion is never counted.
+    await seedNativeContract(h.env, "od01", OD01_TERMS);
+    assert.deepEqual(preflight(h), []);
+    let refused = 0;
+    for (const [suffix, terms] of [
+      ["deposit", TERMS],
+      ["zero-deposit-schedule", { ...OD01_TERMS, payment_schedule: ["deposit"] }],
+      ["zero-mixed-schedule", { ...OD01_TERMS, payment_schedule: ["completion", "deposit"] }],
+      ["deposit-on-completion", { ...OD01_TERMS, deposit_percent: 25 }],
+      ["deposit-not-a-number", { ...OD01_TERMS, deposit_percent: false }],
+      ["no-deposit-term", { payment_schedule: ["completion"], payment_terms_days: 30 }],
+    ] as const) {
+      await seedNativeContract(h.env, suffix, terms);
+      refused += 1;
+      assert.deepEqual(preflight(h), counted(refused, refused, refused), suffix);
+    }
+  } finally {
+    h.restore();
+  }
+});
+
+test("the OD-01 pre-flight counts drafts and quotes under review, and leaves out what no customer can accept", async () => {
+  const h = await setup({ contracts: 0 });
+  try {
+    await seedNativeContract(h.env, "draft", TERMS, { status: "draft" });
+    assert.deepEqual(preflight(h), counted(1, 0, 0));
+    await seedNativeContract(h.env, "under-review", TERMS, { status: "needs_review" });
+    assert.deepEqual(preflight(h), counted(2, 0, 0));
+    await seedNativeContract(h.env, "declined", TERMS, { status: "rejected" });
+    assert.deepEqual(preflight(h), counted(2, 0, 0));
+    // Recorded a month ago and valid for five days.
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    await seedNativeContract(h.env, "expired", TERMS, {
+      base: monthAgo,
+      validUntil: new Date(monthAgo.getTime() + 5 * 24 * 60 * 60_000).toISOString().slice(0, 10),
+    });
+    assert.deepEqual(preflight(h), counted(2, 0, 0));
+    // Published for a job that is then cancelled.
+    seedSecondJob(h, "job:acceptance:cancelled");
+    await seedNativeContract(h.env, "cancelled-job", TERMS, { roofJobId: "job:acceptance:cancelled" });
+    assert.deepEqual(preflight(h), counted(3, 1, 1));
+    h.db.raw.prepare(
+      `UPDATE operating_roof_jobs SET job_status = 'cancelled', version = version + 1, updated_at = ?
+        WHERE tenant_id = ? AND roof_job_id = ?`,
+    ).run(new Date().toISOString(), TENANT, "job:acceptance:cancelled");
+    assert.deepEqual(preflight(h), counted(2, 0, 0));
+    // A quote revised without a new proposal: the revision is open, the proposal left on the
+    // superseded quote is not.
+    const revised = await seedNativeContract(h.env, "revised-quote", TERMS);
+    assert.deepEqual(preflight(h), counted(3, 1, 1));
+    await reviseQuote(h, revised, { ...TERMS, deposit_percent: 30 }, new Date(Date.now() - 30_000));
+    assert.deepEqual(preflight(h), counted(3, 0, 0));
+  } finally {
+    h.restore();
+  }
+
+  // A contract the customer accepted is no longer open.
   const accepted = await setup();
   try {
-    assert.deepEqual(run(accepted), [
-      { tenant_id: TENANT, open_quotes: 1, open_proposals: 1, published_proposals: 1 },
-    ]);
+    assert.deepEqual(preflight(accepted), counted(1, 1, 1));
     const response = await accept(accepted, await seedPortalLink(accepted.db), "acceptance-preflight-0001");
     assert.equal(response.status, 200, await response.clone().text());
-    assert.deepEqual(run(accepted), []);
+    assert.deepEqual(preflight(accepted), []);
   } finally {
     accepted.restore();
   }
+});
 
-  const h = await setup({ contracts: 0 });
+test("the OD-01 pre-flight counts as published only the proposals a customer can open now", async () => {
+  const h = await setup();
   try {
-    assert.deepEqual(run(h), []);
-    // A deposit, a 0% deposit on another schedule and a missing deposit term are each refused
-    // under OD-01; payment on completion is not.
-    await seedNativeContract(h.env, "deposit", TERMS);
-    const zero = await seedNativeContract(h.env, "zero-deposit-schedule", {
-      ...OD01_TERMS,
-      payment_schedule: ["deposit", "completion"],
+    assert.deepEqual(preflight(h), counted(1, 1, 1));
+    // The primary contract corrected: proposal revision 2 published at version 3, after a withdrawal.
+    await publishCorrectedContract(h, { ...TERMS, deposit_percent: 30 });
+    assert.deepEqual(preflight(h), counted(1, 1, 1));
+    // Published, then withdrawn.
+    const withdrawn = await seedNativeContract(h.env, "withdrawn", TERMS);
+    assert.deepEqual(preflight(h), counted(2, 2, 2));
+    await recordPublicationTransition(h.env, withdrawn, "withdrawn", new Date(Date.now() - 10_000));
+    assert.deepEqual(preflight(h), counted(2, 2, 1));
+    // A new proposal revision of the same quote, not published yet: the pack still shows revision 1.
+    const unpublished = await seedNativeContract(h.env, "unpublished-revision", TERMS);
+    assert.deepEqual(preflight(h), counted(3, 3, 2));
+    await reviseProposal(h, unpublished, unpublished.quoteRevisionId, TERMS, new Date(Date.now() - 20_000));
+    assert.deepEqual(preflight(h), counted(3, 3, 1));
+  } finally {
+    h.restore();
+  }
+});
+
+test("on a database built from every migration, an OD-01 contract's final invoice bills the whole contract", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const response = await accept(h, portalToken, "acceptance-od01-final-invoice-0001");
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(depositGate(h).state, "complete");
+    const triggers = () => h.db.raw.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+      .all().map((row) => ({ ...row }));
+    const before = triggers();
+    recordCompletedRoofJobWork(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID, assignedByUserId: OWNER_ID });
+    assert.deepEqual(triggers(), before);
+
+    // The owner's QuickBooks mapping, anchored to the contract in force, and the GST snapshot.
+    const contract = await readAcceptedCommercialPaymentTerms(h.env, {
+      tenantId: TENANT,
+      roofJobId: JOB_ID,
+      customerId: CUSTOMER_ID,
     });
-    await seedNativeContract(h.env, "no-deposit-term", { payment_schedule: ["completion"], payment_terms_days: 30 });
-    await seedNativeContract(h.env, "od01", OD01_TERMS);
-    assert.deepEqual(run(h), [
-      { tenant_id: TENANT, open_quotes: 3, open_proposals: 3, published_proposals: 3 },
-    ]);
-    // A quote revised without a new proposal: the revision is open, and the proposal left on the
-    // superseded quote no longer is.
-    await reviseQuote(h, zero, { ...OD01_TERMS, payment_schedule: ["completion", "completion"] }, new Date(Date.now() - 30_000));
-    assert.deepEqual(run(h), [
-      { tenant_id: TENANT, open_quotes: 3, open_proposals: 2, published_proposals: 2 },
-    ]);
+    assert.ok(contract.ok, JSON.stringify(contract));
+    if (!contract.ok) return;
+    const now = new Date();
+    await recordTaxPolicySnapshot(
+      h.env,
+      {
+        tenantId: TENANT,
+        jurisdiction: "CA-AB",
+        taxCode: "GST",
+        providerTaxCodeId: "10",
+        ratePercent: "5.0000",
+        effectiveFrom: "2026-01-01",
+        sourceRef: "CRA GST policy snapshot 2026-01-01",
+      },
+      now,
+    );
+    await recordNativeFinalInvoiceProviderBinding(
+      h.env,
+      {
+        tenantId: TENANT,
+        realmId: "4620816365000000000",
+        roofJobId: JOB_ID,
+        qboCustomerId: "7",
+        qboItemId: "8",
+        qboTaxCodeId: "10",
+        qboTermsId: "9",
+        jurisdiction: "CA-AB",
+        taxCode: "GST",
+        paymentTermsDays: contract.paymentTermsDays,
+        sourceRef: "owner-approved-provider-map:od01-real-schema",
+        sourceSha256: "6".repeat(64),
+        commercialTermsHash: contract.termsHash,
+        commercialHeadSha256: contract.commercialHeadSha256,
+      },
+      now,
+    );
+
+    const derived = await deriveNativeFinalInvoiceForJob(h.env, { tenantId: TENANT, roofJobId: JOB_ID }, now);
+    assert.equal(derived.outcome, "intent_derived", JSON.stringify(derived));
+    if (derived.outcome !== "intent_derived") return;
+    const intent = h.db.raw.prepare("SELECT * FROM accounting_intents WHERE intent_id = ?")
+      .get(derived.accounting_intent_id) as Record<string, string>;
+    const quote = h.db.raw.prepare(
+      "SELECT subtotal_cents, tax_cents, total_cents FROM commercial_quote_revisions WHERE quote_revision_id = ?",
+    ).get(h.chain!.quoteRevisionId) as { subtotal_cents: number; tax_cents: number; total_cents: number };
+    const dollars = (cents: number) => (cents / 100).toFixed(2);
+    // The whole contract, tax included: 1000.00 + 50.00 GST = 1050.00.
+    assert.deepEqual(
+      {
+        kind: intent.kind,
+        final: intent.final_invoice_intent_id === intent.intent_id,
+        subtotal: intent.subtotal,
+        tax: intent.tax_amount,
+        total: intent.total_amount,
+      },
+      {
+        kind: "progress_invoice",
+        final: true,
+        subtotal: dollars(quote.subtotal_cents),
+        tax: dollars(quote.tax_cents),
+        total: dollars(quote.total_cents),
+      },
+    );
+    assert.equal(intent.total_amount, "1050.00");
+    const basis = JSON.parse(intent.basis_json) as Record<string, any>;
+    assert.equal(basis.commercial.already_invoiced, "0.00");
+    assert.deepEqual(basis.prior_invoices, []);
+    assert.deepEqual(
+      (basis.commercial.lines as Array<{ description_code: string; amount: string }>)
+        .map((line) => [line.description_code, line.amount]),
+      [["RESIDENTIAL_ACCEPTED_QUOTE", "1000.00"]],
+    );
+    assert.equal(basis.commercial_head.acceptance.id, bindingFor(h, (await response.json() as { acceptance_id: string }).acceptance_id).acceptance_binding_id);
+    // No deposit invoice and no derivation exist, and the completion packet is recorded once.
+    assert.deepEqual(
+      (h.db.raw.prepare("SELECT kind FROM accounting_intents").all() as Array<{ kind: string }>).map((row) => row.kind),
+      ["progress_invoice"],
+    );
+    assert.equal(count(h, "commercial_deposit_derivations"), 0);
+    assert.equal(count(h, "native_completion_packets"), 1);
   } finally {
     h.restore();
   }

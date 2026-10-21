@@ -56,3 +56,26 @@ export async function safetyStopActive(
   ).bind(tenantId, roofJobId, tenantId, roofJobId, tenantId, tenantId, roofJobId).first();
   return row !== null;
 }
+
+/**
+ * The oldest active safety stop that names a job this tenant does not have (0158), or null. It may
+ * be a typo for any job, so it holds Safety on every job of the tenant until it is lifted; the
+ * refusal names the stop, and the owner's exception list shows it, so a person opens it and fixes
+ * which job it is for. A stop is always recorded: nothing refuses it when it is raised.
+ */
+export async function unknownJobStop(env: AppEnv, tenantId: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `SELECT occurrence.occurrence_id
+       FROM safety_occurrences occurrence
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'roof_job'
+        AND NOT EXISTS (
+          SELECT 1 FROM operating_roof_jobs job
+           WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at, occurrence.occurrence_id
+      LIMIT 1`,
+  ).bind(tenantId).first<{ occurrence_id: string }>();
+  return row?.occurrence_id ?? null;
+}

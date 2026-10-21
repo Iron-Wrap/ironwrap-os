@@ -583,6 +583,25 @@ BEGIN
     AND NEW.gate = 'Safety'
     AND json_extract(NEW.attestation_json, '$.permit.answer') = 'unknown';
 
+  -- [0158] An active safety stop naming a job this tenant does not have may be a typo for any of its
+  -- jobs, so it holds Safety on every job of the tenant until it is lifted. Its own code says a
+  -- stop names a job that doesn't exist. Nothing refuses such a stop when it is recorded: a person
+  -- may always stop work.
+  SELECT RAISE(ABORT, 'production_gate_stop_job_unknown')
+  WHERE NEW.basis = 'person_attestation'
+    AND NEW.gate = 'Safety'
+    AND EXISTS (
+      SELECT 1
+        FROM safety_occurrences occurrence
+       WHERE occurrence.tenant_id = NEW.tenant_id
+         AND occurrence.stop_active = 1
+         AND occurrence.scope_type = 'roof_job'
+         AND NOT EXISTS (
+           SELECT 1 FROM operating_roof_jobs job
+            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+         )
+    );
+
   -- [0158] Safety is never attested while an active stop applies to the job: a safety stop on the
   -- whole tenant, on the job, or on any Work Package of the job in any status, Superseded included;
   -- or a crew's stop_work on any Work Package of the job that no release has lifted (0145). A

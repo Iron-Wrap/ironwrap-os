@@ -30,6 +30,8 @@
 //       site safety (`authority_scope` exactly `site_safety`) and no stop that applies to the
 //       job: a safety stop on the tenant, the job or any of its Work Packages, a crew stop_work on
 //       one of them that no release has lifted, or a safety stop whose scope cannot be resolved.
+//       An active stop naming a job the tenant does not have holds Safety on every job: 409
+//       `production_gate_stop_job_unknown` with its `stop_id`, so a person opens the stop.
 //       The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
@@ -55,7 +57,7 @@ import { listAccountingIntents, type AccountingIntentRecord } from "./accounting
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { listJobEvidenceItemsFromD1, r2ObjectStore } from "./field-actions.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
-import { safetyStopActive } from "./production-job-stops.ts";
+import { safetyStopActive, unknownJobStop } from "./production-job-stops.ts";
 import {
   fieldEvidenceId,
   isAttestableProductionGate,
@@ -157,11 +159,14 @@ export interface ProductionGateWaiverDecisionRequest {
 export class ProductionGateClearanceError extends Error {
   readonly code: string;
   readonly status: number;
+  /** What a one-click fix needs beside the code, such as the stop to open. */
+  readonly detail: Readonly<Record<string, string>>;
 
-  constructor(code: string, status: number) {
+  constructor(code: string, status: number, detail: Readonly<Record<string, string>> = {}) {
     super(code);
     this.code = code;
     this.status = status;
+    this.detail = detail;
     this.name = "ProductionGateClearanceError";
   }
 }
@@ -189,6 +194,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_evidence_invalid: 409,
   production_gate_material_exception_open: 409,
   production_gate_safety_permit_unknown: 409,
+  production_gate_stop_job_unknown: 409,
   production_gate_safety_stop_active: 409,
   production_gate_competency_required: 403,
   production_gate_forecast_stale: 409,
@@ -276,8 +282,12 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function refusal(code: string, status: number): ProductionGateClearanceError {
-  return new ProductionGateClearanceError(code, status);
+function refusal(
+  code: string,
+  status: number,
+  detail?: Readonly<Record<string, string>>,
+): ProductionGateClearanceError {
+  return new ProductionGateClearanceError(code, status, detail);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -637,7 +647,7 @@ async function appendEntry(
 
 function refusalResponse(error: unknown): Response {
   if (error instanceof ProductionGateClearanceError) {
-    return json({ error: error.code }, error.status);
+    return json({ ...error.detail, error: error.code }, error.status);
   }
   return json({ error: "production_gate_clearance_failed" }, 502);
 }
@@ -1044,6 +1054,8 @@ async function attestGate(
     if ((input.attestation as SafetyAttestation).permit.answer === "unknown") {
       throw refusal("production_gate_safety_permit_unknown", 409);
     }
+    const unknownJob = await unknownJobStop(env, tenantId);
+    if (unknownJob) throw refusal("production_gate_stop_job_unknown", 409, { stop_id: unknownJob });
     if (await safetyStopActive(env, tenantId, roofJobId)) {
       throw refusal("production_gate_safety_stop_active", 409);
     }

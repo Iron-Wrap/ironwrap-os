@@ -307,6 +307,17 @@ interface NativeOwnerFieldBlockerRow {
   updated_at: string;
 }
 
+interface NativeOwnerUnknownJobStopRow {
+  occurrence_id: string;
+  scope_id: string;
+  reported_at: string;
+  updated_at: string;
+}
+
+/** The owner's exception for an active stop that names a job the tenant does not have. */
+export const STOP_JOB_UNKNOWN_TITLE =
+  "This stop names a job that doesn't exist — fix which job it is for";
+
 interface NativeOwnerEffectExceptionRow {
   exception_id: string;
   effect_id: string;
@@ -2232,6 +2243,7 @@ export async function buildOwnerNowReadModel(
     untriagedLeadSource,
     materialExceptionSource,
     quoteSource,
+    unknownJobStopSource,
   ] = await Promise.all([
     nativeOwnerFieldBlockers(env, auth.session.tenant_id, jobIds),
     nativeProductionGates(
@@ -2253,6 +2265,7 @@ export async function buildOwnerNowReadModel(
       OWNER_NOW_SOURCE_LIMIT,
     ),
     nativeOwnerCommercialQuotes(env, auth.session.tenant_id, jobIds),
+    nativeOwnerUnknownJobStops(env, auth.session.tenant_id),
   ]);
 
   const fieldBlockers = fieldBlockerSource.rows.map(
@@ -2594,6 +2607,18 @@ export async function buildOwnerNowReadModel(
         occurredAt: text(row.submitted_at),
       }),
     ),
+    // The stop holds Safety on every job until someone opens it (its id) and fixes its job.
+    ...unknownJobStopSource.rows.flatMap((row) =>
+      exceptionRow({}, {
+        id: row.occurrence_id,
+        kind: "stop_job_unknown",
+        severity: null,
+        title: STOP_JOB_UNKNOWN_TITLE,
+        why: `Names job ${row.scope_id}`,
+        jobId: null,
+        occurredAt: row.reported_at,
+      }),
+    ),
     ...gates.flatMap((row) =>
       exceptionRow(row, {
         id: text(row.gate_id) ?? text(row.name),
@@ -2649,6 +2674,7 @@ export async function buildOwnerNowReadModel(
   const partialSources = [
     ...(jobSource.partial ? ["active_jobs"] : []),
     ...(fieldBlockerSource.partial ? ["field_blockers"] : []),
+    ...(unknownJobStopSource.partial ? ["unknown_job_stops"] : []),
     ...(gateSource.partial ? ["blocked_gates"] : []),
     ...(incidentSource.partial ? ["automation_incidents"] : []),
     ...(accountingIntentSource.partial ||
@@ -2680,6 +2706,10 @@ export async function buildOwnerNowReadModel(
       [
         ...jobs,
         ...fieldBlockers,
+        ...unknownJobStopSource.rows.map((row) => ({
+          name: row.occurrence_id,
+          modified: row.updated_at,
+        })),
         ...gates,
         ...incidents,
         ...payments,
@@ -3537,6 +3567,33 @@ async function nativeOwnerFieldBlockers(
         AND package.job_id IN (${selected.map(() => "?").join(", ")})
       ORDER BY package.updated_at DESC, package.work_package_id ASC`,
     [tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+/**
+ * Active safety stops that name a job this tenant does not have. Recording a stop never fails, so
+ * a mistyped job is caught here: such a stop holds Safety on every job (0158) until it is opened
+ * and fixed or lifted.
+ */
+async function nativeOwnerUnknownJobStops(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerUnknownJobStopRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerUnknownJobStopRow>(
+    env,
+    `SELECT occurrence.occurrence_id, occurrence.scope_id, occurrence.reported_at,
+            occurrence.updated_at
+       FROM safety_occurrences AS occurrence
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'roof_job'
+        AND NOT EXISTS (
+          SELECT 1 FROM operating_roof_jobs AS job
+           WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
+    [tenantId],
     OWNER_NOW_SOURCE_LIMIT,
   );
 }

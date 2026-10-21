@@ -14,6 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { buildOwnerNowReadModel, STOP_JOB_UNKNOWN_TITLE } from "../src/app-read-models.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import {
   permissionsForRole,
@@ -33,6 +34,7 @@ import {
   PRODUCTION_GATE_SAFETY_PERMISSION,
   SITE_SAFETY_AUTHORITY_SCOPE,
 } from "../src/production-gate-clearance.ts";
+import { recordMakeSafe, recordSafetyResponse, reportSafetyOccurrence } from "../src/safety-lifecycle.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times. D1 checks
 // every time rule against its own clock, so the fixtures are relative to the real one.
@@ -996,6 +998,98 @@ test("an unresolvable stop scope holds Safety, on the route and in D1", async ()
   await assertSafetyHeldByStop(unknownType);
 });
 
+test("a stop on a job the tenant does not have is recorded, holds Safety on every job until it is lifted, and is on the owner's list", async () => {
+  const h = setup();
+  const occurrenceId = "occurrence.attest.unknown-job";
+  const step = (minutesAgo: number) => at(-minutesAgo * 60_000);
+  // A person may always stop work: the stop is recorded though no job of the tenant has this id
+  // (here the job's number, not its id).
+  const reported = await reportSafetyOccurrence(h.env, {
+    occurrenceId,
+    tenantId: TENANT,
+    occurrenceKind: "hazard",
+    severity: "high",
+    scope: { type: "roof_job", id: "IW-ATTEST-0001" },
+    reportedByUserId: USERS.field.id,
+    reportedAt: step(50),
+    summary: "Synthetic hazard on a mistyped job, for repository proof only.",
+    rescueRequired: false,
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    now: step(50),
+  });
+  assert.equal(reported.kind, "reported");
+  // The owner's exception list names it, and its id is the stop a one-click fix opens.
+  const owner = await person(h, USERS.owner.id);
+  const listed = async () => (await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind === "stop_job_unknown")
+    .map((row) => [row.id, row.title, row.why, row.job_id]);
+  assert.deepEqual(await listed(), [[occurrenceId, STOP_JOB_UNKNOWN_TITLE, "Names job IW-ATTEST-0001", null]]);
+  // It holds Safety on every job of the tenant: on the route by name, with the stop to open, and
+  // in D1.
+  const production = await person(h, USERS.production.id);
+  const competency = insertCompetency(h.sqlite, USERS.production.id);
+  for (const job of [JOB, OTHER_JOB]) {
+    const routed = await call(h, production, "POST", CLEARANCE("Safety", job), attest("Safety"));
+    assert.deepEqual(
+      [routed.status, routed.body.error, routed.body.stop_id],
+      [409, "production_gate_stop_job_unknown", occurrenceId],
+      job,
+    );
+    refused(
+      () => append(h.sqlite, {
+        gate: "Safety",
+        gate_id: gateId("Safety", job),
+        roof_job_id: job,
+        attestation_json: safetyStored(competency),
+      }),
+      "production_gate_stop_job_unknown",
+    );
+  }
+  // A stop's scope cannot be corrected (0047 keeps it immutable), so the stop is recorded again on
+  // the job it is for and the mistyped one is lifted through its lifecycle.
+  insertSafetyStop(h.sqlite, { type: "roof_job", id: OTHER_JOB });
+  await recordMakeSafe(h.env, {
+    tenantId: TENANT,
+    occurrenceId,
+    actorUserId: USERS.field.id,
+    detail: "Area taped off.",
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    occurredAt: step(40),
+    now: step(40),
+  });
+  for (const [command, minutesAgo] of [["investigation_opened", 30], ["controlled", 20], ["released", 10]] as const) {
+    await recordSafetyResponse(h.env, {
+      tenantId: TENANT,
+      occurrenceId,
+      actorUserId: USERS.production.id,
+      command,
+      detail: "Synthetic response for repository proof only.",
+      evidence: null,
+      now: step(minutesAgo),
+    });
+  }
+  // The lifted stop leaves the owner's list, and a real job's stop never joins it.
+  assert.deepEqual(await listed(), []);
+  // The hold drops to the one job the stop is for, on the route and in D1.
+  const other = await call(h, production, "POST", CLEARANCE("Safety", OTHER_JOB), attest("Safety"));
+  assert.deepEqual([other.status, other.body.error], [409, "production_gate_safety_stop_active"]);
+  refused(
+    () => append(h.sqlite, {
+      gate: "Safety",
+      gate_id: gateId("Safety", OTHER_JOB),
+      roof_job_id: OTHER_JOB,
+      attestation_json: safetyStored(competency),
+    }),
+    "production_gate_safety_stop_active",
+  );
+  const cleared = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+});
+
 test("another job's stop, a shop or vehicle stop, or a lifted stop leaves Safety open on the route and in D1", async () => {
   const h = setup();
   insertWorkPackage(h.sqlite, "wp:attest:other-job", OTHER_JOB);
@@ -1012,8 +1106,6 @@ test("another job's stop, a shop or vehicle stop, or a lifted stop leaves Safety
   for (const scope of [
     { type: "work_package", id: "wp:attest:other-job" },
     { type: "roof_job", id: OTHER_JOB },
-    // A roof_job stop names its job by id: an id this tenant has no job for is not this job.
-    { type: "roof_job", id: "IW-ATTEST-0001" },
     { type: "shop", id: "shop:attest:main" },
     { type: "vehicle", id: "vehicle:attest:truck-1" },
     { type: "roof_job", id: JOB, active: 0 as const },
@@ -1070,6 +1162,10 @@ test("the route alone holds the site_safety scope, every stop and the permit ans
       insertCompetency(db, USERS.production.id);
       insertUnknownScopeStop(db);
     }, [409, "production_gate_safety_stop_active"]],
+    ["stop on a job the tenant does not have", (db: DatabaseSync) => {
+      insertCompetency(db, USERS.production.id);
+      insertSafetyStop(db, { type: "roof_job", id: "IW-ATTEST-0001" });
+    }, [409, "production_gate_stop_job_unknown"]],
   ] as const) {
     const h = setup();
     h.sqlite.exec("DROP TRIGGER production_gate_clearances_validate_insert");
@@ -1697,6 +1793,8 @@ test("the validate trigger after every migration still holds A1's, A2's and A3's
     "competency.authority_scope = 'site_safety'",
     "production_gate_safety_permit_unknown",
     "'$.permit.answer'",
+    "production_gate_stop_job_unknown",
+    "FROM operating_roof_jobs job",
     "'$.permit.number'",
     "production_gate_forecast_stale",
     "production_gate_weather_window_invalid",

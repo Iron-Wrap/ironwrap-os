@@ -79,6 +79,8 @@ export interface StepInput {
     actor: { type: string; authenticated: boolean } | null;
     /** The action a press on a view's action asked for (ask.ts postRequest); null for an ask. */
     expected_action_id?: string | null;
+    /** The record the signal is about; an inbound event's is the lead the envelope becomes. */
+    subject?: { aggregate: string; id: string } | null;
   } | null;
 }
 
@@ -95,6 +97,12 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
   // The press is on compliance's view for this action, never one for another action.
   ["authority.record", { sources: new Set(["request"]), named: false, pressFor: true }],
 ]);
+
+/** A lead id other than `leadId`; an argument with none is left to the schema. */
+function otherLead(args: unknown, leadId: string): boolean {
+  const named = typeof args === "object" && args !== null ? (args as { lead_id?: unknown }).lead_id : undefined;
+  return typeof named === "string" && named !== leadId;
+}
 
 /**
  * Actions that propose from the inbound a run answers and cite only that inbound (contract
@@ -199,6 +207,9 @@ export function evaluateStep(input: StepInput): PolicyDecision {
       !inbound ||
       inbound.kind !== "event" ||
       !INBOUND_CHANNELS.has(inbound.source) ||
+      // Only for the lead that inbound is about: text in one lead's message never proposes another's.
+      inbound.subject?.aggregate !== "lead" ||
+      otherLead(input.args, inbound.subject.id) ||
       input.citations.length === 0 ||
       input.citations.some((citation) => citation.fact_id !== inbound.signal_ref)
     )

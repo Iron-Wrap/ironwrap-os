@@ -240,8 +240,8 @@ Current source tracing distinguishes implemented modules from reachable producti
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
   step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event the
-  run answers, an event that came by an inbound channel, and may cite only that event
-  (`signal/<id>`); the host offers it once the receptionist's allowlist names it. An open proposal
+  run answers, an event that came by an inbound channel, for the lead that event is about, and may
+  cite only that event (`signal/<id>`); the host offers it once the receptionist's allowlist names it. An open proposal
   is the fact `lead_proposal/<step_id>` (read at
   `sales:read`), linked from its lead, so a later run about the lead can confirm it; a
   `lead_fact.confirm` must name an open proposal of the same lead and tenant (else `fact_missing`
@@ -289,8 +289,8 @@ Current source tracing distinguishes implemented modules from reachable producti
   The inbound producer (`workers-bus/src/agents/inbound.ts`, `test/agents-inbound.test.ts`)
   appends one `event` signal for `lead_concierge`, watch `new_inbound`, per inbound envelope from
   generic ingest, office capture, the estimator and Newo: at the end of `insertEnvelope`, best
-  effort, so intake never fails on it, and from the five-minute cron's sweep for any envelope still
-  without one; its dedupe key `inbound:<envelope_id>` keeps it to one. A CRM import's envelopes and
+  effort and waited on at most two seconds, so intake never fails on it, and from the five-minute
+  cron's sweep for any envelope of the last two days still without one; its dedupe key `inbound:<envelope_id>` keeps it to one. A CRM import's envelopes and
   release-smoke rows give none. Its source is the channel, its subject the lead the envelope
   becomes, and its content exactly `envelope_id`, `channel`, `brand`, `received_via`, `sender`,
   `has_phone`, `has_email`, `service`, `excerpt` and `form_fields` (contract "The inbound signal");

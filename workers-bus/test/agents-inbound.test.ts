@@ -16,6 +16,7 @@ import {
   produceInbound,
   senderMatch,
   sweepInbound,
+  SWEEP_WINDOW_MS,
   type InboundSender,
 } from "../src/agents/inbound.ts";
 import { OBJECT_MODELS } from "../src/agents/read-models.ts";
@@ -315,8 +316,27 @@ test("intake never fails for a signal: the insert logs it, and the sweep produce
   assert.deepEqual(inboundSignals(db).map((row) => row.dedupe_key), [`inbound:${envelopeId}`]);
 });
 
+test("intake waits on the hook at most two seconds; the sweep produces what that leaves", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: unknown) => void logged.push(String(line)));
+  const hung = { prepare: () => ({ bind: () => ({ all: () => new Promise(() => {}), first: () => new Promise(() => {}), run: () => new Promise(() => {}) }) }) };
+  const rec = envelope();
+  let done = false;
+  const hook = inboundAfterInsert({ DB: hung, AGENT_INBOUND_FROM: ON }, TENANT, rec).then(() => (done = true));
+  await Promise.resolve();
+  t.mock.timers.tick(1_999);
+  await Promise.resolve();
+  assert.equal(done, false);
+  t.mock.timers.tick(1);
+  await hook;
+  assert.deepEqual(logged.map((line) => JSON.parse(line)), [{ at: "agent_inbound", envelope_id: rec.envelope_id, error: "Error: inbound_hook_timeout" }]);
+});
+
 test("the producer is off until AGENT_INBOUND_FROM names an instant, and a release smoke never produces", async () => {
-  for (const raw of [undefined, "", "   ", "yes", "2026-10-20", "2026-10-20T15:52:43", "2026-10-20 15:52:43Z", "2026-13-45T15:52:43Z"])
+  for (const raw of [undefined, "", "   ", "yes", "2026-10-20", "2026-10-20T15:52:43", "2026-10-20 15:52:43Z", "2026-13-45T15:52:43Z",
+    // Dates the calendar lacks are off, never rolled forward to another instant.
+    "2026-02-30T00:00:00Z", "2026-11-31T00:00:00Z", "2026-10-20T24:00:00Z", "2026-10-20T23:60:00Z", "2026-10-20T23:59:60Z"])
     assert.equal(inboundFrom(raw), null, String(raw));
   assert.equal(inboundFrom("2026-10-20T15:52:43Z"), "2026-10-20T15:52:43.000Z");
   assert.equal(inboundFrom(" 2026-10-20T17:52:43.250+02:00 "), "2026-10-20T15:52:43.250Z");
@@ -416,7 +436,9 @@ test("the content holds exactly its keys and names nobody, and caps what the sen
   assert.deepEqual(await fields({ address: " 1 Synthetic Way ", city: "", province: "AB", postal_code: null }), { address: "1 Synthetic Way, AB", scope: null, timing: null });
   assert.deepEqual((await fields({ address: "2 Estimator Way", city: "Calgary", state_text: "AB", zip: "T2P 0A2" })).address, "2 Estimator Way, Calgary, AB, T2P 0A2");
   assert.deepEqual((await fields({ address_line1: "3 Newo Way", city: "Airdrie", province: "AB", postal_code: "T4B 0A3" })).address, "3 Newo Way, Airdrie, AB, T4B 0A3");
+  assert.deepEqual((await fields({ address1: "4 Webhook Way", city: "Calgary", state: "AB", postal: "T2P 0A4" })).address, "4 Webhook Way, Calgary, AB, T2P 0A4");
   assert.deepEqual(await fields({ address: "", city: " ", province: 5 }), { address: null, scope: null, timing: null });
+  assert.equal((await contentOf({ service_intent: " Metal roof " })).service, "Metal roof");
   assert.equal((await fields({ address: "a".repeat(595), city: "Calgary" })).address, `${"a".repeat(595)}, Cal`);
   assert.deepEqual(await fields({ timing: "", preferred_time: "mornings", timeline: "spring" }), { address: null, scope: null, timing: "mornings" });
   assert.equal((await fields({ timeline: "spring" })).timing, "spring");
@@ -470,7 +492,7 @@ test("the sender is matched exactly, by email, phone or both, never to its own c
 test("the sweep takes inbound envelopes from the switch's instant on, oldest first, and skips the rest", async () => {
   const db = new SqliteD1();
   const id = (n: number) => `ow_00000000-0000-4000-8000-0000000001${String(n).padStart(2, "0")}`;
-  const at = (minute: number) => `2026-02-01T10:${String(minute).padStart(2, "0")}:00.000Z`;
+  const at = (minute: number) => `2026-01-01T10:${String(minute).padStart(2, "0")}:00.000Z`;
   const rows = {
     atInstant: envelope({ envelope_id: id(1), created_at: FROM }),
     first: envelope({ envelope_id: id(2), created_at: at(1), source: "phone", payload: { provider: "newo" } }),
@@ -486,7 +508,7 @@ test("the sweep takes inbound envelopes from the switch's instant on, oldest fir
   };
   for (const rec of Object.values(rows)) insertRow(db, rec);
   const swept = () => inboundSignals(db).map((row) => row.dedupe_key.slice("inbound:".length));
-  const now = "2026-02-01T11:00:00.000Z";
+  const now = "2026-01-01T11:00:00.000Z";
 
   assert.deepEqual(await sweepInbound(db, TENANT, FROM, now, 2), { produced: 2, failed: 0 });
   assert.deepEqual(swept(), [rows.atInstant.envelope_id, rows.first.envelope_id]);
@@ -498,6 +520,14 @@ test("the sweep takes inbound envelopes from the switch's instant on, oldest fir
   assert.deepEqual(await sweepInbound(db, TENANT, FROM, now), { produced: 0, failed: 0 });
   assert.deepEqual(swept(), [rows.atInstant.envelope_id, rows.first.envelope_id, rows.third.envelope_id, rows.second.envelope_id]);
   assert.deepEqual(inboundSignals(db).map((row) => row.source), ["web_form", "newo_call", "gbp", "walk_in"]);
+  // Each tick reads only the last two days: an envelope every tick missed for longer gets none.
+  const later = "2026-01-05T00:00:00.000Z";
+  const stale = envelope({ envelope_id: id(10), created_at: new Date(Date.parse(later) - SWEEP_WINDOW_MS - 1).toISOString() });
+  const recent = envelope({ envelope_id: id(11), created_at: new Date(Date.parse(later) - SWEEP_WINDOW_MS).toISOString() });
+  insertRow(db, stale);
+  insertRow(db, recent);
+  assert.deepEqual(await sweepInbound(db, TENANT, FROM, later), { produced: 1, failed: 0 });
+  assert.deepEqual(swept().slice(-1), [recent.envelope_id]);
 });
 
 test("the five-minute cron sweeps a missed inbound signal in, and only while the switch is on", async (t) => {

@@ -847,8 +847,9 @@ them and follows these conventions:
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
   citations, never an argument. Only a run started by the inbound event itself may propose it, an
-  event whose source is one of the inbound channels ("The inbound signal"), and every citation is
-  that event (`signal/<id>`); anything else stops (`out_of_scope`). A lead's
+  event whose source is one of the inbound channels ("The inbound signal"), only for the lead that
+  event is about (its subject), and every citation is that event (`signal/<id>`); anything else
+  stops (`out_of_scope`). A lead's
   proposals stay open by one rule: a newer proposal for the same lead that sets every key an older
   open one set supersedes it, while one that sets only some of those keys leaves the older one
   open. A proposal closes for good once any `lead_fact.confirm` that policy admitted names it,
@@ -1530,7 +1531,8 @@ work.
 gives one `event` signal for `lead_concierge` with watch id `new_inbound`. Its `source` is the
 channel the envelope came by, its subject is the lead the envelope becomes (whether or not that
 lead exists yet), and its dedupe key is `inbound:<envelope_id>`, so it counts once: the envelope's
-insert appends it, best effort, and a five-minute sweep appends any that is still missing. An
+insert appends it, best effort (intake waits on it at most two seconds), and a five-minute sweep
+appends any from the last two days that is still missing. An
 envelope a CRM import wrote is never inbound, and a release-smoke envelope gives no signal.
 
 The channel follows the envelope's source: `web_form`, or `instant_estimate` for an instant

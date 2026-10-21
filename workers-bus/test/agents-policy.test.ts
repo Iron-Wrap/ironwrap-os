@@ -530,7 +530,7 @@ test("a prepared people-only act names the person who performs it, under a hold 
 });
 
 test("lead_fact.propose proposes from the inbound the run answers and cites only it", () => {
-  const INBOUND = { signal_ref: "signal/sig_1", kind: "event", source: "web_form", actor: null };
+  const INBOUND = { signal_ref: "signal/sig_1", kind: "event", source: "web_form", actor: null, subject: { aggregate: "lead", id: "L-5401" } };
   const fields = { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null };
   const propose = (overrides: Partial<StepInput> = {}, args: unknown = { lead_id: "L-5401", fields }) =>
     evaluateStep(input({ specialistId: "lead_concierge", actionId: "lead_fact.propose", args, requester: INBOUND, ...overrides }));
@@ -546,6 +546,9 @@ test("lead_fact.propose proposes from the inbound the run answers and cites only
     ["a record cited beside it", { citations: [{ fact_id: "signal/sig_1", version: 1 }, { fact_id: "lead/L-5401", version: 1 }], snapshot: new Map([[SIGNAL_FACT.fact_id, SIGNAL_FACT], [leadFact.fact_id, leadFact]]), currentVersions: new Map([["signal/sig_1", 1], ["lead/L-5401", 1]]) }],
     ["another signal", { citations: [{ fact_id: "signal/sig_2", version: 1 }] }],
     ["nothing cited", { citations: [] }],
+    ["another lead than the inbound's", { args: { lead_id: "L-5402", fields } }],
+    ["an inbound about no lead", { requester: { ...INBOUND, subject: null } }],
+    ["an inbound about another record", { requester: { ...INBOUND, subject: { aggregate: "customer", id: "L-5401" } } }],
   ] as const) {
     const stopped = propose(overrides as Partial<StepInput>);
     assert.deepEqual([stopped.outcome, stopped.reason_codes, requester(stopped)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
@@ -567,7 +570,7 @@ test("lead_fact.propose answers only an event that came by an inbound channel", 
         specialistId: "lead_concierge",
         actionId: "lead_fact.propose",
         args: { lead_id: "L-5401", fields: { service: "metal_roofing", scope: null, address: null, timing: null } },
-        requester: { signal_ref: "signal/sig_1", kind: "event", source, actor: null },
+        requester: { signal_ref: "signal/sig_1", kind: "event", source, actor: null, subject: { aggregate: "lead", id: "L-5401" } },
       }),
     );
   for (const channel of ["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]) {

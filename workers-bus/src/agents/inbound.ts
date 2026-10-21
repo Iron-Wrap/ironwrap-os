@@ -13,7 +13,7 @@
 // sender wrote, so they may hold a name, a number or an address (the form's address is one); like
 // all signal content they are untrusted text, read only by the receptionist's run on the signal.
 
-import { normalizeEmail, normalizePhone, type EnvelopeRecord } from "../core.ts";
+import { ALLOWED_SOURCES, normalizeEmail, normalizePhone, type EnvelopeRecord } from "../core.ts";
 import { stableId } from "../operating-core.ts";
 import { INBOUND_CHANNELS } from "./policy.ts";
 import { appendSignal, type AgentDb } from "./store.ts";
@@ -52,8 +52,8 @@ export interface InboundContent {
   form_fields: { address: string | null; scope: string | null; timing: string | null };
 }
 
-/** The envelope sources the intake paths write (core.ts ALLOWED_SOURCES); no other is inbound. */
-const SOURCES = ["website", "phone", "gbp", "ad", "referral", "manual"];
+/** The envelope sources the intake paths write; no other is inbound. */
+const SOURCES: readonly string[] = ALLOWED_SOURCES;
 const NO_MATCH: InboundSender = { customer_id: null, matched_on: null, conflict: false };
 // The lengths lead_fact.propose takes for each value (registry.ts LEAD_FACT_FIELDS), and the
 // excerpt's.
@@ -62,6 +62,10 @@ const ADDRESS_MAX = 600;
 const SCOPE_MAX = 2000;
 const TIMING_MAX = 600;
 const EXCERPT_MAX = 1000;
+/** How far back the cron's sweep looks for an envelope without its signal. */
+export const SWEEP_WINDOW_MS = 48 * 3_600_000;
+/** How long intake waits on the hook before it goes on; the sweep produces what that leaves. */
+const HOOK_WAIT_MS = 2_000;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -73,8 +77,13 @@ const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
  */
 export function inboundFrom(raw: string | undefined): string | null {
   const value = raw?.trim() ?? "";
-  const at = ISO_INSTANT.test(value) ? Date.parse(value) : Number.NaN;
-  return Number.isNaN(at) ? null : new Date(at).toISOString();
+  if (!ISO_INSTANT.test(value)) return null;
+  // Date.parse rolls 2026-02-30 or T24:00 forward; a date the calendar lacks is off, not shifted.
+  const [year, month, day, hour, minute, second] = value.slice(0, 19).split(/[-T:]/).map(Number);
+  const wall = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (wall.getUTCMonth() !== month - 1 || wall.getUTCDate() !== day || wall.getUTCHours() !== hour || wall.getUTCMinutes() !== minute || wall.getUTCSeconds() !== second)
+    return null;
+  return new Date(Date.parse(value)).toISOString();
 }
 
 /**
@@ -121,7 +130,7 @@ export async function inboundSignal(tenantId: string, envelope: EnvelopeRecord, 
     sender,
     has_phone: normalizePhone(envelope.contact_phone) !== null,
     has_email: normalizeEmail(envelope.contact_email) !== null,
-    service: text(payload.service, SERVICE_MAX),
+    service: firstText([payload.service, payload.service_intent], SERVICE_MAX),
     // The customer's own words: a form's message, or what a Newo call handed off.
     excerpt: firstText([payload.message, payload.handoff_summary], EXCERPT_MAX),
     form_fields: {
@@ -172,19 +181,24 @@ export async function inboundAfterInsert(
   try {
     const from = inboundFrom(env.AGENT_INBOUND_FROM);
     if (from === null || !isInbound(envelope, from)) return;
-    await produceInbound(env.DB as AgentDb, tenantId, envelope, new Date().toISOString());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("inbound_hook_timeout")), HOOK_WAIT_MS)));
+    try {
+      await Promise.race([produceInbound(env.DB as AgentDb, tenantId, envelope, new Date().toISOString()), late]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   } catch (error) {
     log({ at: "agent_inbound", envelope_id: envelope.envelope_id, error: String(error) });
   }
 }
 
 /**
- * The cron's backstop: produces the signal of each inbound envelope recorded at or after `from`
- * (as inboundFrom gives it) that has none, oldest first, at most `limit` a tick. One that fails is
- * counted and comes back on the next tick; the others still run.
- *
- * ponytail: each tick reads every envelope since `from` (idx_env_day) to find the few without a
- * signal; move AGENT_INBOUND_FROM forward, or keep a cursor, once that range is slow to read.
+ * The cron's backstop: produces the signal of each inbound envelope recorded in the last
+ * SWEEP_WINDOW_MS, and at or after `from` (as inboundFrom gives it), that has none, oldest first, at
+ * most `limit` a tick. One that fails is counted and logged and comes back on the next tick; the
+ * others still run. The window keeps each tick's read bounded; an envelope its hook and two days of
+ * ticks all missed gets no signal.
  */
 export async function sweepInbound(
   db: AgentDb,
@@ -194,6 +208,7 @@ export async function sweepInbound(
   limit = 25,
 ): Promise<{ produced: number; failed: number }> {
   // The same envelopes isInbound admits.
+  const floor = new Date(Math.max(Date.parse(from), Date.parse(now) - SWEEP_WINDOW_MS)).toISOString();
   const pending = await db
     .prepare(
       `SELECT * FROM envelopes e
@@ -202,15 +217,16 @@ export async function sweepInbound(
           AND NOT EXISTS (SELECT 1 FROM agent_signals s WHERE s.tenant_id = e.tenant_id AND s.dedupe_key = 'inbound:' || e.envelope_id)
         ORDER BY e.created_at ASC, e.envelope_id ASC LIMIT ?`,
     )
-    .bind(tenantId, from, ...SOURCES, limit)
+    .bind(tenantId, floor, ...SOURCES, limit)
     .all<EnvelopeRecord>();
   let produced = 0;
   let failed = 0;
   for (const envelope of pending.results ?? []) {
     try {
       if ((await produceInbound(db, tenantId, envelope, now))?.created) produced += 1;
-    } catch {
+    } catch (error) {
       failed += 1;
+      log({ at: "agent_inbound_sweep", envelope_id: envelope.envelope_id, error: String(error) });
     }
   }
   return { produced, failed };
@@ -249,16 +265,16 @@ function channelOf(source: string, payload: Record<string, unknown>): InboundCha
 }
 
 /**
- * The address as the sender gave it, from the keys each intake path writes: `address` (Newo's
- * `address_line1`), `city`, `province` (the public estimator's `state_text`) and `postal_code` (its
- * `zip`), the blank ones skipped.
+ * The address as the sender gave it, from the keys the operating core reads (operating-core.ts) and
+ * the public estimator's `state_text`: street, city, province and postal code, the blank ones
+ * skipped.
  */
 function addressOf(payload: Record<string, unknown>): string | null {
   const parts = [
-    firstText([payload.address, payload.address_line1], ADDRESS_MAX),
+    firstText([payload.address, payload.address1, payload.address_line1], ADDRESS_MAX),
     text(payload.city, ADDRESS_MAX),
-    firstText([payload.province, payload.state_text], ADDRESS_MAX),
-    firstText([payload.postal_code, payload.zip], ADDRESS_MAX),
+    firstText([payload.province, payload.state, payload.state_text], ADDRESS_MAX),
+    firstText([payload.postal, payload.postal_code, payload.zip], ADDRESS_MAX),
   ].filter((part): part is string => part !== null);
   return parts.length > 0 ? text(parts.join(", "), ADDRESS_MAX) : null;
 }

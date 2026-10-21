@@ -24,7 +24,8 @@ export interface Applied {
   by: string;
 }
 
-const CLOSE = `UPDATE agent_run_steps SET reason_code = ?, policy_json = json_set(policy_json, '$.reason_codes', json_array(?)),
+// The pair index, named: with two owners in the IN list the planner may otherwise scan the tenant.
+const CLOSE = `UPDATE agent_run_steps INDEXED BY idx_agent_run_steps_pair SET reason_code = ?, policy_json = json_set(policy_json, '$.reason_codes', json_array(?)),
   needs_ask = NULL, readback_json = ?, do_it_myself_json = CASE WHEN ? IS NULL THEN do_it_myself_json
     ELSE json_set(do_it_myself_json, '$.context.applied', json(?)) END,
   decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), version = version + 1

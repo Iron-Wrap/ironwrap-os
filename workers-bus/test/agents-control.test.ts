@@ -2495,13 +2495,24 @@ test("migration 0206: the decided-step guard is 0200's plus one exception that o
 
   // The closing code leaves the draft open when its own condition fails: a newer draft that was
   // never recorded, another tenant, or an owner setting refused as stale.
-  const { closeDelegationDrafts, supersedeDrafts } = await import("../src/agents/drafts.ts");
+  const { closeAccessDrafts, closeDelegationDrafts, supersedeDrafts } = await import("../src/agents/drafts.ts");
   const args = { specialist_id: "lead_concierge", action_id: "note.add", proposed: "asks_first", ceiling: null, reason: "Synthetic." };
   await (await supersedeDrafts(s.db, TENANT, { step_id: "step_never_recorded", action_id: "delegation.propose_change", args, args_sha256: "synthetic" }))!.run();
   await (await closeDelegationDrafts(s.db, "tenant_synthetic", args, "asks_first", "appu_test_owner")).run();
   const stale = await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 7 }), "owner", "close-stale");
   assert.equal(stale.status, 409);
   assert.equal(s.scalar("SELECT needs_ask FROM agent_run_steps WHERE step_id = ?", draft.step_id).needs_ask, "apply_in_own_screen");
+  // Every close reads the pair index, never every succeeded step of the tenant.
+  const closes: string[] = [];
+  const spy = { prepare: (sql: string) => (closes.push(sql), s.db.prepare(sql)) } as unknown as typeof s.db;
+  await supersedeDrafts(spy, TENANT, { step_id: "step_x", action_id: "access.prepare_change", args: { person_ref: "person:x", change: "change_role", device_ref: null }, args_sha256: "x" });
+  await closeDelegationDrafts(spy, TENANT, args, "asks_first", "appu_test_owner");
+  await closeAccessDrafts(spy, TENANT, "appu_x", "sales", "appu_test_owner");
+  assert.equal(closes.length, 3);
+  for (const sql of closes) {
+    const plan = (s.db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((row) => row.detail).join("; ");
+    assert.match(plan, /^SEARCH agent_run_steps USING INDEX idx_agent_run_steps_pair/, plan);
+  }
 
   const before = s.scalar("SELECT version FROM agent_run_steps WHERE step_id = ?", draft.step_id).version as number;
   assert.equal(update(CLOSE)().changes, 1);

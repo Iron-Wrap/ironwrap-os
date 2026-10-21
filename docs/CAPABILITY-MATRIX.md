@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 135,
-      "latest": "0205_agent_step_pair_index.sql"
+      "count": 136,
+      "latest": "0206_agent_draft_closing.sql"
     }
   },
   "test_observation_policy": {
@@ -244,8 +244,10 @@ Current source tracing distinguishes implemented modules from reachable producti
   it, so the host offers it. The app has no import screen, so the Retry a person would use for an
   import run's failed items is not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
-  too, and never under Done for you; closing that draft when the matching act lands or a newer
-  draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.
+  too, and never under Done for you. It closes (`applied_by_person` or `superseded`) when the
+  person's role change or the owner's delegation or practice setting lands, or a newer draft for
+  the same record replaces it; migration 0206 lets only that close past the decided-step guard. A
+  "Not now" for it is not built yet.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: no inbound
@@ -329,9 +331,9 @@ Current source tracing distinguishes implemented modules from reachable producti
     (#17, not merged) records it for production gate waiver decisions.
   - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
     operation-sets slice builds the four sets.
-  - Closing a prepared people-only draft: the receipt codes `applied_by_person` and `superseded`
-    (under `succeeded`) and the app's words and notes for them exist, but nothing closes the draft,
-    and no receipt renders a note yet (`words.note`, `VIEW_REFUSED` included).
+  - A prepared people-only draft: "Not now" is not built, `payee.unfreeze_prepare` and
+    `safety_stop.release_prepare` drafts (no registered arguments) do not close, and no receipt
+    renders a note yet (`words.note`, `VIEW_REFUSED` included).
   - The lead proposal open rule: the Worker serves no `lead_proposal` fact.
   - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
     tenant policy lists no company pages.

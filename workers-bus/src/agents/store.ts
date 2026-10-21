@@ -5,7 +5,7 @@
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
 import { APPLY_IN_OWN_SCREEN } from "./receipts.ts";
-import { DEFAULT_CEILINGS, evaluateStep, INBOUND_ONLY, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
+import { DEFAULT_CEILINGS, evaluateStep, INBOUND_ONLY, PERSON_REQUEST_ONLY, PREPARES_PEOPLE_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
 import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
 import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
@@ -15,6 +15,7 @@ import { CANDIDATE_BAR, currentQualifications, delegationCandidates, qualificati
 import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
+import { supersedeDrafts } from "./drafts.ts";
 
 export interface BoundStatement {
   first<T>(): Promise<T | null>;
@@ -817,7 +818,15 @@ export async function proposeStep(
           stepId,
         ),
       ]);
-    } else await insert.run();
+    } else {
+      // A people-only draft replaces the open drafts of the same record, in the same transaction.
+      const replaces =
+        PREPARES_PEOPLE_ONLY.has(input.action_id) && decision.permit_kind === "draft" && decision.outcome === "succeeded"
+          ? await supersedeDrafts(db, tenantId, { step_id: stepId, action_id: input.action_id, args: input.args, args_sha256: argsSha }, now)
+          : null;
+      if (replaces) await db.batch([insert, replaces]);
+      else await insert.run();
+    }
     if (ceiling !== null && !(await stepByKey(db, run.run_id, input.step_key))) {
       const reviewer = catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner";
       const latestControl = admission?.guardControls

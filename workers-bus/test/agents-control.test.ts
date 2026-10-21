@@ -41,6 +41,7 @@ class SqliteD1 {
           "0203_agent_shadow_agreement.sql",
           "0204_agent_watch_firings.sql",
           "0205_agent_step_pair_index.sql",
+          "0206_agent_draft_closing.sql",
         ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")
@@ -2352,4 +2353,81 @@ test("the pair index serves the delegation reads, and only the face proposes del
     "SELECT COUNT(*) FROM agent_run_steps s LEFT JOIN agent_step_decisions d ON d.step_id = s.step_id WHERE s.tenant_id = 't' AND s.specialist_id = 's' AND s.action_id = 'a'",
   ])
     assert.match(plan(sql), /idx_agent_run_steps_pair/, sql);
+});
+
+// --- Closing prepared people-only drafts (contract f5) ---
+
+test("a delegation proposal closes when the owner sets the pair, or when a newer proposal replaces it", async () => {
+  const s = setup(true);
+  const face = async () => await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+  const propose = async (proposed: string, reason: string) => {
+    const body = (await s.propose(await face(), "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "note.add", proposed, ceiling: null, reason })).body;
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return body.step_id as string;
+  };
+  const step = (id: string) => {
+    const row = s.scalar("SELECT outcome, reason_code, needs_ask, readback_json, do_it_myself_json, permit_json, policy_json FROM agent_run_steps WHERE step_id = ?", id);
+    return {
+      outcome: row.outcome,
+      reason_code: row.reason_code,
+      reason_codes: JSON.parse(row.policy_json).reason_codes,
+      needs_ask: row.needs_ask,
+      readback: row.readback_json ? JSON.parse(row.readback_json) : null,
+      applied: JSON.parse(row.do_it_myself_json).context?.applied ?? null,
+      approved_by: JSON.parse(row.permit_json).approved_by,
+    };
+  };
+  const lane = async (view: string) => (await s.app(`/receipts?view=${view}`)).body.receipts.map((entry: { step_id: string }) => entry.step_id);
+
+  // A newer proposal for the same pair replaces the older one, which names where the newer waits.
+  const first = await propose("asks_first", "Synthetic: keep asking.");
+  s.tick(1_000);
+  const second = await propose("shadow", "Synthetic: practise first.");
+  assert.deepEqual(step(first), {
+    outcome: "succeeded",
+    reason_code: "superseded",
+    reason_codes: ["superseded"],
+    needs_ask: null,
+    readback: { source: "owned_store", reference: `step/${second}`, response_hash: s.scalar("SELECT args_sha256 a FROM agent_run_steps WHERE step_id = ?", second).a, matched: true },
+    applied: null,
+    approved_by: null,
+  });
+  assert.deepEqual([(await lane("needs_you")).includes(first), (await lane("done")).includes(first), (await lane("needs_you")).includes(second)], [false, true, true]);
+
+  // The owner turns practice on: the proposal that asked for it is applied by the owner.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "close-shadow")).status, 200);
+  const applied = step(second);
+  assert.deepEqual(
+    [applied.reason_codes, applied.needs_ask, applied.readback.reference, applied.readback.matched, applied.applied, applied.approved_by],
+    [["applied_by_person"], null, "delegation/lead_concierge:note.add", true, { field: "delegation_setting", value: "shadow", by: "appu_test_owner" }, null],
+  );
+  // The owner sets something else than a proposal asked for: it closes superseded, naming what is set.
+  s.tick(1_000);
+  const third = await propose("shadow", "Synthetic: practise again.");
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null }), "owner", "close-asks")).status, 200);
+  const other = step(third);
+  assert.deepEqual([other.reason_codes, other.readback.reference, other.applied], [["superseded"], "delegation/lead_concierge:note.add", { field: "delegation_setting", value: "asks_first", by: "appu_test_owner" }]);
+  // Another pair's proposal is untouched.
+  const elsewhere = (await s.propose(await face(), "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "lead.qualify", proposed: "shadow", ceiling: null, reason: "Synthetic: another action." })).body;
+  if (elsewhere.decision === "drafted") assert.equal(step(elsewhere.step_id).needs_ask, "apply_in_own_screen");
+  // A retried proposal records nothing new and so replaces nothing.
+  const run = await face();
+  const args = { specialist_id: "lead_concierge", action_id: "note.add", proposed: "asks_first", ceiling: null, reason: "Synthetic: once." };
+  const once = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
+  const again = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
+  assert.deepEqual([again, step(once).needs_ask], [once, "apply_in_own_screen"]);
+  // Only that close moves a decided step: any other change to it, or a close that also touches its
+  // permit or carries another code, is refused as before (migration 0206).
+  const close = (set: string) => () => s.db.raw.prepare(`UPDATE agent_run_steps SET ${set} WHERE step_id = ?`).run(once);
+  for (const set of [
+    "permit_json = json_set(permit_json, '$.approved_by', 'appu_test_owner'), needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded'))",
+    "needs_ask = NULL, reason_code = 'declined', policy_json = json_set(policy_json, '$.reason_codes', json_array('declined'))",
+    "needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('applied_by_person'))",
+    "outcome = 'failed', needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded'))",
+    "reason_code = 'superseded'",
+  ])
+    assert.throws(close(set), /agent_step_decided/, set);
+  assert.throws(() => s.db.raw.prepare("UPDATE agent_run_steps SET readback_json = '{}' WHERE step_id = ?").run(first), /agent_step_decided/, "a closed draft is final");
 });

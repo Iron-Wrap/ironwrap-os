@@ -18,6 +18,8 @@
 //     owner — is answered here against D1, never by what the caller claims.
 
 import * as authStore from "./app-auth-store.ts";
+import { closeAccessDrafts } from "./agents/drafts.ts";
+import type { AgentDb } from "./agents/store.ts";
 import {
   appPublicOrigin,
   authRequestContext,
@@ -629,6 +631,8 @@ export async function changeAppUserRole(
     request: await authRequestContext(req, env),
     detailCode: `${user.role}->${updated.role}:${auth.session.user_id}`,
   });
+  // The person's change answers the AI team's open role-change drafts for them (best effort).
+  await closeAccessDrafts(env.DB as unknown as AgentDb, auth.session.tenant_id, updated.user_id, updated.role, auth.session.user_id, new Date().toISOString());
   return {
     ok: true,
     body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },

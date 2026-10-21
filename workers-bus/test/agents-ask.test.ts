@@ -1470,3 +1470,34 @@ test("a refused ask says when to come back: the oldest of the window leaves, and
   // The window's oldest ask leaves in nine minutes; the waiting asks stop counting in fifteen.
   assert.deepEqual([both.body.error, both.retryAfter], ["too_many_pending_asks", String(15 * 60)]);
 });
+
+test("a person's role change closes the open role-change drafts for them, and leaves device drafts open", async () => {
+  const t = setup();
+  const { closeAccessDrafts } = await import("../src/agents/drafts.ts");
+  const draft = async (key: string, args: (ref: string) => Record<string, unknown>) => {
+    const askId = await ask(t, "owner", key, askBody("Synthetic: change the crew member's access.", null));
+    const run = await openFace(t, askId);
+    const own = factOf(run, `signal/${askId}`);
+    const body = await step(t, run.run_id, "access.prepare_change", args(own.fact_id), [cite(own)]);
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return body.step_id as string;
+  };
+  const toSales = await draft("ask-role-sales", (ref) => ({ ...pairing(ref), change: "change_role", target_role: "sales" }));
+  const toProduction = await draft("ask-role-production", (ref) => ({ ...pairing(ref), person_ref: "person:appu_field_0002", change: "change_role", target_role: "production" }));
+  const device = await draft("ask-device", (ref) => pairing(ref));
+  const row = (id: string) => t.db.raw.prepare("SELECT reason_code, needs_ask, readback_json, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(id) as Record<string, string | null>;
+  const person = (pairing("signal/x").person_ref as string).slice("person:".length);
+  // The owner sets the role the first draft proposed.
+  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001", new Date().toISOString()), true);
+  const applied = row(toSales);
+  assert.deepEqual(
+    [applied.reason_code, applied.needs_ask, JSON.parse(applied.readback_json!).reference, JSON.parse(applied.do_it_myself_json!).context.applied],
+    ["applied_by_person", null, `person:${person}`, { field: "role", value: "sales", by: "appu_owner_0001" }],
+  );
+  // The device draft for the same person, and another person's role draft, stay open.
+  assert.deepEqual([row(device).needs_ask, row(toProduction).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
+  // A different role than proposed closes it superseded, naming what is set now.
+  await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001", new Date().toISOString());
+  const other = row(toProduction);
+  assert.deepEqual([other.reason_code, JSON.parse(other.do_it_myself_json!).context.applied.value], ["superseded", "sales"]);
+});

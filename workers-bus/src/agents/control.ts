@@ -12,6 +12,7 @@ import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist } from "./ca
 import { citedFacts } from "./memory.ts";
 import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSetting } from "./policy.ts";
 import { CEILING_SCHEMA, competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
+import { closeDelegationDrafts } from "./drafts.ts";
 import { afterCatastrophe, decisionAgreement, shadowSetting, unqualifiedSince } from "./shadow.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 import {
@@ -289,6 +290,8 @@ export async function setDelegation(
   const control = await specialistControl(db, tenantId, input.specialist_id);
   if (control.held && input.setting === "within_limits") return { error: "specialist_held", status: 409 };
   const settingId = `dlg_${crypto.randomUUID()}`;
+  // The owner's own change answers the face's open proposals for the pair (contract f5).
+  const answered = await closeDelegationDrafts(db, tenantId, input, input.setting, actor.user_id, now);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),
@@ -361,6 +364,7 @@ export async function setDelegation(
           AND json_extract(permit_json,'$.delegation_id') IS NOT NULL`,
         )
         .bind(now, tenantId, input.specialist_id, input.action_id),
+      answered,
     ]);
   } catch (error) {
     const refusal = controlError(error);

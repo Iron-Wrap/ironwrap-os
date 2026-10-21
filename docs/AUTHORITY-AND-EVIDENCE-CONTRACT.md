@@ -643,6 +643,31 @@ revision and the policy's Deposit entries take D1's clock, not the Worker's:
   name the policy and the term to change; the customer gets the code and plain words only, and the
   log keeps the policy and the term. D1 aborts such an acceptance as the backstop.
 
+Materials, Access, Weather and Safety also clear on a person's attestation (migration `0158`): one
+small typed record per gate, by an active owner or production person who is on no crew, whose only
+free text is an optional note of at most 300 characters kept in the redactable reason. Its evidence
+is 0 to 10 references to verified, stored Work Package captures of the job or, for Materials, live
+stock reservations of the job; the Worker resolves each reference and records its checksum, so a
+client never supplies a hash. Safety is its own operation set, `production.gates.safety`, carried
+today by owner and production. Its proof answers the permit: needed and held, with the permit
+number, or not needed; an unknown answer is refused as `production_gate_safety_permit_unknown`, so
+the person changes the answer. Safety also needs the attester's current internal Worker Competency
+(`authority.record`) in site safety: `authority_scope` exactly `site_safety`, a closed token in a
+field that is otherwise free text, so an empty, foreign or near value does not count; verified by an
+internal assessment, neither revoked nor superseded, in force today and not bound to another job.
+Safety is refused while a stop applies to the job: an active stop on the tenant, the job or any of
+its Work Packages in any status, Superseded included; a crew `stop_work` on one of them that no
+release has lifted; or an active stop whose scope cannot be resolved, meaning an unknown scope type
+or a Work Package id that maps to no job. An active stop that names a job the tenant does not have
+holds Safety on every job of the tenant, refused as `production_gate_stop_job_unknown` with the
+stop's id. The owner's exception list shows it as "This work stop names a job that doesn’t exist",
+with who raised it, when and what they wrote, never the raw job id, and with no controls. Nothing
+refuses such a stop when it is recorded, because a person may always stop work, and a stop's scope
+cannot be corrected today, so it holds until it is lifted. Another job's stop, a shop or a vehicle
+stop does not hold it. The entry names the competency record, D1 checks both rules again at insert
+with the same predicate, and no agent or policy ever attests Safety. A person's entry, an
+attestation or a reversal, takes D1's clock, as the policy's entries do.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

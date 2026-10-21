@@ -2282,9 +2282,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
     // proposal revision checks. 0155 adds the owner's deposit policy (OD-01 payment on completion
     // or MD-13 deposits), which acceptance and the Deposit gate's policy entries follow. 0156 lets
-    // a person record whether an unconfirmed proposal send reached the customer.
+    // a person record whether an unconfirmed proposal send reached the customer. 0158 lets a
+    // person attest Materials, Safety, Access and Weather and reverse a gate entry, all through the
+    // gate ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 137);
+    assert.equal(migrations.length, 138);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2436,7 +2438,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (validate, audit, two append-only), and re-creates 0116's enqueue trigger and two 0153 guards
     // under their names. 0156 adds the proposal delivery confirmation ledger, one named
     // index, four guards and the proposal publish single-flight guard, and re-creates the external
-    // effect binding guard under its name.
+    // effect binding guard under its name. 0158 re-creates the gate ledger's validate and replace
+    // guards under their names, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
       { tables: 277, indexes: 379, triggers: 760 },
@@ -3777,9 +3780,10 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155 applied after 0156 and 0200-0205 on a database already through them gives the sorted schema", async () => {
-  // qa and production applied 0156 and 0200-0205 first, so they receive 0155 after them.
-  const late = ["0155_od01_deposit_policy.sql"];
+test("0155 and 0158 applied after 0156 and 0200-0205 on a database already through them give the sorted schema", async () => {
+  // qa and production applied 0156 and 0200-0205 first, so they receive 0155 and then 0158 after
+  // them. 0158 re-creates the validate guard 0155 re-creates, so it must land after 0155.
+  const late = ["0155_od01_deposit_policy.sql", "0158_production_gate_attestations.sql"];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));
   assert.ok(migrations.indexOf(late[0]!) < migrations.indexOf("0156_proposal_delivery_confirmations.sql"));

@@ -114,6 +114,41 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
     expect(words.note).toBe(VIEW_REFUSED);
   });
 
+  it("closes a people-only draft a person made by hand, never as Done for you", () => {
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        record: "Grace Obi's access",
+      }),
+    ).toEqual({
+      state: "done_by_person",
+      words: "Done by Dana Whitford",
+      kind: "done",
+      note: "Dana Whitford already made this change to Grace Obi's access, so this draft is closed. That does not undo the change, and nothing is left to do.",
+    });
+    expect(receiptWords(closed("succeeded", "applied_by_person"))).toMatchObject({
+      state: "done_by_person",
+      words: "Done by a person",
+      note: "A person already made this change, so this draft is closed. That does not undo the change, and nothing is left to do.",
+    });
+  });
+
+  it("closes a people-only draft a newer one replaced, and says where the newer one is", () => {
+    expect(
+      receiptWords(closed("succeeded", "superseded"), { record: "Grace Obi's access" }),
+    ).toEqual({
+      state: "replaced",
+      words: "Replaced",
+      kind: "retired",
+      note: "A newer draft for Grace Obi's access replaced this one. This draft changed nothing; the newer draft is in Needs you.",
+    });
+    expect(receiptWords(closed("succeeded", "superseded")).note).toBe(
+      "A newer draft of the same change replaced this one. This draft changed nothing; the newer draft is in Needs you.",
+    );
+    // A failed step a newer one replaced keeps its chip and needs no note.
+    expect(receiptWords(closed("failed", "superseded")).note).toBeUndefined();
+  });
+
   it("gives every held reason one sentence and one next step", () => {
     const why = (outcome: "failed" | "abstained", code: ReasonCode) =>
       receiptWords(closed(outcome, code), { where: "QuickBooks" });

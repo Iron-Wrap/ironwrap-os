@@ -152,9 +152,10 @@ describe("officeSessionIsLive", () => {
   });
 
   it("answers false when storage cannot be read", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    const getItem = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
       throw new Error("SecurityError: storage disabled");
     });
     expect(officeSessionIsLive()).toBe(false);
+    expect(getItem).toHaveBeenCalled();
   });
 });

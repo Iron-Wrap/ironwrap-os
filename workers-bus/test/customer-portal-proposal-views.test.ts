@@ -751,14 +751,20 @@ test("the first-open write runs after the response, so a slow or failing write n
       release = resolve;
     });
     const slow = executionContext();
-    const response = await worker.fetch(
-      resolveRequest(token),
-      { ...h.env, DB: writing(async (statement) => {
-        await gate;
-        return await statement.run();
-      }) } as never,
-      slow.ctx as never,
-    );
+    let timer!: ReturnType<typeof setTimeout>;
+    const response = await Promise.race([
+      worker.fetch(
+        resolveRequest(token),
+        { ...h.env, DB: writing(async (statement) => {
+          await gate;
+          return await statement.run();
+        }) } as never,
+        slow.ctx as never,
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("the page waited for the first-open write")), 5_000);
+      }),
+    ]).finally(() => clearTimeout(timer));
     assert.equal(response.status, 200);
     sameModel((await response.json()) as { read_model_generated_at: string });
     assert.equal(slow.pending.length, 1, "the write was handed to waitUntil");

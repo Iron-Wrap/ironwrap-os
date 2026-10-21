@@ -274,7 +274,8 @@ export function buildLeadTriageCommand(input: RecordLeadTriageInput): Readonly<R
  * proposed, claimed (authorized, executing, reconciling, retry), unknown, compensating, or a
  * manual exception. A person settles an unknown send or a manual exception with
  * `recordProposalDeliveryConfirmation`; D1 refuses any other move from unknown to succeeded or
- * reconciled (0164). Compensating clears when the compensation settles.
+ * reconciled unless a delivery check dated at the move justifies it, which no path does before B2
+ * (0164, 0167). Compensating clears when the compensation settles.
  */
 export const UNCONFIRMED_PROPOSAL_DELIVERY_STATES = [
   "proposed",
@@ -300,6 +301,8 @@ export interface ProposalDeliveryConfirmationRecord {
   confirmed_by_user_id: string;
   confirmed_by_role: string;
   created_at: string;
+  /** The delivery check a "not delivered" cites as provider evidence (0167), or null. */
+  delivery_check_id: string | null;
 }
 
 export class ProposalDeliveryConfirmationError extends Error {
@@ -319,8 +322,9 @@ export class ProposalDeliveryConfirmationError extends Error {
 /**
  * A person records what they found about a proposal send that could not be confirmed (0156): one
  * append-only row whose insert moves an `unknown` or `manual_exception` effect to `succeeded` or
- * `reconciled`, resolves its exception and writes the audit row. The same key with the same request
- * replays; anything else conflicts.
+ * `reconciled`, resolves its exception and writes the audit row. A "not delivered" may cite a
+ * delivery check of the same send as provider evidence (0167); on a send whose readback conflicted
+ * it must. The same key with the same request replays; anything else conflicts.
  */
 export async function recordProposalDeliveryConfirmation(
   env: AppEnv,
@@ -332,20 +336,24 @@ export async function recordProposalDeliveryConfirmation(
     actorUserId: string;
     actorRole: string;
     idempotencyKey: string;
+    deliveryCheckId?: string | null;
     now?: string;
   },
 ): Promise<{ confirmation: ProposalDeliveryConfirmationRecord; replayed: boolean; effectState: string }> {
   const keyHash = await sha256Hex(`proposal-delivery-confirmation\n${input.tenantId}\n${input.idempotencyKey}`);
+  const deliveryCheckId = input.deliveryCheckId ?? null;
   const requestSha = await sha256Hex(canonicalJson({
     effect_id: input.effectId,
     outcome: input.outcome,
     note: input.note,
     actor: input.actorUserId,
+    // Only when cited, so a confirmation recorded before 0167 still replays under its key.
+    ...(deliveryCheckId === null ? {} : { delivery_check_id: deliveryCheckId }),
   }));
   const readConfirmation = async (where: string, value: string) =>
     await env.DB.prepare(
       `SELECT confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome,
-              note, confirmed_by_user_id, confirmed_by_role, created_at, request_sha256
+              note, confirmed_by_user_id, confirmed_by_role, created_at, delivery_check_id, request_sha256
          FROM proposal_delivery_confirmations WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
     ).bind(input.tenantId, value).first<ProposalDeliveryConfirmationRecord & { request_sha256: string }>();
   const replay = async () => {
@@ -382,16 +390,31 @@ export async function recordProposalDeliveryConfirmation(
       delivery_state: effect.state,
     });
   }
+  // A cited check is provider evidence that the send went nowhere: a complete-scan "not found" of
+  // this same send, and only "not delivered" cites one. D1 holds the same rule (0167).
+  const cited = deliveryCheckId === null ? null : await env.DB.prepare(
+    `SELECT created_at FROM proposal_delivery_checks
+      WHERE tenant_id = ? AND check_id = ? AND effect_id = ? AND outcome = 'not_found' AND scan_complete = 1`,
+  ).bind(input.tenantId, deliveryCheckId, effect.effect_id).first<{ created_at: string }>();
+  if (deliveryCheckId !== null && (input.outcome !== "not_delivered" || !cited)) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_check_invalid", 409, {
+      delivery_state: effect.state,
+    });
+  }
   // A readback that conflicted means the provider answered, so it did something: "not delivered"
   // would make the send "not executed" and open the way to a second send. That needs provider
-  // evidence, never a person's word; D1 refuses it as well (0164). "Delivered" stays open.
+  // evidence, never a person's word: a cited complete-scan "not found" made after the conflict. D1
+  // refuses it as well (0164, 0167). "Delivered" stays open.
   if (input.outcome === "not_delivered" && effect.state === "manual_exception") {
     // The latest move into the exception says why it is one, as 0161's late-answer wait reads it.
     const cause = await env.DB.prepare(
-      `SELECT from_state FROM external_effect_events
+      `SELECT from_state, occurred_at FROM external_effect_events
         WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`,
-    ).bind(effect.effect_id).first<{ from_state: string | null }>();
-    if (cause?.from_state === "reconciling") {
+    ).bind(effect.effect_id).first<{ from_state: string | null; occurred_at: string }>();
+    if (
+      cause?.from_state === "reconciling" &&
+      !(cited && Date.parse(cited.created_at) > Date.parse(cause.occurred_at))
+    ) {
       throw new ProposalDeliveryConfirmationError(
         "proposal_delivery_confirmation_conflict_needs_provider_evidence",
         409,
@@ -418,11 +441,13 @@ export async function recordProposalDeliveryConfirmation(
     await env.DB.prepare(
       `INSERT INTO proposal_delivery_confirmations
          (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
-          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at,
+          delivery_check_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).bind(
       confirmationId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id,
       input.outcome, input.note, input.actorUserId, input.actorRole, keyHash, requestSha, createdAt,
+      deliveryCheckId,
     ).run();
   } catch (error) {
     const raced = await replay();

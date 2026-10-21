@@ -137,6 +137,7 @@ import {
   handleExternalEffectSettlement,
 } from "./effect-runtime-admin.ts";
 import { recoverExpiredExternalEffects } from "./effect-runtime.ts";
+import { escalateStaleProposalDeliveries } from "./proposal-delivery-checks.ts";
 import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
@@ -618,6 +619,12 @@ export default {
             if (result.recovered > 0 || result.failed > 0) log({ at: "external_effect_lease_sweep", ...result });
           }).catch((error) =>
             log({ at: "external_effect_lease_sweep", error: String(error) }),
+          ),
+          // A proposal send left unknown past T opens one owner-visible effect exception (#15b-1b).
+          escalateStaleProposalDeliveries(env as import("./app-types.ts").AppEnv).then((result) => {
+            if (result.opened > 0) log({ at: "proposal_delivery_escalation", ...result });
+          }).catch((error) =>
+            log({ at: "proposal_delivery_escalation", error: String(error) }),
           ),
           drainPipelineStageAutomation(env as import("./app-types.ts").AppEnv).then((result) => {
             log({

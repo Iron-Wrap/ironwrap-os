@@ -154,10 +154,11 @@ export const REMOVING_EXPLAINS =
  * The crew-phone clause belongs to the role they end up with (Track B's ruling for #13): it shows
  * only when removing their access unpaired a crew phone (`crew_phone_unpaired`) and that role is
  * Crew. Only the field role pairs a phone, so a phone they had as Crew does not matter once they
- * get any other role.
+ * get any other role. It ends on where to pair it; after Save, it says "must then be paired".
  */
-function pairAgain(role: AppRole, crewPhoneUnpaired: boolean): string {
-  return crewPhoneUnpaired && role === "field" ? "; a crew phone must be paired again" : "";
+function pairAgain(role: AppRole, crewPhoneUnpaired: boolean, afterSave = false): string {
+  if (!crewPhoneUnpaired || role !== "field") return "";
+  return `; a crew phone must ${afterSave ? "then " : ""}be paired again in Settings › Crew devices`;
 }
 
 /**
@@ -179,7 +180,7 @@ export function giveBackThenSave(
   pending: AppRole,
   crewPhoneUnpaired: boolean,
 ): string {
-  return `it returns the access they had (${roleLabel(had)}) right away. Then save to add your change: their role moves from ${roleLabel(had)} to ${roleLabel(pending)}${pairAgain(pending, crewPhoneUnpaired)}. You don’t need to wait for them to sign in.`;
+  return `it returns the access they had (${roleLabel(had)}) right away. Then save to add your change: their role moves from ${roleLabel(had)} to ${roleLabel(pending)}${pairAgain(pending, crewPhoneUnpaired, true)}. You don’t need to wait for them to sign in.`;
 }
 
 /** Adding an address already on the list (or added by someone else a moment ago), Track B's line. */

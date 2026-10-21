@@ -28,10 +28,10 @@ const SAVED_ON_DEVICE =
   "Saved on this device. It uploads on its own and keeps the same record if you retry.";
 
 /**
- * Stop work on one job from a crew phone (P33 S20), then say the area is safe (S23). A stop whose
- * job the office could not find holds every job, and says so (S21). Every action goes to the
- * durable outbox first, so a stop survives no signal; the stop is scoped to this job, never the
- * whole company.
+ * Stop work on one job from a crew phone (P33 S20), then say the area is safe (S23). Every action
+ * goes to the durable outbox first, so a stop survives no signal; the stop is scoped to this job,
+ * never the whole company. A stop whose job the office could not find (S21, `scope_unresolved`)
+ * waits for the owner items and Track C's slice, in a follow-up.
  */
 export function JobStopSheet({
   session,
@@ -43,13 +43,12 @@ export function JobStopSheet({
   fetcher?: typeof fetch;
 }) {
   const [raised, setRaised] = useState<RaisedStop>();
-  const [delivery, setDelivery] = useState<"saved" | "sent" | "unresolved">("saved");
+  const [delivery, setDelivery] = useState<"saved" | "sent">("saved");
   const [unsafe, setUnsafe] = useState("");
   const [done, setDone] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
-  const [closed, setClosed] = useState(false);
   const unsafeId = useId();
   const doneId = useId();
   const timeZone = session.tenant.time_zone;
@@ -159,29 +158,6 @@ export function JobStopSheet({
 
   const jobLine = job.address ? `Job ${job.code}, ${job.address}` : `Job ${job.code}`;
 
-  if (raised && delivery === "unresolved") {
-    if (closed) return null;
-    return (
-      <section className="space-y-3" aria-label="Stop work">
-        <Notice
-          tone="danger"
-          title="Work is stopped on every job: this stop's job wasn't found. The office is told and fixes the job on it."
-        />
-        <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          {["Stop", stopTime(raised.raisedAt, timeZone), session.user.display_name, raised.unsafe]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-        <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          Job: not found · The owner fixes it
-        </p>
-        <Button type="button" size="field" onClick={() => setClosed(true)}>
-          Done
-        </Button>
-      </section>
-    );
-  }
-
   if (raised) {
     return (
       <section className="space-y-3" aria-label="Work stopped">
@@ -279,9 +255,8 @@ export function JobStopSheet({
   );
 }
 
-/** Whether the office has the stop yet, and whether its job was found. */
-async function deliveryOf(deviceActionId: string): Promise<"saved" | "sent" | "unresolved"> {
+/** Whether the office has the stop yet. */
+async function deliveryOf(deviceActionId: string): Promise<"saved" | "sent"> {
   const action = await getOutboxAction(deviceActionId);
-  if (action?.state !== "verified") return "saved";
-  return action.verification?.scopeUnresolved ? "unresolved" : "sent";
+  return action?.state === "verified" ? "sent" : "saved";
 }

@@ -179,25 +179,6 @@ describe("JobStopSheet", () => {
     expect(await screen.findByText("Stop sent. When the area is safe, say so here.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
   });
-
-  it("S21: a stop whose job was not found says it holds every job", async () => {
-    officeAnswers({ scopeUnresolved: true });
-    const user = userEvent.setup();
-    render(<JobStopSheet session={session} job={job} />);
-    await user.type(screen.getByLabelText("What is unsafe (optional)"), "Ice on the north slope");
-    await user.click(screen.getByRole("button", { name: "Send stop report" }));
-    expect(
-      await screen.findByText(
-        "Work is stopped on every job: this stop's job wasn't found. The office is told and fixes the job on it.",
-      ),
-    ).toBeVisible();
-    expect(screen.getByText(/^Stop · \w{3} \d{1,2}:\d{2}/)).toHaveTextContent(
-      "· Sam Keewatin · Ice on the north slope",
-    );
-    expect(screen.getByText(/^Job: not found · /)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
-  });
 });
 
 describe("resolveStopJob", () => {

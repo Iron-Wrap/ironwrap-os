@@ -139,8 +139,9 @@ assert.equal(new Set(proofControls).size, consoleProof.proofs.length);
 assert.ok(proofControls.includes("r2_raw_newo_30_day_lifecycle"));
 assert.ok(proofControls.includes("usage_limit_and_threshold_alert"));
 assert.ok(proofControls.includes("after_hours_forwarding_and_rollback"));
-assert.ok(proofControls.includes("handoff_callback_only"));
-assert.ok(proofControls.includes("newo_in_call_sms_disabled"));
+for (const control of ["handoff_callback_only", "newo_in_call_sms_disabled"]) {
+  assert.ok(proofControls.includes(control), `console proof must keep ${control}`);
+}
 assert.deepEqual(
   proofControls.filter((control) => /transfer/i.test(control)),
   [],

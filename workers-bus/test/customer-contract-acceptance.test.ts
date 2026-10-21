@@ -3544,6 +3544,108 @@ test("a later contract needs its own copy: the window is unknown again until it 
   }
 });
 
+test("D1 holds a signed-copy event to its contract, its clock and its bounds, and a record to the event", async () => {
+  // Signed a day ago on today's page: a contract with no copy shown.
+  const h = await inThePast(1, () => setup({ terms: OD01_TERMS, depositPolicy: null }));
+  try {
+    seedGates(h);
+    const portalToken = await inThePast(1, () => seedPortalLink(h.db));
+    const accepted = await inThePast(1, () => accept(h, portalToken, "acceptance-a5-direct-0001"));
+    assert.equal(accepted.status, 200);
+    const binding = bindingFor(h, (await accepted.json() as { acceptance_id: string }).acceptance_id);
+    const plusHours = (iso: string, hours: number) =>
+      new Date(Date.parse(iso) + hours * 60 * MINUTE_MS).toISOString();
+    let n = 0;
+    const insertEvent = (overrides: Record<string, unknown> = {}) => {
+      n += 1;
+      const row: Record<string, unknown> = {
+        event_id: `scs_${String(n).padStart(40, "0")}`,
+        tenant_id: TENANT,
+        acceptance_binding_id: binding.acceptance_binding_id,
+        roof_job_id: JOB_ID,
+        contract_signed_at: binding.accepted_at,
+        time_zone: ZONE,
+        ...overrides,
+      };
+      const shown = "shown_at" in row ? "?" : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+      const ends = "window_ends_at" in row ? "?" : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+240 hours')";
+      const columns = Object.keys(row).filter((column) => column !== "shown_at" && column !== "window_ends_at");
+      h.db.raw.prepare(
+        `INSERT INTO contract_signed_copy_events (${columns.join(", ")}, shown_at, window_ends_at)
+         VALUES (${columns.map(() => "?").join(", ")}, ${shown}, ${ends})`,
+      ).run(
+        ...(columns.map((column) => row[column]) as never[]),
+        ...(["shown_at", "window_ends_at"].filter((column) => column in row).map((column) => row[column]) as never[]),
+      );
+    };
+    const insertReceipt = (receivedAt: string, windowEndsAt: string) => {
+      n += 1;
+      h.db.raw.prepare(
+        `INSERT INTO production_cancellation_window_receipts (
+           receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+           acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
+           recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Synthetic direct record.', 'fixture://copy', ?, 'owner',
+                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+      ).run(
+        `pcw_${String(n).padStart(40, "0")}`, TENANT, JOB_ID, receivedAt, windowEndsAt, ZONE,
+        binding.acceptance_binding_id, binding.accepted_at, OWNER_ID, "a".repeat(64), String(n).padStart(64, "0"),
+      );
+    };
+    const now = () => new Date(d1Now(h.db.raw)).toISOString();
+
+    // The copy is of this contract, exactly as its binding holds it, shown now by D1's clock.
+    assert.throws(() => insertEvent({ acceptance_binding_id: "commercial-acceptance:other" }), /contract_signed_copy_event_binding_invalid/);
+    assert.throws(() => insertEvent({ roof_job_id: "job:acceptance:other" }), /contract_signed_copy_event_binding_invalid/);
+    assert.throws(
+      () => insertEvent({ contract_signed_at: new Date(Date.parse(binding.accepted_at) + 1).toISOString() }),
+      /contract_signed_copy_event_binding_invalid/,
+    );
+    assert.throws(() => insertEvent({ shown_at: plusHours(now(), -24) }), /contract_signed_copy_event_shown_at_invalid/);
+    const shownAt = now();
+    assert.throws(
+      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 240)) - 1).toISOString() }),
+      /contract_signed_copy_event_end_invalid/,
+    );
+    assert.throws(
+      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 241)) + 1).toISOString() }),
+      /contract_signed_copy_event_end_invalid/,
+    );
+    assert.equal(count(h, "contract_signed_copy_events"), 0);
+
+    // A person's record half an hour ago, ending at its 241st hour: an event ending before that
+    // end is refused, and one keeping it is written.
+    const receivedAt = plusHours(now(), -0.5);
+    insertReceipt(receivedAt, plusHours(receivedAt, 241));
+    assert.throws(() => insertEvent(), /contract_signed_copy_event_end_invalid/);
+    insertEvent({ window_ends_at: plusHours(receivedAt, 241) });
+    const [event] = shownEvents(h);
+    assert.ok(event);
+    // One event per contract; it is never updated or deleted.
+    assert.throws(() => insertEvent({ window_ends_at: plusHours(receivedAt, 241) }), /contract_signed_copy_event_append_only/);
+    assert.throws(
+      () => h.db.raw.prepare("UPDATE contract_signed_copy_events SET time_zone = 'UTC' WHERE event_id = ?").run(event.event_id),
+      /contract_signed_copy_event_append_only/,
+    );
+    assert.throws(
+      () => h.db.raw.prepare("DELETE FROM contract_signed_copy_events WHERE event_id = ?").run(event.event_id),
+      /contract_signed_copy_event_append_only/,
+    );
+
+    // A record at the copy's own time changes nothing, and one after it never ends sooner.
+    assert.throws(() => insertReceipt(event.shown_at, plusHours(event.shown_at, 240)), /cancellation_window_receipt_unchanged/);
+    while (d1Now(h.db.raw) <= Date.parse(event.shown_at)) {
+      // Wait out the millisecond the copy was shown in.
+    }
+    const later = now();
+    assert.throws(() => insertReceipt(later, plusHours(later, 240)), /cancellation_window_receipt_end_invalid/);
+    insertReceipt(later, event.window_ends_at);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 2);
+  } finally {
+    h.restore();
+  }
+});
+
 const WINDOW_PREFLIGHT = readFileSync(new URL("../../tools/cancellation-window-preflight.sql", import.meta.url), "utf8");
 
 test("the cancellation window pre-flight counts the open signed jobs, in D1 or outside it, and no other", async () => {

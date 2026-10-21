@@ -557,8 +557,10 @@ test("the window is not a gate and cannot be waived: no gate, no ledger, and a M
 test("a firm start waits for the window by name on the store, the route and in D1, after 0098 and before 0159", async () => {
   const h = setup();
   const owner = await person(h, USERS.owner);
-  // 0098 answers first: with its gates blocked the job is refused for the gates, window or not.
+  // 0098 answers first: with its gates blocked the job is refused for the gates, window or not,
+  // on the store and in D1, where 0160 re-creates 0098's trigger to fire before its own hold.
   await refusedSchedule(h, scheduleCommand(JOB), "operating_job_assignment_gates_blocked");
+  refusedWith(() => insertAssignment(h, OTHER_JOB), "operating_job_assignment_gates_blocked");
 
   readyInsideWindow(h, JOB);
   const unknown = await refusedSchedule(h, scheduleCommand(JOB), "operating_job_assignment_cancellation_window_unknown");
@@ -728,8 +730,11 @@ test("a job's purchase order line waits for the window; a stock line never does;
   h.sqlite.exec("DROP TRIGGER inventory_po_lines_cancellation_window_hold");
   const legacy = placeOrderLine(h, JOB, "backordered");
   const other = placeOrderLine(h, JOB, "backordered");
+  const unknownLine = placeOrderLine(h, OTHER_JOB, "backordered");
   h.sqlite.exec(guard.sql);
   refusedWith(() => moveOrderLine(h, legacy, "ordered"), "inventory_po_line_cancellation_window_open");
+  refusedWith(() => moveOrderLine(h, unknownLine, "ordered"), "inventory_po_line_cancellation_window_unknown");
+  moveOrderLine(h, unknownLine, "cancelled");
   moveOrderLine(h, legacy, "cancelled");
   moveOrderLine(h, other, "exception");
   refusedWith(
@@ -758,6 +763,7 @@ test("a job's purchase order line waits for the window; a stock line never does;
       { roof_job_id: null, status: "ordered" },
       { roof_job_id: JOB, status: "cancelled" },
       { roof_job_id: JOB, status: "exception" },
+      { roof_job_id: OTHER_JOB, status: "cancelled" },
       { roof_job_id: ENDED_JOB, status: "ordered" },
     ],
   );
@@ -1056,4 +1062,78 @@ test("the work queue lists the open signed jobs whose window is unknown, for own
   // Once its time is recorded, the job leaves the list.
   await recordReceipt(h, ops, JOB, { received_at: d1At(h, -HOUR), reason: REASON, evidence_ref: EVIDENCE });
   assert.deepEqual(await call(h, owner, MISSING), { status: 200, body: { count: 0, complete: true, jobs: [] } });
+});
+
+test("the four holds read the window with the same two predicates, and 0160 keeps 0098 and 0153 firing first", () => {
+  const h = setup();
+  const sql = (name: string) => String((h.sqlite.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+  ).get(name) as { sql: string }).sql);
+  // Each hold's two refusals, with the predicate after its code, normalized for whitespace.
+  const predicates = (name: string, unknownCode: string, openCode: string) => {
+    const text = sql(name).replace(/\s+/g, " ");
+    const unknownAt = text.indexOf(`'${unknownCode}')`);
+    const openAt = text.indexOf(`'${openCode}')`);
+    assert.ok(unknownAt > 0 && openAt > unknownAt, name);
+    const unknown = text.slice(text.indexOf("NOT EXISTS ( SELECT 1 FROM contract_signed_copy_events", unknownAt), openAt);
+    // The open refusal is each hold's last statement: its predicate runs to the closing ";".
+    const open = text.slice(text.indexOf("EXISTS ( SELECT 1 FROM contract_signed_copy_events", openAt), text.lastIndexOf(";"));
+    assert.ok(unknown.length > 600 && open.length > 300, name);
+    return {
+      unknown: unknown.slice(0, unknown.lastIndexOf(")") + 1),
+      open: open.trim(),
+    };
+  };
+  const holds = [
+    predicates("operating_job_assignments_cancellation_window_hold",
+      "operating_job_assignment_cancellation_window_unknown", "operating_job_assignment_cancellation_window_open"),
+    predicates("production_gate_clearances_cancellation_window_hold",
+      "production_gate_cancellation_window_unknown", "production_gate_cancellation_window_open"),
+    predicates("inventory_po_lines_cancellation_window_hold",
+      "inventory_po_line_cancellation_window_unknown", "inventory_po_line_cancellation_window_open"),
+  ];
+  for (const hold of holds.slice(1)) assert.deepEqual(hold, holds[0]);
+  // The update hold reads the same predicates, after its own conditions.
+  const update = sql("inventory_po_lines_cancellation_window_update_hold").replace(/\s+/g, " ");
+  assert.ok(update.includes(holds[0]!.unknown), "the update hold carries the unknown predicate");
+  for (const part of holds[0]!.open.split(" OR EXISTS ")) {
+    assert.ok(update.includes(part.replace(/^EXISTS /, "")), "the update hold carries the open predicate");
+  }
+  for (const name of [
+    "operating_job_assignments_cancellation_window_hold",
+    "production_gate_clearances_cancellation_window_hold",
+    "inventory_po_lines_cancellation_window_hold",
+    "inventory_po_lines_cancellation_window_update_hold",
+  ]) {
+    assert.ok(!sql(name).includes("NEW.created_at"), `${name} reads D1's clock, never the row's time`);
+    assert.ok(sql(name).includes("julianday('now')"), name);
+  }
+  // Triggers on one table fire newest first: 0098's validate trigger and 0153's replace guard are
+  // re-created after the holds, so they still answer first.
+  const newest = (table: string) => (h.sqlite.prepare(
+    `SELECT name FROM sqlite_master
+      WHERE type = 'trigger' AND tbl_name = ? AND sql LIKE '%BEFORE INSERT%'
+      ORDER BY rowid DESC LIMIT 2`,
+  ).all(table) as Array<{ name: string }>).map((row) => row.name);
+  assert.deepEqual(newest("operating_job_assignments"), [
+    "operating_job_assignments_validate_insert",
+    "operating_job_assignments_cancellation_window_hold",
+  ]);
+  assert.deepEqual(newest("production_gate_clearances"), [
+    "production_gate_clearances_no_insert_replace",
+    "production_gate_clearances_cancellation_window_hold",
+  ]);
+  const migration = readFileSync(new URL("../migrations/0160_production_cancellation_window.sql", import.meta.url), "utf8");
+  const body = (text: string, name: string) => {
+    const match = text.match(new RegExp(`CREATE TRIGGER (?:IF NOT EXISTS )?${name}\\b[\\s\\S]*?\\nEND;`));
+    assert.ok(match, name);
+    return match[0].replace(/^CREATE TRIGGER (?:IF NOT EXISTS )?/, "");
+  };
+  for (const [source, name] of [
+    ["0098_native_operating_job_assignments.sql", "operating_job_assignments_validate_insert"],
+    ["0153_production_gate_clearances.sql", "production_gate_clearances_no_insert_replace"],
+  ] as const) {
+    const shipped = readFileSync(new URL(`../migrations/${source}`, import.meta.url), "utf8");
+    assert.equal(body(migration, name), body(shipped, name), `0160 re-creates ${name} unchanged`);
+  }
 });

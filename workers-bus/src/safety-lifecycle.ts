@@ -421,6 +421,15 @@ export async function recordMakeSafe(
   env: AppEnv,
   input: MakeSafeInput,
 ): Promise<SafetyOccurrenceRecord> {
+  // A detail the journal would refuse is a definite refusal now, not a write
+  // that rolls back on every retry.
+  if (!journalDetail(input.detail)) {
+    throw new SafetyError(
+      "safety_occurrence_input_invalid",
+      400,
+      "Making an area safe needs a detail of 3 to 4000 characters.",
+    );
+  }
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
   const occurrence = await requireOccurrence(
     env,
@@ -590,11 +599,17 @@ export async function recordSafetyResponse(
 /**
  * The event table's own rule, `length(trim(detail)) BETWEEN 3 AND 4000`, checked
  * before the write: SQLite's trim removes spaces only, its length counts
- * characters rather than UTF-16 units, and it stops counting at a NUL.
+ * characters rather than UTF-16 units, and it stops counting at a NUL. The
+ * spaces are trimmed by index, because a trailing-space regex backtracks
+ * quadratically over a long inner run of spaces.
  */
 function journalDetail(value: unknown): value is string {
   if (typeof value !== "string" || value.includes("\u0000")) return false;
-  const length = [...value.replace(/^ +| +$/g, "")].length;
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 32) start += 1;
+  while (end > start && value.charCodeAt(end - 1) === 32) end -= 1;
+  const length = [...value.slice(start, end)].length;
   return length >= 3 && length <= 4000;
 }
 

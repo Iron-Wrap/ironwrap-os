@@ -679,6 +679,76 @@ test("an event that cannot be written leaves the occurrence unchanged, for every
   allowWrites();
 });
 
+test("the detail check counts characters as the journal does, and stays linear on long runs of spaces", async () => {
+  const env = testEnv();
+  const occurrenceId = await raisedStop(env, USERS.crew, { upTo: "investigating" });
+  const reported = await raisedStop(env, USERS.crew, { upTo: "reported" });
+  const before = occurrenceRow(env, occurrenceId);
+  const journal = events(env, occurrenceId).length;
+  const refusedBefore = async (pending: Promise<unknown>, code: string, label: string) => {
+    const batches = env.DB.batches;
+    await assert.rejects(pending, (error) => error instanceof SafetyError && error.code === code, label);
+    assert.equal(env.DB.batches, batches, label);
+  };
+
+  // A 32 KiB detail, the route's own body limit, made of one long inner run of spaces. A
+  // trailing-space regex took about 400 ms of CPU on it; trimming by index takes well under 1 ms,
+  // so 100 ms separates the two on any runner.
+  const spaces = `a${" ".repeat(32 * 1024 - 2)}b`;
+  const started = performance.now();
+  await refusedBefore(respond(env, USERS.ops, occurrenceId, "controlled", spaces),
+    "safety_command_invalid", "long run of spaces");
+  assert.ok(performance.now() - started < 100, "the detail check is linear");
+
+  // Two characters in three UTF-16 units: too short for the journal, so refused before the write.
+  await refusedBefore(respond(env, USERS.ops, occurrenceId, "controlled", "a\u{1F525}"),
+    "safety_command_invalid", "command, two characters");
+  unchanged(env, occurrenceId, before, journal, "command");
+
+  const reportedBefore = occurrenceRow(env, reported);
+  const reportedJournal = events(env, reported).length;
+  await refusedBefore(
+    recordMakeSafe(env, {
+      tenantId: TENANT,
+      occurrenceId: reported,
+      actorUserId: USERS.crew.id,
+      detail: "a\u{1F525}",
+      evidence: null,
+      capturedOffline: true,
+      deviceActionId: null,
+      occurredAt: at(98),
+      now: at(98),
+    }),
+    "safety_occurrence_input_invalid",
+    "make-safe, two characters",
+  );
+  unchanged(env, reported, reportedBefore, reportedJournal, "make-safe");
+  // Three characters with spaces around them pass: the journal trims spaces only.
+  const accepted = await respond(env, USERS.ops, occurrenceId, "finding_recorded", "  a\u{1F525}b  ");
+  assert.equal(accepted.version, before.version + 1);
+});
+
+test("a stop lifted before 0165 keeps no releaser name and still closes", async () => {
+  const env = testEnv();
+  // A row as 0047 left it after a lift: controlled, stop lifted, nobody named.
+  env.DB.sqlite.prepare(
+    `INSERT INTO safety_occurrences
+      (occurrence_id, tenant_id, occurrence_kind, severity, version, state, stop_active,
+       rescue_required, scope_type, scope_id, reported_by_user_id, reported_at, summary,
+       report_fingerprint_sha256, created_at, updated_at)
+     VALUES ('so_l06_legacy_lifted', ?, 'hazard', 'high', 5, 'controlled', 0, 0, ?, ?, ?, ?,
+       'Lifted before 0165.', ?, ?, ?)`,
+  ).run(TENANT, SCOPE.type, SCOPE.id, USERS.crew.id, at(0), "c".repeat(64), at(0), at(5));
+  const before = occurrenceRow(env, "so_l06_legacy_lifted");
+  assert.equal(before.released_by_user_id, null);
+  assertRefused(await postCommand(env, await personAuth(env, USERS.ops), "so_l06_legacy_lifted", release),
+    409, "safety_stop_already_released", "legacy release");
+  unchanged(env, "so_l06_legacy_lifted", before, 0, "legacy release");
+  const closed = await respond(env, USERS.ops, "so_l06_legacy_lifted", "closed");
+  assert.equal(closed.state, "closed");
+  assert.equal(closed.released_by_user_id, null);
+});
+
 test("a command that lost a race writes neither its event nor its state change", async () => {
   const env = testEnv();
   const occurrenceId = await raisedStop(env, USERS.crew, { upTo: "investigating" });

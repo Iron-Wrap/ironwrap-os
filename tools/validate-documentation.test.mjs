@@ -564,6 +564,22 @@ test("documentation gate rejects delegating an action that always asks first", (
   );
 });
 
+test("documentation gate keeps an outside send capped at asks first, class A2 included", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-send-cap-",
+    (content) => content.replace(
+      /("action_id": "rfq\.send", [^\n]*?"delegable": )false/,
+      "$1true",
+    ),
+    /rfq\.send: delegable must be false/,
+  );
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-send-marker-",
+    (content) => content.replace("| `rfq.send` | A2 | Asks first | Always asks first. ", "| `rfq.send` | A2 | Asks first | "),
+    /rfq\.send: prose catalog always-asks-first marker differs from the contract/,
+  );
+});
+
 test("documentation gate rejects slowing an owner report watch", () => {
   rejectsAiTeamEdit(
     "ironwrap-ai-team-cadence-",

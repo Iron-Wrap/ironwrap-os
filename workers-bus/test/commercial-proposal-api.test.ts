@@ -1738,3 +1738,862 @@ test("single flight holds across publication versions, and any commercial person
     db.close();
   }
 });
+
+
+// ---------------------------------------------------------------------------------------------
+// #15b-1 (0161): findings that never change the send, the late-answer wait in D1 with a window per
+// provider, server time on the settle and reconcile admin routes, and the permit holder of a
+// publication.
+
+const FINDINGS_PATH = "/api/v1/commercial/proposal-publications/delivery-findings";
+
+type Finding = {
+  finding_id: string;
+  finding: string;
+  attempt_state: string;
+  supersedes_finding_id: string | null;
+};
+
+function effectRow(db: SqliteD1, effectId: string): { state: string; updated_at: string; result_code: string | null } {
+  return { ...(db.raw.prepare("SELECT state, updated_at, result_code FROM external_effects WHERE effect_id = ?")
+    .get(effectId) as { state: string; updated_at: string; result_code: string | null }) };
+}
+
+/** When the send's last attempt ended: the late-answer window is counted from here. */
+function lastAttemptEnd(db: SqliteD1, effectId: string): string {
+  return (db.raw.prepare(
+    `SELECT attempt.ended_at FROM external_effect_attempts attempt
+       JOIN external_effects effect ON effect.effect_id = attempt.effect_id
+      WHERE attempt.effect_id = ? AND attempt.attempt_number = effect.attempt_count`,
+  ).get(effectId) as { ended_at: string }).ended_at;
+}
+
+function adminPost(path: string, body: Record<string, unknown>): Request {
+  return new Request(`https://worker.example.com${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+    body: JSON.stringify(body),
+  });
+}
+
+async function unknownSendThroughRoutes(
+  env: AppEnv,
+  prepare: (key: string) => Promise<Response>,
+  key: string,
+  effectId: string,
+  provider = "native-commercial-publication",
+): Promise<void> {
+  const { handleExternalEffectClaim, handleExternalEffectSettlement } = await import("../src/effect-runtime-admin.ts");
+  const prepared = await prepare(key);
+  assert.equal(prepared.status, 201, await prepared.clone().text());
+  const { permit } = await prepared.json() as { permit: Permit };
+  const send = { ...effectRequest(permit, effectId), provider };
+  const claimed = await handleExternalEffectClaim(adminPost("/admin/effects/claim", {
+    effect: send,
+    authority: send.authority,
+  }), env);
+  assert.equal(claimed.status, 200, await claimed.clone().text());
+  const { attempt } = await claimed.json() as { attempt: { attempt_id: string } };
+  const settled = await handleExternalEffectSettlement(adminPost("/admin/effects/settle", {
+    effectId,
+    settlement: { attemptId: attempt.attempt_id, outcome: "unknown", detailCode: "provider_timeout" },
+  }), env);
+  assert.equal(settled.status, 200, await settled.clone().text());
+}
+
+function reconcileThroughRoute(env: AppEnv, effectId: string, outcome: "executed" | "not_executed" | "inconclusive") {
+  return import("../src/effect-runtime-admin.ts").then(({ handleExternalEffectReconciliation }) =>
+    handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
+      effectId,
+      outcome,
+      evidence: { provider: `checked: ${outcome}` },
+      // Ignored: the route reconciles on the server's clock.
+      now: "2099-01-01T00:00:00.000Z",
+    }), env));
+}
+
+test("a person records findings about a settled send and corrects only the newest; the send never changes", async () => {
+  const { db, env, prepare } = await publicationReady("findings-chain");
+  const effectId = "effect:findings:conflict";
+  try {
+    const prepared = await prepare("findings-chain-prepare-1");
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "conflict");
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const other = await personSession(db, env, OTHER_OPS_ID, "sales");
+
+    // 0156's first confirmation behaves exactly as merged: it settles the send.
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "findings-chain-confirm", {
+      external_effect_id: effectId,
+      outcome: "delivered",
+      note: "Called the customer; the email is in their inbox.",
+    });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    const settled = effectRow(db, effectId);
+    assert.equal(settled.state, "succeeded");
+    const stateEvents = () =>
+      (db.raw.prepare("SELECT count(*) AS n FROM external_effect_events WHERE effect_id = ?").get(effectId) as { n: number }).n;
+    const eventsAfterConfirmation = stateEvents();
+
+    // "Not executed" is provider proof, never a person's finding.
+    const malformed = await personPost(env, ops, FINDINGS_PATH, "findings-chain-malformed", {
+      external_effect_id: effectId,
+      supersedes_finding_id: null,
+      finding: "not_executed",
+      note: "A person cannot know nothing went out.",
+    });
+    assert.equal(malformed.status, 400);
+    assert.deepEqual(await malformed.json(), { error: "invalid_proposal_delivery_finding" });
+
+    const firstBody = {
+      external_effect_id: effectId,
+      supersedes_finding_id: null,
+      finding: "not_received",
+      note: "They called back: it went out, but not to their inbox.",
+    };
+    const first = await personPost(env, ops, FINDINGS_PATH, "findings-chain-1", firstBody);
+    assert.equal(first.status, 201, await first.clone().text());
+    const firstFinding = await first.json() as {
+      finding: Finding;
+      effect: { external_effect_id: string; state: string };
+      replayed: boolean;
+    };
+    assert.equal(firstFinding.finding.finding, "not_received");
+    // The provider's readback did not match this send, so its last attempt is unknown: the answer is
+    // not confirmed.
+    assert.equal(firstFinding.finding.attempt_state, "unknown");
+    assert.equal(firstFinding.finding.supersedes_finding_id, null);
+    // A finding never changes the send: same state, result and time, and no state event.
+    assert.deepEqual(firstFinding.effect, { external_effect_id: effectId, state: "succeeded" });
+    assert.deepEqual(effectRow(db, effectId), settled);
+    assert.equal(stateEvents(), eventsAfterConfirmation);
+
+    const replay = await personPost(env, ops, FINDINGS_PATH, "findings-chain-1", firstBody);
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+    const conflicting = await personPost(env, ops, FINDINGS_PATH, "findings-chain-1", {
+      ...firstBody,
+      note: "Another note under the same key.",
+    });
+    assert.equal(conflicting.status, 409);
+    assert.deepEqual(await conflicting.json(), { error: "proposal_delivery_finding_replay_conflict" });
+
+    // A second first finding would fork the history: only the newest is corrected.
+    const secondFirst = await personPost(env, other, FINDINGS_PATH, "findings-chain-second-first", {
+      ...firstBody,
+      finding: "delivered",
+      note: "Recording a first finding again.",
+    });
+    assert.equal(secondFirst.status, 409);
+    assert.deepEqual(await secondFirst.json(), {
+      error: "proposal_delivery_finding_not_latest",
+      latest_finding_id: firstFinding.finding.finding_id,
+    });
+
+    const corrected = await personPost(env, other, FINDINGS_PATH, "findings-chain-2", {
+      external_effect_id: effectId,
+      supersedes_finding_id: firstFinding.finding.finding_id,
+      finding: "delivered",
+      note: "Found it in their spam folder after all.",
+    });
+    assert.equal(corrected.status, 201, await corrected.clone().text());
+    const secondFinding = (await corrected.json() as { finding: Finding }).finding;
+    assert.equal(secondFinding.supersedes_finding_id, firstFinding.finding.finding_id);
+
+    // Correcting the first finding again, now that it was corrected, is refused.
+    const stale = await personPost(env, ops, FINDINGS_PATH, "findings-chain-stale", {
+      external_effect_id: effectId,
+      supersedes_finding_id: firstFinding.finding.finding_id,
+      finding: "not_received",
+      note: "Correcting a finding someone already corrected.",
+    });
+    assert.equal(stale.status, 409);
+    assert.deepEqual(await stale.json(), {
+      error: "proposal_delivery_finding_not_latest",
+      latest_finding_id: secondFinding.finding_id,
+    });
+
+    const third = await personPost(env, ops, FINDINGS_PATH, "findings-chain-3", {
+      external_effect_id: effectId,
+      supersedes_finding_id: secondFinding.finding_id,
+      finding: "not_received",
+      note: "They checked again: it is not in their inbox after all.",
+    });
+    assert.equal(third.status, 201, await third.clone().text());
+    assert.deepEqual(effectRow(db, effectId), settled);
+    assert.equal(stateEvents(), eventsAfterConfirmation);
+
+    // The history keeps every finding, with who found it; the first confirmation is unchanged.
+    assert.deepEqual(
+      (db.raw.prepare(
+        `SELECT finding, found_by_user_id, found_by_role FROM proposal_delivery_findings
+          WHERE effect_id = ? ORDER BY created_at, finding_id`,
+      ).all(effectId) as Array<Record<string, string>>).map((row) => ({ ...row })),
+      [
+        { finding: "not_received", found_by_user_id: OPS_ID, found_by_role: "ops" },
+        { finding: "delivered", found_by_user_id: OTHER_OPS_ID, found_by_role: "sales" },
+        { finding: "not_received", found_by_user_id: OPS_ID, found_by_role: "ops" },
+      ],
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT count(*) AS n FROM proposal_delivery_confirmations WHERE effect_id = ?").get(effectId) as { n: number }).n,
+      1,
+    );
+    assert.deepEqual(
+      (db.raw.prepare(
+        "SELECT action, approved_by FROM audit_log WHERE automation = 'proposal_delivery' ORDER BY rowid",
+      ).all() as Array<Record<string, string>>).map((row) => ({ ...row })),
+      [
+        { action: "proposal_delivery_delivered", approved_by: OPS_ID },
+        { action: "proposal_delivery_finding_not_received", approved_by: OPS_ID },
+        { action: "proposal_delivery_finding_delivered", approved_by: OTHER_OPS_ID },
+        { action: "proposal_delivery_finding_not_received", approved_by: OPS_ID },
+      ],
+    );
+
+    const notPerson = await handleAuthenticatedRoute(
+      request(FINDINGS_PATH, firstBody, "findings-chain-not-person"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(notPerson.status, 403);
+    assert.deepEqual(await notPerson.json(), { error: "person_session_required" });
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 holds the findings chain: settled sends only, one first finding, one successor each, append-only", async () => {
+  const { recordProposalDeliveryFinding } = await import("../src/commercial-store.ts");
+  const { db, env, prepare } = await publicationReady("findings-d1");
+  const effectId = "effect:findings-d1:send";
+  try {
+    await unknownSendThroughRoutes(env, prepare, "findings-d1-prepare-1", effectId);
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const direct = (findingId: string, supersedes: string | null, finding = "not_received", attemptState = "unknown") =>
+      db.raw.prepare(
+        `INSERT INTO proposal_delivery_findings
+           (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+            attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+            idempotency_key_hash, request_sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+      ).run(
+        findingId, TENANT, effectId, PACK, REVISION, finding, attemptState, supersedes, OPS_ID,
+        findingId.slice(-1).repeat(64), "f".repeat(64), new Date().toISOString(),
+      );
+    // An unknown send is not settled: a person answers it through the first confirmation (0156).
+    assert.throws(() => direct("delivery-finding:direct-unsettled-a", null), /proposal_delivery_finding_effect_invalid/);
+    const executed = await reconcileThroughRoute(env, effectId, "executed");
+    assert.equal(executed.status, 200, await executed.clone().text());
+    assert.equal(effectRow(db, effectId).state, "succeeded");
+
+    const first = await recordProposalDeliveryFinding(env, {
+      tenantId: TENANT, effectId, supersedesFindingId: null, finding: "not_received",
+      note: "It went out, but they cannot find it.", actorUserId: OPS_ID, actorRole: "ops",
+      idempotencyKey: "findings-d1-1",
+    });
+    assert.equal(first.finding.attempt_state, "unknown");
+    assert.throws(() => direct("delivery-finding:direct-second-root-b", null, "delivered"), /proposal_delivery_finding_not_latest/);
+    // A person never records "not executed", and the attempt state is the send's own.
+    assert.throws(
+      () => direct("delivery-finding:direct-not-executed-5", first.finding.finding_id, "not_executed"),
+      /CHECK constraint failed: finding IN/,
+    );
+    assert.throws(
+      () => direct("delivery-finding:direct-claimed-success-6", first.finding.finding_id, "delivered", "succeeded"),
+      /proposal_delivery_finding_attempt_mismatch/,
+    );
+    assert.throws(
+      () => direct("delivery-finding:direct-orphan-c", "delivery-finding:no-such-finding", "delivered"),
+      /proposal_delivery_finding_chain_invalid/,
+    );
+    // Only an active person of this tenant in the commercial set records a finding.
+    assert.throws(
+      () => db.raw.prepare(
+        `INSERT INTO proposal_delivery_findings
+           (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+            attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+            idempotency_key_hash, request_sha256, created_at)
+         VALUES ('delivery-finding:direct-stranger-g', ?, ?, ?, ?, 'delivered', 'unknown', ?, 'Direct insert attempt',
+                 'appu_unknown_0161', 'ops', ?, ?, ?)`,
+      ).run(TENANT, effectId, PACK, REVISION, first.finding.finding_id, "7".repeat(64), "f".repeat(64), new Date().toISOString()),
+      /proposal_delivery_finding_actor_invalid/,
+    );
+    direct("delivery-finding:direct-successor-d", first.finding.finding_id, "delivered");
+    assert.throws(
+      () => direct("delivery-finding:direct-fork-e", first.finding.finding_id, "not_executed"),
+      /proposal_delivery_finding_not_latest/,
+    );
+    // A replace that would drop a finding by its id is refused, as is any update or delete.
+    assert.throws(
+      () => db.raw.prepare(
+        `INSERT OR REPLACE INTO proposal_delivery_findings
+           (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+            attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+            idempotency_key_hash, request_sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, 'delivered', 'unknown', NULL, 'Replacing the first finding', ?, 'ops', ?, ?, ?)`,
+      ).run(first.finding.finding_id, TENANT, effectId, PACK, REVISION, OPS_ID, "9".repeat(64), "f".repeat(64), new Date().toISOString()),
+      /proposal_delivery_finding_exists/,
+    );
+    assert.throws(
+      () => db.raw.prepare("UPDATE proposal_delivery_findings SET note = 'Rewritten note text'").run(),
+      /proposal_delivery_findings_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM proposal_delivery_findings").run(),
+      /proposal_delivery_findings_append_only/,
+    );
+    assert.equal(effectRow(db, effectId).state, "succeeded");
+  } finally {
+    db.close();
+  }
+});
+
+test("each finding keeps whether the provider confirmed the send or its answer is not confirmed", async () => {
+  const { recordProposalDeliveryFinding } = await import("../src/commercial-store.ts");
+  for (const mode of ["success", "rejected"] as const) {
+    const { db, env, prepare } = await publicationReady(`findings-attempt-${mode}`);
+    const effectId = `effect:findings-attempt:${mode}`;
+    try {
+      const prepared = await prepare(`findings-attempt-${mode}-prepare`);
+      const { permit } = await prepared.json() as { permit: Permit };
+      if (mode === "success") {
+        await runSend(env, permit, effectId, "success");
+      } else {
+        await runExternalEffect(env, effectRequest(permit, effectId), {
+          async dispatch() {
+            return { outcome: "rejected", detailCode: "provider_rejected" } as never;
+          },
+          async replay() {
+            return { published: false };
+          },
+        }).catch(() => undefined);
+      }
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const find = () => recordProposalDeliveryFinding(env, {
+        tenantId: TENANT, effectId, supersedesFindingId: null, finding: "not_received",
+        note: "They say it is not in their inbox.", actorUserId: OPS_ID, actorRole: "ops",
+        idempotencyKey: `findings-attempt-${mode}-1`,
+      });
+      if (mode === "success") {
+        // The provider confirmed the send, and the customer says they did not get it.
+        const recorded = await find();
+        assert.equal(recorded.finding.attempt_state, "succeeded");
+        assert.equal(recorded.finding.finding, "not_received");
+        assert.equal(recorded.effectState, "succeeded");
+      } else {
+        // A send the provider refused reached no one: there is nothing to find.
+        await assert.rejects(find(), {
+          code: "proposal_delivery_finding_effect_invalid",
+          detail: { attempt_state: "failed" },
+        });
+      }
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("a finding is closed once the proposal is sent again", async () => {
+  const { db, env, prepare } = await publicationReady("findings-resent");
+  const firstSend = "effect:findings-resent:first";
+  try {
+    const prepared = await prepare("findings-resent-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, firstSend, "conflict");
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "findings-resent-confirm", {
+      external_effect_id: firstSend,
+      outcome: "not_delivered",
+      note: "Nothing in their inbox or spam folder.",
+    });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    const found = await personPost(env, ops, FINDINGS_PATH, "findings-resent-1", {
+      external_effect_id: firstSend,
+      supersedes_finding_id: null,
+      finding: "not_received",
+      note: "It went out, but never reached them.",
+    });
+    assert.equal(found.status, 201, await found.clone().text());
+    const findingId = (await found.json() as { finding: Finding }).finding.finding_id;
+
+    const again = await prepare("findings-resent-prepare-2");
+    assert.equal(again.status, 201, await again.clone().text());
+    const { permit: second } = await again.json() as { permit: Permit };
+    await runSend(env, second, "effect:findings-resent:second", "success");
+    const late = await personPost(env, ops, FINDINGS_PATH, "findings-resent-2", {
+      external_effect_id: firstSend,
+      supersedes_finding_id: findingId,
+      finding: "delivered",
+      note: "They found the first email after all.",
+    });
+    assert.equal(late.status, 409);
+    assert.deepEqual(await late.json(), { error: "proposal_delivery_finding_closed" });
+  } finally {
+    db.close();
+  }
+});
+
+test("a finding is closed once the customer has decided on the proposal", async () => {
+  const { recordProposalDeliveryConfirmation, recordProposalDeliveryFinding } = await import("../src/commercial-store.ts");
+  const { db, env, prepare } = await publicationReady("findings-decided");
+  const effectId = "effect:findings-decided:conflict";
+  try {
+    const prepared = await prepare("findings-decided-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "conflict");
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const person = { actorUserId: OPS_ID, actorRole: "ops" };
+    await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "delivered", note: "The customer has the email.",
+      idempotencyKey: "findings-decided-confirm", ...person,
+    });
+    // The customer's decision is an acceptance on this proposal pack. Its portal link and email
+    // challenge are not what this rule reads, so they are left out of this synthetic row.
+    db.raw.exec("PRAGMA foreign_keys = OFF");
+    const now = new Date().toISOString();
+    db.raw.prepare(
+      `INSERT INTO customer_portal_acceptance_intents
+         (acceptance_id, idempotency_key_hash, request_fingerprint, challenge_id, tenant_id,
+          portal_link_id, roof_job_id, customer_id, email_hash, quote_id, quote_version,
+          proposal_pack_id, terms_hash, terms_json, signer_name, signer_ip_hash, accepted_at,
+          receipt_key, state, created_at, updated_at)
+       VALUES ('acceptance_0161decided0001', ?, ?, 'challenge:synthetic:0161', ?, 'portal-link:synthetic:0161',
+               ?, ?, ?, ?, 1, ?, ?, '{}', 'Synthetic Signer', ?, ?,
+               'customer-contract-acceptance/v1/synthetic/0161-decided.json', 'receipt_pending', ?, ?)`,
+    ).run(
+      "1".repeat(64), "2".repeat(64), TENANT, JOB_ID, CUSTOMER_ID, "3".repeat(64), QUOTE_ID, PACK,
+      "4".repeat(64), "5".repeat(64), now, now, now,
+    );
+    db.raw.exec("PRAGMA foreign_keys = ON");
+    await assert.rejects(
+      recordProposalDeliveryFinding(env, {
+        tenantId: TENANT, effectId, supersedesFindingId: null, finding: "not_received",
+        note: "Recording it after the customer accepted.", idempotencyKey: "findings-decided-1", ...person,
+      }),
+      { code: "proposal_delivery_finding_closed" },
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 refuses an early 'not delivered' on an unknown send, with the window of the send's provider", async () => {
+  const { proposalDeliveryLateAnswerWindowMs, recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  for (const { provider, windowMs } of [
+    { provider: "native-commercial-publication", windowMs: EFFECT_ATTEMPT_LEASE_MS },
+    { provider: "synthetic-slow-provider", windowMs: 600_000 },
+  ]) {
+    const { db, env, prepare } = await publicationReady(`late-answer-${provider}`);
+    const effectId = `effect:late-answer:${provider}`;
+    try {
+      // 0161 records the default only; a provider with its own window adds a row with its source.
+      db.raw.prepare(
+        "INSERT INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES (?, ?, ?)",
+      ).run("synthetic-slow-provider", 600_000, "Synthetic provider for this test: answers may come ten minutes late.");
+      assert.equal(await proposalDeliveryLateAnswerWindowMs(env, provider), windowMs);
+
+      const prepared = await prepare(`late-answer-${provider}-prepare`);
+      const { permit } = await prepared.json() as { permit: Permit };
+      await runExternalEffect(env, { ...effectRequest(permit, effectId), provider }, {
+        async dispatch() {
+          return { outcome: "unknown", detailCode: "provider_timeout" } as never;
+        },
+        async replay() {
+          return { published: false };
+        },
+      }).catch(() => undefined);
+      assert.equal(effectRow(db, effectId).state, "unknown");
+      const ended = lastAttemptEnd(db, effectId);
+      const after = (ms: number) => new Date(Date.parse(ended) + ms).toISOString();
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const direct = (confirmationId: string, createdAt: string) =>
+        db.raw.prepare(
+          `INSERT INTO proposal_delivery_confirmations
+             (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+              confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+           VALUES (?, ?, ?, ?, ?, 'not_delivered', 'Nothing in their inbox or spam.', ?, 'ops', ?, ?, ?)`,
+        ).run(confirmationId, TENANT, effectId, PACK, REVISION, OPS_ID,
+          confirmationId.slice(-1).repeat(64), "e".repeat(64), createdAt);
+
+      // D1 itself refuses it inside the provider's window, even past the default lease.
+      assert.throws(() => direct("delivery-confirmation:direct-early-1", after(60_000)), /proposal_delivery_answer_may_be_late/);
+      assert.throws(() => direct("delivery-confirmation:direct-early-2", after(windowMs - 1_000)), /proposal_delivery_answer_may_be_late/);
+      // The Worker names the same moment.
+      await assert.rejects(
+        recordProposalDeliveryConfirmation(env, {
+          tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
+          actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: `late-answer-${provider}-early`,
+          now: after(windowMs - 1_000),
+        }),
+        (error: { code?: string; detail?: { not_before?: string } }) =>
+          error.code === "proposal_delivery_answer_may_be_late" && error.detail?.not_before === after(windowMs),
+      );
+      assert.equal(effectRow(db, effectId).state, "unknown");
+      // Once the window has passed, the answer is recorded.
+      direct("delivery-confirmation:direct-after-3", after(windowMs + 1_000));
+      assert.equal(effectRow(db, effectId).state, "reconciled");
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("the late-answer wait also holds after an unknown send became a manual exception", async () => {
+  const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const { db, env, prepare } = await publicationReady("late-manual-exception");
+  const effectId = "effect:late-manual-exception:send";
+  try {
+    await unknownSendThroughRoutes(env, prepare, "late-manual-exception-prepare", effectId);
+    const inconclusive = await reconcileThroughRoute(env, effectId, "inconclusive");
+    assert.equal(inconclusive.status, 200, await inconclusive.clone().text());
+    assert.equal(effectRow(db, effectId).state, "manual_exception");
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const notBefore = new Date(Date.parse(lastAttemptEnd(db, effectId)) + EFFECT_ATTEMPT_LEASE_MS).toISOString();
+    const answer = (key: string, now?: string) => recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
+      actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: key, ...(now ? { now } : {}),
+    });
+    // An inconclusive check is not the provider's answer: "not delivered" still waits, in D1 too.
+    assert.throws(
+      () => db.raw.prepare(
+        `INSERT INTO proposal_delivery_confirmations
+           (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+            confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+         VALUES ('delivery-confirmation:direct-manual-1', ?, ?, ?, ?, 'not_delivered',
+                 'Nothing in their inbox or spam.', ?, 'ops', ?, ?, ?)`,
+      ).run(TENANT, effectId, PACK, REVISION, OPS_ID, "1".repeat(64), "e".repeat(64), new Date().toISOString()),
+      /proposal_delivery_answer_may_be_late/,
+    );
+    await assert.rejects(
+      answer("late-manual-exception-early"),
+      (error: { code?: string; detail?: { not_before?: string } }) =>
+        error.code === "proposal_delivery_answer_may_be_late" && error.detail?.not_before === notBefore,
+    );
+    assert.equal(effectRow(db, effectId).state, "manual_exception");
+    const recorded = await answer(
+      "late-manual-exception-after",
+      new Date(Date.parse(notBefore) + 1_000).toISOString(),
+    );
+    assert.equal(recorded.effectState, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
+test("the late-answer wait fails closed when no window row is left", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const { db, env, prepare } = await publicationReady("late-answer-no-window");
+  const effectId = "effect:late-answer-no-window:unknown";
+  try {
+    // Only a schema change can remove the default row; with none left the wait is still the lease.
+    db.raw.exec("DROP TRIGGER proposal_delivery_late_answer_windows_append_only_delete");
+    db.raw.exec("DELETE FROM proposal_delivery_late_answer_windows");
+    const prepared = await prepare("late-answer-no-window-prepare");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "unknown");
+    const ended = lastAttemptEnd(db, effectId);
+    const notExecuted = (afterMs: number) => db.raw.prepare(
+      `UPDATE external_effects SET state = 'reconciled', result_code = 'reconciled_not_executed',
+         updated_at = ? WHERE effect_id = ? AND state = 'unknown'`,
+    ).run(new Date(Date.parse(ended) + afterMs).toISOString(), effectId);
+    assert.throws(() => notExecuted(60_000), /proposal_delivery_answer_may_be_late/);
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    notExecuted(EFFECT_ATTEMPT_LEASE_MS + 1_000);
+    assert.equal(effectRow(db, effectId).state, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
+test("a manual exception that did not come straight from unknown is not held, even after an earlier unknown", async () => {
+  const { claimExternalEffect, EFFECT_ATTEMPT_LEASE_MS, reconcileExternalEffect, retryExternalEffect, settleExternalEffect } =
+    await import("../src/effect-runtime.ts");
+  const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+  const { db, env, prepare } = await publicationReady("late-answer-not-from-unknown");
+  const effectId = "effect:late-answer-not-from-unknown:send";
+  try {
+    const prepared = await prepare("late-answer-not-from-unknown-prepare");
+    const { permit } = await prepared.json() as { permit: Permit };
+    // The first attempt goes unknown, and the provider later shows nothing went out.
+    await runExternalEffect(env, { ...effectRequest(permit, effectId), retryLimit: 1 }, {
+      async dispatch() {
+        return { outcome: "unknown", detailCode: "provider_timeout" } as never;
+      },
+      async replay() {
+        return { published: false };
+      },
+    }).catch(() => undefined);
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    await reconcileExternalEffect(env, effectId, {
+      outcome: "not_executed",
+      evidence: { provider: "no message for this send" },
+      now: new Date(Date.parse(lastAttemptEnd(db, effectId)) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
+    });
+    // The second attempt is answered, but the readback does not match: a manual exception that
+    // came from reconciling, not from unknown.
+    await retryExternalEffect(env, effectId);
+    const { attempt } = await claimExternalEffect(env, effectId, new Date());
+    await settleExternalEffect(env, effectId, {
+      attemptId: attempt.attempt_id,
+      outcome: "accepted",
+      providerExternalId: `provider:${effectId}:retry`,
+      readback: {
+        status: "match",
+        providerExternalId: `provider:${effectId}:retry`,
+        observed: { ...READBACK, state: "withdrawn" },
+      },
+    });
+    assert.equal(effectRow(db, effectId).state, "manual_exception");
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    // Not held: the person's answer is recorded at once, as 0156 settles a readback conflict.
+    const recorded = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
+      actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: "late-answer-not-from-unknown-1",
+    });
+    assert.equal(recorded.effectState, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
+test("the late-answer windows are append-only and the default is the attempt lease", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const db = new SqliteD1();
+  try {
+    const rows = db.raw.prepare("SELECT provider, window_ms, source FROM proposal_delivery_late_answer_windows").all() as
+      Array<{ provider: string; window_ms: number; source: string }>;
+    assert.deepEqual(rows.map((row) => [row.provider, row.window_ms]), [["*", EFFECT_ATTEMPT_LEASE_MS]]);
+    assert.match(rows[0]!.source, /EFFECT_ATTEMPT_LEASE_MS/);
+    assert.throws(
+      () => db.raw.prepare("UPDATE proposal_delivery_late_answer_windows SET window_ms = 0").run(),
+      /proposal_delivery_late_answer_windows_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM proposal_delivery_late_answer_windows").run(),
+      /proposal_delivery_late_answer_windows_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare(
+        "INSERT OR REPLACE INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES ('*', 0, ?)",
+      ).run("A replacement that would switch the wait off."),
+      /proposal_delivery_late_answer_windows_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("the settle and reconcile admin routes date what they record by the server's clock", async () => {
+  const {
+    handleExternalEffectClaim,
+    handleExternalEffectReconciliation,
+    handleExternalEffectSettlement,
+  } = await import("../src/effect-runtime-admin.ts");
+  const { db, env, prepare } = await publicationReady("server-time");
+  const effectId = "effect:server-time:send";
+  try {
+    const prepared = await prepare("server-time-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    const send = effectRequest(permit, effectId);
+    const claimed = await handleExternalEffectClaim(adminPost("/admin/effects/claim", {
+      effect: send,
+      authority: send.authority,
+    }), env);
+    assert.equal(claimed.status, 200, await claimed.clone().text());
+    const { attempt } = await claimed.json() as { attempt: { attempt_id: string } };
+
+    // A caller's time is ignored: a settlement dated years ago is recorded now.
+    const beforeSettle = Date.now();
+    const settled = await handleExternalEffectSettlement(adminPost("/admin/effects/settle", {
+      effectId,
+      settlement: {
+        attemptId: attempt.attempt_id,
+        outcome: "unknown",
+        detailCode: "provider_timeout",
+        now: "2020-01-01T00:00:00.000Z",
+      },
+    }), env);
+    assert.equal(settled.status, 200, await settled.clone().text());
+    const afterSettle = Date.now();
+    const unknown = effectRow(db, effectId);
+    assert.equal(unknown.state, "unknown");
+    assert.ok(
+      Date.parse(unknown.updated_at) >= beforeSettle && Date.parse(unknown.updated_at) <= afterSettle,
+      `settled at ${unknown.updated_at}, not at the caller's time`,
+    );
+    assert.equal(lastAttemptEnd(db, effectId), unknown.updated_at);
+
+    // Likewise a reconciliation dated far ahead is recorded now.
+    const beforeReconcile = Date.now();
+    const reconciled = await handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
+      effectId,
+      outcome: "executed",
+      evidence: { provider: "late answer: delivered" },
+      now: "2099-01-01T00:00:00.000Z",
+    }), env);
+    assert.equal(reconciled.status, 200, await reconciled.clone().text());
+    const afterReconcile = Date.now();
+    const executed = effectRow(db, effectId);
+    assert.equal(executed.state, "succeeded");
+    assert.ok(
+      Date.parse(executed.updated_at) >= beforeReconcile && Date.parse(executed.updated_at) <= afterReconcile,
+      `reconciled at ${executed.updated_at}, not at the caller's time`,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("D1 refuses moving an unknown send to not executed before its provider's late-answer window", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+  const { db, env, prepare } = await publicationReady("late-reconcile-d1");
+  const effectId = "effect:late-reconcile-d1:unknown";
+  try {
+    const prepared = await prepare("late-reconcile-d1-prepare");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "unknown");
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    const ended = lastAttemptEnd(db, effectId);
+    const after = (ms: number) => new Date(Date.parse(ended) + ms).toISOString();
+    const notExecuted = (updatedAt: string) => db.raw.prepare(
+      `UPDATE external_effects SET state = 'reconciled', result_code = 'reconciled_not_executed',
+         updated_at = ? WHERE effect_id = ? AND state = 'unknown'`,
+    ).run(updatedAt, effectId);
+    // Any path, not only a person's record: inside the window the move itself is refused.
+    assert.throws(() => notExecuted(after(EFFECT_ATTEMPT_LEASE_MS - 1_000)), /proposal_delivery_answer_may_be_late/);
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    notExecuted(after(EFFECT_ATTEMPT_LEASE_MS + 1_000));
+    assert.equal(effectRow(db, effectId).state, "reconciled");
+  } finally {
+    db.close();
+  }
+});
+
+test("the reconcile route cannot call an unknown send not executed inside its provider's window", async () => {
+  for (const { provider, windowMs, early } of [
+    { provider: "synthetic-slow-provider", windowMs: 3_600_000, early: true },
+    { provider: "synthetic-instant-provider", windowMs: 0, early: false },
+  ]) {
+    const { db, env, prepare } = await publicationReady(`late-reconcile-route-${provider}`);
+    const effectId = `effect:late-reconcile-route:${provider}`;
+    try {
+      db.raw.prepare(
+        "INSERT INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES (?, ?, ?)",
+      ).run(provider, windowMs, "Synthetic provider for this test, with its own late-answer window.");
+      await unknownSendThroughRoutes(env, prepare, `late-reconcile-route-${provider}-prepare`, effectId, provider);
+      const reconciled = await reconcileThroughRoute(env, effectId, "not_executed");
+      if (early) {
+        assert.equal(reconciled.status, 409);
+        assert.deepEqual(await reconciled.json(), { error: "proposal_delivery_answer_may_be_late" });
+        assert.equal(effectRow(db, effectId).state, "unknown");
+        // The wait guards "not executed" only: a provider answer that it did go out settles at once.
+        const executed = await reconcileThroughRoute(env, effectId, "executed");
+        assert.equal(executed.status, 200, await executed.clone().text());
+        assert.equal(effectRow(db, effectId).state, "succeeded");
+      } else {
+        assert.equal(reconciled.status, 200, await reconciled.clone().text());
+        assert.equal(effectRow(db, effectId).state, "reconciled");
+      }
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("D1 names the permit holder of every new publication, whoever records it", async () => {
+  const { db, env, prepare } = await publicationReady("recorded-by");
+  const effectId = "effect:recorded-by:success";
+  try {
+    // OPS_ID prepares, so OPS_ID holds the permit.
+    const prepared = await prepare("recorded-by-prepare-1");
+    const { permit } = await prepared.json() as { permit: Permit };
+    await runSend(env, permit, effectId, "success");
+    // Another commercial person records the send that ran (readback, #15).
+    const other = await personSession(db, env, OTHER_OPS_ID, "ops");
+    const settlement = {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: effectId,
+    };
+    const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "recorded-by-record", settlement);
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+    const { publication } = await recorded.json() as {
+      publication: { publication_event_id: string; occurred_at: string };
+    };
+    // D1 wrote the permit holder in the insert's own statement: not the person who pressed record,
+    // and no Worker field supplied it.
+    assert.deepEqual(
+      { ...db.raw.prepare(
+        "SELECT permit_holder_user_id, occurred_at FROM commercial_proposal_publication_permit_holders WHERE publication_event_id = ?",
+      ).get(publication.publication_event_id) },
+      { permit_holder_user_id: OPS_ID, occurred_at: publication.occurred_at },
+    );
+
+    // A permit-holder row is only ever the permit holder of an existing event; it is never rewritten.
+    const insertHolder = (publicationEventId: string, userId: string, occurredAt: string) =>
+      db.raw.prepare(
+        `INSERT INTO commercial_proposal_publication_permit_holders
+           (publication_event_id, tenant_id, permit_holder_user_id, occurred_at) VALUES (?, ?, ?, ?)`,
+      ).run(publicationEventId, TENANT, userId, occurredAt);
+    assert.throws(
+      () => insertHolder(publication.publication_event_id, OTHER_OPS_ID, publication.occurred_at),
+      /commercial_publication_permit_holder_exists/,
+    );
+    assert.throws(
+      () => insertHolder("commercial-publication:no-such-event-0161", OPS_ID, publication.occurred_at),
+      /commercial_publication_permit_holder_invalid/,
+    );
+    assert.throws(
+      () => db.raw.prepare("UPDATE commercial_proposal_publication_permit_holders SET permit_holder_user_id = ?").run(OTHER_OPS_ID),
+      /commercial_proposal_publication_permit_holders_append_only/,
+    );
+    assert.throws(
+      () => db.raw.prepare("DELETE FROM commercial_proposal_publication_permit_holders").run(),
+      /commercial_proposal_publication_permit_holders_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("0161 only adds objects: it re-creates or drops nothing an earlier migration created", () => {
+  const directory = new URL("../migrations/", import.meta.url);
+  const files = readdirSync(directory).filter((name) => name.endsWith(".sql")).sort();
+  const created = (sql: string) =>
+    [...sql.matchAll(/CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/gi)]
+      .map((match) => match[1]!.toLowerCase());
+  const migration0161 = readFileSync(new URL("0161_proposal_delivery_corrections.sql", directory), "utf8");
+  assert.doesNotMatch(migration0161, /\bDROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)\b/i);
+  assert.doesNotMatch(migration0161, /\bALTER\s+TABLE\b/i);
+  const earlier = new Set(
+    files.filter((name) => name < "0161").flatMap((name) => created(readFileSync(new URL(name, directory), "utf8"))),
+  );
+  const objects = created(migration0161);
+  assert.deepEqual(objects.filter((name) => earlier.has(name)), []);
+  assert.deepEqual(objects.sort(), [
+    "commercial_proposal_publication_permit_holders",
+    "commercial_proposal_publication_permit_holders_append_only_delete",
+    "commercial_proposal_publication_permit_holders_append_only_update",
+    "commercial_proposal_publication_permit_holders_validate_insert",
+    "commercial_publication_permit_holder_from_permit",
+    "external_effects_proposal_late_answer_guard",
+    "idx_proposal_delivery_findings_effect",
+    "proposal_delivery_findings",
+    "proposal_delivery_findings_append_only_delete",
+    "proposal_delivery_findings_append_only_update",
+    "proposal_delivery_findings_audit",
+    "proposal_delivery_findings_validate_insert",
+    "proposal_delivery_late_answer_windows",
+    "proposal_delivery_late_answer_windows_append_only_delete",
+    "proposal_delivery_late_answer_windows_append_only_update",
+    "proposal_delivery_late_answer_windows_no_insert_replace",
+  ]);
+});

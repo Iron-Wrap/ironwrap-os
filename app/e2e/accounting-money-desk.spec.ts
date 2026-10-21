@@ -204,7 +204,7 @@ test.describe("Money desk mobile acceptance", () => {
     const nav = page.getByRole("navigation", { name: "Main navigation" }).last();
     await expect(nav.getByRole("link", { name: "Money" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Issues" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Setup" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
 
     await nav.getByRole("link", { name: "Issues" }).click();
     await expect(page.getByRole("heading", { name: "Money issues", exact: true })).toBeVisible();

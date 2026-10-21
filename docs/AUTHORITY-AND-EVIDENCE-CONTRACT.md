@@ -328,6 +328,23 @@ the same version, unlocks nothing. Refusals are distinct:
 `work_package_stop_release_evidence_before_stop` and `work_package_stop_release_replay_conflict`
 (409).
 
+A stop on a safety occurrence follows the same rule (owner rule L06). Its only lift path is the
+`released` command, `POST /api/v1/safety/occurrences/{occurrence}/commands` (CSRF). That command
+admits only a person's own cookie session (`safety_stop_release_person_required`, 403) in the
+owner, ops or production role. It never admits the person who raised the stop, under any
+identity either of them carries: user id, email or Frappe user, compared exactly as a crew stop
+release compares them (`safety_stop_release_by_raiser_forbidden`, 403). There is no exception for
+working alone: if nobody else can release the stop, it stays active. Release by another Staff
+member or a named outside person (`docs/AI-TEAM-CONTRACT.md`, Q7) is not built. The stop lifts only
+from `controlled` once any required rescue is complete (`safety_stop_release_not_permitted`), and
+only once (`safety_stop_already_released`, 409). Every command's detail and evidence are checked
+before anything is written (`safety_command_invalid`, `safety_evidence_invalid`, 400), and the
+occurrence moves in one batch with the event that records the command, so no transition stands
+without its journal entry. Migration `0165` records who lifted the stop (`released_by_user_id`) and
+repeats the rule in D1 for any write. A lift must name an active user of the tenant who is not the
+raiser and whose own `released` event for that version is already written, and the recorded name
+never changes afterwards.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's

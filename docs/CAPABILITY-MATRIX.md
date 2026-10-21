@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 135,
+      "count": 136,
       "latest": "0205_agent_step_pair_index.sql"
     }
   },
@@ -767,6 +767,14 @@ stale from before that merge):
   notification, independent verification, and stop release each require the exact current role, and
   the occurrence reporter, corrective-action owner, and evidence capturer are all refused
   verification of that closure.
+- Lifting a safety-occurrence stop enforces owner rule L06 the way a Work Package stop release
+  does. The person who raised the stop never lifts it, under any identity they carry, and there is
+  no exception for working alone. Only a person's own cookie session lifts a stop, never an agent
+  or service credential. Migration `0165` records who lifted the stop. In D1 it refuses a lift by
+  the raiser, a lift that names nobody or an unknown user, and a lift without that person's own
+  `released` event. The occurrence and its event now commit in one batch. The release by another
+  Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
+  Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

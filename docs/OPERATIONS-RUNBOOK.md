@@ -202,7 +202,7 @@ allowlist of routes, refuses any target that is not one of qa's own origins, and
 identity outside `example.invalid` and the two testers.
 
 `EFFECT_RUNTIME_TOKEN` serves the MCP host's `mcp.*` effects and never an outside send: a proposal
-publish or withdrawal and a customer or operations email are executed only by the bus, and the
+publish or withdrawal and a customer or operations email may be executed only by the bus, and the
 token's claim, settle, reconcile and retry answer 403 for them. The seed's
 `qa-synthetic-publication` stand-in passes only because qa's `AGENT_DATA_CLASS` is `synthetic`. On
 production (`business`) the same claim answers 403 `effect_provider_not_allowed`, and the seed

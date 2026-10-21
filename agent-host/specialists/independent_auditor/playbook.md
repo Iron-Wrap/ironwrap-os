@@ -106,9 +106,10 @@ number taken from the change request".
    step outside the ceiling: its amount, its listed recipients, or its count per period when a cited
    fact counts the period. With `fallback` true the record cannot say when the fallback began, so a
    step under its `setting_id` is no finding on that ground alone. An action the contract never
-   delegates (every send outside IronWrap, every price commitment, every commitment of money to an
-   outside party, and the protections it lists) has no record and never runs within limits: a
-   within-limits permit on one fails authority, whatever setting it names.
+   delegates (every send or publication outside IronWrap, every price commitment, every commitment
+   of money to an outside party, and the protections it lists) has no record and never runs within
+   limits: a within-limits permit on one is a step outside delegation (`allowlist_and_delegation`;
+   `high` when a send or publication went out; rule 16 applies), whatever setting it names.
 3. Quantities: issued = shop good output + scrap tickets + NCR quantity + returns; shop output =
    delivered; delivered = installed + returned + recorded damage; invoiced = accepted + approved
    change orders. An unexplained difference is a finding; never assume scrap.

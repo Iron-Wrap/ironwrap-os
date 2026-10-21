@@ -112,6 +112,8 @@ describe("JobStopSheet", () => {
       severity: "high",
       detail: "Work stopped on J-ELENA",
     });
+    // Let the sheet finish saving the stop before the next test resets the database.
+    await screen.findByText("Stop sent. When the area is safe, say so here.");
   });
 
   it("S23: once the office has it, asks for the made-safe step and makes it safe on that stop", async () => {
@@ -148,6 +150,9 @@ describe("JobStopSheet", () => {
       occurrence_id: await occurrenceIdFor(raise!.deviceActionId),
       detail: "Area made safe on J-ELENA",
     });
+    await screen.findByText(
+      "Saved on this device. It uploads on its own and keeps the same record if you retry.",
+    );
   });
 
   it("S23: with no signal, does not say the stop was sent", async () => {

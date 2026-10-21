@@ -757,3 +757,22 @@ describe("a people-only draft that left Needs you", () => {
     expect(screen.queryByText(/couldn't draw the layout/)).toBeNull();
   });
 });
+
+describe("a step a newer one replaced or a person did, with no line from the screen", () => {
+  it.each(["superseded", "done_by_person"] as const)(
+    "shows no empty Since then row: failed/%s",
+    (reason) => {
+      render(
+        <Receipt
+          receipt={receipt({
+            outcome: "failed",
+            readback: null,
+            policy: { ...receipt().policy, reason_codes: [reason] },
+          })}
+          display={{ ...display, people: { person_dana: "Dana Whitford" } }}
+        />,
+      );
+      expect(screen.queryByText("Since then")).toBeNull();
+    },
+  );
+});

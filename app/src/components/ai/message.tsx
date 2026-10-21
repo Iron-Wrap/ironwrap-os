@@ -21,8 +21,8 @@ export interface MessagePart {
  *
  * `working`: the answer is being written. `unavailable`: it could not answer, so the person does
  * it themselves. `not-sent`: the person's message is waiting on this device for signal. `note`:
- * what the person should know about the answer, under it (`receiptWords(receipt).note`, such as
- * `VIEW_REFUSED` when its generated view was refused).
+ * `VIEW_REFUSED` under an answer whose generated view was refused. A closed draft's note belongs on
+ * its receipt ("Since then"), never here.
  */
 export function Message({
   from,

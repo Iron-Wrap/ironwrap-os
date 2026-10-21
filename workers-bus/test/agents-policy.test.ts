@@ -240,7 +240,7 @@ test("handoffs stop at the depth and repeat limits", () => {
 test("the followup contract keeps closed machine reasons, auditor protection and protective revoke", () => {
   assert.equal(CATALOG.actions.length, 163);
   assert.equal(CATALOG.watches.length, 116);
-  assert.equal(CATALOG_VERSION, "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34");
+  assert.equal(CATALOG_VERSION, "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6");
   assert.deepEqual(catalogAction("specialist.hold")?.never_targets, ["independent_auditor"]);
   assert.equal(catalogAction("portal_link.revoke")?.protective, true);
   assert.equal(catalogAction("portal_link.revoke")?.side_effect_class, "internal_reversible");

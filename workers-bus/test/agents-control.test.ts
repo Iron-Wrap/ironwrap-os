@@ -5,7 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.ts";
 import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
+import { catalogAction, earnable } from "../src/agents/catalog.ts";
 import { currentDelegation, specialistControl } from "../src/agents/control.ts";
+import { effectiveDelegation } from "../src/agents/policy.ts";
 import { CATASTROPHE_IDS, SHADOW_COMPARE_WINDOW_MS, sweepShadow } from "../src/agents/shadow.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import { WATCH_CONDITIONS } from "../src/agents/watches.ts";
@@ -385,6 +387,60 @@ test("H, protective and never-delegable actions cannot receive owner delegation"
   );
 });
 
+test("the owner's caps keep every outside send and price commitment at asks first", async () => {
+  const s = setup();
+  // Every send outside IronWrap, every price commitment and every commitment of money to an outside
+  // party asks first (D-05, D-09, Q4, L04): the twenty-four actions the catalog caps, with
+  // customer_message.send for two of its owners.
+  const capped = [
+    ["estimator", "quote.commit_revision"],
+    ["estimator", "quote.apply_discount"],
+    ["estimator", "change_order.commit"],
+    ["lead_concierge", "customer_message.send"],
+    ["billing_reconciliation", "customer_message.send"],
+    ["lead_concierge", "visit.confirm"],
+    ["proposal_contract", "portal_link.send"],
+    ["proposal_contract", "proposal.publish"],
+    ["proposal_contract", "change_order.send_for_decision"],
+    ["customer_care_warranty", "remedy.offer"],
+    ["marketing_reputation", "campaign.send"],
+    ["billing_reconciliation", "invoice.commit_intent"],
+    ["marketing_reputation", "review_response.publish"],
+    ["estimator", "insurance_supplement.send"],
+    ["purchasing_inventory", "rfq.send"],
+    ["purchasing_inventory", "purchase_order.place"],
+    ["purchasing_inventory", "purchase_order.change"],
+    ["purchasing_inventory", "purchase_order.expedite"],
+    ["billing_reconciliation", "supplier_message.send"],
+    ["purchasing_inventory", "supplier_return.request"],
+    ["compliance", "document.request"],
+    ["customer_care_warranty", "cost_recovery.claim"],
+    ["marketing_reputation", "content.publish"],
+    ["marketing_reputation", "ad_spend.commit"],
+    ["billing_reconciliation", "supplier_bill.approve"],
+  ] as const;
+  for (const [specialist, actionId] of capped) {
+    const action = catalogAction(actionId);
+    assert.ok(action, actionId);
+    assert.equal(action.delegable, false, actionId);
+    // Never a delegation candidate, so the face never proposes acting within limits for it.
+    assert.equal(earnable(action), false, actionId);
+    for (const [key, body] of [
+      ["within", setting({ action_id: actionId })],
+      ["asks", setting({ action_id: actionId, setting: "asks_first", ceiling: null })],
+      ["off", setting({ action_id: actionId, setting: "off", ceiling: null })],
+    ] as const) {
+      const r = await s.app(`/specialists/${specialist}/delegation`, body, "owner", `cap-${key}-${specialist}-${actionId}`);
+      assert.equal(r.status, 422, `${actionId} ${key}`);
+      assert.equal(r.body.error, "not_delegable", `${actionId} ${key}`);
+    }
+    // A within-limits setting recorded before the cap no longer applies: the step asks first.
+    const before = { delegation_id: "dlg_recorded_before_the_cap", setting: "within_limits" } as const;
+    assert.equal(effectiveDelegation(action, { delegation: before, specialistState: { paused: false, held: false } }), "asks_first");
+  }
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_delegation_settings").n, 0);
+});
+
 test("auditor holds execute once, cannot target the auditor, and clearing requires per-action reconfirmation", async () => {
   const s = setup();
   const delegated = await s.app("/specialists/lead_concierge/delegation", setting());
@@ -556,9 +612,13 @@ test("approval is recorded but an unbound effect remains policy_missing with no 
 
 test("an approved import retry or lead confirmation runs nothing: the decision is recorded and its reviewer takes the work over", async () => {
   const s = setup();
+  // The confirm names an open proposal of the same lead, made from the inbound earlier.
+  const fields = { service: "metal_roofing", scope: null, address: null, timing: null };
+  const proposal = (await s.propose(await s.run(), "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body;
+  assert.equal(proposal.decision, "drafted");
   const steps = [
     { specialist: "orchestrator", action: "import.retry_failed", args: { import_run_id: "import_run:synthetic-0001", source_keys: ["SRC-0001", "SRC-0002"] }, reviewer: "owner" },
-    { specialist: "lead_concierge", action: "lead_fact.confirm", args: { lead_id: "synthetic-lead", proposal_id: "proposal-0001", fields: { service: "metal_roofing", scope: null, address: null, timing: null } }, reviewer: "sales" },
+    { specialist: "lead_concierge", action: "lead_fact.confirm", args: { lead_id: "synthetic-lead", proposal_id: proposal.step_id, fields }, reviewer: "sales" },
   ];
   for (const item of steps) {
     const proposed = await s.propose(await s.run(item.specialist), item.action, item.args);
@@ -2296,4 +2356,93 @@ test("the pair index serves the delegation reads, and only the face proposes del
     "SELECT COUNT(*) FROM agent_run_steps s LEFT JOIN agent_step_decisions d ON d.step_id = s.step_id WHERE s.tenant_id = 't' AND s.specialist_id = 's' AND s.action_id = 'a'",
   ])
     assert.match(plan(sql), /idx_agent_run_steps_pair/, sql);
+});
+
+test("an open lead proposal reaches a later run, and a confirm must name it, for its lead, with its values", async () => {
+  const s = setup(true);
+  const { OBJECT_MODELS } = await import("../src/agents/read-models.ts");
+  const at = s.now();
+  s.db.raw.prepare("INSERT OR IGNORE INTO envelopes (envelope_id, source, payload_json, ts, status, created_at, updated_at) VALUES ('ow_synthetic-lead', 'website', '{}', ?, 'received', ?, ?)").run(at, at, at);
+  s.db.raw.prepare("INSERT INTO operating_leads (lead_id, tenant_id, source_envelope_id, source, contact_name, created_at, updated_at) VALUES ('synthetic-lead', ?, 'ow_synthetic-lead', 'website', 'Synthetic Lead', ?, ?)").run(TENANT, at, at);
+  const propose = async (fields: Record<string, string | null>) => {
+    s.tick(1_000);
+    const run = await s.run();
+    const body = (await s.propose(run, "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body;
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return { step_id: body.step_id as string, signal: `signal/${run.signal_id}` };
+  };
+  const proposalFact = async (id: string) => (await OBJECT_MODELS.lead_proposal.read(s.db, TENANT, id))?.data ?? null;
+  const leadLinks = async () => ((await OBJECT_MODELS.lead.read(s.db, TENANT, "synthetic-lead"))?.links ?? []).filter((link) => link.kind === "lead_proposal").map((link) => link.id);
+  const confirm = async (proposalId: string, fields: Record<string, string | null>, leadId = "synthetic-lead") =>
+    (await s.propose(await s.run(), "lead_fact.confirm", { lead_id: leadId, proposal_id: proposalId, fields })).body;
+
+  const first = await propose({ service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null });
+  assert.deepEqual(await proposalFact(first.step_id), {
+    lead_id: "synthetic-lead",
+    fields: { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null },
+    proposed_at: s.now(),
+    source: first.signal,
+  });
+  assert.deepEqual(await leadLinks(), [first.step_id]);
+  // A newer proposal that covers only some of its keys leaves it open.
+  const partial = await propose({ service: "asphalt_roofing", scope: null, address: null, timing: null });
+  assert.deepEqual(await leadLinks(), [partial.step_id, first.step_id]);
+
+  // A confirm names an open proposal of its own lead and only its values.
+  const refused = (body: any) => [body.decision, body.reason_codes, body.receipt.policy.checks.at(-1)];
+  assert.deepEqual(refused(await confirm("step_not_a_proposal", { service: "metal_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_missing"], { check: "proposal", passed: false }]);
+  assert.deepEqual(refused(await confirm(first.step_id, { service: "metal_roofing", scope: null, address: null, timing: null }, "another-lead")), ["abstained", ["fact_missing"], { check: "proposal", passed: false }]);
+  assert.deepEqual(refused(await confirm(first.step_id, { service: "metal_roofing", scope: null, address: "2 Other Way", timing: null })), ["abstained", ["fact_conflict"], { check: "proposal", passed: false }]);
+  // Confirming part of it is a confirm: once policy admits one, the proposal is used and closes.
+  const confirmed = await confirm(first.step_id, { service: null, scope: null, address: "1 Synthetic Way", timing: null });
+  assert.deepEqual([confirmed.decision, confirmed.receipt.policy.checks.at(-1)], ["awaiting_approval", { check: "proposal", passed: true }]);
+  assert.equal(await proposalFact(first.step_id), null);
+  assert.deepEqual(await leadLinks(), [partial.step_id]);
+  assert.deepEqual(refused(await confirm(first.step_id, { service: "metal_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  // A newer proposal that sets every key of an older one supersedes it.
+  const covering = await propose({ service: "metal_roofing", scope: "house only", address: null, timing: null });
+  assert.equal(await proposalFact(partial.step_id), null);
+  assert.deepEqual(await leadLinks(), [covering.step_id]);
+  assert.deepEqual(refused(await confirm(partial.step_id, { service: "asphalt_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  // A refused confirm goes to the specialist's reviewer.
+  const missing = await confirm("step_not_a_proposal", { service: "metal_roofing", scope: null, address: null, timing: null });
+  assert.equal(missing.receipt.needs_from_you?.reviewer_role, "sales");
+  // Proposals made in the same instant: the later one by insertion order supersedes, never by id.
+  const tie = s.now();
+  const tied = async (fields: Record<string, string | null>) => (await s.propose(await s.run(), "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body.step_id as string;
+  s.tick(1_000);
+  const sameInstant = s.now();
+  assert.notEqual(sameInstant, tie);
+  const earlier = await tied({ service: null, scope: null, address: null, timing: "next week" });
+  const later = await tied({ service: "metal_roofing", scope: "house only", address: null, timing: "this week" });
+  assert.equal(await proposalFact(earlier), null, "the later of two same-instant proposals supersedes the earlier");
+  assert.deepEqual(await leadLinks(), [later]);
+  // Two confirms of one proposal racing: the second to land stops as a used proposal.
+  s.db.beforeStepInsert = async () => {
+    const first = await confirm(later, { service: "metal_roofing", scope: null, address: null, timing: null });
+    assert.equal(first.decision, "awaiting_approval");
+  };
+  const raced = await confirm(later, { service: null, scope: "house only", address: null, timing: null });
+  assert.deepEqual(refused(raced), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'lead_fact.confirm' AND json_extract(args_json, '$.proposal_id') = ? AND json_extract(policy_json, '$.result') <> 'deny'", later).n, 1);
+  // An owner report's run writes for a wider audience: its snapshot holds no proposal, while an
+  // ordinary run about the same lead does.
+  const watched = async (watch_id: string, key: string) => {
+    const signal = await appendSignal(
+      s.db,
+      TENANT,
+      { kind: "watch", specialist_id: "lead_concierge", watch_id, source: "watch_scheduler", subject: null, content: { watch_id, period_key: key, objects: [{ aggregate: "lead", id: "synthetic-lead" }], digest: {}, summary: "Synthetic" }, dedupe_key: `watch:${watch_id}:${key}` },
+      s.now(),
+    );
+    assert.ok("signal_id" in signal);
+    const opened = await s.worker.openRun({ signal_id: signal.signal_id, specialist_id: "lead_concierge", host_run_key: `proposal-${key}` });
+    return opened.context.facts.map((fact: { fact_id: string }) => fact.fact_id);
+  };
+  const fresh = await propose({ service: "metal_roofing", scope: "house only", address: "1 Synthetic Way", timing: "next week" });
+  const report = await watched("new_leads", "report");
+  assert.ok(report.includes("lead/synthetic-lead") && !report.some((id: string) => id.startsWith("lead_proposal/")), JSON.stringify(report));
+  assert.ok((await watched("first_response_due", "work")).includes(`lead_proposal/${fresh.step_id}`));
+  // Only the sales view reads it: its fields carry customer details.
+  const { viewFor } = await import("../src/agents/memory.ts");
+  assert.deepEqual([{ role: "sales" }, { role: "owner" }, { role: "field" }, { role: "accounting" }].map((reader) => viewFor(OBJECT_MODELS, reader, "lead_proposal") !== null), [true, true, false, false]);
 });

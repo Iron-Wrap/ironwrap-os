@@ -1038,6 +1038,35 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "shop_order.release_hold",
   "cancellation.release_hold",
   "ncr.verify_close",
+  // Capped at asks first by owner ruling D-09: the price and sending a proposal, a change order or
+  // an invoice.
+  "quote.commit_revision",
+  "quote.apply_discount",
+  "proposal.publish",
+  "change_order.send_for_decision",
+  "invoice.commit_intent",
+  // Capped because a sent message cannot be undone and reminders go by approval only (D-05, Q4).
+  "customer_message.send",
+  // Every other send outside IronWrap and every price commitment the owner capped (L04, D-09).
+  "visit.confirm",
+  "portal_link.send",
+  "remedy.offer",
+  "campaign.send",
+  "review_response.publish",
+  "insurance_supplement.send",
+  "change_order.commit",
+  "rfq.send",
+  "purchase_order.place",
+  "purchase_order.change",
+  "purchase_order.expedite",
+  "supplier_message.send",
+  "supplier_return.request",
+  "document.request",
+  "cost_recovery.claim",
+  "content.publish",
+  // Money committed to an outside party.
+  "ad_spend.commit",
+  "supplier_bill.approve",
 ];
 // Human-only: never an agent's act, never delegable.
 const AI_TEAM_PEOPLE_ONLY = [
@@ -1291,7 +1320,8 @@ function validateAiTeamContract(contract, content) {
   }
   const pins = [
     [AI_TEAM_OWNER_ASKS_FIRST, (action) => action.autonomy === "A3", "the owner's launch rule requires class A3"],
-    [AI_TEAM_ALWAYS_ASKS_FIRST, (action) => action.autonomy === "A3", "always asks first, so it must be class A3"],
+    // A send outside the company asks first even at class A2 (rfq.send), so the rule is the start state.
+    [AI_TEAM_ALWAYS_ASKS_FIRST, (action) => action.default_delegation === "asks_first", "always asks first, so it must start as asks first"],
     [AI_TEAM_PEOPLE_ONLY, (action) => action.autonomy === "H", "the owner's launch rule requires class H"],
     [
       AI_TEAM_EXTERNAL_A2,
@@ -1394,7 +1424,8 @@ function validateAiTeamContract(contract, content) {
     if (row.does.startsWith("Protective.") !== (action.protective === true)) {
       fail(`${AI_TEAM_LABEL}: ${id}: prose catalog protective marker differs from the contract`);
     }
-    if (row.does.startsWith("Always asks first.") !== (action.autonomy === "A3" && action.delegable === false)) {
+    const alwaysAsksFirst = ["A2", "A3"].includes(action.autonomy) && !action.protective && action.delegable === false;
+    if (row.does.startsWith("Always asks first.") !== alwaysAsksFirst) {
       fail(`${AI_TEAM_LABEL}: ${id}: prose catalog always-asks-first marker differs from the contract`);
     }
     if (AI_TEAM_CUSTOMER_DISCLOSURE_REQUIRED.includes(id) && !row.checks.includes("disclosure")) {

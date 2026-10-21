@@ -663,8 +663,11 @@ holds Safety on every job of the tenant, refused as `production_gate_stop_job_un
 stop's id. The owner's exception list shows it as "This work stop names a job that doesn’t exist",
 with who raised it, when and what they wrote, never the raw job id, and with no controls. An active
 stop that names a Work Package the tenant does not have is treated the same way (migration
-`0159`): `production_gate_stop_work_package_unknown` with the stop's id. Nothing refuses such a stop
-when it is recorded, because a person may always stop work, and a stop's scope cannot be corrected
+`0159`): `production_gate_stop_work_package_unknown` with the stop's id, and the owner's item "This
+work stop names a job plan that doesn’t exist" with the same fields; the screen says job plan, never
+work package. From `0159` both stops also hold every schedule, so both items say "Safety and
+scheduling stay held on every job while this work stop is active." Nothing refuses such a stop when
+it is recorded, because a person may always stop work, and a stop's scope cannot be corrected
 today, so it holds until it is lifted. Another job's stop, a shop or a vehicle stop does not hold
 it. The entry names the competency record, D1 checks both rules again at insert with the same
 predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a

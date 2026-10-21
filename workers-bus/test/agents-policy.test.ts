@@ -559,3 +559,25 @@ test("lead_fact.propose proposes from the inbound the run answers and cites only
   ])
     assert.deepEqual(propose({}, args).reason_codes, ["action_unregistered"], JSON.stringify(args));
 });
+
+test("lead_fact.propose answers only an event that came by an inbound channel", () => {
+  const propose = (source: string) =>
+    evaluateStep(
+      input({
+        specialistId: "lead_concierge",
+        actionId: "lead_fact.propose",
+        args: { lead_id: "L-5401", fields: { service: "metal_roofing", scope: null, address: null, timing: null } },
+        requester: { signal_ref: "signal/sig_1", kind: "event", source, actor: null },
+      }),
+    );
+  for (const channel of ["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]) {
+    const proposed = propose(channel);
+    assert.deepEqual([proposed.result, proposed.outcome, proposed.checks.find((check) => check.check === "requester")], ["allow", "succeeded", { check: "requester", passed: true }], channel);
+  }
+  // Any other event is not inbound: an envelope's source rather than its channel, a channel the
+  // Worker does not take yet, or a source no producer writes.
+  for (const source of ["website", "manual", "email", "sms", "whatsapp", "synthetic-test", "watch_scheduler", ""]) {
+    const stopped = propose(source);
+    assert.deepEqual([stopped.outcome, stopped.reason_codes, stopped.checks.at(-1)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], source);
+  }
+});

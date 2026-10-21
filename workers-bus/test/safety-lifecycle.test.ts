@@ -1302,8 +1302,11 @@ test("a raise whose scope lookup fails is recorded and answered without a scope 
     { ...raisedStop(db, first.body) },
     { state: "reported", stop_active: 1, scope_type: "roof_job", scope_id: "job-missing-0001" },
   );
-  assert.equal(logged.mock.callCount(), 1);
-  assert.equal(logged.mock.calls[0]?.arguments[0], "safety_scope_lookup_failed");
+  // Counted by name: Node can print its own warnings through console.error during the test.
+  const lookupFailures = logged.mock.calls.filter(
+    (call) => call.arguments[0] === "safety_scope_lookup_failed",
+  );
+  assert.equal(lookupFailures.length, 1);
 
   // The replay answers from the stored response: still no flag, though the lookup works now and
   // would find no such job.

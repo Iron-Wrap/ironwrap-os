@@ -717,8 +717,9 @@ them and follows these conventions:
   the same four keys as the `fields` of `lead_fact.confirm`: every key present, `null` where nothing
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
-  citations, never an argument. Only a run started by the inbound event itself may propose it, and
-  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`).
+  citations, never an argument. Only a run started by the inbound event itself may propose it, an
+  event whose source is one of the inbound channels ("The inbound signal"), and every citation is
+  that event (`signal/<id>`); anything else stops (`out_of_scope`).
 - `lead_fact.confirm` names an open proposal of the same lead and tenant in `proposal_id`
   (`lead_proposal/<step_id>`) and may only repeat its values: a `null` leaves a field unconfirmed,
   and a value that differs from the proposal's stops it (`fact_conflict`, check `proposal`), as does
@@ -1387,6 +1388,59 @@ work.
 | `independent_auditor` | `injection_flagged` | On `injection.flagged` | Inbound content tried to instruct an agent | `finding.raise`, `specialist.hold` |
 | `independent_auditor` | `closure_submitted` | On `finding.closure_submitted` | Closure evidence for a finding arrives | `finding.close` |
 
+### The inbound signal
+
+`inbound.received`, the trigger of `new_inbound`, is the insert of an inbound envelope. Each one
+gives one `event` signal for `lead_concierge` with watch id `new_inbound`. Its `source` is the
+channel the envelope came by, its subject is the lead the envelope becomes (whether or not that
+lead exists yet), and its dedupe key is `inbound:<envelope_id>`, so it counts once: the envelope's
+insert appends it, best effort, and a five-minute sweep appends any that is still missing. An
+envelope a CRM import wrote is never inbound, and a release-smoke envelope gives no signal.
+
+The channel follows the envelope's source: `web_form`, or `instant_estimate` for an instant
+estimate, from the website; `phone`, or `newo_call` for a Newo call; `walk_in` for an office
+capture of a walk-in, otherwise `office`, from manual entry; and `gbp`, `ad` and `referral` as
+they are. The content holds exactly these keys:
+
+- `envelope_id` and `channel`;
+- `brand`: `ironwrap`, `iroof` or `null`;
+- `received_via`: which of the tenant's addresses or numbers the inbound reached; `null` until
+  intake records that;
+- `sender`: `customer_id`, `matched_on` (`email`, `phone`, `email_and_phone` or `null`) and
+  `conflict`. It names the tenant's customer whose email or phone equals the sender's, both
+  normalized, and never the customer this envelope itself created. The match is recorded only and
+  links nothing. An email and a phone that belong to two different customers are a conflict, which
+  names neither;
+- `has_phone` and `has_email`;
+- `service`, as the sender gave it, at most 200 characters;
+- `excerpt`: the sender's message, or a call's hand-off summary, trimmed, at most 1000 characters;
+- `form_fields`: `address` (the address parts the sender gave, joined), `scope` and `timing`, at
+  most 600, 2000 and 600 characters, so that `lead_fact.propose` can take each of its four values
+  from the signal it cites.
+
+The content has no field for the sender's name, phone number or email address. The excerpt and the
+form fields hold what the sender wrote, so they may hold a name, a number or an address
+(`form_fields.address` is the address the sender gave): the receptionist needs that text. Inside the
+run they are `untrusted_text`, as every signal's content is, and they never reach a watch digest or
+an owner report's snapshot: no watch condition reads an inbound signal, and a report run reads only
+its own watch signal and the objects that signal names.
+
+`AGENT_INBOUND_FROM` switches the producer: envelopes are inbound from that instant on, and while
+it is unset or blank nothing is produced. Production stays off until the owner decides to go live;
+QA is on from its recorded instant.
+
+Not built yet (see `CAPABILITY-MATRIX.md`):
+
+- Email, SMS, WhatsApp and social messages: the Worker takes none of them in yet, so they give no
+  signal. WhatsApp is a first-class channel for the owner and a named gap.
+- `newo_call` is mapped, but no Newo call makes an envelope while `NEWO_ENABLED` is false.
+- A repeat from the same contact inside the 72-hour dedupe window makes no envelope, so it gives no
+  signal.
+- An inbound from a customer with an accepted job still goes to `lead_concierge`; routing it to
+  `customer_care_warranty` (its `customer_message` watch) is not built.
+- `received_via` stays `null` until intake records which address or number was reached.
+- An inbound event's `actor` is `null`: the Worker writes no `external` actor yet.
+
 ### Owner reports
 
 | Report | Watch | Composed by | Contents | Delivery |
@@ -1732,10 +1786,11 @@ model family that proposed the work under review (see "Coordination run").
   portal session; `external` is an inbound sender the OS has not authenticated (`authenticated`
   false, `ref` `channel:<email|sms|web|voice>`). A message that claims to come from staff or the
   owner without that authentication is `external`, and its claim is untrusted text. Watch firings
-  and handoffs carry `null`. No inbound channel feeds the team yet, so the Worker writes only
-  `owner`, `staff` and `worker` actors so far, each with `ref` `person:<user_id>`. A person's ask
-  or press is an `owner_request` with source `ask` (to the face) or `request` (to the owning
-  specialist), and it gets the owner's trust only when `actor.type` is `owner`.
+  and handoffs carry `null`. So far an inbound event ("The inbound signal") carries `null` too: the
+  Worker writes only `owner`, `staff` and `worker` actors, each with `ref` `person:<user_id>`, and
+  no `external` actor yet. A person's ask or press is an `owner_request` with source `ask` (to the
+  face) or `request` (to the owning specialist), and it gets the owner's trust only when
+  `actor.type` is `owner`.
 - An access change (a crew phone pairing, a role change or a device change) is prepared
   (`access.prepare_change`) only on the request of an owner or staff member, either as the run's
   own ask or request or as the root of its handoff chain; the step sets that request as

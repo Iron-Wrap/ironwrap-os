@@ -240,8 +240,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   approved step records the decision and abstains, so no other agent step has a business effect;
   `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
   step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event the
-  run answers and may cite only that event (`signal/<id>`); the host offers it once the
-  receptionist's allowlist names it. An open proposal is the fact `lead_proposal/<step_id>` (read at
+  run answers, an event that came by an inbound channel, and may cite only that event
+  (`signal/<id>`); the host offers it once the receptionist's allowlist names it. An open proposal
+  is the fact `lead_proposal/<step_id>` (read at
   `sales:read`), linked from its lead, so a later run about the lead can confirm it; a
   `lead_fact.confirm` must name an open proposal of the same lead and tenant (else `fact_missing`
   or, once used or superseded, `fact_stale`) and may only repeat its values (else `fact_conflict`).
@@ -252,9 +253,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
-  Every signal carries the actor the Worker writes: no inbound
-  channel feeds the team yet, so the Worker writes only owner, staff and worker actors for a
-  person's ask or request, and `null` for watch firings and handoffs.
+  Every signal carries the actor the Worker writes: owner, staff and worker actors for a person's
+  ask or request, and `null` for watch firings, handoffs and inbound events; it writes no
+  `external` actor yet.
   Shared memory gives a run's snapshot the signal's subject and the objects it
   links to (job, customer, lead, property, roof, measurement, crew, inventory position, money
   item) through the role screens' readers, as far as the specialist's reviewer role may read them,
@@ -282,8 +283,30 @@ Current source tracing distinguishes implemented modules from reachable producti
   than the Worker's: the v3 close to a Worker naming close model 3 or later. A synthetic run closes
   only on a Worker whose `AGENT_DATA_CLASS` is synthetic. Seven cadence watches fire from the cron
   with deterministic conditions (`0204`), the four owner reports, `delegation_review` and
-  `import_failed_items` among them; the other watches and every event-triggered watch do not fire
-  yet, and nothing emits `injection.flagged` yet.
+  `import_failed_items` among them, and the event-triggered `new_inbound` fires from the inbound
+  producer below; the other watches, event-triggered or not, do not fire yet, and nothing emits
+  `injection.flagged` yet.
+  The inbound producer (`workers-bus/src/agents/inbound.ts`, `test/agents-inbound.test.ts`)
+  appends one `event` signal for `lead_concierge`, watch `new_inbound`, per inbound envelope from
+  generic ingest, office capture, the estimator and Newo: at the end of `insertEnvelope`, best
+  effort, so intake never fails on it, and from the five-minute cron's sweep for any envelope still
+  without one; its dedupe key `inbound:<envelope_id>` keeps it to one. A CRM import's envelopes and
+  release-smoke rows give none. Its source is the channel, its subject the lead the envelope
+  becomes, and its content exactly `envelope_id`, `channel`, `brand`, `received_via`, `sender`,
+  `has_phone`, `has_email`, `service`, `excerpt` and `form_fields` (contract "The inbound signal");
+  the sender's match to an existing customer is recorded only and links nothing. The excerpt and
+  the form fields may hold a name, a number or an address, which the receptionist needs: they are
+  `untrusted_text` inside its run and reach no watch digest or owner report snapshot, since no
+  watch condition reads an inbound signal and a report run reads only its own watch signal and the
+  objects that signal names.
+  `AGENT_INBOUND_FROM` switches the producer: blank in production, so off until the owner's
+  go-live decision, and 2026-10-20T15:52:43Z in qa and local, so on from that instant there.
+  Repository tests only; no deploy has run it yet. Not built yet: email, SMS, WhatsApp and social
+  inbound do not exist in the Worker, and WhatsApp, a first-class channel for the owner, is a named
+  gap; `newo_call` is built but no Newo call makes an envelope while `NEWO_ENABLED` is false; a
+  repeat from the same contact within 72 hours makes no envelope, so no signal; an inbound from a
+  customer with an accepted job is not routed to `customer_care_warranty`; and `received_via`
+  stays `null` until intake records it.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
   takes signals in the order the Worker feeds them: the contract's queue priority is not
   implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,

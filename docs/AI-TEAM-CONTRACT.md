@@ -486,7 +486,8 @@ same pair, or the same person, change and device) replaced it; `readback.referen
 draft's step (`step/<step_id>`). `permit.approved_by` stays null, and a draft closes once. A role
 change, on the Access screen or by provisioning, closes the drafts after it commits, and a close
 that closed any writes an `agent_draft_close` auth audit row naming the role and who set it; if
-that close fails, repeating the same change closes them. Once a person's access is versioned, only
+that close fails, repeating the same role on the Access screen closes them (a repeated
+provisioning does not). Once a person's access is versioned, only
 drafts prepared against an older access version close. Needs you is to offer "Not now",
 which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
 `safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns

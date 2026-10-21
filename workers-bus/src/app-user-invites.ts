@@ -581,8 +581,9 @@ export async function listAppUsersForOffice(
 
 /**
  * A person's role was set: the AI team's open role-change drafts for them close (agents/drafts.ts),
- * after the change commits and best effort, and a close that closed any is audited, so no draft
- * leaves its person's Needs you without a trace. `accessVersion` is the person's access version
+ * after the change commits; the close is best effort, and a close that closed any is audited like
+ * the role change itself (a failed audit write fails the request), so no draft leaves its person's
+ * Needs you without a trace. `accessVersion` is the person's access version
  * now, once access is versioned; until then it is null and every open role-change draft closes.
  */
 export async function closeRoleDrafts(

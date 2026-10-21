@@ -107,6 +107,12 @@ One case:
 Field rules (the validator enforces them):
 
 - `id`: `<specialist_id>.<suite>.<three digits>`, unique and stable. Retired ids are not reused.
+- `tags` are free labels. A `pending_*` tag marks a case that models behaviour the Worker cannot
+  produce yet; the case still validates and scores. `pending_inbound_channel`: email, SMS, social,
+  or web chat inbound, which the Worker does not take in. `pending_newo`: a Newo call that needs
+  the dialed line's brand, the caller's language or transfer outcome as data, or the
+  `reception_session` watch. `pending_repeat_contact`: a repeat contact within 72 hours, which makes
+  no envelope. `pending_proposal_record`: a recorded proposal reaching a later run.
 - `signal.kind`: `event`, `watch`, `owner_request`, or `handoff` (from another specialist).
   `signal.actor` is who sent it, as the Worker writes it, `{ "type", "role", "ref", "authenticated" }`:
   `owner` or `staff` (an app user: `role` the app role, `owner` only for the owner, `ref`
@@ -122,8 +128,16 @@ Field rules (the validator enforces them):
   `request` belong to no other kind. Crew free text typed into Ask reaches another specialist as
   the face's handoff, with no actor. Only the owner's request carries the owner's authority; a
   request from another role carries that role's, and one with no actor carries none.
-  `signal.content` holds `text` or a `request`. A watch firing may instead carry the Worker's own
-  content, `{ "watch_id", "objects", "digest", "summary" }`: `watch_id` is the signal's, `objects`
+  An inbound envelope (`new_inbound`, from a channel the Worker takes in: `web_form`,
+  `instant_estimate`, `phone`, `newo_call`, `walk_in`, `office`, `gbp`, `ad`, `referral`) has no
+  actor and names the lead it becomes as `signal.subject: { "aggregate": "lead", "id" }`; every
+  event from those channels carries that subject. Its content is exactly the Worker's envelope keys:
+  `envelope_id`, `channel` (its source), `brand` (`ironwrap`, `iroof`, or null), `received_via`
+  (null), `sender` (`{ "customer_id", "matched_on", "conflict" }`, the Worker's exact email or phone
+  match; a customer is named exactly when something matched, and a conflict names none),
+  `has_phone`, `has_email`, `service`, `excerpt`, and `form_fields` (`address`, `scope`, `timing`).
+  Otherwise `signal.content` holds `text` or a `request`. A watch firing may instead carry the
+  Worker's own content, `{ "watch_id", "objects", "digest", "summary" }`: `watch_id` is the signal's, `objects`
   are at most 24 `{ "aggregate", "id" }`, `digest` is an object, `summary` is text, and the Worker's `period_key` is left out because it is a
   calendar date.
   `signal.at` and every fact time are ISO 8601 durations relative to the case clock (`PT0M` is the

@@ -126,10 +126,10 @@ test("document generation stays disabled in production and local, and is on in q
   assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
 });
 
-test("the proposal first-open record stays off until its retention sweep exists", async () => {
-  // 3 years is the maximum retention of a first-open row (0163), and nothing deletes one yet. The
-  // flag stays off in every environment until the retention sweep that deletes rows older than 3
-  // years exists, and until the owner approves the portal privacy notice that says so.
+test("the proposal first-open record stays off until the owner approves its privacy notice", async () => {
+  // 3 years is the maximum retention of a first-open row (0163). Deletion exists: D1 lets a row go
+  // only once it is older than 3 years, and the daily cron deletes those rows. The flag still stays
+  // off in every environment until the owner approves the portal privacy notice that says so.
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   flattenParsedVars(config.vars);

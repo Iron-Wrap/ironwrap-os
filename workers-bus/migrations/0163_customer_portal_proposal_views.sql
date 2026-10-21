@@ -2,8 +2,8 @@
 -- published proposal.
 --
 -- "Elena opened this proposal" needs a fact the portal does not keep. `customer_portal_links` holds
--- one `last_accessed_at` that every visit overwrites and that names no proposal. This append-only
--- table keeps one row per portal link and proposal publication: when someone holding that link
+-- one `last_accessed_at` that every visit overwrites and that names no proposal. This table keeps
+-- one row per portal link and proposal publication, never updated: when someone holding that link
 -- first opened that published proposal. A later open of the same publication through the same link
 -- adds nothing; a new link or a new publication starts its own row. A row means "someone holding
 -- the customer's link opened it", never "the customer read it".

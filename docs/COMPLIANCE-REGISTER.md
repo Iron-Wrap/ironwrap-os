@@ -167,12 +167,12 @@ someone holding a customer's portal link opened a published proposal.
 |---|---|
 | Stored | Tenant, portal link, job, customer, proposal pack, revision and publication ids, and one timestamp |
 | Not stored | IP address, user agent, location, or any later visit |
-| Meaning | Someone holding the customer's link opened the proposal. It does not show that the customer read it, and a forwarded link opens it too |
+| Meaning | Someone holding the customer's link opened the proposal. It does not show that the customer read it: a forwarded link opens it too, and a headless email link scanner that runs the page's script may count as an open |
 | Purpose | Evidence that the offer was opened through the customer's link, kept in the business's own record of the terms it offered |
-| Staff opens | Not recorded: a request with a live staff session, or from the device that issued the link, is skipped |
-| Retention | At most 3 years (owner decision). The portal prune never deletes a row and keeps every link a row names. Deleting rows older than 3 years is the retention sweep's job; until it exists the table is strictly append-only |
+| Staff opens | Not recorded when the app marks the request as a staff preview (`staff_preview`, sent while an office sign-in is live in that browser) or when it comes from the device that issued the link. A staff member on another device or browser without a sign-in counts as the customer. A forged flag can only stop a record, never make one |
+| Retention | At most 3 years (owner decision). D1 refuses to delete a row younger than 3 years by its own clock; the daily cron deletes older rows, 500 at a time, before it prunes portal links. The link prune keeps every link a row names, so that link's issuer hashes (`issued_ip_hash`, `issued_user_agent_hash`) live as long as its last first-open row |
 | Notice | The portal privacy notice must say that the first open is recorded and kept for at most 3 years. The owner and the privacy owner approve that text before the switch goes on |
-| Switch | `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in every checked-in environment. It stays off until the retention sweep exists and the owner approves the notice text |
+| Switch | `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in every checked-in environment. Deletion after 3 years exists, so it can go on once the owner approves the notice text |
 
 ## AI model providers
 

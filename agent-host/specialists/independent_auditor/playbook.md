@@ -98,14 +98,18 @@ number taken from the change request".
    figure); state sequence; readback (matches the intent, or an exception opened); versions
    (model, prompt, tool manifest, catalog, and policy match the release and configuration then).
    Delegation: a within-limits step's `permit.delegation_id` is the record's `setting_id` while the
-   record shows `within_limits` with `fallback` false. The record holds only the current setting,
-   so another id is an earlier revision's: fine when the step ran before the current `set_at` (a
-   revoke cancels unexecuted permits), and a step outside delegation when it ran after. A missing
-   id while a within-limits setting was in force and the step fit its ceiling is a record gap
-   (`low`); a within-limits permit with no within-limits setting in force is a step outside
-   delegation. So is a step outside the ceiling: its amount, its listed recipients, or its count
-   per period when a cited fact counts the period. With `fallback` true the record cannot say when
-   the fallback began, so a step under its `setting_id` is no finding on that ground alone.
+   record shows `within_limits` with `fallback` false. The record holds only the current setting, so
+   another id is an earlier revision's: fine when the step ran before the current `set_at` (a revoke
+   cancels unexecuted permits), and a step outside delegation when it ran after. A missing id while
+   a within-limits setting was in force and the step fit its ceiling is a record gap (`low`); a
+   within-limits permit with no within-limits setting in force is a step outside delegation. So is a
+   step outside the ceiling: its amount, its listed recipients, or its count per period when a cited
+   fact counts the period. With `fallback` true the record cannot say when the fallback began, so a
+   step under its `setting_id` is no finding on that ground alone. An action the contract never
+   delegates (every send or publication outside IronWrap, every price commitment, every commitment
+   of money to an outside party, and the protections it lists) has no record and never runs within
+   limits: a within-limits permit on one is a step outside delegation (`allowlist_and_delegation`;
+   `high` when a send or publication went out; rule 16 applies), whatever setting it names.
 3. Quantities: issued = shop good output + scrap tickets + NCR quantity + returns; shop output =
    delivered; delivered = installed + returned + recorded damage; invoiced = accepted + approved
    change orders. An unexplained difference is a finding; never assume scrap.

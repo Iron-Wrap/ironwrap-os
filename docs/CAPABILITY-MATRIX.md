@@ -312,6 +312,65 @@ Current source tracing distinguishes implemented modules from reachable producti
   implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,
   `bedrock`, `vertex`) and the `cloud_identity` credential mode are not built yet. No live provider
   call, deployment or reference run has happened.
+- AI team contract f5 (owner rulings D-01 to D-10 and Q1 to Q10; `docs/AI-TEAM-CONTRACT.md` "Owner
+  rulings", "Dial levels" and "Appendix: autonomy screen mapping") is Target, Partial, with one
+  Locally-validated part. The owner's caps are Locally-validated: every send outside IronWrap and
+  every price commitment asks first, and so does every commitment of money to an outside party, live
+  answering the owner's exception (D-05, D-09, Q4, L04). Twenty-four actions carry it:
+  `quote.commit_revision`, `quote.apply_discount`, `change_order.commit`, `ad_spend.commit`,
+  `supplier_bill.approve`, `customer_message.send` (every purpose), `visit.confirm`,
+  `portal_link.send`, `proposal.publish`, `change_order.send_for_decision`, `remedy.offer`,
+  `campaign.send`, `invoice.commit_intent`, `rfq.send`, `purchase_order.place`,
+  `purchase_order.change`, `purchase_order.expedite`, `supplier_message.send`,
+  `supplier_return.request`, `document.request`, `cost_recovery.claim`, `content.publish`,
+  `review_response.publish` and `insurance_supplement.send`. Four actions that send nothing and
+  commit no price stay delegable (`dead_letter.replay`, `privacy_incident.contain`, `content.stop`,
+  `proposal.withdraw`). None of the twenty-four is delegable, so the Worker refuses every delegation
+  setting for them (`not_delegable`), never lists them as delegation candidates, refuses a
+  `delegation.propose_change` for them (`delegation_not_earnable`), serves no
+  `delegation/<specialist>:<action>` fact or preview for them, and runs a within-limits setting
+  recorded before the cap as asks first (`test/agents-control.test.ts`, "the owner's caps keep every
+  outside send and price commitment at asks first"); before the caps the Worker accepted within
+  limits for all twenty-four. The rest is not built yet:
+  - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
+    a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
+    no undo flow, no non-protective action has a proven machine path (a within-limits step asks
+    first), and the Worker accepts within limits whatever an action's undo; no screen shows the dial
+    words (the app shows the contract words, `app/src/components/ai/words.ts`); "Facts only, live"
+    has no live conversation runtime.
+  - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
+    message purpose covers a visit reminder, and `customer_message.send` is not registered; it
+    always asks first, so no reminder can run automatically.
+  - Voice reception (D-02, D-03): `config/newo/production.expected.json` books in `request_only`
+    mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
+    webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration
+    in `config/newo` still transfer a caller to the owner's line first, where D-03 allows no live
+    transfer.
+  - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI
+    receptionist's playbook reads it as a placeholder fact.
+  - Free text running an action (D-04): `POST /api/v1/agent-team/ask` runs nothing itself, and the
+    face's run may propose only its own actions or hand work to the owning specialist
+    (`handoff.create`); an ask shows its answer, its view and that view's actions, never a decision;
+    `authority.record` answers only a press; the app has no Ask IronWrap screen.
+  - Single-holder self-approval (D-08, basis `only_holder`) is not on `main`: Track C's A1 slice
+    (#17, not merged) records it for production gate waiver decisions.
+  - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
+    operation-sets slice builds the four sets.
+  - Closing a prepared people-only draft: the receipt codes `applied_by_person` and `superseded`
+    (under `succeeded`) and the app's words and notes for them exist, but nothing closes the draft,
+    and no receipt renders a note yet (`words.note`, `VIEW_REFUSED` included).
+  - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
+    tenant policy lists no company pages.
+  - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its
+    job link, so a stock coil order with no job passes, and to hold shop cutting once the shop has
+    its first write.
+  - Q6, "No deposit under this contract": acceptance still queues a deposit derivation; Track C's
+    A2 slice (#22, not merged) clears Deposit by contract.
+  - Q7's release by a named outside person; Q10 (no permit line among the six production gates,
+    no default hold points, no daily hazard acknowledgement); L04 for every send but proposal
+    publication (migration 0156); L05 (no Worker code checks the margin floor); L08 (no route
+    records a person's acceptance of completed work); L09 (no payee record or guard in D1); and
+    L10 (no shop-run screen for the first piece).
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.

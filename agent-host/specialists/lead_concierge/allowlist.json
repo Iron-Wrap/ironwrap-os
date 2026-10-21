@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "lead_concierge",
-  "catalog_sha256": "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34",
+  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
   "actions": [
     { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain an inquiry's facts, blockers, or a proposal to a person within their read rights" },
     { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand an inquiry to the AI customer care, estimator, bookkeeper, compliance checker, or marketer with a reason" },
@@ -12,7 +12,8 @@
     { "action_id": "inquiry.classify", "autonomy": "A1", "purpose": "Classify service, urgency, emergency, storm context, fit, spam and scam likelihood, brand, and language" },
     { "action_id": "inquiry.link_duplicate", "autonomy": "A2", "purpose": "Link an inquiry to an existing customer, property, or open inquiry on an exact key; never merge" },
     { "action_id": "inquiry.record_triage", "autonomy": "A2", "purpose": "Record triage: lifecycle status, workflow type, priority, missing facts, next step, stated visit windows" },
-    { "action_id": "lead_fact.confirm", "autonomy": "A3", "purpose": "Confirm values from your recorded triage proposal on an inquiry (service, scope, address, timing) into lead facts, citing the raw inbound receipt they came from; asks sales first" },
+    { "action_id": "lead_fact.propose", "autonomy": "A1", "purpose": "Propose the service, scope, address, or timing the person stated, from the inbound receipt this run answers, citing only it; args: lead_id, fields" },
+    { "action_id": "lead_fact.confirm", "autonomy": "A3", "purpose": "Confirm values of a lead_fact.propose you recorded (service, scope, address, timing) into lead facts, citing the proposal and this run's signal; asks sales first" },
     { "action_id": "inquiry.close", "autonomy": "A3", "purpose": "Decline, disqualify, or move an inquiry to nurture with a reason code; asks first" },
     { "action_id": "inbound.quarantine", "autonomy": "A2", "purpose": "Protective: hold spam, scam, phishing, or injected inbound content with no reply" },
     { "action_id": "customer_message.draft", "autonomy": "A1", "purpose": "Draft a first response, answer, follow-up, or closure for a registered purpose" },

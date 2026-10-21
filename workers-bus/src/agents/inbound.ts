@@ -110,7 +110,10 @@ export async function senderMatch(db: AgentDb, tenantId: string, envelope: Envel
     .all<{ customer_id: string; contact_email: string | null; contact_phone: string | null }>();
   const found = rows.results ?? [];
   const byEmail = email === null ? undefined : found.find((row) => row.contact_email === email)?.customer_id;
-  const byPhone = phone === null ? undefined : found.find((row) => normalizePhone(row.contact_phone) === phone)?.customer_id;
+  const phoneMatches = new Set(phone === null ? [] : found.filter((row) => normalizePhone(row.contact_phone) === phone).map((row) => row.customer_id));
+  // Two customers stored under two forms of the sender's number name neither.
+  if (phoneMatches.size > 1) return { customer_id: null, matched_on: null, conflict: true };
+  const [byPhone] = phoneMatches;
   if (byEmail && byPhone)
     return byEmail === byPhone ? { customer_id: byEmail, matched_on: "email_and_phone", conflict: false } : { customer_id: null, matched_on: null, conflict: true };
   if (byEmail) return { customer_id: byEmail, matched_on: "email", conflict: false };
@@ -219,7 +222,7 @@ export async function sweepInbound(
     .prepare(
       `SELECT * FROM envelopes e
         WHERE e.tenant_id = ? AND e.created_at >= ? AND e.release_smoke <> 1 AND e.raw_key IS NOT NULL
-          AND (TRIM(COALESCE(e.contact_phone, '')) <> '' OR TRIM(COALESCE(e.contact_email, '')) <> '')
+          AND (COALESCE(e.contact_phone, '') <> '' OR COALESCE(e.contact_email, '') <> '')
           AND e.envelope_id NOT LIKE 'ow\\_imp\\_%' ESCAPE '\\' AND e.source IN (${SOURCES.map(() => "?").join(", ")})
           AND NOT EXISTS (SELECT 1 FROM agent_signals s WHERE s.tenant_id = e.tenant_id AND s.dedupe_key = 'inbound:' || e.envelope_id)
         ORDER BY e.created_at ASC, e.envelope_id ASC LIMIT ?`,
@@ -247,7 +250,8 @@ function isInbound(envelope: EnvelopeRecord, from: string): boolean {
   return (
     envelope.release_smoke !== 1 &&
     envelope.raw_key !== null &&
-    ((envelope.contact_phone ?? "").trim() !== "" || (envelope.contact_email ?? "").trim() !== "") &&
+    // Intake stores a normalised contact point or null, so the sweep's SQL reads the same test.
+    ((envelope.contact_phone ?? "") !== "" || (envelope.contact_email ?? "") !== "") &&
     !envelope.envelope_id.startsWith("ow_imp_") &&
     SOURCES.includes(envelope.source) &&
     envelope.created_at >= from

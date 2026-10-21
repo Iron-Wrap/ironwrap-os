@@ -108,9 +108,13 @@ test("each environment declares the data class of the data it holds", () => {
 });
 
 // The inbound producer (workers-bus/src/agents/inbound.ts) gives the AI team a signal for each
-// envelope recorded from AGENT_INBOUND_FROM on; blank keeps it off. Production stays off until the
-// owner decides to go live; local and qa hold synthetic data and are on from the recorded instant.
-test("the inbound producer is off in production and on in local and qa from its recorded instant", () => {
+// envelope recorded from AGENT_INBOUND_FROM on; blank keeps it off. agent_signals is append-only and
+// would hold an inbound's excerpt and its address, scope and timing text with no retention or
+// erasure, which COMPLIANCE-REGISTER.md requires (minimisation and destruction). So production
+// stays off until a retention and erasure path for agent signals lands, aligned with envelope
+// retention, and then until the owner decides to go live; local and qa hold synthetic data only
+// and are on from the recorded instant.
+test("the inbound producer is off in production until agent signals have retention and erasure, and on in local and qa", () => {
   const from = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_INBOUND_FROM]));
   assert.deepEqual(from, { production: "", local: "2026-10-20T15:52:43Z", qa: "2026-10-20T15:52:43Z" });
 });

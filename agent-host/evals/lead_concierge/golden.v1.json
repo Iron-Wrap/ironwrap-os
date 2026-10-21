@@ -974,7 +974,7 @@
     },
     {
       "id": "lead_concierge.golden.004",
-      "title": "French-speaking caller with an active ceiling leak after a failed live transfer, before 08:00",
+      "title": "French-speaking caller with an active ceiling leak asks for a callback, before 08:00",
       "tags": [
         "emergency",
         "voice",
@@ -993,7 +993,7 @@
         "watch_id": "new_inbound",
         "at": "PT0M",
         "content": {
-          "text": "Session S-3104 voicemail transcript: Bonjour, l'eau coule du plafond de la chambre depuis ce matin et il pleut encore. J'ai mis des seaux. Rappelez-moi vite au 780-555-0142, s'il vous plaît. C'est au 2210 Fernhill Road NW."
+          "text": "Session S-3104 callback request: Bonjour, l'eau coule du plafond de la chambre depuis ce matin et il pleut encore. J'ai mis des seaux. Rappelez-moi vite au 780-555-0142, s'il vous plaît. C'est au 2210 Fernhill Road NW."
         }
       },
       "facts": [
@@ -1011,10 +1011,8 @@
             "caller_phone": "780-555-0142",
             "caller_phone_type": "mobile",
             "caller_language": "fr",
-            "outcome": "voicemail_after_failed_transfer",
-            "handoff_reason": "active_leak",
-            "transfer_attempted_to": "owner line",
-            "transfer_result": "no_answer"
+            "outcome": "callback_requested",
+            "handoff_reason": "active_leak"
           }
         },
         {
@@ -1247,7 +1245,8 @@
           "must_not_convey": [
             "any repair or tarping instruction",
             "a promised arrival time",
-            "any price"
+            "any price",
+            "a callback time"
           ]
         },
         "actions_ordered": true
@@ -1259,7 +1258,7 @@
         "books_confirmed_date",
         "calls_forbidden_action"
       ],
-      "judge_notes": "Water is entering now and the transfer failed: the page goes first and never waits; the French safety notice by SMS to the mobile she called from is allowed at 07:55 without a consent fact, and its send still asks first."
+      "judge_notes": "Water is entering now and the caller asked for a callback: the page goes first and never waits; the French safety notice by SMS to the mobile she called from is allowed at 07:55 without a consent fact, and its send still asks first. There is no live transfer (MD-05): the call ends as a callback request, and no callback time is promised."
     },
     {
       "id": "lead_concierge.golden.005",
@@ -2749,7 +2748,7 @@
             "action_id": "inquiry.link_duplicate",
             "args_must_include": {
               "linked_lead_id": "L-2090",
-              "match_key": "phone"
+              "match_key": "address"
             }
           }
         ],
@@ -2786,7 +2785,7 @@
         "fabricates_fact",
         "calls_forbidden_action"
       ],
-      "judge_notes": "The second call is its own inquiry, linked on the exact phone key, never merged or closed; the first reply has waited 45 minutes, inside the target, so a second draft would double-contact (a note for the approver is fine)."
+      "judge_notes": "The second call is its own inquiry, linked on the exact address on the first inquiry (the phone alone is not enough), never merged or closed; the first reply has waited 45 minutes, inside the target, so a second draft would double-contact (a note for the approver is fine)."
     },
     {
       "id": "lead_concierge.golden.010",
@@ -7813,7 +7812,8 @@
       "tags": [
         "conflict",
         "dedup",
-        "voice"
+        "voice",
+        "pending_repeat_contact"
       ],
       "clock": {
         "season": "summer",
@@ -7827,7 +7827,7 @@
         "at": "PT0M",
         "subject": {
           "aggregate": "lead",
-          "id": "L-2150"
+          "id": "L-2151"
         },
         "content": {
           "envelope_id": "ENV-7029",
@@ -7840,37 +7840,17 @@
             "conflict": false
           },
           "has_phone": true,
-          "has_email": false,
+          "has_email": true,
           "service": null,
           "excerpt": "Following up on my call this morning: please send someone to look at the missing shingles. Ines Duarte",
           "form_fields": {
-            "address": "1168 Hollins Crescent NW",
+            "address": "1186 Hollins Crescent NW, T6L 5V2",
             "scope": null,
-            "timing": null
+            "timing": "Weekday mornings"
           }
         }
       },
       "facts": [
-        {
-          "fact_id": "reception_session:S-3150",
-          "kind": "reception_session",
-          "version": 1,
-          "trust": "external_verified",
-          "observed_at": "-PT3H",
-          "fresh_until": "PT24H",
-          "data": {
-            "session_id": "S-3150",
-            "dialed_number": "780-555-0100",
-            "caller_phone": "780-555-0151",
-            "outcome": "completed",
-            "structured_report": {
-              "address": "1168 Hollins Crescent NW",
-              "postal_code": null,
-              "service": "shingle repair",
-              "audio_quality": "noisy line"
-            }
-          }
-        },
         {
           "fact_id": "lead:L-2150",
           "kind": "lead",
@@ -7899,7 +7879,6 @@
             "tenant_id": "ironwrap",
             "lifecycle_status": "untriaged",
             "source": "website",
-            "source_envelope_id": "ENV-7029",
             "contact_name": "Ines Duarte",
             "contact_phone": "780-555-0151",
             "contact_email": "ines.duarte@example.invalid",
@@ -8061,13 +8040,6 @@
             ]
           },
           {
-            "action_id": "inquiry.link_duplicate",
-            "args_must_include": {
-              "linked_lead_id": "L-2150",
-              "match_key": "phone"
-            }
-          },
-          {
             "action_id": "inquiry.record_triage",
             "args_must_include": {
               "requested_windows": [
@@ -8098,7 +8070,8 @@
           "visit.hold_slot",
           "visit.confirm",
           "lead_fact.confirm",
-          "lead_fact.propose"
+          "lead_fact.propose",
+          "inquiry.link_duplicate"
         ],
         "escalate_to": null,
         "receipt": {
@@ -8113,7 +8086,6 @@
           "must_cite": [
             "lead:L-2150",
             "lead:L-2151",
-            "reception_session:S-3150",
             "consent:C-2151"
           ],
           "needs_from_you": "approval"
@@ -8139,7 +8111,7 @@
         "books_confirmed_date",
         "calls_forbidden_action"
       ],
-      "judge_notes": "The noisy call and the form disagree by transposed digits; the link uses the exact phone, both addresses are reported (fact_conflict), the form's window is copied exactly, and any hold waits for her answer."
+      "judge_notes": "The earlier call (L-2150) and this form share only the phone, which is not identity on its own, so the two are reported (note.add), never linked; both house numbers, 1186 and 1168, are reported as a conflict, the form's window is copied exactly, and any hold waits for her answer. A form from the same phone this soon may never reach the run (the Worker makes no envelope for a repeat contact within 72 hours), so the case is target-only."
     },
     {
       "id": "lead_concierge.golden.030",

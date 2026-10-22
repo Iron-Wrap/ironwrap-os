@@ -216,7 +216,11 @@ npm run db:migrate
 
 A push to `main` deploys `qa` only (IRO-260). Production is promoted from a release tag by
 `.github/workflows/deploy-production.yml` (IRO-264), which builds nothing: it promotes the exact
-bytes the Deploy run of that commit already proved on `qa`.
+bytes the Deploy run of that commit already proved on `qa`. A tag alone does not deploy: production
+is GitOps (owner decision, 2026-10-21). The version it runs is declared in
+`Iron-Wrap/iron-wrap-infra` `environments/production/stand.yml`, a merged promotion PR there is the
+production gate, and that repository's `promote-production.yml` is the only caller of this
+workflow. The contract is `docs/PRODUCTION-PROMOTION.md` in `iron-wrap-infra`.
 
 `validateMergePolicy` requires `allow_merge_commit: false` with `allow_squash_merge` and
 `allow_rebase_merge` `true` on `main`, and the repository is set that way (owner change of
@@ -235,13 +239,14 @@ takes effect from the first push after the commit that introduces it.
 
 **Owner prerequisites, still open:**
 
-- `gh api repos/Iron-Wrap/ironwrap-os/environments` lists `qa` and `release` only (read back
-  2026-10-02): the `production` GitHub Environment does not exist yet, so
-  its "tags `v*` only" deployment rule, `vars.RELEASE_PRODUCTION_ZONE_ID`, and every
-  `RELEASE_PRODUCTION_*` / `RELEASE_PERMIT_*` / `RELEASE_POLICY_LEDGER_API_TOKEN` secret are
-  absent. A run against the missing environment gets an implicitly created, unprotected one rather
-  than the `v*`-only gate the design leans on; the job still fails closed at "Require production
-  provider and smoke inputs" and at the `^[0-9a-f]{32}$` zone-format check.
+- The `production` GitHub Environment exists since 2026-10-21 with the "tags `v*` only" deployment
+  rule (`gh api repos/Iron-Wrap/ironwrap-os/environments/production/deployment-branch-policies`
+  → `tag v*`, read back 2026-10-22). It holds two secrets, `RELEASE_DECLARATION_READ_TOKEN` and
+  `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN`, and no variable. `vars.RELEASE_PRODUCTION_ZONE_ID`,
+  `RELEASE_PRODUCTION_ADMIN_TOKEN`, `RELEASE_PRODUCTION_INGEST_TOKEN`, `RELEASE_PERMIT_*` and
+  `RELEASE_POLICY_LEDGER_API_TOKEN` are still absent, so the job fails closed at "Require production
+  provider and smoke inputs" and at the `^[0-9a-f]{32}$` zone-format check. The zone waits for the
+  domain (IRO-221).
 - The first production release writes a generation-0 row to `release-policy:Iron-Wrap/ironwrap-os`
   and then fails closed before any promotion (step 7 below, "Capture the current production
   revision" fails `deployment_list_empty` on a Worker that has never been deployed). Any later
@@ -273,16 +278,23 @@ The release path, end to end:
 5. **`github-release` tags that commit.** The job runs on a successful Deploy of `main` and exits
    without tagging unless that Deploy's head SHA is the merge commit of the newest merged release
    pull request. Every other successful Deploy is an ordinary commit and is not a release.
-6. **The tag starts the production workflow.** A tag pushed by a `GITHUB_TOKEN` does not trigger
-   another workflow, so `github-release` pushes it with `RELEASE_TAG_TOKEN`: a fine-grained PAT
-   (`Contents` and `Pull requests` read and write, `ironwrap-os` only) held in the `release` GitHub
-   Environment, which deploys from `main` only. `release-pr` uses the same token, so CI runs on the
-   release pull request without an approval click. A missing secret stops either job at
-   `release_tag_token_missing`; an expired token answers 401. If a tag did not start production, the
-   owner runs `deploy-production.yml` by hand: **Actions → Deploy Production → Run workflow**,
-   selecting the tag as the ref and entering the same tag in the required `tag` input. The job
-   refuses anything that is not a `vMAJOR.MINOR.PATCH` tag, and refuses a dispatch whose `tag` input
-   does not equal the ref it was dispatched on.
+6. **A promotion PR in `iron-wrap-infra` starts the production workflow.** The tag does not:
+   `deploy-production.yml` has no `push` trigger. `github-release` pushes the tag with
+   `RELEASE_TAG_TOKEN`, a fine-grained PAT (`Contents` and `Pull requests` read and write,
+   `ironwrap-os` only) held in the `release` GitHub Environment, which deploys from `main` only;
+   `release-pr` uses the same token, so CI runs on the release pull request without an approval
+   click. A missing secret stops either job at `release_tag_token_missing`; an expired token
+   answers 401. The owner then opens a PR in `iron-wrap-infra` that sets
+   `components.ironwrap-os.ref: vX.Y.Z` in `environments/production/stand.yml`, and merges it.
+   `promote-production.yml` there checks the tag exists and dispatches this workflow on the tag with
+   `tag` and `declaration_sha` (the merge commit), using `RELEASE_PROMOTION_DISPATCH_TOKEN`. The job
+   refuses anything that is not a `vMAJOR.MINOR.PATCH` tag and a dispatch whose `tag` input does not
+   equal the ref. It then reads `stand.yml` with `RELEASE_DECLARATION_READ_TOKEN` and fails
+   `release_production_declaration_mismatch:<reason>` unless the declaration at `declaration_sha`
+   names this tag, `declaration_sha` is an ancestor of `iron-wrap-infra` `main`, and the declaration
+   on `main` still names this tag. A re-run uses **Re-run jobs** on the `promote-production.yml`
+   run; a hand dispatch must pass the same two inputs and meets the same check. A rollback is a
+   revert of the promotion PR.
 7. **Production promotes the qa-proven bytes behind the permit and the ledger.** The job re-verifies
    the artifact digest against the qa proof, re-reads the merged source with
    `--source-policy reachable` (the tagged commit must still be *on* `main`, not necessarily its

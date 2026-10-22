@@ -7,7 +7,7 @@ import {
   requestMagicLink,
   sessionHashFor,
 } from "../src/app-auth.ts";
-import { upsertAppUser } from "../src/app-auth-store.ts";
+import { seedAppUser } from "./app-user-seed.ts";
 import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
 
 interface MagicRow {
@@ -186,7 +186,15 @@ class AuthMemoryDb {
     return [];
   }
 
+  private lastChanges = 0;
+
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
+    const result = this.runStatement(sql, args);
+    if (!sql.includes("INSERT INTO app_auth_audit")) this.lastChanges = result.meta.changes;
+    return result;
+  }
+
+  private runStatement(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
     if (
       sql.includes("UPDATE app_users") && sql.includes("display_name = ?") &&
       sql.includes("actor.access_role = ?")
@@ -204,6 +212,7 @@ class AuthMemoryDb {
         expectedRole,
         expectedActive,
         expectedUpdatedAt,
+        expectedVersion,
         actorTenant,
         actorUserId,
         actorRole,
@@ -214,6 +223,7 @@ class AuthMemoryDb {
         !user || user.tenant_id !== String(tenant) ||
         user.email_normalized !== String(email) || user.role !== String(expectedRole) ||
         user.active !== Number(expectedActive) || user.updated_at !== String(expectedUpdatedAt) ||
+        (user.access_version ?? 1) !== Number(expectedVersion) ||
         !actor || actor.tenant_id !== String(actorTenant) || actor.active !== 1 ||
         actor.role !== String(actorRole)
       ) return changed(0);
@@ -223,6 +233,7 @@ class AuthMemoryDb {
         frappe_user_id: frappeUser === null ? null : String(frappeUser),
         active: Number(active),
         updated_at: String(updatedAt),
+        access_version: (user.access_version ?? 1) + 1,
       });
       this.storageRoles.set(user.user_id, {
         role: String(storageRole) as Extract<AppRole, "owner" | "ops" | "field">,
@@ -441,6 +452,8 @@ class AuthMemoryDb {
       return changed(changes);
     }
     if (sql.includes("INSERT INTO app_auth_audit")) {
+      // An access change's audit row is written only after that change wrote a row (0157).
+      if (sql.includes("changes() = 1") && this.lastChanges !== 1) return changed(0);
       this.audits.push({ args: [...args] });
       return changed(1);
     }
@@ -495,7 +508,7 @@ function waitContext() {
 }
 
 async function addFieldUser(env: AppEnv): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "crew@example.com",
     display_name: "Crew Member",
@@ -510,7 +523,7 @@ async function addOfficeUser(
   env: AppEnv,
   role: Exclude<AppRole, "field"> = "owner",
 ): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "owner@example.com",
     display_name: "Office Owner",
@@ -554,7 +567,7 @@ test("magic-link request is enumeration-resistant and stores only a hash", async
   const env = baseEnv(db);
   await addOfficeUser(env);
   await addFieldUser(env);
-  await upsertAppUser(env, {
+  await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "inactive@example.com",
     display_name: "Inactive User",
@@ -1059,6 +1072,14 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
   const provisionAudit = db.audits.at(-1)?.args as unknown[] | undefined;
   assert.equal(provisionAudit?.[3], "user_provision");
   assert.equal(provisionAudit?.[7], "field:owner@example.com");
+  // The grant as a structured change: the version it produced, no earlier access, the access
+  // granted, and the signed-in actor the server attributes it to (0157).
+  assert.deepEqual(JSON.parse(String(provisionAudit?.[8])), {
+    v: 1,
+    before: null,
+    after: { role: "field", active: true },
+    actor: office.user.user_id,
+  });
 
   const salesResponse = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
@@ -1205,6 +1226,7 @@ test("legacy app-user provisioning cannot bypass owner and self-change authority
     role: "sales",
     frappe_user_id: null,
     active: true,
+    expected_access_version: 1,
   }, {
     cookie: ops.cookiePair,
     "x-csrf-token": ops.csrfToken,
@@ -1216,7 +1238,7 @@ test("legacy app-user provisioning cannot bypass owner and self-change authority
     "an exact retry remains one grant",
   );
 
-  const protectedOwner = await upsertAppUser(opsEnv, {
+  const protectedOwner = await seedAppUser(opsEnv, {
     tenant_id: "ironwrap",
     email_normalized: "protected-owner@example.com",
     display_name: "Protected Owner",
@@ -1269,7 +1291,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
   const office = await signInOffice(env);
-  const target = await upsertAppUser(env, {
+  const target = await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "departing@example.com",
     display_name: "Departing Teammate",
@@ -1319,6 +1341,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
     role: target.role,
     frappe_user_id: null,
     active: false,
+    expected_access_version: 1,
   }, {
     cookie: office.cookiePair,
     "x-csrf-token": office.csrfToken,

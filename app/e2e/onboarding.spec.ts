@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
-import { devices, expect, test, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { devices, expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import { assertNoFrappeDesk } from "./frappe-desk-guard";
 import { expectTouchTarget } from "./touch-target";
@@ -58,6 +59,39 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
     );
     await expectTouchTarget(control, { name: `${screen}: "${label}"`, axis: "height" });
   }
+}
+
+async function assertAxeClean(page: Page): Promise<void> {
+  const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(axe.violations).toEqual([]);
+}
+
+/** Sam Sales on the list, his access open on this screen. */
+async function openSam(page: Page): Promise<void> {
+  await page.goto("/settings/team");
+  await page.getByLabel("Their name").fill("Sam Sales");
+  await page.getByLabel("Their work email").fill("sam@freshco.example");
+  await page.getByRole("button", { name: "Add to the team" }).click();
+  await expect(page.getByText("Sam Sales can sign in now")).toBeVisible();
+  await page.getByRole("button", { name: "See access for Sam Sales" }).click();
+}
+
+/** The same owner changes Sam's access on another tab first. */
+async function onAnotherTab(
+  context: BrowserContext,
+  change: (other: Page) => Promise<void>,
+): Promise<void> {
+  const other = await context.newPage();
+  await other.goto("/settings/team");
+  await other.getByRole("button", { name: "See access for Sam Sales" }).click();
+  await change(other);
+  await other.close();
+}
+
+async function changeRoleTo(other: Page, role: RegExp, saved: string): Promise<void> {
+  await other.getByRole("radio", { name: role }).check();
+  await other.getByRole("button", { name: "Save Sam’s access" }).click();
+  await expect(other.getByText(saved)).toBeVisible();
 }
 
 test.use({ ...devices["Pixel 5"] });
@@ -151,8 +185,12 @@ test.describe("Onboarding v0 mobile acceptance", () => {
   test("an owner adds a teammate and the list shows who has access", async ({ page }) => {
     await page.goto("/settings/team");
     await expect(page.getByRole("heading", { name: "People" })).toBeVisible();
-    // The one account a fresh tenant starts with is the owner, and it cannot lock itself out.
-    await expect(page.getByLabel("Role for Ada Owner")).toBeDisabled();
+    // The one account a fresh tenant starts with is the owner, and it cannot lock itself out: its
+    // row has no controls, only the line.
+    await expect(
+      page.getByText("Nobody can change their own access.", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /access for Ada Owner/ })).toHaveCount(0);
 
     await page.getByLabel("Their name").fill("Sam Sales");
     await page.getByLabel("Their work email").fill("sam@freshco.example");
@@ -169,6 +207,205 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await assertNoHorizontalScroll(page, "people after adding");
     await assertNoFrappeDesk(page);
     await page.screenshot({ path: `${SHOT_DIR}/onboarding-05-people-added.png`, fullPage: true });
+
+    // The same address again: nothing is added, the line says where their access is, no retry.
+    await page.getByLabel("Their name").fill("Sam Sales");
+    await page.getByLabel("Their work email").fill("sam@freshco.example");
+    await page.getByRole("button", { name: "Add to the team" }).click();
+    await expect(
+      page.getByText("sam@freshco.example is already on your team, so nothing was added."),
+    ).toBeVisible();
+    await expect(
+      page.getByText("To change their access, use “See access” on their row."),
+    ).toBeVisible();
+    await expect(page.getByLabel("Their work email")).toHaveValue("sam@freshco.example");
+    await assertAxeClean(page);
+  });
+
+  test("a role change refused because another tab changed the access first reloads and saves", async ({
+    page,
+    context,
+  }) => {
+    // This screen decides on Sam's access as it loaded it...
+    await openSam(page);
+    await page.getByRole("radio", { name: /^Accounting/ }).check();
+    const access = page.getByRole("region", { name: "Sam Sales’s access" });
+    await expect(access.getByText("Not saved", { exact: true })).toBeVisible();
+
+    // ...while the same owner changes it on another tab first.
+    await onAnotherTab(context, (other) =>
+      changeRoleTo(other, /^Production/, "Production · sam@freshco.example"),
+    );
+
+    // 2 · Conflict: the refusal hands the focus to the reload.
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(
+      access.getByText(
+        "You changed Sam Sales’s access somewhere else a moment ago: their role is now Production, not Sales.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: /^Accounting/ })).toBeChecked();
+    await expect(page.getByRole("radio", { name: /^Sales · may be out of date/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Reload Sam’s access" })).toBeFocused();
+    await assertNoHorizontalScroll(page, "access conflict");
+    await assertActionsAreReachable(page, "access conflict");
+    await assertAxeClean(page);
+    await page.screenshot({
+      path: `${SHOT_DIR}/onboarding-05b-access-conflict.png`,
+      fullPage: true,
+    });
+
+    // 3 · After reload: only a refusal moves the focus, so Save is not pulled into it.
+    await page.getByRole("button", { name: "Reload Sam’s access" }).click();
+    await expect(
+      page.getByRole("radio", { name: /^Production · changed somewhere else a moment ago/ }),
+    ).toBeVisible();
+    await expect(
+      access.getByText(
+        "Your change is not saved yet: Sam’s role changes from Production to Accounting.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save Sam’s access" })).not.toBeFocused();
+    await assertNoHorizontalScroll(page, "access after reload");
+    await assertAxeClean(page);
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(page.getByText("Accounting · sam@freshco.example")).toBeVisible();
+    await expect(access.getByText("Not saved", { exact: true })).toHaveCount(0);
+    await assertNoHorizontalScroll(page, "access saved after the reload");
+    await page.screenshot({ path: `${SHOT_DIR}/onboarding-05c-access-saved.png`, fullPage: true });
+  });
+
+  test("a remove refused because another tab changed the access waits for the reload", async ({
+    page,
+    context,
+  }) => {
+    await openSam(page);
+    await onAnotherTab(context, (other) =>
+      changeRoleTo(other, /^Production/, "Production · sam@freshco.example"),
+    );
+
+    // 4 · Held remove plus conflict.
+    await page.getByRole("button", { name: "Remove Sam from the team" }).click();
+    await expect(page.getByText("Your change: remove Sam from the team. Not saved.")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Remove Sam from the team · after reload" }),
+    ).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Reload Sam’s access" })).toBeFocused();
+    await assertNoHorizontalScroll(page, "held remove");
+    await assertActionsAreReachable(page, "held remove");
+    await assertAxeClean(page);
+
+    // Reloaded, the held remove is the next step.
+    await page.getByRole("button", { name: "Reload Sam’s access" }).click();
+    await page.getByRole("button", { name: "Remove Sam from the team", exact: true }).click();
+    await expect(page.getByText("No access", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Give Sam access back" })).toBeVisible();
+    await expect(
+      page.getByText(
+        "Give Sam access back: it returns the access they had (Production) right away.",
+      ),
+    ).toBeVisible();
+    await assertAxeClean(page);
+  });
+
+  test("a role change that cannot apply after another tab removed the person gives access back first", async ({
+    page,
+    context,
+  }) => {
+    await openSam(page);
+    await page.getByRole("radio", { name: /^Accounting/ }).check();
+    await onAnotherTab(context, async (other) => {
+      await other.getByRole("button", { name: "Remove Sam from the team" }).click();
+      await expect(other.getByRole("button", { name: "Give Sam access back" })).toBeVisible();
+    });
+
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(
+      page.getByText(
+        "You changed Sam Sales’s access somewhere else a moment ago: they no longer have access.",
+      ),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Reload Sam’s access" }).click();
+
+    // 5 · No longer possible: reached by a reload, so nothing takes the focus.
+    await expect(
+      page.getByText(
+        "Your change cannot apply: you removed Sam Sales from the team somewhere else a moment ago.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Your change: Sam’s role changes from Sales to Accounting. Not saved."),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Give Sam access back" })).not.toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Save Sam’s access · after their access is back" }),
+    ).toBeDisabled();
+    await expect(
+      page.getByText(
+        "Give Sam access back: it returns the access they had (Sales) right away. Then save to add your change: their role moves from Sales to Accounting. You don’t need to wait for them to sign in.",
+      ),
+    ).toBeVisible();
+    await assertNoHorizontalScroll(page, "cannot apply");
+    await assertActionsAreReachable(page, "cannot apply");
+    await assertAxeClean(page);
+
+    await page.getByRole("button", { name: "Give Sam access back" }).click();
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(page.getByText("Accounting · sam@freshco.example")).toBeVisible();
+  });
+
+  test("a reload that fails, or runs offline, keeps the change and offers the reload again", async ({
+    page,
+    context,
+  }) => {
+    await openSam(page);
+    await page.getByRole("radio", { name: /^Accounting/ }).check();
+    await onAnotherTab(context, (other) =>
+      changeRoleTo(other, /^Production/, "Production · sam@freshco.example"),
+    );
+    await page.getByRole("button", { name: "Save Sam’s access" }).click();
+    await expect(page.getByRole("button", { name: "Reload Sam’s access" })).toBeFocused();
+
+    // 6a · The list does not answer.
+    await page.route("**/api/v1/admin/app-users", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 503, body: '{"error":"unavailable"}' })
+        : route.continue(),
+    );
+    await page.getByRole("button", { name: "Reload Sam’s access" }).click();
+    await expect(
+      page.getByText(
+        "Sam’s access did not reload; your change is kept until you save it or leave this page.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Save Sam’s access · after reload" }),
+    ).toBeDisabled();
+    await expect(page.getByRole("radio", { name: /^Accounting/ })).toBeChecked();
+    await assertNoHorizontalScroll(page, "reload failed");
+    await assertActionsAreReachable(page, "reload failed");
+    await assertAxeClean(page);
+    await page.unroute("**/api/v1/admin/app-users");
+
+    // 6b · Offline.
+    await context.setOffline(true);
+    await page.getByRole("button", { name: "Reload Sam’s access again" }).click();
+    await expect(
+      page.getByText(
+        "You are offline, so Sam’s access cannot reload; your change is kept until you save it or leave this page. When you’re back online, reload their access.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reload Sam’s access again" })).not.toBeFocused();
+    await assertNoHorizontalScroll(page, "reload offline");
+    await assertAxeClean(page);
+
+    // Back online, the reload lands and the change is still waiting for Save.
+    await context.setOffline(false);
+    await page.getByRole("button", { name: "Reload Sam’s access again" }).click();
+    await expect(
+      page.getByRole("radio", { name: /^Production · changed somewhere else a moment ago/ }),
+    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: /^Accounting/ })).toBeChecked();
   });
 
   test("a fresh sales desk offers the first lead instead of an empty tab", async ({ page }) => {

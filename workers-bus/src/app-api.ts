@@ -46,10 +46,12 @@ import {
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
+  accessConflictBody,
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
   createUserInvite,
+  type AccessConflict,
   listAppUsersForOffice,
   listUserInvitesForOffice,
   resendUserInviteForOffice,
@@ -448,15 +450,45 @@ export async function handleAdminAppUserProvision(
   );
   const authority = authorizeAppUserMutation(auth, target, validated.value.role);
   if (authority) return appJson({ error: authority.error }, authority.status);
+  // A change to an existing person names the access version it was decided on; a new person has
+  // none yet (0157).
+  const { expected_access_version: expectedAccessVersion, ...provision } = validated.value;
+  if (target && expectedAccessVersion === null) {
+    return appJson({ error: "expected_access_version_required" }, 400);
+  }
+  if (
+    (target && Number(target.access_version ?? 1) !== expectedAccessVersion) ||
+    (!target && expectedAccessVersion !== null)
+  ) {
+    return appJson({
+      error: "access_version_conflict",
+      conflict: await accessConflictBody(appEnv, auth, target, expectedAccessVersion ?? 0),
+    }, 409);
+  }
   const user = await provisionAppUser(appEnv, {
-    ...validated.value,
+    ...provision,
     provisioned_by: auth.session.email_normalized,
   }, req, {
     actorUserId: auth.session.user_id,
     actorRole: auth.session.role,
     expectedTarget: target,
   });
-  if (!user) return appJson({ error: "app_user_state_changed" }, 409);
+  if (!user) {
+    const current = await appAuthStore.findAppUserByEmail(
+      appEnv,
+      provision.tenant_id,
+      provision.email_normalized,
+    );
+    const moved = target
+      ? Number(current?.access_version ?? 1) !== expectedAccessVersion
+      : current !== null;
+    return moved
+      ? appJson({
+        error: "access_version_conflict",
+        conflict: await accessConflictBody(appEnv, auth, current, expectedAccessVersion ?? 0),
+      }, 409)
+      : appJson({ error: "app_user_state_changed" }, 409);
+  }
   return appJson({
     user: {
       user_id: user.user_id,
@@ -466,7 +498,14 @@ export async function handleAdminAppUserProvision(
       role: user.role,
       frappe_user_id: user.frappe_user_id,
       active: user.active === 1,
+      access_version: Number(user.access_version ?? 1),
       updated_at: user.updated_at,
+      // Whether removing their access unpaired a crew phone; never which one (0157).
+      crew_phone_unpaired: (await appAuthStore.usersWithCrewPhoneUnpairedByRemoval(
+        appEnv,
+        user.tenant_id,
+        user.user_id,
+      )).has(user.user_id),
     },
   });
 }
@@ -624,7 +663,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserRole(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   const appUserAccessMatch = url.pathname.match(
     /^\/api\/v1\/admin\/app-users\/([^/]+)\/access$/,
@@ -635,7 +674,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserAccess(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   if (url.pathname === "/api/v1/admin/user-invites") {
     if (req.method === "GET") {
@@ -7990,6 +8029,15 @@ function decodedPathSegment(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A refused role or access change; a version conflict also says what moved (0157). */
+function accessChangeFailureBody(
+  failure: { error: string; conflict?: AccessConflict | null },
+): Record<string, unknown> {
+  return failure.conflict === undefined
+    ? { error: failure.error }
+    : { error: failure.error, conflict: failure.conflict };
 }
 
 function decodeWorkObjectScope(

@@ -81,6 +81,31 @@ interface RouteFailure {
   ok: false;
   error: string;
   status: number;
+  /** Present on `access_version_conflict`: what moved since the refused change was decided. */
+  conflict?: AccessConflict | null;
+}
+
+/**
+ * The body of a 409 `access_version_conflict` past `error`, so the refused screen can say who
+ * changed the person's access, what is different now and which version to decide on next.
+ */
+export interface AccessConflict {
+  user_id: string;
+  /** The version the person's access carries now. */
+  access_version: number;
+  /** When the newest change since the refused change's version was recorded. */
+  changed_at: string | null;
+  changed_by: {
+    user_id: string;
+    display_name: string | null;
+    /** The person whose change was refused made that change too (another tab or device). */
+    is_self_actor: boolean;
+  } | null;
+  change: {
+    /** The access at the version the refused change was decided on, when the audit can say. */
+    before: authStore.AccessState | null;
+    after: authStore.AccessState;
+  };
 }
 
 /**
@@ -146,6 +171,7 @@ export function userInviteState(
 function appUserProjection(
   user: AppUserRecord,
   auth: AuthContext,
+  crewPhoneUnpaired: boolean,
 ): Record<string, unknown> {
   return {
     user_id: user.user_id,
@@ -153,10 +179,27 @@ function appUserProjection(
     display_name: user.display_name,
     role: user.role,
     active: user.active === 1,
+    access_version: Number(user.access_version ?? 1),
     updated_at: user.updated_at,
     /** The signed-in owner must not be able to lock themselves out of their own tenant. */
     is_self: user.user_id === auth.session.user_id,
+    /** Removing their access unpaired a crew phone, which giving it back does not re-pair. */
+    crew_phone_unpaired: crewPhoneUnpaired,
   };
+}
+
+/** One person's projection, with whether a removal unpaired their crew phone. */
+async function projectAppUser(
+  env: AppEnv,
+  user: AppUserRecord,
+  auth: AuthContext,
+): Promise<Record<string, unknown>> {
+  const unpaired = await authStore.usersWithCrewPhoneUnpairedByRemoval(
+    env,
+    auth.session.tenant_id,
+    user.user_id,
+  );
+  return appUserProjection(user, auth, unpaired.has(user.user_id));
 }
 
 // --------------------------------------------------------------------------- input parsing
@@ -180,26 +223,121 @@ export function parseUserInviteInput(
   return { ok: true, value: { email, displayName, role: value.role } };
 }
 
+/**
+ * The access version a person's change was decided on (0157). Required on every change to an
+ * existing person; a stale one is refused rather than applied over someone else's decision.
+ */
+export function parseExpectedAccessVersion(value: unknown): number | null {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) < 1_000_000_000
+    ? (value as number)
+    : null;
+}
+
 export function parseRoleChange(
   value: unknown,
-): { ok: true; value: { role: AppRole } } | { ok: false; error: string } {
+):
+  | { ok: true; value: { role: AppRole; expectedAccessVersion: number } }
+  | { ok: false; error: string } {
   if (!isRecord(value)) return { ok: false, error: "invalid_body" };
-  if (Object.keys(value).some((key) => key !== "role")) {
+  if (Object.keys(value).some((key) => key !== "role" && key !== "expected_access_version")) {
     return { ok: false, error: "unexpected_field" };
   }
   if (!authStore.isAppRole(value.role)) return { ok: false, error: "invalid_role" };
-  return { ok: true, value: { role: value.role } };
+  const expectedAccessVersion = parseExpectedAccessVersion(value.expected_access_version);
+  if (expectedAccessVersion === null) {
+    return { ok: false, error: "expected_access_version_required" };
+  }
+  return { ok: true, value: { role: value.role, expectedAccessVersion } };
 }
 
 export function parseAccessChange(
   value: unknown,
-): { ok: true; value: { active: boolean } } | { ok: false; error: string } {
+):
+  | { ok: true; value: { active: boolean; expectedAccessVersion: number } }
+  | { ok: false; error: string } {
   if (!isRecord(value)) return { ok: false, error: "invalid_body" };
-  if (Object.keys(value).some((key) => key !== "active")) {
+  if (Object.keys(value).some((key) => key !== "active" && key !== "expected_access_version")) {
     return { ok: false, error: "unexpected_field" };
   }
   if (typeof value.active !== "boolean") return { ok: false, error: "invalid_active" };
-  return { ok: true, value: { active: value.active } };
+  const expectedAccessVersion = parseExpectedAccessVersion(value.expected_access_version);
+  if (expectedAccessVersion === null) {
+    return { ok: false, error: "expected_access_version_required" };
+  }
+  return { ok: true, value: { active: value.active, expectedAccessVersion } };
+}
+
+/**
+ * What moved since `expectedAccessVersion`, read from the person's versioned access audit: the
+ * newest change names the actor and when, the first change after that version names the access
+ * before it, and the person's row is the access now. `changed_by` and `change.before` are null
+ * when the audit cannot say (history from before 0157, or more changes since than it reads).
+ *
+ * There is deliberately no device: the audit keeps only keyed hashes of the network address and
+ * browser, and no session, so it cannot tell "your phone" from another tab on this computer.
+ */
+export async function accessConflictBody(
+  env: AppEnv,
+  auth: AuthContext,
+  current: AppUserRecord | null,
+  expectedAccessVersion: number,
+): Promise<AccessConflict | null> {
+  if (!current) return null;
+  const changes = await authStore.listAccessChangesSince(
+    env,
+    auth.session.tenant_id,
+    current.user_id,
+    expectedAccessVersion,
+  );
+  const newest = changes[0];
+  const first = changes.at(-1);
+  const actor = newest
+    ? await authStore.findAppUserById(env, auth.session.tenant_id, newest.actorUserId)
+    : null;
+  return {
+    user_id: current.user_id,
+    access_version: Number(current.access_version ?? 1),
+    changed_at: newest?.recordedAt ?? null,
+    changed_by: newest
+      ? {
+        user_id: newest.actorUserId,
+        display_name: actor?.display_name ?? null,
+        is_self_actor: newest.actorUserId === auth.session.user_id,
+      }
+      : null,
+    change: {
+      before: first?.version === expectedAccessVersion + 1 ? first.before : null,
+      after: { role: current.role, active: current.active === 1 },
+    },
+  };
+}
+
+/** A change decided on an older access version than the person now carries. */
+async function accessVersionConflict(
+  env: AppEnv,
+  auth: AuthContext,
+  current: AppUserRecord,
+  expectedAccessVersion: number,
+): Promise<RouteFailure> {
+  return {
+    ok: false,
+    error: "access_version_conflict",
+    status: 409,
+    conflict: await accessConflictBody(env, auth, current, expectedAccessVersion),
+  };
+}
+
+/** After a refused write: a moved access version is the conflict, anything else a state change. */
+async function accessWriteFailure(
+  env: AppEnv,
+  auth: AuthContext,
+  userId: string,
+  expectedAccessVersion: number,
+): Promise<RouteFailure> {
+  const current = await authStore.findAppUserById(env, auth.session.tenant_id, userId);
+  return current && Number(current.access_version ?? 1) !== expectedAccessVersion
+    ? await accessVersionConflict(env, auth, current, expectedAccessVersion)
+    : { ok: false, error: "app_user_state_changed", status: 409 };
 }
 
 export function parseInviteAcceptance(
@@ -462,7 +600,12 @@ export async function acceptUserInvite(
   // a link in a mailbox would let an issued-then-superseded invitation quietly undo a role change
   // the office made deliberately; role changes have their own authenticated route and their own
   // rules. The invitation is still spent, so the secret cannot be used twice.
-  const existing = await authStore.findActiveUser(env, invite.tenant_id, invite.email_normalized);
+  const account = await authStore.findAppUserByEmail(
+    env,
+    invite.tenant_id,
+    invite.email_normalized,
+  );
+  const existing = account?.active === 1 ? account : null;
   if (existing) {
     const settled = await settleUserInviteWithoutGrant(env, {
       invite,
@@ -495,26 +638,23 @@ export async function acceptUserInvite(
     };
   }
 
+  // A removed account gets access back only against the access version read here; its granted
+  // audit row, with the change in access_change, commits in the claim's own batch (0157).
   const claim = await claimUserInvite(env, {
     invite,
     candidateUserId: `appu_${crypto.randomUUID()}`,
-    // Mirrors `upsertAppUser`: `app_users.role` is a deployed authentication-class CHECK that
-    // predates the least-privilege vocabulary, and `access_role` (0038) is the effective role.
+    // Mirrors `upsertAppUserWithAuthority`: `app_users.role` is a deployed authentication-class
+    // CHECK that predates the least-privilege vocabulary, and `access_role` (0038) is the effective
+    // role.
     storageRole: invite.access_role === "owner" ? "owner" : "ops",
     now: nowIso,
+    expected: account,
+    request,
   });
   if (!claim.claimed || !claim.user) {
     const current = await findUserInviteById(env, invite.tenant_id, invite.invite_id);
     return settledInviteFailure(current ?? invite, nowIso);
   }
-  await authStore.recordAuthAudit(env, {
-    tenantId: invite.tenant_id,
-    userId: claim.user.user_id,
-    event: "user_invite_accept",
-    outcome: "granted",
-    request,
-    detailCode: `${invite.access_role}:${invite.invite_id}`,
-  });
   return {
     ok: true,
     body: await acceptanceBody(env, claim.user, "accepted", request, now, ctx, deps),
@@ -567,11 +707,15 @@ export async function listAppUsersForOffice(
   const guard = officeGuard(auth);
   if (guard) return guard;
   const users = await authStore.listAppUsers(env, auth.session.tenant_id);
+  const unpaired = await authStore.usersWithCrewPhoneUnpairedByRemoval(
+    env,
+    auth.session.tenant_id,
+  );
   return {
     ok: true,
     body: {
       version: APP_API_VERSION,
-      users: users.map((user) => appUserProjection(user, auth)),
+      users: users.map((user) => appUserProjection(user, auth, unpaired.has(user.user_id))),
     },
   };
 }
@@ -605,8 +749,14 @@ export async function changeAppUserRole(
   const user = target.user;
   const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
   if (authority) return authority;
+  if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
+    return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
+  }
   if (user.role === parsed.value.role) {
-    return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
+    return {
+      ok: true,
+      body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) },
+    };
   }
 
   const updated = await authStore.setAppUserAccessRole(env, {
@@ -618,20 +768,20 @@ export async function changeAppUserRole(
       actorUserId: auth.session.user_id,
       actorRole: auth.session.role,
       expectedTarget: user,
+      audit: {
+        event: "user_role_change",
+        outcome: "changed",
+        request: await authRequestContext(req, env),
+        detailCode: `${user.role}->${parsed.value.role}:${auth.session.user_id}`,
+      },
     },
   });
-  if (!updated) return { ok: false, error: "app_user_state_changed", status: 409 };
-  await authStore.recordAuthAudit(env, {
-    tenantId: auth.session.tenant_id,
-    userId: updated.user_id,
-    event: "user_role_change",
-    outcome: "changed",
-    request: await authRequestContext(req, env),
-    detailCode: `${user.role}->${updated.role}:${auth.session.user_id}`,
-  });
+  if (!updated) {
+    return await accessWriteFailure(env, auth, user.user_id, parsed.value.expectedAccessVersion);
+  }
   return {
     ok: true,
-    body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },
+    body: { version: APP_API_VERSION, user: await projectAppUser(env, updated, auth) },
   };
 }
 
@@ -663,8 +813,14 @@ export async function changeAppUserAccess(
   const user = target.user;
   const authority = authorizeAppUserMutation(auth, user, user.role);
   if (authority) return authority;
+  if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
+    return await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
+  }
   if ((user.active === 1) === parsed.value.active) {
-    return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
+    return {
+      ok: true,
+      body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) },
+    };
   }
 
   const now = new Date().toISOString();
@@ -677,20 +833,20 @@ export async function changeAppUserAccess(
       actorUserId: auth.session.user_id,
       actorRole: auth.session.role,
       expectedTarget: user,
+      audit: {
+        event: "user_access_change",
+        outcome: parsed.value.active ? "restored" : "removed",
+        request: await authRequestContext(req, env),
+        detailCode: `${user.role}:${auth.session.user_id}`,
+      },
     },
   });
-  if (!updated) return { ok: false, error: "app_user_state_changed", status: 409 };
-  await authStore.recordAuthAudit(env, {
-    tenantId: auth.session.tenant_id,
-    userId: updated.user_id,
-    event: "user_access_change",
-    outcome: parsed.value.active ? "restored" : "removed",
-    request: await authRequestContext(req, env),
-    detailCode: `${updated.role}:${auth.session.user_id}`,
-  });
+  if (!updated) {
+    return await accessWriteFailure(env, auth, user.user_id, parsed.value.expectedAccessVersion);
+  }
   return {
     ok: true,
-    body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },
+    body: { version: APP_API_VERSION, user: await projectAppUser(env, updated, auth) },
   };
 }
 

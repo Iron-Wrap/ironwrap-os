@@ -445,7 +445,7 @@ deploy/backup-to-r2.sh
 `deploy/backup-d1-to-r2.sh` accepts no arguments. It uses only the locked
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
-`f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
+`8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d`. It performs `d1 export --remote`, imports the SQL into an
 isolated SQLite file, runs integrity checks, and requires the complete migration-derived table,
 index, and invariant-trigger inventories before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the

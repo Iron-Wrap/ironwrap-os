@@ -126,7 +126,7 @@ test("0085 native photo evidence authority is complete in backup and restore con
     // and manual measurement history are included in both D1 inventories.
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 278);
     assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 392);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 761);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 762);
   }
 
   for (const [name, table] of INDEXES) {

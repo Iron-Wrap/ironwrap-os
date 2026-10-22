@@ -1,5 +1,5 @@
 import { sha256Hex } from "./app-auth.ts";
-import type { AppEnv } from "./app-types.ts";
+import { appUserIdentities, type AppEnv } from "./app-types.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 /**
@@ -159,6 +159,8 @@ export interface SafetyOccurrenceRecord {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  /** Who lifted the stop (0165); null while it is active, and for a stop lifted before 0165. */
+  released_by_user_id: string | null;
 }
 
 export interface SafetyNotificationRecord {
@@ -419,6 +421,15 @@ export async function recordMakeSafe(
   env: AppEnv,
   input: MakeSafeInput,
 ): Promise<SafetyOccurrenceRecord> {
+  // A detail the journal would refuse is a definite refusal now, not a write
+  // that rolls back on every retry.
+  if (!journalDetail(input.detail)) {
+    throw new SafetyError(
+      "safety_occurrence_input_invalid",
+      400,
+      "Making an area safe needs a detail of 3 to 4000 characters.",
+    );
+  }
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
   const occurrence = await requireOccurrence(
     env,
@@ -434,36 +445,41 @@ export async function recordMakeSafe(
     );
   }
   const nextVersion = occurrence.version + 1;
-  await advanceOccurrence(env, occurrence, {
-    version: nextVersion,
-    state: "made_safe",
-    stopActive: occurrence.stop_active,
-    severity: occurrence.severity,
-    rescueRequired: occurrence.rescue_required,
-    rescueCompletedAt: occurrence.rescue_completed_at,
-    closedAt: null,
-    now: input.now,
-  });
-  await appendOccurrenceEventRow(env, {
-    eventId: derivedEventId(
-      "soe",
-      input.occurrenceId,
-      nextVersion,
-      "make_safe",
-    ),
-    tenantId: input.tenantId,
-    occurrenceId: input.occurrenceId,
-    occurrenceVersion: nextVersion,
-    eventKind: "make_safe",
-    actorUserId: actor.userId,
-    actorRole: actor.role,
-    detail: input.detail,
-    evidence: input.evidence,
-    capturedOffline: input.capturedOffline,
-    occurredAt: input.occurredAt,
-    recordedAt: input.now,
-    deviceActionId: input.deviceActionId,
-  });
+  await advanceOccurrence(
+    env,
+    occurrence,
+    {
+      version: nextVersion,
+      state: "made_safe",
+      stopActive: occurrence.stop_active,
+      severity: occurrence.severity,
+      rescueRequired: occurrence.rescue_required,
+      rescueCompletedAt: occurrence.rescue_completed_at,
+      closedAt: null,
+      releasedByUserId: occurrence.released_by_user_id,
+      now: input.now,
+    },
+    {
+      eventId: derivedEventId(
+        "soe",
+        input.occurrenceId,
+        nextVersion,
+        "make_safe",
+      ),
+      tenantId: input.tenantId,
+      occurrenceId: input.occurrenceId,
+      occurrenceVersion: nextVersion,
+      eventKind: "make_safe",
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      detail: input.detail,
+      evidence: input.evidence,
+      capturedOffline: input.capturedOffline,
+      occurredAt: input.occurredAt,
+      recordedAt: input.now,
+      deviceActionId: input.deviceActionId,
+    },
+  );
   return await requireOccurrence(env, input.tenantId, input.occurrenceId);
 }
 
@@ -489,13 +505,25 @@ export interface SafetyResponseInput {
 /**
  * Rescue command, investigation, control, stop release, and closure are
  * authority acts. A stop is released only once the event is controlled and any
- * required rescue has completed, and closure additionally requires every
- * required notification resolved and every high-risk corrective action closed.
+ * required rescue has completed, and never by the person who raised it (owner
+ * rule L06, with no exception for working alone: if nobody else can release it,
+ * it stays active). Closure additionally requires every required notification
+ * resolved and every high-risk corrective action closed.
+ *
+ * Every input is checked before anything is written, and the occurrence moves
+ * in the same batch as the event that records the command.
  */
 export async function recordSafetyResponse(
   env: AppEnv,
   input: SafetyResponseInput,
 ): Promise<SafetyOccurrenceRecord> {
+  if (!journalDetail(input.detail)) {
+    throw new SafetyError(
+      "safety_command_invalid",
+      400,
+      "A safety command needs a detail of 3 to 4000 characters.",
+    );
+  }
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
   requireRole(
     actor,
@@ -511,42 +539,96 @@ export async function recordSafetyResponse(
     input.tenantId,
     input.occurrenceId,
   );
+  if (input.command === "released") {
+    // The same identity comparison as a Work Package stop release
+    // (work-package-stop-release.ts); migration 0165 repeats it in D1.
+    const raiser = await userIdentities(env, input.tenantId, occurrence.reported_by_user_id);
+    const releaser = await userIdentities(env, input.tenantId, actor.userId);
+    if ([...releaser].some((identity) => raiser.has(identity))) {
+      throw new SafetyError(
+        "safety_stop_release_by_raiser_forbidden",
+        403,
+        "The person who raised a safety stop can never release it.",
+      );
+    }
+  }
   const next = nextOccurrenceShape(occurrence, input.command);
   const nextVersion = occurrence.version + 1;
   if (input.command === "closed") {
     await assertClosureAllowed(env, occurrence);
   }
-  await advanceOccurrence(env, occurrence, {
-    version: nextVersion,
-    state: next.state,
-    stopActive: next.stopActive,
-    severity: occurrence.severity,
-    rescueRequired: occurrence.rescue_required,
-    rescueCompletedAt: next.rescueCompletedAt ?? occurrence.rescue_completed_at,
-    closedAt: next.state === "closed" ? input.now : null,
-    now: input.now,
-  });
-  await appendOccurrenceEventRow(env, {
-    eventId: derivedEventId(
-      "soe",
-      input.occurrenceId,
-      nextVersion,
-      input.command,
-    ),
-    tenantId: input.tenantId,
-    occurrenceId: input.occurrenceId,
-    occurrenceVersion: nextVersion,
-    eventKind: input.command,
-    actorUserId: actor.userId,
-    actorRole: actor.role,
-    detail: input.detail,
-    evidence: input.evidence,
-    capturedOffline: false,
-    occurredAt: input.now,
-    recordedAt: input.now,
-    deviceActionId: null,
-  });
+  await advanceOccurrence(
+    env,
+    occurrence,
+    {
+      version: nextVersion,
+      state: next.state,
+      stopActive: next.stopActive,
+      severity: occurrence.severity,
+      rescueRequired: occurrence.rescue_required,
+      rescueCompletedAt: next.rescueCompletedAt ?? occurrence.rescue_completed_at,
+      closedAt: next.state === "closed" ? input.now : null,
+      releasedByUserId:
+        input.command === "released" ? actor.userId : occurrence.released_by_user_id,
+      now: input.now,
+    },
+    {
+      eventId: derivedEventId(
+        "soe",
+        input.occurrenceId,
+        nextVersion,
+        input.command,
+      ),
+      tenantId: input.tenantId,
+      occurrenceId: input.occurrenceId,
+      occurrenceVersion: nextVersion,
+      eventKind: input.command,
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      detail: input.detail,
+      evidence: input.evidence,
+      capturedOffline: false,
+      occurredAt: input.now,
+      recordedAt: input.now,
+      deviceActionId: null,
+    },
+  );
   return await requireOccurrence(env, input.tenantId, input.occurrenceId);
+}
+
+/**
+ * The event table's own rule, `length(trim(detail)) BETWEEN 3 AND 4000`, checked
+ * before the write: SQLite's trim removes spaces only, its length counts
+ * characters rather than UTF-16 units, and it stops counting at a NUL. The
+ * spaces are trimmed by index, because a trailing-space regex backtracks
+ * quadratically over a long inner run of spaces.
+ */
+function journalDetail(value: unknown): value is string {
+  if (typeof value !== "string" || value.includes("\u0000")) return false;
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 32) start += 1;
+  while (end > start && value.charCodeAt(end - 1) === 32) end -= 1;
+  const length = [...value.slice(start, end)].length;
+  return length >= 3 && length <= 4000;
+}
+
+/** Every identity a user carries in this tenant, normalized as `appUserIdentities` does. */
+async function userIdentities(
+  env: AppEnv,
+  tenantId: string,
+  userId: string,
+): Promise<Set<string>> {
+  const identities = new Set([userId.trim().toLowerCase()]);
+  const user = await env.DB.prepare(
+    `SELECT user_id, email_normalized, frappe_user_id
+       FROM app_users
+      WHERE tenant_id = ? AND user_id = ?`,
+  )
+    .bind(tenantId, userId)
+    .first<{ user_id: string; email_normalized: string; frappe_user_id: string | null }>();
+  if (user) for (const identity of appUserIdentities(user)) identities.add(identity);
+  return identities;
 }
 
 function nextOccurrenceShape(
@@ -608,6 +690,14 @@ function nextOccurrenceShape(
       }
       return { state: "controlled", stopActive: occurrence.stop_active };
     case "released":
+      // A second release would rename who lifted the stop; 0165 refuses that in D1 as well.
+      if (occurrence.stop_active !== 1) {
+        throw new SafetyError(
+          "safety_stop_already_released",
+          409,
+          "This stop has already been released.",
+        );
+      }
       if (occurrence.state !== "controlled") {
         throw new SafetyError(
           "safety_stop_release_not_permitted",
@@ -2119,41 +2209,88 @@ interface AdvanceOccurrenceInput {
   rescueRequired: number;
   rescueCompletedAt: string | null;
   closedAt: string | null;
+  releasedByUserId: string | null;
   now: string;
 }
 
+/**
+ * Moves an occurrence one version forward in the same batch as the event that
+ * records why. The event row goes first, and only while the occurrence still
+ * holds the version this command read; then the occurrence leaves that version.
+ * Both commit or neither does, so no transition stands without its journal
+ * entry, and 0165 can require a lift's own `released` event before the stop drops.
+ */
 async function advanceOccurrence(
   env: AppEnv,
   occurrence: SafetyOccurrenceRecord,
   next: AdvanceOccurrenceInput,
+  event: OccurrenceEventRow,
 ): Promise<void> {
-  const updated = await env.DB.prepare(
-    `UPDATE safety_occurrences
-        SET version = ?, state = ?, stop_active = ?, severity = ?, rescue_required = ?,
-            rescue_completed_at = ?, closed_at = ?, updated_at = ?
-      WHERE tenant_id = ? AND occurrence_id = ? AND version = ?`,
-  )
-    .bind(
-      next.version,
-      next.state,
-      next.stopActive,
-      next.severity,
-      next.rescueRequired,
-      next.rescueCompletedAt,
-      next.closedAt,
-      next.now,
-      occurrence.tenant_id,
-      occurrence.occurrence_id,
-      occurrence.version,
-    )
-    .run();
-  if (d1Changes(updated) !== 1) {
+  assertEvidence(event.evidence);
+  let results: Array<{ meta?: { changes?: number } }>;
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO safety_occurrence_events (${OCCURRENCE_EVENT_COLUMNS})
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM safety_occurrences
+             WHERE tenant_id = ? AND occurrence_id = ? AND version = ?
+          )`,
+      ).bind(
+        ...occurrenceEventValues(event),
+        occurrence.tenant_id,
+        occurrence.occurrence_id,
+        occurrence.version,
+      ),
+      env.DB.prepare(
+        `UPDATE safety_occurrences
+            SET version = ?, state = ?, stop_active = ?, severity = ?, rescue_required = ?,
+                rescue_completed_at = ?, closed_at = ?, released_by_user_id = ?, updated_at = ?
+          WHERE tenant_id = ? AND occurrence_id = ? AND version = ?`,
+      ).bind(
+        next.version,
+        next.state,
+        next.stopActive,
+        next.severity,
+        next.rescueRequired,
+        next.rescueCompletedAt,
+        next.closedAt,
+        next.releasedByUserId,
+        next.now,
+        occurrence.tenant_id,
+        occurrence.occurrence_id,
+        occurrence.version,
+      ),
+    ]);
+  } catch (error) {
+    throw guardRefusal(error);
+  }
+  // The insert is held to the same version as the update, so neither wrote when this is not 1.
+  if (d1Changes(results[1] ?? {}) !== 1) {
     throw new SafetyError(
       "safety_occurrence_version_conflict",
       409,
       "This occurrence changed while the command was applied.",
     );
   }
+}
+
+/**
+ * A D1 guard that refused the batch because a person's identity, status or role
+ * changed after the checks above reports its own refusal. Anything else stays a
+ * store fault.
+ */
+function guardRefusal(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  const refusals: Array<[string, string]> = [
+    ["safety_stop_release_by_raiser_forbidden", "The person who raised a safety stop can never release it."],
+    ["safety_actor_unknown", "This safety actor is not recognized."],
+    ["safety_release_authority_required", "This safety command requires current production authority."],
+    ["safety_rescue_authority_required", "This safety command requires current production authority."],
+  ];
+  const refusal = refusals.find(([code]) => message.includes(code));
+  return refusal ? new SafetyError(refusal[0], 403, refusal[1]) : error;
 }
 
 interface OccurrenceEventRow {
@@ -2172,35 +2309,40 @@ interface OccurrenceEventRow {
   deviceActionId: string | null;
 }
 
+const OCCURRENCE_EVENT_COLUMNS = `event_id, tenant_id, occurrence_id, occurrence_version,
+  event_kind, actor_user_id, actor_role, detail, evidence_refs_json, evidence_sha256,
+  captured_offline, occurred_at, recorded_at, device_action_id`;
+
+function occurrenceEventValues(row: OccurrenceEventRow): unknown[] {
+  return [
+    row.eventId,
+    row.tenantId,
+    row.occurrenceId,
+    row.occurrenceVersion,
+    row.eventKind,
+    row.actorUserId,
+    row.actorRole,
+    row.detail,
+    row.evidence?.refsJson ?? null,
+    row.evidence?.sha256 ?? null,
+    row.capturedOffline ? 1 : 0,
+    row.occurredAt,
+    row.recordedAt,
+    row.deviceActionId,
+  ];
+}
+
 async function appendOccurrenceEventRow(
   env: AppEnv,
   row: OccurrenceEventRow,
 ): Promise<void> {
   assertEvidence(row.evidence);
   await env.DB.prepare(
-    `INSERT INTO safety_occurrence_events
-       (event_id, tenant_id, occurrence_id, occurrence_version, event_kind, actor_user_id,
-        actor_role, detail, evidence_refs_json, evidence_sha256, captured_offline,
-        occurred_at, recorded_at, device_action_id)
+    `INSERT INTO safety_occurrence_events (${OCCURRENCE_EVENT_COLUMNS})
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT DO NOTHING`,
   )
-    .bind(
-      row.eventId,
-      row.tenantId,
-      row.occurrenceId,
-      row.occurrenceVersion,
-      row.eventKind,
-      row.actorUserId,
-      row.actorRole,
-      row.detail,
-      row.evidence?.refsJson ?? null,
-      row.evidence?.sha256 ?? null,
-      row.capturedOffline ? 1 : 0,
-      row.occurredAt,
-      row.recordedAt,
-      row.deviceActionId,
-    )
+    .bind(...occurrenceEventValues(row))
     .run();
 }
 

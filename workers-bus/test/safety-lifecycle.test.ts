@@ -161,6 +161,20 @@ class SqliteD1 {
       },
     };
   }
+
+  /** D1 runs a batch as one transaction: every statement commits, or none does. */
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 interface StoredObject {

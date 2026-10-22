@@ -555,8 +555,13 @@
     // R2 ironwrap-bus-qa-raw, six ironwrap-qa-* queues. This is the only environment a push
     // to main deploys; production is a separate tag-triggered release (IRO-264).
     "qa": {
+      // qa answers on its own subdomain and keeps the workers.dev address working too. Merge only
+      // after ironwrapexteriors.com is an active zone in this Cloudflare account and the qa deploy
+      // token holds Zone Read, DNS Edit and Workers Routes Edit on it: `wrangler triggers deploy`
+      // attaches the domain, and it fails the qa deploy while the zone is still at GoDaddy.
+      // workers_dev must stay explicit, because a route turns it off by default.
       "workers_dev": true,
-      "routes": [],
+      "routes": [{ "pattern": "qa.ironwrapexteriors.com", "custom_domain": true }],
       "d1_databases": [
         {
           "binding": "DB",
@@ -634,8 +639,10 @@
           "APP_LOCALE": "en-CA",
           "APP_TIME_ZONE": "America/Edmonton",
           "APP_CURRENCY": "CAD",
-          "APP_PUBLIC_ORIGIN": "https://ironwrap-bus-qa.yellow-rain-7498.workers.dev",
-          "APP_ALLOWED_ORIGINS": "https://ironwrap-bus-qa.yellow-rain-7498.workers.dev",
+          // Sign-in, invite, crew pairing and customer links are built from APP_PUBLIC_ORIGIN.
+          // The workers.dev origin stays allowed so links already sent there still work.
+          "APP_PUBLIC_ORIGIN": "https://qa.ironwrapexteriors.com",
+          "APP_ALLOWED_ORIGINS": "https://qa.ironwrapexteriors.com,https://ironwrap-bus-qa.yellow-rain-7498.workers.dev",
           "APP_ALLOW_INSECURE_LOCAL": "false",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",

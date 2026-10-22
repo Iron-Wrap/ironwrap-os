@@ -272,9 +272,9 @@ export function buildLeadTriageCommand(input: RecordLeadTriageInput): Readonly<R
 /**
  * External effect states in which a proposal send has started but its delivery is not confirmed:
  * proposed, claimed (authorized, executing, reconciling, retry), unknown, compensating, or a
- * manual exception. A delivery check (`reconcileExternalEffect`) settles an unknown send; a person
- * settles a manual exception with `recordProposalDeliveryConfirmation`; compensating clears when
- * the compensation settles.
+ * manual exception. A person settles an unknown send or a manual exception with
+ * `recordProposalDeliveryConfirmation`; D1 refuses any other move from unknown to succeeded or
+ * reconciled (0164). Compensating clears when the compensation settles.
  */
 export const UNCONFIRMED_PROPOSAL_DELIVERY_STATES = [
   "proposed",
@@ -381,6 +381,23 @@ export async function recordProposalDeliveryConfirmation(
     throw new ProposalDeliveryConfirmationError("proposal_delivery_not_awaiting_confirmation", 409, {
       delivery_state: effect.state,
     });
+  }
+  // A readback that conflicted means the provider answered, so it did something: "not delivered"
+  // would make the send "not executed" and open the way to a second send. That needs provider
+  // evidence, never a person's word; D1 refuses it as well (0164). "Delivered" stays open.
+  if (input.outcome === "not_delivered" && effect.state === "manual_exception") {
+    // The latest move into the exception says why it is one, as 0161's late-answer wait reads it.
+    const cause = await env.DB.prepare(
+      `SELECT from_state FROM external_effect_events
+        WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`,
+    ).bind(effect.effect_id).first<{ from_state: string | null }>();
+    if (cause?.from_state === "reconciling") {
+      throw new ProposalDeliveryConfirmationError(
+        "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+        409,
+        { delivery_state: effect.state },
+      );
+    }
   }
   const createdAt = input.now ?? new Date().toISOString();
   // A send that went unknown may only be late: "not delivered" waits until its provider's own answer

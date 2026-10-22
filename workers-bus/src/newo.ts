@@ -51,12 +51,16 @@ const DIVISIONS = [
   "steel_distribution",
 ] as const;
 const URGENCIES = ["routine", "urgent", "emergency"] as const;
+// Callback only (owner decisions MD-05 and D-03): a handoff is requested or failed. Any other
+// value, including a live connection, is refused at ingest.
+const HANDOFF_STATUSES = ["requested", "failed"] as const;
 const CHANNELS = ["phone", "chat"] as const;
 const DIRECTIONS = ["inbound", "outbound"] as const;
 
 export type NewoEventType = (typeof EVENT_TYPES)[number];
 type NewoDivision = (typeof DIVISIONS)[number];
 type NewoUrgency = (typeof URGENCIES)[number];
+export type NewoHandoffStatus = (typeof HANDOFF_STATUSES)[number];
 
 export interface NewoPreferredWindow {
   start: string;
@@ -108,7 +112,7 @@ export interface NewoEventV1 {
   outcome: {
     status: string | null;
     summary: string | null;
-    handoff_status: string | null;
+    handoff_status: NewoHandoffStatus | null;
     booking_status: string | null;
     transcript_ref: string | null;
     recording_ref: string | null;
@@ -636,7 +640,7 @@ async function acceptEvent(
     ) {
       await env.JN_QUEUE.send({ envelope_id: response.envelope_id });
     }
-    scheduleNotifications(env, ctx, event, envelope);
+    scheduleNotifications(env, ctx, event, envelope, existingSession);
     await completeNewoReceipt(env, event.event_id, response.envelope_id, response, new Date().toISOString());
     return json(response);
   } catch (error) {
@@ -750,10 +754,10 @@ function sessionRecord(
     postal_code: event.contact.address.postal_code,
     division: event.intent.division,
     service: event.intent.service,
-    urgency: event.intent.urgency,
+    urgency: newoUrgency(event, existing),
     lead_envelope_id: envelopeId,
     appointment_request_id: appointmentRequestId,
-    handoff_status: event.outcome.handoff_status,
+    handoff_status: newoHandoffStatus(event, existing),
     booking_status: bookingStatus(event),
     summary: event.outcome.summary,
     transcript_ref: event.outcome.transcript_ref,
@@ -806,25 +810,92 @@ function scheduleNotifications(
   ctx: ExecutionContext,
   event: NewoEventV1,
   envelope: EnvelopeRecord | null,
+  existing: NewoSessionRecord | null,
 ): void {
   if (event.event_type === "missed_call" && event.consent.follow_up_email && envelope?.contact_email) {
     ctx.waitUntil(sendInstantAck(env, envelope).catch((error) =>
       console.log(JSON.stringify({ at: "newo_missed_call_ack", event_id: event.event_id, error: String(error) }))));
   }
+  // Best effort: a send that fails leaves only this log line. The D1 session row is the record.
+  for (const alert of newoOwnerAlerts(event, existing)) {
+    ctx.waitUntil(sendOwnerAlert(env, alert.subject, alert.html).catch((error) =>
+      console.log(JSON.stringify({ at: `newo_${alert.kind}_alert`, event_id: event.event_id, error: String(error) }))));
+  }
+}
+
+const HANDOFF_RANK: Readonly<Record<string, number>> = { requested: 1, failed: 2 };
+const URGENCY_RANK: Readonly<Record<string, number>> = { routine: 0, urgent: 1, emergency: 2 };
+
+/** The session keeps its highest urgency, never the latest one. */
+export function newoUrgency(event: NewoEventV1, existing: NewoSessionRecord | null = null): NewoUrgency {
+  const previous = existing?.urgency;
+  return previous && (URGENCY_RANK[previous] ?? -1) > URGENCY_RANK[event.intent.urgency]
+    ? previous as NewoUrgency
+    : event.intent.urgency;
+}
+
+/**
+ * The receptionist is callback only (owner decisions MD-05 and D-03). A handoff request that
+ * reaches the Worker is a requested callback, so one sent without a status is recorded as
+ * "requested". "failed" keeps its meaning: the handoff request did not arrive or could not be
+ * processed. A session keeps its strongest status (failed over requested over none), so a later
+ * event cannot clear a callback. An emergency call must end in a handoff request, so a report that
+ * closes an emergency session without one records the request that never arrived as failed.
+ */
+export function newoHandoffStatus(event: NewoEventV1, existing: NewoSessionRecord | null = null): string | null {
+  const reported = event.outcome.handoff_status ??
+    (event.event_type === "handoff_requested" ? "requested" : null);
+  const previous = existing?.handoff_status ?? null;
+  const status = (HANDOFF_RANK[previous ?? ""] ?? 0) > (HANDOFF_RANK[reported ?? ""] ?? 0)
+    ? previous
+    : reported ?? previous;
+  if (status) return status;
+  const closesSession = event.event_type === "session_ended" || event.event_type === "session_failed";
+  return closesSession && newoUrgency(event, existing) === "emergency" ? "failed" : null;
+}
+
+/** The caller details staff need to call back, as the session knows them. */
+function callerHtml(event: NewoEventV1, existing: NewoSessionRecord | null): string {
+  const contact = event.contact;
+  const address = [
+    contact.address.line1 ?? existing?.address_line1,
+    contact.address.city ?? existing?.city,
+    contact.address.province ?? existing?.province,
+    contact.address.postal_code ?? existing?.postal_code,
+  ].filter(Boolean).join(", ");
+  return `<ul><li>Name: ${escapeHtml(contact.name ?? existing?.contact_name ?? "not given")}</li>` +
+    `<li>Phone: ${escapeHtml(contact.phone ?? existing?.contact_phone ?? "not given")}</li>` +
+    `<li>Address: ${escapeHtml(address || "not given")}</li>` +
+    `<li>Session: ${escapeHtml(event.session_id)}</li></ul>`;
+}
+
+/**
+ * The owner alerts one accepted event raises: a callback request, or a handoff or session that
+ * failed. Each email carries the caller's name, phone and address, because it is the work list.
+ */
+export function newoOwnerAlerts(
+  event: NewoEventV1,
+  existing: NewoSessionRecord | null = null,
+): Array<{ kind: "handoff" | "failure"; subject: string; html: string }> {
+  const alerts: Array<{ kind: "handoff" | "failure"; subject: string; html: string }> = [];
+  const caller = callerHtml(event, existing);
   if (event.event_type === "handoff_requested") {
-    ctx.waitUntil(sendOwnerAlert(
-      env,
-      `Newo handoff requested - ${event.intent.urgency}`,
-      `<p>Session ${escapeHtml(event.session_id)} requested a handoff.</p><p>${escapeHtml(event.handoff_summary ?? "No reason supplied")}</p>`,
-    ).catch((error) => console.log(JSON.stringify({ at: "newo_handoff_alert", event_id: event.event_id, error: String(error) }))));
+    const urgency = newoUrgency(event, existing);
+    alerts.push({
+      kind: "handoff",
+      subject: urgency === "routine" ? "Newo callback requested" : `Urgent Newo callback requested - ${urgency}`,
+      html: `<p>Call this caller back. Reason: ${escapeHtml(event.handoff_summary ?? "No reason supplied")}</p>${caller}`,
+    });
   }
-  if (event.event_type === "session_failed" || event.outcome.handoff_status === "failed") {
-    ctx.waitUntil(sendOwnerAlert(
-      env,
-      "Urgent Newo callback required",
-      `<p>Transfer or session failed for ${escapeHtml(event.contact.name ?? event.contact.phone ?? event.session_id)}.</p>`,
-    ).catch((error) => console.log(JSON.stringify({ at: "newo_failure_alert", event_id: event.event_id, error: String(error) }))));
+  const failedNow = newoHandoffStatus(event, existing) === "failed" && existing?.handoff_status !== "failed";
+  if (event.event_type === "session_failed" || failedNow) {
+    alerts.push({
+      kind: "failure",
+      subject: "Urgent Newo callback required",
+      html: `<p>The handoff request or the session failed. Call this caller back.</p>${caller}`,
+    });
   }
+  return alerts;
 }
 
 async function recordConflict(
@@ -992,7 +1063,7 @@ function outcomeObject(value: unknown, issues: string[]): NewoEventV1["outcome"]
   return {
     status: nullableString(value.status, 80, "outcome.status", issues),
     summary: nullableString(value.summary, 2_000, "outcome.summary", issues),
-    handoff_status: nullableString(value.handoff_status, 80, "outcome.handoff_status", issues),
+    handoff_status: handoffStatusValue(value.handoff_status, issues),
     booking_status: nullableString(value.booking_status, 80, "outcome.booking_status", issues),
     transcript_ref: nullableReference(value.transcript_ref, "outcome.transcript_ref", issues),
     recording_ref: nullableReference(value.recording_ref, "outcome.recording_ref", issues),
@@ -1000,6 +1071,15 @@ function outcomeObject(value: unknown, issues: string[]): NewoEventV1["outcome"]
     ended_at: endedAt,
     duration_seconds: typeof duration === "number" && Number.isInteger(duration) ? duration : null,
   };
+}
+
+/** A live connection is an MD-05 breach: it is refused, never recorded as a handoff. */
+function handoffStatusValue(value: unknown, issues: string[]): NewoHandoffStatus | null {
+  if (typeof value === "string" && /connect|transfer/i.test(value)) {
+    issues.push("outcome.handoff_status reports a live connection; the receptionist is callback only");
+    return null;
+  }
+  return nullableEnumValue(value, HANDOFF_STATUSES, "outcome.handoff_status", issues);
 }
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[], path: string, issues: string[]): void {

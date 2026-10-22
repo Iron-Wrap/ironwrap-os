@@ -39,12 +39,12 @@
     "tool_schema_path": "config/newo/schemas/tool-contracts.v1.schema.json",
     "tool_schema_sha256": "6d1028836d51f25a42cf0b38660ccf5d7f624f5396616ebd2c5168b16a1554fa",
     "report_schema_path": "config/newo/schemas/session-report.v1.schema.json",
-    "report_schema_sha256": "5c587d4c53b872fbef4290a315ecc7e00477371168b1ac4a07735fff695602cb"
+    "report_schema_sha256": "fa229010f76755d1b70ede2dfc13d14cc21f5db01c1358f09b696fb0e974eede"
   },
   "akb": {
     "version": "ironwrap-receptionist.v1",
     "path": "config/newo/akb/ironwrap-receptionist.v1.md",
-    "sha256": "9549fdf4956053b84e261f4909e31a8b072599cd2dcae7aa85861d4592a9aa64",
+    "sha256": "a56f923daf7330f0c2d95ef6bdfd5356480e9a7d1f5033354ebe02a349cdb4bf",
     "owner_approval": "pending",
     "legal_wording_approval": "pending"
   },
@@ -54,11 +54,14 @@
     "jobnimbus_appointment_contract_proven": false,
     "confirmed_mode_gate": "controlled_create_read_collision_update_cancel_100_percent"
   },
-  "transfer": {
-    "policy": "owner_then_voicemail",
-    "owner_line_env": "NEWO_OWNER_TRANSFER_NUMBER",
-    "voicemail_fallback_required": true,
-    "failed_transfer_callback_incident": true
+  "handoff": {
+    "policy": "callback_only",
+    "tool": "request_handoff",
+    "handoff_status": "requested"
+  },
+  "sms": {
+    "newo_in_call_sms_enabled": false,
+    "confirmation_sender": "ironwrap"
   },
   "telephony": {
     "newo_owned_number": null,
@@ -81,6 +84,6 @@
     "sandbox_fixture_index": "config/newo/sandbox-fixtures.json",
     "console_proof_index": "config/newo/console-proof.json",
     "evaluation_path": "config/newo/evaluation-cases.v1.json",
-    "evaluation_sha256": "3ad0b9d87783ccdcc54617631900e180c2b07a593c05d1f77a3f2a2ca84b921a"
+    "evaluation_sha256": "de52f24a4acab260ed7d3c5944e9de8d5db1d30fc0a826a7d26ad3ce32cad176"
   }
 }

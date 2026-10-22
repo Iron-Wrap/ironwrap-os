@@ -519,8 +519,7 @@ test("Newo production readiness requires credentials, live actor/webhooks, Frapp
     NEWO_KB_SHA256: "c".repeat(64),
     NEWO_PHONE_NUMBER: "+14035550100",
     NEWO_ENABLED_CHANNELS: "voice",
-    NEWO_TRANSFER_POLICY: "owner_then_voicemail",
-    NEWO_OWNER_TRANSFER_NUMBER: "+17805550101",
+    // Callback only (owner decision MD-05): readiness needs no transfer policy or number.
     NEWO_R2_LIFECYCLE_PROVEN: "true",
     NEWO_USAGE_LIMIT_MINUTES: "1000",
     NEWO_USAGE_ALERT_PERCENT: "80",

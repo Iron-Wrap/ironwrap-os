@@ -890,7 +890,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
-`f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
+`8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d` (created empty in WNAM on 2026-10-21; the earlier WEUR
+database `f0674848…` was exported and deleted the same day). It runs locked Wrangler `d1 export --remote`, imports
 the SQL into isolated SQLite, checks integrity and the complete migration-derived table, index,
 and invariant-trigger inventories, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes

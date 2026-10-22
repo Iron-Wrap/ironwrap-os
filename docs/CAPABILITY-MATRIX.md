@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 136,
-      "latest": "0205_agent_step_pair_index.sql"
+      "count": 137,
+      "latest": "0206_agent_draft_closing.sql"
     }
   },
   "test_observation_policy": {
@@ -249,8 +249,10 @@ Current source tracing distinguishes implemented modules from reachable producti
   The app has no import screen, so the Retry a person would use for an import run's failed items is
   not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
-  too, and never under Done for you; closing that draft when the matching act lands or a newer
-  draft replaces it, and a "Not now" for it, are not built yet, so it stays in Needs you.
+  too, and never under Done for you. It closes once: `applied_by_person` when the person's role
+  change or the owner's delegation or practice setting for its record lands, `superseded` when a
+  newer draft for the same record replaces it; migration 0206 lets only that close past the
+  decided-step guard. A "Not now" for it is not built yet.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: owner, staff and worker actors for a person's
@@ -359,10 +361,10 @@ Current source tracing distinguishes implemented modules from reachable producti
     (#17, not merged) records it for production gate waiver decisions.
   - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
     operation-sets slice builds the four sets.
-  - Closing a prepared people-only draft: the receipt codes `applied_by_person` and `superseded`
-    (under `succeeded`) and the app's words and notes for them exist, and the receipt shows the
-    note on its "Since then" row, but nothing closes the draft yet. No screen hosts the answer
-    message that shows `VIEW_REFUSED` under the answer.
+  - A prepared people-only draft: "Not now" is not built, and `payee.unfreeze_prepare` and
+    `safety_stop.release_prepare` drafts (no registered arguments) do not close. A closed draft's
+    receipt shows its note on its "Since then" row; no screen hosts the answer message that shows
+    `VIEW_REFUSED` under the answer.
   - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
     tenant policy lists no company pages.
   - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its

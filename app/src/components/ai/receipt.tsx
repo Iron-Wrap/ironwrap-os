@@ -342,7 +342,8 @@ export function Receipt({
             <PersonAvatar initials={by ? initialsOf({ name: by }) : undefined} decorative />
             <span className="grid min-w-0">
               <span className={cn(type.body, "font-semibold")}>{by ?? "A person"}</span>
-              {/* A closed draft has two moments; its time is the hand change that closed it (gate c2). */}
+              {/* A closed draft has two moments; its time is the hand change that closed it (gate c2).
+                  Only applied_by_person reaches this branch closed: a replaced draft has the AI header. */}
               <span className={cn(type.caption, "text-text-secondary")}>
                 {closedDraft ? <>Changed by hand · {when}</> : when}
               </span>

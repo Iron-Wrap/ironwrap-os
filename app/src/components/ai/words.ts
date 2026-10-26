@@ -405,7 +405,7 @@ const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
  */
 const APPLIED_SETTING: Record<string, string> = {
   asks_first: `${DELEGATION.asks_first.words}: it asks a person each time before it acts`,
-  within_limits: `${DELEGATION.within_limits.words}: it acts without asking up to the limit set, and asks a person above it`,
+  within_limits: `${DELEGATION.within_limits.words}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
   off: "Off: it does not do this at all, and people do it by hand",
   shadow:
     "Practice only: it runs practice rounds that change nothing, and people still do the real work",

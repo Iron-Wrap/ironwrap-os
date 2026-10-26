@@ -757,6 +757,18 @@ describe("a people-only draft that left Needs you", () => {
     expect(within(card).queryAllByRole("button")).toEqual([]);
   });
 
+  it("labels the time of the hand change when the time is machine-readable too", () => {
+    render(
+      <Receipt
+        receipt={draft("applied_by_person")}
+        display={{ ...closed, when: { text: "Mon 14:05", at: "2026-10-19T14:05:00-06:00" } }}
+      />,
+    );
+    const time = screen.getByText("Mon 14:05");
+    expect(time.tagName).toBe("TIME");
+    expect(time.parentElement?.textContent).toBe("Changed by hand · Mon 14:05");
+  });
+
   it("never prints the id of a person in the applied record it cannot name", () => {
     const changed = {
       ...draft("applied_by_person"),
@@ -808,6 +820,7 @@ describe("a people-only draft that left Needs you", () => {
     render(<Receipt receipt={replaced} display={closed} />);
     const card = screen.getByRole("article");
     expect(within(card).queryByText("Checked")).toBeNull();
+    expect(card.textContent).not.toMatch(/Changed by hand/);
     expect(card).toHaveAttribute("data-state", "replaced");
     expect(within(card).getByText("Replaced")).toBeVisible();
     expect(

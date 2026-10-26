@@ -898,6 +898,16 @@ test("a role change closes the AI team's open role-change drafts for that person
   assert.equal(closed("step_kept").reason_code, null);
   assert.equal(audits().length, 3);
 
+  // Provisioning refused on a stale version closes nothing either.
+  const staleProvision = await call(h, "POST", APP_USERS, {
+    session,
+    body: { tenant_id: TENANT, email: "mate@example.invalid", display_name: "Mate", role: "production", frappe_user_id: "mate@example.invalid", active: true, expected_access_version: 1 },
+  });
+  assert.equal(staleProvision.status, 409);
+  assert.equal(staleProvision.body.error, "access_version_conflict");
+  assert.equal(closed("step_kept").reason_code, null);
+  assert.equal(audits().length, 3);
+
   // Provisioning that re-grades an existing person closes their role-change drafts on any version
   // older than the one it produced, in one audited close.
   draft("step_provisioned", "change_role", "field", null, version);
@@ -915,6 +925,48 @@ test("a role change closes the AI team's open role-change drafts for that person
       audits().length,
     ],
     ["applied_by_person", "sales", "applied_by_person", "applied_by_person", 4],
+  );
+});
+
+test("a role change that loses its write to a concurrent change closes no draft", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  h.db.raw.exec("PRAGMA foreign_keys = OFF");
+  h.db.raw
+    .prepare(
+      `INSERT INTO agent_run_steps (step_id, tenant_id, run_id, step_seq, step_key, specialist_id, action_id, autonomy, args_json, args_sha256,
+        sources_json, policy_json, permit_json, outcome, needs_ask, undo_json, do_it_myself_json, created_at, decided_at)
+      VALUES ('step_raced', ?, 'run_step_raced', 1, 'k', 'orchestrator', 'access.prepare_change', 'A1', ?, 'synthetic', '[]', '{"result":"allow","reason_codes":[]}',
+        '{"approved_by":null}', 'succeeded', 'apply_in_own_screen', '{}', '{"context":{}}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    )
+    .run(TENANT, JSON.stringify({ person_ref: `person:${mate.user_id}`, change: "change_role", target_role: "field", device_ref: null, expected_access_version: 1 }));
+  h.db.raw.exec("PRAGMA foreign_keys = ON");
+  // Between the version check and the write, another writer moves the person to the same role.
+  let raced = false;
+  h.db.beforeNextMatchingRun(
+    (sql) => sql.includes("UPDATE app_users") && sql.includes("access_version = access_version + 1") && sql.includes("SET access_role"),
+    () => {
+      raced = true;
+      h.db.raw.prepare(
+        `UPDATE app_users SET access_role = 'production', access_version = access_version + 1, updated_at = ?
+          WHERE tenant_id = ? AND user_id = ?`,
+      ).run("2026-08-24T12:02:00.000Z", TENANT, mate.user_id);
+    },
+  );
+
+  const refused = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production", expected_access_version: 1 },
+  });
+  assert.equal(raced, true, "the concurrent writer reached the write boundary");
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "access_version_conflict");
+  const step = h.db.raw.prepare("SELECT reason_code FROM agent_run_steps WHERE step_id = 'step_raced'").get() as { reason_code: string | null };
+  assert.equal(step.reason_code, null, "a refused write closes nothing, even when the role now matches");
+  assert.equal(
+    scalar(h, "SELECT COUNT(*) AS value FROM app_auth_audit WHERE event = 'agent_draft_close'"),
+    0,
   );
 });
 

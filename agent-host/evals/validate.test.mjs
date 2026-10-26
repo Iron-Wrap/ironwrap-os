@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { INBOUND_CHANNELS, checkContextTargets, loadRegistry, validate } from "./validate.mjs";
+import { CONSENT_KEYS, CONSENT_VALUES, INBOUND_CHANNELS, LEAD_KEYS, LEAD_SOURCES, LEAD_STATUSES, checkContextTargets, loadRegistry, validate } from "./validate.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const ID = "lead_concierge";
@@ -48,13 +48,31 @@ x
 x
 `;
 
+// A lead as the Worker's lead read model shows it, from a web form with a phone number.
+const leadData = (overrides = {}) => ({
+  lead_id: "L-1",
+  source: "website",
+  contact_name: "Synthetic Person",
+  job_ref: null,
+  lifecycle_status: "untriaged",
+  record_version: 1,
+  created_at: { $case_time: "-PT2M" },
+  updated_at: { $case_time: "-PT2M" },
+  has_phone: true,
+  has_email: false,
+  consents: [],
+  jobs: ["J-1"],
+  ...overrides,
+});
+const leadFact = (overrides = {}) => ({ fact_id: "lead:L-1", kind: "lead", version: 1, trust: "owned", observed_at: "PT0M", data: leadData(overrides) });
+
 function makeCase(suite, n, overrides = {}) {
   return {
     id: `${ID}.${suite}.${String(n).padStart(3, "0")}`,
     title: "Synthetic web lead",
     tags: [],
     signal: { kind: "watch", source: "web_form", watch_id: "new_inbound", at: "PT0M", content: { text: "Call me at 780-555-0123 or a@example.invalid" } },
-    facts: [{ fact_id: "lead:L-1", kind: "lead", version: 1, trust: "owned", observed_at: "-PT2M", data: {} }],
+    facts: [leadFact()],
     attack: suite === "golden" ? null : { category: ["prompt_injection", "spam", "fake_buyer", "privacy_request"][n % 4], vector: "web_form" },
     expected: {
       decision: "propose",
@@ -296,6 +314,8 @@ test("a case clock names a season, a weekday, and a local time, and nothing else
 
 test("fact data and expected may carry case-relative date markers, and no other $-key appears in a case", () => {
   const golden = suiteFile("golden", 20, (cases) => {
+    // The markers go in a fact of no fixed shape, ahead of the lead.
+    for (const item of cases) item.facts.unshift({ fact_id: "window:W-1", kind: "window", version: 1, trust: "owned", observed_at: "-PT1M", data: {} });
     cases[0].facts[0].data = { effective_from: { $case_date: "-P7D" }, checked: [{ at: { $case_time: "-PT2H" } }] };
     cases[1].facts[0].data = { effective_from: { $case_date: "2026-01-01" } };
     cases[2].facts[0].data = { effective_from: { $case_date: "-P7D", note: "x" } };
@@ -624,6 +644,91 @@ test("the inbound channels match the Worker's policy", () => {
   assert.ok(list, "policy.ts declares INBOUND_CHANNELS");
   const worker = [...list.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual([...INBOUND_CHANNELS].sort(), worker);
+});
+
+test("a lead fact is the Worker's lead read model, and its consents live on it", () => {
+  const content = {
+    envelope_id: "ENV-1",
+    channel: "web_form",
+    brand: "ironwrap",
+    received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false },
+    has_phone: true,
+    has_email: false,
+    service: "gutters",
+    excerpt: "Gutters pulling away.",
+    form_fields: { address: null, scope: null, timing: null },
+  };
+  const inbound = (channel, overrides = {}) => ({ kind: "event", source: channel, watch_id: "new_inbound", at: "PT0M", subject: { aggregate: "lead", id: "L-1" }, content: { ...content, channel, ...overrides } });
+  const consent = (channel, overrides = {}) => ({ consent_id: `C-1-${channel}`, roof_job_id: "J-1", channel, purpose: "estimate_follow_up", status: "granted", jurisdiction: "CA-AB", consent_basis: "express", recorded_at: { $case_time: "-PT2M" }, ...overrides });
+  const otherLead = { ...leadFact({ lead_id: "L-2", jobs: ["J-2"] }), fact_id: "lead:L-2" };
+  const rows = [
+    [(item) => (item.facts[0].data.contact_email = "a@example.invalid"), /a lead's data is exactly the Worker's lead read model/],
+    [(item) => (item.facts[0].fact_id = "lead:L-9"), /a lead fact is lead:<lead_id>/],
+    [(item) => (item.facts[0].trust = "external_unverified"), /an owned fact with no fresh_until/],
+    [(item) => (item.facts[0].fresh_until = "PT24H"), /an owned fact with no fresh_until/],
+    [(item) => (item.facts[0].data.source = "email"), /a lead's source is one of website/],
+    [(item) => (item.facts[0].data.lifecycle_status = "new"), /a lead's lifecycle_status is one of/],
+    [(item) => (item.facts[0].data.record_version = 0), /record_version is a positive integer/],
+    [(item) => (item.facts[0].data.created_at = "-PT2M"), /created_at and updated_at are \{ "\$case_time": <duration> \} markers/],
+    [(item) => (item.facts[0].data.has_phone = false), /at least one is true/],
+    [(item) => (item.facts[0].data.jobs = []), /jobs are one to eight distinct job ids/],
+    [(item) => (item.facts[0].data.consents = [consent("phone", { purpose: "marketing" })]), /a consent is exactly \{ consent_id/],
+    [(item) => (item.facts[0].data.consents = [consent("phone", { roof_job_id: "J-9" })]), /consent C-1-phone is for one of the lead's jobs/],
+    [(item) => (item.facts[0].data.consents = [consent("phone"), consent("phone", { consent_id: "C-2" })]), /a lead holds one consent per channel/],
+    [(item) => (item.facts[0].data.consents = [consent("email")]), /consent C-1-email is on a channel the lead has \(has_email\)/],
+    [(item) => item.facts.push({ fact_id: "consent:C-1", kind: "consent", version: 1, trust: "owned", observed_at: "-PT2M", data: {} }), /consent:C-1 is a consent fact; the Worker has no consent object/],
+    [(item) => item.facts.push({ fact_id: "triage:L-1", kind: "triage", version: 1, trust: "owned", observed_at: "-PT2M", data: {} }), /triage:L-1 is an inquiry record.*tag the case pending_inquiry_record/],
+    [(item) => { item.signal = inbound("web_form"); item.facts[0].data.source = "manual"; }, /the lead a web_form envelope becomes has source website/],
+    [(item) => (item.signal = inbound("web_form", { has_email: true })), /the lead an envelope becomes has the signal's has_phone and has_email/],
+    [(item) => { item.signal = inbound("web_form"); item.facts[0].data.consents = [consent("phone")]; }, /a web_form intake records no consent/],
+    [(item) => { item.signal = inbound("walk_in"); item.facts[0].data.source = "manual"; item.facts[0].data.consents = [consent("phone")]; }, /a walk_in intake records only email consent/],
+    [(item) => { item.signal = inbound("web_form"); item.facts.push(otherLead); }, /lead:L-2: a new inquiry's run sees only the lead it becomes/],
+  ];
+  const passing = [
+    (item) => { item.signal = inbound("instant_estimate", { has_email: true }); Object.assign(item.facts[0].data, { has_email: true, consents: [consent("email"), consent("phone")] }); },
+    (item) => { item.signal = inbound("web_form"); item.facts.push(otherLead); item.tags = ["pending_record_access"]; },
+    (item) => { item.signal = { kind: "event", source: "email", watch_id: "new_inbound", at: "PT0M", content: { text: "Hi" } }; item.tags = ["pending_inbound_channel"]; Object.assign(item.facts[0].data, { source: "email", has_phone: false }); },
+    (item) => { item.facts.push({ fact_id: "triage:L-1", kind: "triage", version: 1, trust: "owned", observed_at: "-PT2M", data: {} }); item.tags = ["pending_inquiry_record"]; },
+  ];
+  const golden = suiteFile("golden", rows.length + passing.length, (cases) => {
+    [...rows.map(([mutate]) => mutate), ...passing].forEach((mutate, index) => mutate(cases[index]));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures;
+  rows.forEach(([, pattern], index) => {
+    const n = String(index + 1).padStart(3, "0");
+    assert.ok(failures.some((failure) => failure.includes(`.${n}: `) && pattern.test(failure)), `case ${n} should fail ${pattern}`);
+  });
+  passing.forEach((_, index) => {
+    const n = String(rows.length + index + 1).padStart(3, "0");
+    assert.deepEqual(failures.filter((failure) => failure.includes(`.${n}: `)), [], `case ${n} should pass`);
+  });
+});
+
+test("the lead and consent shapes match the Worker's read model, intake sources, and D1 checks", () => {
+  const readModels = readFileSync(join(here, "../../workers-bus/src/agents/read-models.ts"), "utf8");
+  const columns = (select) => select.split(",").map((part) => part.trim().split(/\s+AS\s+/i).at(-1).trim());
+  const leadSelect = readModels.match(/const lead: ObjectModel[\s\S]*?SELECT ([\s\S]*?)\s+FROM operating_leads/)?.[1];
+  assert.ok(leadSelect, "read-models.ts reads the lead from operating_leads");
+  assert.deepEqual([...LEAD_KEYS].sort(), [...columns(leadSelect), "consents", "jobs"].sort());
+  const consentSelect = readModels.match(/SELECT ([^`]*?)\s+FROM operating_consents/)?.[1];
+  assert.ok(consentSelect, "read-models.ts reads consents from operating_consents");
+  assert.deepEqual(CONSENT_KEYS, columns(consentSelect));
+  const core = readFileSync(join(here, "../../workers-bus/src/core.ts"), "utf8");
+  const sources = core.match(/ALLOWED_SOURCES = \[([^\]]*)\]/)?.[1];
+  assert.ok(sources, "core.ts declares ALLOWED_SOURCES");
+  assert.deepEqual([...LEAD_SOURCES].sort(), [...sources.matchAll(/"([a-z]+)"/g)].map((match) => match[1]).sort());
+  const migration = readFileSync(join(here, "../../workers-bus/migrations/0090_operating_core.sql"), "utf8");
+  const quoted = (list) => [...list.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]).sort();
+  const leads = migration.match(/CREATE TABLE IF NOT EXISTS operating_leads \(([\s\S]*?)\n\);/)?.[1] ?? "";
+  assert.deepEqual([...LEAD_STATUSES].sort(), quoted(leads.match(/lifecycle_status IN \(([^)]*)\)/)?.[1] ?? ""));
+  const consents = migration.match(/CREATE TABLE IF NOT EXISTS operating_consents \(([\s\S]*?)\n\);/)?.[1] ?? "";
+  for (const [column, values] of Object.entries(CONSENT_VALUES)) {
+    const check = consents.match(new RegExp(`${column} TEXT NOT NULL CHECK \\(${column} (?:IN \\(([^)]*)\\)|= ('[a-z_]+'))`));
+    assert.ok(check, `operating_consents checks ${column}`);
+    assert.deepEqual([...values].sort(), quoted(check[1] ?? check[2]), `operating_consents ${column}`);
+  }
 });
 
 test("structural mode without the contract still checks shape", () => {

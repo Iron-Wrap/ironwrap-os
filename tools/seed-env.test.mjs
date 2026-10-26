@@ -37,7 +37,7 @@ const config = loadWranglerConfig(wranglerConfigPath);
 test("loads the real wrangler.jsonc and derives production identifiers from it", () => {
   const prod = productionIdentifiers(config);
   assert.equal(prod.workerName, "ironwrap-bus");
-  assert.equal(prod.databaseId, "f0674848-13df-4422-9896-8ba2719663b8");
+  assert.equal(prod.databaseId, "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d");
   assert.equal(prod.routeHostname, "ironwrap-bus.ironwrapexteriors.com");
   assert.equal(prod.workersDevHostname, "ironwrap-bus.yellow-rain-7498.workers.dev");
 });

@@ -402,18 +402,29 @@ const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
 };
 
 /**
- * The delegation settings a person can set by hand, as the contract's delegation table shows them,
- * each with what it means once (gate c2: "Asks first" alone was terse).
+ * The owner's dial, the words screens show for a delegation setting (owner ruling); the contract
+ * settings stay internal.
+ */
+export const DIAL = {
+  off: "Off",
+  suggest: "Suggest",
+  approval: "Act with approval",
+  auto: "Auto with undo",
+  locked: "Locked",
+} as const;
+
+/**
+ * The delegation settings a person can set by hand, in the dial's words, each with what it means
+ * once (gate c2: the setting's name alone was terse).
  */
 const APPLIED_SETTING: Record<string, string> = {
-  asks_first: `${DELEGATION.asks_first.words}: it asks a person each time before it acts`,
-  within_limits: `${DELEGATION.within_limits.words}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
-  off: "Off: it does not do this at all, and people do it by hand",
-  shadow:
-    "Practice only: it runs practice rounds that change nothing, and people still do the real work",
+  asks_first: `${DIAL.approval}: it asks a person each time before it acts`,
+  within_limits: `${DIAL.auto}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
+  off: `${DIAL.off}: it does not do this at all, and people do it by hand`,
+  shadow: `${DIAL.suggest}: it runs practice rounds that change nothing, and people still do the real work`,
 };
 
-/** What is set now, in the words its screen shows (a role, or a delegation setting's "Shown as"). */
+/** What is set now, in the words its screen shows (a role, or a delegation setting on the dial). */
 function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "value">) {
   if (field === "role")
     return (appRoles as readonly string[]).includes(value)

@@ -159,7 +159,7 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
         value: "within_limits",
       }),
     ).toBe(
-      "Dana Whitford changed the AI estimator's quote sending by hand, so this draft is closed. The AI estimator's quote sending is now Acts within your limits: it acts without asking up to the limit set, and asks a person for anything over the limit.",
+      "Dana Whitford changed the AI estimator's quote sending by hand, so this draft is closed. The AI estimator's quote sending is now Auto with undo: it acts without asking up to the limit set, and asks a person for anything over the limit.",
     );
     expect(
       ["asks_first", "within_limits", "off", "shadow"].map((value) =>
@@ -167,10 +167,10 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       ),
     ).toEqual(
       [
-        "Asks first: it asks a person each time before it acts",
-        "Acts within your limits: it acts without asking up to the limit set, and asks a person for anything over the limit",
+        "Act with approval: it asks a person each time before it acts",
+        "Auto with undo: it acts without asking up to the limit set, and asks a person for anything over the limit",
         "Off: it does not do this at all, and people do it by hand",
-        "Practice only: it runs practice rounds that change nothing, and people still do the real work",
+        "Suggest: it runs practice rounds that change nothing, and people still do the real work",
       ].map(
         (words) =>
           `Dana Whitford changed the AI team setting by hand, so this draft is closed. The AI team setting is now ${words}.`,

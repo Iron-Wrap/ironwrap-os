@@ -11,6 +11,7 @@ import {
   CONSENT_KEYS,
   CONSENT_VALUES,
   INBOUND_CHANNELS,
+  INBOUND_ONLY_ACTIONS,
   LEAD_KEYS,
   LEAD_SOURCE_BY_CHANNEL,
   LEAD_SOURCES,
@@ -787,6 +788,47 @@ test("the lead and consent shapes match the Worker's read model, intake paths, a
     assert.ok(check, `operating_consents checks ${column}`);
     assert.deepEqual([...values].sort(), quoted(check[1] ?? check[2]).sort(), `operating_consents ${column}`);
   }
+});
+
+test("an inbound-only action is expected or allowed only on an inbound event about its lead", () => {
+  const content = {
+    envelope_id: "ENV-1", channel: "web_form", brand: "ironwrap", received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false }, has_phone: true, has_email: false,
+    service: "gutters", excerpt: "Gutters pulling away.", form_fields: { address: null, scope: null, timing: null },
+  };
+  const inbound = { kind: "event", source: "web_form", watch_id: "new_inbound", at: "PT0M", subject: { aggregate: "lead", id: "L-1" }, content };
+  const propose = (leadId) => ({ action_id: "lead_fact.propose", ...(leadId ? { args_must_include: { lead_id: leadId } } : {}) });
+  const allowlist = {
+    schema_version: "ironwrap.specialist-allowlist.v1",
+    specialist_id: ID,
+    catalog_sha256: CATALOG_SHA,
+    actions: [{ action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" }, { action_id: "lead_fact.propose", autonomy: "A1", purpose: "Propose" }],
+  };
+  const rows = [
+    [(item) => item.expected.actions.push(propose()), /lead_fact\.propose comes only from an inbound event about its lead/],
+    [(item) => (item.expected.optional_actions = ["lead_fact.propose"]), /lead_fact\.propose comes only from an inbound event about its lead/],
+    [(item) => { item.signal = { ...inbound, source: "email", content: { text: "Hi" }, subject: undefined }; item.tags = ["pending_inbound_channel"]; item.expected.actions.push(propose()); }, /lead_fact\.propose comes only from an inbound event about its lead/],
+    [(item) => { item.signal = inbound; item.expected.actions.push(propose("L-2")); }, /lead_fact\.propose names the signal's lead \(L-1\), not L-2/],
+  ];
+  const passing = [
+    (item) => { item.signal = inbound; item.expected.actions.push(propose("L-1")); },
+    (item) => { item.signal = inbound; item.expected.optional_actions = ["lead_fact.propose"]; },
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    [...rows.map(([mutate]) => mutate), ...passing].forEach((mutate, index) => mutate(cases[index]));
+    return cases;
+  });
+  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures;
+  const of = (n) => failures.filter((failure) => failure.includes(`.${String(n).padStart(3, "0")}: `));
+  rows.forEach(([, pattern], index) => assert.ok(of(index + 1).some((failure) => pattern.test(failure)), `case ${index + 1} fails ${pattern}`));
+  passing.forEach((_, index) => assert.deepEqual(of(rows.length + index + 1), [], `case ${rows.length + index + 1} passes`));
+});
+
+test("the inbound-only actions match the Worker's policy", () => {
+  const policy = readFileSync(join(here, "../../workers-bus/src/agents/policy.ts"), "utf8");
+  const list = policy.match(/INBOUND_ONLY[^=]*=\s*new Set\(\[([^\]]*)\]/)?.[1];
+  assert.ok(list, "policy.ts declares INBOUND_ONLY");
+  assert.deepEqual([...INBOUND_ONLY_ACTIONS].sort(), [...list.matchAll(/"([a-z_.]+)"/g)].map((match) => match[1]).sort());
 });
 
 test("every pack the lead check skips still holds an unaligned lead or consent fact", () => {

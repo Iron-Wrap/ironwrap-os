@@ -516,6 +516,23 @@ function checkInboundSignal(signal, label, fail) {
   if (signal.subject?.aggregate !== "lead") fail(`${label}: an inbound signal's subject is the lead it becomes ({ aggregate: "lead", id })`);
 }
 
+// Actions the Worker takes only from the inbound event a lead came from (policy.ts INBOUND_ONLY):
+// an event on a channel it takes in, for the lead that event is about. A case that expects or
+// allows one is such an event, and names that lead.
+export const INBOUND_ONLY_ACTIONS = new Set(["lead_fact.propose"]);
+function checkInboundOnly(item, expected, fail, label) {
+  const signal = item.signal ?? {};
+  const inbound = signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate === "lead";
+  const listed = [...objects(expected.actions).map((action) => action.action_id), ...(expected.optional_actions ?? [])];
+  for (const actionId of new Set(listed.filter((id) => INBOUND_ONLY_ACTIONS.has(id)))) {
+    if (!inbound) fail(`${label}: ${actionId} comes only from an inbound event about its lead (an event on ${[...INBOUND_CHANNELS].join(", ")} with a lead subject); the Worker stops it here (out_of_scope)`);
+  }
+  for (const action of objects(expected.actions).filter((entry) => INBOUND_ONLY_ACTIONS.has(entry.action_id))) {
+    const leadId = action.args_must_include?.lead_id;
+    if (inbound && leadId !== undefined && leadId !== signal.subject.id) fail(`${label}: ${action.action_id} names the signal's lead (${signal.subject.id}), not ${leadId}`);
+  }
+}
+
 // A lead, as the Worker's lead read model shows it (workers-bus/src/agents/read-models.ts `lead`,
 // over operating_leads and operating_consents in migration 0090): exactly these keys, read whole
 // as an owned fact with no freshness bound. Contact values, form fields, language, brand and
@@ -816,6 +833,7 @@ function checkCase(item, context) {
   }
   checkProducerExclusion(item, expected, fail, label);
   checkLeadFacts(item, id, fail, label);
+  checkInboundOnly(item, expected, fail, label);
   if (catalog) checkDelegable(item, expected, catalog, fail, label);
 }
 

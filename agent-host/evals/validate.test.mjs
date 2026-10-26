@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkContextTargets, loadRegistry, validate } from "./validate.mjs";
+import { INBOUND_CHANNELS, checkContextTargets, loadRegistry, validate } from "./validate.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const ID = "lead_concierge";
@@ -441,7 +441,7 @@ test("a watch signal may carry the Worker's firing content instead of text", () 
   assert.match(failures, /\.002: a watch firing's content\.watch_id is its signal's watch_id/);
   for (const n of ["003", "004"]) assert.match(failures, new RegExp(`\\.${n}: a watch firing's objects are at most 24 \\{ aggregate, id \\}`));
   assert.match(failures, /\.005: a watch firing's period_key is a calendar date; leave it out/);
-  for (const n of ["006", "007"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.content needs text or request, or a watch firing's digest and summary`));
+  for (const n of ["006", "007"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.content needs text or request, an inbound envelope's keys, or a watch firing's digest and summary`));
 });
 
 test("a delegation names a delegable action its specialist owns; a within-limits permit on a never-delegable one is a finding", () => {
@@ -480,6 +480,150 @@ test("a delegation names a delegable action its specialist owns; a within-limits
   assert.match(failures, /\.012: delegation record delegation\/lead_concierge:lead\.triage \(data\) names comms\.send, which is never delegable/);
   assert.match(failures, /\.013: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
   assert.match(failures, /\.014: digest previewable names lead\.unknown, which is not in the catalog/);
+});
+
+test("an inbound signal carries exactly the Worker's envelope keys, no actor, and its lead as subject", () => {
+  const content = {
+    envelope_id: "ENV-1",
+    channel: "web_form",
+    brand: "ironwrap",
+    received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false },
+    has_phone: true,
+    has_email: false,
+    service: "gutters",
+    excerpt: "Gutters pulling away at the back.",
+    form_fields: { address: "123 Example Street NW", scope: null, timing: null },
+  };
+  const inbound = (overrides = {}, signalOverrides = {}) => ({
+    kind: "event",
+    source: "web_form",
+    watch_id: "new_inbound",
+    at: "PT0M",
+    subject: { aggregate: "lead", id: "L-1" },
+    content: { ...content, ...overrides },
+    ...signalOverrides,
+  });
+  const signals = [
+    inbound(),
+    inbound({ channel: "email" }, { source: "email" }),
+    inbound({ received_via: "ironwrap.example.invalid/contact" }),
+    inbound({ sender: { customer_id: "CU-1", matched_on: "name", conflict: false } }),
+    inbound({ excerpt: "x".repeat(1001) }),
+    inbound({ form_fields: { address: null, timing: null } }),
+    inbound({}, { actor: { type: "external", role: null, ref: "channel:web", authenticated: false } }),
+    inbound({}, { subject: { aggregate: "job", id: "J-1" } }),
+    inbound({ text: "extra" }),
+    inbound({}, { subject: { id: "L-1" } }),
+    inbound({ brand: "other" }),
+    { kind: "event", source: "phone", watch_id: "new_inbound", at: "PT0M", content: { text: "Call back please." } },
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    signals.forEach((entry, index) => (cases[index].signal = entry));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: (an inbound signal|signal\.subject|signal\.content)/);
+  assert.match(failures, /\.002: an inbound signal's channel is one the Worker takes in/);
+  assert.match(failures, /\.003: an inbound signal's received_via is null/);
+  assert.match(failures, /\.004: an inbound signal's sender is \{ customer_id, matched_on/);
+  assert.match(failures, /\.005: an inbound signal's excerpt is text of at most 1000 characters/);
+  assert.match(failures, /\.006: an inbound signal's form_fields are \{ address, scope, timing \}/);
+  assert.match(failures, /\.007: an inbound signal has no actor/);
+  assert.match(failures, /\.008: an inbound signal's subject is the lead it becomes/);
+  assert.match(failures, /\.009: an inbound signal's content has exactly envelope_id/);
+  assert.match(failures, /\.010: signal\.subject is \{ aggregate, id \}/);
+  assert.match(failures, /\.011: an inbound signal's brand is ironwrap, iroof, or null/);
+  assert.match(failures, /\.012: an event on an inbound channel names the lead it becomes as its subject/);
+});
+
+test("each inbound-signal check fails on its own", () => {
+  const content = {
+    envelope_id: "ENV-1",
+    channel: "web_form",
+    brand: "ironwrap",
+    received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false },
+    has_phone: true,
+    has_email: false,
+    service: "gutters",
+    excerpt: "Gutters pulling away.",
+    form_fields: { address: null, scope: null, timing: null },
+  };
+  const base = { kind: "event", source: "web_form", watch_id: "new_inbound", at: "PT0M", subject: { aggregate: "lead", id: "L-1" } };
+  const rows = [
+    [{ ...base, source: "phone", content }, /channel is one the Worker takes in .* and is its source/],
+    [{ ...base, content: { ...content, has_phone: "yes" } }, /has_phone and has_email are booleans/],
+    [{ ...base, content: { ...content, sender: { ...content.sender, conflict: "no" } } }, /sender is \{ customer_id, matched_on/],
+    [{ ...base, content: { ...content, sender: { ...content.sender, extra: 1 } } }, /sender is \{ customer_id, matched_on/],
+    [{ ...base, content: { ...content, sender: { customer_id: "CU-1", matched_on: null, conflict: false } } }, /sender names a customer exactly when it says what matched/],
+    [{ ...base, content: { ...content, sender: { customer_id: "CU-1", matched_on: "email", conflict: true } } }, /a conflict names none/],
+    [{ ...base, content: { ...content, service: "x".repeat(201) } }, /service is text of at most 200 characters/],
+    [{ ...base, content: { ...content, form_fields: { address: "x".repeat(601), scope: null, timing: null } } }, /form_fields are \{ address, scope, timing \}/],
+    [{ ...base, content: { ...content, form_fields: { address: null, scope: "x".repeat(2001), timing: null } } }, /form_fields are \{ address, scope, timing \}/],
+    [{ ...base, content: { ...content, form_fields: { address: null, scope: null, timing: "x".repeat(601) } } }, /form_fields are \{ address, scope, timing \}/],
+    [{ ...base, content: { ...content, envelope_id: "" } }, /names its envelope_id/],
+    [{ ...base, subject: { aggregate: "lead", id: "" }, content }, /signal\.subject is \{ aggregate, id \}/],
+    [{ ...base, subject: null, content }, /signal\.subject is \{ aggregate, id \}/],
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    rows.forEach(([signal], index) => (cases[index].signal = signal));
+    cases[rows.length].signal = { kind: "event", source: "sms", watch_id: "new_inbound", at: "PT0M", content: { text: "Hi" } };
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures;
+  rows.forEach(([, pattern], index) => {
+    const n = String(index + 1).padStart(3, "0");
+    assert.ok(failures.some((failure) => failure.includes(`.${n}: `) && pattern.test(failure)), `case ${n} should fail ${pattern}`);
+  });
+  const n = String(rows.length + 1).padStart(3, "0");
+  assert.ok(!failures.some((failure) => failure.includes(`.${n}: `) && /subject/.test(failure)), "an event on a channel not taken in needs no subject");
+});
+
+test("a delegation names a delegable action its specialist owns; a within-limits permit on a never-delegable one is a finding", () => {
+  const record = (actionId, specialistId = ID) => ({ fact_id: `delegation/${specialistId}:${actionId}`, kind: "delegation", version: 1, trust: "owned", observed_at: "-PT1M", data: {} });
+  const permit = { fact_id: "receipt/RC-1", kind: "receipt", version: 1, trust: "owned", observed_at: "-PT1M", data: { action_id: "comms.send", permit: { kind: "within_limits", delegation_id: "dlg_1" } } };
+  const review = (key, actionId) => ({ kind: "watch", source: "scheduler", watch_id: "new_inbound", at: "PT0M", content: { watch_id: "new_inbound", objects: [], digest: { [key]: [{ specialist_id: ID, action_id: actionId }] }, summary: "1 pair" } });
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].facts.push(record("comms.send"));
+    cases[1].signal = review("previewable", "comms.send");
+    cases[2].expected.actions.push({ action_id: "delegation.propose_change", args_must_include: { specialist_id: ID, action_id: "comms.send", proposed: "within_limits" } });
+    cases[3].facts.push(permit);
+    cases[4].facts.push(permit);
+    cases[4].expected.actions.push({ action_id: "finding.raise" });
+    cases[5].facts.push(record("lead.triage"));
+    cases[6].facts.push(record("lead.triage", "estimator"));
+    cases[7].signal = review("delegation_candidates", "lead.triage");
+    cases[8].signal = review("awaiting_owner", "comms.send");
+    cases[9].expected.actions.push({ action_id: "delegation.propose_change", args_must_include: { specialist_id: ID, action_id: "lead.triage", proposed: "within_limits" } });
+    cases[10].facts.push({ ...permit, data: { ...permit.data, action_id: "lead.triage" } });
+    cases[11].facts.push({ ...record("lead.triage"), data: { specialist_id: ID, action_id: "comms.send" } });
+    cases[12].facts.push({ ...record("comms.send"), kind: "delegation_setting" });
+    cases[13].signal = review("previewable", "lead.unknown");
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.match(failures, /\.001: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
+  assert.match(failures, /\.002: digest previewable names comms\.send, which is never delegable/);
+  assert.match(failures, /\.003: delegation\.propose_change names comms\.send, which is never delegable/);
+  assert.match(failures, /\.004: receipt\/RC-1 holds a within-limits permit on comms\.send, which is never delegable; only a case that raises it as a finding may/);
+  assert.doesNotMatch(failures, /\.005: receipt\/RC-1 holds a within-limits permit/);
+  for (const n of ["006", "008"]) assert.doesNotMatch(failures, new RegExp(`\\.${n}: (delegation record|digest)`));
+  assert.match(failures, /\.007: delegation record delegation\/estimator:lead\.triage names lead\.triage for estimator, which does not own it/);
+  assert.match(failures, /\.009: digest awaiting_owner names comms\.send, which is never delegable/);
+  assert.doesNotMatch(failures, /\.010: delegation\.propose_change names/);
+  assert.doesNotMatch(failures, /\.011: receipt\/RC-1 holds a within-limits permit/);
+  assert.match(failures, /\.012: delegation record delegation\/lead_concierge:lead\.triage \(data\) names comms\.send, which is never delegable/);
+  assert.match(failures, /\.013: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
+  assert.match(failures, /\.014: digest previewable names lead\.unknown, which is not in the catalog/);
+});
+
+test("the inbound channels match the Worker's policy", () => {
+  const policy = readFileSync(join(here, "../../workers-bus/src/agents/policy.ts"), "utf8");
+  const list = policy.match(/INBOUND_CHANNELS[^=]*=\s*new Set\(\[([^\]]*)\]/)?.[1];
+  assert.ok(list, "policy.ts declares INBOUND_CHANNELS");
+  const worker = [...list.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]).sort();
+  assert.deepEqual([...INBOUND_CHANNELS].sort(), worker);
 });
 
 test("structural mode without the contract still checks shape", () => {

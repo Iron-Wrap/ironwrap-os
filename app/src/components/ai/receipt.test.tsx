@@ -747,7 +747,7 @@ describe("a people-only draft that left Needs you", () => {
     expect(within(card).getByText("Changed by hand · Yesterday 16:20")).toBeVisible();
     expect(
       within(card).getByText(
-        "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Production.",
+        "Dana Whitford changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Production.",
       ),
     ).toBeVisible();
     expect(card.textContent).not.toMatch(/this change|person_dana|production\b/);
@@ -755,6 +755,37 @@ describe("a people-only draft that left Needs you", () => {
     expect(within(card).queryByText("Checked")).toBeNull();
     expect(card.textContent).not.toMatch(/other system/);
     expect(within(card).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("says You when the person who changed it is the one reading", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      do_it_myself: {
+        surface: null,
+        context: { applied: { field: "role", value: "production", by: "person_dana" } },
+      },
+    };
+    const { unmount } = render(
+      <Receipt
+        receipt={changed}
+        display={{ ...closed, when: { text: "Today 09:30" }, viewer: "person_dana" }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("You")).toBeVisible();
+    expect(within(card).getByText("Done by you")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "You changed Grace Obi's role by hand today at 09:30, so this draft is closed. Grace Obi's role is now Production.",
+      ),
+    ).toBeVisible();
+    expect(card.textContent).not.toMatch(/Dana Whitford/);
+    // The initials stay the person's own.
+    expect(card.querySelector('[data-shape="circle"]')?.textContent).toBe("DW");
+    unmount();
+    // Someone else reading sees the name.
+    render(<Receipt receipt={changed} display={{ ...closed, viewer: "person_grace" }} />);
+    expect(screen.getByText("Done by Dana Whitford")).toBeVisible();
   });
 
   it("labels the time of the hand change when the time is machine-readable too", () => {
@@ -782,7 +813,7 @@ describe("a people-only draft that left Needs you", () => {
     expect(card.textContent).not.toMatch(/person_gone/);
     expect(
       within(card).getByText(
-        "A person changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales.",
+        "A person changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Sales.",
       ),
     ).toBeVisible();
   });

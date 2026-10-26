@@ -94,6 +94,8 @@ export interface ReceiptDisplay {
   since?: string;
   /** What a people-only draft changes, for that closing line: "Grace Obi's role". */
   record?: string;
+  /** The signed-in person's id: a step they did reads "You", never their own name. */
+  viewer?: string;
 }
 
 function Row({
@@ -165,12 +167,16 @@ export function Receipt({
   // A closed draft says what a person set by hand and who: their id resolves like any other.
   const applied = appliedOf(receipt.do_it_myself.context);
   const by = display.by ? (people[display.by] ?? display.by) : name(applied?.by);
+  // The person who acted is the one reading: the card says "You" (ruling: actor is viewer).
+  const byViewer = Boolean(display.viewer) && (display.by ?? applied?.by) === display.viewer;
   const words = receiptWords(receipt, {
     by,
     where,
     waitingFor: display.waitingFor,
     record: display.record,
     applied,
+    byViewer,
+    when: display.when.text,
   });
   const { state } = words;
   // A closed draft's note is what happened since. A done answer's note (VIEW_REFUSED) points at the
@@ -341,7 +347,9 @@ export function Receipt({
           <span className="inline-flex min-w-0 items-center gap-2.5">
             <PersonAvatar initials={by ? initialsOf({ name: by }) : undefined} decorative />
             <span className="grid min-w-0">
-              <span className={cn(type.body, "font-semibold")}>{by ?? "A person"}</span>
+              <span className={cn(type.body, "font-semibold")}>
+                {byViewer ? "You" : (by ?? "A person")}
+              </span>
               {/* A closed draft has two moments; its time is the hand change that closed it (gate c2).
                   Only applied_by_person reaches this branch closed: a replaced draft has the AI header. */}
               <span className={cn(type.caption, "text-text-secondary")}>

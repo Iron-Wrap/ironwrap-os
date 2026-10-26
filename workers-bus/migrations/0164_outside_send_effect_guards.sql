@@ -7,7 +7,11 @@
 -- `succeeded` or `reconciled` only with a matching person confirmation of the same tenant (0156).
 -- An executor's own report of a match or a reconcile is not evidence that the customer received
 -- anything. 0156 records confirmations for publish only, so an unknown withdraw stays unknown, or
--- goes to a person as an exception, until its creator brings an evidence path of its own.
+-- goes to a person as an exception, until its creator brings an evidence path of its own. The
+-- evidence guard is keyed on the action alone: the aggregate type is the claimer's own word, and
+-- every path that binds or records a proposal send (the 0093 permit binding, the publication
+-- record, the QA seed) already requires `proposal_publication`, so a send claimed under any other
+-- type is held all the same.
 -- `manual_exception` keeps its 0156 exit, and the 0156 apply trigger inserts the confirmation
 -- before it moves the effect, so the person path passes this guard.
 --
@@ -26,14 +30,19 @@
 --
 -- New triggers with distinct names only. No 0042, 0156 or 0161 trigger is re-created. Each uses
 -- CREATE TRIGGER IF NOT EXISTS and references only 0042 and 0156 objects, so this file applies the
--- same before or after 0161 and 0162. 0161's late-answer wait and this file's evidence guard both
--- refuse an unknown send's early move to "not executed"; which answers first is not part of either
--- contract.
+-- same before or after 0161. 0161's late-answer wait and this file's evidence guard both refuse an
+-- unknown send's early move to "not executed"; which answers first is not part of either contract.
 --
--- PR-A (0162) extends the evidence guard. It DROPs TRIGGER IF EXISTS and CREATEs it again under the
--- same name, carrying this clause unchanged. On a fresh database its CREATE runs first and this
--- file's IF NOT EXISTS skips; where this file ran first, its CREATE replaces this one. Both end with
--- the same trigger.
+-- PR-A (0167) re-creates two of these guards under the same names: the conflict guard and the
+-- evidence guard. It always runs after this file in filename order, so it DROPs TRIGGER IF EXISTS
+-- each one and CREATEs it again, replacing this file's version. Each re-created guard must carry
+-- this file's rules unchanged:
+--   - the widened origin rule: `not_delivered` is refused when the send's own latest move into
+--     `manual_exception` has origin IN ('reconciling', 'failed');
+--   - the withdraw clauses: `proposal.withdraw` stays beside `proposal.publish`, so an unknown
+--     withdrawal needs evidence too;
+--   - the action-keyed evidence guard: keyed on OLD.action alone, never on the aggregate type.
+-- Applying this file again after PR-A changes nothing: IF NOT EXISTS keeps PR-A's version.
 --
 -- Existing rows need no data step: every proposal send so far was created with the default retry
 -- limit of 0, and `proposal.withdraw` has no creator yet. `customer.email.send` and
@@ -57,7 +66,6 @@ CREATE TRIGGER IF NOT EXISTS external_effects_proposal_settle_evidence_guard
 BEFORE UPDATE OF state ON external_effects
 WHEN OLD.state = 'unknown' AND NEW.state IN ('succeeded', 'reconciled')
   AND OLD.action IN ('proposal.publish', 'proposal.withdraw')
-  AND OLD.aggregate_type = 'proposal_publication'
 BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_settle_evidence_missing')
     WHERE NOT EXISTS (

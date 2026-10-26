@@ -590,6 +590,35 @@ test("D1 keeps an unknown withdrawal unknown: no person's record exists for one 
   );
 });
 
+test("the evidence guard keys on the action: a proposal send claimed under another aggregate type needs a person's record too", async () => {
+  // The aggregate type is the claimer's own word. A stand-in on a synthetic Worker is claimed with
+  // no permit, so 0093 binds nothing; the guard must hold the send on its action alone.
+  const db = new D1();
+  const env = workerEnv(db, "synthetic");
+  for (const action of ["proposal.publish", "proposal.withdraw"]) {
+    const spoofed = envelope(`spoof:${action}`, { action, provider: QA_PROVIDER });
+    spoofed.effect.aggregate = { type: "communication", id: `communication:spoof:${action}`, version: 0 };
+    const claimed = await post(env, "claim", spoofed);
+    assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+    const effectId = claimed.body.effect.effect_id;
+    assert.equal(effectRow(db, effectId).aggregate_type, "communication");
+    const settled = await post(env, "settle", { effectId, settlement: { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" } });
+    assert.equal(settled.status, 200, JSON.stringify(settled.body));
+    assert.equal(stateOf(db, effectId), "unknown");
+    const before = effectRow(db, effectId);
+    for (const outcome of ["executed", "not_executed"]) {
+      assert.deepEqual(
+        await post(env, "reconcile", { effectId, outcome, evidence: { provider: "says so" } }),
+        { status: 409, body: { error: "effect_reconciliation_evidence_missing" } },
+        `${action} ${outcome}`,
+      );
+    }
+    assert.throws(() => moveTo(db, effectId, "succeeded"), /proposal_delivery_settle_evidence_missing/);
+    assert.throws(() => moveTo(db, effectId, "reconciled", afterLateAnswerWindow()), /proposal_delivery_settle_evidence_missing/);
+    assert.deepEqual(effectRow(db, effectId), before);
+  }
+});
+
 test("the evidence guard counts only a confirmation of the same tenant with the matching outcome", async () => {
   const db = new D1();
   const env = workerEnv(db);
@@ -754,6 +783,74 @@ test("a send whose provider answered is never recorded as not delivered, before 
   assert.equal((await confirm(silentDelivered, "delivered", "silent-delivered")).effectState, "succeeded");
 });
 
+test("the conflict rule reads the send's own latest exception, never a newer one of another send in the tenant", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const afterWindow = () => new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
+  const confirm = (effectId: string, key: string) =>
+    recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT,
+      effectId,
+      outcome: "not_delivered",
+      note: "Checked with the customer by phone.",
+      actorUserId: USERS.ops,
+      actorRole: "ops",
+      idempotencyKey: key,
+      now: afterWindow(),
+    });
+  const insert = (effectId: string, id: string) => {
+    const effect = effectRow(db, effectId);
+    db.raw.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, 'not_delivered', 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+    ).run(
+      `delivery-confirmation:${id}`, TENANT, effectId, effect.aggregate_id, effect.intent_id, USERS.ops,
+      sha256(`${id}:key`), sha256(`${id}:request`), afterWindow(),
+    );
+  };
+  const latestCause = (effectId: string) =>
+    (db.raw.prepare(`SELECT from_state FROM external_effect_events
+      WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`).get(effectId) as { from_state: string }).from_state;
+  const tenantLatestCause = () =>
+    (db.raw.prepare(`SELECT from_state FROM external_effect_events
+      WHERE tenant_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`).get(TENANT) as { from_state: string }).from_state;
+  /** A provider that never answered: unknown, then an inconclusive check made it an exception. */
+  const silentException = async (id: string) => {
+    const lost = await busSend(env, id, "lost");
+    await reconcileExternalEffect(env, lost.effect.effect_id, { outcome: "inconclusive", evidence: { provider: "no answer" } });
+    return lost.effect.effect_id;
+  };
+
+  // Older: a send whose readback conflicted. Newer: another send's silent exception in the tenant.
+  const conflicted = (await busSend(env, "scope:conflicted", "conflict")).effect.effect_id;
+  const silent = await silentException("scope:silent");
+  assert.deepEqual([stateOf(db, conflicted), stateOf(db, silent)], ["manual_exception", "manual_exception"]);
+  assert.deepEqual([latestCause(conflicted), latestCause(silent), tenantLatestCause()], ["reconciling", "unknown", "unknown"]);
+  // The conflicted send's own cause decides, in D1 and in the Worker, past the late-answer window.
+  assert.throws(() => insert(conflicted, "scope-direct"), /proposal_delivery_confirmation_conflict_needs_provider_evidence/);
+  await assert.rejects(confirm(conflicted, "scope-worker"), {
+    code: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+    status: 409,
+    detail: { delivery_state: "manual_exception" },
+  });
+  assert.equal(stateOf(db, conflicted), "manual_exception");
+  assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_confirmations WHERE effect_id = ?", conflicted), 0);
+
+  // The other way round: a newer conflict elsewhere does not take the silent send's person path.
+  const conflictedLater = (await busSend(env, "scope:conflicted-later", "conflict")).effect.effect_id;
+  assert.equal(stateOf(db, conflictedLater), "manual_exception");
+  assert.equal(tenantLatestCause(), "reconciling");
+  insert(silent, "scope-silent-direct");
+  assert.equal(stateOf(db, silent), "reconciled");
+  const silentAgain = await silentException("scope:silent-again");
+  const conflictedLast = (await busSend(env, "scope:conflicted-last", "conflict")).effect.effect_id;
+  assert.equal(stateOf(db, conflictedLast), "manual_exception");
+  assert.equal(tenantLatestCause(), "reconciling");
+  assert.equal((await confirm(silentAgain, "scope-silent-worker")).effectState, "reconciled");
+});
+
 test("other effects reconcile from unknown as before", async () => {
   const db = new D1();
   const env = workerEnv(db, "business");
@@ -810,13 +907,18 @@ test("0164 adds four named guards that reference only 0042 and 0156 objects, and
   assert.deepEqual(guards(), applied);
   assert.equal(triggers(), total);
 
-  // A later migration that already created the evidence guard under its name (PR-A's 0162 on a
-  // fresh database, where filename order runs it first) keeps its own version.
+  // A later migration that re-creates the conflict and evidence guards under their names (PR-A's
+  // 0167, which always runs after this file) keeps its own versions if this file is applied again.
   db.raw.exec(`DROP TRIGGER external_effects_proposal_settle_evidence_guard;
     CREATE TRIGGER external_effects_proposal_settle_evidence_guard
     BEFORE UPDATE OF state ON external_effects
     WHEN OLD.state = 'unknown' AND NEW.state IN ('succeeded', 'reconciled')
-    BEGIN SELECT RAISE(ABORT, 'proposal_delivery_settle_evidence_missing'); END;`);
+    BEGIN SELECT RAISE(ABORT, 'proposal_delivery_settle_evidence_missing'); END;
+    DROP TRIGGER proposal_delivery_confirmations_conflict_guard;
+    CREATE TRIGGER proposal_delivery_confirmations_conflict_guard
+    BEFORE INSERT ON proposal_delivery_confirmations
+    WHEN NEW.outcome = 'not_delivered'
+    BEGIN SELECT RAISE(ABORT, 'proposal_delivery_confirmation_conflict_needs_provider_evidence'); END;`);
   const extended = guards();
   db.raw.exec(migration);
   assert.deepEqual(guards(), extended);

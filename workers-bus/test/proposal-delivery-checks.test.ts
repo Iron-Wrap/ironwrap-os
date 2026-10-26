@@ -1045,10 +1045,8 @@ test("the delivery read is the sales set's, for a revision that exists", async (
 test("a send left unknown for T opens one owner-visible exception, which a person's record resolves", async () => {
   const db = new D1();
   const env = workerEnv(db);
-  // Neither a withdrawal, a publish bound to another aggregate, another kind of send, nor a send that
-  // settled is escalated here.
+  // Neither a withdrawal, another kind of send, nor a send that settled is escalated here.
   await send(env, "sweep:withdraw", "lost", { action: "proposal.withdraw" });
-  await send(env, "sweep:misbound", "lost", { aggregateType: "communication" });
   await send(env, "sweep:other", "lost", { action: "mcp.test_write", aggregateType: "communication" });
   await send(env, "sweep:refused", "refused");
   const effectId = await send(env, "sweep:lost", "lost");
@@ -1079,6 +1077,27 @@ test("a send left unknown for T opens one owner-visible exception, which a perso
   });
   assert.equal(count(db, "SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'", effectId), 0);
   assert.deepEqual(await escalateStaleProposalDeliveries(env, at(PROPOSAL_DELIVERY_ESCALATION_MS * 3)), { opened: 0 });
+});
+
+test("a stuck publish claimed under another aggregate type is escalated all the same", async () => {
+  // The aggregate type is the claimer's own word; the sweep, like 0164's evidence guard, keys on the
+  // action. The check route still answers 404 for such a send: there is no proposal publication to
+  // check delivery of.
+  const db = new D1();
+  const env = workerEnv(db);
+  const effectId = await send(env, "sweep:misbound", "lost", { aggregateType: "communication" });
+  assert.equal(effectRow(db, effectId).aggregate_type, "communication");
+  assert.deepEqual(await escalateStaleProposalDeliveries(env, new Date(Date.now() + PROPOSAL_DELIVERY_ESCALATION_MS)), { opened: 1 });
+  assert.equal(
+    count(db, "SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND reason_code = ? AND status = 'open'",
+      effectId, PROPOSAL_DELIVERY_STALE_REASON),
+    1,
+  );
+  const ops = await person(db, env, "ops");
+  assert.deepEqual(
+    await post(env, ops, CHECK_PATH, { external_effect_id: effectId }, "delivery-check-misbound-0001"),
+    { status: 404, body: { error: "proposal_delivery_effect_not_found" } },
+  );
 });
 
 test("a send already escalated once is never escalated again, open or resolved", async () => {

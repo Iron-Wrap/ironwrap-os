@@ -666,7 +666,9 @@ async function livePublication(
 /**
  * The `*\/5` sweep: a proposal send unknown for T since its attempt ended, with nobody's record
  * (an unknown send has none: a confirmation moves it, and a finding needs a settled send), opens one
- * owner-visible effect exception. A send is escalated once, ever: 0156 resolves an exception only
+ * owner-visible effect exception. It is keyed on the action alone, as 0164's evidence guard is: the
+ * aggregate type is the claimer's own word, so a stuck publish claimed under another type is
+ * escalated too, never skipped. A send is escalated once, ever: 0156 resolves an exception only
  * while no resolved one of the same reason exists, so a second one could never be resolved. A
  * person's 0156 record resolves it.
  */
@@ -683,7 +685,6 @@ export async function escalateStaleProposalDeliveries(
        LEFT JOIN external_effect_attempts attempt
          ON attempt.effect_id = effect.effect_id AND attempt.attempt_number = effect.attempt_count
       WHERE effect.state = 'unknown' AND effect.action = 'proposal.publish'
-        AND effect.aggregate_type = 'proposal_publication'
         AND julianday(COALESCE(attempt.ended_at, effect.updated_at)) <= julianday(?)
         AND NOT EXISTS (
           SELECT 1 FROM external_effect_exceptions escalated

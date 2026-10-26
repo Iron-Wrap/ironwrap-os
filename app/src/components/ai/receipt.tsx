@@ -167,8 +167,12 @@ export function Receipt({
   // A closed draft says what a person set by hand and who: their id resolves like any other.
   const applied = appliedOf(receipt.do_it_myself.context);
   const by = display.by ? (people[display.by] ?? display.by) : name(applied?.by);
-  // The person who acted is the one reading: the card says "You" (ruling: actor is viewer).
-  const byViewer = Boolean(display.viewer) && (display.by ?? applied?.by) === display.viewer;
+  // The person who acted is the one reading, by id or by the name `by` may already be: the card
+  // says "You" (gate c2, C2-D4).
+  const actor = display.by || applied?.by;
+  const byViewer =
+    Boolean(display.viewer) &&
+    (actor === display.viewer || (actor !== undefined && actor === name(display.viewer)));
   const words = receiptWords(receipt, {
     by,
     where,
@@ -191,7 +195,9 @@ export function Receipt({
   );
 
   const approver = receipt.permit.approved_by
-    ? (name(receipt.permit.approved_by) ?? "a person")
+    ? receipt.permit.approved_by === display.viewer
+      ? "you"
+      : (name(receipt.permit.approved_by) ?? "a person")
     : undefined;
   // A closed people-only draft's read-back names the record a person changed or the newer draft,
   // not a check in an outside system; its note says what happened, so it has no Checked line.

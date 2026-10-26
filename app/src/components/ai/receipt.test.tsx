@@ -788,6 +788,52 @@ describe("a people-only draft that left Needs you", () => {
     expect(screen.getByText("Done by Dana Whitford")).toBeVisible();
   });
 
+  it("says You when the screen names the person who acted by name, and you for an approval", () => {
+    const { unmount } = render(
+      <Receipt
+        receipt={draft("applied_by_person")}
+        display={{ ...closed, by: "Dana Whitford", viewer: "person_dana" }}
+      />,
+    );
+    expect(screen.getByText("Done by you")).toBeVisible();
+    unmount();
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, approved_by: "person_dana" },
+          readback: null,
+        })}
+        display={{ ...display, people: { person_dana: "Dana Whitford" }, viewer: "person_dana" }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText(/Approved by you/)).toBeVisible();
+    expect(card.textContent).not.toMatch(/Dana Whitford/);
+  });
+
+  it("says you on a history row and item the viewer did", () => {
+    render(
+      <>
+        <ReceiptRow
+          state="done_by_person"
+          by={{ name: "Dana Whitford", isViewer: true }}
+          summary="Crew booked"
+        />
+        <ol>
+          <TimelineItem
+            actor="person"
+            state="done_by_person"
+            by={{ name: "Dana Whitford", isViewer: true }}
+            when={{ text: "Today 09:30" }}
+            what="Booked the crew"
+          />
+        </ol>
+      </>,
+    );
+    expect(screen.getAllByText("Done by you")).toHaveLength(2);
+    expect(screen.queryByText("Done by Dana Whitford")).toBeNull();
+  });
+
   it("labels the time of the hand change when the time is machine-readable too", () => {
     render(
       <Receipt

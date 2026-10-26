@@ -237,6 +237,8 @@ export interface Person {
   name: string;
   /** Two letters for the circle; taken from the name when absent. */
   initials?: string;
+  /** The signed-in person: their own step reads "you", never their name (gate c2, C2-D4). */
+  isViewer?: boolean;
 }
 
 export function initialsOf({ name, initials }: Person): string {
@@ -425,12 +427,14 @@ function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "va
  * "on Mon 19 Oct at 14:05". A time it cannot place ("Not known yet") reads as nothing.
  */
 export function timeInSentence(when: string): string | undefined {
-  const match = /^(.+) (\d{1,2}:\d{2}(?: [ap]\.m\.)?)$/.exec(when.trim());
+  // Intl may space "p.m." with a no-break space; \s takes it.
+  const match = /^(.+?),?\s(\d{1,2}:\d{2}(?:\s[ap]\.m\.)?)$/.exec(when.trim());
   if (!match) return undefined;
   const [, day, time] = match as unknown as [string, string, string];
-  return /^(Today|Yesterday|Tomorrow|In \d+ days|\d+ days ago)$/.test(day)
-    ? `${day.charAt(0).toLowerCase()}${day.slice(1)} at ${time}`
-    : `on ${day.replace(/,$/, "")} at ${time}`;
+  if (/^(Today|Yesterday|Tomorrow|In \d+ days|\d+ days ago)$/.test(day))
+    return `${day.charAt(0).toLowerCase()}${day.slice(1)} at ${time}`;
+  // A weekday, with or without its date; anything else it does not guess at.
+  return /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/.test(day) ? `on ${day} at ${time}` : undefined;
 }
 
 /**

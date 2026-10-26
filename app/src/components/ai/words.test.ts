@@ -208,6 +208,23 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       receiptWords(closed("failed", "done_by_person"), { by: "Dana Whitford", byViewer: true })
         .words,
     ).toBe("Done by you");
+    expect(
+      receiptWords(closed("failed", "done_by_person"), {
+        by: "Dana Whitford",
+        byViewer: true,
+        waitingFor: "the phone",
+      }).words,
+    ).toBe("Answered by you · waiting for the phone");
+    // With no value to name, the earlier line still says "You".
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        byViewer: true,
+        record: "Grace Obi's role",
+      }).note,
+    ).toBe(
+      "You already made this change to Grace Obi's role, so this draft is closed. The change stays in place, and nothing is left to do.",
+    );
     // A time it cannot place leaves the line without one.
     expect(
       appliedByPersonNote(
@@ -243,8 +260,13 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       "on Thu at 07:00",
       "9 days ago at 14:00",
     ]);
+    expect(
+      ["Tomorrow 07:00", "In 9 days 07:00", "Today\u202f6:26\u00a0p.m."].map(timeInSentence),
+    ).toEqual(["tomorrow at 07:00", "in 9 days at 07:00", "today at 6:26\u00a0p.m."]);
+    // A time it cannot place, or a day it does not know, it leaves out rather than guess.
     expect(timeInSentence("Not known yet")).toBeUndefined();
     expect(timeInSentence("")).toBeUndefined();
+    expect(timeInSentence("Around 14:05")).toBeUndefined();
   });
 
   it("reads only a well-formed applied record from a closed draft's context", () => {

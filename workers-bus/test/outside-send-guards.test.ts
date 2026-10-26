@@ -475,6 +475,11 @@ test("D1 never moves a proposal send to retry; an email send still retries after
   assert.equal(stateOf(db, reconciledSend.effect.effect_id), "reconciled");
   assert.throws(() => moveTo(db, reconciledSend.effect.effect_id, "retry"), /outside_send_retry_forbidden/);
 
+  // A withdrawal is a proposal send too.
+  const withdrawFailed = await busSend(env, "retry:withdraw", "refused", { action: "proposal.withdraw" });
+  assert.equal(withdrawFailed.effect.state, "failed");
+  assert.throws(() => moveTo(db, withdrawFailed.effect.effect_id, "retry"), /outside_send_retry_forbidden/);
+
   // The runtime's own retry reaches the same rule once its attempt count would allow one: here a
   // send whose preconditions failed before any attempt.
   const { effect, authority } = envelope("retry:preconditions");
@@ -551,6 +556,71 @@ test("D1 keeps an unknown proposal send unknown until a person records what they
   assert.equal(inconclusive.state, "manual_exception");
 });
 
+test("D1 keeps an unknown withdrawal unknown: no person's record exists for one yet", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const lost = await busSend(env, "withdraw:lost", "lost", { action: "proposal.withdraw" });
+  const effectId = lost.effect.effect_id;
+  assert.equal(lost.effect.state, "unknown");
+  assert.throws(() => moveTo(db, effectId, "succeeded"), /proposal_delivery_settle_evidence_missing/);
+  assert.throws(() => moveTo(db, effectId, "reconciled", afterLateAnswerWindow()), /proposal_delivery_settle_evidence_missing/);
+  for (const outcome of ["executed", "not_executed"] as const) {
+    await assert.rejects(
+      reconcileExternalEffect(env, effectId, { outcome, evidence: { provider: "says so" }, now: afterLateAnswerWindow() }),
+      /proposal_delivery_settle_evidence_missing/,
+    );
+  }
+  // 0156 takes a confirmation for a publish only, so nothing settles an unknown withdrawal until its
+  // creator brings an evidence path of its own.
+  const effect = effectRow(db, effectId);
+  assert.throws(
+    () => db.raw.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES ('delivery-confirmation:withdraw-0001', ?, ?, ?, ?, 'delivered', 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+    ).run(TENANT, effectId, effect.aggregate_id, effect.intent_id, USERS.ops, sha256("withdraw:key"), sha256("withdraw:request"), new Date().toISOString()),
+    /proposal_delivery_confirmation_effect_invalid/,
+  );
+  assert.equal(stateOf(db, effectId), "unknown");
+  // A person still gets it, as an exception.
+  assert.equal(
+    (await reconcileExternalEffect(env, effectId, { outcome: "inconclusive", evidence: { provider: "no answer" } })).state,
+    "manual_exception",
+  );
+});
+
+test("the evidence guard counts only a confirmation of the same tenant with the matching outcome", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  // 0156 refuses such rows and moves the send itself on insert. Both of its triggers are dropped
+  // here, so the rows sit beside an unknown send and only this guard decides.
+  db.raw.exec(`DROP TRIGGER proposal_delivery_confirmations_validate_insert;
+    DROP TRIGGER proposal_delivery_confirmations_apply;`);
+  const lost = await busSend(env, "evidence:rows", "lost");
+  const effectId = lost.effect.effect_id;
+  const effect = effectRow(db, effectId);
+  const row = (id: string, tenantId: string, outcome: "delivered" | "not_delivered") =>
+    db.raw.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'Written past 0156', ?, 'ops', ?, ?, ?)`,
+    ).run(
+      `delivery-confirmation:${id}`, tenantId, effectId, effect.aggregate_id, effect.intent_id, outcome, USERS.ops,
+      sha256(`${id}:key`), sha256(`${id}:request`), new Date().toISOString(),
+    );
+  // Another tenant's "delivered" does not settle this tenant's send.
+  row("rows-other-tenant", "other-tenant", "delivered");
+  assert.throws(() => moveTo(db, effectId, "succeeded"), /proposal_delivery_settle_evidence_missing/);
+  // A "not delivered" does not make it delivered; it makes it not executed, once the window is over.
+  row("rows-not-delivered", TENANT, "not_delivered");
+  assert.throws(() => moveTo(db, effectId, "succeeded"), /proposal_delivery_settle_evidence_missing/);
+  assert.equal(stateOf(db, effectId), "unknown");
+  moveTo(db, effectId, "reconciled", afterLateAnswerWindow());
+  assert.equal(stateOf(db, effectId), "reconciled");
+});
+
 test("a person's record still settles an unknown or conflicting send, with its audit row", async () => {
   const db = new D1();
   const env = workerEnv(db);
@@ -589,7 +659,7 @@ test("a person's record still settles an unknown or conflicting send, with its a
   assert.equal(audits("delivered"), 2);
 });
 
-test("a conflicting readback is never recorded as not delivered, before or after the late-answer window", async () => {
+test("a send whose provider answered is never recorded as not delivered, before or after the late-answer window", async () => {
   const db = new D1();
   const env = workerEnv(db);
   const afterWindow = () => new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
@@ -620,36 +690,56 @@ test("a conflicting readback is never recorded as not delivered, before or after
   const confirmations = (effectId: string) =>
     count(db, "SELECT count(*) AS n FROM proposal_delivery_confirmations WHERE effect_id = ?", effectId);
 
-  // The provider answered, but its readback conflicts: reconciling -> manual_exception.
-  const conflict = await busSend(env, "readback:conflict", "conflict");
-  const conflictId = conflict.effect.effect_id;
-  assert.equal(conflict.effect.state, "manual_exception");
-  assert.equal(count(db, `SELECT count(*) AS n FROM external_effect_events
-    WHERE effect_id = ? AND from_state = 'reconciling' AND to_state = 'manual_exception'`, conflictId), 1);
-  for (const [label, now] of [["before", undefined], ["after", afterWindow()]] as const) {
+  // Two ways a provider answers and the send still ends up an exception:
+  // - reconciling -> manual_exception: it answered, but its readback conflicts;
+  // - failed -> manual_exception: it refused the send, then a check says the send ran.
+  const answered = {
+    reconciling: async (id: string) => (await busSend(env, id, "conflict")).effect.effect_id,
+    failed: async (id: string) => {
+      const refused = await busSend(env, id, "refused");
+      assert.equal(refused.effect.state, "failed");
+      const contradicted = await reconcileExternalEffect(env, refused.effect.effect_id, {
+        outcome: "executed",
+        evidence: { provider: "found the message after all" },
+      });
+      assert.equal(contradicted.result_code, "effect_reconciliation_conflicts_with_failure");
+      return refused.effect.effect_id;
+    },
+  };
+  for (const [origin, make] of Object.entries(answered)) {
+    const effectId = await make(`answered:${origin}`);
+    assert.equal(stateOf(db, effectId), "manual_exception");
+    assert.equal(count(db, `SELECT count(*) AS n FROM external_effect_events
+      WHERE effect_id = ? AND from_state = ? AND to_state = 'manual_exception'`, effectId, origin), 1);
+    for (const [label, now] of [["before", undefined], ["after", afterWindow()]] as const) {
+      await assert.rejects(
+        confirm(effectId, "not_delivered", `${origin}-${label}`, now),
+        {
+          code: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+          status: 409,
+          detail: { delivery_state: "manual_exception" },
+        },
+        `the Worker refuses ${origin} ${label} the window`,
+      );
+      assert.throws(
+        () => insert(effectId, `${origin}-direct-${label}`, now ?? new Date().toISOString()),
+        /proposal_delivery_confirmation_conflict_needs_provider_evidence/,
+        `D1 refuses ${origin} ${label} the window`,
+      );
+    }
+    assert.equal(stateOf(db, effectId), "manual_exception");
+    assert.equal(confirmations(effectId), 0);
+    // So it keeps blocking a second send of the same revision.
+    const second = envelope(`answered:${origin}`);
+    second.effect.effectId = `effect:outside-send:answered:${origin}:second`;
+    second.effect.idempotencyKey = `outside-send:answered:${origin}:second`;
     await assert.rejects(
-      confirm(conflictId, "not_delivered", `conflict-${label}`, now),
-      { code: "proposal_delivery_confirmation_conflict_needs_provider_evidence", status: 409 },
-      `the Worker refuses ${label} the window`,
+      proposeExternalEffect(env, second.effect as ExternalEffectRequest),
+      { code: "effect_proposal_delivery_unconfirmed" },
     );
-    assert.throws(
-      () => insert(conflictId, `conflict-direct-${label}`, now ?? new Date().toISOString()),
-      /proposal_delivery_confirmation_conflict_needs_provider_evidence/,
-      `D1 refuses ${label} the window`,
-    );
+    // "Delivered" stays open.
+    assert.equal((await confirm(effectId, "delivered", `${origin}-delivered`)).effectState, "succeeded");
   }
-  assert.equal(stateOf(db, conflictId), "manual_exception");
-  assert.equal(confirmations(conflictId), 0);
-  // So it keeps blocking a second send of the same revision.
-  const second = envelope("readback:conflict");
-  second.effect.effectId = "effect:outside-send:readback:conflict:second";
-  second.effect.idempotencyKey = "outside-send:readback:conflict:second";
-  await assert.rejects(
-    proposeExternalEffect(env, second.effect as ExternalEffectRequest),
-    { code: "effect_proposal_delivery_unconfirmed" },
-  );
-  // "Delivered" stays open on a conflict.
-  assert.equal((await confirm(conflictId, "delivered", "conflict-delivered")).effectState, "succeeded");
 
   // A provider that never answered: unknown, then an inconclusive check made it an exception.
   const silentException = async (id: string) => {

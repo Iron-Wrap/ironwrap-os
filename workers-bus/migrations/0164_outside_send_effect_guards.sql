@@ -3,20 +3,26 @@
 --
 -- A proposal send runs once. Its retry limit is 0 from the start, and it never enters `retry`: a
 -- second attempt at the same revision is a new effect, which the 0156 single-flight guard admits
--- only once the last send is settled. An `unknown` proposal send moves to `succeeded` or
--- `reconciled` only with a matching person confirmation (0156). An executor's own report of a
--- match or a reconcile is not evidence that the customer received anything. `manual_exception`
--- keeps its 0156 exit, and the 0156 apply trigger inserts the confirmation before it moves the
--- effect, so the person path passes this guard.
+-- only once the last send is settled. An `unknown` proposal send (publish or withdraw) moves to
+-- `succeeded` or `reconciled` only with a matching person confirmation of the same tenant (0156).
+-- An executor's own report of a match or a reconcile is not evidence that the customer received
+-- anything. 0156 records confirmations for publish only, so an unknown withdraw stays unknown, or
+-- goes to a person as an exception, until its creator brings an evidence path of its own.
+-- `manual_exception` keeps its 0156 exit, and the 0156 apply trigger inserts the confirmation
+-- before it moves the effect, so the person path passes this guard.
 --
--- A send whose readback conflicted went straight from `reconciling` to `manual_exception` (its
--- latest move into the exception, the same event 0161's late-answer wait reads): the provider
--- answered, so it did something. A person may record that the customer has it (`delivered`), but
--- never `not_delivered`, which would make the send "not executed" and open the way to a second
--- send. That needs provider evidence; until then the send stays an exception. A send whose latest
--- move came from `unknown` (a provider that never answered) keeps the 0156 person path, after
--- 0161's wait. This guard runs on the confirmation insert, before 0156's apply trigger moves the
--- effect and before 0161's wait is read, so the refusal is this guard's at any time.
+-- The conflict rule. A person never records `not_delivered` for a send whose provider answered.
+-- That is a send whose latest move into `manual_exception` (the same event 0161's late-answer wait
+-- reads) came from:
+--   - `reconciling`: the provider answered and its readback conflicted; or
+--   - `failed`: the provider refused it, yet a later check says it ran or cannot tell
+--     (`effect_reconciliation_conflicts_with_failure`, or an inconclusive check of a failed send).
+-- "Not delivered" would make such a send "not executed" and open the way to a second send. That
+-- needs provider evidence; until then the send stays an exception. A person may still record that
+-- the customer has it (`delivered`). A send whose latest move came from `unknown` (a provider that
+-- never answered) keeps the 0156 person path, after 0161's wait. This guard runs on the
+-- confirmation insert, before 0156's apply trigger moves the effect and before 0161's wait is
+-- read, so the refusal is this guard's at any time.
 --
 -- New triggers with distinct names only. No 0042, 0156 or 0161 trigger is re-created. Each uses
 -- CREATE TRIGGER IF NOT EXISTS and references only 0042 and 0156 objects, so this file applies the
@@ -50,7 +56,8 @@ END;
 CREATE TRIGGER IF NOT EXISTS external_effects_proposal_settle_evidence_guard
 BEFORE UPDATE OF state ON external_effects
 WHEN OLD.state = 'unknown' AND NEW.state IN ('succeeded', 'reconciled')
-  AND OLD.action = 'proposal.publish' AND OLD.aggregate_type = 'proposal_publication'
+  AND OLD.action IN ('proposal.publish', 'proposal.withdraw')
+  AND OLD.aggregate_type = 'proposal_publication'
 BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_settle_evidence_missing')
     WHERE NOT EXISTS (
@@ -71,5 +78,5 @@ BEGIN
       SELECT event.from_state FROM external_effect_events event
        WHERE event.effect_id = NEW.effect_id AND event.to_state = 'manual_exception'
        ORDER BY event.event_seq DESC LIMIT 1
-    ) = 'reconciling';
+    ) IN ('reconciling', 'failed');
 END;

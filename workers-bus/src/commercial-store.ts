@@ -402,10 +402,10 @@ export async function recordProposalDeliveryConfirmation(
     });
   }
   // A send whose provider answered (its readback conflicted, or it refused the send yet a later
-  // check says otherwise) did something: "not delivered" would make it "not executed" and open the
-  // way to a second send. That needs provider evidence, never a person's word: a cited complete-scan
-  // "not found" made after the send's latest move into the exception. D1 refuses it as well (0164,
-  // 0167). "Delivered" stays open.
+  // check says it ran or cannot tell) did something: "not delivered" would make it "not executed"
+  // and open the way to a second send. That needs provider evidence, never a person's word: a cited
+  // complete-scan "not found" made after the send's latest move into the exception. D1 refuses it as
+  // well (0164, 0167). "Delivered" stays open. Only this send's own events decide.
   if (input.outcome === "not_delivered" && effect.state === "manual_exception") {
     // The latest move into the exception says why it is one, as 0161's late-answer wait reads it.
     const cause = await env.DB.prepare(

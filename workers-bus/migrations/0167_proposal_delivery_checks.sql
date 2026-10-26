@@ -16,11 +16,11 @@
 -- account holder in that role.
 --
 -- PR-S's evidence guard (0164) is re-created under its name. It carries 0164's text unchanged
--- (publish and withdraw, a confirmation of the same tenant with the matching outcome) and adds the
--- check rows that will justify a move from B2 on: a `sent` or `bounced` row for unknown ->
--- succeeded, a complete-scan `not_found` row for unknown -> reconciled, each bound to the move by
--- `created_at = NEW.updated_at`, as 0161 binds a correction to its move. No Worker path makes either
--- move from a check yet.
+-- (keyed on the action alone, publish and withdraw, a confirmation of the same tenant with the
+-- matching outcome) and adds the check rows that will justify a move from B2 on: a `sent` or
+-- `bounced` row for unknown -> succeeded, a complete-scan `not_found` row for unknown -> reconciled,
+-- each bound to the move by `created_at = NEW.updated_at`, as 0161 binds a correction to its move.
+-- No Worker path makes either move from a check yet.
 --
 -- The recorder. A send that a check moves to succeeded is then recorded as the publication (B2), and
 -- that record names the send's permit holder (0161, `permit_holder_user_id`, read from the permit).
@@ -187,7 +187,6 @@ CREATE TRIGGER external_effects_proposal_settle_evidence_guard
 BEFORE UPDATE OF state ON external_effects
 WHEN OLD.state = 'unknown' AND NEW.state IN ('succeeded', 'reconciled')
   AND OLD.action IN ('proposal.publish', 'proposal.withdraw')
-  AND OLD.aggregate_type = 'proposal_publication'
 BEGIN
   SELECT RAISE(ABORT, 'proposal_delivery_settle_evidence_missing')
     WHERE NOT EXISTS (

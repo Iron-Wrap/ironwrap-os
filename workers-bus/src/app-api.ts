@@ -49,6 +49,7 @@ import {
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
+  closeRoleDrafts,
   createUserInvite,
   listAppUsersForOffice,
   listUserInvitesForOffice,
@@ -457,6 +458,9 @@ export async function handleAdminAppUserProvision(
     expectedTarget: target,
   });
   if (!user) return appJson({ error: "app_user_state_changed" }, 409);
+  // An existing person's new role answers the AI team's open role-change drafts for them.
+  if (target && target.role !== user.role)
+    await closeRoleDrafts(appEnv, req, user.tenant_id, user.user_id, user.role, auth.session.user_id);
   return appJson({
     user: {
       user_id: user.user_id,

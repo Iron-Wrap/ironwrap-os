@@ -50,6 +50,7 @@ import {
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
+  closeRoleDrafts,
   createUserInvite,
   type AccessConflict,
   listAppUsersForOffice,
@@ -488,6 +489,19 @@ export async function handleAdminAppUserProvision(
         conflict: await accessConflictBody(appEnv, auth, current, expectedAccessVersion ?? 0),
       }, 409)
       : appJson({ error: "app_user_state_changed" }, 409);
+  }
+  // An existing person's new role answers the AI team's role-change drafts for them that were
+  // prepared against an older access version.
+  if (target && target.role !== user.role) {
+    await closeRoleDrafts(
+      appEnv,
+      req,
+      user.tenant_id,
+      user.user_id,
+      user.role,
+      auth.session.user_id,
+      Number(user.access_version ?? 1),
+    );
   }
   return appJson({
     user: {

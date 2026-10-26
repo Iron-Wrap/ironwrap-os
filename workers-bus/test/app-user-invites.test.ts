@@ -816,6 +816,108 @@ test("the people list is office-only and marks the caller", async () => {
   assert.equal(refused.body.error, "office_role_required");
 });
 
+test("a role change closes the AI team's open role-change drafts for that person, and a repeat closes what a failed close left", async () => {
+  const h = harness();
+  const { user: ownerUser, session } = await owner(h);
+  const priya = await addUser(h.env, "priya@example.invalid", "ops", "Priya Nand");
+  const priyaSession = await signIn(h, priya, "p".repeat(43));
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  // A synthetic prepared draft, as access.prepare_change leaves it in the owner's Needs you, decided
+  // on the access version it names.
+  const draft = (stepId: string, change: string, targetRole: string | null, deviceRef: string | null, version: number) => {
+    h.db.raw.exec("PRAGMA foreign_keys = OFF");
+    h.db.raw
+      .prepare(
+        `INSERT INTO agent_run_steps (step_id, tenant_id, run_id, step_seq, step_key, specialist_id, action_id, autonomy, args_json, args_sha256,
+          sources_json, policy_json, permit_json, outcome, needs_ask, undo_json, do_it_myself_json, created_at, decided_at)
+        VALUES (?, ?, ?, 1, 'k', 'orchestrator', 'access.prepare_change', 'A1', ?, 'synthetic', '[]', '{"result":"allow","reason_codes":[]}',
+          '{"approved_by":null}', 'succeeded', 'apply_in_own_screen', '{}', '{"context":{}}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run(
+        stepId,
+        TENANT,
+        `run_${stepId}`,
+        JSON.stringify({ person_ref: `person:${mate.user_id}`, change, target_role: targetRole, device_ref: deviceRef, expected_access_version: version }),
+      );
+    h.db.raw.exec("PRAGMA foreign_keys = ON");
+  };
+  const closed = (stepId: string) =>
+    h.db.raw.prepare("SELECT reason_code, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(stepId) as { reason_code: string | null; do_it_myself_json: string };
+  const audits = () =>
+    (h.db.raw.prepare("SELECT user_id, outcome, detail_code FROM app_auth_audit WHERE event = 'agent_draft_close' ORDER BY id").all() as Array<Record<string, string>>).map((row) => ({ ...row }));
+  const role = (body: Record<string, unknown>, as = session) => call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session: as, body });
+  draft("step_role", "change_role", "field", null, 1);
+  draft("step_device", "revoke_device", null, "device:synthetic", 1);
+
+  // Refusals close nothing: ownership is an owner's to hand out (403), and a change decided on a
+  // version that is not the person's is a conflict (409).
+  assert.equal((await role({ role: "owner", expected_access_version: 1 }, priyaSession)).status, 403);
+  assert.equal((await role({ role: "production", expected_access_version: 9 })).status, 409);
+  assert.equal(closed("step_role").reason_code, null);
+
+  const changed = await role({ role: "production", expected_access_version: 1 });
+  assert.equal(changed.status, 200);
+  const version = Number((changed.body.user as Record<string, unknown>).access_version);
+  assert.equal(version, 2);
+  assert.deepEqual(
+    [closed("step_role").reason_code, JSON.parse(closed("step_role").do_it_myself_json).context.applied],
+    ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }],
+  );
+  assert.equal(closed("step_device").reason_code, null, "a device draft stays open");
+  // Each close that closed a draft is audited, naming the role and who set it.
+  assert.deepEqual(audits(), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
+
+  // Drafts on the old version left open after the change (a close that failed) close on a repeat of
+  // the same role at the version now; a draft written after the change stays.
+  draft("step_left", "change_role", "field", null, 1);
+  draft("step_after", "change_role", "field", null, version);
+  const repeat = await role({ role: "production", expected_access_version: version });
+  assert.equal(repeat.status, 200);
+  assert.equal(closed("step_left").reason_code, "applied_by_person");
+  assert.equal(closed("step_after").reason_code, null, "a draft decided on the version now stays open");
+  assert.equal(audits().length, 2);
+
+  // A verbatim repeat names the old version and is refused, but this viewer's own change set the
+  // role it asks for, so it still closes what was left on the old version.
+  draft("step_left_again", "change_role", "field", null, 1);
+  const verbatim = await role({ role: "production", expected_access_version: 1 });
+  assert.equal(verbatim.status, 409);
+  assert.equal(verbatim.body.error, "access_version_conflict");
+  assert.equal(accessVersionOf(h, mate.user_id), version, "the refused repeat changes nothing");
+  assert.equal(closed("step_left_again").reason_code, "applied_by_person");
+  assert.equal(closed("step_after").reason_code, null);
+  assert.equal(audits().length, 3);
+  // A repeat with nothing older open closes nothing and leaves no audit row.
+  assert.equal((await role({ role: "production", expected_access_version: version })).status, 200);
+  assert.equal(closed("step_after").reason_code, null);
+  assert.equal(audits().length, 3);
+  // A stale change to another role, or a conflict someone else's change caused, closes nothing.
+  draft("step_kept", "change_role", "field", null, 1);
+  assert.equal((await role({ role: "accounting", expected_access_version: 1 })).status, 409);
+  assert.equal((await role({ role: "production", expected_access_version: 1 }, priyaSession)).status, 409);
+  assert.equal(closed("step_kept").reason_code, null);
+  assert.equal(audits().length, 3);
+
+  // Provisioning that re-grades an existing person closes their role-change drafts on any version
+  // older than the one it produced, in one audited close.
+  draft("step_provisioned", "change_role", "field", null, version);
+  const provisioned = await call(h, "POST", APP_USERS, {
+    session,
+    body: { tenant_id: TENANT, email: "mate@example.invalid", display_name: "Mate", role: "sales", frappe_user_id: "mate@example.invalid", active: true, expected_access_version: version },
+  });
+  assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+  assert.deepEqual(
+    [
+      closed("step_provisioned").reason_code,
+      JSON.parse(closed("step_provisioned").do_it_myself_json).context.applied.value,
+      closed("step_kept").reason_code,
+      closed("step_after").reason_code,
+      audits().length,
+    ],
+    ["applied_by_person", "sales", "applied_by_person", "applied_by_person", 4],
+  );
+});
+
 test("a role change is the server's decision, not the browser's", async () => {
   const h = harness();
   const { user: ownerUser, session } = await owner(h);

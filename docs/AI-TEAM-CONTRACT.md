@@ -473,11 +473,25 @@ For an `H` act an agent may explain the facts (`fact.explain`) and prepare what 
 its specialist is on hold, and waits in that person's Needs you, never under Done for you: the
 owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfreeze_prepare`, and
 production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
-receipt asks the person to check it and apply it in their own screen. The draft is to leave Needs
-you when the matching act lands or a newer draft replaces it: its receipt closes `succeeded` with
-`applied_by_person` or `superseded`, which names what happened, and Needs you is to offer "Not
-now", which names what it removes. Neither is built yet (see `CAPABILITY-MATRIX.md`): today a
-prepared draft stays in Needs you. A run gets the names of the people-only acts its specialist owns
+receipt asks the person to check it and apply it in their own screen. The draft leaves Needs you
+when the matching act lands or a newer draft for the same record replaces it: its receipt closes,
+still `succeeded`, with exactly one reason code that names what happened. `applied_by_person` means
+a person acted on the same record by hand, whether or not they set what the draft proposed: a role
+change on the Access screen closes that person's role-change drafts, and the owner's delegation
+setting, or turning practice on or off, closes that pair's `delegation.propose_change` drafts.
+`readback.reference` names the changed record (`person:<user_id>` or
+`delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by}`) says
+what is set now and by whom. `superseded` means only that a newer draft for the same record (the
+same pair, or the same person, change and device) replaced it; `readback.reference` names that
+draft's step (`step/<step_id>`). `permit.approved_by` stays null, and a draft closes once. A role
+change, on the Access screen or by provisioning, closes the drafts after it commits, and a close
+that closed any writes an `agent_draft_close` auth audit row naming the role and who set it; if
+that close fails, repeating the same role on the Access screen closes them (a repeated
+provisioning does not), whether the repeat names the person's access version now or is refused
+because the same viewer's change moved it to that role. Only drafts prepared against an older
+access version than the person's now close; any other refusal closes none. Needs you is to offer "Not now",
+which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
+`safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns
 as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.
 
 ### Delegation
@@ -846,8 +860,10 @@ them and follows these conventions:
   the same four keys as the `fields` of `lead_fact.confirm`: every key present, `null` where nothing
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
-  citations, never an argument. Only a run started by the inbound event itself may propose it, and
-  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`). A lead's
+  citations, never an argument. Only a run started by the inbound event itself may propose it, an
+  event whose source is one of the inbound channels ("The inbound signal"), only for the lead that
+  event is about (its subject), and every citation is that event (`signal/<id>`); anything else
+  stops (`out_of_scope`). A lead's
   proposals stay open by one rule: a newer proposal for the same lead that sets every key an older
   open one set supersedes it, while one that sets only some of those keys leaves the older one
   open. A proposal closes for good once any `lead_fact.confirm` that policy admitted names it,
@@ -1524,6 +1540,65 @@ work.
 | `independent_auditor` | `injection_flagged` | On `injection.flagged` | Inbound content tried to instruct an agent | `finding.raise`, `specialist.hold` |
 | `independent_auditor` | `closure_submitted` | On `finding.closure_submitted` | Closure evidence for a finding arrives | `finding.close` |
 
+### The inbound signal
+
+`inbound.received`, the trigger of `new_inbound`, is the insert of an inbound envelope. Each one
+gives one `event` signal for `lead_concierge` with watch id `new_inbound`. Its `source` is the
+channel the envelope came by, its subject is the lead the envelope becomes (whether or not that
+lead exists yet), and its dedupe key is `inbound:<envelope_id>`, so it counts once: the envelope's
+insert appends it, best effort (intake waits on it at most two seconds), and a five-minute sweep
+appends any from the last two days that is still missing. An
+envelope a CRM import wrote is never inbound, and a release-smoke envelope, or one with neither a
+phone nor an email (intake refuses it after the insert), gives no signal.
+
+The channel follows the envelope's source: `web_form`, or `instant_estimate` for an instant
+estimate, from the website; `phone`, or `newo_call` for a Newo call; `walk_in` for an office
+capture of a walk-in, otherwise `office`, from manual entry; and `gbp`, `ad` and `referral` as
+they are. The content holds exactly these keys:
+
+- `envelope_id` and `channel`;
+- `brand`: `ironwrap`, `iroof` or `null`;
+- `received_via`: which of the tenant's addresses or numbers the inbound reached; `null` until
+  intake records that;
+- `sender`: `customer_id`, `matched_on` (`email`, `phone`, `email_and_phone` or `null`) and
+  `conflict`. It names the tenant's customer whose email or phone equals the sender's, both read
+  by one normaliser (a stored `5875550150` is the sender's `+15875550150`), and never the
+  customer this envelope itself created. The match is recorded only and
+  links nothing. An email and a phone that belong to two different customers are a conflict, which
+  names neither;
+- `has_phone` and `has_email`;
+- `service`, as the sender gave it, at most 200 characters;
+- `excerpt`: the sender's message, or a call's hand-off summary, trimmed, at most 1000 characters;
+- `form_fields`: `address` (the address parts the sender gave, joined), `scope` and `timing`, at
+  most 600, 2000 and 600 characters, so that `lead_fact.propose` can take each of its four values
+  from the signal it cites.
+
+The content has no field for the sender's name, phone number or email address. The excerpt and the
+form fields hold what the sender wrote, so they may hold a name, a number or an address
+(`form_fields.address` is the address the sender gave): the receptionist needs that text. Inside the
+run they are `untrusted_text`, as every signal's content is, and they never reach a watch digest or
+an owner report's snapshot: no watch condition reads an inbound signal, and a report run reads only
+its own watch signal and the objects that signal names.
+
+`AGENT_INBOUND_FROM` switches the producer: envelopes are inbound from that instant on, and while
+it is unset or blank nothing is produced. Production stays off until agent signals have a
+retention and erasure path aligned with envelope retention (`agent_signals` is append-only and
+would hold the excerpt and the form fields; `COMPLIANCE-REGISTER.md` requires minimisation and
+destruction), and then until the owner decides to go live; a test pins it blank. QA and local hold
+synthetic data only and are on from their recorded instant.
+
+Not built yet (see `CAPABILITY-MATRIX.md`):
+
+- Email, SMS, WhatsApp and social messages: the Worker takes none of them in yet, so they give no
+  signal. WhatsApp is a first-class channel for the owner and a named gap.
+- `newo_call` is mapped, but no Newo call makes an envelope while `NEWO_ENABLED` is false.
+- A repeat from the same contact inside the 72-hour dedupe window makes no envelope, so it gives no
+  signal.
+- An inbound from a customer with an accepted job still goes to `lead_concierge`; routing it to
+  `customer_care_warranty` (its `customer_message` watch) is not built.
+- `received_via` stays `null` until intake records which address or number was reached.
+- An inbound event's `actor` is `null`: the Worker writes no `external` actor yet.
+
 ### Owner reports
 
 | Report | Watch | Composed by | Contents | Delivery |
@@ -1880,10 +1955,11 @@ model family that proposed the work under review (see "Coordination run").
   portal session; `external` is an inbound sender the OS has not authenticated (`authenticated`
   false, `ref` `channel:<email|sms|web|voice>`). A message that claims to come from staff or the
   owner without that authentication is `external`, and its claim is untrusted text. Watch firings
-  and handoffs carry `null`. No inbound channel feeds the team yet, so the Worker writes only
-  `owner`, `staff` and `worker` actors so far, each with `ref` `person:<user_id>`. A person's ask
-  or press is an `owner_request` with source `ask` (to the face) or `request` (to the owning
-  specialist), and it gets the owner's trust only when `actor.type` is `owner`.
+  and handoffs carry `null`. So far an inbound event ("The inbound signal") carries `null` too: the
+  Worker writes only `owner`, `staff` and `worker` actors, each with `ref` `person:<user_id>`, and
+  no `external` actor yet. A person's ask or press is an `owner_request` with source `ask` (to the
+  face) or `request` (to the owning specialist), and it gets the owner's trust only when
+  `actor.type` is `owner`.
 - An access change (a crew phone pairing, a role change or a device change) is prepared
   (`access.prepare_change`) only on the request of an owner or staff member, either as the run's
   own ask or request or as the root of its handoff chain; the step sets that request as

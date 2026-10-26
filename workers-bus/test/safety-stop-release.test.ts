@@ -474,6 +474,37 @@ test("an identity that changes after the Worker's check still meets the same ref
   unchanged(env, occurrenceId, before, journal, "race");
 });
 
+test("a person deactivated or moved off authority mid-command meets a named 403 from D1, not a store fault", async () => {
+  const deactivate = (env: TestEnv) =>
+    env.DB.sqlite.prepare("UPDATE app_users SET active = 0 WHERE user_id = ?").run(USERS.ops.id);
+  const moveToSales = (env: TestEnv) =>
+    env.DB.sqlite.prepare("UPDATE app_users SET access_role = 'sales' WHERE user_id = ?").run(USERS.ops.id);
+  for (const [label, upTo, rescueRequired, body, change] of [
+    ["released, releaser deactivated", "controlled", false, release, deactivate],
+    ["released, releaser moved to sales", "controlled", false, release, moveToSales],
+    ["controlled, moved to sales", "investigating", false,
+      { command: "controlled", detail: "Barrier installed." }, moveToSales],
+    ["rescue_dispatched, moved to sales", "made_safe", true,
+      { command: "rescue_dispatched", detail: "Rescue team called." }, moveToSales],
+    ["rescue_completed, deactivated", "made_safe", true,
+      { command: "rescue_completed", detail: "Worker brought down safely." }, deactivate],
+  ] as const) {
+    const env = testEnv();
+    const occurrenceId = await raisedStop(env, USERS.crew, { upTo, rescueRequired });
+    const ops = await personAuth(env, USERS.ops);
+    const before = occurrenceRow(env, occurrenceId);
+    const journal = events(env, occurrenceId).length;
+    const batches = env.DB.batches;
+    // Committed after the Worker resolved the person and their role, and before its batch.
+    env.DB.beforeBatch = () => change(env);
+    const refused = await postCommand(env, ops, occurrenceId, body);
+    assertRefused(refused, 403, "safety_actor_unknown", label);
+    // The refusal came from D1: the batch was sent and rolled back.
+    assert.equal(env.DB.batches, batches + 1, label);
+    unchanged(env, occurrenceId, before, journal, label);
+  }
+});
+
 // --- Who may call the release at all ---------------------------------------------------------------
 
 test("only a person's own session may lift a stop: agents, connectors and borrowed sessions are refused", async () => {

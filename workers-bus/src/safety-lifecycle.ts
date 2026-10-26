@@ -2277,17 +2277,17 @@ async function advanceOccurrence(
 }
 
 /**
- * A D1 guard that refused the batch because a person's identity, status or role
- * changed after the checks above reports its own refusal. Anything else stays a
- * store fault.
+ * The two D1 refusals this batch can meet after the checks above passed, because
+ * a person changed in between: 0165's raiser check, and 0047's event actor check,
+ * which answers `safety_actor_unknown` for a person deactivated or moved to another
+ * role. 0047's authority clauses compare the role recorded here, which always holds
+ * authority, so they never fire on this batch. Anything else stays a store fault.
  */
 function guardRefusal(error: unknown): unknown {
   const message = error instanceof Error ? error.message : String(error);
   const refusals: Array<[string, string]> = [
     ["safety_stop_release_by_raiser_forbidden", "The person who raised a safety stop can never release it."],
     ["safety_actor_unknown", "This safety actor is not recognized."],
-    ["safety_release_authority_required", "This safety command requires current production authority."],
-    ["safety_rescue_authority_required", "This safety command requires current production authority."],
   ];
   const refusal = refusals.find(([code]) => message.includes(code));
   return refusal ? new SafetyError(refusal[0], 403, refusal[1]) : error;

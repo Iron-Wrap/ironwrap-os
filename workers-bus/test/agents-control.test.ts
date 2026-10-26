@@ -2467,6 +2467,25 @@ test("a closed delegation draft says whether the owner set what it proposed, its
   s.tick(1_000);
   await delegate("as-proposed-tighter", {});
   assert.deepEqual(applied(tighter), ["applied_by_person", "within_limits", false]);
+  // Recipients are a set: the same ones in another order are as proposed; another set is not, and
+  // no limit (null) is not an empty list.
+  const recipients = (list: string[] | null) => ({ ...ceiling, recipients: list });
+  const reordered = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-reordered", { ceiling: recipients(["office@example.invalid", "crew@example.invalid"]) });
+  assert.deepEqual(applied(reordered), ["applied_by_person", "within_limits", true]);
+  const otherSet = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-other-set", { ceiling: recipients(["crew@example.invalid", "yard@example.invalid"]) });
+  assert.deepEqual(applied(otherSet), ["applied_by_person", "within_limits", false]);
+  const subset = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-subset", { ceiling: recipients(["crew@example.invalid"]) });
+  assert.deepEqual(applied(subset), ["applied_by_person", "within_limits", false]);
+  const unlimited = await propose("within_limits", recipients(null));
+  s.tick(1_000);
+  await delegate("as-proposed-empty", { ceiling: recipients([]) });
+  assert.deepEqual(applied(unlimited), ["applied_by_person", "within_limits", false]);
   // Another setting than it proposed: not as proposed.
   const asks = await propose("asks_first", null);
   s.tick(1_000);

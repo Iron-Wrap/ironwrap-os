@@ -743,6 +743,8 @@ describe("a people-only draft that left Needs you", () => {
     expect(card).toHaveAttribute("data-state", "done_by_person");
     // The person comes from the applied record when the screen names no one.
     expect(within(card).getByText("Done by Dana Whitford")).toBeVisible();
+    // Its one time is the hand change that closed it.
+    expect(within(card).getByText("Changed by hand · Yesterday 16:20")).toBeVisible();
     expect(
       within(card).getByText(
         "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Production.",
@@ -771,6 +773,18 @@ describe("a people-only draft that left Needs you", () => {
         "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales. That is what this draft proposed.",
       ),
     ).toBeVisible();
+  });
+
+  it("labels the time of the hand change when the time is machine-readable too", () => {
+    render(
+      <Receipt
+        receipt={draft("applied_by_person")}
+        display={{ ...closed, when: { text: "Mon 14:05", at: "2026-10-19T14:05:00-06:00" } }}
+      />,
+    );
+    const time = screen.getByText("Mon 14:05");
+    expect(time.tagName).toBe("TIME");
+    expect(time.parentElement?.textContent).toBe("Changed by hand · Mon 14:05");
   });
 
   it("never prints the id of a person in the applied record it cannot name", () => {
@@ -806,6 +820,9 @@ describe("a people-only draft that left Needs you", () => {
     const card = screen.getByRole("article");
     expect(card).toHaveAttribute("data-state", "done_by_person");
     expect(within(card).getByText(/Checked in the other system: matches\./)).toBeVisible();
+    // Not a closed draft: its time stays the step's own.
+    expect(within(card).getByText("Yesterday 16:20")).toBeVisible();
+    expect(card.textContent).not.toMatch(/Changed by hand/);
   });
 
   it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
@@ -821,6 +838,7 @@ describe("a people-only draft that left Needs you", () => {
     render(<Receipt receipt={replaced} display={closed} />);
     const card = screen.getByRole("article");
     expect(within(card).queryByText("Checked")).toBeNull();
+    expect(card.textContent).not.toMatch(/Changed by hand/);
     expect(card).toHaveAttribute("data-state", "replaced");
     expect(within(card).getByText("Replaced")).toBeVisible();
     expect(

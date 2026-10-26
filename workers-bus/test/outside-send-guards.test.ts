@@ -708,20 +708,23 @@ test("0164 adds four named guards that reference only 0042 and 0156 objects, and
     external_effects_proposal_settle_evidence_guard: ["external_effects", "proposal_delivery_confirmations"],
     proposal_delivery_confirmations_conflict_guard: ["external_effect_events", "proposal_delivery_confirmations"],
   };
-  for (const row of applied) {
-    const tables = new Set([...row.sql.matchAll(/\b(?:FROM|JOIN|ON)\s+([a-z_]+)/gi)].map((match) => match[1]));
-    assert.deepEqual([...tables].sort(), references[row.name], row.name);
-  }
-
   const migration = readFileSync(new URL("../migrations/0164_outside_send_effect_guards.sql", import.meta.url), "utf8");
+  // 0164's own text: 0167 later re-creates the evidence and conflict guards under their names, so
+  // the applied schema carries 0167's versions of those two (proposal-delivery-checks.test.ts).
+  const own = [...migration.matchAll(/^CREATE TRIGGER IF NOT EXISTS ([a-z_]+)([\s\S]*?)\nEND;/gm)];
+  assert.deepEqual(own.map((match) => match[1]).sort(), applied.map((row) => row.name));
+  for (const [, name, body] of own) {
+    const tables = new Set([...body.matchAll(/\b(?:FROM|JOIN|ON)\s+([a-z_]+)/gi)].map((match) => match[1]));
+    assert.deepEqual([...tables].sort(), references[name], name);
+  }
   const triggers = () => count(db, "SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger'");
   const total = triggers();
   db.raw.exec(migration);
   assert.deepEqual(guards(), applied);
   assert.equal(triggers(), total);
 
-  // A later migration that already created the evidence guard under its name (PR-A's 0162 on a
-  // fresh database, where filename order runs it first) keeps its own version.
+  // Whatever version of the evidence guard a database already holds under its name (0167's, which
+  // runs after 0164 in every order), applying 0164 again keeps it.
   db.raw.exec(`DROP TRIGGER external_effects_proposal_settle_evidence_guard;
     CREATE TRIGGER external_effects_proposal_settle_evidence_guard
     BEFORE UPDATE OF state ON external_effects

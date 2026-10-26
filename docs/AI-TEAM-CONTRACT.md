@@ -473,11 +473,24 @@ For an `H` act an agent may explain the facts (`fact.explain`) and prepare what 
 its specialist is on hold, and waits in that person's Needs you, never under Done for you: the
 owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfreeze_prepare`, and
 production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
-receipt asks the person to check it and apply it in their own screen. The draft is to leave Needs
-you when the matching act lands or a newer draft replaces it: its receipt closes `succeeded` with
-`applied_by_person` or `superseded`, which names what happened, and Needs you is to offer "Not
-now", which names what it removes. Neither is built yet (see `CAPABILITY-MATRIX.md`): today a
-prepared draft stays in Needs you. A run gets the names of the people-only acts its specialist owns
+receipt asks the person to check it and apply it in their own screen. The draft leaves Needs you
+when the matching act lands or a newer draft for the same record replaces it: its receipt closes,
+still `succeeded`, with exactly one reason code that names what happened. `applied_by_person` means
+a person acted on the same record by hand, whether or not they set what the draft proposed: a role
+change on the Access screen closes that person's role-change drafts, and the owner's delegation
+setting, or turning practice on or off, closes that pair's `delegation.propose_change` drafts.
+`readback.reference` names the changed record (`person:<user_id>` or
+`delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by}`) says
+what is set now and by whom. `superseded` means only that a newer draft for the same record (the
+same pair, or the same person, change and device) replaced it; `readback.reference` names that
+draft's step (`step/<step_id>`). `permit.approved_by` stays null, and a draft closes once. A role
+change, on the Access screen or by provisioning, closes the drafts after it commits, and a close
+that closed any writes an `agent_draft_close` auth audit row naming the role and who set it; if
+that close fails, repeating the same role on the Access screen closes them (a repeated
+provisioning does not). Once a person's access is versioned, only
+drafts prepared against an older access version close. Needs you is to offer "Not now",
+which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
+`safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns
 as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.
 
 ### Delegation

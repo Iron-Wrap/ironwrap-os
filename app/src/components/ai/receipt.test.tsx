@@ -724,6 +724,52 @@ describe("a people-only draft that left Needs you", () => {
     expect(within(card).queryAllByRole("button")).toEqual([]);
   });
 
+  it("says who changed the record by hand and what it is now, from the draft's applied record", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      readback: {
+        source: "owned_store",
+        reference: "person:user_grace",
+        response_hash: "sha256:role",
+        matched: true,
+      },
+      do_it_myself: {
+        surface: "/settings/team",
+        context: { applied: { field: "role", value: "production", by: "person_dana" } },
+      },
+    };
+    render(<Receipt receipt={changed} display={closed} />);
+    const card = screen.getByRole("article");
+    expect(card).toHaveAttribute("data-state", "done_by_person");
+    // The person comes from the applied record when the screen names no one.
+    expect(within(card).getByText("Done by Dana Whitford")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Production.",
+      ),
+    ).toBeVisible();
+    expect(card.textContent).not.toMatch(/this change|person_dana|production\b/);
+    expect(within(card).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("never prints the id of a person in the applied record it cannot name", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      do_it_myself: {
+        surface: null,
+        context: { applied: { field: "role", value: "sales", by: "person_gone" } },
+      },
+    };
+    render(<Receipt receipt={changed} display={closed} />);
+    const card = screen.getByRole("article");
+    expect(card.textContent).not.toMatch(/person_gone/);
+    expect(
+      within(card).getByText(
+        "A person changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales.",
+      ),
+    ).toBeVisible();
+  });
+
   it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
     render(<Receipt receipt={draft("superseded")} display={closed} />);
     const card = screen.getByRole("article");

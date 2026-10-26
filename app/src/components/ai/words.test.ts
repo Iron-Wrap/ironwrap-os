@@ -4,6 +4,8 @@ import {
   DEFAULT_TIME_ZONE,
   DELEGATION,
   RECEIPT_FIELDS,
+  appliedByPersonNote,
+  appliedOf,
   dayTime,
   deciderWords,
   delegationOf,
@@ -131,6 +133,75 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       words: "Done by a person",
       note: "A person already made this change, so this draft is closed. The change stays in place, and nothing is left to do.",
     });
+  });
+
+  it("says what a person set by hand on the draft's record, never that they made this change", () => {
+    const role = { field: "role", value: "production", by: "user_dana" } as const;
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        record: "Grace Obi's role",
+        applied: role,
+      }),
+    ).toEqual({
+      state: "done_by_person",
+      words: "Done by Dana Whitford",
+      kind: "done",
+      note: "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Production.",
+    });
+    expect(appliedByPersonNote(undefined, undefined, { field: "role", value: "field" })).toBe(
+      "A person changed the role by hand, so this draft is closed. The role is now Crew.",
+    );
+    expect(
+      appliedByPersonNote("Dana Whitford", "the AI estimator's quote sending", {
+        field: "delegation_setting",
+        value: "within_limits",
+      }),
+    ).toBe(
+      "Dana Whitford changed the AI estimator's quote sending by hand, so this draft is closed. The AI estimator's quote sending is now Acts within your limits.",
+    );
+    expect(
+      ["asks_first", "within_limits", "off_until_enabled", "off", "shadow"].map((value) =>
+        appliedByPersonNote("Dana Whitford", undefined, { field: "delegation_setting", value }),
+      ),
+    ).toEqual(
+      [
+        "Asks first",
+        "Acts within your limits",
+        "Off until you turn it on",
+        "Off",
+        "Practice only",
+      ].map(
+        (words) =>
+          `Dana Whitford changed the AI team setting by hand, so this draft is closed. The AI team setting is now ${words}.`,
+      ),
+    );
+    // A value it has no words for keeps the note that names no value, never the raw value.
+    for (const applied of [
+      { field: "role", value: "foreman" },
+      { field: "delegation_setting", value: "constructor" },
+    ] as const)
+      expect(appliedByPersonNote("Dana Whitford", "Grace Obi's role", applied)).toBe(
+        appliedByPersonNote("Dana Whitford", "Grace Obi's role"),
+      );
+  });
+
+  it("reads only a well-formed applied record from a closed draft's context", () => {
+    const applied = { field: "delegation_setting", value: "off", by: "user_dana" };
+    expect(appliedOf({ applied })).toEqual(applied);
+    expect(appliedOf({ applied, prior: "kept" })).toEqual(applied);
+    for (const context of [
+      null,
+      undefined,
+      "applied",
+      {},
+      { applied: null },
+      { applied: { ...applied, field: "email" } },
+      { applied: { ...applied, value: "" } },
+      { applied: { ...applied, value: 3 } },
+      { applied: { field: "role", value: "sales" } },
+    ])
+      expect(appliedOf(context)).toBeUndefined();
   });
 
   it("closes a people-only draft a newer one replaced, and says where the newer one is", () => {

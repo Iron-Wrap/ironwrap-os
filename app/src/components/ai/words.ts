@@ -23,8 +23,10 @@ import {
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
+import { z } from "zod";
 
 import { dateTimeFormatter } from "../../lib/intl-cache";
+import { appRoles, roleLabel, type AppRole } from "../../lib/roles";
 import type { StatusKind } from "../ui/status";
 
 /*
@@ -369,13 +371,69 @@ const notItsJob = { why: "This is not something it may do.", next: "A person dec
 export const VIEW_REFUSED =
   "IronWrap couldn't draw the layout you asked for, so the answer is in the text above. To try once more, type your request in other words in the box below.";
 
+/** What a person set by hand on the record a closed draft prepared (`do_it_myself.context.applied`). */
+export interface AppliedByPerson {
+  field: "role" | "delegation_setting";
+  value: string;
+  /** The person's user id. */
+  by: string;
+}
+
+const appliedSchema = z.object({
+  applied: z.object({
+    field: z.enum(["role", "delegation_setting"]),
+    value: z.string().min(1),
+    by: z.string().min(1),
+  }),
+});
+
+/** The `applied` record of a closed draft's `do_it_myself.context`; anything else reads as absent. */
+export function appliedOf(context: unknown): AppliedByPerson | undefined {
+  const parsed = appliedSchema.safeParse(context);
+  return parsed.success ? parsed.data.applied : undefined;
+}
+
+/** What a person changed, when the screen names no record. */
+const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
+  role: "the role",
+  delegation_setting: "the AI team setting",
+};
+
+/** What is set now, in the words its screen shows (a role, or a delegation setting's "Shown as"). */
+function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "value">) {
+  if (field === "role")
+    return (appRoles as readonly string[]).includes(value)
+      ? roleLabel(value as AppRole)
+      : undefined;
+  const setting: Record<string, string> = {
+    asks_first: DELEGATION.asks_first.words,
+    within_limits: DELEGATION.within_limits.words,
+    off_until_enabled: DELEGATION.off_until_enabled.words,
+    off: "Off",
+    shadow: "Practice only",
+  };
+  return Object.hasOwn(setting, value) ? setting[value] : undefined;
+}
+
 /**
- * A people-only draft a person made by hand (`applied_by_person`): who made it, to which record,
- * that the draft is closed (gate f5: "closing this draft" read as a button to find), that the
- * change stays in place (gate f5: "does not undo the change" left readers only fairly sure it
- * still held), and that nothing is left.
+ * A people-only draft whose record a person changed by hand (`applied_by_person`). With what is
+ * set now (`applied`): who changed which record, that the draft is closed, and what the record
+ * is now, whatever the draft proposed, so it never claims the person made "this change". Without
+ * it, or with a value it has no words for: who made the change, to which record, that the draft is
+ * closed (gate f5: "closing this draft" read as a button to find), that the change stays in place
+ * (gate f5: "does not undo the change" left readers only fairly sure it still held), and that
+ * nothing is left.
  */
-export function appliedByPersonNote(by = "A person", record?: string): string {
+export function appliedByPersonNote(
+  by = "A person",
+  record?: string,
+  applied?: Pick<AppliedByPerson, "field" | "value">,
+): string {
+  const value = applied && appliedValueWords(applied);
+  if (applied && value) {
+    const subject = record ?? APPLIED_SUBJECT[applied.field];
+    return `${by} changed ${subject} by hand, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.`;
+  }
   return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. The change stays in place, and nothing is left to do.`;
 }
 
@@ -388,7 +446,7 @@ export function supersededNote(record?: string): string {
  * The state words of one receipt. `by` names the person who declined, undid or did the step;
  * `where` is the outside system in plain words ("QuickBooks"); `waitingFor` is where a person's
  * answer still has to arrive ("the phone"); `record` is what a people-only draft changes ("Grace
- * Obi's access").
+ * Obi's access"); `applied` is what a person set on it by hand (`appliedOf`).
  */
 export function receiptWords(
   receipt: Pick<ContractReceipt, "outcome" | "policy" | "needs_from_you">,
@@ -397,7 +455,14 @@ export function receiptWords(
     where = "the other system",
     waitingFor,
     record,
-  }: { by?: string; where?: string; waitingFor?: string; record?: string } = {},
+    applied,
+  }: {
+    by?: string;
+    where?: string;
+    waitingFor?: string;
+    record?: string;
+    applied?: AppliedByPerson;
+  } = {},
 ): ReceiptWords {
   const [reason] = receipt.policy.reason_codes;
   const as = (state: ReceiptState, words?: string): ReceiptWords => ({
@@ -424,7 +489,7 @@ export function receiptWords(
           ...(by
             ? { state: "done_by_person" as const, ...personDoneWords(by) }
             : as("done_by_person")),
-          note: appliedByPersonNote(by, record),
+          note: appliedByPersonNote(by, record, applied),
         };
       if (reason === "superseded") return { ...as("replaced"), note: supersededNote(record) };
       return as("done");

@@ -11,6 +11,7 @@ import { AiName } from "./name";
 import { SourceList, type SourceProps } from "./source";
 import { type } from "./type";
 import {
+  appliedOf,
   deciderWords,
   initialsOf,
   receiptActions,
@@ -158,12 +159,15 @@ export function Receipt({
   const name = (person: string | null | undefined) =>
     person ? (people[person] ?? undefined) : undefined;
   const where = display.where ?? "the other system";
-  const by = display.by ? (people[display.by] ?? display.by) : undefined;
+  // A closed draft says what a person set by hand and who: their id resolves like any other.
+  const applied = appliedOf(receipt.do_it_myself.context);
+  const by = display.by ? (people[display.by] ?? display.by) : name(applied?.by);
   const words = receiptWords(receipt, {
     by,
     where,
     waitingFor: display.waitingFor,
     record: display.record,
+    applied,
   });
   const { state } = words;
   // A closed draft's note is what happened since. A done answer's note (VIEW_REFUSED) points at the

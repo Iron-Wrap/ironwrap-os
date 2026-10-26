@@ -377,6 +377,8 @@ export interface AppliedByPerson {
   value: string;
   /** The person's user id; without it the note says "A person". */
   by?: string;
+  /** True only when the value set is the one the draft proposed; anything else says nothing. */
+  as_proposed?: boolean;
 }
 
 const appliedSchema = z.object({
@@ -384,6 +386,8 @@ const appliedSchema = z.object({
     field: z.enum(["role", "delegation_setting"]),
     value: z.string().min(1),
     by: z.string().min(1).optional(),
+    // A malformed flag reads as absent rather than dropping what was set.
+    as_proposed: z.boolean().optional().catch(undefined),
   }),
 });
 
@@ -419,7 +423,8 @@ function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "va
 /**
  * A people-only draft whose record a person changed by hand (`applied_by_person`). With what is
  * set now (`applied`): who changed which record, that the draft is closed, and what the record
- * is now, whatever the draft proposed, so it never claims the person made "this change". Without
+ * is now, whatever the draft proposed, so it never claims the person made "this change"; only
+ * when the Worker says the value is the proposed one (`as_proposed`), that it is. Without
  * it, or with a value it has no words for: who made the change, to which record, that the draft is
  * closed (gate f5: "closing this draft" read as a button to find), that the change stays in place
  * (gate f5: "does not undo the change" left readers only fairly sure it still held), and that
@@ -428,12 +433,13 @@ function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "va
 export function appliedByPersonNote(
   by = "A person",
   record?: string,
-  applied?: Pick<AppliedByPerson, "field" | "value">,
+  applied?: Pick<AppliedByPerson, "field" | "value" | "as_proposed">,
 ): string {
   const value = applied && appliedValueWords(applied);
   if (applied && value) {
     const subject = record ?? APPLIED_SUBJECT[applied.field];
-    return `${by} changed ${subject} by hand, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.`;
+    const proposed = applied.as_proposed === true ? " That is what this draft proposed." : "";
+    return `${by} changed ${subject} by hand, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.${proposed}`;
   }
   return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. The change stays in place, and nothing is left to do.`;
 }

@@ -482,11 +482,13 @@ setting, or turning practice on or off, closes that pair's `delegation.propose_c
 `readback.reference` names the changed record (`person:<user_id>` or
 `delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by,
 as_proposed}`) says what is set now, by whom, and whether that is what this draft proposed:
-`as_proposed` is true when the stable key set equals the one the draft proposed (the role, or the
-delegation setting, and for `within_limits` also the same ceiling), false otherwise. Turning
-practice off sets the setting in force with its ceiling. `superseded` means only that a newer draft for the same record (the
-same pair, or the same person, change and device) replaced it; `readback.reference` names that
-draft's step (`step/<step_id>`), and it carries no `applied`. `permit.approved_by` stays null, and a draft closes once. A role
+`as_proposed` is true when the role or setting set is the one the draft proposed, and for
+`within_limits` the ceiling is the same too (its recipients in the same order), false otherwise.
+Turning practice off sets the setting in force, with its ceiling. A draft closed before
+`as_proposed` existed has none, which reads as not known, never as true. `superseded` means only
+that a newer draft for the same record (the same pair, or the same person, change and device)
+replaced it; `readback.reference` names that draft's step (`step/<step_id>`), and it carries no
+`applied`. `permit.approved_by` stays null, and a draft closes once. A role
 change, on the Access screen or by provisioning, closes the drafts after it commits, and a close
 that closed any writes an `agent_draft_close` auth audit row naming the role and who set it; if
 that close fails, repeating the same role on the Access screen closes them (a repeated

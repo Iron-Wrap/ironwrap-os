@@ -112,7 +112,8 @@ export async function supersedeDrafts(
 /**
  * The owner set one specialist and action's delegation, or turned its practice on or off: that
  * pair's open delegation.propose_change drafts close `applied_by_person`, naming the pair's record.
- * `ceiling` is the ceiling in force with `within_limits`, null with any other setting.
+ * `ceiling` is the ceiling in force with `within_limits`, null with any other setting; a draft that
+ * proposed within limits is as proposed only at its own ceiling.
  */
 export async function closeDelegationDrafts(
   db: AgentDb,
@@ -120,7 +121,7 @@ export async function closeDelegationDrafts(
   pair: { specialist_id: string; action_id: string },
   setting: string,
   by: string,
-  ceiling: unknown = null,
+  ceiling: unknown,
 ): Promise<BoundStatement> {
   const reference = `delegation/${pair.specialist_id}:${pair.action_id}`;
   const set: Applied = { field: "delegation_setting", value: setting, by };

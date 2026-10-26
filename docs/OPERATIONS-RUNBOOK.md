@@ -202,7 +202,9 @@ and Crew has no waiver: it clears by policy when a person schedules the job (mig
 refuses every such entry from the seed identity, and a schedule from it, so the seed clears no
 gate. The job's OD-01 cancellation window reads unknown (migration `0160`): nothing shows the tester
 a signed copy, and D1 refuses the seed identity's record of one, so the window holds the schedule,
-the Materials attestation and the job's purchase orders, as intended. It never writes D1 directly,
+the Materials attestation and the job's D1 purchase order lines, as intended. It does not hold a
+Frappe Supplier Order (written through the ERPNext MCP, outside D1); that hold is required before
+supplier send opens. It never writes D1 directly,
 calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.

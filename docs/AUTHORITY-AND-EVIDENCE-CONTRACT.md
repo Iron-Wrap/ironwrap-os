@@ -697,17 +697,22 @@ written, read with D1's own clock, and each refusal is named on the route and re
 ### OD-01 cancellation window
 
 The customer may cancel until 10 days after they receive their copy of the signed contract
-(owner's register OD-01; counsel confirms the wording through the owner). Inside that window nothing
-is ordered from a supplier, no shop work starts and no start is confirmed. The register scopes it to
-private dwellings; D1 cannot tell a private dwelling from a commercial job, so the window applies to
-every contract. It is a System state next to the gates (`cancellation_window` on
+(owner's register OD-01; counsel confirms the wording through the owner). The register says that
+inside that window nothing is ordered from a supplier, no shop work starts and no start is
+confirmed; what is held today is listed below, with what is not. The register scopes it to private
+dwellings; D1 cannot tell a private dwelling from a commercial job, so the window applies to every
+contract. It is a System state next to the gates (`cancellation_window` on
 `GET /api/v1/production/jobs/{job}/gates`), not a gate: it has no ledger and no waiver, and a
 Materials waiver lifts none of its holds (migration `0160`).
 
-- It starts from the copy the portal showed at signing, which counts as received: the confirm
-  route appends a `contract_signed_copy_events` row in the acceptance's own batch, with D1's time,
-  only when the client renders the copy on that screen (`signed_copy: true`) and the answer returns
-  it. Nothing else writes or moves that event.
+- It starts from the copy the portal served at signing, which counts as received. Only after the
+  acceptance has committed and the Worker has built the copy, for a client that renders it on that
+  screen (`signed_copy: true`), does the confirm route append a `contract_signed_copy_events` row,
+  in its own statement conditional on the committed binding and with D1's time; then it serves the
+  copy. A copy that cannot be built, or an event that cannot be written, starts no window and the
+  answer claims none: the window stays unknown until ops records the receipt. An exact replay
+  serves the recorded copy, or builds and records it then, starting the window at that later time.
+  Nothing else writes or moves that event.
 - Otherwise an owner or ops person records when the customer received the copy
   (`POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy`), from their own cookie
   session, with a reason and an evidence reference. The time is not before the job's latest contract
@@ -715,13 +720,22 @@ Materials waiver lifts none of its holds (migration `0160`).
   shown: a record only moves the window later, and the same time is a no-op. A job with no contract
   in D1 records with no floor, and its record says so. D1 stamps the record with its own clock and
   writes its audit row in the same statement; each refusal has its own code.
-- It ends at the later of its start + 240 hours and the same local clock time 10 calendar days
-  later in the business time zone, never before the job's previous end, so a DST change never ends
-  the hold early in local time. D1 holds every end to [start + 240 hours, start + 241 hours].
+- Interim, pending counsel: it ends at the end of the 10th local calendar day after the day it
+  starts on, in the business time zone, the start's own day being day 0 (a copy received Tuesday
+  18:26 holds through the end of Friday the following week). `ends_at` is the first instant of the
+  11th local day, an exclusive bound. It is never before the start + 240 hours nor before the job's
+  previous end, so it is never earlier than either reading of "10 days", across DST too. D1 holds
+  every end to [start + 240 hours, start + 265 hours]: with no time zone database, 265 hours is the
+  latest the end of the 10th local day can be (a start at local midnight, plus one DST hour).
 - It is unknown until the job's latest contract has a copy shown or a record at or after its
   signature, open until it ends, then ended. While it is unknown or open, D1 and the routes refuse,
-  each by name: a schedule (the firm start), the Materials attestation, and a purchase order line
+  each by name: a schedule (the firm start), the Materials attestation, and a D1 purchase order line
   for the job or one moving back to `ordered`. A line with no job (stock) is never held.
+- Not held (gaps): the Frappe Supplier Order path (the ERPNext MCP's
+  `request_create_supplier_order`, and `request_transition_supplier_order` moving a Supplier Order
+  to Ordered) writes Frappe directly, outside D1 and the Worker; the window hold is required on that
+  path before supplier send opens. A Shop Order's `scheduled_start` on the typed work-object
+  assignment is not held either; that hold comes with the shop-run contract rule.
 - `GET /api/v1/production/cancellation-window/signed-copy-missing` lists, for owner and ops, the open
   signed jobs whose window is unknown, and their count: signed means a contract in D1, or a Deposit
   gate that has cleared for a contract signed outside D1.

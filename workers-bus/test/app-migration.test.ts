@@ -2282,12 +2282,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // person record whether an unconfirmed proposal send reached the customer. 0161 records what
     // people found about a send, and their corrections, without changing it; holds the late-answer
     // wait in D1 with a window per provider; and names the permit holder of each new publication.
+    // 0207 lets a signal's free text be redacted in place once, ninety days after it was received.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 137);
+    assert.equal(migrations.length, 138);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0206_agent_draft_closing.sql",
+      "0207_agent_signal_redaction.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2427,7 +2428,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
-    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged.
+    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged. 0207
+    // re-creates the signal update guard under its name and adds one named partial index.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
@@ -2435,7 +2437,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // holders), one named index and twelve guards, and re-creates nothing.
     assert.deepEqual(
       { ...counts },
-      { tables: 278, indexes: 379, triggers: 761 },
+      { tables: 278, indexes: 380, triggers: 761 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

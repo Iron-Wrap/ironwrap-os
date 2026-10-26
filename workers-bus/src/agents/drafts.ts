@@ -107,9 +107,10 @@ export async function closeDelegationDrafts(
 
 /**
  * A person's role was set (the Access screen or provisioning): that person's open role-change drafts
- * close `applied_by_person`, naming the person; true when any closed. Given the person's
- * access version now, only drafts prepared against an older one close, so a draft written after the
- * change stays. Device drafts are left open. Never throws: a draft that stays open is only stale.
+ * close `applied_by_person`, naming the person; true when any closed. `accessVersion` is the access
+ * version that role change produced: only drafts prepared against an older one close, so a draft
+ * written after the change stays. Device drafts are left open. Never throws: a draft that stays
+ * open is only stale.
  */
 export async function closeAccessDrafts(
   db: AgentDb,
@@ -117,11 +118,11 @@ export async function closeAccessDrafts(
   userId: string,
   role: string,
   by: string,
-  accessVersion: number | null = null,
+  accessVersion: number,
 ): Promise<boolean> {
   try {
     const person = `person:${userId}`;
-    const older = { sql: " AND (? IS NULL OR json_extract(args_json, '$.expected_access_version') < ?)", values: [accessVersion, accessVersion] };
+    const older = { sql: " AND json_extract(args_json, '$.expected_access_version') < ?", values: [accessVersion] };
     const set: Applied = { field: "role", value: role, by };
     // D1's change count includes rows triggers touch, so it says only whether any closed.
     return changesOf(await (await applied(db, tenantId, "access.prepare_change", { person_ref: person, change: "change_role", device_ref: null }, person, set, older)).run()) > 0;

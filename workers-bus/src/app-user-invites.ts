@@ -727,8 +727,9 @@ export async function listAppUsersForOffice(
  * A person's role was set: the AI team's open role-change drafts for them close (agents/drafts.ts),
  * after the change commits; the close is best effort, and a close that closed any is audited like
  * the role change itself (a failed audit write fails the request), so no draft leaves its person's
- * Needs you without a trace. `accessVersion` is the person's access version now (0157): only the
- * drafts prepared against an older one close, so a draft written after the change stays open.
+ * Needs you without a trace. `role`, `actorUserId` and `accessVersion` describe that change: the
+ * role it set, who set it and the access version it produced (0157). Only the drafts prepared
+ * against an older version close, so a draft written after the change stays open.
  */
 export async function closeRoleDrafts(
   env: AppEnv,
@@ -780,36 +781,44 @@ export async function changeAppUserRole(
   const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
   if (authority) return authority;
   if (Number(user.access_version ?? 1) !== parsed.value.expectedAccessVersion) {
-    const refused = await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
     // A verbatim repeat of a change that went through names the version it moved from, so it is
-    // refused here and changes nothing. When what moved it is this viewer's own change and the role
-    // it asks for is the role now, the repeat still closes the role-change drafts a failed close
-    // after that change left open: the ones prepared against an older access version.
-    const conflict = refused.conflict;
-    if (conflict?.changed_by?.is_self_actor && conflict.change.after.role === parsed.value.role) {
-      await closeRoleDrafts(
+    // refused here and changes nothing. When the role it asks for is the role now and this viewer's
+    // own change set it, the repeat still closes the role-change drafts a failed close after that
+    // change left open: the ones prepared against an older version than that change produced,
+    // attributed to it. A removal or give-back since moves the version but answers no draft, and a
+    // role someone else set is theirs to close, so neither counts here.
+    const refused = await accessVersionConflict(env, auth, user, parsed.value.expectedAccessVersion);
+    if (user.role === parsed.value.role) {
+      const set = await authStore.findNewestRoleSet(
         env,
-        req,
         auth.session.tenant_id,
         user.user_id,
-        conflict.change.after.role,
+        user.role,
         auth.session.user_id,
-        conflict.access_version,
       );
+      if (set) {
+        await closeRoleDrafts(env, req, auth.session.tenant_id, user.user_id, user.role, set.actorUserId, set.version);
+      }
     }
     return refused;
   }
   if (user.role === parsed.value.role) {
-    // Nothing to change at this version; drafts prepared against an older one close.
-    await closeRoleDrafts(
+    // Nothing to change at this version. Drafts prepared before the change that set the role now
+    // close, attributed to it: a repeat closes what a failed close after it left open. The measure
+    // is that change's version, not the version now: a removal or give-back since moved the version
+    // without answering a role draft, so a draft prepared at or after that change stays open. It is
+    // not the role a draft proposed either: a role change answers the person's role drafts whether
+    // or not it set what they proposed (AI-TEAM-CONTRACT.md, "Action classes").
+    const set = await authStore.findNewestRoleSet(
       env,
-      req,
       auth.session.tenant_id,
       user.user_id,
       user.role,
-      auth.session.user_id,
-      Number(user.access_version ?? 1),
+      null,
     );
+    if (set) {
+      await closeRoleDrafts(env, req, auth.session.tenant_id, user.user_id, user.role, set.actorUserId, set.version);
+    }
     return {
       ok: true,
       body: { version: APP_API_VERSION, user: await projectAppUser(env, user, auth) },
@@ -836,16 +845,18 @@ export async function changeAppUserRole(
   if (!updated) {
     return await accessWriteFailure(env, auth, user.user_id, parsed.value.expectedAccessVersion);
   }
-  // The role change and its audit row committed together above; drafts prepared against an older
-  // access version than the one it produced close.
+  // The role change and its audit row committed together above. The close names what this request
+  // wrote, not the row read back after it, which a concurrent writer may already have moved: the
+  // write held only at `expectedAccessVersion`, so it produced exactly the next one, and drafts
+  // prepared against an older version close.
   await closeRoleDrafts(
     env,
     req,
     auth.session.tenant_id,
     updated.user_id,
-    updated.role,
+    parsed.value.role,
     auth.session.user_id,
-    Number(updated.access_version ?? 1),
+    parsed.value.expectedAccessVersion + 1,
   );
   return {
     ok: true,

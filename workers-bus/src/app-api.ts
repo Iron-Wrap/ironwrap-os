@@ -491,16 +491,17 @@ export async function handleAdminAppUserProvision(
       : appJson({ error: "app_user_state_changed" }, 409);
   }
   // An existing person's new role answers the AI team's role-change drafts for them that were
-  // prepared against an older access version.
-  if (target && target.role !== user.role) {
+  // prepared against an older access version. The close names what this request wrote, not the row
+  // read back after it: the write held only at `expectedAccessVersion`, so it produced the next one.
+  if (target && expectedAccessVersion !== null && target.role !== provision.role) {
     await closeRoleDrafts(
       appEnv,
       req,
       user.tenant_id,
       user.user_id,
-      user.role,
+      provision.role,
       auth.session.user_id,
-      Number(user.access_version ?? 1),
+      expectedAccessVersion + 1,
     );
   }
   return appJson({

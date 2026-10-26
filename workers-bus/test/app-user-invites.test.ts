@@ -970,6 +970,154 @@ test("a role change that loses its write to a concurrent change closes no draft"
   );
 });
 
+/** A synthetic prepared role-change draft, as access.prepare_change leaves it in the owner's Needs you. */
+function roleDraft(h: Harness, userId: string, stepId: string, version: number): void {
+  h.db.raw.exec("PRAGMA foreign_keys = OFF");
+  h.db.raw
+    .prepare(
+      `INSERT INTO agent_run_steps (step_id, tenant_id, run_id, step_seq, step_key, specialist_id, action_id, autonomy, args_json, args_sha256,
+        sources_json, policy_json, permit_json, outcome, needs_ask, undo_json, do_it_myself_json, created_at, decided_at)
+      VALUES (?, ?, ?, 1, 'k', 'orchestrator', 'access.prepare_change', 'A1', ?, 'synthetic', '[]', '{"result":"allow","reason_codes":[]}',
+        '{"approved_by":null}', 'succeeded', 'apply_in_own_screen', '{}', '{"context":{}}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    )
+    .run(
+      stepId,
+      TENANT,
+      `run_${stepId}`,
+      JSON.stringify({ person_ref: `person:${userId}`, change: "change_role", target_role: "field", device_ref: null, expected_access_version: version }),
+    );
+  h.db.raw.exec("PRAGMA foreign_keys = ON");
+}
+
+/** How one draft closed, if it did: its reason code and what `do_it_myself.context.applied` says. */
+function draftClose(h: Harness, stepId: string): [string | null, unknown] {
+  const row = h.db.raw.prepare("SELECT reason_code, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(stepId) as {
+    reason_code: string | null;
+    do_it_myself_json: string;
+  };
+  return [row.reason_code, JSON.parse(row.do_it_myself_json).context.applied ?? null];
+}
+
+function draftCloseAudits(h: Harness): Array<Record<string, string>> {
+  return (h.db.raw.prepare("SELECT user_id, outcome, detail_code FROM app_auth_audit WHERE event = 'agent_draft_close' ORDER BY id").all() as Array<Record<string, string>>)
+    .map((row) => ({ ...row }));
+}
+
+test("after a self-removal, a draft prepared on the role's version stays open", async () => {
+  const h = harness();
+  const { user: ownerUser, session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  const role = (body: Record<string, unknown>) => call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session, body });
+  // The owner sets the role (version 2). Then a draft on version 1 that the close after it missed,
+  // and the AI team's new proposal on version 2.
+  assert.equal((await role({ role: "production", expected_access_version: 1 })).status, 200);
+  roleDraft(h, mate.user_id, "step_left", 1);
+  roleDraft(h, mate.user_id, "step_new", 2);
+  // The same owner removes the person's access (version 3): no role is set.
+  assert.equal((await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+    session,
+    body: { active: false, expected_access_version: 2 },
+  })).status, 200);
+
+  // A stale tab repeats the first change: refused, and it closes only what that change answered.
+  const replay = await role({ role: "production", expected_access_version: 1 });
+  assert.equal(replay.status, 409);
+  assert.equal(replay.body.error, "access_version_conflict");
+  assert.equal(accessVersionOf(h, mate.user_id), 3, "the refused repeat changes nothing");
+  assert.deepEqual(draftClose(h, "step_left"), ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }]);
+  assert.deepEqual(draftClose(h, "step_new"), [null, null], "nobody applied the proposal prepared on version 2");
+  // A repeat at the version now measures against the role change too, not the removal after it.
+  assert.equal((await role({ role: "production", expected_access_version: 3 })).status, 200);
+  assert.deepEqual(draftClose(h, "step_new"), [null, null]);
+  assert.deepEqual(draftCloseAudits(h), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
+});
+
+test("a stale repeat of a role someone else set closes nothing, and a repeat at the version now names who set it", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const priya = await addUser(h.env, "priya@example.invalid", "ops", "Priya Nand");
+  const priyaSession = await signIn(h, priya, "p".repeat(43));
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  const access = (active: boolean, version: number) =>
+    call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, { session, body: { active, expected_access_version: version } });
+  const role = (version: number, as = session) =>
+    call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session: as, body: { role: "production", expected_access_version: version } });
+  // Priya sets the role (version 2); a draft on version 1 is left open, as when the close after her
+  // change fails.
+  assert.equal((await role(1, priyaSession)).status, 200);
+  roleDraft(h, mate.user_id, "step_left", 1);
+  // The owner removes and gives back the person's access (versions 3 and 4), so the newest change
+  // is the owner's own, but it set no role.
+  assert.equal((await access(false, 2)).status, 200);
+  assert.equal((await access(true, 3)).status, 200);
+
+  // The owner's stale tab asks for the role Priya set: refused, and the owner never set that role,
+  // so nothing closes in the owner's name.
+  const stale = await role(1);
+  assert.equal(stale.status, 409);
+  assert.equal((stale.body.conflict as { changed_by: { is_self_actor: boolean } }).changed_by.is_self_actor, true);
+  assert.deepEqual(draftClose(h, "step_left"), [null, null]);
+  assert.deepEqual(draftCloseAudits(h), []);
+
+  // A repeat at the version now closes it, attributed to Priya's change, which answered it.
+  assert.equal((await role(4)).status, 200);
+  assert.deepEqual(draftClose(h, "step_left"), ["applied_by_person", { field: "role", value: "production", by: priya.user_id }]);
+  assert.deepEqual(draftCloseAudits(h), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${priya.user_id}` }]);
+});
+
+test("a role change's close names what it wrote, not what a concurrent writer set after it committed", async () => {
+  const h = harness();
+  const { user: ownerUser, session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  roleDraft(h, mate.user_id, "step_old", 1);
+  // After this request's batch commits and before it reads the person back, the AI team prepares a
+  // proposal on version 2 and another writer sets 'accounting' (version 3).
+  let raced = false;
+  h.db.afterNextMatchingRun(
+    (sql) => sql.includes("UPDATE app_users") && sql.includes("SET access_role") && sql.includes("access_version = access_version + 1"),
+    () => {
+      raced = true;
+      roleDraft(h, mate.user_id, "step_v2", 2);
+      h.db.raw.prepare(
+        `UPDATE app_users SET access_role = 'accounting', access_version = access_version + 1, updated_at = ?
+          WHERE tenant_id = ? AND user_id = ?`,
+      ).run("2026-08-24T12:02:00.000Z", TENANT, mate.user_id);
+    },
+  );
+
+  const changed = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production", expected_access_version: 1 },
+  });
+  assert.equal(raced, true, "the concurrent writer ran between the commit and the read-back");
+  assert.equal(changed.status, 200);
+  assert.equal((changed.body.user as Record<string, unknown>).role, "accounting", "the response shows the person now");
+  assert.deepEqual(draftClose(h, "step_old"), ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }]);
+  assert.deepEqual(draftClose(h, "step_v2"), [null, null], "this change produced version 2, so it did not answer a draft on it");
+  assert.deepEqual(draftCloseAudits(h), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
+});
+
+test("a no-op role repeat after a removal and a give-back closes no draft: no role was set", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  roleDraft(h, mate.user_id, "step_pending", 1);
+  for (const [active, version] of [[false, 1], [true, 2]] as const) {
+    assert.equal((await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+      session,
+      body: { active, expected_access_version: version },
+    })).status, 200);
+  }
+  const noop = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "sales", expected_access_version: 3 },
+  });
+  assert.equal(noop.status, 200);
+  assert.equal(accessVersionOf(h, mate.user_id), 3);
+  assert.deepEqual(draftClose(h, "step_pending"), [null, null], "the version moved, but nobody set a role");
+  assert.deepEqual(draftCloseAudits(h), []);
+});
+
 test("a role change is the server's decision, not the browser's", async () => {
   const h = harness();
   const { user: ownerUser, session } = await owner(h);

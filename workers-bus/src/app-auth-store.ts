@@ -138,6 +138,35 @@ export async function listAccessChangesSince(
   );
 }
 
+/**
+ * The newest change in one person's audit that set their role to `role` from another role, by
+ * `actorUserId` when one is named: the access version it produced and who decided it. A new
+ * person, a removal and a give-back set no role, so none of them is it.
+ */
+export async function findNewestRoleSet(
+  env: Env,
+  tenantId: string,
+  userId: string,
+  role: AppRole,
+  actorUserId: string | null,
+): Promise<{ version: number; actorUserId: string } | null> {
+  const row = await env.DB.prepare(
+    `SELECT json_extract(access_change, '$.v') AS version,
+            json_extract(access_change, '$.actor') AS actor
+       FROM app_auth_audit
+      WHERE tenant_id = ? AND user_id = ? AND access_change IS NOT NULL
+        AND json_extract(access_change, '$.after.role') = ?
+        AND json_extract(access_change, '$.before.role') <> ?
+        AND (? IS NULL OR json_extract(access_change, '$.actor') = ?)
+      ORDER BY json_extract(access_change, '$.v') DESC, id DESC
+      LIMIT 1`,
+  ).bind(tenantId, userId, role, role, actorUserId, actorUserId).first<{
+    version: number;
+    actor: string;
+  }>();
+  return row ? { version: Number(row.version), actorUserId: row.actor } : null;
+}
+
 /** The access version the route authorized against; the column is NOT NULL DEFAULT 1 (0157). */
 function expectedAccessVersion(expected: AppUserRecord): number | null {
   const version = Number(expected.access_version ?? 1);

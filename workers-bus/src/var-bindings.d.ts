@@ -150,6 +150,8 @@ interface Env {
   COMMERCIAL_AUTHORITY_POLICY_JSON: string;
   /** What data the Worker holds for the AI team: `business` (the default) or `synthetic`. */
   AGENT_DATA_CLASS: string;
+  /** The instant from which envelopes give the AI team inbound signals; blank keeps that off. */
+  AGENT_INBOUND_FROM: string;
 }
 
 declare namespace Cloudflare {
@@ -294,5 +296,6 @@ declare namespace Cloudflare {
     STUCK_THRESHOLD_MIN: string;
     COMMERCIAL_AUTHORITY_POLICY_JSON: string;
     AGENT_DATA_CLASS: string;
+    AGENT_INBOUND_FROM: string;
   }
 }

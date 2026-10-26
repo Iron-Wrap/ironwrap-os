@@ -34,7 +34,7 @@
     {
       "binding": "DB",
       "database_name": "ironwrap-bus",
-      "database_id": "f0674848-13df-4422-9896-8ba2719663b8",
+      "database_id": "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
       "migrations_dir": "migrations"
     }
   ],
@@ -313,11 +313,19 @@
       "PROPOSAL_TEMPLATE_DOC_ID": "",
       "DEDUP_WINDOW_HOURS": "72",
       "STUCK_THRESHOLD_MIN": "15",
-      "COMMERCIAL_AUTHORITY_POLICY_JSON": "",
+      "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
+    },
+    // The AI team's vars: two share the AGENT_ token, so they are their own group
+    // (tools/wrangler-vars.mjs groupWranglerVars).
+    "CFG_AGENT": {
       // What data this Worker holds, for the AI team: business data here, so a run closes as a
       // live or shadow run on a qualified route, and a synthetic run (a QA or dev agent host) is
       // refused. Only a Worker on seed data says "synthetic".
-      "AGENT_DATA_CLASS": "business"
+      "AGENT_DATA_CLASS": "business",
+      // The instant from which inbound envelopes become AI team signals (src/agents/inbound.ts);
+      // blank keeps the producer off. Production stays off until agent signals have retention and
+      // erasure (a test pins it blank), then until the owner decides to go live.
+      "AGENT_INBOUND_FROM": ""
     }
   },
 
@@ -536,9 +544,13 @@
           "PROPOSAL_TEMPLATE_DOC_ID": "",
           "DEDUP_WINDOW_HOURS": "72",
           "STUCK_THRESHOLD_MIN": "15",
-          "COMMERCIAL_AUTHORITY_POLICY_JSON": "",
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
+        },
+        "CFG_AGENT": {
           // The local stack holds throwaway seed data, so a dev agent host's synthetic runs close here.
-          "AGENT_DATA_CLASS": "synthetic"
+          "AGENT_DATA_CLASS": "synthetic",
+          // Seed data only, so inbound envelopes become AI team signals here, as in qa.
+          "AGENT_INBOUND_FROM": "2026-10-20T15:52:43Z"
         }
       }
     },
@@ -791,10 +803,15 @@
           // 10000000 cents, owner and worker (staff) actors, never agents. production and local
           // carry "" and keep the commercial write path closed. When the window lapses the QA seed
           // stops with policy_expired; renewal is that event's one-line edit of valid_from/valid_until.
-          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}",
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}"
+        },
+        "CFG_AGENT": {
           // qa holds synthetic data only, and the QA agent host runs as a synthetic host
           // (AGENT_HOST_DATA_CLASS=synthetic), so its synthetic runs close here.
-          "AGENT_DATA_CLASS": "synthetic"
+          "AGENT_DATA_CLASS": "synthetic",
+          // The inbound producer is on in qa: envelopes recorded from this instant on become AI
+          // team signals; earlier ones never do.
+          "AGENT_INBOUND_FROM": "2026-10-20T15:52:43Z"
         }
       }
     }

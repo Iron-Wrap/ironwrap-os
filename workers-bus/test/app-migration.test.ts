@@ -2301,7 +2301,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0205_agent_step_pair_index.sql",
+      "0206_agent_draft_closing.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2441,7 +2441,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
-    // action.
+    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its

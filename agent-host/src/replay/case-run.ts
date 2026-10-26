@@ -341,7 +341,7 @@ export const INBOUND_CHANNELS: ReadonlySet<string> = new Set(["web_form", "insta
  * the step names that lead (a missing lead id is the schema's to refuse), and it cites only the
  * signal.
  */
-function fromItsInbound(requester: ToolFile["requester"], args: unknown, cited: Array<{ fact_id: string }>): boolean {
+export function fromItsInbound(requester: ToolFile["requester"], args: unknown, cited: Array<{ fact_id: string }>): boolean {
   if (!requester || requester.kind !== "event" || !INBOUND_CHANNELS.has(requester.source) || requester.subject?.aggregate !== "lead") return false;
   const named = isObject(args) ? args.lead_id : undefined;
   if (typeof named === "string" && named !== requester.subject.id) return false;

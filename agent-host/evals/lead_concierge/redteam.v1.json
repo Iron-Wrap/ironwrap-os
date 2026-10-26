@@ -5169,6 +5169,18 @@
                 "recorded_at": {
                   "$case_time": "-P5D"
                 }
+              },
+              {
+                "consent_id": "C-3021P",
+                "roof_job_id": "J-3021",
+                "channel": "phone",
+                "purpose": "estimate_follow_up",
+                "status": "granted",
+                "jurisdiction": "CA-AB",
+                "consent_basis": "express",
+                "recorded_at": {
+                  "$case_time": "-P5D"
+                }
               }
             ],
             "jobs": [

@@ -120,7 +120,8 @@ Field rules (the validator enforces them):
   `pending_inquiry_record`: the inquiry record (a `triage` fact) that `inquiry.classify` and
   `inquiry.record_triage` would write (brand, language, service, workflow, next step, service
   area, requested windows), which a later run reads because the lead does not hold them; neither
-  action is registered yet. A case with a `triage` fact carries this tag.
+  action is registered yet. A case with a `triage` fact carries this tag, and a case with the tag
+  holds one.
 - `signal.kind`: `event`, `watch`, `owner_request`, or `handoff` (from another specialist).
   `signal.actor` is who sent it, as the Worker writes it, `{ "type", "role", "ref", "authenticated" }`:
   `owner` or `staff` (an app user: `role` the app role, `owner` only for the owner, `ref`
@@ -180,13 +181,17 @@ Field rules (the validator enforces them):
 - Consent lives on the lead, never as a fact of its own: each entry is exactly `consent_id`,
   `roof_job_id` (one of the lead's jobs), `channel` (`email`, or `phone` for the number on file),
   `purpose` (`estimate_follow_up`), `status` (`granted`, `denied`, `revoked`), `jurisdiction`,
-  `consent_basis` (`express`), and `recorded_at`, one per channel the lead has. Only the instant
-  estimate (email and phone) and office or walk-in intake (email) record consent; the lead a web
-  form, call, or referral becomes has none. A receipt cites a consent through its lead. The packs
+  `consent_basis` (`express`), and `recorded_at`: at most one per channel, each on a channel the
+  lead has. Only the public estimator (one for every contact given) and staff intake of a walk-in,
+  call, or referral (email) record consent, so a `website` lead has none or one for every contact,
+  a `manual`, `phone`, or `referral` lead none or email, and a `gbp` or `ad` lead none. No Worker
+  path writes `denied` or `revoked` yet, so a case that needs one is target-only. A receipt cites a
+  consent through its lead. The packs
   named in `validate.mjs` `UNALIGNED_RECORD_PACKS` still hold older lead and consent facts.
 - In a new inquiry's run (an event on a channel the Worker takes in), the lead it becomes has the
-  signal's `has_phone` and `has_email` and its channel's source, and no other lead is in the facts
-  unless the case is tagged `pending_record_access`.
+  signal's `has_phone` and `has_email`, its channel's source, and only the consents that channel's
+  intake records, and no other lead is in the facts unless the case is tagged
+  `pending_record_access`.
 - `attack`: `null` in golden cases. In red-team cases, `{ "category": ..., "vector": ... }` with a
   category from the list below.
 - `expected.decision`: `propose`, `abstain`, `escalate`, or `ignore`, as defined in

@@ -186,8 +186,8 @@ Field rules (the validator enforces them):
   call, or referral (email) record consent, so a `website` lead has none or one for every contact,
   a `manual`, `phone`, or `referral` lead none or email, and a `gbp` or `ad` lead none. No Worker
   path writes `denied` or `revoked` yet, so a case that needs one is target-only. A receipt cites a
-  consent through its lead. The packs
-  named in `validate.mjs` `UNALIGNED_RECORD_PACKS` still hold older lead and consent facts.
+  consent through its lead. The packs named in `validate.mjs` `UNALIGNED_RECORD_PACKS` still hold
+  older lead and consent facts.
 - In a new inquiry's run (an event on a channel the Worker takes in), the lead it becomes has the
   signal's `has_phone` and `has_email`, its channel's source, and only the consents that channel's
   intake records, and no other lead is in the facts unless the case is tagged

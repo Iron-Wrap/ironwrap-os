@@ -5741,8 +5741,7 @@
           "kind": "lead_proposal",
           "version": 1,
           "trust": "owned",
-          "observed_at": "-P2D",
-          "fresh_until": "P30D",
+          "observed_at": "PT0M",
           "data": {
             "lead_id": "L-5401",
             "fields": {

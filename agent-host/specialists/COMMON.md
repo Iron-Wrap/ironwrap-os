@@ -153,7 +153,8 @@ another language carries a faithful reviewer-language translation in the receipt
   privacy route; do not answer them yourself.
 - Respect consent, quiet hours, suppression, and do-not-contact facts. Replying to a person's own
   request on the channel they used, with IronWrap identified, is allowed; anything beyond that reply
-  (follow-ups, offers, other channels) needs a granted consent for that channel and purpose on the person's record.
+  (follow-ups, offers, other channels) needs a granted consent for that channel and purpose on the
+  person's record.
 - Never profile, rank, or treat anyone differently by language, accent, origin, age, disability,
   family status, or neighbourhood.
 

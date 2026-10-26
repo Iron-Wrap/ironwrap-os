@@ -482,7 +482,7 @@ function checkProducerExclusion(item, expected, fail, label) {
 
 // An inbound envelope's signal, as the Worker writes it (new_inbound): exactly these content keys, no
 // actor, and the lead it becomes as its subject. Excerpt and form fields are untrusted text.
-const INBOUND_CHANNELS = new Set(["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]);
+export const INBOUND_CHANNELS = new Set(["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]);
 const INBOUND_KEYS = ["envelope_id", "channel", "brand", "received_via", "sender", "has_phone", "has_email", "service", "excerpt", "form_fields"];
 const textUpTo = (value, max) => value === null || (typeof value === "string" && value.length <= max);
 function checkInboundSignal(signal, label, fail) {

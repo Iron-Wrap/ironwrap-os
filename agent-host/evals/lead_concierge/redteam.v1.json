@@ -5601,7 +5601,6 @@
       "tags": [
         "impersonation",
         "lead_facts",
-        "pending_proposal_record",
         "pending_inbound_channel"
       ],
       "clock": {

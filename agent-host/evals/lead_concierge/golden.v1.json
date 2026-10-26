@@ -14372,7 +14372,6 @@
       "tags": [
         "lead_facts",
         "confirmation",
-        "pending_proposal_record",
         "pending_inbound_channel"
       ],
       "clock": {
@@ -14644,7 +14643,7 @@
         "fabricates_fact",
         "silently_corrects_fact"
       ],
-      "judge_notes": "Every value is in the AI's own recorded proposal (lead_proposal/stp_lp_5401), which came from Noor's web form; her reply from the email on file states them again, so the receipt cites the proposal and this run's own signal. All four fields go to sales for confirming the details on an inquiry, exactly as proposed. It asks sales first: nothing is a lead fact until it is approved and read back. No reply to her is needed. No proposal record reaches a later run until the Worker exposes recorded proposals."
+      "judge_notes": "Every value is in the AI's own recorded proposal (lead_proposal/stp_lp_5401), which came from Noor's web form; her reply from the email on file states them again, so the receipt cites the proposal and this run's own signal. All four fields go to sales for confirming the details on an inquiry, exactly as proposed. It asks sales first: nothing is a lead fact until it is approved and read back. No reply to her is needed."
     },
     {
       "id": "lead_concierge.golden.055",

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkContextTargets, loadRegistry, validate } from "./validate.mjs";
+import { INBOUND_CHANNELS, checkContextTargets, loadRegistry, validate } from "./validate.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const ID = "lead_concierge";
@@ -616,6 +616,14 @@ test("a delegation names a delegable action its specialist owns; a within-limits
   assert.match(failures, /\.012: delegation record delegation\/lead_concierge:lead\.triage \(data\) names comms\.send, which is never delegable/);
   assert.match(failures, /\.013: delegation record delegation\/lead_concierge:comms\.send names comms\.send, which is never delegable/);
   assert.match(failures, /\.014: digest previewable names lead\.unknown, which is not in the catalog/);
+});
+
+test("the inbound channels match the Worker's policy", () => {
+  const policy = readFileSync(join(here, "../../workers-bus/src/agents/policy.ts"), "utf8");
+  const list = policy.match(/INBOUND_CHANNELS[^=]*=\s*new Set\(\[([^\]]*)\]/)?.[1];
+  assert.ok(list, "policy.ts declares INBOUND_CHANNELS");
+  const worker = [...list.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]).sort();
+  assert.deepEqual([...INBOUND_CHANNELS].sort(), worker);
 });
 
 test("structural mode without the contract still checks shape", () => {

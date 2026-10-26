@@ -18,6 +18,8 @@
 //     owner — is answered here against D1, never by what the caller claims.
 
 import * as authStore from "./app-auth-store.ts";
+import { closeAccessDrafts } from "./agents/drafts.ts";
+import type { AgentDb } from "./agents/store.ts";
 import {
   appPublicOrigin,
   authRequestContext,
@@ -576,6 +578,34 @@ export async function listAppUsersForOffice(
   };
 }
 
+
+/**
+ * A person's role was set: the AI team's open role-change drafts for them close (agents/drafts.ts),
+ * after the change commits; the close is best effort, and a close that closed any is audited like
+ * the role change itself (a failed audit write fails the request), so no draft leaves its person's
+ * Needs you without a trace. `accessVersion` is the person's access version
+ * now, once access is versioned; until then it is null and every open role-change draft closes.
+ */
+export async function closeRoleDrafts(
+  env: AppEnv,
+  req: Request,
+  tenantId: string,
+  userId: string,
+  role: string,
+  actorUserId: string,
+  accessVersion: number | null = null,
+): Promise<void> {
+  if (await closeAccessDrafts(env.DB as unknown as AgentDb, tenantId, userId, role, actorUserId, accessVersion))
+    await authStore.recordAuthAudit(env, {
+      tenantId,
+      userId,
+      event: "agent_draft_close",
+      outcome: "closed",
+      request: await authRequestContext(req, env),
+      detailCode: `${role}:${actorUserId}`,
+    });
+}
+
 /**
  * Change one person's role.
  *
@@ -606,6 +636,8 @@ export async function changeAppUserRole(
   const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
   if (authority) return authority;
   if (user.role === parsed.value.role) {
+    // A repeat closes any role-change draft a failed close left open after the first request.
+    await closeRoleDrafts(env, req, auth.session.tenant_id, user.user_id, user.role, auth.session.user_id);
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
   }
 
@@ -629,6 +661,7 @@ export async function changeAppUserRole(
     request: await authRequestContext(req, env),
     detailCode: `${user.role}->${updated.role}:${auth.session.user_id}`,
   });
+  await closeRoleDrafts(env, req, auth.session.tenant_id, updated.user_id, updated.role, auth.session.user_id);
   return {
     ok: true,
     body: { version: APP_API_VERSION, user: appUserProjection(updated, auth) },

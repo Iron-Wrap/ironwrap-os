@@ -6,6 +6,7 @@
 // re-drives anything stuck; a daily cron reconciles source vs landed and emits the heartbeat.
 
 import { handleAgentHostApi, type AgentEnv } from "./agents/api.ts";
+import { inboundFrom, sweepInbound } from "./agents/inbound.ts";
 import { sweepShadow } from "./agents/shadow.ts";
 import { retryReportDeliveries, runWatches } from "./agents/watches.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -457,6 +458,17 @@ export default {
             if (result.fired.length + result.failed.length > 0) log({ at: "agent_watches", ...result });
           }).catch((error) =>
             log({ at: "agent_watches", error: String(error) }),
+          ),
+          // An inbound envelope whose signal its insert did not append gets it here, once.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            const from = inboundFrom(env.AGENT_INBOUND_FROM);
+            if (!tenantId || from === null) return { produced: 0, failed: 0 };
+            return await sweepInbound(env.DB as unknown as AgentDb, tenantId, from, new Date().toISOString());
+          })().then((result) => {
+            if (result.produced + result.failed > 0) log({ at: "agent_inbound_sweep", ...result });
+          }).catch((error) =>
+            log({ at: "agent_inbound_sweep", error: String(error) }),
           ),
           // A run whose host never closed it closes past its wall-time ceiling, so none stays open.
           (async () => {

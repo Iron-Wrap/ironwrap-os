@@ -401,10 +401,11 @@ export async function recordProposalDeliveryConfirmation(
       delivery_state: effect.state,
     });
   }
-  // A readback that conflicted means the provider answered, so it did something: "not delivered"
-  // would make the send "not executed" and open the way to a second send. That needs provider
-  // evidence, never a person's word: a cited complete-scan "not found" made after the conflict. D1
-  // refuses it as well (0164, 0167). "Delivered" stays open.
+  // A send whose provider answered (its readback conflicted, or it refused the send yet a later
+  // check says otherwise) did something: "not delivered" would make it "not executed" and open the
+  // way to a second send. That needs provider evidence, never a person's word: a cited complete-scan
+  // "not found" made after the send's latest move into the exception. D1 refuses it as well (0164,
+  // 0167). "Delivered" stays open.
   if (input.outcome === "not_delivered" && effect.state === "manual_exception") {
     // The latest move into the exception says why it is one, as 0161's late-answer wait reads it.
     const cause = await env.DB.prepare(
@@ -412,7 +413,7 @@ export async function recordProposalDeliveryConfirmation(
         WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`,
     ).bind(effect.effect_id).first<{ from_state: string | null; occurred_at: string }>();
     if (
-      cause?.from_state === "reconciling" &&
+      (cause?.from_state === "reconciling" || cause?.from_state === "failed") &&
       !(cited && Date.parse(cited.created_at) > Date.parse(cause.occurred_at))
     ) {
       throw new ProposalDeliveryConfirmationError(

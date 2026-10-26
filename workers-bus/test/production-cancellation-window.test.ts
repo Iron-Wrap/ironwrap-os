@@ -1022,6 +1022,11 @@ test("the window ends at the end of the 10th local day after its start, never be
   // The last millisecond of a day still counts that day as day 0; the next one starts day 0 anew.
   assert.equal(cancellationWindowEndsAt("2025-11-05T06:59:59.999Z", ZONE), "2025-11-15T07:00:00.000Z");
   assert.equal(cancellationWindowEndsAt("2025-11-05T07:00:00.000Z", ZONE), "2025-11-16T07:00:00.000Z");
+  // Where a local midnight repeats (Havana falls back from 01:00 to 00:00), the window ends at the
+  // later of the two, never the earlier; where one is skipped (Havana springs forward at 00:00),
+  // at the instant just after the gap, the first of that day.
+  assert.equal(cancellationWindowEndsAt("2025-10-22T16:00:00.000Z", "America/Havana"), "2025-11-02T05:00:00.000Z");
+  assert.equal(cancellationWindowEndsAt("2025-02-26T17:00:00.000Z", "America/Havana"), "2025-03-09T05:00:00.000Z");
   // Both instants of the hour the clocks repeat fall on the same day, and end together.
   assert.equal(cancellationWindowEndsAt("2025-11-02T07:30:00.000Z", ZONE), "2025-11-13T07:00:00.000Z");
   assert.equal(cancellationWindowEndsAt("2025-11-02T08:30:00.000Z", ZONE), "2025-11-13T07:00:00.000Z");

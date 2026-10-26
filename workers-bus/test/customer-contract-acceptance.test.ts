@@ -3593,6 +3593,50 @@ test("a copy whose event D1 does not write claims no window; one whose answer D1
   }
 });
 
+test("a copy recorded as shown after a person's record never ends before that record's end", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextSignedCopyBuild = true;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-later-end-0001");
+    assert.equal(first.status, 200);
+    const binding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
+    assert.deepEqual(shownEvents(h), []);
+    // A person's record at the signature, ending at its 265th hour, which D1 allows: later than the
+    // copy's own end will be, as for a record read in a business time zone hours behind this one.
+    const recordEnd = new Date(Date.parse(binding.accepted_at) + 265 * 60 * MINUTE_MS).toISOString();
+    h.db.raw.prepare(
+      `INSERT INTO production_cancellation_window_receipts (
+         receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
+         acceptance_binding_id, contract_signed_at, reason, evidence_ref, recorded_by_user_id,
+         recorded_by_role, recorded_at, request_sha256, idempotency_key_hash
+       ) VALUES (?, ?, ?, ?, ?, 'Pacific/Honolulu', ?, ?, 'Synthetic direct record.', 'fixture://copy', ?,
+                 'owner', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`,
+    ).run(
+      `pcw_${"6".repeat(40)}`, TENANT, JOB_ID, binding.accepted_at, recordEnd, binding.acceptance_binding_id,
+      binding.accepted_at, OWNER_ID, "a".repeat(64), "6".repeat(64),
+    );
+    // The replay records the copy as shown now. Its own end would come sooner, so it keeps the
+    // record's end, and serves it.
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-later-end-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    const body = await replay.json() as Record<string, any>;
+    const [event] = shownEvents(h);
+    assert.ok(event);
+    assert.ok(cancellationWindowEndsAt(event.shown_at, ZONE) < recordEnd);
+    assert.equal(event.window_ends_at, recordEnd);
+    assert.equal(body.signed_copy.window_ends_at, recordEnd);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).ends_at, recordEnd);
+  } finally {
+    h.restore();
+  }
+});
+
 test("an uncertain (202) attempt with signed_copy records no copy as shown", async () => {
   const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
   try {

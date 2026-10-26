@@ -2297,7 +2297,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // wait in D1 with a window per provider; and names the permit holder of each new publication.
     // 0163 keeps the first time a customer's portal link opened a published proposal.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 137);
+    assert.equal(migrations.length, 138);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),

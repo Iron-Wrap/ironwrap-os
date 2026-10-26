@@ -60,7 +60,7 @@
     "react": "19.2.9",
     "react-dom": "19.2.9",
     "tailwind-merge": "3.7.0",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
@@ -84,7 +84,7 @@
     "eslint-plugin-react-refresh": "0.5.7",
     "fake-indexeddb": "6.2.5",
     "globals": "17.13.0",
-    "happy-dom": "21.0.1",
+    "happy-dom": "21.0.4",
     "lighthouse": "13.5.0",
     "prettier": "3.9.10",
     "puppeteer-core": "25.14.0",

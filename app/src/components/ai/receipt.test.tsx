@@ -749,6 +749,9 @@ describe("a people-only draft that left Needs you", () => {
       ),
     ).toBeVisible();
     expect(card.textContent).not.toMatch(/this change|person_dana|production\b/);
+    // The read-back names the changed record; it is not a check in another system.
+    expect(within(card).queryByText("Checked")).toBeNull();
+    expect(card.textContent).not.toMatch(/other system/);
     expect(within(card).queryAllByRole("button")).toEqual([]);
   });
 
@@ -771,8 +774,18 @@ describe("a people-only draft that left Needs you", () => {
   });
 
   it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
-    render(<Receipt receipt={draft("superseded")} display={closed} />);
+    const replaced = {
+      ...draft("superseded"),
+      readback: {
+        source: "owned_store",
+        reference: "step/step_newer",
+        response_hash: "sha256:args",
+        matched: true,
+      },
+    };
+    render(<Receipt receipt={replaced} display={closed} />);
     const card = screen.getByRole("article");
+    expect(within(card).queryByText("Checked")).toBeNull();
     expect(card).toHaveAttribute("data-state", "replaced");
     expect(within(card).getByText("Replaced")).toBeVisible();
     expect(

@@ -184,13 +184,17 @@ export function Receipt({
   const approver = receipt.permit.approved_by
     ? (name(receipt.permit.approved_by) ?? "a person")
     : undefined;
+  // A closed people-only draft's read-back names the record a person changed or the newer draft,
+  // not a check in an outside system; its note says what happened, so it has no Checked line.
+  const closedDraft =
+    receipt.outcome === "succeeded" && (state === "done_by_person" || state === "replaced");
   const checked =
     display.checked ??
     ([
       approver
         ? `Approved by ${approver}${display.approvedWhen ? ` ${display.approvedWhen}` : ""}.`
         : null,
-      receipt.readback
+      receipt.readback && !closedDraft
         ? `Checked in ${where}${display.checkedWhen ? ` ${display.checkedWhen}` : ""}: ${
             receipt.readback.matched ? "matches" : "does not match"
           }.`

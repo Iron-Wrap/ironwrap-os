@@ -2,18 +2,23 @@
 -- firm start until it ends.
 --
 -- OD-01 (the owner's register, as the lead ruled it, pending counsel through the owner): the
--- customer may cancel until 10 days after they receive their copy of the signed contract. Inside
--- that window nothing is ordered from a supplier, no shop work starts and no start is confirmed.
--- The register scopes it to private dwellings; D1 cannot tell a private dwelling from a commercial
--- job, so the window applies to every contract.
+-- customer may cancel until 10 days after they receive their copy of the signed contract, and
+-- inside that window nothing is ordered from a supplier, no shop work starts and no start is
+-- confirmed. The register scopes it to private dwellings; D1 cannot tell a private dwelling from a
+-- commercial job, so the window applies to every contract. Of that register, this migration holds
+-- the firm start, the Materials attestation and a job's purchase order lines in D1. It does not hold
+-- Frappe's Supplier Order (written outside D1, through the ERPNext MCP) or a Shop Order's schedule
+-- on the typed work-object assignment; each needs this hold before it opens.
 --
 -- The window starts from one of two records of that receipt:
 --
--- 1. `contract_signed_copy_events`: the portal showed the customer the signed copy. By the owner's
+-- 1. `contract_signed_copy_events`: the portal served the customer the signed copy. By the owner's
 --    ruling a copy shown in the portal at signing counts as received. The Worker appends the event
---    in the same D1 batch as the acceptance it belongs to, only when the confirm response returns
---    the signed copy (terms plus receipt), never from the acceptance alone. One per acceptance
---    binding; `shown_at` is D1's own clock; each event writes one `audit_log` row as it lands.
+--    only after the acceptance has committed and it has built the copy (terms plus receipt) for a
+--    client that renders it, in its own statement conditional on that committed binding, and then
+--    serves the copy; never from the acceptance alone, and never for a copy it could not build.
+--    One per acceptance binding; `shown_at` is D1's own clock; each event writes one `audit_log`
+--    row as it lands.
 -- 2. `production_cancellation_window_receipts`: a person's record, for a contract whose copy the
 --    portal did not show (every contract signed before this, or one signed outside D1). An active
 --    owner or ops person, never the QA seed owner, records when the customer received the copy,
@@ -27,16 +32,21 @@
 --      * a time earlier than one already recorded or shown for the job, or the same time again: a
 --        record only ever moves the window later.
 --
--- Both carry `window_ends_at`: the later of the start + 240 hours and the same local clock time 10
--- calendar days later in the business time zone, and never earlier than the job's previous end, so
--- across a DST change the hold never ends early in local time. D1 has no time zone database, so it
--- holds every end to [start + 240 hours, start + 241 hours] and to no earlier than the job's
--- previous end: no writer can shorten a window. The Worker reads the DST hour with Intl.
+-- Both carry `window_ends_at` (INTERIM, pending counsel): the end of the 10th local calendar day
+-- after the day the window starts on, in the business time zone, the start's own day being day 0.
+-- It is stored as the first instant of the 11th local day, an exclusive bound: the window holds
+-- while D1's now is before it. It is never before the start + 240 hours nor before the job's
+-- previous end, so whichever way counsel counts "10 days" the hold never ends early, across DST
+-- too. The Worker reads local days with Intl; for an event it hands D1 the days around its own now,
+-- and D1 picks the one its own clock is on. D1 has no time zone database, so it holds every end to
+-- [start + 240 hours, start + 265 hours] (the end of the 10th local day is at most 264 hours after a
+-- start at local midnight, plus one DST hour) and to no earlier than the job's previous end: no
+-- writer can shorten a window.
 --
 -- The window is derived and read-only. It is not a gate: it has no ledger and no waiver.
 --   * Unknown while the job has neither a copy event for its latest contract nor a record at or
 --     after that contract's signature: nothing at all, or only from before a later contract.
---   * Open while any end on the job is after D1's now (ends never move earlier).
+--   * Open while any end on the job is after D1's now (ends never move earlier); ended at the end.
 --   * Ended otherwise.
 -- While a job's window is unknown or open, D1 refuses each of these by its own code, read with
 -- D1's own clock:
@@ -50,7 +60,8 @@
 --   * a purchase order line for the job. `inventory_po_lines` gains `roof_job_id`, the line's job
 --     link. A line with no job (stock, such as coil into stock) is never held. A job's line is
 --     refused while that job's window holds, and so is a move back to `ordered`; the link never
---     changes once written. Placing a supplier order is that insert: a line is born `ordered`.
+--     changes once written. Placing a supplier order in D1 is that insert: a line is born
+--     `ordered`. No line has a `sent` status (0067).
 --
 -- This file may apply after higher-numbered migrations already on a database (0200-0205 on qa and
 -- production). It creates two tables and twelve triggers, adds one column, and re-creates 0098's
@@ -71,8 +82,8 @@ CREATE TABLE IF NOT EXISTS contract_signed_copy_events (
   roof_job_id TEXT NOT NULL,
   -- The signature time of the contract whose copy was shown, as its binding holds it.
   contract_signed_at TEXT NOT NULL CHECK (length(contract_signed_at) BETWEEN 20 AND 40),
-  -- D1's time when the confirm response returned the signed copy, in the form `Date.toISOString`
-  -- writes.
+  -- D1's time when the Worker, having built the signed copy, recorded it as shown and served it,
+  -- in the form `Date.toISOString` writes.
   shown_at TEXT NOT NULL CHECK (length(shown_at) = 24),
   window_ends_at TEXT NOT NULL CHECK (length(window_ends_at) = 24),
   -- The business time zone the local clock end was read in.
@@ -170,10 +181,12 @@ BEGIN
   WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at) IS NOT NEW.shown_at
      OR abs(julianday(NEW.shown_at) - julianday('now')) * 86400 > 60;
 
+  -- Never before the start + 240 hours, never after the latest the end of the 10th local day can
+  -- be (264 hours after a start at local midnight, plus one DST hour), never before a previous end.
   SELECT RAISE(ABORT, 'contract_signed_copy_event_end_invalid')
   WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.window_ends_at) IS NOT NEW.window_ends_at
      OR NEW.window_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+240 hours')
-     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+241 hours')
+     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+265 hours')
      OR EXISTS (
        SELECT 1
          FROM contract_signed_copy_events shown
@@ -348,10 +361,11 @@ BEGIN
        AND shown.shown_at = NEW.received_at
   );
 
+  -- The same bounds as an event's: [start + 240 hours, start + 265 hours], and no previous end later.
   SELECT RAISE(ABORT, 'cancellation_window_receipt_end_invalid')
   WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.window_ends_at) IS NOT NEW.window_ends_at
      OR NEW.window_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+240 hours')
-     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+241 hours')
+     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+265 hours')
      OR EXISTS (
        SELECT 1
          FROM production_cancellation_window_receipts recorded

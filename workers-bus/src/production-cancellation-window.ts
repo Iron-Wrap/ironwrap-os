@@ -1,17 +1,29 @@
 // production-cancellation-window.ts - the OD-01 cancellation window (migration 0160): when it starts
 // and ends, what it holds, and a person's record of when the customer received their signed copy.
 //
-// The customer may cancel until 10 days after they receive their copy of the signed contract.
-// Inside that window nothing is ordered from a supplier, no shop work starts and no start is
-// confirmed. The register scopes the window to private dwellings, but D1 cannot tell a private
-// dwelling from a commercial job, so it applies to every contract. Pending counsel, through the
-// owner. The 15-day refund intent belongs to the cancellation flow (P13), not here.
+// The owner's register (OD-01, pending counsel through the owner): the customer may cancel until 10
+// days after they receive their copy of the signed contract, and inside that window nothing is
+// ordered from a supplier, no shop work starts and no start is confirmed. The register scopes the
+// window to private dwellings, but D1 cannot tell a private dwelling from a commercial job, so it
+// applies to every contract. The 15-day refund intent belongs to the cancellation flow (P13).
+//
+// What D1 and the Worker hold of that today, and what they do not:
+//   * held: the firm start (a roof job's schedule), the Materials attestation, and a job's D1
+//     purchase order lines (placing one, or moving one back to `ordered`);
+//   * not held: the Frappe Supplier Order path (the ERPNext MCP's `request_create_supplier_order`
+//     and `request_transition_supplier_order` write "Ordered" in Frappe directly), and the
+//     `scheduled_start` of a typed work-object assignment on a Shop Order. The window hold is
+//     required on the Frappe supplier-order path before supplier send opens, and on a Shop Order's
+//     schedule with the shop-run contract rule. No other shop surface exists.
 //
 // The window starts from one of two records:
-//   * the portal showed the signed copy at signing (owner's ruling: that counts as received). The
-//     confirm route appends `contract_signed_copy_events` in the acceptance's own batch, only for a
-//     client that renders the copy on that screen (customer-contract-acceptance.ts,
-//     `signedCopyShownStatement` below);
+//   * the portal served the customer the signed copy (owner's ruling: a copy shown at signing
+//     counts as received). Only after the acceptance has committed and the copy has been built, for
+//     a client that renders it on the confirm screen, does the confirm route record the copy as
+//     shown (`recordSignedCopyShown` below): one `contract_signed_copy_events` row in its own D1
+//     statement, conditional on the committed binding, with D1's time. Then it serves the copy. A
+//     copy that cannot be built, or an event that cannot be written, starts no window, and the
+//     answer claims none (customer-contract-acceptance.ts);
 //   * otherwise an owner or ops person records when the customer received it (the route below).
 // The window is a read-only System state next to the gates, not a gate: it has no ledger and no
 // waiver, so nothing a person waives lifts it. Its state is read with D1's own clock:
@@ -24,17 +36,22 @@
 // While it is unknown or open, each of these is refused on the route and in D1, by name:
 //   * the firm start (`firmStartGateEvidence`): `operating_job_assignment_cancellation_window_*`;
 //   * the Materials attestation: `production_gate_cancellation_window_*`;
-//   * a purchase order line of the job, which is how a supplier order is placed, and a job's line
+//   * a purchase order line of the job, which is how D1 places a supplier order, and a job's line
 //     moving back to `ordered`: `inventory_po_line_cancellation_window_*`. No route writes a line
 //     today; the first that does calls `cancellationWindowHold` first, as D1 already holds it. A
-//     stock line, with no job, is never held.
+//     stock line, with no job, is never held. Frappe's Supplier Order is not a D1 line (above).
 // Inside the window a person still assesses hazards, clears Safety and Access, asks for or decides
 // a waiver (a Materials waiver lifts no hold) and drafts the plan.
 //
-// Every window ends at the later of its start + 240 hours and the same local clock time 10
-// calendar days later in the business time zone, and never before the job's previous end, so a DST
-// change never ends the hold early in local time. D1 holds every end to [start + 240 hours,
-// start + 241 hours].
+// INTERIM, pending counsel: every window ends at the end of the 10th local calendar day after the
+// day it starts on, in the business time zone. The start's own day is day 0: a copy received Tue
+// 18:26 holds through the end of Friday the following week. `ends_at` is the first instant of the
+// 11th day, an exclusive bound: the window holds while D1's now is before it, and has ended at it.
+// It is never before the start + 240 hours (which wins only for a start in the last hour of a local
+// day with a spring-forward inside the window), nor before the job's previous end. Whichever way
+// counsel counts "10 days", 240 hours or 10 calendar days, this end is never earlier. D1 has no
+// time zone database, so it holds every end to [start + 240 hours, start + 265 hours]: the end of
+// the 10th local day is at most 264 hours after a start at local midnight, plus one DST hour.
 //
 //   POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy
 //     `{received_at, reason, evidence_ref}`: when the customer received their copy of the signed
@@ -539,9 +556,28 @@ function instantOfWallClock(wall: number, timeZone: string): number {
 }
 
 /**
- * When a window that starts at `startsAt` ends: the later of the start + 240 hours and the same
- * local clock time 10 calendar days later in `timeZone`, and never earlier than the job's previous
- * end. D1 holds the result to [start + 240 hours, start + 241 hours].
+ * The midnight that opens the local day `days` days after the one `instant` falls on, in
+ * `timeZone`. As an end it is the later instant where that midnight repeats (never earlier); as a
+ * day's start (`first`) it is the earlier one, the first instant the clock reads that day. A
+ * midnight the clock skips gives the instant just after the gap either way.
+ */
+function localMidnight(instant: number, days: number, timeZone: string, first = false): number {
+  const day = new Date(wallClock(instant, timeZone));
+  const wall = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() + days);
+  if (!first) return instantOfWallClock(wall, timeZone);
+  const candidates = [wall - DAY_MS, wall + DAY_MS].map(
+    (probe) => wall - (wallClock(probe, timeZone) - probe),
+  );
+  const exact = candidates.filter((candidate) => wallClock(candidate, timeZone) === wall);
+  return exact.length > 0 ? Math.min(...exact) : Math.max(...candidates);
+}
+
+/**
+ * When a window that starts at `startsAt` ends (INTERIM, pending counsel): at the end of the 10th
+ * local calendar day after the day it starts on in `timeZone`, the start's own day being day 0. The
+ * answer is the first instant of the 11th day, an exclusive bound. It is never before the start +
+ * 240 hours, nor before the job's previous end. D1 holds the result to
+ * [start + 240 hours, start + 265 hours].
  */
 export function cancellationWindowEndsAt(
   startsAt: string,
@@ -549,60 +585,123 @@ export function cancellationWindowEndsAt(
   previousEndsAt: string | null = null,
 ): string {
   const start = Date.parse(startsAt);
-  const local = instantOfWallClock(wallClock(start, timeZone) + WINDOW_MS, timeZone);
+  const endOfTenthDay = localMidnight(start, CANCELLATION_WINDOW_DAYS + 1, timeZone);
   const previous = previousEndsAt ? Date.parse(previousEndsAt) : Number.NEGATIVE_INFINITY;
-  return new Date(Math.max(start + WINDOW_MS, local, previous)).toISOString();
+  return new Date(Math.max(endOfTenthDay, start + WINDOW_MS, previous)).toISOString();
 }
 
 /**
- * The statement that appends the "signed copy shown" event for the acceptance binding the same D1
- * batch writes just before it, and nothing when that batch wrote no binding. `shown_at` is D1's
- * clock; so is the end, plus the DST hour read here with Intl for a window starting now, and never
- * before the job's previous end. The confirm route adds it only for a client that renders the copy.
+ * The business days around `nowMs`, for D1 to end a window that starts on its own clock: for the day
+ * before, the day of and the day after `nowMs`, when that local day starts and when the 10th local
+ * day after it ends, each read with Intl; then when the day after that starts, with no end. D1 picks
+ * the last day that starts at or before its own now. A D1 clock outside those days finds no end, and
+ * nothing is stored.
  */
-export async function signedCopyShownStatement(
+export function businessDayTable(timeZone: string, nowMs: number): Array<[string, string | null]> {
+  const iso = (instant: number) => new Date(instant).toISOString();
+  return [-1, 0, 1, 2].map((day) => [
+    iso(localMidnight(nowMs, day, timeZone, true)),
+    day < 2 ? iso(localMidnight(nowMs, day + CANCELLATION_WINDOW_DAYS + 1, timeZone)) : null,
+  ]);
+}
+
+/**
+ * D1's end of a window that starts at the SQL instant `start`, as `cancellationWindowEndsAt` reads
+ * it: the end of the 10th local day after the day `start` falls on, from the day table bound to its
+ * one `?` (`businessDayTable`), and never before `start` + 240 hours. A `start` the table does not
+ * cover gives NULL, which no event stores.
+ */
+export function windowEndSql(start: string): string {
+  return `max(
+      (SELECT json_extract(day.value, '$[1]')
+         FROM json_each(?) day
+        WHERE json_extract(day.value, '$[0]') <= ${start}
+        ORDER BY json_extract(day.value, '$[0]') DESC
+        LIMIT 1),
+      strftime('%Y-%m-%dT%H:%M:%fZ', ${start}, '+240 hours')
+    )`;
+}
+
+/** The copy recorded as shown for one contract: when, and when the window it started ends. */
+export interface SignedCopyShownEvent {
+  event_id: string;
+  shown_at: string;
+  window_ends_at: string;
+}
+
+async function signedCopyShownEvent(
   env: AppEnv,
   input: { tenantId: string; acceptanceBindingId: string },
-): Promise<D1PreparedStatement> {
+): Promise<SignedCopyShownEvent | null> {
+  return await env.DB.prepare(
+    `SELECT event_id, shown_at, window_ends_at FROM contract_signed_copy_events
+      WHERE tenant_id = ? AND acceptance_binding_id = ?`,
+  ).bind(input.tenantId, input.acceptanceBindingId).first<SignedCopyShownEvent>();
+}
+
+/**
+ * Record that the portal is serving the customer the signed copy of the contract
+ * `acceptanceBindingId` binds, and return the event that starts the window. The caller has already
+ * built the copy and serves it with this event's times; it calls this only for a client that renders
+ * the copy on the confirm screen.
+ *
+ * An event already recorded for the contract is returned as it stands: nothing is written, nothing
+ * moves. Otherwise one row is appended in its own statement: only for a binding D1 has committed
+ * whose acceptance is accepted, with `shown_at` from D1's clock and its end read from D1's clock too
+ * (`windowEndSql`), never before the job's previous end; the audit row is written in the same
+ * statement. So a replay whose first attempt served no copy starts the window when the replay
+ * serves it, never earlier. Null when no event stands for the contract afterwards: the caller then
+ * serves no copy and claims no window. A write whose answer was lost is read back.
+ */
+export async function recordSignedCopyShown(
+  env: AppEnv,
+  input: { tenantId: string; acceptanceBindingId: string },
+): Promise<SignedCopyShownEvent | null> {
+  const recorded = await signedCopyShownEvent(env, input);
+  if (recorded) return recorded;
   const zone = await businessTimeZone(env, input.tenantId);
-  const now = new Date();
-  const dstMinutes = Math.round(
-    (Date.parse(cancellationWindowEndsAt(now.toISOString(), zone.timeZone)) - now.getTime() - WINDOW_MS) /
-      60_000,
-  );
   const eventId = `scs_${(await sha256Hex(`${input.tenantId}:${input.acceptanceBindingId}`)).slice(0, 40)}`;
-  return env.DB.prepare(
-    `INSERT INTO contract_signed_copy_events (
-       event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at,
-       shown_at, window_ends_at, time_zone
-     )
-     SELECT ?, binding.tenant_id, binding.acceptance_binding_id, binding.roof_job_id,
-            binding.accepted_at, ${D1_NOW},
-            max(
-              strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+240 hours', ?),
-              COALESCE((SELECT MAX(shown.window_ends_at) FROM contract_signed_copy_events shown
-                         WHERE shown.tenant_id = binding.tenant_id
-                           AND shown.roof_job_id = binding.roof_job_id), ''),
-              COALESCE((SELECT MAX(receipt.window_ends_at) FROM production_cancellation_window_receipts receipt
-                         WHERE receipt.tenant_id = binding.tenant_id
-                           AND receipt.roof_job_id = binding.roof_job_id), '')
-            ),
-            ?
-       FROM commercial_acceptance_bindings binding
-      WHERE binding.tenant_id = ? AND binding.acceptance_binding_id = ?
-        AND NOT EXISTS (
+  try {
+    await env.DB.prepare(
+      `INSERT INTO contract_signed_copy_events (
+         event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at,
+         shown_at, window_ends_at, time_zone
+       )
+       SELECT ?, binding.tenant_id, binding.acceptance_binding_id, binding.roof_job_id,
+              binding.accepted_at, clock.now,
+              max(
+                ${windowEndSql("clock.now")},
+                COALESCE((SELECT MAX(shown.window_ends_at) FROM contract_signed_copy_events shown
+                           WHERE shown.tenant_id = binding.tenant_id
+                             AND shown.roof_job_id = binding.roof_job_id), ''),
+                COALESCE((SELECT MAX(receipt.window_ends_at) FROM production_cancellation_window_receipts receipt
+                           WHERE receipt.tenant_id = binding.tenant_id
+                             AND receipt.roof_job_id = binding.roof_job_id), '')
+              ),
+              ?
+         FROM (SELECT ${D1_NOW} AS now) clock
+         JOIN commercial_acceptance_bindings binding
+           ON binding.tenant_id = ? AND binding.acceptance_binding_id = ?
+         JOIN customer_portal_acceptance_intents acceptance
+           ON acceptance.tenant_id = binding.tenant_id
+          AND acceptance.acceptance_id = binding.acceptance_id
+          AND acceptance.state = 'accepted'
+        WHERE NOT EXISTS (
           SELECT 1 FROM contract_signed_copy_events shown
            WHERE shown.tenant_id = binding.tenant_id
              AND shown.acceptance_binding_id = binding.acceptance_binding_id
         )`,
-  ).bind(
-    eventId,
-    // Clamped to D1's bound of 241 hours, so the event never fails the acceptance's batch.
-    `+${Math.min(60, Math.max(0, dstMinutes))} minutes`,
-    zone.timeZone,
-    input.tenantId,
-    input.acceptanceBindingId,
-  );
+    ).bind(
+      eventId,
+      JSON.stringify(businessDayTable(zone.timeZone, Date.now())),
+      zone.timeZone,
+      input.tenantId,
+      input.acceptanceBindingId,
+    ).run();
+  } catch {
+    // D1 refused it (nothing was written), or committed it and the answer was lost: read it back.
+  }
+  return await signedCopyShownEvent(env, input);
 }
 
 // ------------------------------------------------------------------------------- the record step

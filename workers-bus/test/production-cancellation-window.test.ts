@@ -22,7 +22,12 @@ import {
   recordOperatingJobAssignment,
   type RecordOperatingJobAssignmentInput,
 } from "../src/operating-job-assignment-store.ts";
-import { cancellationWindowEndsAt, receivedAtInstant } from "../src/production-cancellation-window.ts";
+import {
+  businessDayTable,
+  cancellationWindowEndsAt,
+  receivedAtInstant,
+  windowEndSql,
+} from "../src/production-cancellation-window.ts";
 import {
   attestGateInLedger,
   bindCrewInLedger,
@@ -57,6 +62,25 @@ const USERS = {
   field: { id: "appu_field_window_001", role: "field", access: "field" },
 } as const;
 type User = (typeof USERS)[keyof typeof USERS];
+
+/**
+ * A database whose clock is the test's: every `'now'` the migrations' triggers and each statement
+ * read is the (mocked) `Date`, so a case can stand D1 a millisecond either side of a window's end.
+ */
+class ClockedDatabase extends DatabaseSync {
+  constructor() {
+    super(":memory:");
+    this.function("fixture_now", () => new Date().toISOString().replace("T", " ").replace("Z", ""));
+  }
+
+  prepare(sql: string) {
+    return super.prepare(sql.replaceAll("'now'", "fixture_now()"));
+  }
+
+  exec(sql: string) {
+    return super.exec(sql.replaceAll("'now'", "fixture_now()"));
+  }
+}
 
 class TestD1 {
   readonly sqlite: DatabaseSync;
@@ -160,9 +184,12 @@ function seedJob(db: DatabaseSync, jobId: string, suffix: string, status = "qual
   }
 }
 
-/** The full migration chain, three open jobs with six blocked gates each, a crew and the people. */
-function setup(): Harness {
-  const db = new TestD1();
+/**
+ * The full migration chain, three open jobs with six blocked gates each, a crew and the people.
+ * `clocked` gives D1 the test's mocked clock (`ClockedDatabase`) instead of the real one.
+ */
+function setup(options: { clocked?: boolean } = {}): Harness {
+  const db = new TestD1(options.clocked ? new ClockedDatabase() : undefined);
   db.sqlite.exec("PRAGMA foreign_keys = ON");
   for (const name of readdirSync(new URL("../migrations/", import.meta.url))
     .filter((value) => /^\d{4}_.+\.sql$/.test(value))
@@ -438,11 +465,13 @@ function moveOrderLine(h: Harness, id: string, status: string): void {
   ).run(status, at(0), id);
 }
 
-/** The local clock reading of an instant in the business time zone, as "HH:MM". */
-function localClock(instant: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: ZONE, hourCycle: "h23", hour: "2-digit", minute: "2-digit",
-  }).format(new Date(instant));
+/** An instant on the business clock, as "Tue 2026-11-03 18:26:00.000". */
+function localDateTime(instant: string): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: ZONE, hourCycle: "h23", weekday: "short", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3,
+  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  return `${parts.weekday} ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}`;
 }
 
 // ------------------------------------------------------------------------------- the state
@@ -470,7 +499,7 @@ test("the window is a System state next to the gates, unknown until recorded, th
   });
   assert.ok(Math.abs(Date.parse(before.body.cancellation_window.as_of) - d1Now(h.sqlite)) < MINUTE);
 
-  // An hour ago: the window is open, and ends on the business clock ten days after the receipt.
+  // An hour ago: the window is open, and ends at the end of the 10th business day after the receipt.
   const receivedAt = d1At(h, -HOUR);
   const recorded = await recordReceipt(h, owner, JOB, {
     received_at: receivedAt, reason: REASON, evidence_ref: EVIDENCE,
@@ -502,9 +531,9 @@ test("the window is a System state next to the gates, unknown until recorded, th
   );
   assert.deepEqual((await call(h, owner, gatesPath(JOB))).body.cancellation_window.signed_copy_received.id, recorded.body.receipt_id);
 
-  // Eleven days ago: the window has ended and holds nothing.
+  // Twelve days ago: the window has ended and holds nothing.
   const ended = await recordReceipt(h, owner, ENDED_JOB, {
-    received_at: d1At(h, -11 * DAY), reason: REASON, evidence_ref: EVIDENCE,
+    received_at: d1At(h, -12 * DAY), reason: REASON, evidence_ref: EVIDENCE,
   });
   assert.equal(ended.status, 201);
   assert.equal(ended.body.cancellation_window.state, "ended");
@@ -900,12 +929,14 @@ test("an owner or ops person records when the copy was received, people only, wi
   assert.equal(same.body.unchanged, true);
   assert.equal(same.body.recorded, false);
   assert.equal(receipts(h, JOB).length, 1);
-  // A later time moves the window later, and keeps the first record.
+  // A later time is recorded, keeps the first record, and never ends the window sooner: on the
+  // same local day it ends at the same instant, and on a later day, later.
   const later = d1At(h, -HOUR);
   const moved = await recordReceipt(h, owner, JOB, { ...body, received_at: later });
   assert.equal(moved.status, 201);
-  assert.equal(moved.body.cancellation_window.ends_at, cancellationWindowEndsAt(later, ZONE));
-  assert.ok(moved.body.cancellation_window.ends_at > stored!.window_ends_at);
+  assert.equal(moved.body.cancellation_window.ends_at, cancellationWindowEndsAt(later, ZONE, stored!.window_ends_at));
+  assert.ok(moved.body.cancellation_window.ends_at >= stored!.window_ends_at);
+  assert.equal(moved.body.cancellation_window.starts_at, later);
   assert.deepEqual(receipts(h, JOB).map((row) => row.received_at), [body.received_at, later]);
 });
 
@@ -957,28 +988,45 @@ test("D1 holds every record to its rules for a writer that skips the Worker", ()
 
 // ------------------------------------------------------------------------------- the clock
 
-test("across a DST change the window never ends early in local time, and D1 bounds every end", async () => {
-  // The November change (Edmonton falls back on 2 November 2025): received Sun 26 Oct 18:26 MDT,
-  // the window ends Thu 6 Nov 18:26 MST, 241 hours later, not an hour early at 17:26.
+test("the window ends at the end of the 10th local day after its start, never before 240 hours (interim, pending counsel)", async () => {
+  // The copy-source fixture: received Tue 18:26, so day 0 is that Tuesday, and the window holds
+  // through the end of Friday the following week. It ends at the first instant of Saturday. Every
+  // fixed time here is on a date whose offsets no time zone database release disagrees on.
+  const tuesday = "2025-11-05T01:26:00.000Z";
+  assert.equal(localDateTime(tuesday), "Tue 2025-11-04 18:26:00.000");
+  assert.equal(cancellationWindowEndsAt(tuesday, ZONE), "2025-11-15T07:00:00.000Z");
+  assert.equal(localDateTime("2025-11-15T06:59:59.999Z"), "Fri 2025-11-14 23:59:59.999");
+  assert.equal(localDateTime("2025-11-15T07:00:00.000Z"), "Sat 2025-11-15 00:00:00.000");
+  // Across the November change (Edmonton falls back on 2 November 2025): received Sun 26 Oct 18:26
+  // MDT, the window holds through Wed 5 Nov and ends at its midnight MST.
   const fall = "2025-10-27T00:26:00.000Z";
-  assert.equal(cancellationWindowEndsAt(fall, ZONE), "2025-11-06T01:26:00.000Z");
-  assert.equal(localClock(fall), "18:26");
-  assert.equal(localClock(cancellationWindowEndsAt(fall, ZONE)), "18:26");
-  // The March change (Edmonton springs forward on 8 March 2026): received Mon 2 Mar 18:26 MST.
-  // Ten calendar days would be 239 hours; the window keeps the full 240 and ends at 19:26 MDT,
-  // an hour late, never early.
+  assert.equal(cancellationWindowEndsAt(fall, ZONE), "2025-11-06T07:00:00.000Z");
+  assert.equal(localDateTime("2025-11-06T07:00:00.000Z"), "Thu 2025-11-06 00:00:00.000");
+  // Across the March change (Edmonton springs forward on 8 March 2026): received Mon 2 Mar 18:26
+  // MST, the window holds through Thu 12 Mar and ends at its midnight MDT.
   const spring = "2026-03-03T01:26:00.000Z";
-  assert.equal(cancellationWindowEndsAt(spring, ZONE), "2026-03-13T01:26:00.000Z");
-  assert.equal(localClock(cancellationWindowEndsAt(spring, ZONE)), "19:26");
-  // A clock time the change skips ends after the gap; one it repeats ends at the later instant.
-  assert.equal(cancellationWindowEndsAt("2026-02-26T09:30:00.000Z", ZONE), "2026-03-08T09:30:00.000Z");
-  assert.equal(cancellationWindowEndsAt("2025-10-23T07:30:00.000Z", ZONE), "2025-11-02T08:30:00.000Z");
-  // No change: exactly 240 hours. A later previous end is kept.
-  assert.equal(cancellationWindowEndsAt("2026-06-01T00:00:00.000Z", ZONE), "2026-06-11T00:00:00.000Z");
-  assert.equal(
-    cancellationWindowEndsAt("2026-06-01T00:00:00.000Z", ZONE, "2026-06-11T00:30:00.000Z"),
-    "2026-06-11T00:30:00.000Z",
-  );
+  assert.equal(cancellationWindowEndsAt(spring, ZONE), "2026-03-13T06:00:00.000Z");
+  assert.equal(localDateTime("2026-03-13T06:00:00.000Z"), "Fri 2026-03-13 00:00:00.000");
+  // Received Sun 1 Mar 23:30 MST, before that change: the end of the 10th day would come 239.5 hours
+  // later, so the window keeps its 240 hours and ends at 00:30 MDT on the 11th day, never early.
+  const lateBeforeSpring = "2026-03-02T06:30:00.000Z";
+  assert.equal(localDateTime(lateBeforeSpring), "Sun 2026-03-01 23:30:00.000");
+  assert.equal(cancellationWindowEndsAt(lateBeforeSpring, ZONE), "2026-03-12T06:30:00.000Z");
+  assert.equal(Date.parse("2026-03-12T06:00:00.000Z") - Date.parse(lateBeforeSpring), 239.5 * HOUR);
+  // The longest window: received at local midnight with the fall-back inside it, 265 hours, D1's
+  // upper bound. With no change, 264 hours.
+  const midnightBeforeFall = "2025-10-26T06:00:00.000Z";
+  assert.equal(localDateTime(midnightBeforeFall), "Sun 2025-10-26 00:00:00.000");
+  assert.equal(Date.parse(cancellationWindowEndsAt(midnightBeforeFall, ZONE)) - Date.parse(midnightBeforeFall), 265 * HOUR);
+  assert.equal(cancellationWindowEndsAt("2026-06-01T06:00:00.000Z", ZONE), "2026-06-12T06:00:00.000Z");
+  // The last millisecond of a day still counts that day as day 0; the next one starts day 0 anew.
+  assert.equal(cancellationWindowEndsAt("2025-11-05T06:59:59.999Z", ZONE), "2025-11-15T07:00:00.000Z");
+  assert.equal(cancellationWindowEndsAt("2025-11-05T07:00:00.000Z", ZONE), "2025-11-16T07:00:00.000Z");
+  // Both instants of the hour the clocks repeat fall on the same day, and end together.
+  assert.equal(cancellationWindowEndsAt("2025-11-02T07:30:00.000Z", ZONE), "2025-11-13T07:00:00.000Z");
+  assert.equal(cancellationWindowEndsAt("2025-11-02T08:30:00.000Z", ZONE), "2025-11-13T07:00:00.000Z");
+  // A later previous end is kept.
+  assert.equal(cancellationWindowEndsAt(tuesday, ZONE, "2025-11-15T08:00:00.000Z"), "2025-11-15T08:00:00.000Z");
   // The full timestamp, with its offset, is the only form a time is read in.
   assert.equal(receivedAtInstant("2025-10-26T18:26:00-06:00"), fall);
   assert.equal(receivedAtInstant("2025-10-27T00:26Z"), fall);
@@ -987,39 +1035,82 @@ test("across a DST change the window never ends early in local time, and D1 boun
     assert.equal(receivedAtInstant(invalid), null, invalid);
   }
 
-  // The route stores the fail-safe end: a receipt before the November change ends at 18:26 MST.
+  // The route stores that end, read on the business clock.
   const h = setup();
   const owner = await person(h, USERS.owner);
   const recorded = await recordReceipt(h, owner, JOB, {
     received_at: "2025-10-26T18:26:00-06:00", reason: REASON, evidence_ref: EVIDENCE,
   });
   assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
-  assert.equal(receipts(h, JOB)[0]!.window_ends_at, "2025-11-06T01:26:00.000Z");
+  assert.equal(receipts(h, JOB)[0]!.window_ends_at, "2025-11-06T07:00:00.000Z");
   const springRecord = await recordReceipt(h, owner, OTHER_JOB, {
-    received_at: "2026-03-02T18:26:00-07:00", reason: REASON, evidence_ref: EVIDENCE,
+    received_at: "2026-03-01T23:30:00-07:00", reason: REASON, evidence_ref: EVIDENCE,
   });
   assert.equal(springRecord.status, 201);
-  assert.equal(receipts(h, OTHER_JOB)[0]!.window_ends_at, "2026-03-13T01:26:00.000Z");
-  // Two times either side of the hour the clocks fall back: 01:30 MDT, then 01:10 MST forty minutes
-  // later. The later time's own end, 01:10 ten days on, would come before the first's 01:30, so the
-  // window keeps the first end: later only, never shorter.
-  const beforeFallBack = await recordReceipt(h, owner, ENDED_JOB, {
-    received_at: "2025-11-02T01:30:00-06:00", reason: REASON, evidence_ref: EVIDENCE,
+  assert.equal(receipts(h, OTHER_JOB)[0]!.window_ends_at, "2026-03-12T06:30:00.000Z");
+  // Never before the job's previous end: a later time read in a business time zone hours ahead (the
+  // tenant's zone changed) would end the 10th day sooner, so the window keeps the earlier end.
+  const first = await recordReceipt(h, owner, ENDED_JOB, {
+    received_at: "2026-06-01T01:00:00-06:00", reason: REASON, evidence_ref: EVIDENCE,
   });
-  assert.equal(beforeFallBack.status, 201);
-  assert.equal(beforeFallBack.body.cancellation_window.ends_at, "2025-11-12T08:30:00.000Z");
-  const afterFallBack = await recordReceipt(h, owner, ENDED_JOB, {
-    received_at: "2025-11-02T01:10:00-07:00", reason: REASON, evidence_ref: EVIDENCE,
+  assert.equal(first.body.cancellation_window.ends_at, "2026-06-12T06:00:00.000Z");
+  h.env.APP_TIME_ZONE = "Asia/Tokyo";
+  assert.equal(cancellationWindowEndsAt("2026-06-01T08:00:00.000Z", "Asia/Tokyo"), "2026-06-11T15:00:00.000Z");
+  const later = await recordReceipt(h, owner, ENDED_JOB, {
+    received_at: "2026-06-01T17:00:00+09:00", reason: REASON, evidence_ref: EVIDENCE,
   });
-  assert.equal(afterFallBack.status, 201, JSON.stringify(afterFallBack.body));
-  assert.equal(cancellationWindowEndsAt("2025-11-02T08:10:00.000Z", ZONE), "2025-11-12T08:10:00.000Z");
-  assert.deepEqual(receipts(h, ENDED_JOB).map((row) => row.window_ends_at), [
-    "2025-11-12T08:30:00.000Z",
-    "2025-11-12T08:30:00.000Z",
-  ]);
+  assert.equal(later.status, 201, JSON.stringify(later.body));
+  assert.deepEqual(
+    receipts(h, ENDED_JOB).map((row) => [row.window_ends_at, row.time_zone]),
+    [["2026-06-12T06:00:00.000Z", ZONE], ["2026-06-12T06:00:00.000Z", "Asia/Tokyo"]],
+  );
+});
 
-  // D1 has no time zone database: it holds any writer to [received + 240 h, received + 241 h],
-  // and to no earlier than the job's previous end.
+test("D1 ends a copy's window on its own clock exactly as the Worker does, whichever local day that clock is on", () => {
+  const db = new DatabaseSync(":memory:");
+  // D1's end for a window starting at `d1Now`, from the day table the Worker builds at `workerNow`.
+  const d1End = (timeZone: string, d1Now: number, workerNow: number) => (db.prepare(
+    `SELECT ${windowEndSql("clock.now")} AS ends FROM (SELECT ? AS now) clock`,
+  ).get(JSON.stringify(businessDayTable(timeZone, workerNow)), new Date(d1Now).toISOString()) as { ends: string | null }).ends;
+  // Every 23 minutes across a fall-back and a spring-forward in Edmonton, and across changes that
+  // skip or repeat a local midnight (Havana falls back from 01:00 to 00:00 and springs forward at
+  // 00:00; Santiago changes at midnight), with the Worker's clock a little behind, level with or
+  // ahead of D1's: the same end as `cancellationWindowEndsAt`, inside D1's [240 hours, 265 hours].
+  const sweeps: Array<[string, string, string]> = [
+    [ZONE, "2025-10-24T00:00:00.000Z", "2025-11-04T00:00:00.000Z"],
+    [ZONE, "2026-02-27T00:00:00.000Z", "2026-03-10T00:00:00.000Z"],
+    ["America/Havana", "2025-10-31T00:00:00.000Z", "2025-11-04T00:00:00.000Z"],
+    ["America/Havana", "2025-03-07T00:00:00.000Z", "2025-03-11T00:00:00.000Z"],
+    ["America/Santiago", "2025-04-03T00:00:00.000Z", "2025-04-08T00:00:00.000Z"],
+    ["America/Santiago", "2025-09-04T00:00:00.000Z", "2025-09-09T00:00:00.000Z"],
+  ];
+  let probes = 0;
+  for (const [timeZone, from, to] of sweeps) {
+    for (let start = Date.parse(from); start < Date.parse(to); start += 23 * MINUTE) {
+      const worker = cancellationWindowEndsAt(new Date(start).toISOString(), timeZone);
+      const length = Date.parse(worker) - start;
+      assert.ok(length >= 240 * HOUR && length <= 265 * HOUR, `${timeZone} ${new Date(start).toISOString()}`);
+      for (const skew of [-90_000, 0, 90_000]) {
+        assert.equal(d1End(timeZone, start, start + skew), worker, `${timeZone} ${new Date(start).toISOString()} ${skew}`);
+        probes += 1;
+      }
+    }
+  }
+  assert.ok(probes > 2_000);
+  // Either side of local midnight, D1 reads the day its own clock is on, not the Worker's.
+  const tuesdayLast = Date.parse("2025-11-05T06:59:59.999Z");
+  assert.equal(d1End(ZONE, tuesdayLast, tuesdayLast + 501), "2025-11-15T07:00:00.000Z");
+  assert.equal(d1End(ZONE, tuesdayLast + 1, tuesdayLast - 1_000), "2025-11-16T07:00:00.000Z");
+  // A D1 clock outside the days the Worker read gives no end, so no copy is recorded as shown.
+  assert.equal(d1End(ZONE, tuesdayLast - 2 * DAY, tuesdayLast), null);
+  assert.equal(d1End(ZONE, tuesdayLast + 2 * DAY + 1, tuesdayLast), null);
+  db.close();
+});
+
+test("D1 holds every end to [start + 240 hours, start + 265 hours] and never before the job's previous end", () => {
+  // D1 has no time zone database: the end of the 10th local day is at most 264 hours after a start
+  // at local midnight, plus one DST hour, and never before 240 hours.
+  const h = setup();
   const BOUNDS_JOB = "job:window:0005";
   seedJob(h.sqlite, BOUNDS_JOB, "0005");
   const base = Date.parse(d1At(h, -30 * DAY));
@@ -1031,22 +1122,162 @@ test("across a DST change the window never ends early in local time, and D1 boun
     "cancellation_window_receipt_end_invalid",
   );
   refusedWith(
-    () => insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 241, 1) }),
+    () => insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 265, 1) }),
     "cancellation_window_receipt_end_invalid",
   );
-  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 241) });
+  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0), window_ends_at: end(base, 265) });
   // A later receipt whose own end would come before the previous end is refused...
   refusedWith(
     () => insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0.5), window_ends_at: end(base + 0.5 * HOUR, 240) }),
     "cancellation_window_receipt_end_invalid",
   );
   // ...and stands with the previous end kept.
-  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0.5), window_ends_at: end(base, 241) });
-  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(2), window_ends_at: end(base + 2 * HOUR, 240) });
+  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(0.5), window_ends_at: end(base, 265) });
+  insertReceipt(h, { roof_job_id: BOUNDS_JOB, received_at: received(30), window_ends_at: end(base + 30 * HOUR, 240) });
   assert.deepEqual(
     receipts(h, BOUNDS_JOB).map((row) => row.window_ends_at),
-    [end(base, 241), end(base, 241), end(base + 2 * HOUR, 240)],
+    [end(base, 265), end(base, 265), end(base + 30 * HOUR, 240)],
   );
+});
+
+// ------------------------------------------------------------------------------- the boundary
+
+test("each hold stands to the last millisecond of the 10th local day and lifts the millisecond after", async () => {
+  // Received Tue 4 Nov 2025 18:26 MST: the window holds through Friday 14 Nov and ends at the first
+  // instant of Saturday 15 Nov, 00:00 MST. D1's clock and the Worker's are both the test's.
+  const RECEIVED = "2025-11-05T01:26:00.000Z";
+  const END = "2025-11-15T07:00:00.000Z";
+  const endMs = Date.parse(END);
+  mock.timers.enable({ apis: ["Date"], now: Date.parse(RECEIVED) + HOUR });
+  try {
+    const h = setup({ clocked: true });
+    assert.equal(d1Now(h.sqlite), Date.parse(RECEIVED) + HOUR);
+    // One job per surface: the firm start on the store, on the route and in D1; Materials on the
+    // route and in D1; a supplier order and a line moving back to ordered in D1.
+    const MATERIALS_ROUTE_JOB = "job:window:0006";
+    const MATERIALS_D1_JOB = "job:window:0007";
+    seedJob(h.sqlite, MATERIALS_ROUTE_JOB, "0006");
+    seedJob(h.sqlite, MATERIALS_D1_JOB, "0007");
+    seedInventory(h);
+    // A backordered line of a job, written before the hold existed.
+    const hold = h.sqlite.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'inventory_po_lines_cancellation_window_hold'",
+    ).get() as { sql: string };
+    h.sqlite.exec("DROP TRIGGER inventory_po_lines_cancellation_window_hold");
+    const backordered = placeOrderLine(h, MATERIALS_D1_JOB, "backordered");
+    h.sqlite.exec(hold.sql);
+
+    const recorder = await person(h, USERS.owner);
+    for (const job of [JOB, OTHER_JOB, ENDED_JOB, MATERIALS_ROUTE_JOB, MATERIALS_D1_JOB]) {
+      const recorded = await recordReceipt(h, recorder, job, {
+        received_at: "2025-11-04T18:26:00-07:00", reason: REASON, evidence_ref: EVIDENCE,
+      });
+      assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+      assert.equal(recorded.body.cancellation_window.ends_at, END);
+    }
+    // An hour before the end, the gates a schedule rests on are cleared inside the window.
+    mock.timers.setTime(endMs - HOUR);
+    for (const job of [JOB, OTHER_JOB, ENDED_JOB]) readyInsideWindow(h, job);
+
+    const scheduleOnRoute = (auth: AuthContext, job: string) => {
+      const day = fixtureSchedule(1, Date.now());
+      return call(h, auth, `/api/v1/jobs/${encodeURIComponent(job)}/schedule`, {
+        method: "POST",
+        body: {
+          expected_roof_job_version: 1,
+          crew_id: CREW,
+          expected_crew_version: 1,
+          authority_requirements: scheduleCommand(job).authorityRequirements,
+          scheduled_start: day.start,
+          scheduled_end: day.end,
+          supersedes_assignment_id: null,
+          correction_reason: null,
+        },
+      });
+    };
+    const attestMaterials = (auth: AuthContext, job: string) =>
+      call(h, auth, `/api/v1/production/jobs/${encodeURIComponent(job)}/gates/Materials/clearance`, {
+        method: "POST",
+        body: {
+          basis: "person_attestation",
+          expected_gate_version: 1,
+          attestation: { source: "supplier_delivery", reference: "DELIVERY-WINDOW-0009" },
+        },
+      });
+    const clearMaterialsInD1 = (job: string) => h.sqlite.prepare(
+      `INSERT INTO production_gate_clearances
+         (clearance_id, tenant_id, gate_id, roof_job_id, gate, entry_kind, basis, to_state,
+          from_gate_version, actor_kind, actor_user_id, actor_role, attestation_json,
+          evidence_refs_json, request_sha256, idempotency_key_hash, created_at)
+       VALUES (?, ?, ?, ?, 'Materials', 'clear', 'person_attestation', 'ready', 1, 'person', ?,
+               'production', '{"reference":"DELIVERY-WINDOW-0010","source":"supplier_delivery"}',
+               '[]', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    ).run(
+      `pgc_${String(++keyCounter).padStart(40, "0")}`, TENANT, `gate:${job}:materials`, job,
+      USERS.production.id, "a".repeat(64), String(keyCounter).padStart(64, "c"),
+    );
+    const count = (sql: string) => (h.sqlite.prepare(sql).get() as { n: number }).n;
+    const written = () => ({
+      assignments: count("SELECT COUNT(*) AS n FROM operating_job_assignments"),
+      materials: count("SELECT COUNT(*) AS n FROM production_gate_clearances WHERE gate = 'Materials' AND entry_kind = 'clear'"),
+      jobLines: count("SELECT COUNT(*) AS n FROM inventory_po_lines WHERE roof_job_id IS NOT NULL AND status = 'ordered'"),
+    });
+
+    // The last millisecond of Friday: every hold stands, by name, with the end.
+    mock.timers.setTime(endMs - 1);
+    const owner = await person(h, USERS.owner);
+    const production = await person(h, USERS.production);
+    const before = written();
+    const window = (await call(h, owner, gatesPath(JOB))).body.cancellation_window;
+    assert.deepEqual([window.state, window.ends_at, window.holds.length], ["open", END, 3]);
+    assert.deepEqual(
+      await refusedSchedule(h, scheduleCommand(JOB), "operating_job_assignment_cancellation_window_open"),
+      { window_ends_at: END },
+    );
+    assert.deepEqual(await scheduleOnRoute(owner, OTHER_JOB), {
+      status: 409,
+      body: { window_ends_at: END, error: "operating_job_assignment_cancellation_window_open" },
+    });
+    refusedWith(() => insertAssignment(h, ENDED_JOB), "operating_job_assignment_cancellation_window_open");
+    assert.deepEqual(await attestMaterials(production, MATERIALS_ROUTE_JOB), {
+      status: 409,
+      body: { window_ends_at: END, error: "production_gate_cancellation_window_open" },
+    });
+    refusedWith(() => clearMaterialsInD1(MATERIALS_D1_JOB), "production_gate_cancellation_window_open");
+    refusedWith(() => placeOrderLine(h, MATERIALS_ROUTE_JOB), "inventory_po_line_cancellation_window_open");
+    refusedWith(() => moveOrderLine(h, backordered, "ordered"), "inventory_po_line_cancellation_window_open");
+    assert.deepEqual(written(), before);
+
+    // At the end itself the window has ended: the bound is exclusive.
+    mock.timers.setTime(endMs);
+    const ended = (await call(h, owner, gatesPath(JOB))).body.cancellation_window;
+    assert.deepEqual([ended.state, ended.ends_at, ended.holds], ["ended", END, []]);
+
+    // The first millisecond after: each is allowed, on every surface.
+    mock.timers.setTime(endMs + 1);
+    assert.equal((await recordOperatingJobAssignment(h.env, scheduleCommand(JOB))).kind, "created");
+    const routed = await scheduleOnRoute(owner, OTHER_JOB);
+    assert.equal(routed.status, 201, JSON.stringify(routed.body));
+    insertAssignment(h, ENDED_JOB);
+    const materials = await attestMaterials(production, MATERIALS_ROUTE_JOB);
+    assert.equal(materials.status, 200, JSON.stringify(materials.body));
+    assert.equal(materials.body.gate.state, "ready");
+    // In D1 directly: Materials attested through the ledger's every guard, a supplier order placed,
+    // and the backordered line ordered again.
+    attestGateInLedger(h.sqlite, {
+      tenantId: TENANT, roofJobId: MATERIALS_D1_JOB, gate: "Materials", actorUserId: USERS.production.id,
+      actorRole: "production", observerUserId: USERS.owner.id,
+    });
+    placeOrderLine(h, MATERIALS_ROUTE_JOB);
+    moveOrderLine(h, backordered, "ordered");
+    assert.deepEqual(written(), {
+      assignments: before.assignments + 3,
+      materials: before.materials + 2,
+      jobLines: before.jobLines + 2,
+    });
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 // ------------------------------------------------------------------------------- the work queue

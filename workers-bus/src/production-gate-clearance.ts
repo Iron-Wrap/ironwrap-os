@@ -1043,8 +1043,9 @@ async function attestGate(
   }));
   const existing = await entryByKey(env, tenantId, idempotency.keyHash);
   if (existing) return await entryResponse(env, tenantId, replayOf(existing, requestSha256), true);
-  // 0160: nothing is ordered inside the cancellation window, so Materials does not clear while it
-  // is unknown or open. D1's hold fires after the replace guard and before the validate trigger.
+  // 0160: the register orders nothing inside the cancellation window, so Materials does not clear
+  // while it is unknown or open. D1's hold fires after the replace guard and before the validate
+  // trigger.
   if (gate === "Materials") {
     const window = await cancellationWindowHold(env, tenantId, roofJobId);
     if (window) {

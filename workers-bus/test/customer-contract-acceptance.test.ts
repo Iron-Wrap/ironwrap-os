@@ -48,6 +48,7 @@ import {
 } from "../src/operating-job-assignment-store.ts";
 import {
   cancellationWindowEndsAt,
+  cancellationWindowHold,
   readCancellationWindow,
 } from "../src/production-cancellation-window.ts";
 import {
@@ -109,6 +110,12 @@ class SqliteD1 {
   failNextLedgerAppend = false;
   /** Fails the next read of the tenant's deposit policy, as an unavailable D1 would. */
   failNextPolicyRead = false;
+  /** Fails the next read the signed copy is built from, as an unavailable D1 would (0160). */
+  failNextSignedCopyBuild = false;
+  /** Fails the next write of a signed-copy event before it runs, as an unavailable D1 would. */
+  failNextSignedCopyEvent = false;
+  /** Commits the next signed-copy event, then loses D1's answer. */
+  loseNextSignedCopyEventAnswer = false;
   /** Every error a batch raised, so a case can tell which writer refused. */
   readonly batchErrors: string[] = [];
 
@@ -131,6 +138,20 @@ class SqliteD1 {
     if (this.failNextPolicyRead && sql.includes("FROM tenant_deposit_policy_revisions")) {
       this.failNextPolicyRead = false;
       throw new Error("simulated_d1_unavailable");
+    }
+    if (this.failNextSignedCopyBuild && sql.includes("AS signed_terms_hash")) {
+      this.failNextSignedCopyBuild = false;
+      throw new Error("simulated_d1_unavailable");
+    }
+    if (sql.includes("INSERT INTO contract_signed_copy_events")) {
+      if (this.failNextSignedCopyEvent) {
+        this.failNextSignedCopyEvent = false;
+        throw new Error("simulated_d1_unavailable");
+      }
+      if (this.loseNextSignedCopyEventAnswer) {
+        this.loseNextSignedCopyEventAnswer = false;
+        return new SqliteStatement(this.raw, this.raw.prepare(sql), [], true);
+      }
     }
     return new SqliteStatement(this.raw, this.raw.prepare(sql));
   }
@@ -165,19 +186,23 @@ class SqliteStatement {
   private readonly database: DatabaseSync;
   private readonly statement: StatementSync;
   private readonly args: unknown[];
+  /** Runs, then throws, as a D1 that committed and lost its answer. */
+  private readonly loseAnswer: boolean;
 
   constructor(
     database: DatabaseSync,
     statement: StatementSync,
     args: unknown[] = [],
+    loseAnswer = false,
   ) {
     this.database = database;
     this.statement = statement;
     this.args = args;
+    this.loseAnswer = loseAnswer;
   }
 
   bind(...args: unknown[]) {
-    return new SqliteStatement(this.database, this.statement, args);
+    return new SqliteStatement(this.database, this.statement, args, this.loseAnswer);
   }
 
   async first<T>(): Promise<T | null> {
@@ -191,6 +216,7 @@ class SqliteStatement {
   async run(): Promise<{ success: true; meta: { changes: number } }> {
     const before = totalChanges(this.database);
     this.statement.run(...this.args);
+    if (this.loseAnswer) throw new Error("simulated_lost_d1_response");
     return {
       success: true,
       meta: { changes: totalChanges(this.database) - before },
@@ -2919,10 +2945,18 @@ test("on a database built from every migration, an OD-01 contract's final invoic
 /**
  * The owner attests Materials, Safety, Access and Weather (0158) and one synthetic field worker
  * forms a crew; Deposit stands on the contract. Returns a scheduler that writes the next schedule
- * revision, which binds Crew by policy (0159).
+ * revision, which binds Crew by policy (0159). With `waiveMaterials` the owner waives Materials
+ * instead, which a waiver may do inside the OD-01 cancellation window (0160) without ending it.
  */
-function readyToSchedule(h: Harness): (key: string) => Promise<unknown> {
+function readyToSchedule(
+  h: Harness,
+  options: { waiveMaterials?: boolean } = {},
+): (key: string) => Promise<unknown> {
+  if (options.waiveMaterials) {
+    waiveGateInLedger(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID, gate: "Materials", ownerUserId: OWNER_ID });
+  }
   for (const gate of ["Materials", "Safety", "Access", "Weather"] as const) {
+    if (gate === "Materials" && options.waiveMaterials) continue;
     attestGateInLedger(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID, gate, actorUserId: OWNER_ID, actorRole: "owner" });
   }
   const at = new Date().toISOString();
@@ -3123,8 +3157,9 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
 //
 // By the owner's ruling a signed copy the portal shows at signing counts as received. A client
 // that shows the copy (terms plus receipt) on its confirm screen sends `signed_copy: true`; only
-// then does the answer carry the copy, and only then is the copy recorded as shown, in the
-// acceptance's own batch. Today's confirm page never sends it.
+// then does the answer carry the copy. The copy is recorded as shown only after the acceptance has
+// committed and the copy has been built, in its own D1 statement, and only then is it served: a
+// copy that is not served starts no window. Today's confirm page never sends the flag.
 
 const ZONE = "America/Edmonton";
 const MINUTE_MS = 60_000;
@@ -3187,8 +3222,16 @@ async function recordReceivedCopy(
   return { status: response.status, body: await response.json() as Record<string, any> };
 }
 
-/** A purchase order line for this job, placed straight in D1 as any writer places one. */
-function placeJobOrderLine(h: Harness): void {
+/**
+ * A purchase order line for this job, placed straight in D1 as any writer places one. With
+ * `beforeTheHold`, it is written as if before 0160's hold existed.
+ */
+function placeJobOrderLine(
+  h: Harness,
+  lineId = "po_line_acceptance_1",
+  status = "ordered",
+  beforeTheHold = false,
+): void {
   const now = new Date().toISOString();
   h.db.raw.prepare(
     `INSERT OR IGNORE INTO inventory_uoms (uom_id, tenant_id, code, dimension, scale, status, created_at, updated_at)
@@ -3201,13 +3244,74 @@ function placeJobOrderLine(h: Harness): void {
      VALUES ('item_acceptance_panel', ?, 'PANEL-24', 'active', 'raw_material', 'uom_acceptance_each',
              0, 0, 'fifo', 'seed', ?, ?)`,
   ).run(TENANT, now, now);
+  const hold = h.db.raw.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'inventory_po_lines_cancellation_window_hold'",
+  ).get() as { sql: string };
+  if (beforeTheHold) h.db.raw.exec("DROP TRIGGER inventory_po_lines_cancellation_window_hold");
+  try {
+    h.db.raw.prepare(
+      `INSERT INTO inventory_po_lines
+         (po_line_id, tenant_id, supplier_order_id, line_no, item_id, uom_id, ordered_quantity_scaled,
+          unit_price_minor, line_identity_sha256, status, created_at, updated_at, roof_job_id)
+       VALUES (?, ?, ?, 1, 'item_acceptance_panel', 'uom_acceptance_each', 10, 500, ?, ?, ?, ?, ?)`,
+    ).run(
+      lineId, TENANT, `SO-${lineId}`, createHash("sha256").update(lineId).digest("hex"), status, now, now, JOB_ID,
+    );
+  } finally {
+    if (beforeTheHold) h.db.raw.exec(hold.sql);
+  }
+}
+
+/** A Materials `clear` written straight at D1 on the gate's current version, as a defective writer would. */
+function clearMaterialsInD1(h: Harness): void {
+  const gate = h.db.raw.prepare(
+    "SELECT gate_id, version FROM operating_production_gates WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Materials'",
+  ).get(TENANT, JOB_ID) as { gate_id: string; version: number };
+  ledgerCounter += 1;
   h.db.raw.prepare(
-    `INSERT INTO inventory_po_lines
-       (po_line_id, tenant_id, supplier_order_id, line_no, item_id, uom_id, ordered_quantity_scaled,
-        unit_price_minor, line_identity_sha256, status, created_at, updated_at, roof_job_id)
-     VALUES ('po_line_acceptance_1', ?, 'SO-ACCEPTANCE-1', 1, 'item_acceptance_panel',
-             'uom_acceptance_each', 10, 500, ?, 'ordered', ?, ?, ?)`,
-  ).run(TENANT, "b".repeat(64), now, now, JOB_ID);
+    `INSERT INTO production_gate_clearances
+       (clearance_id, tenant_id, gate_id, roof_job_id, gate, entry_kind, basis, to_state,
+        from_gate_version, actor_kind, actor_user_id, actor_role, attestation_json,
+        evidence_refs_json, request_sha256, idempotency_key_hash, created_at)
+     VALUES (?, ?, ?, ?, 'Materials', 'clear', 'person_attestation', 'ready', ?, 'person', ?, 'owner',
+             '{"reference":"DELIVERY-ACCEPTANCE-0001","source":"supplier_delivery"}', '[]', ?, ?,
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+  ).run(
+    `pgc_${ledgerCounter.toString(16).padStart(40, "b")}`, TENANT, gate.gate_id, JOB_ID, gate.version, OWNER_ID,
+    createHash("sha256").update(`materials:${ledgerCounter}`).digest("hex"),
+    createHash("sha256").update(`materials-key:${ledgerCounter}`).digest("hex"),
+  );
+}
+
+/** A backordered purchase order line of this job, written before the window's hold existed. */
+function backorderedJobLine(h: Harness): void {
+  placeJobOrderLine(h, "po_line_acceptance_backordered", "backordered", true);
+}
+
+/**
+ * Every hold of the job's cancellation window stands, by its code (`unknown` or `open`): the firm
+ * start on the store, the Materials attestation in D1, a supplier order (a job's purchase order line)
+ * and a backordered line moving back to ordered in D1. Nothing is written.
+ */
+async function assertEveryHoldStands(
+  h: Harness,
+  schedule: (key: string) => Promise<unknown>,
+  state: "unknown" | "open",
+): Promise<void> {
+  const before = [count(h, "operating_job_assignments"), count(h, "production_gate_clearances"), count(h, "inventory_po_lines")];
+  await refusedSchedule(schedule(`schedule-a5-held-${state}`), `operating_job_assignment_cancellation_window_${state}`);
+  refusedWith(() => clearMaterialsInD1(h), `production_gate_cancellation_window_${state}`);
+  refusedWith(() => placeJobOrderLine(h), `inventory_po_line_cancellation_window_${state}`);
+  refusedWith(
+    () => h.db.raw.prepare(
+      "UPDATE inventory_po_lines SET status = 'ordered', version = version + 1 WHERE po_line_id = 'po_line_acceptance_backordered'",
+    ).run(),
+    `inventory_po_line_cancellation_window_${state}`,
+  );
+  assert.deepEqual(
+    [count(h, "operating_job_assignments"), count(h, "production_gate_clearances"), count(h, "inventory_po_lines")],
+    before,
+  );
 }
 
 test("without signed_copy the confirm answer is unchanged and no copy is recorded as shown: the window is unknown", async () => {
@@ -3246,7 +3350,7 @@ test("without signed_copy the confirm answer is unchanged and no copy is recorde
   }
 });
 
-test("with signed_copy the answer carries the signed copy, recorded as shown in the acceptance's batch, and the window opens", async () => {
+test("with signed_copy the answer carries the signed copy, recorded as shown once it is built, and the window opens", async () => {
   const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
   try {
     seedGates(h);
@@ -3279,15 +3383,18 @@ test("with signed_copy the answer carries the signed copy, recorded as shown in 
         accepted_at: binding.accepted_at,
         receipt_sha256: binding.receipt_hash,
         shown_at: event.shown_at,
-        // The stored, DST-safe end the confirm screen's "You can cancel until ..." reads.
+        // The stored end, the first instant after the 10th local day: the confirm screen's "You
+        // can cancel until ..." reads the day before it.
         window_ends_at: event.window_ends_at,
       },
     });
     // The copy is the contract the binding holds: the same terms hash.
     assert.equal(body.signed_copy.terms_hash, binding.terms_hash);
     assert.equal(body.signed_copy.terms_hash, OD01_TERMS_HASH);
-    // D1's own time, linked to the binding, and the window's fail-safe end.
+    // D1's own time, after the contract was bound, linked to the binding, and the window's end:
+    // the end of the 10th business day after the day the copy was shown (interim, pending counsel).
     assert.ok(Math.abs(Date.parse(event.shown_at) - d1Now(h.db.raw)) < MINUTE_MS, event.shown_at);
+    assert.ok(event.shown_at >= binding.bound_at, `${event.shown_at} ${binding.bound_at}`);
     assert.deepEqual(
       { ...event, event_id: undefined },
       {
@@ -3363,6 +3470,166 @@ test("a rejected attempt with signed_copy records no copy as shown", async () =>
     assert.deepEqual(await rejected.json(), { error: "acceptance_rejected" });
     assert.equal(count(h, "commercial_acceptance_bindings"), 0);
     assert.deepEqual(shownEvents(h), []);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a signed copy that cannot be built is never recorded as shown: no window starts, every hold stands, and the exact replay starts it then", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextSignedCopyBuild = true;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-unbuilt-0001");
+    assert.equal(first.status, 200);
+    assert.equal(h.db.failNextSignedCopyBuild, false, "the copy was being built when D1 failed");
+    const text = await first.text();
+    const acceptanceId = (JSON.parse(text) as { acceptance_id: string }).acceptance_id;
+    // The contract is signed, but the answer is the plain accepted one: no copy, no window claimed.
+    assert.equal(text, JSON.stringify({ acceptance_id: acceptanceId, status: "accepted" }));
+    assert.equal(count(h, "commercial_acceptance_bindings"), 1);
+    assert.deepEqual(shownEvents(h), []);
+    // No window started: it is unknown, and every hold stands, on the Worker and in D1.
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual(
+      [window.state, window.unknown_reason, window.starts_at, window.ends_at, window.holds.length],
+      ["unknown", "signed_copy_time_missing", null, null, 3],
+    );
+    assert.deepEqual(await cancellationWindowHold(h.env, TENANT, JOB_ID), {
+      state: "unknown",
+      detail: { unknown_reason: "signed_copy_time_missing" },
+    });
+    const schedule = readyToSchedule(h, { waiveMaterials: true });
+    backorderedJobLine(h);
+    await assertEveryHoldStands(h, schedule, "unknown");
+    // The work queue lists the job, so ops can record the receipt through the people-only route.
+    const owner = await personAuth(h, OWNER_ID);
+    const missing = await handleAuthenticatedRoute(
+      new Request(`${PUBLIC_ORIGIN}/api/v1/production/cancellation-window/signed-copy-missing`),
+      h.env,
+      owner,
+    );
+    assert.equal((await missing.json() as { count: number }).count, 1);
+
+    // The exact replay builds the copy now, records it as shown with D1's time now, and serves it:
+    // the window starts at the replay, never back-dated to the first attempt.
+    const afterFirst = new Date(d1Now(h.db.raw)).toISOString();
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unbuilt-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    const body = await replay.json() as Record<string, any>;
+    const [event, ...more] = shownEvents(h);
+    assert.ok(event);
+    assert.deepEqual(more, []);
+    assert.ok(event.shown_at >= afterFirst, `${event.shown_at} is before ${afterFirst}`);
+    assert.equal(body.acceptance_id, acceptanceId);
+    assert.equal(body.signed_copy.shown_at, event.shown_at);
+    assert.equal(body.signed_copy.window_ends_at, event.window_ends_at);
+    assert.equal(event.window_ends_at, cancellationWindowEndsAt(event.shown_at, ZONE));
+    const opened = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual(
+      [opened.state, opened.started_from, opened.starts_at, opened.ends_at],
+      ["open", "signed_copy_shown", event.shown_at, event.window_ends_at],
+    );
+    await assertEveryHoldStands(h, schedule, "open");
+    // Replayed again: the same copy, and nothing more is written.
+    const again = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unbuilt-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.deepEqual(await again.json(), body);
+    assert.deepEqual(shownEvents(h), [event]);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a copy whose event D1 does not write claims no window; one whose answer D1 lost is read back and served", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextSignedCopyEvent = true;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-unwritten-0001");
+    assert.equal(first.status, 200);
+    assert.equal(h.db.failNextSignedCopyEvent, false, "the event was being written when D1 failed");
+    const text = await first.text();
+    const acceptanceId = (JSON.parse(text) as { acceptance_id: string }).acceptance_id;
+    assert.equal(text, JSON.stringify({ acceptance_id: acceptanceId, status: "accepted" }));
+    assert.deepEqual(shownEvents(h), []);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "unknown");
+    assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_unknown/);
+
+    // The replay writes it; D1 commits it and loses the answer. The event is read back, and the copy
+    // is served with its times and its one audit row.
+    h.db.loseNextSignedCopyEventAnswer = true;
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unwritten-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    assert.equal(h.db.loseNextSignedCopyEventAnswer, false, "the event's answer was lost");
+    const body = await replay.json() as Record<string, any>;
+    const [event, ...more] = shownEvents(h);
+    assert.ok(event);
+    assert.deepEqual(more, []);
+    assert.deepEqual(
+      [body.signed_copy.shown_at, body.signed_copy.window_ends_at],
+      [event.shown_at, event.window_ends_at],
+    );
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE run_id = ?").get(event.event_id) as { n: number }).n,
+      1,
+    );
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "open");
+  } finally {
+    h.restore();
+  }
+});
+
+test("an uncertain (202) attempt with signed_copy records no copy as shown", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+    // The commit never reaches D1...
+    h.db.beforeNextBatch = () => {
+      throw new Error("simulated_d1_unavailable");
+    };
+    const lost = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-uncertain-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.notEqual(lost.status, 200);
+    assert.equal(h.db.beforeNextBatch, null, "the commit's batch was attempted");
+    assert.equal(count(h, "commercial_acceptance_bindings"), 0);
+    // ...and the attempt's lease has run out when the customer asks again: the outcome is uncertain.
+    const attemptedAt = new Date(Date.now() - 120_000).toISOString();
+    const leaseExpiredAt = new Date(Date.now() - 60_000).toISOString();
+    h.db.raw.prepare(
+      `UPDATE customer_portal_acceptance_intents
+          SET frappe_attempted_at = ?, frappe_attempt_lease_expires_at = ?, updated_at = ?
+        WHERE state = 'receipt_stored'`,
+    ).run(attemptedAt, leaseExpiredAt, attemptedAt);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const uncertain = await worker.fetch(
+        confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-uncertain-0001"),
+        h.env as never,
+        {} as never,
+      );
+      assert.equal(uncertain.status, 202);
+      assert.equal((await uncertain.json() as { status: string }).status, "uncertain");
+    }
+    assert.deepEqual(shownEvents(h), []);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "unknown");
   } finally {
     h.restore();
   }
@@ -3606,23 +3873,25 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
       () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 240)) - 1).toISOString() }),
       /contract_signed_copy_event_end_invalid/,
     );
+    // The end of the 10th local day is at most 264 hours after a start at local midnight, plus one
+    // DST hour: D1 refuses anything later.
     assert.throws(
-      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 241)) + 1).toISOString() }),
+      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 265)) + 1).toISOString() }),
       /contract_signed_copy_event_end_invalid/,
     );
     assert.equal(count(h, "contract_signed_copy_events"), 0);
 
     // A person's record half an hour ago, ending at its 241st hour: an event ending before that
-    // end is refused, and one at its own 241st hour is written.
+    // end is refused, and one at its own 265th hour, D1's upper bound, is written.
     const receivedAt = plusHours(now(), -0.5);
     insertReceipt(receivedAt, plusHours(receivedAt, 241));
     assert.throws(() => insertEvent(), /contract_signed_copy_event_end_invalid/);
     const firstShown = now();
-    insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 241) });
+    insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 265) });
     const [event] = shownEvents(h);
     assert.ok(event);
     // One event per contract; it is never updated or deleted.
-    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 241) }), /contract_signed_copy_event_append_only/);
+    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 265) }), /contract_signed_copy_event_append_only/);
     assert.throws(
       () => h.db.raw.prepare("UPDATE contract_signed_copy_events SET time_zone = 'UTC' WHERE event_id = ?").run(event.event_id),
       /contract_signed_copy_event_append_only/,

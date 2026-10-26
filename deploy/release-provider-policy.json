@@ -121,7 +121,7 @@
         {
           "binding": "DB",
           "database_name": "ironwrap-bus",
-          "database_id": "f0674848-13df-4422-9896-8ba2719663b8",
+          "database_id": "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
           "migrations_dir": "migrations"
         }
       ],

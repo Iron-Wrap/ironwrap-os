@@ -806,7 +806,8 @@ function cleanSource(value: unknown): string {
   return source;
 }
 
-async function stableId(prefix: string, tenant: string, identity: string): Promise<string> {
+/** Also names an envelope's lead for the AI team's inbound producer (agents/inbound.ts). */
+export async function stableId(prefix: string, tenant: string, identity: string): Promise<string> {
   // Keep kind and tenant visible for D1 operations while hashing every external identity. This
   // prevents delimiter sanitization/truncation collisions and avoids putting email, phone, raw
   // keys, or provider identifiers into tenant-owned primary keys.

@@ -19,13 +19,15 @@ import {
   humanGuard,
   openException,
   specialistControl,
+  specialistState,
   type HumanPrincipal,
   type Notify,
 } from "./control.ts";
-import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
+import { effectiveDelegation, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson } from "./schema.ts";
 import type { AgentDb, BoundStatement, StoreError } from "./store.ts";
+import { closeDelegationDrafts } from "./drafts.ts";
 
 /** Track D's catastrophe ids (agent-host/evals/catastrophes.v1.json); a test keeps them equal. */
 export const CATASTROPHE_IDS = [
@@ -207,6 +209,15 @@ export async function setShadow(
     return same ? { setting_id: prior.setting_id, revision: prior.revision } : { error: "idempotency_conflict", status: 409 };
   }
   const settingId = `shd_${crypto.randomUUID()}`;
+  // Turning practice on or off answers the face's open proposals for the pair (contract f5); off,
+  // the pair is back on the setting in force.
+  const inForce = input.shadow
+    ? "shadow"
+    : effectiveDelegation(catalogAction(input.action_id)!, {
+        delegation: await currentDelegation(db, tenantId, input.specialist_id, input.action_id),
+        specialistState: specialistState(await specialistControl(db, tenantId, input.specialist_id)),
+      });
+  const answered = await closeDelegationDrafts(db, tenantId, input, inForce, actor.user_id);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),
@@ -230,6 +241,7 @@ export async function setShadow(
         WHERE tenant_id=? AND specialist_id=? AND action_id=? AND outcome IS NULL AND json_extract(permit_json,'$.delegation_id') IS NOT NULL AND ? = 1`,
         )
         .bind(now, tenantId, input.specialist_id, input.action_id, input.shadow ? 1 : 0),
+      answered,
     ]);
   } catch (error) {
     const refusal = controlError(error) ?? (String(error).includes("agent_shadow_settings_append_only") ? { error: "stale_version", status: 409 } : null);

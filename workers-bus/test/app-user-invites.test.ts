@@ -807,7 +807,7 @@ test("a role change closes the AI team's open role-change drafts for that person
   assert.equal(changed.status, 200);
   assert.deepEqual(
     [closed("step_role").reason_code, JSON.parse(closed("step_role").do_it_myself_json).context.applied],
-    ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }],
+    ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id, as_proposed: false }],
   );
   assert.equal(closed("step_device").reason_code, null, "a device draft stays open");
   // Each close that closed a draft is audited, naming the role and who set it.
@@ -815,10 +815,11 @@ test("a role change closes the AI team's open role-change drafts for that person
     (h.db.raw.prepare("SELECT user_id, outcome, detail_code FROM app_auth_audit WHERE event = 'agent_draft_close' ORDER BY id").all() as Array<Record<string, string>>).map((row) => ({ ...row }));
   assert.deepEqual(audits(), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
   // A draft left open after the change (a close that failed) closes on a repeat of the same change.
-  draft("step_left", "change_role", "field", null);
+  // This one proposed the role the repeat sets: as proposed.
+  draft("step_left", "change_role", "production", null);
   const repeat = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session, body: { role: "production" } });
   assert.equal(repeat.status, 200);
-  assert.equal(closed("step_left").reason_code, "applied_by_person");
+  assert.deepEqual([closed("step_left").reason_code, JSON.parse(closed("step_left").do_it_myself_json).context.applied.as_proposed], ["applied_by_person", true]);
   assert.equal(audits().length, 2);
   // A repeat with nothing open closes nothing and leaves no audit row.
   await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, { session, body: { role: "production" } });

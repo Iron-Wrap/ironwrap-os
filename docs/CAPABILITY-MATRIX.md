@@ -648,12 +648,17 @@ IRO-38 branch-local side-effect substrate:
   The MCP host's `mcp.*` effects keep the token, as do the remaining actions. Migration
   `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
   never `retry`) and moves an `unknown` proposal send to `succeeded` or `reconciled` only with a
-  person's delivery confirmation (0156). 0156 confirms publishes only, so an unknown withdrawal
-  stays unknown until its creator brings an evidence path. A send whose provider answered (its
-  readback conflicted, or it refused the send and a later check contradicted that) cannot be
-  recorded as not delivered by a person, in the Worker or in D1 (409
-  `proposal_delivery_confirmation_conflict_needs_provider_evidence`): that needs provider evidence,
-  so until then it stays a manual exception; "delivered" stays open. Checks:
+  person's delivery confirmation (0156). That guard is keyed on the action alone, so a proposal send
+  claimed under another aggregate type is held the same way. 0156 confirms publishes only, so an
+  unknown withdrawal stays unknown until its creator brings an evidence path. A send whose provider
+  answered cannot be recorded as not delivered by a person, in the Worker or in D1 (409
+  `proposal_delivery_confirmation_conflict_needs_provider_evidence`): its readback conflicted, or
+  it refused the send and a later check then said it ran or could not tell, an inconclusive check
+  of a refused send included. The rule reads that send's own latest move into the exception. Such a
+  send stays a manual exception and keeps blocking a second send of the same revision until a
+  provider check that cites the provider's answer exists (planned, not built); "delivered" stays
+  open. Nothing reaches this today: no bearer path takes a real proposal send, and no in-process
+  caller reconciles one. Checks:
   `workers-bus/test/outside-send-guards.test.ts`, `commercial-proposal-api.test.ts`,
   `qa-seed-journey.test.ts`.
 

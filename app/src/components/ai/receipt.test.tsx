@@ -773,6 +773,23 @@ describe("a people-only draft that left Needs you", () => {
     ).toBeVisible();
   });
 
+  it("keeps the Checked line on a step a person did instead that has a read-back", () => {
+    const answered = receipt({
+      outcome: "failed",
+      readback: {
+        source: "quickbooks",
+        reference: "invoice/88",
+        response_hash: "sha256:invoice",
+        matched: true,
+      },
+      policy: { ...receipt().policy, reason_codes: ["done_by_person"] },
+    });
+    render(<Receipt receipt={answered} display={{ ...closed, by: "person_dana" }} />);
+    const card = screen.getByRole("article");
+    expect(card).toHaveAttribute("data-state", "done_by_person");
+    expect(within(card).getByText(/Checked in the other system: matches\./)).toBeVisible();
+  });
+
   it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
     const replaced = {
       ...draft("superseded"),

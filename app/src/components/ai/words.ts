@@ -375,15 +375,15 @@ export const VIEW_REFUSED =
 export interface AppliedByPerson {
   field: "role" | "delegation_setting";
   value: string;
-  /** The person's user id. */
-  by: string;
+  /** The person's user id; without it the note says "A person". */
+  by?: string;
 }
 
 const appliedSchema = z.object({
   applied: z.object({
     field: z.enum(["role", "delegation_setting"]),
     value: z.string().min(1),
-    by: z.string().min(1),
+    by: z.string().min(1).optional(),
   }),
 });
 
@@ -399,20 +399,21 @@ const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
   delegation_setting: "the AI team setting",
 };
 
+/** The delegation settings a person can set by hand, as the contract's delegation table shows them. */
+const APPLIED_SETTING: Record<string, string> = {
+  asks_first: DELEGATION.asks_first.words,
+  within_limits: DELEGATION.within_limits.words,
+  off: "Off",
+  shadow: "Practice only",
+};
+
 /** What is set now, in the words its screen shows (a role, or a delegation setting's "Shown as"). */
 function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "value">) {
   if (field === "role")
     return (appRoles as readonly string[]).includes(value)
       ? roleLabel(value as AppRole)
       : undefined;
-  const setting: Record<string, string> = {
-    asks_first: DELEGATION.asks_first.words,
-    within_limits: DELEGATION.within_limits.words,
-    off_until_enabled: DELEGATION.off_until_enabled.words,
-    off: "Off",
-    shadow: "Practice only",
-  };
-  return Object.hasOwn(setting, value) ? setting[value] : undefined;
+  return Object.hasOwn(APPLIED_SETTING, value) ? APPLIED_SETTING[value] : undefined;
 }
 
 /**
@@ -446,7 +447,7 @@ export function supersededNote(record?: string): string {
  * The state words of one receipt. `by` names the person who declined, undid or did the step;
  * `where` is the outside system in plain words ("QuickBooks"); `waitingFor` is where a person's
  * answer still has to arrive ("the phone"); `record` is what a people-only draft changes ("Grace
- * Obi's access"); `applied` is what a person set on it by hand (`appliedOf`).
+ * Obi's role"); `applied` is what a person set on it by hand (`appliedOf`).
  */
 export function receiptWords(
   receipt: Pick<ContractReceipt, "outcome" | "policy" | "needs_from_you">,

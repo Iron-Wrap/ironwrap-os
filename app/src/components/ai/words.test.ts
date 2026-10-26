@@ -136,7 +136,7 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
   });
 
   it("says what a person set by hand on the draft's record, never that they made this change", () => {
-    const role = { field: "role", value: "production", by: "user_dana" } as const;
+    const role = { field: "role", value: "production", by: "person_dana" } as const;
     expect(
       receiptWords(closed("succeeded", "applied_by_person"), {
         by: "Dana Whitford",
@@ -161,17 +161,11 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       "Dana Whitford changed the AI estimator's quote sending by hand, so this draft is closed. The AI estimator's quote sending is now Acts within your limits.",
     );
     expect(
-      ["asks_first", "within_limits", "off_until_enabled", "off", "shadow"].map((value) =>
+      ["asks_first", "within_limits", "off", "shadow"].map((value) =>
         appliedByPersonNote("Dana Whitford", undefined, { field: "delegation_setting", value }),
       ),
     ).toEqual(
-      [
-        "Asks first",
-        "Acts within your limits",
-        "Off until you turn it on",
-        "Off",
-        "Practice only",
-      ].map(
+      ["Asks first", "Acts within your limits", "Off", "Practice only"].map(
         (words) =>
           `Dana Whitford changed the AI team setting by hand, so this draft is closed. The AI team setting is now ${words}.`,
       ),
@@ -187,9 +181,14 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
   });
 
   it("reads only a well-formed applied record from a closed draft's context", () => {
-    const applied = { field: "delegation_setting", value: "off", by: "user_dana" };
+    const applied = { field: "delegation_setting", value: "off", by: "person_dana" };
     expect(appliedOf({ applied })).toEqual(applied);
     expect(appliedOf({ applied, prior: "kept" })).toEqual(applied);
+    // Without who, the value still reads; the note then says "A person".
+    expect(appliedOf({ applied: { field: "role", value: "sales" } })).toEqual({
+      field: "role",
+      value: "sales",
+    });
     for (const context of [
       null,
       undefined,
@@ -199,7 +198,8 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       { applied: { ...applied, field: "email" } },
       { applied: { ...applied, value: "" } },
       { applied: { ...applied, value: 3 } },
-      { applied: { field: "role", value: "sales" } },
+      { applied: { ...applied, by: "" } },
+      { applied: { field: "role", by: "person_dana" } },
     ])
       expect(appliedOf(context)).toBeUndefined();
   });

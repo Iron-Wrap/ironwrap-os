@@ -198,7 +198,7 @@ export function Receipt({
         ? `Checked in ${where}${display.checkedWhen ? ` ${display.checkedWhen}` : ""}: ${
             receipt.readback.matched ? "matches" : "does not match"
           }.`
-        : receipt.tool && state !== "needs_you"
+        : receipt.tool && state !== "needs_you" && !closedDraft
           ? "Not checked yet."
           : null,
     ]

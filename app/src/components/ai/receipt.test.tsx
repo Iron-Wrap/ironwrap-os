@@ -743,6 +743,8 @@ describe("a people-only draft that left Needs you", () => {
     expect(card).toHaveAttribute("data-state", "done_by_person");
     // The person comes from the applied record when the screen names no one.
     expect(within(card).getByText("Done by Dana Whitford")).toBeVisible();
+    // Its one time is the hand change that closed it.
+    expect(within(card).getByText("Changed by hand · Yesterday 16:20")).toBeVisible();
     expect(
       within(card).getByText(
         "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Production.",
@@ -788,6 +790,9 @@ describe("a people-only draft that left Needs you", () => {
     const card = screen.getByRole("article");
     expect(card).toHaveAttribute("data-state", "done_by_person");
     expect(within(card).getByText(/Checked in the other system: matches\./)).toBeVisible();
+    // Not a closed draft: its time stays the step's own.
+    expect(within(card).getByText("Yesterday 16:20")).toBeVisible();
+    expect(card.textContent).not.toMatch(/Changed by hand/);
   });
 
   it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {

@@ -399,12 +399,16 @@ const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
   delegation_setting: "the AI team setting",
 };
 
-/** The delegation settings a person can set by hand, as the contract's delegation table shows them. */
+/**
+ * The delegation settings a person can set by hand, as the contract's delegation table shows them,
+ * each with what it means once (gate c2: "Asks first" alone was terse).
+ */
 const APPLIED_SETTING: Record<string, string> = {
-  asks_first: DELEGATION.asks_first.words,
-  within_limits: DELEGATION.within_limits.words,
-  off: "Off",
-  shadow: "Practice only",
+  asks_first: `${DELEGATION.asks_first.words}: it asks a person each time before it acts`,
+  within_limits: `${DELEGATION.within_limits.words}: it acts without asking up to the limit set, and asks a person above it`,
+  off: "Off: it does not do this at all, and people do it by hand",
+  shadow:
+    "Practice only: it runs practice rounds that change nothing, and people still do the real work",
 };
 
 /** What is set now, in the words its screen shows (a role, or a delegation setting's "Shown as"). */

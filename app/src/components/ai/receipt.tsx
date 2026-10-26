@@ -27,7 +27,10 @@ import {
 export interface ReceiptDisplay {
   /** One line with the exact facts: "Final invoice for Ruth Okafor, CAD 9,860.00". */
   title: ReactNode;
-  /** When the step happened: a day word, the time and the zone. */
+  /**
+   * When the step happened: a day word, the time and the zone. For a draft a person closed by
+   * changing its record by hand, when they changed it; the card reads "Changed by hand · {when}".
+   */
   when: When;
   /** One plain label per contract source, in the same order. */
   sources: SourceProps[];
@@ -339,7 +342,10 @@ export function Receipt({
             <PersonAvatar initials={by ? initialsOf({ name: by }) : undefined} decorative />
             <span className="grid min-w-0">
               <span className={cn(type.body, "font-semibold")}>{by ?? "A person"}</span>
-              <span className={cn(type.caption, "text-text-secondary")}>{when}</span>
+              {/* A closed draft has two moments; its time is the hand change that closed it (gate c2). */}
+              <span className={cn(type.caption, "text-text-secondary")}>
+                {closedDraft ? <>Changed by hand · {when}</> : when}
+              </span>
             </span>
           </span>
         ) : (

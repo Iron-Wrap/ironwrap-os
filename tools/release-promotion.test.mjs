@@ -1381,7 +1381,7 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
   await writeFile(contextFile, JSON.stringify({
     qa_secret_names: ["INGEST_TOKEN"],
     qa_binding_manifest: [
-      { name: "DB", type: "d1", resource_id: "f0674848-13df-4422-9896-8ba2719663b8" },
+      { name: "DB", type: "d1", resource_id: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d" },
       { name: "INGEST_TOKEN", type: "secret_text" },
     ],
     qa_runtime_manifest: { compatibility_date: "2026-06-28", compatibility_flags: [] },
@@ -1396,7 +1396,7 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
     resources: {
       script: { handlers: ["fetch"] },
       script_runtime: { compatibility_date: "2026-06-28" },
-      bindings: [{ name: "DB", type: "d1", id: "f0674848-13df-4422-9896-8ba2719663b8" }, { name: "INGEST_TOKEN", type: "secret_text" }],
+      bindings: [{ name: "DB", type: "d1", id: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d" }, { name: "INGEST_TOKEN", type: "secret_text" }],
     },
   }));
   await main(["version-readback", "--input", versionInput, "--output", versionOutput, "--environment", "qa", "--version-id", QA, "--source-commit", COMMIT, "--source-tree", TREE, "--artifact-digest", ARTIFACT, "--config-digest", CONFIG, "--secret-inventory", inventoryOutput, "--context", contextFile]);
@@ -1433,10 +1433,10 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
   const recoveryInput = path.join(root, "production-recovery.provider.json");
   const recoveryOutput = path.join(root, "production-recovery.json");
   await writeFile(recoveryInput, JSON.stringify({ bookmark: "bookmark-20260816-production-0001" }));
-  await main(["d1-recovery-point", "--input", recoveryInput, "--database-id", "f0674848-13df-4422-9896-8ba2719663b8", "--output", recoveryOutput]);
+  await main(["d1-recovery-point", "--input", recoveryInput, "--database-id", "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d", "--output", recoveryOutput]);
   assert.equal(JSON.parse(await readFile(recoveryOutput, "utf8")).status, "matched");
   await writeFile(recoveryInput, JSON.stringify({ bookmark: "bookmark-20260816-production-0001", ignored: true }));
-  await assert.rejects(() => main(["d1-recovery-point", "--input", recoveryInput, "--database-id", "f0674848-13df-4422-9896-8ba2719663b8", "--output", recoveryOutput]), /release_promotion_d1_recovery_readback_shape_invalid/);
+  await assert.rejects(() => main(["d1-recovery-point", "--input", recoveryInput, "--database-id", "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d", "--output", recoveryOutput]), /release_promotion_d1_recovery_readback_shape_invalid/);
 
   const rollbackReadback = path.join(root, "rollback.readback");
   const rollbackOutput = path.join(root, "rollback.receipt.json");

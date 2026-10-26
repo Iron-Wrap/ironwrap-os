@@ -6,6 +6,7 @@ import {
   RECEIPT_FIELDS,
   appliedByPersonNote,
   appliedOf,
+  timeInSentence,
   dayTime,
   deciderWords,
   delegationOf,
@@ -207,6 +208,89 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
         as_proposed: true,
       }),
     ).toBe(appliedByPersonNote("Dana Whitford", "Grace Obi's role"));
+  });
+
+  it("says the card's time in the line, and you when the person who acted reads it", () => {
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        record: "Grace Obi's role",
+        applied: { field: "role", value: "production", by: "person_dana" },
+        when: "Mon 19 Oct 14:05",
+        byViewer: true,
+      }),
+    ).toEqual({
+      state: "done_by_person",
+      words: "Done by you",
+      kind: "done",
+      note: "You changed Grace Obi's role by hand on Mon 19 Oct at 14:05, so this draft is closed. Grace Obi's role is now Production.",
+    });
+    expect(
+      receiptWords(closed("failed", "declined"), { by: "Dana Whitford", byViewer: true }).words,
+    ).toBe("Undone by you");
+    expect(
+      receiptWords(closed("failed", "done_by_person"), { by: "Dana Whitford", byViewer: true })
+        .words,
+    ).toBe("Done by you");
+    expect(
+      receiptWords(closed("failed", "done_by_person"), {
+        by: "Dana Whitford",
+        byViewer: true,
+        waitingFor: "the phone",
+      }).words,
+    ).toBe("Answered by you · waiting for the phone");
+    // With no value to name, the earlier line still says "You".
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        byViewer: true,
+        record: "Grace Obi's role",
+      }).note,
+    ).toBe(
+      "You already made this change to Grace Obi's role, so this draft is closed. The change stays in place, and nothing is left to do.",
+    );
+    // A time it cannot place leaves the line without one.
+    expect(
+      appliedByPersonNote(
+        "Dana Whitford",
+        "Grace Obi's role",
+        { field: "role", value: "sales" },
+        "Not known yet",
+      ),
+    ).toBe(
+      "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales.",
+    );
+  });
+
+  it("says a card time inside a sentence", () => {
+    expect(
+      [
+        "Today 09:30",
+        "Today 6:26 p.m.",
+        "Mon 19 Oct 14:05",
+        "Mon 19 Oct 2025 14:05",
+        "Fri 18 Sep, 6:26 p.m.",
+        "Yesterday 15:40",
+        "Thu 07:00",
+        "9 days ago 14:00",
+      ].map(timeInSentence),
+    ).toEqual([
+      "today at 09:30",
+      "today at 6:26 p.m.",
+      "on Mon 19 Oct at 14:05",
+      "on Mon 19 Oct 2025 at 14:05",
+      "on Fri 18 Sep at 6:26 p.m.",
+      "yesterday at 15:40",
+      "on Thu at 07:00",
+      "9 days ago at 14:00",
+    ]);
+    expect(
+      ["Tomorrow 07:00", "In 9 days 07:00", "Today\u202f6:26\u00a0p.m."].map(timeInSentence),
+    ).toEqual(["tomorrow at 07:00", "in 9 days at 07:00", "today at 6:26\u00a0p.m."]);
+    // A time it cannot place, or a day it does not know, it leaves out rather than guess.
+    expect(timeInSentence("Not known yet")).toBeUndefined();
+    expect(timeInSentence("")).toBeUndefined();
+    expect(timeInSentence("Around 14:05")).toBeUndefined();
   });
 
   it("reads only a well-formed applied record from a closed draft's context", () => {

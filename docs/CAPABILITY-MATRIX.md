@@ -312,12 +312,14 @@ Current source tracing distinguishes implemented modules from reachable producti
   handoff's `reason`; a watch is never redacted. The row keeps its ids, roles, envelope, channel,
   objects and its original `content_sha256`, and gains `"redacted": true`. `0207` adds one
   exception to the signal's append-only guard, with the age on D1's clock and every other column
-  pinned, and a partial index of unredacted signals; a run redacts at most 500, oldest first.
+  pinned, and a partial index of unredacted signals; a run redacts at most 500, oldest first, and
+  no run opens on a redacted signal (`409 signal_redacted`).
   `AGENT_SIGNAL_REDACTION` switches it: "on" in qa and local, blank in production until this slice
   is merged and independently reviewed, then one config change on the production go-live list.
   Envelopes are the business record, kept three years; redacting them is a later slice that must
   ship before the first reach that age. Named gap: copies this redaction does not reach, namely
-  a step's `args_json` (`lead_fact.propose` copies service, scope, address and timing), a run's
+  a step's and a shadowed step's `args_json` (`lead_fact.propose` copies service, scope, address
+  and timing), a run's
   `close_json`, `agent_exceptions.summary`, the agent host's `rejected-signals.jsonl`, D1 backups
   (7 to 365 days) and model-provider copies. Not built yet: the owner-only erasure of one
   customer's data after verifying them (call to the number or email from the address on file,

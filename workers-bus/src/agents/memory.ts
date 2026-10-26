@@ -446,7 +446,8 @@ function refUnder(byId: Map<string, FactRef>, citation: string): { ref: FactRef;
 }
 
 /**
- * Reads a fact's value again; the signal's value comes from its immutable signal row. `all` reads
+ * Reads a fact's value again; the signal's value comes from its signal row, whose hash never changes
+ * (its text alone is redacted at ninety days, retention.ts). `all` reads
  * many at once, as a resume does.
  */
 export type FactReader = ((ref: FactRef) => Promise<ContextFact | null>) & { all?: (refs: FactRef[]) => Promise<Array<ContextFact | null>> };

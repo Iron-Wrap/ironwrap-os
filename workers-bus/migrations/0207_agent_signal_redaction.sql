@@ -10,8 +10,8 @@
 -- keeps its original content_sha256: it still proves what was received, and every receipt that cited
 -- the signal still names the same hash. The trigger body is 0200's plus that one exception; the
 -- age is read on D1's clock in the stored ISO form, so the code cannot redact a younger signal
--- (the trigger is the floor). Every comparison is null-safe (IS), so a NULL can never switch the
--- exception on.
+-- (the trigger is the floor). kind and received_at are NOT NULL and every other comparison is
+-- null-safe (IS), so a NULL can never switch the exception on.
 
 DROP TRIGGER IF EXISTS prevent_agent_signal_update;
 

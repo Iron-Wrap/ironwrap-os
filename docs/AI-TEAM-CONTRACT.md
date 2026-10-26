@@ -1615,9 +1615,11 @@ After that the daily cron redacts it in place, once (`workers-bus/src/agents/ret
 A redacted signal gains `"redacted": true` and keeps every column but its content: its id, kind,
 specialist, source, subject, dedupe key, chain and time. It keeps its original `content_sha256`,
 which still proves what was received, so a receipt that cited the signal still names the same hash;
-nothing hashes a signal's content again. A run never opens on a redacted signal (an ask expires
-long before), and a person's replay of an ask under its idempotency key after ninety days answers
-`idempotency_conflict`.
+no code recomputes it. No run opens on a redacted signal (`409 signal_redacted`, which the host
+skips), and a person's replay of an ask under its idempotency key after ninety days answers
+`idempotency_conflict`, since the question it compares is gone; a request holds no text and still
+replays. Every signal is stored under `toISOString`'s form of its time, the form the guard compares;
+a writer that passes any other throws.
 
 Runtime migration 0207 lets only this past the signal's append-only guard: one exception added to
 0200's guard, which reads the age on D1's clock in the stored ISO form, pins every other column,
@@ -1637,8 +1639,9 @@ The owner's rulings, final:
   to the number on file or an email from the address on file, and every erasure is recorded.
 
 Not built yet, a named gap: this redaction reaches the signal row only. Copies of the same text it
-does not reach are a step's `args_json` (`lead_fact.propose` copies the service, scope, address
-and timing from the inbound it cites), a run's `close_json` (its answer and reasons may quote a
+does not reach are a step's `args_json` and a shadowed step's (`agent_shadow_steps.args_json`):
+`lead_fact.propose` copies the service, scope, address and timing from the inbound it cites; a
+run's `close_json` (its answer and reasons may quote a
 signal), `agent_exceptions.summary`, the agent host's `rejected-signals.jsonl`, D1 backups (kept 7
 to 365 days) and the copies the model providers keep under their own retention
 (`COMPLIANCE-REGISTER.md`). The next slice is the owner-only erasure route, an exception that lets

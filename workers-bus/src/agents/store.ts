@@ -148,6 +148,14 @@ export interface RunTool {
 export type StoreError = { error: string; status: number };
 
 const SIGNAL_KINDS = new Set(["event", "watch", "owner_request", "handoff"]);
+/** A signal's time as toISOString writes it: migration 0207's age check compares this form as text. */
+const STORED_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** The time a signal is stored under; any other form is a bug in its writer, so it throws. */
+function signalTime(now: string): string {
+  if (!STORED_INSTANT.test(now)) throw new Error("invalid_signal_time");
+  return now;
+}
 
 export async function appendSignal(
   db: AgentDb,
@@ -200,7 +208,7 @@ export async function appendSignal(
       input.dedupe_key,
       input.parent_run_id ?? null,
       input.handoff_depth ?? 0,
-      now,
+      signalTime(now),
       tenantId,
       input.dedupe_key,
       ...(admission?.values ?? []),
@@ -291,6 +299,9 @@ export async function openRun(
     .first<SignalRow>();
   if (!signal) return { error: "signal_not_found", status: 422 };
   if (signal.specialist_id !== input.specialist_id) return { error: "specialist_mismatch", status: 422 };
+  // A signal past its text retention no longer holds what a run would read (retention.ts), so no
+  // run starts on it (409: the host skips it).
+  if (redacted(signal)) return { error: "signal_redacted", status: 409 };
 
   const subject = signal.subject_aggregate && signal.subject_id ? { aggregate: signal.subject_aggregate, id: signal.subject_id } : null;
   // The face answering a person's ask reads as that person's role at ask time (face.ts). An ask
@@ -580,6 +591,12 @@ export function runTools(run: RunRow): RunTool[] {
   return JSON.parse(run.tool_manifest_json);
 }
 
+/** Whether a signal's text was redacted at the end of its retention (migration 0207). */
+function redacted(signal: SignalRow): boolean {
+  const content: unknown = JSON.parse(signal.content_json);
+  return typeof content === "object" && content !== null && (content as { redacted?: unknown }).redacted === true;
+}
+
 /** The objects a scheduler watch's condition named, or null for any other signal. */
 function watchSubjects(signal: SignalRow): Array<{ aggregate: string; id: string }> | null {
   if (signal.kind !== "watch" || signal.source !== WATCH_SIGNAL_SOURCE) return null;
@@ -592,8 +609,9 @@ function watchSubjects(signal: SignalRow): Array<{ aggregate: string; id: string
 }
 
 /**
- * The signal itself is the first fact of every run: immutable. Its text is untrusted, except a
- * watch the Worker's scheduler wrote from its own records.
+ * The signal itself is the first fact of every run, under the hash of what was received, which
+ * redaction keeps (retention.ts). Its text is untrusted, except a watch the Worker's scheduler wrote
+ * from its own records.
  */
 function signalFact(signal: SignalRow): ContextFact {
   return {
@@ -1236,7 +1254,7 @@ async function handoffSignalInsert(
       `handoff:${run.run_id}:${stepKey}`,
       run.run_id,
       depth,
-      now,
+      signalTime(now),
       stepId,
       tenantId,
       `handoff:${run.run_id}:${stepKey}`,

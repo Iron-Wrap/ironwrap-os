@@ -11,7 +11,7 @@ import test from "node:test";
 import { inboundSignal, type InboundSender } from "../src/agents/inbound.ts";
 import { redactSignalText, SIGNAL_REDACTION_BATCH, SIGNAL_TEXT_RETENTION_DAYS, signalRedactionOn } from "../src/agents/retention.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
-import { appendSignal, listSignals, type BoundStatement } from "../src/agents/store.ts";
+import { appendSignal, listSignals, openRun, type BoundStatement } from "../src/agents/store.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
 import worker from "../src/index.ts";
 
@@ -177,25 +177,30 @@ test("migration 0207: only a signal past ninety days loses its text, once, and n
   const refused = (fn: () => unknown, label: string) => assert.throws(fn, /agent_signals_append_only/, label);
 
   // Each frozen column, moved alone beside an otherwise valid redaction, is refused (the last
-  // assignment to a column wins in SQLite).
+  // assignment to a column wins in SQLite). The table's own columns name what must be frozen, so a
+  // column added later fails here until the guard pins it.
   const event = insert(db, "event", { envelope_id: "ow_synthetic", channel: "web_form", excerpt: "Synthetic text.", form_fields: { address: "1 Synthetic Way", scope: null, timing: null }, service: "metal roofing" }, old);
-  for (const change of [
-    "signal_seq = signal_seq + 1000",
-    "signal_id = 'sig_synthetic_other'",
-    "tenant_id = 'tenant_synthetic'",
-    "kind = 'owner_request'",
-    "specialist_id = 'estimator'",
-    "watch_id = 'synthetic'",
-    "source = 'phone'",
-    "subject_aggregate = 'job'",
-    "subject_id = 'lead_other'",
-    "content_sha256 = 'synthetic'",
-    "dedupe_key = 'synthetic:other'",
-    "parent_run_id = 'run_synthetic'",
-    "handoff_depth = handoff_depth + 1",
-    `received_at = '${ago(SIGNAL_TEXT_RETENTION_DAYS + 2)}'`,
-  ])
-    refused(update(db, event, `content_json = ${REDACTED}, ${change}`), change);
+  const frozen: Record<string, string> = {
+    signal_seq: "signal_seq + 1000",
+    signal_id: "'sig_synthetic_other'",
+    tenant_id: "'tenant_synthetic'",
+    kind: "'owner_request'",
+    specialist_id: "'estimator'",
+    watch_id: "'synthetic'",
+    source: "'phone'",
+    subject_aggregate: "'job'",
+    subject_id: "'lead_other'",
+    content_sha256: "'synthetic'",
+    dedupe_key: "'synthetic:other'",
+    parent_run_id: "'run_synthetic'",
+    handoff_depth: "handoff_depth + 1",
+    received_at: `'${ago(SIGNAL_TEXT_RETENTION_DAYS + 2)}'`,
+  };
+  const columns = (db.raw.prepare("PRAGMA table_info(agent_signals)").all() as Array<{ name: string }>).map((column) => column.name).filter((name) => name !== "content_json");
+  assert.deepEqual(Object.keys(frozen).sort(), columns.sort());
+  const guard = (db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_agent_signal_update'").get() as { sql: string }).sql;
+  for (const column of columns) assert.ok(guard.includes(`AND NEW.${column} IS OLD.${column}\n`), `the guard pins ${column}`);
+  for (const [column, value] of Object.entries(frozen)) refused(update(db, event, `content_json = ${REDACTED}, ${column} = ${value}`), column);
   // Any content but the exact redaction of its kind is refused.
   for (const content of [
     "content_json",
@@ -290,9 +295,29 @@ test("an inbound event keeps its envelope, channel and sender match and loses wh
   const text = db.row(appended.signal_id).content_json as string;
   for (const written of ["re-roof", "Synthetic Way", "detached garage", "first snow", "metal"]) assert.ok(!text.includes(written), written);
   assert.equal(db.row(appended.signal_id).content_sha256, received.content_sha256);
-  // The host reads the redacted content under the signal's own id and subject.
+  // The host reads the redacted content under the signal's own id and subject, and no run starts
+  // on it (409: the host skips it).
   const { signals } = await listSignals(db, TENANT, 0, 10);
   assert.deepEqual([signals[0].signal_id, signals[0].subject, signals[0].content.redacted], [appended.signal_id, signal.subject, true]);
+  assert.deepEqual(await openRun(db, TENANT, { signal_id: appended.signal_id, specialist_id: "lead_concierge", host_run_key: "synthetic-redacted" }, new Date().toISOString()), {
+    error: "signal_redacted",
+    status: 409,
+  });
+});
+
+test("a signal is stored only under the time form the redaction's age check compares", async () => {
+  const db = new SqliteD1();
+  const input = { kind: "event" as const, specialist_id: "lead_concierge", watch_id: null, source: "web_form", subject: null, content: { excerpt: "Synthetic." }, dedupe_key: "synthetic:time" };
+  // A space for the T sorts before the stored form and would read a day old too early.
+  for (const now of ["2026-07-01 10:00:00.000Z", "2026-07-01T10:00:00Z", "2026-07-01T10:00:00.000+00:00", ""])
+    await assert.rejects(appendSignal(db, TENANT, input, now), /invalid_signal_time/, now);
+  assert.equal(Number((db.raw.prepare("SELECT COUNT(*) AS n FROM agent_signals").get() as { n: number }).n), 0);
+  const stored = await appendSignal(db, TENANT, input, new Date().toISOString());
+  assert.ok("signal_id" in stored && stored.created);
+  // D1's clock in the guard writes the same form.
+  const d1 = (db.raw.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS at").get() as { at: string }).at;
+  assert.match(d1, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.match(db.row(stored.signal_id).received_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
 
 test("the daily cron redacts only while AGENT_SIGNAL_REDACTION is on", async (t) => {
@@ -337,9 +362,10 @@ test("only retention.ts updates a signal, and nothing hashes a signal's content 
   const src = new URL("../src/", import.meta.url);
   const files = (readdirSync(src, { recursive: true }) as string[]).filter((file) => file.endsWith(".ts")).sort();
   const read = (file: string) => readFileSync(new URL(file, src), "utf8");
-  assert.deepEqual(files.filter((file) => /UPDATE\s+agent_signals/i.test(read(file))), ["agents/retention.ts"]);
+  assert.deepEqual(files.filter((file) => /UPDATE\s+(OR\s+\w+\s+)?agent_signals/i.test(read(file))), ["agents/retention.ts"]);
   // The stored content_sha256 is the hash of what was received; a receipt that cites a signal
-  // names it (store.ts signalFact, ask.ts). Only the two inserts hash content, before it is stored.
+  // names it (store.ts signalFact, ask.ts). Only the two inserts hash content, before it is stored,
+  // and nothing hashes a stored row's content_json in its place.
   assert.deepEqual(files.filter((file) => /(sha256Hex|factHash|sha256)\([^)]*content_json/.test(read(file))), []);
   assert.deepEqual(files.filter((file) => /INSERT INTO agent_signals[^;]*content_sha256/.test(read(file))), ["agents/store.ts"]);
 });

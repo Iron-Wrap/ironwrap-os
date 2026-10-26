@@ -126,6 +126,19 @@ test("document generation stays disabled in production and local, and is on in q
   assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
 });
 
+test("the proposal first-open record stays off until the owner approves its privacy notice", async () => {
+  // 3 years is the maximum retention of a first-open row (0163). Deletion exists: D1 lets a row go
+  // only once it is older than 3 years, and the daily cron deletes those rows. The flag still stays
+  // off in every environment until the owner approves the portal privacy notice that says so.
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
+  for (const environment of [config, config.env.local, config.env.qa]) {
+    assert.equal(environment.vars.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED, "false");
+  }
+});
+
 test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
   const source = await readFile(
     new URL("../wrangler.jsonc", import.meta.url),
@@ -2282,8 +2295,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // person record whether an unconfirmed proposal send reached the customer. 0161 records what
     // people found about a send, and their corrections, without changing it; holds the late-answer
     // wait in D1 with a window per provider; and names the permit holder of each new publication.
+    // 0163 keeps the first time a customer's portal link opened a published proposal.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 137);
+    assert.equal(migrations.length, 138);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2432,10 +2446,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
     // name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
-    // holders), one named index and twelve guards, and re-creates nothing.
+    // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
+    // portal first-open table, one named index and four validation, update, age-gated delete and
+    // no-replace guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 278, indexes: 379, triggers: 761 },
+      { tables: 279, indexes: 380, triggers: 765 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

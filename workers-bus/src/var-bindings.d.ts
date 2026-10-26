@@ -3,7 +3,7 @@
  *
  * IRO-268 groups these vars into CFG_* JSON bindings (see env-bindings.ts and wrangler.jsonc) so
  * the Worker stays under the Cloudflare variable-count limit; wrangler types then emits CFG_* as
- * an opaque object and the 140 flat names below vanish from the generated Env. flattenEnv()
+ * an opaque object and the 141 flat names below vanish from the generated Env. flattenEnv()
  * restores them at runtime; this file restores them for tsc. Keep this list in sync with the
  * flattened key set that tools/wrangler-binding-budget.test.mjs pins.
  */
@@ -151,6 +151,8 @@ interface Env {
   AGENT_DATA_CLASS: string;
   /** The instant from which envelopes give the AI team inbound signals; blank keeps that off. */
   AGENT_INBOUND_FROM: string;
+  /** "on" redacts AI team signal text past its retention, daily; blank keeps that off. */
+  AGENT_SIGNAL_REDACTION: string;
 }
 
 declare namespace Cloudflare {
@@ -295,5 +297,6 @@ declare namespace Cloudflare {
     COMMERCIAL_AUTHORITY_POLICY_JSON: string;
     AGENT_DATA_CLASS: string;
     AGENT_INBOUND_FROM: string;
+    AGENT_SIGNAL_REDACTION: string;
   }
 }

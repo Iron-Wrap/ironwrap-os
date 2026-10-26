@@ -12,13 +12,21 @@ name: Deploy Production
 # Every `release-promotion.mjs` call runs from `$RELEASE_ENFORCER`: the enforcer
 # checked out from the tagged commit's PARENT (generation N). The candidate tree
 # never gets to approve its own release.
+#
+# A tag alone does not deploy. Production is declared in Iron-Wrap/iron-wrap-infra
+# `environments/production/stand.yml`; a merged promotion PR there runs its
+# `promote-production.yml`, which dispatches this workflow on the declared tag with
+# the declaration commit. This workflow re-reads that declaration and fails closed
+# unless it names this tag (docs/PRODUCTION-PROMOTION.md in iron-wrap-infra).
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
         description: The release tag to promote; must equal the dispatched ref
+        required: true
+        type: string
+      declaration_sha:
+        description: The iron-wrap-infra main commit whose production stand.yml names the tag
         required: true
         type: string
 
@@ -38,8 +46,10 @@ env:
   RELEASE_REPOSITORY: ${{ github.repository }}
   RELEASE_SOURCE_COMMIT: ${{ github.sha }}
   RELEASE_RULESET_ID: 20652124
+  RELEASE_DECLARATION_REPOSITORY: Iron-Wrap/iron-wrap-infra
+  RELEASE_DECLARATION_PATH: environments/production/stand.yml
   CLOUDFLARE_ACCOUNT_ID: 7ee5775bc1ba46f05c5a65235b60e939
-  RELEASE_PRODUCTION_D1_ID: f0674848-13df-4422-9896-8ba2719663b8
+  RELEASE_PRODUCTION_D1_ID: 8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d
   RELEASE_PRODUCTION_DOMAIN_HOSTNAME: ironwrap-bus.ironwrapexteriors.com
   RELEASE_PRODUCTION_DOMAIN_SERVICE: ironwrap-bus
   RELEASE_PRODUCTION_ZONE_ID: ${{ vars.RELEASE_PRODUCTION_ZONE_ID }}
@@ -66,7 +76,7 @@ jobs:
     steps:
       # Fail closed before anything is checked out. Only a release tag of the
       # exact `vMAJOR.MINOR.PATCH` shape release-please produces may promote, and
-      # a manual dispatch must name the very ref it was dispatched on, so
+      # the dispatch must name the very ref it was dispatched on, so
       # `github.sha` is always the tagged commit.
       - name: Require a release tag
         env:
@@ -83,10 +93,48 @@ jobs:
             echo "release_production_tag_format_invalid:$REF_NAME" >&2
             exit 1
           fi
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_TAG" != "$REF_NAME" ]]; then
+          if [[ "$DISPATCH_TAG" != "$REF_NAME" ]]; then
             echo "release_production_dispatch_tag_mismatch" >&2
             exit 1
           fi
+
+      # The production gate is a merged promotion PR in iron-wrap-infra, not the
+      # dispatch. Re-read the declaration at the commit that dispatched this run:
+      # it must be on iron-wrap-infra main and name this tag, and so must main's
+      # current declaration, so an old declaration cannot be replayed after a
+      # newer promotion or a revert.
+      - name: Require the production declaration to name this tag
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_DECLARATION_READ_TOKEN }}
+          DECLARATION_SHA: ${{ inputs.declaration_sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mismatch() { echo "release_production_declaration_mismatch:$1" >&2; exit 1; }
+          test -n "$GH_TOKEN" || mismatch token_missing
+          [[ "$DECLARATION_SHA" =~ ^[0-9a-f]{40}$ ]] || mismatch sha_invalid
+          declared_ref() {
+            local declaration
+            declaration="$(gh api -H "Accept: application/vnd.github.raw+json" \
+              "repos/$RELEASE_DECLARATION_REPOSITORY/contents/$RELEASE_DECLARATION_PATH?ref=$1")" \
+              || mismatch "unreadable:$1"
+            [[ "$(yq -r '.environment // ""' <<< "$declaration")" == "production" ]] \
+              || mismatch "environment_invalid:$1"
+            [[ "$(yq -r '.components["ironwrap-os"].policy // ""' <<< "$declaration")" == "pin" ]] \
+              || mismatch "policy_not_pin:$1"
+            yq -r '.components["ironwrap-os"].ref // ""' <<< "$declaration"
+          }
+          # Assignments, so a failure inside declared_ref stops the step under set -e.
+          declared="$(declared_ref "$DECLARATION_SHA")"
+          [[ "$declared" == "$REF_NAME" ]] || mismatch "ref_not_tag:$declared"
+          # compare/<sha>...main is `ahead` or `identical` exactly when <sha> is
+          # an ancestor of main.
+          status="$(gh api "repos/$RELEASE_DECLARATION_REPOSITORY/compare/$DECLARATION_SHA...main" --jq .status)" \
+            || mismatch compare_unreadable
+          [[ "$status" == "ahead" || "$status" == "identical" ]] || mismatch "not_on_main:$status"
+          current="$(declared_ref main)"
+          [[ "$current" == "$REF_NAME" ]] || mismatch "superseded:$current"
+          echo "$RELEASE_DECLARATION_REPOSITORY@$DECLARATION_SHA declares $REF_NAME"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

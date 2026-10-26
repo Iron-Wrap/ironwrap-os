@@ -2282,6 +2282,13 @@ async function advanceOccurrence(
  * which answers `safety_actor_unknown` for a person deactivated or moved to another
  * role. 0047's authority clauses compare the role recorded here, which always holds
  * authority, so they never fire on this batch. Anything else stays a store fault.
+ *
+ * Keep the raiser mapping. The Worker's comparison folds every identity with JS
+ * `trim()` and `toLowerCase()`, a superset of D1's space-only `trim` and ASCII-only
+ * `lower`, so D1 never refuses a raiser the Worker passed from the same rows. It
+ * still does when an identity changes between the read and this batch. Without
+ * the mapping, that refusal becomes a 502. The test "an identity that changes
+ * after the Worker's check" in safety-stop-release.test.ts pins this.
  */
 function guardRefusal(error: unknown): unknown {
   const message = error instanceof Error ? error.message : String(error);

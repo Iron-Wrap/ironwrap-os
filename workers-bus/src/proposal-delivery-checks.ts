@@ -38,6 +38,24 @@ export const PROPOSAL_DELIVERY_STALE_REASON = "proposal_delivery_unconfirmed_sta
 const MAX_CHECKS_PER_SEND = 20;
 const QA_SYNTHETIC_PROVIDER = /^qa-synthetic-[a-z0-9-]+$/;
 const CHECKABLE_STATES = ["unknown", "succeeded", "manual_exception"];
+/**
+ * The latest move into manual_exception came from one of these when the provider answered: its
+ * readback conflicted (`reconciling`), or it refused the send and a later check said otherwise
+ * (`failed`). Only such a send is checked from manual_exception, and only its "not delivered" needs a
+ * cited check (0164, 0167).
+ */
+const PROVIDER_ANSWERED_ORIGINS = ["reconciling", "failed"];
+
+/** The latest move into manual_exception of a send: where it came from, and when. */
+async function exceptionEntry(
+  env: AppEnv,
+  effectId: string,
+): Promise<{ from_state: string | null; occurred_at: string } | null> {
+  return await env.DB.prepare(
+    `SELECT from_state, occurred_at FROM external_effect_events
+      WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`,
+  ).bind(effectId).first<{ from_state: string | null; occurred_at: string }>();
+}
 
 export type ProposalDeliveryCheckOutcome =
   | "sent"
@@ -144,12 +162,16 @@ async function readBack(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      controller.abort();
+      // The bound wins first: an adapter that answers as it is told to stop answered too late.
       reject(new ProposalDeliveryTransportError("timeout"));
+      controller.abort();
     }, timeoutMs);
   });
   try {
-    const readback = await Promise.race([adapter(effect, controller.signal), timedOut]);
+    const pending = adapter(effect, controller.signal);
+    // An answer that comes after the bound is dropped, and so is a late failure.
+    pending.catch(() => undefined);
+    const readback = await Promise.race([pending, timedOut]);
     const scanComplete = readback.scanComplete === true;
     // "Not found" without a complete scan proves nothing.
     const outcome = readback.outcome === "not_found" && !scanComplete ? "unknown" : readback.outcome;
@@ -251,8 +273,12 @@ export async function checkProposalDelivery(
     }
     effect = (await getExternalEffect(env, effect.effect_id)) ?? effect;
   }
-  if (!CHECKABLE_STATES.includes(effect.state)) {
-    // Still sending, never sent, or already settled: there is nothing to read back.
+  const answeredException = effect.state === "manual_exception" &&
+    PROVIDER_ANSWERED_ORIGINS.includes((await exceptionEntry(env, effect.effect_id))?.from_state ?? "");
+  // Still sending, never sent, or already settled: there is nothing to read back. A manual exception
+  // is checked only when its provider answered (a readback conflict of either kind); one that came
+  // from a provider that never answered goes to a person after 0161's wait, with no check to cite.
+  if (!CHECKABLE_STATES.includes(effect.state) || (effect.state === "manual_exception" && !answeredException)) {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_check_effect_invalid", 409, {
       delivery_state: effect.state,
     });
@@ -496,13 +522,11 @@ export async function readProposalDeliveryState(
   };
 
   if (send.state === "manual_exception") {
-    const entered = await env.DB.prepare(
-      `SELECT from_state, occurred_at FROM external_effect_events
-        WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`,
-    ).bind(send.effect_id).first<{ from_state: string | null; occurred_at: string }>();
-    // A readback that conflicted: the provider answered. "Didn't get it" needs a complete-scan
-    // "not found" made after the conflict (0167); until P1 no check can scan completely.
-    const conflict = entered?.from_state === "reconciling";
+    const entered = await exceptionEntry(env, send.effect_id);
+    // The provider answered (its readback conflicted, or it refused the send and a later check said
+    // otherwise). "Didn't get it" needs a complete-scan "not found" made after that move (0167);
+    // until P1 no check can scan completely.
+    const conflict = PROVIDER_ANSWERED_ORIGINS.includes(entered?.from_state ?? "");
     const cited = conflict
       ? checks.find((row) =>
         row.outcome === "not_found" && row.scan_complete === 1 &&
@@ -642,8 +666,9 @@ async function livePublication(
 /**
  * The `*\/5` sweep: a proposal send unknown for T since its attempt ended, with nobody's record
  * (an unknown send has none: a confirmation moves it, and a finding needs a settled send), opens one
- * owner-visible effect exception. `UNIQUE (effect_id, reason_code, status)` keeps it to one open
- * exception per send; a person's 0156 record resolves it.
+ * owner-visible effect exception. A send is escalated once, ever: 0156 resolves an exception only
+ * while no resolved one of the same reason exists, so a second one could never be resolved. A
+ * person's 0156 record resolves it.
  */
 export async function escalateStaleProposalDeliveries(
   env: AppEnv,
@@ -659,16 +684,17 @@ export async function escalateStaleProposalDeliveries(
          ON attempt.effect_id = effect.effect_id AND attempt.attempt_number = effect.attempt_count
       WHERE effect.state = 'unknown' AND effect.action = 'proposal.publish'
         AND effect.aggregate_type = 'proposal_publication'
-        AND julianday(COALESCE(attempt.ended_at, effect.updated_at)) + ? / 86400000.0 <= julianday(?)
+        AND julianday(COALESCE(attempt.ended_at, effect.updated_at)) <= julianday(?)
         AND NOT EXISTS (
           SELECT 1 FROM external_effect_exceptions escalated
            WHERE escalated.effect_id = effect.effect_id AND escalated.reason_code = ?
-             AND escalated.status = 'open'
         )
       ORDER BY effect.updated_at ASC LIMIT ?`,
   ).bind(
-    PROPOSAL_DELIVERY_STALE_REASON, now.toISOString(), PROPOSAL_DELIVERY_ESCALATION_MS,
-    now.toISOString(), PROPOSAL_DELIVERY_STALE_REASON, limit,
+    PROPOSAL_DELIVERY_STALE_REASON, now.toISOString(),
+    // Due once its attempt ended T ago or more: compared as one instant, so the bound is exact.
+    new Date(now.getTime() - PROPOSAL_DELIVERY_ESCALATION_MS).toISOString(),
+    PROPOSAL_DELIVERY_STALE_REASON, limit,
   ).run();
   return { opened: Number(result.meta?.changes ?? 0) };
 }

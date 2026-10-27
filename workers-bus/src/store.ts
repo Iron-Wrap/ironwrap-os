@@ -1,6 +1,7 @@
 // store.ts — owned system of record (Cloudflare D1 + R2).
 // The owned store IS the bus: every event is written here FIRST, before JobNimbus.
 
+import { inboundAfterInsert } from "./agents/inbound.ts";
 import { operatingTenantId, type EnvelopeRecord, type Status } from "./core.ts";
 
 function envTenantId(env: { APP_TENANT_ID?: string }): string | null {
@@ -208,6 +209,8 @@ export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<voi
     rec.created_at, rec.updated_at, tenantId,
     rec.release_smoke === 1 ? 1 : 0,
   ).run();
+  // The AI team's inbound signal: best effort and never throws (agents/inbound.ts).
+  await inboundAfterInsert(env, tenantId, rec);
 }
 
 export async function getEnvelope(env: Env, id: string): Promise<EnvelopeRecord | null> {

@@ -1,4 +1,4 @@
-import { validAppCsrf } from "./app-auth.ts";
+import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { assertCurrentEvidenceReader, evidenceFilesForDetail, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedEvidenceFilesForRefs, resolveEvidenceUploads } from "./evidence-uploads.ts";
 import {
@@ -47,6 +47,9 @@ import {
  * command to the store, which resolves the caller's exact current role and
  * refuses anything it does not hold. That keeps one enforcement point for
  * rights, authority, and separation of duties instead of two that can drift.
+ * The one fact only this layer can see is whether the request carries a
+ * person's own cookie session; releasing a stop requires one, so no agent,
+ * connector, or service credential ever lifts a stop.
  */
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -420,6 +423,13 @@ export async function handleSafetyRoute(
       return json({ error: "safety_command_invalid" }, 400);
     }
     try {
+      if (requested === "released" && !(await personCookieSession(env, auth))) {
+        throw new SafetyError(
+          "safety_stop_release_person_required",
+          403,
+          "Releasing a safety stop needs a person's own signed-in session.",
+        );
+      }
       const occurrence = await recordSafetyResponse(env, {
         tenantId,
         occurrenceId,

@@ -3,7 +3,7 @@
  *
  * IRO-268 groups these vars into CFG_* JSON bindings (see env-bindings.ts and wrangler.jsonc) so
  * the Worker stays under the Cloudflare variable-count limit; wrangler types then emits CFG_* as
- * an opaque object and the 139 flat names below vanish from the generated Env. flattenEnv()
+ * an opaque object and the 140 flat names below vanish from the generated Env. flattenEnv()
  * restores them at runtime; this file restores them for tsc. Keep this list in sync with the
  * flattened key set that tools/wrangler-binding-budget.test.mjs pins.
  */
@@ -18,6 +18,7 @@ interface Env {
   APP_CUSTOMER_PORTAL_ENABLED: string;
   APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: string;
   APP_CUSTOMER_PORTAL_DECISION_ENABLED: string;
+  APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED: string;
   APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: string;
   APP_PROPOSAL_PUBLICATION_ENABLED: string;
   APP_FACET_LAUNCH_ENABLED: string;
@@ -149,6 +150,8 @@ interface Env {
   COMMERCIAL_AUTHORITY_POLICY_JSON: string;
   /** What data the Worker holds for the AI team: `business` (the default) or `synthetic`. */
   AGENT_DATA_CLASS: string;
+  /** The instant from which envelopes give the AI team inbound signals; blank keeps that off. */
+  AGENT_INBOUND_FROM: string;
 }
 
 declare namespace Cloudflare {
@@ -162,6 +165,7 @@ declare namespace Cloudflare {
     APP_CUSTOMER_PORTAL_ENABLED: string;
     APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: string;
     APP_CUSTOMER_PORTAL_DECISION_ENABLED: string;
+    APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED: string;
     APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: string;
     APP_PROPOSAL_PUBLICATION_ENABLED: string;
     APP_FACET_LAUNCH_ENABLED: string;
@@ -292,5 +296,6 @@ declare namespace Cloudflare {
     STUCK_THRESHOLD_MIN: string;
     COMMERCIAL_AUTHORITY_POLICY_JSON: string;
     AGENT_DATA_CLASS: string;
+    AGENT_INBOUND_FROM: string;
   }
 }

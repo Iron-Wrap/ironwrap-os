@@ -482,7 +482,7 @@ test("one row per check and per key; a check is never changed, removed or replac
   assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", lost), 1);
 });
 
-test("at most twenty checks of each kind are kept per send: answers that prove nothing never use up the proof's room", async () => {
+test("at most twenty checks of each kind are kept per send: answers that prove nothing never use up the proof's or a found message's room", async () => {
   const db = new D1();
   const env = workerEnv(db);
   assert.equal(PROPOSAL_DELIVERY_CHECK_LIMIT, 20);
@@ -490,13 +490,17 @@ test("at most twenty checks of each kind are kept per send: answers that prove n
   const other = await send(env, "row:limit:other", "lost", { provider: PROMPT });
   for (let n = 0; n < 20; n += 1) insertCheck(db, lost, { outcome: n % 2 ? "unknown" : "provider_unavailable" });
   assert.throws(() => insertCheck(db, lost), /proposal_delivery_check_limit/);
-  assert.throws(() => insertCheck(db, lost, { outcome: "sent" }), /proposal_delivery_check_limit/);
+  // A bounce is one of the other answers.
+  assert.throws(() => insertCheck(db, lost, { outcome: "bounced" }), /proposal_delivery_check_limit/);
   insertCheck(db, other);
-  // The citable kind keeps its own room.
+  // A found message keeps its own room: twenty answers that prove nothing never refuse it.
+  for (let n = 0; n < 20; n += 1) insertCheck(db, lost, { outcome: "sent" });
+  assert.throws(() => insertCheck(db, lost, { outcome: "sent" }), /proposal_delivery_check_limit/);
+  // So does the citable kind.
   for (let n = 0; n < 20; n += 1) insertCheck(db, lost, { outcome: "not_found" });
   assert.throws(() => insertCheck(db, lost, { outcome: "not_found" }), /proposal_delivery_check_limit/);
-  for (let n = 0; n < 19; n += 1) insertCheck(db, other, { outcome: "not_found" });
-  insertCheck(db, other, { outcome: "not_found" });
+  for (let n = 0; n < 20; n += 1) insertCheck(db, other, { outcome: "not_found" });
+  insertCheck(db, other, { outcome: "sent" });
   insertCheck(db, other, { outcome: "unknown" });
 });
 
@@ -506,41 +510,63 @@ test("the Worker refuses a check nobody could keep before it calls the provider,
   const effectId = await send(env, "quota:worker", "lost", { provider: PROMPT });
   const read = async () => await readProposalDeliveryState(env, TENANT, "proposal-pack:quota:worker", "proposal-revision:quota:worker");
   let calls = 0;
-  const counting: ProposalDeliveryReadbackAdapter = async () => {
+  // Like every provider without a readback yet: it can never find the message.
+  const blind: ProposalDeliveryReadbackAdapter = Object.assign(async () => {
     calls += 1;
-    return { outcome: "unknown", detailCode: "readback_not_supported" };
-  };
+    return { outcome: "unknown" as const, detailCode: "readback_not_supported" };
+  }, { findsMessages: false });
   for (let n = 0; n < 19; n += 1) insertCheck(db, effectId);
   assert.equal((await read()).check_allowed, true);
-  await check(env, effectId, "quota:worker:20", counting);
+  await check(env, effectId, "quota:worker:20", blind);
   assert.equal(calls, 1);
-  // Twenty answers that prove nothing, and a readback that cannot scan completely: closed.
+  // Twenty answers that prove nothing, and a readback that can neither find the message nor scan
+  // completely: closed.
   assert.equal((await read()).check_allowed, false);
-  await assert.rejects(check(env, effectId, "quota:worker:21", counting), { code: "proposal_delivery_check_limit", status: 409 });
+  await assert.rejects(check(env, effectId, "quota:worker:21", blind), { code: "proposal_delivery_check_limit", status: 409 });
   assert.equal(calls, 1);
   const ops = await person(db, env, "ops");
   assert.deepEqual(
     await post(env, ops, CHECK_PATH, { external_effect_id: effectId }, "delivery-check-quota-0001"),
     { status: 409, body: { error: "proposal_delivery_check_limit" } },
   );
-  // A readback that scans completely still has the proof's room: its "not found" is kept...
-  const kept = await check(env, effectId, "quota:worker:scan", scanning(async () => ({ outcome: "not_found", scanComplete: true, evidence: { matched: 0 } })));
-  assert.equal(kept.check.outcome, "not_found");
-  // ...and any other answer of it is refused by D1, writing nothing.
-  const rows = count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", effectId);
+  // A readback that can find the message still runs, and a found message is always kept...
+  const sentAnswer = await check(env, effectId, "quota:worker:found", async () => ({ outcome: "sent", evidence: { found: true } }));
+  assert.equal(sentAnswer.check.outcome, "sent");
+  // ...while any other answer of it is refused by D1, writing nothing.
+  const rows = () => count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", effectId);
+  const before = rows();
   await assert.rejects(
-    check(env, effectId, "quota:worker:scan-unclear", scanning(async () => ({ outcome: "unknown" }))),
+    check(env, effectId, "quota:worker:found-unclear", async () => ({ outcome: "unknown" })),
     { code: "proposal_delivery_check_limit", status: 409 },
   );
-  assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", effectId), rows);
-  // Once the proof's room is full too, even a scanning readback is refused before the call.
+  assert.equal(rows(), before);
+  // A readback that scans completely keeps the proof's room: its "not found" is kept.
+  const kept = await check(env, effectId, "quota:worker:scan", scanning(async () => ({ outcome: "not_found", scanComplete: true, evidence: { matched: 0 } })));
+  assert.equal(kept.check.outcome, "not_found");
+  // Once every room is full, even a readback that finds and scans is refused before the call.
   for (let n = 0; n < 19; n += 1) insertCheck(db, effectId, { outcome: "not_found" });
+  for (let n = 0; n < 19; n += 1) insertCheck(db, effectId, { outcome: "sent" });
   let scans = 0;
   await assert.rejects(
-    check(env, effectId, "quota:worker:scan-full", scanning(async () => { scans += 1; return { outcome: "not_found", scanComplete: true }; })),
+    check(env, effectId, "quota:worker:all-full", scanning(async () => { scans += 1; return { outcome: "not_found", scanComplete: true }; })),
     { code: "proposal_delivery_check_limit", status: 409 },
   );
   assert.equal(scans, 0);
+});
+
+test("a send the stand-in can find stays checkable once the other answers are full, and its found message is kept", async () => {
+  const db = new D1();
+  const env = workerEnv(db, "synthetic");
+  // A readback conflict: the stand-in holds the send's provider id, so it finds the message.
+  const effectId = await send(env, "quota:found-room", "conflict", { provider: QA });
+  for (let n = 0; n < 20; n += 1) insertCheck(db, effectId, { outcome: n % 2 ? "bounced" : "unknown" });
+  const read = async () => await readProposalDeliveryState(env, TENANT, "proposal-pack:quota:found-room", "proposal-revision:quota:found-room");
+  assert.deepEqual([(await read()).state, (await read()).check_allowed], ["1", true]);
+  const answered = await post(env, await person(db, env, "ops"), CHECK_PATH, { external_effect_id: effectId }, "delivery-check-found-room-0001");
+  assert.equal(answered.status, 201, JSON.stringify(answered.body));
+  assert.equal(answered.body.check.outcome, "sent");
+  // And the found message closes "didn't get it".
+  assert.equal((await read()).not_delivered_allowed, false);
 });
 
 test("each check writes one audit row naming the person who asked", async () => {
@@ -631,7 +657,7 @@ test("from B2 on, a complete-scan not-found check dated at the move settles an u
   const effectId = await send(env, "move:not-found", "lost", { provider: PROMPT });
   const at = new Date().toISOString();
   // Only "not found" proves the send went nowhere, however complete the scan behind another answer.
-  // (A `sent` or `bounced` answer contradicts it outright: see the B2 contradiction test.)
+  // (A `sent` answer contradicts it outright: see the B2 contradiction test.)
   for (const outcome of ["unknown", "provider_unavailable"]) {
     insertCheck(db, effectId, { outcome, createdAt: at, scanComplete: 1 });
   }
@@ -819,9 +845,9 @@ test("a check no newer than the conflict does not settle it", async () => {
   assert.equal(stateOf(db, atMoment), "manual_exception");
 });
 
-test("a check that found the message voids every not-found of the send, from either kind of conflict", async () => {
+test("a check that found the message sent voids every not-found of the send, from either kind of conflict", async () => {
   for (const [origin, make] of Object.entries(conflicts)) {
-    for (const found of ["sent", "bounced"]) {
+    for (const found of ["sent"]) {
       for (const order of ["later", "earlier"]) {
         const db = new D1();
         const env = workerEnv(db);
@@ -873,6 +899,84 @@ test("a check that found the message voids every not-found of the send, from eit
   }
 });
 
+test("a bounce does not void a citation: the customer did not get it, so not delivered stays the way to send again", async () => {
+  for (const [origin, make] of Object.entries(conflicts)) {
+    for (const order of ["later", "earlier"]) {
+      const db = new D1();
+      const env = workerEnv(db);
+      const id = `bounced:${origin}:${order}`;
+      const effectId = await make(env, id);
+      const after = conflictAt(db, effectId);
+      const stamps = order === "later" ? [plus(after, 1), plus(after, 2)] : [plus(after, 2), plus(after, 1)];
+      const notFound = insertCheck(db, effectId, { outcome: "not_found", createdAt: stamps[0] });
+      insertCheck(db, effectId, { outcome: "bounced", createdAt: stamps[1] });
+      const label = `${origin} ${order}`;
+      const state = await readProposalDeliveryState(env, TENANT, `proposal-pack:${id}`, `proposal-revision:${id}`);
+      assert.deepEqual([state.not_delivered_allowed, state.not_delivered_check_id], [true, notFound], label);
+      const answered = await post(env, await person(db, env, "ops"), CONFIRM_PATH, {
+        external_effect_id: effectId, outcome: "not_delivered", note: "The message bounced; the scan found nothing.",
+        delivery_check_id: notFound,
+      }, `bounced-${origin}-${order}`);
+      assert.equal(answered.status, 201, `${label} ${JSON.stringify(answered.body)}`);
+      assert.equal(stateOf(db, effectId), "reconciled", label);
+    }
+  }
+});
+
+test("a found message closes not delivered on 0156's path too, uncited; a bounce does not", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const ops = await person(db, env, "ops");
+  const silent = async (id: string) => {
+    const effectId = await send(env, id, "lost", { provider: PROMPT });
+    await reconcileExternalEffect(env, effectId, { outcome: "inconclusive", evidence: { provider: "no answer" } });
+    return effectId;
+  };
+  const sends = {
+    unknown: async (id: string) => await send(env, id, "lost", { provider: PROMPT }),
+    silent,
+  };
+  for (const [kind, make] of Object.entries(sends)) {
+    // A check found the message sent: "not delivered" is closed, in the read, D1, the Worker and the route.
+    const foundId = `uncited:${kind}:found`;
+    const found = await make(foundId);
+    insertCheck(db, found, { outcome: "sent" });
+    const state = await readProposalDeliveryState(env, TENANT, `proposal-pack:${foundId}`, `proposal-revision:${foundId}`);
+    assert.deepEqual([state.record_allowed, state.not_delivered_allowed], [true, false], kind);
+    assert.throws(() => insertConfirmation(db, found, "not_delivered"), /proposal_delivery_confirmation_check_contradicted/, kind);
+    await assert.rejects(
+      recordProposalDeliveryConfirmation(env, {
+        tenantId: TENANT, effectId: found, outcome: "not_delivered", note: "The customer says it never came.",
+        actorUserId: USERS.ops, actorRole: "ops", idempotencyKey: `${foundId}:worker`,
+      }),
+      { code: "proposal_delivery_confirmation_check_contradicted", status: 409, detail: { delivery_state: stateOf(db, found) } },
+      kind,
+    );
+    assert.deepEqual(
+      await post(env, ops, CONFIRM_PATH, {
+        external_effect_id: found, outcome: "not_delivered", note: "The customer says it never came.",
+      }, `uncited-${kind}-found`),
+      { status: 409, body: { error: "proposal_delivery_confirmation_check_contradicted", delivery_state: stateOf(db, found) } },
+      kind,
+    );
+    // "Delivered" stays open.
+    assert.equal((await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId: found, outcome: "delivered", note: "The provider shows it was sent.",
+      actorUserId: USERS.ops, actorRole: "ops", idempotencyKey: `${foundId}:delivered`,
+    })).effectState, "succeeded", kind);
+    // A bounce does not close it (frame 1·b).
+    const bouncedId = `uncited:${kind}:bounced`;
+    const bounced = await make(bouncedId);
+    insertCheck(db, bounced, { outcome: "bounced" });
+    const bouncedState = await readProposalDeliveryState(env, TENANT, `proposal-pack:${bouncedId}`, `proposal-revision:${bouncedId}`);
+    assert.equal(bouncedState.not_delivered_allowed, true, kind);
+    assert.equal((await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId: bounced, outcome: "not_delivered", note: "It bounced; the address will be fixed.",
+      actorUserId: USERS.ops, actorRole: "ops", idempotencyKey: `${bouncedId}:worker`,
+    })).effectState, "reconciled", kind);
+  }
+});
+
 test("only a check of the same send and tenant contradicts a citation", async () => {
   const db = new D1();
   const env = workerEnv(db);
@@ -893,12 +997,21 @@ test("from B2 on, a not-found never settles a send a check found", async () => {
   const db = new D1();
   const env = workerEnv(db);
   db.raw.exec("DROP TRIGGER proposal_delivery_checks_validate_insert;");
-  for (const found of ["sent", "bounced"]) {
-    const effectId = await send(env, `move:contradicted:${found}`, "lost", { provider: PROMPT });
+  {
+    const effectId = await send(env, "move:contradicted:sent", "lost", { provider: PROMPT });
     const at = new Date().toISOString();
-    insertCheck(db, effectId, { outcome: found, createdAt: plus(at, -1) });
+    insertCheck(db, effectId, { outcome: "sent", createdAt: plus(at, -1) });
     insertCheck(db, effectId, { outcome: "not_found", createdAt: at });
-    assert.throws(() => moveTo(db, effectId, "reconciled", at), /proposal_delivery_settle_evidence_missing/, found);
+    assert.throws(() => moveTo(db, effectId, "reconciled", at), /proposal_delivery_settle_evidence_missing/);
+  }
+  {
+    // A bounce is no found message: the not-found still settles the send.
+    const effectId = await send(env, "move:contradicted:bounced", "lost", { provider: PROMPT });
+    const at = new Date().toISOString();
+    insertCheck(db, effectId, { outcome: "bounced", createdAt: plus(at, -1) });
+    insertCheck(db, effectId, { outcome: "not_found", createdAt: at });
+    moveTo(db, effectId, "reconciled", at);
+    assert.equal(stateOf(db, effectId), "reconciled");
   }
   // Another tenant's row or another send's does not.
   const effectId = await send(env, "move:contradicted:foreign", "lost", { provider: PROMPT });
@@ -984,13 +1097,11 @@ test("a silent provider's exception keeps 0156's path; a citation there must sti
   const plain = await silent("silent:plain");
   insertConfirmation(db, plain, "not_delivered");
   assert.equal(stateOf(db, plain), "reconciled");
-  // The found-check rule is about citations: an uncited record on a silent provider's exception keeps
-  // 0156's person path even beside a check that found the message. Whether that path should yield to
-  // such a check is a B2 follow-up, recorded in the pull request.
+  // A found message closes it, uncited as well (0167).
   const foundSilent = await silent("silent:found");
   insertCheck(db, foundSilent, { outcome: "sent" });
-  insertConfirmation(db, foundSilent, "not_delivered");
-  assert.equal(stateOf(db, foundSilent), "reconciled");
+  assert.throws(() => insertConfirmation(db, foundSilent, "not_delivered"), /proposal_delivery_confirmation_check_contradicted/);
+  assert.equal(stateOf(db, foundSilent), "manual_exception");
   // A citation that proves nothing is refused all the same.
   const cited = await silent("silent:cited");
   const unclear = insertCheck(db, cited, { outcome: "unknown" });
@@ -1382,6 +1493,7 @@ test("the delivery read derives each state PR-A can reach", async () => {
   const unclear = await stateFor("state:unknown");
   assert.equal(unclear.state, "7·u");
   assert.equal(unclear.record_allowed, true);
+  assert.equal(unclear.not_delivered_allowed, true);
   // "Didn't get it" waits for the provider's window from the end of the attempt (0161).
   assert.equal(unclear.record_not_before, plus(endedAt, EFFECT_ATTEMPT_LEASE_MS));
   assert.equal((await stateFor("state:unknown", new Date(Date.parse(endedAt) + EFFECT_ATTEMPT_LEASE_MS))).record_not_before, null);
@@ -1397,6 +1509,8 @@ test("the delivery read derives each state PR-A can reach", async () => {
   const bounced = await stateFor("state:unknown");
   assert.equal(bounced.state, "1·b");
   assert.equal(bounced.since, bouncedAt);
+  // The earlier check found the message sent, so "didn't get it" stays closed beside the bounce.
+  assert.equal(bounced.not_delivered_allowed, false);
 
   // A conflict of either kind: frame 1, checkable, and "didn't get it" only with a cited check.
   for (const [origin, make] of Object.entries(conflicts)) {

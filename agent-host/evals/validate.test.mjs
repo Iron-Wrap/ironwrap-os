@@ -804,11 +804,17 @@ test("an inbound-only action is expected or allowed only on an inbound event abo
     catalog_sha256: CATALOG_SHA,
     actions: [{ action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" }, { action_id: "lead_fact.propose", autonomy: "A1", purpose: "Propose" }],
   };
+  const outOfScope = /lead_fact\.propose comes only from an inbound event about its lead/;
   const rows = [
-    [(item) => item.expected.actions.push(propose()), /lead_fact\.propose comes only from an inbound event about its lead/],
-    [(item) => (item.expected.optional_actions = ["lead_fact.propose"]), /lead_fact\.propose comes only from an inbound event about its lead/],
-    [(item) => { item.signal = { ...inbound, source: "email", content: { text: "Hi" }, subject: undefined }; item.tags = ["pending_inbound_channel"]; item.expected.actions.push(propose()); }, /lead_fact\.propose comes only from an inbound event about its lead/],
+    [(item) => item.expected.actions.push(propose()), outOfScope],
+    [(item) => (item.expected.optional_actions = ["lead_fact.propose"]), outOfScope],
+    [(item) => { item.signal = { ...inbound, source: "email", content: { text: "Hi" }, subject: undefined }; item.tags = ["pending_inbound_channel"]; item.expected.actions.push(propose()); }, outOfScope],
     [(item) => { item.signal = inbound; item.expected.actions.push(propose("L-2")); }, /lead_fact\.propose names the signal's lead \(L-1\), not L-2/],
+    // Each of these misses exactly one part of an inbound event: its channel, its lead subject, or
+    // its kind.
+    [(item) => { item.signal = { ...inbound, source: "email", content: { text: "Hi" } }; item.tags = ["pending_inbound_channel"]; item.expected.actions.push(propose("L-1")); }, outOfScope],
+    [(item) => { item.signal = { ...inbound, subject: undefined }; item.expected.actions.push(propose()); }, outOfScope],
+    [(item) => { item.signal = { ...inbound, kind: "watch", content: { text: "Gutters pulling away." } }; item.expected.actions.push(propose("L-1")); }, outOfScope],
   ];
   const passing = [
     (item) => { item.signal = inbound; item.expected.actions.push(propose("L-1")); },

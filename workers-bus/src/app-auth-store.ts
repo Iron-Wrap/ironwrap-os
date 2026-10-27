@@ -715,6 +715,18 @@ export async function findActiveSession(
   ).bind(sessionHash, configuredTenantId, now, configuredTenantId).first<AppSessionRecord>();
 }
 
+/**
+ * The phone on the tenant's saved company profile, exactly as stored, or null when no owner has
+ * saved a profile yet (the deployment defaults carry no phone). One primary-key row read only by
+ * the routes that answer with a session envelope; `company-setup-store.ts` owns the profile.
+ */
+export async function findSavedCompanyPhone(env: Env, tenantId: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT phone FROM tenant_company_profiles WHERE tenant_id = ? LIMIT 1",
+  ).bind(tenantId).first<{ phone: string | null }>();
+  return row?.phone ?? null;
+}
+
 export async function touchSession(env: Env, sessionHash: string, now: string): Promise<void> {
   await env.DB.prepare(
     `UPDATE app_sessions SET last_seen_at = ?

@@ -72,6 +72,9 @@ class AuthMemoryDb {
   devices = new Map<string, DeviceRow>();
   throttles = new Map<string, { scope: string; started: string; expires: string; attempts: number }>();
   audits: Array<Record<string, unknown>> = [];
+  /** Saved company profiles by tenant; a tenant with no entry has never saved one. */
+  companyProfiles = new Map<string, { phone: string }>();
+  companyProfileUnavailable = false;
 
   prepare(sql: string) {
     return {
@@ -95,6 +98,11 @@ class AuthMemoryDb {
   }
 
   private first(sql: string, args: unknown[]): unknown {
+    if (sql.includes("FROM tenant_company_profiles")) {
+      if (this.companyProfileUnavailable) throw new Error("company_profile_unavailable");
+      const profile = this.companyProfiles.get(String(args[0]));
+      return profile ? { ...profile } : null;
+    }
     if (sql.includes("INSERT INTO app_auth_throttles")) {
       const [key, scope, now, expires] = args.map(String);
       const previous = this.throttles.get(key);
@@ -858,7 +866,7 @@ test("session envelope is exact, unauthenticated session is 200, and logout requ
   ].sort());
   assert.deepEqual(body.tenant, {
     id: "ironwrap", name: "IronWrap OS", brand: "IronWrap", locale: "en-CA",
-    time_zone: "America/Edmonton", currency: "CAD",
+    time_zone: "America/Edmonton", currency: "CAD", office_phone: null,
   });
   assert.deepEqual(body.user, {
     id: [...db.users.values()][0].user_id,
@@ -891,6 +899,7 @@ test("session envelope is exact, unauthenticated session is 200, and logout requ
   assert.equal(afterBody.authenticated, false);
   assert.equal(afterBody.user, null);
   assert.equal(afterBody.csrf_token, null);
+  assert.equal((afterBody.tenant as { office_phone: unknown }).office_phone, null);
 });
 
 test("field bootstrap returns only the unauthenticated session envelope", async () => {
@@ -1636,4 +1645,154 @@ test("a proofless field request is refused without expiring a live session cooki
   assert.equal(signedOutSession.status, 200);
   assert.equal((await signedOutSession.json() as { authenticated: boolean }).authenticated, false);
   assert.match(signedOutSession.headers.get("set-cookie") ?? "", /Max-Age=0/);
+});
+
+interface OfficePhoneSession {
+  authenticated: boolean;
+  tenant: { id: string; office_phone: string | null } | null;
+  stale_fields: string[];
+}
+
+async function sessionRead(
+  env: AppEnv,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: OfficePhoneSession }> {
+  const response = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: { origin: "https://app.example.com", ...headers },
+  }), env, waitContext().ctx as never);
+  return { status: response.status, body: await response.json() as OfficePhoneSession };
+}
+
+/** An office-issued QR pairing consumed by a crew phone, as the pairing test drives it. */
+async function pairCrewPhone(env: AppEnv): Promise<{
+  consumed: { status: number; body: OfficePhoneSession };
+  headers: Record<string, string>;
+}> {
+  const fieldUser = await addFieldUser(env);
+  const office = await signInOffice(env);
+  const ctx = waitContext();
+  const issued = await worker.fetch(jsonRequest("/api/v1/device-pairings", {
+    field_user_id: fieldUser.user_id,
+  }, { cookie: office.cookiePair, "x-csrf-token": office.csrfToken }), env, ctx.ctx as never);
+  assert.equal(issued.status, 200);
+  const pairingUrl = new URL((await issued.json() as { pairing_url: string }).pairing_url);
+  const deviceProof = "p".repeat(43);
+  const paired = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: pairingUrl.hash.slice("#token=".length),
+    device_proof: deviceProof,
+  }), env, ctx.ctx as never);
+  return {
+    consumed: { status: paired.status, body: await paired.json() as OfficePhoneSession },
+    headers: {
+      cookie: (paired.headers.get("set-cookie") ?? "").split(";")[0],
+      "x-ironwrap-device-proof": deviceProof,
+    },
+  };
+}
+
+async function fieldBootstrapSession(
+  env: AppEnv,
+  headers: Record<string, string>,
+): Promise<{ status: number; session: OfficePhoneSession }> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ data: [] });
+  try {
+    const response = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
+      headers: { origin: "https://app.example.com", ...headers },
+    }), env, waitContext().ctx as never);
+    const body = await response.json() as { session: OfficePhoneSession };
+    return { status: response.status, session: body.session };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("a signed-in session carries the saved company phone as the office line", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "  780-555-0142  " });
+  const env = baseEnv(db);
+  const office = await signInOffice(env);
+
+  // Trimmed, and otherwise exactly what the owner saved: the app builds the tel: link.
+  const session = await sessionRead(env, { cookie: office.cookiePair });
+  assert.equal(session.status, 200);
+  assert.equal(session.body.authenticated, true);
+  assert.equal(session.body.tenant?.office_phone, "780-555-0142");
+  assert.deepEqual(session.body.stale_fields, []);
+
+  // The business line is for signed-in staff: a signed-out browser gets the key, always null.
+  const signedOut = await sessionRead(env, {});
+  assert.equal(signedOut.status, 200);
+  assert.equal(signedOut.body.authenticated, false);
+  assert.equal(signedOut.body.tenant?.office_phone, null);
+  const signedOutBootstrap = await fieldBootstrapSession(env, {});
+  assert.equal(signedOutBootstrap.status, 200);
+  assert.equal(signedOutBootstrap.session.tenant?.office_phone, null);
+});
+
+test("the office line is null with no saved profile, a blank phone, or a phone the profile refuses", async () => {
+  const cases: Array<[string, { phone: string } | undefined]> = [
+    ["no saved profile", undefined],
+    ["empty phone", { phone: "" }],
+    ["blank phone", { phone: "   " }],
+    ["too short for the profile check", { phone: "555-01" }],
+    ["not a phone number", { phone: "call the office" }],
+  ];
+  for (const [label, profile] of cases) {
+    const db = new AuthMemoryDb();
+    if (profile) db.companyProfiles.set("ironwrap", profile);
+    // Another tenant's saved phone is never borrowed for this one.
+    db.companyProfiles.set("other-tenant", { phone: "780-555-0199" });
+    const env = baseEnv(db);
+    const office = await signInOffice(env);
+    const session = await sessionRead(env, { cookie: office.cookiePair });
+    assert.equal(session.status, 200, label);
+    assert.equal(session.body.authenticated, true, label);
+    assert.equal(session.body.tenant?.office_phone, null, label);
+    assert.deepEqual(session.body.stale_fields, [], label);
+  }
+});
+
+test("a paired crew phone gets the same office line from pairing, session and field bootstrap", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "(780) 555-0142" });
+  const env = baseEnv(db);
+  const crew = await pairCrewPhone(env);
+  assert.equal(crew.consumed.status, 200);
+  assert.equal(crew.consumed.body.tenant?.office_phone, "(780) 555-0142");
+
+  const session = await sessionRead(env, crew.headers);
+  assert.equal(session.status, 200);
+  assert.equal(session.body.tenant?.office_phone, "(780) 555-0142");
+
+  const bootstrap = await fieldBootstrapSession(env, crew.headers);
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.session.authenticated, true);
+  assert.equal(bootstrap.session.tenant?.office_phone, "(780) 555-0142");
+  assert.deepEqual(bootstrap.session.stale_fields, []);
+});
+
+test("an unreadable company profile leaves the office line null and says so without failing sign-in", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "780-555-0142" });
+  const env = baseEnv(db);
+  const crew = await pairCrewPhone(env);
+  db.companyProfileUnavailable = true;
+
+  const session = await sessionRead(env, crew.headers);
+  assert.equal(session.status, 200);
+  assert.equal(session.body.authenticated, true);
+  assert.equal(session.body.tenant?.office_phone, null);
+  assert.deepEqual(session.body.stale_fields, ["office_phone.unavailable"]);
+
+  const bootstrap = await fieldBootstrapSession(env, crew.headers);
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.session.tenant?.office_phone, null);
+  assert.deepEqual(bootstrap.session.stale_fields, ["office_phone.unavailable"]);
+
+  // A fresh sign-in still issues its session; only the optional line is missing.
+  const office = await signInOffice(env);
+  const officeSession = await sessionRead(env, { cookie: office.cookiePair });
+  assert.equal(officeSession.body.authenticated, true);
+  assert.deepEqual(officeSession.body.stale_fields, ["office_phone.unavailable"]);
 });

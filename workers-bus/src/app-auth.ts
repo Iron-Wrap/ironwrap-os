@@ -10,9 +10,11 @@ import {
   MAGIC_LINK_REQUEST_IP_LIMIT,
   MAGIC_LINK_TTL_SECONDS,
   SESSION_TTL_SECONDS,
+  COMPANY_PHONE_PATTERN,
   type AppEnv,
   type AppDeviceRecord,
   type AppRole,
+  type AppSessionTenant,
   type AppTenantPublic,
   type AppUserRecord,
   type AuthContext,
@@ -411,7 +413,7 @@ export async function consumeMagicLink(
     request,
   });
 
-  const response = authJson(sessionEnvelopeForUser(
+  const response = authJson(await sessionEnvelopeForUser(
     env,
     user,
     expiresAt,
@@ -543,7 +545,7 @@ export async function consumeDevicePairing(
     request,
     detailCode: `device:${pairing.deviceId}`,
   });
-  const response = authJson(sessionEnvelopeForUser(
+  const response = authJson(await sessionEnvelopeForUser(
     env,
     pairing.user,
     expiresAt,
@@ -677,8 +679,11 @@ export async function authenticateAppRequest(
   };
 }
 
-export function sessionPayload(auth: AuthContext, env: AppEnv): Record<string, unknown> {
-  return sessionEnvelopeForUser(
+export async function sessionPayload(
+  auth: AuthContext,
+  env: AppEnv,
+): Promise<Record<string, unknown>> {
+  return await sessionEnvelopeForUser(
     env,
     auth.session,
     auth.session.session_expires_at,
@@ -692,7 +697,9 @@ export function unauthenticatedSessionPayload(env: AppEnv): Record<string, unkno
     version: 1,
     authenticated: false,
     user: null,
-    tenant: publicTenant(env),
+    // The office line is business contact data for signed-in staff only: a signed-out
+    // browser gets the same key, always null, and costs no profile read.
+    tenant: sessionTenant(publicTenant(env), null),
     permissions: [],
     allowed_actions: ["auth.magic_link.request", "auth.magic_link.consume", "auth.device_pairing.consume"],
     csrf_token: null,
@@ -886,27 +893,64 @@ function publicUser(user: AppUserRecord): Record<string, unknown> {
   };
 }
 
-function sessionEnvelopeForUser(
+async function sessionEnvelopeForUser(
   env: AppEnv,
   user: AppUserRecord,
   expiresAt: string,
   csrfToken: string,
   sourceUpdatedAt: string | null = null,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const permissions = permissionsForRole(user.role);
+  const tenant = publicTenant(env);
+  const officePhone = tenant
+    ? await sessionOfficePhone(env, user.tenant_id)
+    : { phone: null, unavailable: false };
   return {
     version: 1,
     authenticated: true,
     user: publicUser(user),
-    tenant: publicTenant(env),
+    tenant: sessionTenant(tenant, officePhone.phone),
     permissions,
     allowed_actions: sessionAllowedActions(user.role),
     csrf_token: csrfToken,
     session_expires_at: expiresAt,
     source_updated_at: sourceUpdatedAt,
     read_model_generated_at: new Date().toISOString(),
-    stale_fields: [],
+    stale_fields: officePhone.unavailable ? ["office_phone.unavailable"] : [],
   };
+}
+
+function sessionTenant(
+  tenant: AppTenantPublic | null,
+  officePhone: string | null,
+): AppSessionTenant | null {
+  return tenant ? { ...tenant, office_phone: officePhone } : null;
+}
+
+/**
+ * The office line a crew phone offers under "Call the office" on its emergency line.
+ *
+ * It is the phone an owner saved on the company profile, trimmed and otherwise exactly as
+ * stored: nothing is formatted, and no number is inferred from the deployment or the device.
+ * The app builds the tel: link and strips what a dialer cannot use. It is null while no owner has
+ * saved the profile, when the saved phone is blank, and when the stored value fails the
+ * profile's own save-time check -- a crew member in an emergency must never be handed a number
+ * the office never confirmed.
+ *
+ * The read is fail-soft. The phone is one optional line on the session, so losing it must not
+ * sign anyone out or fail the field bootstrap; `office_phone.unavailable` then says the null
+ * means "not read", not "none on file".
+ */
+async function sessionOfficePhone(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ phone: string | null; unavailable: boolean }> {
+  try {
+    const stored = (await authStore.findSavedCompanyPhone(env, tenantId))?.trim() ?? "";
+    return { phone: COMPANY_PHONE_PATTERN.test(stored) ? stored : null, unavailable: false };
+  } catch {
+    return { phone: null, unavailable: true };
+  }
 }
 
 function sessionAllowedActions(role: AppUserRecord["role"]): string[] {

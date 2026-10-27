@@ -417,7 +417,8 @@ const fixtureJob = {
       stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
       make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
       issued_at: "2026-07-10T15:00:00.000Z",
-      released_at: "2026-07-10T15:15:00.000Z",
+      // The Worker releases a plan in the same step that issues it (one input.issuedAt).
+      released_at: "2026-07-10T15:00:00.000Z",
       expires_at: "2026-07-10T23:00:00.000Z",
       release_attempt_id: "wpe_acceptance_release_00000003",
       supersession: null,

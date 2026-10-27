@@ -414,7 +414,7 @@ test.describe("Field Companion PWA acceptance", () => {
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
     await expect(
-      page.getByText("Issued to the crew · Fri 10 Jul 9:15 a.m.", { exact: true }),
+      page.getByText("Issued to the crew · Fri 10 Jul 9:00 a.m.", { exact: true }),
     ).toBeVisible();
     await expect(page.getByText(/Waiting for Production manager/i)).toBeVisible();
     await expect

@@ -830,6 +830,25 @@ describe("JobPage", () => {
     expect(heading.parentElement?.firstElementChild).not.toHaveTextContent("IW-1042");
   });
 
+  it("leaves out the customer and reference lines when the read has neither", async () => {
+    const model = jobModel();
+    renderJob({
+      ...model,
+      job: { ...model.job, job_number: null },
+      packet: {
+        ...model.packet,
+        contact: { display_name: "  ", phone: null, access_instructions: null },
+      },
+    });
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: "123 Example Avenue, Calgary, AB",
+    });
+    expect(heading.parentElement?.firstElementChild).toBe(heading);
+    expect(heading.nextElementSibling).toBeNull();
+    expect(screen.queryByText(/^Reference/)).toBeNull();
+  });
+
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {
     renderJob();
 

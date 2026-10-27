@@ -285,6 +285,16 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales.",
     );
     expect(note()).toBe(note(false));
+    // A setting's value reads as a long clause; the sentence still closes the note.
+    expect(
+      appliedByPersonNote("Dana Whitford", "the AI estimator's setting for sending quotes", {
+        field: "delegation_setting",
+        value: "shadow",
+        as_proposed: true,
+      }),
+    ).toBe(
+      "Dana Whitford changed the AI estimator's setting for sending quotes by hand, so this draft is closed. The AI estimator's setting for sending quotes is now Suggest: it runs practice rounds that change nothing, and people still do the real work. That is what this draft proposed.",
+    );
     // A value with no words keeps the note that names no value, flag or not.
     expect(
       appliedByPersonNote("Dana Whitford", "Grace Obi's role", {

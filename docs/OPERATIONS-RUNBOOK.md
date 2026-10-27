@@ -201,12 +201,19 @@ D1 directly, calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.
 
-`EFFECT_RUNTIME_TOKEN` serves the MCP host's `mcp.*` effects and never an outside send: a proposal
-publish or withdrawal and a customer or operations email may be executed only by the bus, and the
-token's claim, settle, reconcile and retry answer 403 for them. The seed's
-`qa-synthetic-publication` stand-in passes only because qa's `AGENT_DATA_CLASS` is `synthetic`. On
-production (`business`) the same claim answers 403 `effect_provider_not_allowed`, and the seed
-stops before anything is published.
+`EFFECT_RUNTIME_TOKEN` handles only actions named `mcp.*`, the MCP host's and approval brokers'
+bounded tools, plus one QA pair: the seed's `proposal.publish` through `qa-synthetic-publication`,
+and only because qa's `AGENT_DATA_CLASS` is `synthetic`. Its claim, settle, reconcile and retry
+answer 403 for everything else: `effect_outside_send_token_refused` for a proposal publish or
+withdrawal and a customer or operations email, which only the bus executes;
+`effect_runtime_action_not_allowed` for any other action outside `mcp.*` (Drive, Docs, document,
+QuickBooks, accounting, Frappe and JobNimbus adapters, Postiz, Newo control, Facet projection); and
+`effect_provider_not_allowed` for a `qa-synthetic-*` provider outside the seed's pair, or on a
+Worker that is not `synthetic`. On production (`business`) the seed's claim answers 403
+`effect_provider_not_allowed`, and the seed stops before anything is published. A runtime that
+needs another action on this token needs a code change and its review, not a new secret: the
+allowlist is in `workers-bus/src/effect-runtime-admin.ts`, and the Worker is its only enforcement
+point (D1 does not record who claimed an attempt).
 
 ```bash
 node tools/qa-seed-owner.mjs --sql-out output/qa/owner-access/qa-seed-owner.sql \

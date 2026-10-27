@@ -21,6 +21,17 @@ describe("Newo operations browser contract", () => {
     expect(newoOperationsResponseSchema.safeParse(widened).success).toBe(false);
   });
 
+  it("rejects caller identity or content on an open callback", () => {
+    const widened = newoOperationsFixture();
+    widened.exceptions.open_callbacks[0] = {
+      ...widened.exceptions.open_callbacks[0],
+      contact_phone: "+15875550101",
+      reason: "Caller asked for a person.",
+    } as never;
+
+    expect(newoOperationsResponseSchema.safeParse(widened).success).toBe(false);
+  });
+
   it("rejects control evidence and reconciliation detail widening", () => {
     const widened = newoOperationsFixture();
     widened.exceptions.control_failures[0] = {

@@ -57,6 +57,7 @@ export function newoOperationsFixture(
       failed_events: 1,
       missing_reports: 1,
       failed_handoffs: 1,
+      open_callbacks: 1,
       pending_bookings: 1,
       control_failures: 1,
       dlq_items: 1,
@@ -67,6 +68,14 @@ export function newoOperationsFixture(
     exceptions: {
       missing_reports: [session],
       failed_handoffs: [session],
+      open_callbacks: [
+        {
+          callback_id: "ncb_0123456789abcdef0123456789abcdef",
+          session_id: "session-2",
+          urgency: "urgent",
+          requested_at: "2026-07-18T18:05:00.000Z",
+        },
+      ],
       pending_bookings: [session],
       sync_failures: [session],
       failed_events: [

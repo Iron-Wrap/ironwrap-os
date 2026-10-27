@@ -45,6 +45,17 @@ const sessionSchema = z
   })
   .strict();
 
+// A requested callback no person has closed. Like every list here it carries no caller identity or
+// content; the person who calls back reads the callback record on its resolution route.
+const openCallbackSchema = z
+  .object({
+    callback_id: z.string().regex(/^ncb_[0-9a-f]{32}$/),
+    session_id: z.string().min(1).max(200),
+    urgency: z.enum(["routine", "urgent", "emergency"]),
+    requested_at: timestamp,
+  })
+  .strict();
+
 const eventFailureSchema = z
   .object({
     event_id: z.string().min(1).max(200),
@@ -146,6 +157,7 @@ export const newoOperationsResponseSchema = z
         failed_events: z.number().int().nonnegative(),
         missing_reports: z.number().int().nonnegative(),
         failed_handoffs: z.number().int().nonnegative(),
+        open_callbacks: z.number().int().nonnegative(),
         pending_bookings: z.number().int().nonnegative(),
         control_failures: z.number().int().nonnegative(),
         dlq_items: z.number().int().nonnegative(),
@@ -158,6 +170,7 @@ export const newoOperationsResponseSchema = z
       .object({
         missing_reports: z.array(sessionSchema).max(25),
         failed_handoffs: z.array(sessionSchema).max(25),
+        open_callbacks: z.array(openCallbackSchema).max(25),
         pending_bookings: z.array(sessionSchema).max(25),
         sync_failures: z.array(sessionSchema).max(25),
         failed_events: z.array(eventFailureSchema).max(25),
@@ -185,5 +198,6 @@ export const newoOperationsResponseSchema = z
 
 export type NewoOperationsResponse = z.infer<typeof newoOperationsResponseSchema>;
 export type NewoOperationsSession = z.infer<typeof sessionSchema>;
+export type NewoOperationsOpenCallback = z.infer<typeof openCallbackSchema>;
 export type NewoReadinessCheckId = (typeof newoReadinessCheckIds)[number];
 export type NewoOperationsReconciliation = z.infer<typeof reconciliationSchema>;

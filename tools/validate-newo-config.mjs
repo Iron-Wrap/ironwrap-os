@@ -59,7 +59,7 @@ assert.equal(expected.booking.request_only_spoken_receipt, "Appointment request 
 assert.equal(expected.booking.jobnimbus_appointment_contract_proven, false);
 // Owner decision MD-05: callback only, never a live transfer. A handoff carries handoff_status
 // "requested", which opens a callback. "failed" means the handoff request did not arrive or could
-// not be processed (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md, "Failed Newo handoffs"); as the
+// not be processed (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md, "Newo callbacks and failed handoffs"); as the
 // routine status it would report every callback as a failure.
 assert.notEqual(expected.handoff?.handoff_status, "failed", "callback only must not report every handoff as failed");
 assert.deepEqual(

@@ -350,14 +350,17 @@ Current source tracing distinguishes implemented modules from reachable producti
     mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
     webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration
     in `config/newo` are callback only (D-03): a hand-off is recorded as `requested` on the D1
-    session, which keeps its highest urgency, and emails the owner the caller's details on a
-    best-effort basis; `failed` keeps the failure path (`workers-bus/test/newo.test.ts`,
+    session, which keeps its highest urgency, writes a D1 callback record (`newo_callback_records`,
+    0168) in the same batch, and emails the owner the caller's details on a best-effort basis;
+    `failed` keeps the failure path and gets a record too. An owner or ops person closes either
+    with an outcome and a note through the resolution route, and the operations read model keeps
+    `open_callbacks` and `failed_handoffs` in attention until then (`workers-bus/test/newo.test.ts`,
     `newo-reconciliation.test.ts`, `newo-handoff-resolution.test.ts`). No transfer setting
     remains, and `tools/validate-newo-config.mjs` refuses one (`tools/validate-newo-config.test.mjs`).
-    No D1 callback record that a person works and closes exists yet, so the validator and the
-    readiness contract refuse `NEWO_ENABLED=true` (a JSON boolean too) until a migration
-    `NNNN_newo_callback_records.sql` creates the `newo_callback_records` table. The Newo console
-    proof (`handoff_callback_only`) is pending, and no person can take over the record yet
+    The validator and the readiness contract pass `NEWO_ENABLED=true` only when the migrations build
+    the callback record, which they now do; `NEWO_ENABLED` stays `false`. No app screen lists the
+    open callbacks yet (the read model carries them), the Newo console proof
+    (`handoff_callback_only`) is pending, and no person is assigned a callback
     (`conversation.assign_person` is not registered).
   - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI
     receptionist's playbook reads it as a placeholder fact.

@@ -670,29 +670,45 @@ does.
   stay on the call-the-office path. A crew write that exists but is not settled cannot be answered
   either way.
 
-### Failed Newo handoffs
+### Newo callbacks and failed handoffs
 
-A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller's request for a person
-that did not arrive or could not be processed. It stays open until a person records how it ended;
-there is no lookback window, because a window would retire a failure nobody decided. The
-receptionist is callback only and never transfers a call live: a callback it requests is
-recorded as `requested` on its session and is not a failed handoff, while an emergency session
-that closes without a handoff request is recorded as failed
-([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
+The receptionist is callback only and never transfers a call live, so a callback is the only way
+a caller who asked for a person reaches one. A callback the receptionist requests is recorded as
+`requested` on its session. A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a
+caller's request for a person that did not arrive or could not be processed, including an emergency
+session that closes without one ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
+Either stays open until a person records how it ended; there is no lookback window, because a
+window would retire a callback nobody made.
 
+- The callback record (`newo_callback_records`, migration `0168`): the Worker writes one
+  append-only row per tenant and session, in the same D1 batch as the session, once an accepted
+  event leaves the handoff `requested` or `failed`. It holds the event that wrote it, the handoff
+  status and urgency then, the reason, and the caller's contact details as the session knows
+  them. D1 stamps `recorded_at` from its own clock and refuses another time, an event the Worker
+  did not claim for that session, an update, a delete and a replace.
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
-  records `outcome` = `called_back`, `unreachable` or `not_needed` and an optional note, with
-  `resolved_by` (the person's user id), their role and `resolved_at`. `GET` on the same path returns
-  the handoff and its resolution.
-- People-only: a person's own cookie session in the owner or ops role, read from the live session
-  (`newo_handoff_resolution_person_required`, `newo_handoff_resolution_role_required`). Agents,
-  automations, connectors, service tokens, the effect runtime and MCP actors are refused.
-- `newo_handoff_resolutions` (migration `0151`) is append-only and tenant-scoped with at most one
-  resolution per failed handoff. D1 re-checks that the session is failed and that the resolver is an
-  active owner or ops user holding that role; an exact replay returns the stored record and a
-  changed intent conflicts (`newo_handoff_resolution_replay_conflict`, `newo_handoff_already_resolved`).
-- The Newo reconcile count (`failed_handoffs`) and the operations exception list count only failed
-  handoffs with no resolution, through one shared predicate.
+  records `outcome` = `called_back`, `unreachable` or `not_needed` and a required note, with
+  `resolved_by` (the person's user id) and their role. D1 stamps `resolved_at`, and one `audit_log`
+  row (`newo_callback_resolution`) commits in the same batch or not at all. `GET` on the same path
+  returns the session's handoff, its callback record with the caller's contact details, and its
+  resolution.
+- People-only: a person's own cookie session in the owner or ops role, read from the live session.
+  Agents, automations, connectors, service tokens, the effect runtime and MCP actors are refused.
+- `newo_handoff_resolutions` (migration `0151`; `0168` re-creates its insert guard) is append-only
+  and tenant-scoped with at most one resolution per session. D1 re-checks that the session's handoff
+  is `failed` or `requested`, or that it has a callback record; that the resolver is an active
+  owner or ops user holding that role; that a note is present; and that `resolved_at` is D1's own
+  clock. An exact replay returns the stored record.
+- Each refusal has its own code: `newo_handoff_resolution_person_required`,
+  `newo_handoff_resolution_role_required`, `csrf_failed`, `idempotency_key_required`,
+  `invalid_newo_handoff_resolution`, `newo_handoff_resolution_outcome_required`,
+  `newo_handoff_resolution_note_required`, `newo_handoff_resolution_note_too_long`,
+  `newo_handoff_not_found`, `newo_handoff_not_open`, `newo_handoff_already_resolved` and
+  `newo_handoff_resolution_replay_conflict`.
+- The operations read model lists the open requested callbacks (`open_callbacks`) and the
+  unresolved failed handoffs (`failed_handoffs`), each caller in one list, and either keeps the
+  model in `attention`. The Newo reconcile count (`failed_handoffs`) and the operations list share
+  one predicate per list.
 
 ## Customer-facing behavior
 

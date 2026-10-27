@@ -767,3 +767,19 @@ test("the crew Today and job reads carry each job's holding stops, and never ano
   assert.deepEqual(degraded.jobs.map((row) => row.active_stops), [null]);
   assert.ok(degraded.stale_fields.includes("jobs.active_stops_unavailable"));
 });
+
+test("a readiness question about a Work Package alone finds the stops on its job", async () => {
+  const env = testEnv();
+  const { jobA, jobB } = await twoJobs(env);
+  const onA = await raise(env, { type: "roof_job", id: jobA.jobId });
+  // No job level in the chain: the package's own job is read from work_packages.
+  const ask = async (packet: NativeWorkPackageDefinition) =>
+    (await evaluateSafetyReadiness(env, {
+      tenantId: TENANT,
+      scopes: [{ type: "tenant", id: TENANT }, { type: "work_package", id: packet.workPackageId }],
+      subjectUserIds: [],
+      now: new Date().toISOString(),
+    })).blockers.map((blocker) => blocker.stop?.occurrence_id);
+  assert.deepEqual(await ask(jobA), [onA]);
+  assert.deepEqual(await ask(jobB), []);
+});

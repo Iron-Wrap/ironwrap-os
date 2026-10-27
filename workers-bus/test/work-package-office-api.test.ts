@@ -1132,9 +1132,34 @@ test("a stop raised after the Worker's gate passed meets the same named refusal 
   appEnv.DB.beforeEventInsertOnce("field-hold-ack-0002", async () => {
     await raiseSafetyStop(appEnv, "so_office_hold_race_0001", { type: "roof_job", id: packet.jobId }, reportedAt);
   });
+  // D1 reports a trigger refusal inside a longer message, as Cloudflare D1 does.
+  const d1Style = {
+    ...appEnv,
+    DB: {
+      prepare(sql: string) {
+        const statement = appEnv.DB.prepare(sql);
+        return {
+          bind(...values: unknown[]) {
+            const bound = statement.bind(...values);
+            return {
+              ...bound,
+              async run() {
+                try {
+                  return await bound.run();
+                } catch (error) {
+                  throw new Error(`D1_ERROR: ${(error as Error).message}: SQLITE_CONSTRAINT`);
+                }
+              },
+            };
+          },
+        };
+      },
+      batch: appEnv.DB.batch.bind(appEnv.DB),
+    },
+  } as unknown as typeof appEnv;
   const refused = await handleWorkPackageAction(
     fieldWorkPackageActionRequest(packet, "acknowledge", "field-hold-ack-0002"),
-    appEnv,
+    d1Style,
     auth("field"),
     packet.jobId,
     { name: packet.assignmentId },

@@ -3965,7 +3965,8 @@ test("a copy whose Worker stopped after its event starts nothing: past that even
 });
 
 test("the replay after a stopped Worker serves a copy that starts then, and the unconfirmed event counts for nothing", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  // D1's clock is the test's, to stand it a millisecond past the confirmed copy's end.
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
   try {
     seedGates(h);
     const portalToken = await seedPortalLink(h.db);
@@ -4008,7 +4009,29 @@ test("the replay after a stopped Worker serves a copy that starts then, and the 
       ["open", event.shown_at, event.window_ends_at, true, event.event_id],
     );
     assert.equal((await signedCopyQueue(h)).count, 0);
+
+    // A millisecond past the confirmed copy's end, every hold lifts, in the Worker and in D1, though
+    // the unconfirmed event's would-be end is still ahead.
+    backorderedJobLine(h);
+    mock.timers.enable({ apis: ["Date"], now: Date.parse(event.window_ends_at) + 1 });
+    assert.ok(Date.now() < Date.parse(unconfirmed!.window_ends_at));
+    const ended = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual([ended.state, ended.holds], ["ended", []]);
+    assert.equal(await cancellationWindowHold(h.env, TENANT, JOB_ID), null);
+    // Materials is attested through the ledger, the crew is scheduled, a supplier order is placed and
+    // the backordered line is ordered again.
+    const schedule = readyToSchedule(h);
+    assert.equal(((await schedule("schedule-a5-after-confirmed-end")) as { kind: string }).kind, "created");
+    placeJobOrderLine(h);
+    h.db.raw.prepare(
+      "UPDATE inventory_po_lines SET status = 'ordered', version = version + 1 WHERE po_line_id = 'po_line_acceptance_backordered'",
+    ).run();
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM inventory_po_lines WHERE status = 'ordered'").get() as { n: number }).n,
+      2,
+    );
   } finally {
+    mock.timers.reset();
     h.restore();
   }
 });

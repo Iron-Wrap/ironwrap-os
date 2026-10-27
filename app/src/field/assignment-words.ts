@@ -1,3 +1,5 @@
+import type { AppRole } from "../lib/roles";
+
 /**
  * A crew phone names the crew's part on a job as a role ("Production crew"), never the bare
  * assignment type: testers did not read "Production · Assigned" as a role (gate e-job-page-layout).
@@ -25,7 +27,7 @@ const STATUS_WORDS: Record<string, string> = {
 };
 
 /** A crew phone reads the fact as its own; an office role looking at the job reads the crew's. */
-export function assignmentRoleLabel(userRole: string): string {
+export function assignmentRoleLabel(userRole: AppRole): string {
   return userRole === "field" ? "Your role" : "Crew role";
 }
 

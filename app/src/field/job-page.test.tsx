@@ -461,6 +461,18 @@ describe("JobPage", () => {
     );
   });
 
+  it("labels the crew's role for an office role on a typed work object", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    renderWorkObject(workObjectModel(), ownerSession);
+    expect(await screen.findByText("Crew role")).toBeVisible();
+    expect(screen.queryByText("Your role")).toBeNull();
+  });
+
   it("renders a typed Shop Order packet as an actionable field surface", async () => {
     routeParams = {
       workObjectType: "Shop Order",

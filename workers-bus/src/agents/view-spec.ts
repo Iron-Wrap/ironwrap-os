@@ -1434,7 +1434,7 @@ const BANNED_TERMS: readonly (readonly [string, RegExp])[] = [
 ];
 /** The renderer derives delegation words from the contract and the setting; a spec never states them. */
 const DELEGATION_WORDS =
-  /\b(?:reads and watches|acts within your limits|always asks first|asks first|off until you turn it on|people only|always on: protects you|paused here)\b/i;
+  /\b(?:act with approval|auto with undo|reads and watches|acts within your limits|always asks first|asks first|off until you turn it on|people only|always on: protects you|paused here)\b/i;
 /** ZL-4: a control label is a verb and its object, and never one of these. */
 const BANNED_START = /^(?:open|go|submit|ok|okay)\b/i;
 /**

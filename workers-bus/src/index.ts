@@ -119,7 +119,10 @@ import {
   handleCustomerPortalDecision,
   reconcileCustomerPortalDecisionAttempts,
 } from "./customer-portal-decision.ts";
-import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
+import {
+  pruneCustomerPortalProposalViews,
+  pruneCustomerPortalRecords,
+} from "./customer-portal-store.ts";
 import {
   listMeasurementIntakeExceptions,
   pruneMeasurementIntakeReceipts,
@@ -364,9 +367,11 @@ export default {
           pruneAuthRecords(env).catch((error) =>
             log({ at: "auth_prune", error: String(error) }),
           ),
-          pruneCustomerPortalRecords(env).catch((error) =>
-            log({ at: "customer_portal_prune", error: String(error) }),
-          ),
+          // First opens older than 3 years go first, so a link they held is pruned in the same run.
+          pruneCustomerPortalProposalViews(env)
+            .catch((error) => log({ at: "customer_portal_proposal_view_prune", error: String(error) }))
+            .then(() => pruneCustomerPortalRecords(env))
+            .catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
           pruneMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_receipt_prune", error: String(error) }),
           ),
@@ -749,6 +754,7 @@ async function routeRequest(
     return await handleCustomerPortalResolve(
       req,
       env as import("./app-types.ts").AppEnv,
+      ctx,
     );
   }
   if (url.pathname === "/api/v1/customer-portal/acceptance/challenge") {

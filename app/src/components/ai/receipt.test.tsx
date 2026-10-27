@@ -100,7 +100,7 @@ describe("Receipt", () => {
     expect(within(card).getByText("Done for you")).toBeVisible();
     expect(within(card).getByText("Today 06:42")).toBeVisible();
     // The people see the delegation words, never the class.
-    expect(within(card).getByText("Asks first")).toBeVisible();
+    expect(within(card).getByText("Act with approval")).toBeVisible();
     expect(within(card).getByText("A3")).not.toBeVisible();
     expect(within(card).getByText("Did")).toBeVisible();
     expect(within(card).getByRole("list", { name: "Where this came from" })).toBeVisible();
@@ -453,6 +453,99 @@ describe("Receipt", () => {
   });
 });
 
+describe("who allowed a step, in words beside the dial", () => {
+  it("says a step done within your limits had no one approve it, beside the screen's check", () => {
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, kind: "within_limits", approved_by: null },
+        })}
+        display={{ ...display, delegation: "within_limits", checked: "IronWrap shows it." }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("Auto with undo")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "It did this on its own; nobody approved it first. IronWrap shows it.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("never says it acted on its own when a person approved it, or when it did not act", () => {
+    const within_limits = { ...receipt().permit, kind: "within_limits" as const };
+    const steps: Partial<ContractReceipt>[] = [
+      {},
+      { permit: { ...within_limits, approved_by: "person_dana" } },
+      { permit: { ...receipt().permit, kind: "shadow" } },
+      { permit: within_limits, outcome: "unknown" },
+      {
+        permit: within_limits,
+        outcome: "failed",
+        policy: { ...receipt().policy, reason_codes: ["declined"] },
+      },
+      {
+        permit: within_limits,
+        outcome: "abstained",
+        policy: { ...receipt().policy, reason_codes: ["fact_missing"] },
+      },
+    ];
+    for (const step of steps) {
+      const { unmount } = render(<Receipt receipt={receipt(step)} display={display} />);
+      expect(screen.getByRole("article").textContent).not.toMatch(/on its own/);
+      unmount();
+    }
+  });
+
+  it("puts the line ahead of the default check when the screen gives none", () => {
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, kind: "within_limits", approved_by: null },
+        })}
+        display={{ ...display, where: "QuickBooks" }}
+      />,
+    );
+    expect(
+      screen.getByText(/^It did this on its own; nobody approved it first\. Checked in QuickBooks/),
+    ).toBeVisible();
+  });
+
+  it("says an action the owner can never raise can never act on its own", () => {
+    const { unmount } = render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "always_asks_first", why: "A person reads it first." }}
+        viewerMayDecide
+      />,
+    );
+    expect(
+      screen.getByText("A person reads it first. It can never be set to do this on its own."),
+    ).toBeVisible();
+    unmount();
+    // A screen's line without its full stop still reads as two sentences.
+    const second = render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "always_asks_first", why: "A person reads it first" }}
+        viewerMayDecide
+      />,
+    );
+    expect(
+      screen.getByText("A person reads it first. It can never be set to do this on its own."),
+    ).toBeVisible();
+    second.unmount();
+    render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "asks_first", why: "A person reads it first." }}
+        viewerMayDecide
+      />,
+    );
+    expect(screen.getByRole("article").textContent).not.toMatch(/never be set/);
+  });
+});
+
 describe("ReceiptRow", () => {
   it("is one target named by the summary and the state, with one outlined action", async () => {
     const open = vi.fn();
@@ -724,9 +817,180 @@ describe("a people-only draft that left Needs you", () => {
     expect(within(card).queryAllByRole("button")).toEqual([]);
   });
 
-  it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
-    render(<Receipt receipt={draft("superseded")} display={closed} />);
+  it("says who changed the record by hand and what it is now, from the draft's applied record", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      readback: {
+        source: "owned_store",
+        reference: "person:user_grace",
+        response_hash: "sha256:role",
+        matched: true,
+      },
+      do_it_myself: {
+        surface: "/settings/team",
+        context: { applied: { field: "role", value: "production", by: "person_dana" } },
+      },
+    };
+    render(<Receipt receipt={changed} display={closed} />);
     const card = screen.getByRole("article");
+    expect(card).toHaveAttribute("data-state", "done_by_person");
+    // The person comes from the applied record when the screen names no one.
+    expect(within(card).getByText("Done by Dana Whitford")).toBeVisible();
+    // Its one time is the hand change that closed it.
+    expect(within(card).getByText("Changed by hand · Yesterday 16:20")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "Dana Whitford changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Production.",
+      ),
+    ).toBeVisible();
+    expect(card.textContent).not.toMatch(/this change|person_dana|production\b/);
+    // The read-back names the changed record; it is not a check in another system.
+    expect(within(card).queryByText("Checked")).toBeNull();
+    expect(card.textContent).not.toMatch(/other system/);
+    expect(within(card).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("says You when the person who changed it is the one reading", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      do_it_myself: {
+        surface: null,
+        context: { applied: { field: "role", value: "production", by: "person_dana" } },
+      },
+    };
+    const { unmount } = render(
+      <Receipt
+        receipt={changed}
+        display={{ ...closed, when: { text: "Today 09:30" }, viewer: "person_dana" }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("You")).toBeVisible();
+    expect(within(card).getByText("Done by you")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "You changed Grace Obi's role by hand today at 09:30, so this draft is closed. Grace Obi's role is now Production.",
+      ),
+    ).toBeVisible();
+    expect(card.textContent).not.toMatch(/Dana Whitford/);
+    // The initials stay the person's own.
+    expect(card.querySelector('[data-shape="circle"]')?.textContent).toBe("DW");
+    unmount();
+    // Someone else reading sees the name.
+    render(<Receipt receipt={changed} display={{ ...closed, viewer: "person_grace" }} />);
+    expect(screen.getByText("Done by Dana Whitford")).toBeVisible();
+  });
+
+  it("says You when the screen names the person who acted by name, and you for an approval", () => {
+    const { unmount } = render(
+      <Receipt
+        receipt={draft("applied_by_person")}
+        display={{ ...closed, by: "Dana Whitford", viewer: "person_dana" }}
+      />,
+    );
+    expect(screen.getByText("Done by you")).toBeVisible();
+    unmount();
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, approved_by: "person_dana" },
+          readback: null,
+        })}
+        display={{ ...display, people: { person_dana: "Dana Whitford" }, viewer: "person_dana" }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText(/Approved by you/)).toBeVisible();
+    expect(card.textContent).not.toMatch(/Dana Whitford/);
+  });
+
+  it("says you on a history row and item the viewer did", () => {
+    render(
+      <>
+        <ReceiptRow
+          state="done_by_person"
+          by={{ name: "Dana Whitford", isViewer: true }}
+          summary="Crew booked"
+        />
+        <ol>
+          <TimelineItem
+            actor="person"
+            state="done_by_person"
+            by={{ name: "Dana Whitford", isViewer: true }}
+            when={{ text: "Today 09:30" }}
+            what="Booked the crew"
+          />
+        </ol>
+      </>,
+    );
+    expect(screen.getAllByText("Done by you")).toHaveLength(2);
+    expect(screen.queryByText("Done by Dana Whitford")).toBeNull();
+  });
+
+  it("labels the time of the hand change when the time is machine-readable too", () => {
+    render(
+      <Receipt
+        receipt={draft("applied_by_person")}
+        display={{ ...closed, when: { text: "Mon 14:05", at: "2026-10-19T14:05:00-06:00" } }}
+      />,
+    );
+    const time = screen.getByText("Mon 14:05");
+    expect(time.tagName).toBe("TIME");
+    expect(time.parentElement?.textContent).toBe("Changed by hand · Mon 14:05");
+  });
+
+  it("never prints the id of a person in the applied record it cannot name", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      do_it_myself: {
+        surface: null,
+        context: { applied: { field: "role", value: "sales", by: "person_gone" } },
+      },
+    };
+    render(<Receipt receipt={changed} display={closed} />);
+    const card = screen.getByRole("article");
+    expect(card.textContent).not.toMatch(/person_gone/);
+    expect(
+      within(card).getByText(
+        "A person changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Sales.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps the Checked line on a step a person did instead that has a read-back", () => {
+    const answered = receipt({
+      outcome: "failed",
+      readback: {
+        source: "quickbooks",
+        reference: "invoice/88",
+        response_hash: "sha256:invoice",
+        matched: true,
+      },
+      policy: { ...receipt().policy, reason_codes: ["done_by_person"] },
+    });
+    render(<Receipt receipt={answered} display={{ ...closed, by: "person_dana" }} />);
+    const card = screen.getByRole("article");
+    expect(card).toHaveAttribute("data-state", "done_by_person");
+    expect(within(card).getByText(/Checked in the other system: matches\./)).toBeVisible();
+    // Not a closed draft: its time stays the step's own.
+    expect(within(card).getByText("Yesterday 16:20")).toBeVisible();
+    expect(card.textContent).not.toMatch(/Changed by hand/);
+  });
+
+  it("says a newer draft replaced it, that it changed nothing and where the newer one is", () => {
+    const replaced = {
+      ...draft("superseded"),
+      readback: {
+        source: "owned_store",
+        reference: "step/step_newer",
+        response_hash: "sha256:args",
+        matched: true,
+      },
+    };
+    render(<Receipt receipt={replaced} display={closed} />);
+    const card = screen.getByRole("article");
+    expect(within(card).queryByText("Checked")).toBeNull();
+    expect(card.textContent).not.toMatch(/Changed by hand/);
     expect(card).toHaveAttribute("data-state", "replaced");
     expect(within(card).getByText("Replaced")).toBeVisible();
     expect(

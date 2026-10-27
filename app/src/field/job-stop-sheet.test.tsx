@@ -307,6 +307,54 @@ describe("JobStopSheet", () => {
     expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();
   });
 
+  it("S21: a new stop shows S21 again after Done on a stop the office then lifted", async () => {
+    officeAnswers({ scopeUnresolved: true });
+    const user = userEvent.setup();
+    const first = render(<JobStopSheet session={session} job={job} />);
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
+    await screen.findByText(/Work is stopped on every job/);
+    first.unmount();
+    // The office's read answers only after the crew has pressed Done: the stop was lifted.
+    let answerPanel!: () => void;
+    const slowPanel = (async (...args: Parameters<typeof fetch>) => {
+      await new Promise<void>((resolve) => (answerPanel = resolve));
+      return panelFetcher([])(...args);
+    }) as typeof fetch;
+    render(<JobStopSheet session={session} job={job} fetcher={slowPanel} />);
+    await screen.findByText(/Work is stopped on every job/);
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
+    answerPanel();
+    await user.click(await screen.findByRole("button", { name: "Send stop report" }));
+    expect(await screen.findByText(/Work is stopped on every job/)).toBeVisible();
+  });
+
+  it("S21: a stop waiting on this phone shows S21 once the office's answer comes in", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      noSignal();
+      const user = userEvent.setup();
+      render(<JobStopSheet session={session} job={job} />);
+      await user.click(await screen.findByRole("button", { name: "Send stop report" }));
+      await screen.findByText(
+        "Saved on this device. It uploads on its own and keeps the same record if you retry.",
+      );
+      // Signal comes back and the office answers that the stop's job wasn't found.
+      const database = await getDatabase();
+      const [raise] = await safetyActions();
+      await database.put("outbox_actions", {
+        ...raise!,
+        state: "verified",
+        verification: { verifiedAt: Date.now(), scopeUnresolved: true },
+      });
+      vi.advanceTimersByTime(5_000);
+      expect(await screen.findByText(/Work is stopped on every job/)).toBeVisible();
+      expect(screen.queryByText(/uploads on its own/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("S21: comes back on the next open while the stop holds", async () => {
     officeAnswers({ scopeUnresolved: true });
     const user = userEvent.setup();

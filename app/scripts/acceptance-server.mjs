@@ -826,7 +826,12 @@ async function handleSafetyActionRoute(request) {
       occurrence_kind: occurrenceKind,
       severity,
       state: "reported",
-      stop_active: kind === "rescue_request" || severity === "critical",
+      // With ACCEPTANCE_SCOPE_UNRESOLVED=1 a crew raise stays in force, as every raise does in the
+      // safety rail, so S21 can be captured coming back on the next open.
+      stop_active:
+        kind === "rescue_request" ||
+        severity === "critical" ||
+        (process.env.ACCEPTANCE_SCOPE_UNRESOLVED === "1" && kind === "report_occurrence"),
       scope_type: scopeType,
       scope_id: payload.scope_id,
       summary: payload.detail,

@@ -721,6 +721,8 @@ describe("JobPage", () => {
     renderJob();
 
     expect(await screen.findByText("Safety plan · v2")).toBeVisible();
+    expect(screen.getByText("Your role")).toBeVisible();
+    expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByText("Steep-slope fall exposure")).toBeVisible();
     expect(screen.getByText("Use roof anchors and harnesses")).toBeVisible();
     expect(screen.getByText(/field_checkin · Team only/i)).toBeVisible();

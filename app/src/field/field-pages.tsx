@@ -57,6 +57,7 @@ import { ErrorSystemDetails } from "../components/ui/system-details";
 import { CustomerJobHistorySection } from "../customers/customer-history-section";
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
+import { assignmentRole } from "./assignment-words";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
@@ -325,7 +326,7 @@ function WorkObjectPacketHeader({
   model: WorkObjectResponse;
   offline: boolean;
 }) {
-  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(model.assignment);
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -343,7 +344,7 @@ function WorkObjectPacketHeader({
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
-        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        <JobFact label="Your role" value={assignment || "Assignment details are missing"} />
         <JobFact
           label="Work plan"
           value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
@@ -546,7 +547,7 @@ function JobPacketHeader({
   offline: boolean;
   dateOptions: FieldDateOptions;
 }) {
-  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(model.assignment);
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -564,7 +565,7 @@ function JobPacketHeader({
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
         <JobFact label="Service" value={model.job.service_type ?? "Service details are missing"} />
-        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        <JobFact label="Your role" value={assignment || "Assignment details are missing"} />
         <JobFact
           label="Scheduled"
           value={formatFieldSchedule(model.assignment?.scheduled_start ?? null, dateOptions)}

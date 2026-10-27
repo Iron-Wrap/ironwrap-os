@@ -242,6 +242,10 @@ describe("TodayPage", () => {
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(screen.getByText("1 check blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
+    // The crew's part reads as a role, not the bare assignment type.
+    expect(screen.getAllByText("Your role").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Production crew · Assigned").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Production · Assigned")).toBeNull();
     expect(await screen.findByRole("heading", { name: "Ready offline" })).toBeVisible();
     expect(
       screen.getByText(/This run sheet and 2 job plans are saved on this phone/),

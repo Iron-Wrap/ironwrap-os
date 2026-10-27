@@ -16,6 +16,7 @@ import {
   type FieldDateOptions,
 } from "./field-formatting";
 import { messageForLoad } from "../lib/plain-error";
+import { assignmentRole } from "./assignment-words";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 import { OfflineReadiness } from "./offline-readiness";
 
@@ -370,7 +371,7 @@ function TodayJobRow({
     : fieldCaptureAllowed
       ? "Open job"
       : "Review job";
-  const assignment = [job.assignment?.type, job.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(job.assignment);
   // The card follows its own width, not the window's: the crew shell centres a phone-wide column
   // on a desktop, where window breakpoints squeezed three columns into it.
   return (
@@ -407,10 +408,7 @@ function TodayJobRow({
             </div>
           ) : null}
           <dl className="mt-4 grid gap-3 text-sm @sm:grid-cols-2">
-            <DispatchFact
-              label="Assignment"
-              value={assignment || "Assignment detail unavailable"}
-            />
+            <DispatchFact label="Your role" value={assignment || "Assignment detail unavailable"} />
             <DispatchFact label="Next step" value={job.next_action} />
           </dl>
           <PacketAvailabilityBadge availability={availability} />
@@ -446,9 +444,7 @@ function TodayWorkObjectRow({
     physicalContextType: workObject.physical_context_type,
     physicalContextId: workObject.physical_context_id,
   };
-  const assignment = [workObject.assignment?.type, workObject.assignment?.status]
-    .filter(Boolean)
-    .join(" · ");
+  const assignment = assignmentRole(workObject.assignment);
   return (
     <li className="@container py-5 sm:py-6">
       <article className="grid gap-5 @3xl:grid-cols-[8rem_minmax(0,1fr)_15rem] @3xl:items-start">
@@ -472,10 +468,7 @@ function TodayWorkObjectRow({
             {workObject.physical_context_type} · {workObject.physical_context_id}
           </h3>
           <dl className="mt-4 grid gap-4 text-sm @sm:grid-cols-2">
-            <DispatchFact
-              label="Assignment"
-              value={assignment || "Assignment detail unavailable"}
-            />
+            <DispatchFact label="Your role" value={assignment || "Assignment detail unavailable"} />
             <DispatchFact label="Next step" value={workObject.next_action} />
           </dl>
         </div>

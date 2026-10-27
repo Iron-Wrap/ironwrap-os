@@ -290,6 +290,8 @@ describe("JobStopSheet", () => {
     expect(screen.getByRole("button", { name: "I've made the area safe" })).toBeVisible();
     // The stop still holds every job, so its line never names the job that wasn't found.
     expect(screen.getByText(/^Stop · .* · Every job$/)).toBeVisible();
+    // Its job wasn't found, so there is no job to file a photo to.
+    expect(screen.queryByRole("link", { name: "Take photo" })).toBeNull();
     expect(screen.queryByText(new RegExp(`Job ${job.code}`))).toBeNull();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();

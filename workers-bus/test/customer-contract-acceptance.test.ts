@@ -4036,6 +4036,32 @@ test("the replay after a stopped Worker serves a copy that starts then, and the 
   }
 });
 
+test("an unconfirmed copy of a superseded contract is no record: the queue and the read both say the time is missing", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failSignedCopyConfirmations = 3;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-superseded-0001");
+    assert.equal(first.status, 200);
+    assert.equal(shownEvents(h).length, 3);
+    // A corrected contract, signed on today's page: its copy was never shown.
+    await publishCorrectedContract(h, OD01_TERMS);
+    const second = await accept(h, portalToken, "acceptance-a5-superseded-0002");
+    assert.equal(second.status, 200);
+    const binding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual([window.state, window.unknown_reason], ["unknown", "signed_copy_time_missing"]);
+    const queue = await signedCopyQueue(h);
+    assert.deepEqual(
+      [queue.counts, queue.jobs[0].category, queue.jobs[0].unknown_reason, queue.jobs[0].copy_shown_at, queue.jobs[0].contract_signed_at],
+      [{ window_unknown: 1, signed_copy_unconfirmed: 0 }, "window_unknown", "signed_copy_time_missing", null, binding.accepted_at],
+    );
+  } finally {
+    h.restore();
+  }
+});
+
 test("a double submit leaves an orphan unconfirmed event, and every read takes the confirmed one", async () => {
   // D1's clock is the test's: the first request's copy is shown a second before local midnight, and
   // the second request's orphan event a second after it.

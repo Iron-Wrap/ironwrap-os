@@ -13,7 +13,7 @@ import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { JobResponse, WorkObjectResponse } from "./field-contracts";
 import { loadJob, loadWorkObject } from "./field-cache";
-import { JobPage, WorkObjectPage } from "./field-pages";
+import { dialableNumber, JobPage, WorkObjectPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),
@@ -741,6 +741,81 @@ describe("JobPage", () => {
     });
     expect(within(bare).getByRole("link", { name: "Call 911" })).toBeVisible();
     expect(within(bare).queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["780-555-0142", "7805550142"],
+    ["(780) 555-0142 ext. 2", "7805550142"],
+    ["780.555.0142 x12", "7805550142"],
+    ["780 555 0142, ask for dispatch", "7805550142"],
+    ["1-780-555-0142", "17805550142"],
+    ["555-0142", "5550142"],
+    ["+1 780 555 0142", "+17805550142"],
+    ["+44 20 7946 0000", "+442079460000"],
+    ["Cell: 403\u2013555\u20130199", "4035550199"],
+    ["+44 (0)20 7946 0000", null],
+    ["780-555-0142 2", null],
+    ["555-0142 555-0143", null],
+    ["780-555-0142-43", null],
+    ["1-800-FLOWERS", null],
+    ["780-555-0142 / 780-555-0143", null],
+    ["780+555", null],
+    ["555-01", null],
+    ["dispatch", null],
+    ["", null],
+    [null, null],
+  ])("dials %j as %j, never a wrong or merged number", (text, expected) => {
+    expect(dialableNumber(text)).toBe(expected);
+  });
+
+  it("calls the job contact only on a dialable number, and shows any other as text", async () => {
+    const model = jobModel();
+    const contact = (phone: string | null) => ({
+      ...model,
+      packet: { ...model.packet, contact: { ...model.packet.contact!, phone } },
+    });
+    const { unmount } = renderJob(contact("(780) 555-0199 ext. 4"));
+    expect(await screen.findByRole("link", { name: "Call job contact" })).toHaveAttribute(
+      "href",
+      "tel:7805550199",
+    );
+    unmount();
+    renderJob(contact("ask at the gate"));
+    expect(await screen.findByText("ask at the gate")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Call job contact" })).not.toBeInTheDocument();
+  });
+
+  it("calls the office without its extension, and offers no office call on a number it can't dial", async () => {
+    const { unmount } = renderJob(jobModel(), {
+      ...fieldSession,
+      tenant: { ...fieldSession.tenant, office_phone: "780-555-0142 ext. 2" },
+    });
+    const emergency = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office, 780-555-0142 ext. 2",
+    });
+    expect(within(emergency).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+    unmount();
+    renderJob(jobModel(), {
+      ...fieldSession,
+      tenant: { ...fieldSession.tenant, office_phone: "1-800-ROOFING" },
+    });
+    const shown = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office, 1-800-ROOFING",
+    });
+    expect(within(shown).getByRole("link", { name: "Call 911" })).toBeVisible();
+    expect(within(shown).queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the emergency line when the job has no safety plan", async () => {
+    const model = jobModel();
+    renderJob({ ...model, packet: { ...model.packet, safety_plan: null } });
+    expect(
+      await screen.findByRole("region", { name: "Emergency: call 911 · then the office" }),
+    ).toBeVisible();
+    expect(screen.getByText("The safety plan is missing. Do not start work.")).toBeVisible();
   });
 
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {

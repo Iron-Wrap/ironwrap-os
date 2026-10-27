@@ -4,6 +4,32 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
+  test("keeps a job card's facts apart in the crew shell on a desktop and on a phone", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    // The crew shell centres a phone-wide column on a desktop; the card follows that column, so
+    // window breakpoints never squeeze three columns and two facts into it (Track C, #55 capture).
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/today");
+      const card = page.locator("li article").first();
+      const facts = card.locator("dl");
+      await expect(facts).toBeVisible();
+      // Squeezed, the labels and values spill past their cells ("Assignment" ran into "Next step").
+      const cells = await facts.locator("dt, dd").all();
+      expect(cells.length).toBe(4);
+      for (const cell of [card, ...cells])
+        expect(
+          await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          `${await cell.textContent()} spills at ${viewport.width}px`,
+        ).toBe(true);
+    }
+  });
+
   test("keeps the full crew name, the sun and night switch, and thumb actions usable on narrow phones", async ({
     page,
   }) => {
@@ -496,6 +522,12 @@ test.describe("Field Companion PWA acceptance", () => {
       await page.setViewportSize(viewport);
       await page.goto("/jobs/JOB-ACCEPTANCE");
       await expect(page.getByRole("heading", { name: "Safety and site" })).toBeVisible();
+      // The emergency line dials 911 and the office's own number from the company profile.
+      await expect(page.getByRole("link", { name: "Call 911" })).toHaveAttribute("href", "tel:911");
+      await expect(page.getByRole("link", { name: "Call the office" })).toHaveAttribute(
+        "href",
+        "tel:7805550142",
+      );
       const cells = await page
         .locator(
           "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",

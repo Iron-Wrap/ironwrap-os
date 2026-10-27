@@ -22,7 +22,13 @@ const tenantSchema = z.object({
   time_zone: z.string().min(1),
   currency: z.string().length(3),
   /** The company's office phone from its profile, dialable from a crew phone; absent until set. */
-  office_phone: z.string().trim().min(1).nullish(),
+  office_phone: z
+    .string()
+    .trim()
+    .transform((value) => value || null)
+    .nullish()
+    // A malformed value reads as none rather than failing sign-in.
+    .catch(null),
 });
 
 const sessionBaseSchema = z.object({

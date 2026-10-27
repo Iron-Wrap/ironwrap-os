@@ -46,6 +46,19 @@ describe("sessionResponseSchema", () => {
     expect(sessionResponseSchema.parse(authenticatedSession)).toEqual(authenticatedSession);
   });
 
+  it("reads the office phone as optional, so a blank one never blocks sign-in", () => {
+    const withPhone = (office_phone: unknown) =>
+      sessionResponseSchema.parse({
+        ...authenticatedSession,
+        tenant: { ...authenticatedSession.tenant, office_phone },
+      });
+    expect(sessionResponseSchema.parse(authenticatedSession)).toEqual(authenticatedSession);
+    expect(withPhone(null).tenant?.office_phone).toBeNull();
+    expect(withPhone("").tenant?.office_phone).toBeNull();
+    expect(withPhone("   ").tenant?.office_phone).toBeNull();
+    expect(withPhone("  780-555-0142 ").tenant?.office_phone).toBe("780-555-0142");
+  });
+
   it("rejects unknown roles and missing CSRF truth", () => {
     expect(
       sessionResponseSchema.safeParse({

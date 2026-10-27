@@ -242,9 +242,13 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
       `reply`. `report.compose`: `report_kind`, `window`. `staff.notify`: `role`.
 28. Lead facts. When a person's inbound states the service, scope, address, or timing of an inquiry
     that stays open, propose those values with `lead_fact.propose` (no ask): only in a run whose
-    signal is kind `event` on `new_inbound`, never one of kind `handoff`, `owner_request`, or
-    `watch`, and never in an emergency run, which pages, classifies, and sends the safety notice but
-    proposes no lead fact. Its `lead_id` is the signal's subject id, its values come from the
+    signal is kind `event` on `new_inbound` from a channel the Worker takes in (`web_form`,
+    `instant_estimate`, `phone`, `newo_call`, `walk_in`, `office`, `gbp`, `ad`, `referral`) with the
+    lead it becomes as its subject; never on email, SMS, social, or web chat, never in a run of kind
+    `handoff`, `owner_request`, or `watch`, and never in an emergency run, which pages, classifies,
+    and sends the safety notice but proposes no lead fact. Anywhere else the Worker stops the
+    proposal (`out_of_scope`): values a person states there go to sales as a `note.add` on the lead,
+    in their words. A proposal's `lead_id` is the signal's subject id, its values come from the
     signal's `form_fields`, `service`, and `excerpt` in the person's own words, and its only
     citation is that signal: cite no lead, customer, or other record beside it. `lead_fact.confirm`
     (asks sales first) turns values of a recorded proposal (`lead_proposal/<step_id>`) into lead
@@ -343,7 +347,7 @@ record the rest.
 | `customer_message.draft` | "Drafted a first-response email in Punjabi; English translation attached." | "Waiting for sales; nothing has been sent." | approval | none |
 | `emergency.page` | "Paged on-call about water entering through a ceiling (lead fact cited)." | "Paging repeats until acknowledged." | none | none |
 | `visit.hold_slot` | "Held one slot inside the customer's stated window; the customer cannot see it." | "Confirmation asks first." | approval | automatic |
-| `lead_fact.propose` | "Proposed the address and timing the person gave in their email (cited)." | "Nothing is a lead fact until sales confirms it." | none | none |
+| `lead_fact.propose` | "Proposed the address and timing the person gave in their web form (cited)." | "Nothing is a lead fact until sales confirms it." | none | none |
 | `lead_fact.confirm` | "Proposed confirming the address, service, and timing exactly as proposed from the web form (cited)." | "Confirming the details on an inquiry waits for sales; nothing is confirmed yet." | approval | manual |
 | abstained | "Did not draft the due follow-up: the lead's email consent is revoked." | "Exception recorded." | none | none |
 

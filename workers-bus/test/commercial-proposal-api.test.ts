@@ -13,6 +13,7 @@ import {
   type RecordCommercialQuoteInput,
 } from "../src/commercial-store.ts";
 import { runExternalEffect } from "../src/effect-runtime.ts";
+import worker from "../src/index.ts";
 import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
@@ -1243,23 +1244,41 @@ test("a person records whether a proposal send that could not be confirmed reach
         );
       const tooShort = await confirm(`delivery-confirm-short-${outcome}`, { ...confirmation, note: "ok" });
       assert.equal(tooShort.status, 400);
+      const audits = () =>
+        (db.raw.prepare("SELECT count(*) AS n FROM audit_log WHERE automation = 'proposal_delivery'").get() as { n: number }).n;
+      const openExceptions = () =>
+        (db.raw.prepare("SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'")
+          .get(effectId) as { n: number }).n;
+
+      if (outcome === "not_delivered") {
+        // The provider answered with a readback that conflicts, so it did something: a person cannot
+        // record "not delivered" (0164), which would clear the way for a second send. The send stays
+        // an exception, nothing is recorded, and the proposal is still not sent again.
+        const refused = await confirm(`delivery-confirm-${outcome}`, confirmation);
+        assert.equal(refused.status, 409, await refused.clone().text());
+        assert.deepEqual(await refused.json(), {
+          error: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+          delivery_state: "manual_exception",
+        });
+        assert.equal(effectState(), "manual_exception");
+        assert.equal(audits(), 0);
+        assert.equal(openExceptions(), 1);
+        const stillBlocked = await handleAuthenticatedRoute(
+          request("/api/v1/commercial/proposal-publications/prepare", prepareBody, `delivery-confirm-prepare-3-${outcome}`),
+          env,
+          auth("ops"),
+        );
+        assert.equal(stillBlocked.status, 409);
+        assert.equal((await stillBlocked.json() as { next_step: string }).next_step, "confirm_delivery_by_hand");
+        continue;
+      }
 
       const recorded = await confirm(`delivery-confirm-${outcome}`, confirmation);
       assert.equal(recorded.status, 201, await recorded.clone().text());
-      const expectedState = outcome === "delivered" ? "succeeded" : "reconciled";
-      assert.equal((await recorded.json() as { effect: { state: string } }).effect.state, expectedState);
-      assert.equal(effectState(), expectedState);
-      assert.equal(
-        (db.raw.prepare("SELECT count(*) AS n FROM audit_log WHERE automation = 'proposal_delivery'").get() as { n: number }).n,
-        1,
-        "one audit row per confirmation",
-      );
-      assert.equal(
-        (db.raw.prepare("SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'")
-          .get(effectId) as { n: number }).n,
-        0,
-        "the exception the send opened is resolved by the confirmation",
-      );
+      assert.equal((await recorded.json() as { effect: { state: string } }).effect.state, "succeeded");
+      assert.equal(effectState(), "succeeded");
+      assert.equal(audits(), 1, "one audit row per confirmation");
+      assert.equal(openExceptions(), 0, "the exception the send opened is resolved by the confirmation");
       const replay = await confirm(`delivery-confirm-${outcome}`, confirmation);
       assert.equal(replay.status, 200);
       assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
@@ -1272,18 +1291,14 @@ test("a person records whether a proposal send that could not be confirmed reach
         env,
         auth("ops"),
       );
-      if (outcome === "not_delivered") {
-        assert.equal(next.status, 201, "not delivered: the proposal may be sent again");
-      } else {
-        // Delivered: record that send as the publication instead of sending it a second time.
-        assert.equal(next.status, 409);
-        assert.deepEqual(await next.json(), {
-          error: "proposal_delivery_not_recorded",
-          delivery_state: "succeeded",
-          external_effect_id: effectId,
-          next_step: "record_publication",
-        });
-      }
+      // Delivered: record that send as the publication instead of sending it a second time.
+      assert.equal(next.status, 409);
+      assert.deepEqual(await next.json(), {
+        error: "proposal_delivery_not_recorded",
+        delivery_state: "succeeded",
+        external_effect_id: effectId,
+        next_step: "record_publication",
+      });
     } finally {
       db.close();
     }
@@ -1484,59 +1499,55 @@ test("D1 holds one proposal send in flight, the claim route included, and a pers
     const { permit } = await prepared.json() as { permit: Permit };
     await runSend(env, permit, "effect:single-flight:unknown", "unknown");
 
-    // The service-token claim path never passes through prepare; D1 refuses the second send itself.
+    // The service-token claim path never passes through prepare. On this business Worker the token
+    // is refused for a proposal send before D1 (0164). The QA seed's synthetic stand-in on a
+    // synthetic Worker still reaches D1, which refuses the second send itself.
+    const synthetic = { ...env, AGENT_DATA_CLASS: "synthetic" } as AppEnv;
+    const claimSend = (target: AppEnv, effect: Record<string, unknown>, authority: unknown) =>
+      handleExternalEffectClaim(
+        new Request("https://worker.example.com/admin/effects/claim", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+          body: JSON.stringify({ effect, authority }),
+        }),
+        target,
+      );
+    const publishEffects = () =>
+      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n;
     const second = effectRequest(permit, "effect:single-flight:second");
-    const claim = await handleExternalEffectClaim(
-      new Request("https://worker.example.com/admin/effects/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
-        body: JSON.stringify({ effect: second, authority: second.authority }),
-      }),
-      env,
-    );
+    const businessClaim = await claimSend(env, second, second.authority);
+    assert.equal(businessClaim.status, 403, await businessClaim.clone().text());
+    assert.deepEqual(await businessClaim.json(), { error: "effect_outside_send_token_refused" });
+    const businessSynthetic = await claimSend(env, { ...second, provider: "qa-synthetic-publication" }, second.authority);
+    assert.equal(businessSynthetic.status, 403, await businessSynthetic.clone().text());
+    assert.deepEqual(await businessSynthetic.json(), { error: "effect_provider_not_allowed" });
+    const claim = await claimSend(synthetic, { ...second, provider: "qa-synthetic-publication" }, second.authority);
     assert.equal(claim.status, 409, await claim.clone().text());
     assert.deepEqual(await claim.json(), { error: "proposal_delivery_unconfirmed" });
-    assert.equal(
-      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
-      1,
-    );
+    assert.equal(publishEffects(), 1);
 
     // A caller-supplied compensation link is no exemption: a "compensation" that is itself a
     // publish of the same revision is a second send.
-    const disguised = effectRequest(permit, "effect:single-flight:disguised");
-    const disguisedClaim = await handleExternalEffectClaim(
-      new Request("https://worker.example.com/admin/effects/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
-        body: JSON.stringify({
-          effect: { ...disguised, compensatesEffectId: "effect:single-flight:unknown" },
-          authority: disguised.authority,
-        }),
-      }),
-      env,
-    );
+    const disguised = { ...effectRequest(permit, "effect:single-flight:disguised"), compensatesEffectId: "effect:single-flight:unknown" };
+    const businessDisguised = await claimSend(env, disguised, disguised.authority);
+    assert.equal(businessDisguised.status, 403, await businessDisguised.clone().text());
+    assert.deepEqual(await businessDisguised.json(), { error: "effect_outside_send_token_refused" });
+    const disguisedClaim = await claimSend(synthetic, { ...disguised, provider: "qa-synthetic-publication" }, disguised.authority);
     assert.equal(disguisedClaim.status, 409, await disguisedClaim.clone().text());
     assert.deepEqual(await disguisedClaim.json(), { error: "proposal_delivery_unconfirmed" });
-    assert.equal(
-      (db.raw.prepare("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'").get() as { n: number }).n,
-      1,
-      "no second publish effect exists",
-    );
+    assert.equal(publishEffects(), 1, "no second publish effect exists");
     // The claim runs on the server's clock: a backdated `now` cannot make a lapsed deadline current.
-    const backdated = effectRequest(permit, "effect:single-flight:backdated", new Date(Date.now() - 60_000).toISOString());
-    const backdatedClaim = await handleExternalEffectClaim(
-      new Request("https://worker.example.com/admin/effects/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
-        body: JSON.stringify({
-          effect: { ...backdated, now: new Date(Date.now() - 120_000).toISOString() },
-          authority: backdated.authority,
-        }),
-      }),
-      env,
-    );
+    const backdated = {
+      ...effectRequest(permit, "effect:single-flight:backdated", new Date(Date.now() - 60_000).toISOString()),
+      now: new Date(Date.now() - 120_000).toISOString(),
+    };
+    const businessBackdated = await claimSend(env, backdated, backdated.authority);
+    assert.equal(businessBackdated.status, 403, await businessBackdated.clone().text());
+    assert.deepEqual(await businessBackdated.json(), { error: "effect_outside_send_token_refused" });
+    const backdatedClaim = await claimSend(synthetic, { ...backdated, provider: "qa-synthetic-publication" }, backdated.authority);
     assert.equal(backdatedClaim.status, 422, await backdatedClaim.clone().text());
     assert.deepEqual(await backdatedClaim.json(), { error: "effect_deadline_invalid" });
+    assert.equal(publishEffects(), 1);
 
     // A person may say "not delivered" only once the provider's own answer can no longer be late.
     const ops = await personSession(db, env, OPS_ID, "ops");
@@ -1660,10 +1671,37 @@ test("the confirmation ledger refuses what it must, in the route and in D1", asy
       ).run(new Date().toISOString()),
       /external_effect_terminal/,
     );
-    const confirmed = await personPost(env, ops, CONFIRM_PATH, "ledger-confirm", {
+    // A readback that conflicted means the provider answered: "not delivered" is not a person's to
+    // record, on the route or in D1 (0164), and the send keeps blocking the next one.
+    const notDelivered = await personPost(env, ops, CONFIRM_PATH, "ledger-not-delivered", {
       external_effect_id: "effect:ledger:conflict",
       outcome: "not_delivered",
       note: "The customer has not received anything.",
+    });
+    assert.equal(notDelivered.status, 409, await notDelivered.clone().text());
+    assert.deepEqual(await notDelivered.json(), {
+      error: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+      delivery_state: "manual_exception",
+    });
+    assert.throws(
+      () => db.raw.prepare(
+        `INSERT INTO proposal_delivery_confirmations
+           (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+            confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+         VALUES ('delivery-confirmation:direct-conflict-0001', ?, 'effect:ledger:conflict', ?, ?, 'not_delivered',
+                 'Direct insert attempt', ?, 'ops', ?, ?, ?)`,
+      ).run(TENANT, PACK, REVISION, OPS_ID, "c".repeat(64), "d".repeat(64), new Date().toISOString()),
+      /proposal_delivery_confirmation_conflict_needs_provider_evidence/,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT state FROM external_effects WHERE effect_id = 'effect:ledger:conflict'").get() as { state: string }).state,
+      "manual_exception",
+    );
+    assert.equal((await prepare("ledger-prepare-after-refusal")).status, 409);
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "ledger-confirm", {
+      external_effect_id: "effect:ledger:conflict",
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
     });
     assert.equal(confirmed.status, 201);
     assert.throws(
@@ -1717,12 +1755,24 @@ test("single flight holds across publication versions, and any commercial person
       { code: "effect_proposal_delivery_unconfirmed" },
     );
 
-    // A send that succeeded is recorded by another commercial person, with no hand confirmation.
+    // An unknown send moves on only with a person's record (0164): a reconcile that reports it
+    // executed is refused in D1. Once one person confirms delivery, another commercial person
+    // records the publication.
     const { reconcileExternalEffect } = await import("../src/effect-runtime.ts");
-    await reconcileExternalEffect(env, "effect:versions:unknown", {
-      outcome: "executed",
-      evidence: { provider: "late answer: delivered" },
+    await assert.rejects(
+      reconcileExternalEffect(env, "effect:versions:unknown", {
+        outcome: "executed",
+        evidence: { provider: "late answer: delivered" },
+      }),
+      /proposal_delivery_settle_evidence_missing/,
+    );
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "versions-confirm", {
+      external_effect_id: "effect:versions:unknown",
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
     });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
     const other = await personSession(db, env, OTHER_OPS_ID, "ops");
     const recorded = await personPost(env, other, "/api/v1/commercial/proposal-publications", "versions-record", {
       proposal_revision_id: REVISION,
@@ -1739,6 +1789,118 @@ test("single flight holds across publication versions, and any commercial person
   }
 });
 
+test("the effect-runtime token cannot forge a proposal send: each step of the forged path is refused (0164)", async () => {
+  const { db, env, prepare } = await publicationReady("forged");
+  try {
+    const prepared = await prepare("forged-prepare-1");
+    assert.equal(prepared.status, 201);
+    const { permit } = await prepared.json() as { permit: Permit };
+    const bearer = (route: string, body: unknown) =>
+      worker.fetch(
+        new Request(`https://worker.example.com/admin/effects/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${EFFECT_TOKEN}` },
+          body: JSON.stringify(body),
+        }),
+        env as never,
+        {} as never,
+      );
+    const count = (sql: string) => (db.raw.prepare(sql).get() as { n: number }).n;
+    const publications = () => count("SELECT count(*) AS n FROM commercial_proposal_publication_events");
+
+    // 1. The holder claims a send against the person's live permit with its own envelope: an empty
+    // expected readback, which any observed value would match. Refused before D1, so the permit
+    // stays unused and no effect exists.
+    const forged = { ...effectRequest(permit, "effect:forged:claim"), expectedReadback: {} };
+    const claim = await bearer("claim", { effect: forged, authority: forged.authority });
+    assert.equal(claim.status, 403, await claim.clone().text());
+    assert.deepEqual(await claim.json(), { error: "effect_outside_send_token_refused" });
+    assert.equal(count("SELECT count(*) AS n FROM external_effects"), 0);
+
+    // 2. A send the bus itself claimed cannot be settled from outside with a reported match.
+    const { authorizeExternalEffect, claimExternalEffect, proposeExternalEffect, reconcileExternalEffect, recoverExpiredExternalEffect, EFFECT_ATTEMPT_LEASE_MS } =
+      await import("../src/effect-runtime.ts");
+    const send = effectRequest(permit, "effect:forged:bus");
+    await proposeExternalEffect(env, {
+      ...send,
+      authority: { permitRef: permit.permit_id, policyRef: permit.policy_ref, policyVersion: permit.policy_version },
+    } as never);
+    await authorizeExternalEffect(env, send.effectId, send.authority);
+    const { attempt } = await claimExternalEffect(env, send.effectId);
+    const row = () => ({ ...db.raw.prepare("SELECT * FROM external_effects WHERE effect_id = ?").get(send.effectId) });
+    const leased = row();
+    const settle = await bearer("settle", {
+      effectId: send.effectId,
+      settlement: { attemptId: attempt.attempt_id, outcome: "accepted", readback: { status: "match", observed: READBACK } },
+    });
+    assert.equal(settle.status, 403, await settle.clone().text());
+    assert.deepEqual(await settle.json(), { error: "effect_outside_send_token_refused" });
+    assert.deepEqual(row(), leased);
+    assert.equal(leased.state, "executing");
+
+    // 3. Nothing is "sent", so even the permit's own preparer cannot record it as the publication.
+    const ops = await personSession(db, env, OPS_ID, "ops");
+    const record = await personPost(env, ops, "/api/v1/commercial/proposal-publications", "forged-record", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: send.effectId,
+    });
+    assert.equal(record.status, 409, await record.clone().text());
+    assert.deepEqual(await record.json(), { error: "commercial_publication_effect_mismatch" });
+    assert.equal(publications(), 0);
+
+    // 4. The lease runs out and the send is unknown. Neither the bearer nor a reconcile inside the
+    // bus moves it, so L04 holds: the revision is not sent again until a person records what they
+    // found.
+    await recoverExpiredExternalEffect(env, send.effectId, new Date(Date.now() + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString());
+    const unknown = row();
+    assert.equal(unknown.state, "unknown");
+    for (const outcome of ["executed", "not_executed"]) {
+      const reconcile = await bearer("reconcile", { effectId: send.effectId, outcome, evidence: { provider: "accepted" } });
+      assert.equal(reconcile.status, 403, await reconcile.clone().text());
+      assert.deepEqual(await reconcile.json(), { error: "effect_outside_send_token_refused" });
+    }
+    const retry = await bearer("retry", { effectId: send.effectId });
+    assert.equal(retry.status, 403, await retry.clone().text());
+    assert.deepEqual(await retry.json(), { error: "effect_outside_send_token_refused" });
+    await assert.rejects(
+      reconcileExternalEffect(env, send.effectId, { outcome: "executed", evidence: { provider: "accepted" } }),
+      /proposal_delivery_settle_evidence_missing/,
+    );
+    assert.deepEqual(row(), unknown);
+    const blocked = await prepare("forged-prepare-2");
+    assert.equal(blocked.status, 409);
+    assert.deepEqual(
+      { ...(await blocked.json() as Record<string, unknown>) },
+      { error: "proposal_delivery_unconfirmed", delivery_state: "unknown", external_effect_id: send.effectId, next_step: "confirm_delivery_by_hand" },
+    );
+
+    // The person path is the way out: a confirmed delivery is then recorded.
+    const confirmed = await personPost(env, ops, CONFIRM_PATH, "forged-confirm", {
+      external_effect_id: send.effectId,
+      outcome: "delivered",
+      note: "The customer confirmed they have the proposal.",
+    });
+    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    const recorded = await personPost(env, ops, "/api/v1/commercial/proposal-publications", "forged-record-2", {
+      proposal_revision_id: REVISION,
+      proposal_pack_id: PACK,
+      publication_version: 1,
+      previous_state: "draft",
+      state: "published",
+      permit_id: permit.permit_id,
+      external_effect_id: send.effectId,
+    });
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+    assert.equal(publications(), 1);
+  } finally {
+    db.close();
+  }
+});
 
 // ---------------------------------------------------------------------------------------------
 // #15b-1 (0161): findings that never change the send, the late-answer wait in D1 with a window per
@@ -1776,12 +1938,17 @@ function adminPost(path: string, body: Record<string, unknown>): Request {
   });
 }
 
+/** The effect routes take a proposal send only as the QA stand-in on a synthetic Worker (0164). */
+function syntheticWorker(env: AppEnv): AppEnv {
+  return { ...env, AGENT_DATA_CLASS: "synthetic" } as AppEnv;
+}
+
 async function unknownSendThroughRoutes(
   env: AppEnv,
   prepare: (key: string) => Promise<Response>,
   key: string,
   effectId: string,
-  provider = "native-commercial-publication",
+  provider = "qa-synthetic-publication",
 ): Promise<void> {
   const { handleExternalEffectClaim, handleExternalEffectSettlement } = await import("../src/effect-runtime-admin.ts");
   const prepared = await prepare(key);
@@ -1791,13 +1958,13 @@ async function unknownSendThroughRoutes(
   const claimed = await handleExternalEffectClaim(adminPost("/admin/effects/claim", {
     effect: send,
     authority: send.authority,
-  }), env);
+  }), syntheticWorker(env));
   assert.equal(claimed.status, 200, await claimed.clone().text());
   const { attempt } = await claimed.json() as { attempt: { attempt_id: string } };
   const settled = await handleExternalEffectSettlement(adminPost("/admin/effects/settle", {
     effectId,
     settlement: { attemptId: attempt.attempt_id, outcome: "unknown", detailCode: "provider_timeout" },
-  }), env);
+  }), syntheticWorker(env));
   assert.equal(settled.status, 200, await settled.clone().text());
 }
 
@@ -1809,7 +1976,7 @@ function reconcileThroughRoute(env: AppEnv, effectId: string, outcome: "executed
       evidence: { provider: `checked: ${outcome}` },
       // Ignored: the route reconciles on the server's clock.
       now: "2099-01-01T00:00:00.000Z",
-    }), env));
+    }), syntheticWorker(env)));
 }
 
 test("a person records findings about a settled send and corrects only the newest; the send never changes", async () => {
@@ -1984,8 +2151,16 @@ test("D1 holds the findings chain: settled sends only, one first finding, one su
       );
     // An unknown send is not settled: a person answers it through the first confirmation (0156).
     assert.throws(() => direct("delivery-finding:direct-unsettled-a", null), /proposal_delivery_finding_effect_invalid/);
+    // A reconcile is no person's record, so it cannot settle it (0164); the person's "delivered" does,
+    // and the send's last attempt stays unknown.
     const executed = await reconcileThroughRoute(env, effectId, "executed");
-    assert.equal(executed.status, 200, await executed.clone().text());
+    assert.equal(executed.status, 409, await executed.clone().text());
+    assert.deepEqual(await executed.json(), { error: "effect_reconciliation_evidence_missing" });
+    const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+    await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId, outcome: "delivered", note: "The customer has the email.",
+      actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: "findings-d1-confirm",
+    });
     assert.equal(effectRow(db, effectId).state, "succeeded");
 
     const first = await recordProposalDeliveryFinding(env, {
@@ -2101,14 +2276,18 @@ test("a finding is closed once the proposal is sent again", async () => {
   try {
     const prepared = await prepare("findings-resent-prepare-1");
     const { permit } = await prepared.json() as { permit: Permit };
-    await runSend(env, permit, firstSend, "conflict");
+    // A provider that never answered: a person may call it not delivered once its window has passed.
+    // A conflicting readback could not be (0164).
+    await runSend(env, permit, firstSend, "unknown");
     const ops = await personSession(db, env, OPS_ID, "ops");
-    const confirmed = await personPost(env, ops, CONFIRM_PATH, "findings-resent-confirm", {
-      external_effect_id: firstSend,
-      outcome: "not_delivered",
-      note: "Nothing in their inbox or spam folder.",
+    const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
+    const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+    const confirmed = await recordProposalDeliveryConfirmation(env, {
+      tenantId: TENANT, effectId: firstSend, outcome: "not_delivered", note: "Nothing in their inbox or spam folder.",
+      actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: "findings-resent-confirm",
+      now: new Date(Date.parse(lastAttemptEnd(db, firstSend)) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
     });
-    assert.equal(confirmed.status, 201, await confirmed.clone().text());
+    assert.equal(confirmed.effectState, "reconciled");
     const found = await personPost(env, ops, FINDINGS_PATH, "findings-resent-1", {
       external_effect_id: firstSend,
       supersedes_finding_id: null,
@@ -2296,65 +2475,68 @@ test("the late-answer wait fails closed when no window row is left", async () =>
     const { permit } = await prepared.json() as { permit: Permit };
     await runSend(env, permit, effectId, "unknown");
     const ended = lastAttemptEnd(db, effectId);
-    const notExecuted = (afterMs: number) => db.raw.prepare(
-      `UPDATE external_effects SET state = 'reconciled', result_code = 'reconciled_not_executed',
-         updated_at = ? WHERE effect_id = ? AND state = 'unknown'`,
-    ).run(new Date(Date.parse(ended) + afterMs).toISOString(), effectId);
-    assert.throws(() => notExecuted(60_000), /proposal_delivery_answer_may_be_late/);
+    // Only a person's record moves an unknown send to "not executed" (0164), so the wait is read
+    // through that record: a "not delivered" row written straight to D1.
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const notDelivered = (id: string, afterMs: number) => db.raw.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, 'not_delivered', 'Nothing in their inbox or spam.', ?, 'ops', ?, ?, ?)`,
+    ).run(
+      `delivery-confirmation:${id}`, TENANT, effectId, PACK, REVISION, OPS_ID, id.slice(-1).repeat(64),
+      "e".repeat(64), new Date(Date.parse(ended) + afterMs).toISOString(),
+    );
+    assert.throws(() => notDelivered("no-window-early-1", 60_000), /proposal_delivery_answer_may_be_late/);
     assert.equal(effectRow(db, effectId).state, "unknown");
-    notExecuted(EFFECT_ATTEMPT_LEASE_MS + 1_000);
+    notDelivered("no-window-after-2", EFFECT_ATTEMPT_LEASE_MS + 1_000);
     assert.equal(effectRow(db, effectId).state, "reconciled");
   } finally {
     db.close();
   }
 });
 
-test("a manual exception that did not come straight from unknown is not held, even after an earlier unknown", async () => {
-  const { claimExternalEffect, EFFECT_ATTEMPT_LEASE_MS, reconcileExternalEffect, retryExternalEffect, settleExternalEffect } =
-    await import("../src/effect-runtime.ts");
+test("a manual exception that came straight from reconciling is not held by the wait, and is never not delivered", async () => {
+  const { EFFECT_ATTEMPT_LEASE_MS } = await import("../src/effect-runtime.ts");
   const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
   const { db, env, prepare } = await publicationReady("late-answer-not-from-unknown");
   const effectId = "effect:late-answer-not-from-unknown:send";
   try {
     const prepared = await prepare("late-answer-not-from-unknown-prepare");
     const { permit } = await prepared.json() as { permit: Permit };
-    // The first attempt goes unknown, and the provider later shows nothing went out.
-    await runExternalEffect(env, { ...effectRequest(permit, effectId), retryLimit: 1 }, {
-      async dispatch() {
-        return { outcome: "unknown", detailCode: "provider_timeout" } as never;
-      },
-      async replay() {
-        return { published: false };
-      },
-    }).catch(() => undefined);
-    assert.equal(effectRow(db, effectId).state, "unknown");
-    await reconcileExternalEffect(env, effectId, {
-      outcome: "not_executed",
-      evidence: { provider: "no message for this send" },
-      now: new Date(Date.parse(lastAttemptEnd(db, effectId)) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString(),
-    });
-    // The second attempt is answered, but the readback does not match: a manual exception that
-    // came from reconciling, not from unknown.
-    await retryExternalEffect(env, effectId);
-    const { attempt } = await claimExternalEffect(env, effectId, new Date());
-    await settleExternalEffect(env, effectId, {
-      attemptId: attempt.attempt_id,
-      outcome: "accepted",
-      providerExternalId: `provider:${effectId}:retry`,
-      readback: {
-        status: "match",
-        providerExternalId: `provider:${effectId}:retry`,
-        observed: { ...READBACK, state: "withdrawn" },
-      },
-    });
+    // A proposal send runs once (0164), so it cannot go unknown first and conflict on a second
+    // attempt; here it is answered and its readback does not match: the latest move into the
+    // exception came from reconciling, not from unknown.
+    await assert.rejects(
+      runExternalEffect(env, { ...effectRequest(permit, "effect:late-answer-not-from-unknown:retry"), retryLimit: 1 }, {
+        async dispatch() {
+          return { outcome: "unknown", detailCode: "provider_timeout" } as never;
+        },
+        async replay() {
+          return { published: false };
+        },
+      }),
+      { code: "effect_proposal_failed" },
+    );
+    await runSend(env, permit, effectId, "conflict");
     assert.equal(effectRow(db, effectId).state, "manual_exception");
     db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
-    // Not held: the person's answer is recorded at once, as 0156 settles a readback conflict.
-    const recorded = await recordProposalDeliveryConfirmation(env, {
-      tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
-      actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: "late-answer-not-from-unknown-1",
-    });
-    assert.equal(recorded.effectState, "reconciled");
+    const answer = (outcome: "delivered" | "not_delivered", key: string, now?: string) =>
+      recordProposalDeliveryConfirmation(env, {
+        tenantId: TENANT, effectId, outcome, note: "Nothing in their inbox or spam.",
+        actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: key, ...(now ? { now } : {}),
+      });
+    // Not held by the wait: the refusal at once and after the window is the readback conflict's, not
+    // a late answer's. "Not executed" needs provider evidence.
+    const afterWindow = new Date(Date.parse(lastAttemptEnd(db, effectId)) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
+    for (const [key, now] of [["late-answer-not-from-unknown-1", undefined], ["late-answer-not-from-unknown-2", afterWindow]] as const) {
+      await assert.rejects(answer("not_delivered", key, now), {
+        code: "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+      });
+    }
+    assert.equal(effectRow(db, effectId).state, "manual_exception");
+    // "Delivered" is recorded at once.
+    assert.equal((await answer("delivered", "late-answer-not-from-unknown-3")).effectState, "succeeded");
   } finally {
     db.close();
   }
@@ -2398,11 +2580,13 @@ test("the settle and reconcile admin routes date what they record by the server'
   try {
     const prepared = await prepare("server-time-prepare-1");
     const { permit } = await prepared.json() as { permit: Permit };
-    const send = effectRequest(permit, effectId);
+    // The routes take a proposal send only as the QA stand-in on a synthetic Worker (0164).
+    const synthetic = syntheticWorker(env);
+    const send = { ...effectRequest(permit, effectId), provider: "qa-synthetic-publication" };
     const claimed = await handleExternalEffectClaim(adminPost("/admin/effects/claim", {
       effect: send,
       authority: send.authority,
-    }), env);
+    }), synthetic);
     assert.equal(claimed.status, 200, await claimed.clone().text());
     const { attempt } = await claimed.json() as { attempt: { attempt_id: string } };
 
@@ -2416,7 +2600,7 @@ test("the settle and reconcile admin routes date what they record by the server'
         detailCode: "provider_timeout",
         now: "2020-01-01T00:00:00.000Z",
       },
-    }), env);
+    }), synthetic);
     assert.equal(settled.status, 200, await settled.clone().text());
     const afterSettle = Date.now();
     const unknown = effectRow(db, effectId);
@@ -2427,21 +2611,32 @@ test("the settle and reconcile admin routes date what they record by the server'
     );
     assert.equal(lastAttemptEnd(db, effectId), unknown.updated_at);
 
-    // Likewise a reconciliation dated far ahead is recorded now.
-    const beforeReconcile = Date.now();
-    const reconciled = await handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
+    // A reconcile is no person's record, so it cannot call the unknown send executed (0164).
+    const executedClaim = await handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
       effectId,
       outcome: "executed",
       evidence: { provider: "late answer: delivered" },
       now: "2099-01-01T00:00:00.000Z",
-    }), env);
+    }), synthetic);
+    assert.equal(executedClaim.status, 409, await executedClaim.clone().text());
+    assert.deepEqual(await executedClaim.json(), { error: "effect_reconciliation_evidence_missing" });
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    // Likewise a reconciliation dated far ahead is recorded now: an inconclusive check hands the
+    // send to a person, dated by the server's clock.
+    const beforeReconcile = Date.now();
+    const reconciled = await handleExternalEffectReconciliation(adminPost("/admin/effects/reconcile", {
+      effectId,
+      outcome: "inconclusive",
+      evidence: { provider: "no answer yet" },
+      now: "2099-01-01T00:00:00.000Z",
+    }), synthetic);
     assert.equal(reconciled.status, 200, await reconciled.clone().text());
     const afterReconcile = Date.now();
-    const executed = effectRow(db, effectId);
-    assert.equal(executed.state, "succeeded");
+    const inconclusive = effectRow(db, effectId);
+    assert.equal(inconclusive.state, "manual_exception");
     assert.ok(
-      Date.parse(executed.updated_at) >= beforeReconcile && Date.parse(executed.updated_at) <= afterReconcile,
-      `reconciled at ${executed.updated_at}, not at the caller's time`,
+      Date.parse(inconclusive.updated_at) >= beforeReconcile && Date.parse(inconclusive.updated_at) <= afterReconcile,
+      `reconciled at ${inconclusive.updated_at}, not at the caller's time`,
     );
   } finally {
     db.close();
@@ -2463,10 +2658,27 @@ test("D1 refuses moving an unknown send to not executed before its provider's la
       `UPDATE external_effects SET state = 'reconciled', result_code = 'reconciled_not_executed',
          updated_at = ? WHERE effect_id = ? AND state = 'unknown'`,
     ).run(updatedAt, effectId);
-    // Any path, not only a person's record: inside the window the move itself is refused.
-    assert.throws(() => notExecuted(after(EFFECT_ATTEMPT_LEASE_MS - 1_000)), /proposal_delivery_answer_may_be_late/);
+    // Inside the window the move itself is refused, by the wait (0161) and, with no person's record,
+    // by the evidence rule (0164) too; which of the two answers first is not part of the contract.
+    assert.throws(
+      () => notExecuted(after(EFFECT_ATTEMPT_LEASE_MS - 1_000)),
+      /proposal_delivery_answer_may_be_late|proposal_delivery_settle_evidence_missing/,
+    );
+    // After the window the wait is over, but a move with no person's record is still refused (0164).
+    assert.throws(() => notExecuted(after(EFFECT_ATTEMPT_LEASE_MS + 1_000)), /proposal_delivery_settle_evidence_missing/);
     assert.equal(effectRow(db, effectId).state, "unknown");
-    notExecuted(after(EFFECT_ATTEMPT_LEASE_MS + 1_000));
+    // A person's record inside the window is refused by the wait alone, and after it the send is not
+    // executed.
+    db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    const notDelivered = (id: string, createdAt: string) => db.raw.prepare(
+      `INSERT INTO proposal_delivery_confirmations
+         (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, 'not_delivered', 'Nothing in their inbox or spam.', ?, 'ops', ?, ?, ?)`,
+    ).run(`delivery-confirmation:${id}`, TENANT, effectId, PACK, REVISION, OPS_ID, id.slice(-1).repeat(64), "e".repeat(64), createdAt);
+    assert.throws(() => notDelivered("late-reconcile-d1-early-1", after(EFFECT_ATTEMPT_LEASE_MS - 1_000)), /proposal_delivery_answer_may_be_late/);
+    assert.equal(effectRow(db, effectId).state, "unknown");
+    notDelivered("late-reconcile-d1-after-2", after(EFFECT_ATTEMPT_LEASE_MS + 1_000));
     assert.equal(effectRow(db, effectId).state, "reconciled");
   } finally {
     db.close();
@@ -2474,9 +2686,12 @@ test("D1 refuses moving an unknown send to not executed before its provider's la
 });
 
 test("the reconcile route cannot call an unknown send not executed inside its provider's window", async () => {
+  const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
+  // The routes take a proposal send only as the QA stand-in on a synthetic Worker (0164), so the two
+  // providers are stand-ins with windows of their own.
   for (const { provider, windowMs, early } of [
-    { provider: "synthetic-slow-provider", windowMs: 3_600_000, early: true },
-    { provider: "synthetic-instant-provider", windowMs: 0, early: false },
+    { provider: "qa-synthetic-slow-provider", windowMs: 3_600_000, early: true },
+    { provider: "qa-synthetic-instant-provider", windowMs: 0, early: false },
   ]) {
     const { db, env, prepare } = await publicationReady(`late-reconcile-route-${provider}`);
     const effectId = `effect:late-reconcile-route:${provider}`;
@@ -2485,19 +2700,34 @@ test("the reconcile route cannot call an unknown send not executed inside its pr
         "INSERT INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES (?, ?, ?)",
       ).run(provider, windowMs, "Synthetic provider for this test, with its own late-answer window.");
       await unknownSendThroughRoutes(env, prepare, `late-reconcile-route-${provider}-prepare`, effectId, provider);
+      // A reconcile is no person's record, so the route never calls a proposal send not executed
+      // (0164). Inside the provider's window the wait refuses it as well (0161); which of the two
+      // answers first is not part of the contract.
       const reconciled = await reconcileThroughRoute(env, effectId, "not_executed");
+      assert.equal(reconciled.status, 409, await reconciled.clone().text());
+      const { error } = await reconciled.json() as { error: string };
       if (early) {
-        assert.equal(reconciled.status, 409);
-        assert.deepEqual(await reconciled.json(), { error: "proposal_delivery_answer_may_be_late" });
-        assert.equal(effectRow(db, effectId).state, "unknown");
-        // The wait guards "not executed" only: a provider answer that it did go out settles at once.
-        const executed = await reconcileThroughRoute(env, effectId, "executed");
-        assert.equal(executed.status, 200, await executed.clone().text());
-        assert.equal(effectRow(db, effectId).state, "succeeded");
+        assert.ok(["proposal_delivery_answer_may_be_late", "effect_reconciliation_evidence_missing"].includes(error), error);
       } else {
-        assert.equal(reconciled.status, 200, await reconciled.clone().text());
-        assert.equal(effectRow(db, effectId).state, "reconciled");
+        assert.equal(error, "effect_reconciliation_evidence_missing");
       }
+      // Nor does a provider answer that it did go out settle it: that is a person's to record.
+      const executed = await reconcileThroughRoute(env, effectId, "executed");
+      assert.equal(executed.status, 409, await executed.clone().text());
+      assert.deepEqual(await executed.json(), { error: "effect_reconciliation_evidence_missing" });
+      assert.equal(effectRow(db, effectId).state, "unknown");
+      // A person's "not delivered" waits for the provider's own window, and then settles the send.
+      db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+      const notDelivered = (key: string, now?: string) => recordProposalDeliveryConfirmation(env, {
+        tenantId: TENANT, effectId, outcome: "not_delivered", note: "Nothing in their inbox or spam.",
+        actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: key, ...(now ? { now } : {}),
+      });
+      if (early) {
+        await assert.rejects(notDelivered(`${provider}-early`), { code: "proposal_delivery_answer_may_be_late" });
+        assert.equal(effectRow(db, effectId).state, "unknown");
+      }
+      const after = new Date(Date.parse(lastAttemptEnd(db, effectId)) + windowMs + 1_000).toISOString();
+      assert.equal((await notDelivered(`${provider}-after`, after)).effectState, "reconciled");
     } finally {
       db.close();
     }

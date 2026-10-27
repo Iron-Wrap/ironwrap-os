@@ -188,15 +188,15 @@ describe("CheckInPage", () => {
     });
     const heading = await screen.findByRole("heading", { name: "Add job proof" });
     expect(heading.nextElementSibling).toHaveTextContent(
-      "Jamie Homeowner · 123 Example Avenue · IW-1042",
+      "Saving to the job: Jamie Homeowner · 123 Example Avenue · IW-1042",
     );
   });
 
-  it("says Assigned job when the read names no customer, street or code", async () => {
+  it("says Saving to this job when the read names no customer, street or code", async () => {
     const model = jobModel();
     renderCheckIn({ ...model, job: { ...model.job, job_number: null, address: null } });
     const heading = await screen.findByRole("heading", { name: "Add job proof" });
-    expect(heading.nextElementSibling).toHaveTextContent("Assigned job");
+    expect(heading.nextElementSibling).toHaveTextContent(/^Saving to this job$/);
   });
 
   it("puts camera and voice capture ahead of form fields without claiming selected media is saved", async () => {

@@ -3764,6 +3764,16 @@ test("a window started with no copy confirmed served is on the work queue, and t
       }],
     });
 
+    // Ops records when the customer received the copy: the job leaves the work queue.
+    while (d1Now(h.db.raw) <= Date.parse(unconfirmed[2]!.shown_at)) {
+      // Wait out the millisecond of the last event.
+    }
+    const recorded = await recordReceivedCopy(
+      h, await personAuth(h, OWNER_ID), new Date(d1Now(h.db.raw)).toISOString(), "receipt-a5-unconfirmed-0001",
+    );
+    assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+    assert.equal((await signedCopyQueue(h)).count, 0);
+
     // The replay never reuses an unconfirmed event: it appends one with D1's time now, confirms it,
     // and serves the copy with it. The copy's start is the replay's, not the first attempt's.
     const afterFirst = new Date(d1Now(h.db.raw)).toISOString();
@@ -3785,7 +3795,7 @@ test("a window started with no copy confirmed served is on the work queue, and t
     );
     assert.ok(event.window_ends_at >= unconfirmed[2]!.window_ends_at);
     const opened = await readCancellationWindow(h.env, TENANT, JOB_ID);
-    assert.deepEqual([opened.starts_at, opened.signed_copy_shown?.served_at], [event.shown_at, served.served_at]);
+    assert.deepEqual([opened.signed_copy_shown?.id, opened.signed_copy_shown?.served_at], [event.event_id, served.served_at]);
     assert.equal((await signedCopyQueue(h)).count, 0);
     // Replayed again: the same copy, and nothing more is written.
     const again = await worker.fetch(
@@ -4461,7 +4471,16 @@ test("D1 holds a served confirmation to its event and its clock, once per contra
        ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-59 seconds'),
                  strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-59 seconds', '+250 hours'), ?)`,
     ).run(eventId, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at, ZONE);
-    const [event] = shownEvents(h);
+    // A second event of the same contract, also left unconfirmed.
+    const secondId = `scs_${"2".repeat(40)}`;
+    h.db.raw.prepare(
+      `INSERT INTO contract_signed_copy_events (
+         event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
+         window_ends_at, time_zone
+       ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+250 hours'), ?)`,
+    ).run(secondId, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at, ZONE);
+    const event = shownEvents(h).find((row) => row.event_id === eventId);
     const confirm = (overrides: Record<string, unknown> = {}, servedAt = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')") => {
       const row: Record<string, unknown> = {
         event_id: eventId,
@@ -4493,8 +4512,9 @@ test("D1 holds a served confirmation to its event and its clock, once per contra
         .get(`${eventId}:served`) as { n: number }).n,
       1,
     );
-    // Once per contract; never updated or deleted.
+    // Once per contract, whichever event; never updated or deleted.
     refusedWith(() => confirm(), "contract_signed_copy_served_append_only");
+    refusedWith(() => confirm({ event_id: secondId }), "contract_signed_copy_served_append_only");
     refusedWith(
       () => h.db.raw.prepare("UPDATE contract_signed_copy_served SET served_at = served_at WHERE event_id = ?").run(eventId),
       "contract_signed_copy_served_append_only",
@@ -4514,7 +4534,7 @@ test("D1 holds a served confirmation to its event and its clock, once per contra
       ).run(`scs_${"3".repeat(40)}`, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at, ZONE),
       "contract_signed_copy_event_already_served",
     );
-    assert.equal(shownEvents(h).length, 1);
+    assert.equal(shownEvents(h).length, 2);
     // The exact replay serves that copy, with its event's times, and writes nothing.
     const replay = await worker.fetch(
       confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-confirm-0001"),
@@ -4526,7 +4546,7 @@ test("D1 holds a served confirmation to its event and its clock, once per contra
       [body.signed_copy.shown_at, body.signed_copy.served_at, body.signed_copy.window_ends_at],
       [event!.shown_at, served.served_at, event!.window_ends_at],
     );
-    assert.equal(shownEvents(h).length, 1);
+    assert.equal(shownEvents(h).length, 2);
     assert.equal(servedCopies(h).length, 1);
   } finally {
     h.restore();

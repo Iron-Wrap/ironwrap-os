@@ -373,7 +373,8 @@ describe("NowPage", () => {
       within(verdicts).getByRole("link", { name: "Check the publication result" }),
     ).toHaveAttribute("href", "/estimator/jobs/JOB-0001");
     // A version number never stands in a person's line (ruling); the receipt keeps it.
-    expect(verdicts).not.toHaveTextContent(/v9\b/);
+    expect(verdicts).not.toHaveTextContent(/\b[vV]9\b|version 9/i);
+    expect(within(verdicts).getByText(/^Updated /)).toBeVisible();
     expect(verdicts).not.toHaveTextContent("Approved");
   });
 

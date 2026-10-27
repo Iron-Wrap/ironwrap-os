@@ -390,6 +390,8 @@ describe("EstimatorWorkbenchPage", () => {
 
     expect(screen.getByText("Review the roof and quote")).toBeVisible();
     expect(screen.getByText("Quote total")).toBeVisible();
+    // A quote is told apart by when it was made, never by a version number (ruling).
+    expect(screen.getAllByText("Prepared")[0]).toBeVisible();
     expect(nextStep.compareDocumentPosition(commercial) & 4).toBeTruthy();
     expect(commercial.compareDocumentPosition(measurement) & 4).toBeTruthy();
   });

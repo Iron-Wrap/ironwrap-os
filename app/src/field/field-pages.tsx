@@ -547,8 +547,10 @@ function JobPacketHeader({
   dateOptions: FieldDateOptions;
 }) {
   const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  // The job's facts follow the header's own width: the crew shell is a phone-wide column even on
+  // a desktop, where window breakpoints squeezed three facts into it.
   return (
-    <header className="border-b border-border pb-5 sm:pb-6">
+    <header className="@container border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">
@@ -562,7 +564,7 @@ function JobPacketHeader({
           {offline ? "Saved copy" : "Office update"}
         </p>
       </div>
-      <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+      <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
         <JobFact label="Service" value={model.job.service_type ?? "Service details are missing"} />
         <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
         <JobFact
@@ -996,7 +998,7 @@ function WorkPackagePanel({
       aria-labelledby="work-package-heading"
     >
       {issueForm}
-      <header className="border-b border-border px-4 py-4 sm:px-5">
+      <header className="@container border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-muted">Work plan</p>
@@ -1009,7 +1011,7 @@ function WorkPackagePanel({
             {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
           </p>
         </div>
-        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+        <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
           <JobFact
             label="Issued"
             value={formatFieldTimestamp(workPackage.issued_at, dateOptions)}
@@ -1709,7 +1711,7 @@ function SafetyAndAccess({
       ].filter((entry): entry is [string, string] => Boolean(entry[1]))
     : [];
   return (
-    <section aria-labelledby="safety-access-heading" className="space-y-4">
+    <section aria-labelledby="safety-access-heading" className="@container space-y-4">
       <header className="border-b border-border pb-4">
         <p className="text-sm font-semibold text-muted">Check before work</p>
         <h2
@@ -1719,7 +1721,7 @@ function SafetyAndAccess({
           Safety and site
         </h2>
       </header>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 @3xl:grid-cols-2">
         <article className="border border-border bg-surface-raised p-4 sm:p-5">
           <div className="flex items-start gap-3">
             <HardHat className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />

@@ -482,6 +482,38 @@ test.describe("Field Companion PWA acceptance", () => {
     await expect(page.getByRole("heading", { name: "Today's work" })).toHaveCount(0);
     expect(bootstrapRequests).toEqual([{ deviceProof: undefined }]);
   });
+
+  test("keeps the job page's facts and safety cards whole in the crew shell on a desktop", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    // The crew shell is a phone-wide column on a desktop too; the job header, the work plan and
+    // the safety cards follow their own width, never the window's.
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/jobs/JOB-ACCEPTANCE");
+      await expect(page.getByRole("heading", { name: "Safety and site" })).toBeVisible();
+      const cells = await page
+        .locator(
+          "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",
+        )
+        .all();
+      expect(cells.length).toBeGreaterThan(6);
+      for (const cell of cells)
+        expect(
+          await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          `${(await cell.textContent())?.slice(0, 40)} spills at ${viewport.width}px`,
+        ).toBe(true);
+      const safety = page.locator("section[aria-labelledby='safety-access-heading'] > div").first();
+      const columns = await safety.evaluate(
+        (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+      );
+      expect(columns, `safety cards side by side at ${viewport.width}px`).toBe(1);
+    }
+  });
 });
 
 /**

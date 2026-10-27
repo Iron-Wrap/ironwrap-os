@@ -82,7 +82,10 @@ export function JobStopBanner({
 }) {
   const onJob = stops.filter((stop) => stop.scope === "job");
   if (onJob.length === 0) return null;
-  const named = jobLabel(job);
+  // No-break spaces keep each dot with the part before it and "Ref" with its code.
+  const named = jobLabel(job)
+    ?.replaceAll(" · ", "\u00a0· ")
+    .replace(/Ref (\S+)$/, "Ref\u00a0$1");
   return (
     <Notice
       tone="danger"

@@ -384,7 +384,8 @@ export function WorkPackageIssueForm({
         ) : null}
         {savedVersion ? (
           <p className="font-semibold text-ok" role="status">
-            The Work Package was verified by the server.
+            The {savedVersion > 1 ? "corrected " : ""}Work Package was verified by the server.
+            {savedVersion > 1 ? " It replaces the earlier one." : ""}
           </p>
         ) : null}
         {!canSend ? (

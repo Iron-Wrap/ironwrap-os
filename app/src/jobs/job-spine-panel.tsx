@@ -199,6 +199,10 @@ export function JobSpinePanel({ jobId }: { jobId: string }) {
                       </Status>
                     </div>
                     <p className="text-sm leading-6">{approval.request_text}</p>
+                    {/* Two requests are told apart by when they were asked, never by a version. */}
+                    <p className="text-sm text-muted">
+                      Requested {formatOwnerDate(approval.created_at, locale)}
+                    </p>
                     <ApprovalReceipt approval={approval} locale={locale} />
                     <a
                       className="inline-flex min-h-11 items-center justify-self-start text-sm font-semibold underline underline-offset-4"

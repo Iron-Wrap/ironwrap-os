@@ -785,7 +785,8 @@ describe("EstimatorWorkbenchPage", () => {
     openCommercialGroup("Proposal");
     openCommercialGroup("Scope and risks");
     expect(screen.getByText("Quote changes")).toBeVisible();
-    expect(screen.getByText(/Linked V3 → V4/i)).toBeVisible();
+    expect(screen.getByText(/Compared with the earlier quote/)).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/\bV[34]\b/);
     expect(screen.getByText("Job changes")).toBeVisible();
     expect(screen.getByText("Ridge ventilation addition")).toBeVisible();
     expect(screen.getByText(/still needs the customer's written choice/i)).toBeVisible();

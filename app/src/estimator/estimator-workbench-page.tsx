@@ -344,6 +344,11 @@ function CommercialSnapshot({
           prominent
         />
         <CommercialFact label="Payment" value={quote.payment_status ?? "Not recorded"} />
+        {/* Two quotes are told apart by when they were made, never by a version number. */}
+        <CommercialFact
+          label="Prepared"
+          value={formatDate(quote.prepared_at, locale) ?? "Not recorded"}
+        />
         <CommercialFact
           label="Proposal"
           value={
@@ -419,10 +424,7 @@ function InsuranceEvidenceRail({
               <li key={supplement.presentation_key} className="py-5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-bold text-foreground">
-                      Insurance supplement
-                      {supplement.version === null ? "" : " · Version " + supplement.version}
-                    </p>
+                    <p className="text-sm font-bold text-foreground">Insurance supplement</p>
                     <p className="mt-1 text-xs leading-5 text-muted">
                       This only shows saved proof. IronWrap does not decide what the insurer means.
                     </p>
@@ -1551,7 +1553,6 @@ function QuoteLedger({
   const currency = quote.currency ?? tenantCurrency;
   return (
     <div className="mt-5">
-      <div className="flex flex-wrap items-center gap-2"></div>
       <p className="mt-3 text-3xl font-bold tracking-[-0.035em] tabular-nums">
         {formatMoney(quote.quote_total, locale, currency) ?? "Total not recorded"}
       </p>
@@ -1782,9 +1783,7 @@ function QuoteRevisionLedger({
             Quote changes
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
-            Linked {prior.version === null ? "older quote" : `V${prior.version}`} →{" "}
-            {quote.version === null ? "this quote" : `V${quote.version}`}. This page does not make
-            new amounts.
+            Compared with the earlier quote. This page does not make new amounts.
           </p>
         </div>
         <StatusChip label="Quotes linked" tone="bg-ok-soft text-ok" />

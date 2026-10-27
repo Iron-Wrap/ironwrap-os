@@ -266,6 +266,21 @@ describe("choosing what an automation sends", () => {
     expect(automationTemplateOptions(legacy, EMAIL_ACTION)).toHaveLength(1);
   });
 
+  it("says in words when a rule keeps an earlier version, never the number", () => {
+    const current = catalog().templates.find(
+      (entry) => entry.template_key === MATERIALS_TEMPLATE_ID,
+    )!;
+    const display = (template_version: number) =>
+      automationTemplateDisplay(catalog(), {
+        template_key: MATERIALS_TEMPLATE_ID,
+        template_version,
+      });
+    expect(display(current.version)).toBe(current.label);
+    expect(display(current.version - 1)).toBe(`${current.label} · an earlier version`);
+    // A rule ahead of the catalog it reads is not "earlier".
+    expect(display(current.version + 1)).toBe(current.label);
+  });
+
   it("says so plainly when a rule points at a document that is gone", () => {
     expect(
       automationTemplateDisplay(catalog({ templates: [] }), {

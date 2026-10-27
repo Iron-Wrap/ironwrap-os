@@ -10,6 +10,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
 import { scopes } from "../lib/theme";
 import { Notice } from "../components/ui/notice";
@@ -742,8 +743,18 @@ const InventoryReadBack = memo(function InventoryReadBack({
           value={overview.authority_ref ?? "None read back"}
           detail={inventoryStatusLabel(overview.authority.verification_state)}
         />
-        <IdentityTile label="Command policy" value="Inventory command rules" detail="In force" />
+        <IdentityTile
+          label="Command policy"
+          value="Inventory command rules"
+          detail="Current rules"
+        />
       </section>
+      {/* The rules' version stays out of the tile's line; System details keeps it. */}
+      <SystemDetails className="text-sm text-muted">
+        <p>
+          Command policy {overview.policy_ref}, version {overview.policy_version}
+        </p>
+      </SystemDetails>
       {overview.authority.verification_state !== "verified" ? (
         <Notice tone="danger" title="Inventory commands are fail-closed">
           The current inventory authority is{" "}

@@ -184,8 +184,8 @@ export interface MoveBlocker {
  * than one generic "something went wrong".
  *
  * The codes are transcribed from `workers-bus/src/pipeline-board-api.ts`; the details the
- * server attaches to them (`required_role`, `card_version`) are read back out of the error
- * body so the message names the actual reason, not a category of reason.
+ * server attaches to them (`required_role`) are read back out of the error body so the message
+ * names the actual reason, not a category of reason. A card's version never reaches the words.
  */
 export function describeMoveBlocker(
   error: unknown,

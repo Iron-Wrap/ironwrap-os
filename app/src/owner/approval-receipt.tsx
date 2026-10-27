@@ -111,6 +111,22 @@ export function ApprovalReceipt({
           </div>
         ) : null}
       </dl>
+      <p className="text-sm leading-6 text-muted">
+        {approval.kind === "lead_triage"
+          ? "This approval covers the lead note. It does not release material, shop work, or a crew."
+          : approval.kind === "quote_revision"
+            ? "This approval creates an empty correction draft. Customer terms, acceptance, material release, and crew dispatch still require their own recorded steps."
+            : "Publication makes this proposal visible through an already-issued customer link. Issuing a link and recording customer acceptance remain separate steps."}
+      </p>
+      {/* Said in words, outside System details: the receipt cannot show the approved edit. */}
+      <p className="text-sm leading-6 text-muted">
+        This receipt does not record which edit of the request was approved.
+      </p>
+      {approval.reconciliation ? (
+        <p className="text-sm leading-6">
+          Result-check evidence: {approval.reconciliation.evidence}
+        </p>
+      ) : null}
       {/* Version numbers stay out of a person's lines; the audit keeps them here. */}
       <SystemDetails className="text-sm text-muted">
         <dl className="grid gap-2">
@@ -123,25 +139,19 @@ export function ApprovalReceipt({
             <dd>Not provided by the saved receipt</dd>
           </div>
           {approval.kind === "quote_revision" ? (
-            <div>
-              <dt className="font-semibold">Observed quote version</dt>
-              <dd>{approval.source.quote_version}</dd>
-            </div>
+            <>
+              <div>
+                <dt className="font-semibold">Observed quote version</dt>
+                <dd>{approval.source.quote_version}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold">New draft version</dt>
+                <dd>{approval.target.quote_version}</dd>
+              </div>
+            </>
           ) : null}
         </dl>
       </SystemDetails>
-      <p className="text-sm leading-6 text-muted">
-        {approval.kind === "lead_triage"
-          ? "This approval covers the lead note. It does not release material, shop work, or a crew."
-          : approval.kind === "quote_revision"
-            ? "This approval creates an empty correction draft. Customer terms, acceptance, material release, and crew dispatch still require their own recorded steps."
-            : "Publication makes this proposal visible through an already-issued customer link. Issuing a link and recording customer acceptance remain separate steps."}
-      </p>
-      {approval.reconciliation ? (
-        <p className="text-sm leading-6">
-          Result-check evidence: {approval.reconciliation.evidence}
-        </p>
-      ) : null}
     </section>
   );
 }

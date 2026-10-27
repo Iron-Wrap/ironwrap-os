@@ -14,6 +14,7 @@ import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
+import { formatOwnerDate } from "../owner/owner-now-utils";
 import { loadNow } from "./now-api";
 import type { DecisionItem, DecisionKind, NowAction, NowCard, NowResponse } from "./now-contracts";
 import { decisionLabels, decisionStatus, decisionsView } from "./decision-presentation";
@@ -949,6 +950,9 @@ function NowEvidenceSummary({ model, locale }: { model: NowResponse; locale: str
                   {item.title}
                 </a>
                 <Status kind={decisionStatus(item).kind}>{decisionStatus(item).label}</Status>
+                <p className="text-xs text-muted">
+                  Updated {formatOwnerDate(item.updated_at, { locale })}
+                </p>
               </li>
             ))}
           </ul>

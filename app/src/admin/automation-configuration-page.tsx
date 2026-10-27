@@ -83,9 +83,9 @@ export function automationTemplateDisplay(
   const entry = catalog.templates.find((candidate) => candidate.template_key === rule.template_key);
   // A version number never stands in a person's line: say in words when the rule keeps an older one.
   if (!entry) return "A document that is no longer offered";
-  return entry.version === rule.template_version
-    ? entry.label
-    : `${entry.label} · an earlier version`;
+  return rule.template_version < entry.version
+    ? `${entry.label} · an earlier version`
+    : entry.label;
 }
 
 /**
@@ -608,7 +608,7 @@ function AutomationRuleCard({
             </CardTitle>
             <CardDescription className="mt-1 break-words">
               {actionLabel(catalog, rule.action)} · {automationTemplateDisplay(catalog, rule)} ·{" "}
-              {recipientDisplay(catalog, rule.recipient_ref)} · revision {rule.version}
+              {recipientDisplay(catalog, rule.recipient_ref)}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -790,6 +790,15 @@ function AutomationRuleForm({
         }))}
         onChange={setTemplate}
       />
+      {selectedTemplate &&
+      selectedTemplate.template_key === rule.template_key &&
+      rule.template_version < selectedTemplate.version ? (
+        <div className="sm:col-span-2">
+          <Notice tone="info" title="This automation uses an earlier version">
+            Saving switches it to the current version of {selectedTemplate.label}.
+          </Notice>
+        </div>
+      ) : null}
       <RecipientChoice
         id={`${rule.rule_id}-recipient`}
         value={recipient}

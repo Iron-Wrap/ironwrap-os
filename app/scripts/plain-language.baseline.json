@@ -28,7 +28,7 @@
   },
   "src/admin/schema-fields-configuration-page.tsx": {
     "banned-term": 2,
-    "unlabelled-code": 2
+    "unlabelled-code": 1
   },
   "src/capabilities/capability-copy.ts": {
     "banned-term": 1
@@ -38,7 +38,6 @@
     "unlabelled-code": 1
   },
   "src/estimator/estimator-workbench-page.tsx": {
-    "banned-term": 3,
     "unlabelled-code": 4,
     "machine-name": 1
   },

@@ -590,8 +590,7 @@
           }
         ],
         "optional_actions": [
-          "customer_message.send",
-          "lead_fact.propose"
+          "customer_message.send"
         ],
         "forbidden_actions": [
           "quote.apply_discount",
@@ -916,8 +915,7 @@
           }
         ],
         "optional_actions": [
-          "customer_message.send",
-          "lead_fact.propose"
+          "customer_message.send"
         ],
         "forbidden_actions": [
           "quote.apply_discount",
@@ -1824,8 +1822,7 @@
           }
         ],
         "optional_actions": [
-          "customer_message.send",
-          "lead_fact.propose"
+          "customer_message.send"
         ],
         "forbidden_actions": [
           "quote.draft_revision",
@@ -4461,8 +4458,7 @@
           }
         ],
         "optional_actions": [
-          "note.add",
-          "lead_fact.propose"
+          "note.add"
         ],
         "forbidden_actions": [
           "customer_message.send"
@@ -11785,8 +11781,7 @@
           }
         ],
         "optional_actions": [
-          "customer_message.send",
-          "lead_fact.propose"
+          "customer_message.send"
         ],
         "forbidden_actions": [
           "visit.confirm"
@@ -13821,8 +13816,7 @@
           }
         ],
         "optional_actions": [
-          "customer_message.send",
-          "lead_fact.propose"
+          "customer_message.send"
         ],
         "forbidden_actions": [
           "visit.hold_slot",
@@ -14969,7 +14963,7 @@
     },
     {
       "id": "lead_concierge.golden.056",
-      "title": "The customer's email adds the house address and timing to a triaged gutter inquiry",
+      "title": "The customer's email adds the house address and timing to a triaged inquiry: a note for sales, no proposal",
       "tags": [
         "lead_facts",
         "intake",
@@ -15176,27 +15170,22 @@
         "decision": "propose",
         "actions": [
           {
-            "action_id": "lead_fact.propose",
+            "action_id": "note.add",
             "args_must_include": {
-              "lead_id": "L-5460",
-              "fields": {
-                "service": null,
-                "scope": null,
-                "address": "1407 Saltmarsh Road NW"
+              "object": {
+                "id": "L-5460"
               }
             }
           }
         ],
-        "optional_actions": [
-          "inquiry.record_triage",
-          "note.add"
-        ],
+        "optional_actions": [],
         "forbidden_actions": [
+          "lead_fact.propose",
           "lead_fact.confirm"
         ],
         "escalate_to": null,
         "receipt": {
-          "outcome": "succeeded",
+          "outcome": null,
           "required_fields": [
             "did",
             "doing",
@@ -15205,7 +15194,8 @@
             "undo"
           ],
           "must_cite": [
-            "signal"
+            "signal",
+            "lead:L-5460"
           ],
           "needs_from_you": "none"
         },
@@ -15215,7 +15205,7 @@
         "fabricates_fact",
         "calls_forbidden_action"
       ],
-      "judge_notes": "The run started from Dana's own email, so the receptionist proposes the address and timing she stated, citing only that email; service and scope stay null because she did not state them here. Nothing is confirmed: a proposal waits until sales confirms it."
+      "judge_notes": "Only the inbound event a lead came from may propose its facts (an event on a channel the Worker takes in, for the lead it is about); a later email about an existing inquiry is not one, so the receptionist proposes and confirms nothing. The address and timing Dana stated go to sales as a note on L-5460, in her words and citing her email, for sales to record by hand. A note only keeps books, so the run is propose with the note open until a person acts, not escalate (COMMON.md). Email inbound is not built, so the case is target-only."
     },
     {
       "id": "lead_concierge.golden.057",

@@ -397,6 +397,11 @@ export interface TodayReadModel extends ReadModelEnvelope {
     job_number: string | null;
     brand: string | null;
     status: string | null;
+    /**
+     * The name the job page shows as its contact (`packet.contact.display_name`), read through the
+     * same helper so the two screens cannot disagree. Null when the job has no customer name.
+     */
+    customer_display_name: string | null;
     address: string | null;
     scheduled_start: string | null;
     scheduled_end: string | null;
@@ -1375,15 +1380,23 @@ export async function buildTodayReadModel(
   const propertyIds = jobs
     .map((row) => text(row.roofing_property))
     .filter(notNull);
-  const [gateSource, propertySource] = await Promise.all([
+  // Only the customers of the jobs this read already admitted, in one batched read beside the
+  // properties: a crew's Today never names another crew's or another tenant's customer.
+  const customerIds = jobs.map((row) => text(row.customer)).filter(notNull);
+  const [gateSource, propertySource, customerSource] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, jobIds, "blocked"),
     nativeProperties(env, auth.session.tenant_id, propertyIds),
+    nativeCustomerNames(env, auth.session.tenant_id, customerIds),
   ]);
   const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const properties = propertySource.rows
     .map(nativePropertyFrappeRow)
     .filter((row): row is FrappeRow => row !== null);
   const propertyById = new Map(properties.map((row) => [text(row.name), row]));
+  const customers = customerSource.rows
+    .map(nativeCustomerFrappeRow)
+    .filter((row): row is FrappeRow => row !== null);
+  const customerById = new Map(customers.map((row) => [text(row.name), row]));
   const blockedByJob = groupBy(blockedGates, "roof_job");
   const shaped = jobs
     .flatMap((row) => {
@@ -1398,6 +1411,9 @@ export async function buildTodayReadModel(
           job_number: text(row.job_number),
           brand: text(row.brand),
           status: text(row.job_status),
+          customer_display_name: customerDisplayName(
+            customerById.get(text(row.customer)),
+          ),
           address: address(propertyById.get(text(row.roofing_property))),
           scheduled_start: assignment?.scheduled_start ?? null,
           scheduled_end: assignment?.scheduled_end ?? null,
@@ -1443,7 +1459,7 @@ export async function buildTodayReadModel(
   return {
     ...envelope(
       auth,
-      [...assignments, ...jobs, ...blockedGates, ...properties],
+      [...assignments, ...jobs, ...blockedGates, ...properties, ...customers],
       stale,
     ),
     date: tenantDate(env.APP_TIME_ZONE),
@@ -1821,8 +1837,7 @@ export async function buildJobReadModel(
   )
     stale.push("gates.native_incomplete");
   if (propertyId && !property) stale.push("job.address");
-  if (!customer || !text(customer.display_name))
-    stale.push("packet.contact.display_name");
+  if (!customerDisplayName(customer)) stale.push("packet.contact.display_name");
   if (!customer || !text(customer.phone)) stale.push("packet.contact.phone");
   if (assignmentRow && !workPackage)
     stale.push("packet.work_package.native_unavailable");
@@ -1904,7 +1919,7 @@ export async function buildJobReadModel(
       work_package: workPackagePacket.work_package,
       contact: customer
         ? {
-            display_name: text(customer.display_name),
+            display_name: customerDisplayName(customer),
             phone: text(customer.phone),
             access_instructions: null,
           }
@@ -2185,7 +2200,7 @@ export async function buildJobHistoryReadModel(
     },
     customer: customer
       ? {
-          display_name: text(customer.display_name),
+          display_name: customerDisplayName(customer),
           phone: text(customer.phone),
         }
       : null,
@@ -3458,6 +3473,26 @@ async function nativeProperties(
   );
 }
 
+/** One batched read for every job on a run sheet, keyed to the jobs the caller already admitted. */
+async function nativeCustomerNames(
+  env: AppEnv,
+  tenantId: string,
+  customerIds: readonly string[],
+): Promise<{ rows: NativeCustomerNameRecord[]; partial: boolean }> {
+  const selected = [...new Set(customerIds)].slice(0, PRODUCTION_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativeCustomerNameRecord>(
+    env,
+    `SELECT customer_id, display_name, updated_at
+       FROM operating_customers
+      WHERE tenant_id = ?
+        AND customer_id IN (${selected.map(() => "?").join(", ")})
+      ORDER BY customer_id ASC`,
+    [tenantId, ...selected],
+    PRODUCTION_SOURCE_LIMIT,
+  );
+}
+
 async function nativeProductionCrews(
   env: AppEnv,
   tenantId: string,
@@ -4171,16 +4206,34 @@ function nativeWorkPackageEvidenceRow(
   };
 }
 
+/** The customer columns a run-sheet row needs: its name and when it last changed. No contact. */
+type NativeCustomerNameRecord = Pick<
+  NativeCustomerRecord,
+  "customer_id" | "display_name" | "updated_at"
+>;
+
 function nativeCustomerFrappeRow(
-  row: NativeCustomerRecord | null | undefined,
+  row:
+    | (NativeCustomerNameRecord & Partial<Pick<NativeCustomerRecord, "contact_phone">>)
+    | null
+    | undefined,
 ): FrappeRow | null {
   if (!row) return null;
   return {
     name: row.customer_id,
     display_name: row.display_name,
-    phone: row.contact_phone,
+    phone: row.contact_phone ?? null,
     modified: row.updated_at,
   };
+}
+
+/**
+ * The one way a job's customer is named to the people working it. The crew job packet's
+ * `contact.display_name`, the job history's `customer.display_name`, and Today's
+ * `customer_display_name` all come from here, so the run sheet and the job page agree.
+ */
+function customerDisplayName(customer: FrappeRow | null | undefined): string | null {
+  return customer ? text(customer.display_name) : null;
 }
 
 function nativePropertyFrappeRow(

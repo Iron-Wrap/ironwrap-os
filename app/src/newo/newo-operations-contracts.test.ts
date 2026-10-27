@@ -21,6 +21,34 @@ describe("Newo operations browser contract", () => {
     expect(newoOperationsResponseSchema.safeParse(widened).success).toBe(false);
   });
 
+  it("rejects caller identity or content on an open callback", () => {
+    const widened = newoOperationsFixture();
+    widened.exceptions.open_callbacks[0] = {
+      ...widened.exceptions.open_callbacks[0],
+      contact_phone: "+15875550101",
+      reason: "Caller asked for a person.",
+    } as never;
+
+    expect(newoOperationsResponseSchema.safeParse(widened).success).toBe(false);
+  });
+
+  it("accepts only the open-callback reasons the Worker lists there", () => {
+    const failedSession = newoOperationsFixture();
+    failedSession.exceptions.open_callbacks[0] = {
+      ...failedSession.exceptions.open_callbacks[0]!,
+      reason: "session_failed",
+    };
+    expect(newoOperationsResponseSchema.safeParse(failedSession).success).toBe(true);
+
+    // A failed handoff's callback is listed under failed_handoffs, never here.
+    const failedHandoff = newoOperationsFixture();
+    failedHandoff.exceptions.open_callbacks[0] = {
+      ...failedHandoff.exceptions.open_callbacks[0]!,
+      reason: "handoff_failed",
+    } as never;
+    expect(newoOperationsResponseSchema.safeParse(failedHandoff).success).toBe(false);
+  });
+
   it("rejects control evidence and reconciliation detail widening", () => {
     const widened = newoOperationsFixture();
     widened.exceptions.control_failures[0] = {

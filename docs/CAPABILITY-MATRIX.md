@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 138,
+      "count": 140,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -350,14 +350,18 @@ Current source tracing distinguishes implemented modules from reachable producti
     mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
     webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration
     in `config/newo` are callback only (D-03): a hand-off is recorded as `requested` on the D1
-    session, which keeps its highest urgency, and emails the owner the caller's details on a
-    best-effort basis; `failed` keeps the failure path (`workers-bus/test/newo.test.ts`,
+    session, which keeps its highest urgency, writes a D1 callback record (`newo_callback_records`,
+    0168) in the same batch, and emails the owner the caller's details on a best-effort basis;
+    `failed` keeps the failure path and gets a record too, as does a failed session with the
+    caller's phone or email (`session_failed`). An owner or ops person closes any of them with an
+    outcome and a note through the resolution route, and the operations read model keeps
+    `open_callbacks` and `failed_handoffs` in attention until then (`workers-bus/test/newo.test.ts`,
     `newo-reconciliation.test.ts`, `newo-handoff-resolution.test.ts`). No transfer setting
     remains, and `tools/validate-newo-config.mjs` refuses one (`tools/validate-newo-config.test.mjs`).
-    No D1 callback record that a person works and closes exists yet, so the validator and the
-    readiness contract refuse `NEWO_ENABLED=true` (a JSON boolean too) until a migration
-    `NNNN_newo_callback_records.sql` creates the `newo_callback_records` table. The Newo console
-    proof (`handoff_callback_only`) is pending, and no person can take over the record yet
+    The validator and the readiness contract pass `NEWO_ENABLED=true` only when the migrations build
+    the callback record, which they now do; `NEWO_ENABLED` stays `false`. No app screen lists the
+    open callbacks yet (the read model carries them), the Newo console proof
+    (`handoff_callback_only`) is pending, and no person is assigned a callback
     (`conversation.assign_person` is not registered).
   - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI
     receptionist's playbook reads it as a placeholder fact.
@@ -828,6 +832,14 @@ stale from before that merge):
   notification, independent verification, and stop release each require the exact current role, and
   the occurrence reporter, corrective-action owner, and evidence capturer are all refused
   verification of that closure.
+- Lifting a safety-occurrence stop enforces owner rule L06 the way a Work Package stop release
+  does. The person who raised the stop never lifts it, under any identity they carry, and there is
+  no exception for working alone. Only a person's own cookie session lifts a stop, never an agent
+  or service credential. Migration `0165` records who lifted the stop. In D1 it refuses a lift by
+  the raiser, a lift that names nobody or an unknown user, and a lift without that person's own
+  `released` event. The occurrence and its event now commit in one batch. The release by another
+  Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
+  Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

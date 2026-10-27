@@ -235,6 +235,100 @@ export async function failNewoReceipt(
 }
 
 /**
+ * Why a caller is owed a callback (migration 0168): the receptionist requested one, the handoff
+ * failed, or the session failed while the session knows how to reach the caller.
+ */
+export type NewoCallbackReason = "callback_requested" | "handoff_failed" | "session_failed";
+
+/**
+ * The callback a Newo caller is owed (migration 0168): one append-only row per tenant and session,
+ * written in the same D1 batch as the session by the accepted event that leaves a callback owed.
+ * D1 stamps `recorded_at`; the Worker never sends a time.
+ */
+export interface NewoCallbackRecordInput {
+  callback_id: string;
+  tenant_id: string;
+  session_id: string;
+  /** The event whose acceptance wrote the record. */
+  event_id: string;
+  reason: NewoCallbackReason;
+  urgency: "routine" | "urgent" | "emergency";
+  /** The receptionist's handoff summary, when the event carried one. */
+  handoff_summary: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+  address_line1: string | null;
+  city: string | null;
+  province: string | null;
+  postal_code: string | null;
+}
+
+export interface NewoCallbackRecord extends NewoCallbackRecordInput {
+  recorded_at: string;
+}
+
+const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, reason, urgency,
+       handoff_summary, contact_name, contact_phone, contact_email, address_line1, city, province,
+       postal_code`;
+
+/**
+ * Writes the session snapshot and, when a callback is owed, its record, as one D1 batch: a session
+ * that says a caller is owed a callback never lands without the record. The record is written once
+ * per session; a later event of the same session adds nothing (never a REPLACE).
+ */
+export async function recordNewoSession(
+  env: Env,
+  rec: NewoSessionRecord,
+  callback: NewoCallbackRecordInput | null,
+): Promise<void> {
+  if (!callback) {
+    await upsertNewoSession(env, rec);
+    return;
+  }
+  await env.DB.batch([
+    newoSessionUpsert(env, rec),
+    env.DB.prepare(
+      `INSERT INTO newo_callback_records (${CALLBACK_RECORD_COLUMNS})
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM newo_callback_records existing
+           WHERE existing.tenant_id = ? AND existing.session_id = ?
+        )`,
+    ).bind(
+      callback.callback_id,
+      callback.tenant_id,
+      callback.session_id,
+      callback.event_id,
+      callback.reason,
+      callback.urgency,
+      callback.handoff_summary,
+      callback.contact_name,
+      callback.contact_phone,
+      callback.contact_email,
+      callback.address_line1,
+      callback.city,
+      callback.province,
+      callback.postal_code,
+      callback.tenant_id,
+      callback.session_id,
+    ),
+  ]);
+}
+
+/** The session's callback record for this deployment's tenant, if one was written. */
+export async function getNewoCallbackRecord(
+  env: Env,
+  sessionId: string,
+): Promise<NewoCallbackRecord | null> {
+  return await env.DB.prepare(
+    `SELECT ${CALLBACK_RECORD_COLUMNS}, recorded_at
+       FROM newo_callback_records
+      WHERE tenant_id = ? AND session_id = ?`,
+  ).bind(newoTenantId(env), sessionId).first<NewoCallbackRecord>();
+}
+
+/**
  * Upserts one session snapshot. A session keeps its highest urgency, never the latest one, and
  * its strongest handoff status: failed outranks requested, and no other value clears a requested
  * callback (callback only, owner decisions MD-05 and D-03).
@@ -243,7 +337,11 @@ export async function upsertNewoSession(
   env: Env,
   rec: NewoSessionRecord,
 ): Promise<void> {
-  await env.DB.prepare(
+  await newoSessionUpsert(env, rec).run();
+}
+
+function newoSessionUpsert(env: Env, rec: NewoSessionRecord): D1PreparedStatement {
+  return env.DB.prepare(
     `INSERT INTO newo_sessions (
        session_id, project_id, agent_id, user_actor_id, conversation_id, channel, direction,
        status, outcome, contact_name, contact_phone, contact_email, address_line1, city, province,
@@ -353,7 +451,7 @@ export async function upsertNewoSession(
     rec.sync_updated_at,
     rec.created_at,
     rec.updated_at,
-  ).run();
+  );
 }
 
 export async function getNewoSession(
@@ -524,7 +622,28 @@ export const UNRESOLVED_FAILED_HANDOFF = `handoff_status = 'failed'
             WHERE resolution.tenant_id = ? AND resolution.session_id = newo_sessions.session_id
          )`;
 
-/** `failed_handoffs` counts only the failed handoffs no person has resolved. */
+/**
+ * A callback record stays open until a person of this deployment's tenant records how it ended
+ * (the same 0151 resolution). A callback whose session's handoff failed is counted once, as a
+ * failed handoff, so each caller owed a call appears in one list; a requested callback and a
+ * failed session's callback are open callbacks. Alias the callback record `callback` and bind
+ * `newoTenantId` to the placeholder.
+ */
+export const OPEN_CALLBACK = `callback.tenant_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM newo_handoff_resolutions resolution
+            WHERE resolution.tenant_id = callback.tenant_id
+              AND resolution.session_id = callback.session_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM newo_sessions failed
+            WHERE failed.session_id = callback.session_id AND failed.handoff_status = 'failed'
+         )`;
+
+/**
+ * `failed_handoffs` counts only the failed handoffs no person has resolved; `open_callbacks` the
+ * other callbacks no person has closed (requested ones and failed sessions').
+ */
 export async function newoOperationalCounts(env: Env): Promise<{
   sessions: number;
   pending_sync: number;
@@ -532,6 +651,7 @@ export async function newoOperationalCounts(env: Env): Promise<{
   failed_events: number;
   missing_reports: number;
   failed_handoffs: number;
+  open_callbacks: number;
   pending_bookings: number;
   control_failures: number;
   last_event_at: string | null;
@@ -546,11 +666,12 @@ export async function newoOperationalCounts(env: Env): Promise<{
        (SELECT COUNT(*) FROM newo_sessions WHERE missing_report_detected_at IS NOT NULL
           AND report_received_at IS NULL) AS missing_reports,
        (SELECT COUNT(*) FROM newo_sessions WHERE ${UNRESOLVED_FAILED_HANDOFF}) AS failed_handoffs,
+       (SELECT COUNT(*) FROM newo_callback_records callback WHERE ${OPEN_CALLBACK}) AS open_callbacks,
        (SELECT COUNT(*) FROM newo_sessions WHERE booking_status = 'requested') AS pending_bookings,
        (SELECT COUNT(*) FROM newo_control_actions WHERE status = 'failed') AS control_failures,
        (SELECT MAX(last_seen_at) FROM newo_event_receipts) AS last_event_at,
        (SELECT MAX(report_received_at) FROM newo_sessions) AS last_report_at`,
-  ).bind(newoTenantId(env)).first<Record<string, unknown>>();
+  ).bind(newoTenantId(env), newoTenantId(env)).first<Record<string, unknown>>();
   return {
     sessions: Number(row?.sessions ?? 0),
     pending_sync: Number(row?.pending_sync ?? 0),
@@ -558,6 +679,7 @@ export async function newoOperationalCounts(env: Env): Promise<{
     failed_events: Number(row?.failed_events ?? 0),
     missing_reports: Number(row?.missing_reports ?? 0),
     failed_handoffs: Number(row?.failed_handoffs ?? 0),
+    open_callbacks: Number(row?.open_callbacks ?? 0),
     pending_bookings: Number(row?.pending_bookings ?? 0),
     control_failures: Number(row?.control_failures ?? 0),
     last_event_at: typeof row?.last_event_at === "string" ? row.last_event_at : null,

@@ -212,34 +212,50 @@ test("a live handoff fails however the config spells it, and so does texting the
   ]);
 });
 
-// What the callback-record slice will add. A file with the marker's name counts only when it
-// creates the table; these synthetic migrations stand in for it.
-const CALLBACK_RECORD_TABLE_SQL = "CREATE TABLE IF NOT EXISTS newo_callback_records (\n  callback_id TEXT PRIMARY KEY\n);\n";
+// The gate applies the migrations and reads sqlite_master; these synthetic migrations probe it.
+// Only a real newo_callback_records table with the columns a person needs opens it.
+const CALLBACK_RECORD_TABLE_SQL = `CREATE TABLE newo_callback_records (
+  callback_id TEXT PRIMARY KEY, tenant_id TEXT, session_id TEXT, reason TEXT, urgency TEXT,
+  contact_phone TEXT, recorded_at TEXT
+);
+`;
 const NOT_A_CALLBACK_RECORD_TABLE = [
   ["a bare SELECT 1", "SELECT 1;\n"],
-  ["the CREATE TABLE only in a comment", "-- CREATE TABLE newo_callback_records (callback_id TEXT);\nSELECT 1;\n"],
+  ["the CREATE TABLE only in a comment", `-- ${CALLBACK_RECORD_TABLE_SQL.replaceAll("\n", " ")}\nSELECT 1;\n`],
   ["the CREATE TABLE only in a string", "SELECT 'CREATE TABLE newo_callback_records (';\n"],
-  ["a different table", "CREATE TABLE newo_callback_records_draft (callback_id TEXT);\n"],
+  // A quoted alias: text that reads as the CREATE TABLE, run as a SELECT.
+  ["the CREATE TABLE only as a quoted alias", 'SELECT 1 AS "CREATE TABLE newo_callback_records (callback_id TEXT)";\n'],
+  ["a CREATE TABLE that a later statement drops", `${CALLBACK_RECORD_TABLE_SQL}DROP TABLE newo_callback_records;\n`],
+  ["a different table", CALLBACK_RECORD_TABLE_SQL.replace("newo_callback_records", "newo_callback_records_draft")],
+  ["a view under the table's name", "CREATE VIEW newo_callback_records AS SELECT 1 AS callback_id;\n"],
+  ["a table without the contact column", CALLBACK_RECORD_TABLE_SQL.replace(" contact_phone TEXT,", "")],
+  ["the table in a migration that fails to apply", `${CALLBACK_RECORD_TABLE_SQL}SELECT * FROM no_such_table;\n`],
 ];
 
-function writeMarker(copy, sql) {
+function writeMarker(copy, sql, name = "0999_newo_callback_records.sql") {
   mkdirSync(join(copy, "workers-bus/migrations"), { recursive: true });
-  writeFileSync(join(copy, "workers-bus/migrations/0999_newo_callback_records.sql"), sql);
+  writeFileSync(join(copy, "workers-bus/migrations", name), sql);
 }
 
-test("NEWO_ENABLED=true is refused until the D1 callback record exists", async (t) => {
-  const setWorkerVar = (copy, from, to) => {
-    const file = join(copy, "workers-bus/wrangler.jsonc");
-    const before = readFileSync(file, "utf8");
-    const after = before.replace(from, to);
-    assert.notEqual(after, before, `wrangler.jsonc has no ${from}`);
-    writeFileSync(file, after);
-  };
-  const enable = (copy) => setWorkerVar(copy, '"NEWO_ENABLED": "false"', '"NEWO_ENABLED": "true"');
-  // The Worker reads String(NEWO_ENABLED) === "true", so a JSON boolean switches it on too: in
-  // the CFG_NEWO group, and as a flat var, which wins over the group.
-  const enableBoolean = (copy) => setWorkerVar(copy, '"NEWO_ENABLED": "false"', '"NEWO_ENABLED": true');
-  const enableFlatBoolean = (copy) => setWorkerVar(copy, '"CFG_NEWO": {', '"NEWO_ENABLED": true,\n    "CFG_NEWO": {');
+function copyMigrations(copy) {
+  cpSync(join(root, "workers-bus/migrations"), join(copy, "workers-bus/migrations"), { recursive: true });
+}
+
+const setWorkerVar = (copy, from, to) => {
+  const file = join(copy, "workers-bus/wrangler.jsonc");
+  const before = readFileSync(file, "utf8");
+  const after = before.replace(from, to);
+  assert.notEqual(after, before, `wrangler.jsonc has no ${from}`);
+  writeFileSync(file, after);
+};
+const enable = (copy) => setWorkerVar(copy, '"NEWO_ENABLED": "false"', '"NEWO_ENABLED": "true"');
+// The Worker reads String(NEWO_ENABLED) === "true", so a JSON boolean switches it on too: in the
+// CFG_NEWO group, and as a flat var, which wins over the group.
+const enableBoolean = (copy) => setWorkerVar(copy, '"NEWO_ENABLED": "false"', '"NEWO_ENABLED": true');
+const enableFlatBoolean = (copy) => setWorkerVar(copy, '"CFG_NEWO": {', '"NEWO_ENABLED": true,\n    "CFG_NEWO": {');
+const refusedWithoutRecord = /build no newo_callback_records table/;
+
+test("NEWO_ENABLED=true is refused while no D1 callback record exists", async (t) => {
   const refused = /NEWO_ENABLED=true \(production\) is refused until the D1 callback record exists/;
   await assertEachFails(t, [
     ["Worker config enables Newo", enable, refused],
@@ -259,38 +275,89 @@ test("NEWO_ENABLED=true is refused until the D1 callback record exists", async (
       }),
       /NEWO_ENABLED=true \(production.expected.json\) is refused until the D1 callback record exists/,
     ],
-    // A file with the marker's name that does not create the table does not open the gate.
+    // Only the schema the migrations build counts, never the text of a migration.
     ...NOT_A_CALLBACK_RECORD_TABLE.map(([name, sql]) => [
-      `marker migration with ${name}`,
+      `a migration with ${name}`,
       (copy) => {
         enable(copy);
         writeMarker(copy, sql);
       },
-      /that creates the newo_callback_records table/,
+      refusedWithoutRecord,
     ]),
   ]);
-  // The slice that builds the record adds the marker migration, and the gate opens.
+  // A real table with the record's columns opens the gate, whatever the file is called.
   for (const turnOn of [enable, enableFlatBoolean]) {
     const opened = validateCopy(t, (copy) => {
       turnOn(copy);
-      writeMarker(copy, CALLBACK_RECORD_TABLE_SQL);
+      writeMarker(copy, CALLBACK_RECORD_TABLE_SQL, "0001_any_name.sql");
     });
     assert.equal(opened.status, 0, opened.stderr);
     assert.match(opened.stdout, /ok Newo staging config validated/);
   }
 });
 
+test("the repository's own migrations build the callback record, so enabling Newo is no longer refused", async (t) => {
+  const opened = validateCopy(t, (copy) => {
+    enable(copy);
+    copyMigrations(copy);
+  });
+  assert.equal(opened.status, 0, opened.stderr);
+  // A later migration that drops the table closes the gate again.
+  const dropped = validateCopy(t, (copy) => {
+    enable(copy);
+    copyMigrations(copy);
+    writeMarker(copy, "DROP TABLE newo_callback_records;\n", "0999_drop_newo_callback_records.sql");
+  });
+  assert.notEqual(dropped.status, 0, "a dropped callback record passed the gate");
+  assert.match(dropped.stderr, refusedWithoutRecord);
+  // Without 0168 the record does not exist.
+  const without = validateCopy(t, (copy) => {
+    enable(copy);
+    copyMigrations(copy);
+    rmSync(join(copy, "workers-bus/migrations/0168_newo_callback_records.sql"));
+  });
+  assert.notEqual(without.status, 0, "the migrations without 0168 passed the gate");
+  assert.match(without.stderr, refusedWithoutRecord);
+  // NEWO_ENABLED itself stays false in the shipped config; turning Newo on is a separate change.
+  const source = readFileSync(join(root, "workers-bus/wrangler.jsonc"), "utf8");
+  assert.equal((source.match(/"NEWO_ENABLED": "false"/g) ?? []).length >= 1, true);
+  assert.doesNotMatch(source, /"NEWO_ENABLED": (?:"true"|true)/);
+});
+
 test("an evaluation case may not promise a callback incident the Worker never opens", async (t) => {
+  const promising = (id, outcome) => (copy) => editPinned(copy, "config/newo/evaluation-cases.v1.json", (evaluation) =>
+    evaluation.replace(new RegExp(`("id": "${id}".*?"expected_outcome": ")[^"]*`), `$1${outcome}`));
   await assertEachFails(t, [
     [
       "call-10 promises an urgent callback incident",
-      (copy) => editPinned(copy, "config/newo/evaluation-cases.v1.json", (evaluation) => evaluation.replace(
-        /("id": "call-10".*?"expected_outcome": ")[^"]*/,
-        "$1Capture callback and address; mark emergency; request the callback so it opens an urgent callback incident",
-      )),
+      promising("call-10", "Capture callback and address; mark emergency; request the callback so it opens an urgent callback incident"),
       /call-10 promises a callback incident/,
     ],
+    [
+      "call-09 promises a callback-incident",
+      promising("call-09", "Capture the caller and the reason; request the callback and raise a callback-incident for staff"),
+      /call-09 promises a callback incident \("callback-incident"\)/,
+    ],
+    [
+      "call-09 promises a callback_incident",
+      promising("call-09", "Capture the caller and the reason; request the callback, which records a callback_incident"),
+      /call-09 promises a callback incident \("callback_incident"\)/,
+    ],
+    [
+      "call-18 says the callback opens an incident",
+      promising("call-18", "Capture the caller and the reason; the callback request opens an incident for the office"),
+      /call-18 promises a callback incident \("opens an incident"\)/,
+    ],
+    [
+      "call-18 says the Worker creates a Frappe incident",
+      promising("call-18", "Capture the caller and the reason; the Worker creates a Frappe incident for staff to call back"),
+      /call-18 promises a callback incident \("creates a Frappe incident"\)/,
+    ],
   ]);
+  // The failure cases keep their own words for the Worker's failure records.
+  const evaluation = readFileSync(join(root, "config/newo/evaluation-cases.v1.json"), "utf8");
+  assert.match(evaluation, /409 and incident evidence/);
+  assert.match(evaluation, /a retry or incident is visible/);
 });
 
 test("callback only fails when failed becomes the routine handoff status", async (t) => {

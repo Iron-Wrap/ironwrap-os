@@ -15,11 +15,14 @@ import {
   listRetryableNewoEventIds,
   markNewoMissingReports,
   newoOperationalCounts,
+  newoTenantId,
   recordNewoReconciliationRun,
+  recordNewoSession,
   restartFailedNewoReceipt,
   markNewoSessionSync,
   touchNewoReceipt,
-  upsertNewoSession,
+  type NewoCallbackReason,
+  type NewoCallbackRecordInput,
   type NewoSessionRecord,
 } from "./newo-store.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
@@ -607,13 +610,17 @@ async function acceptEvent(
     }
   }
 
+  // Which processing of this event this is: 1, then one more for each restart of a failed receipt
+  // (Newo's retry). No two processings share it, so it names each owner alert attempt.
+  const processingAttempt = existing ? Number(existing.attempts) + 1 : 1;
+
   try {
     const existingSession = await getNewoSession(env, event.session_id);
     const envelope = await ensureSessionEnvelope(env, event, rawKey, existingSession);
     const appointmentRequestId = appointmentRequestIdFor(event, existingSession);
     const response = toolReceipt(event, envelope?.envelope_id ?? existingSession?.lead_envelope_id ?? null,
       appointmentRequestId, bookingMode(env));
-    await upsertNewoSession(env, sessionRecord(
+    await recordNewoSession(env, sessionRecord(
       env,
       event,
       rawKey,
@@ -621,7 +628,11 @@ async function acceptEvent(
       envelope?.envelope_id ?? existingSession?.lead_envelope_id ?? null,
       appointmentRequestId,
       existingSession,
-    ));
+    ), await newoCallbackRecordInput(env, event, existingSession));
+    // The owner alerts go out as soon as the session and its callback record are in D1, before
+    // the audit row and the queue sends: a queue that stays down until Newo stops retrying must
+    // not keep the alert from ever being attempted.
+    scheduleOwnerAlerts(env, ctx, event, existingSession, processingAttempt);
     await store.recordAudit(env, {
       automation: "newo_reception",
       trigger: event.event_type,
@@ -640,7 +651,9 @@ async function acceptEvent(
     ) {
       await env.JN_QUEUE.send({ envelope_id: response.envelope_id });
     }
-    scheduleNotifications(env, ctx, event, envelope, existingSession);
+    // The caller's acknowledgement stays after the queue sends: a customer email is sent only for
+    // an event the Worker accepted in full.
+    scheduleMissedCallAck(env, ctx, event, envelope);
     await completeNewoReceipt(env, event.event_id, response.envelope_id, response, new Date().toISOString());
     return json(response);
   } catch (error) {
@@ -805,22 +818,31 @@ function toolReceipt(
   };
 }
 
-function scheduleNotifications(
+function scheduleMissedCallAck(
   env: NewoRuntimeEnv,
   ctx: ExecutionContext,
   event: NewoEventV1,
   envelope: EnvelopeRecord | null,
-  existing: NewoSessionRecord | null,
 ): void {
   if (event.event_type === "missed_call" && event.consent.follow_up_email && envelope?.contact_email) {
     ctx.waitUntil(sendInstantAck(env, envelope).catch((error) =>
       console.log(JSON.stringify({ at: "newo_missed_call_ack", event_id: event.event_id, error: String(error) }))));
   }
-  // Best effort: a send that fails leaves this log line and no sent marker, so the session's next
-  // accepted event (Newo's retry of this one included) owes the alert again. The D1 session row is
-  // the record.
+}
+
+function scheduleOwnerAlerts(
+  env: NewoRuntimeEnv,
+  ctx: ExecutionContext,
+  event: NewoEventV1,
+  existing: NewoSessionRecord | null,
+  processingAttempt: number,
+): void {
+  // Best effort: a send that fails leaves this log line and no sent marker. The failure alert is
+  // owed again on the session's next accepted event; a callback request alert only on Newo's
+  // retry of its own handoff event. The D1 callback record holds the callback either way (for a
+  // failed session, when the session knows how to reach the caller).
   for (const alert of newoOwnerAlerts(event, existing)) {
-    ctx.waitUntil(deliverNewoOwnerAlert(env, event, alert).catch((error) =>
+    ctx.waitUntil(deliverNewoOwnerAlert(env, event, alert, processingAttempt).catch((error) =>
       console.log(JSON.stringify({ at: `newo_${alert.kind}_alert`, event_id: event.event_id, error: String(error) }))));
   }
 }
@@ -832,17 +854,85 @@ function scheduleNotifications(
  * already stored. The R2 marker is written only after the send succeeds, under `raw/newo/` and so
  * under its 30-day lifecycle, and holds no caller details. Two events of one session racing can
  * both send; a duplicate urgent email is the safe side of a lost one.
+ *
+ * Each processing sends its own attempt: the email names the event and the processing attempt
+ * (`newoOwnerAlertAttemptHtml`), so its content, and with it the Gmail effect's idempotency
+ * identity, differs from every earlier attempt. A send whose outcome is unknown (a timeout) stays
+ * unknown in the effect ledger and is never sent again as the same effect; the next attempt is a
+ * new effect that says it may repeat an earlier alert, so the urgent alert never waits on that
+ * reconciliation.
  */
-async function deliverNewoOwnerAlert(env: NewoRuntimeEnv, event: NewoEventV1, alert: NewoOwnerAlert): Promise<void> {
+async function deliverNewoOwnerAlert(
+  env: NewoRuntimeEnv,
+  event: NewoEventV1,
+  alert: NewoOwnerAlert,
+  processingAttempt: number,
+): Promise<void> {
   if (await newoOwnerAlertSent(env, alert.marker)) return;
-  await sendOwnerAlert(env, alert.subject, alert.html);
+  await sendOwnerAlert(env, alert.subject, `${alert.html}${newoOwnerAlertAttemptHtml(event.event_id, processingAttempt)}`);
   await store.putRaw(env, alert.marker, JSON.stringify({
     schema_version: "newo.owner-alert-sent.v1",
     kind: alert.kind,
     session_id: event.session_id,
     event_id: event.event_id,
+    attempt: processingAttempt,
     sent_at: new Date().toISOString(),
   }), "application/json");
+}
+
+/** The line that makes each alert attempt its own message: the event and its processing attempt. */
+export function newoOwnerAlertAttemptHtml(eventId: string, processingAttempt: number): string {
+  return `<p>Alert for event ${escapeHtml(eventId)}, attempt ${processingAttempt}. ` +
+    `If an earlier alert about this caller reached you, this one repeats it.</p>`;
+}
+
+/**
+ * The callback record an accepted event owes (migration 0168), or null: one per session, written
+ * by the first event that leaves a callback owed. A `requested` handoff is a requested callback, a
+ * `failed` one a failed handoff, and a failed session (`session_failed`) with no failed handoff is
+ * owed one too when the session knows the caller's phone or email, so no caller rests on an email
+ * alone. The contact details are the ones the owner email carries, as the session knows them,
+ * bounded to the record's columns.
+ */
+export async function newoCallbackRecordInput(
+  env: Env,
+  event: NewoEventV1,
+  existing: NewoSessionRecord | null,
+): Promise<NewoCallbackRecordInput | null> {
+  const contact = event.contact;
+  const phone = bounded(contact.phone ?? existing?.contact_phone, 40);
+  const email = bounded(contact.email ?? existing?.contact_email, 254);
+  const handoffStatus = newoHandoffStatus(event, existing);
+  const reason: NewoCallbackReason | null = handoffStatus === "requested"
+    ? "callback_requested"
+    : handoffStatus === "failed"
+      ? "handoff_failed"
+      : event.event_type === "session_failed" && (phone || email)
+        ? "session_failed"
+        : null;
+  if (!reason) return null;
+  const tenantId = newoTenantId(env);
+  return {
+    callback_id: `ncb_${(await sha256Hex(`${tenantId}:${event.session_id}:newo-callback-record`)).slice(0, 32)}`,
+    tenant_id: tenantId,
+    session_id: event.session_id,
+    event_id: event.event_id,
+    reason,
+    urgency: newoUrgency(event, existing),
+    handoff_summary: bounded(event.handoff_summary, 1_000),
+    contact_name: bounded(contact.name ?? existing?.contact_name, 160),
+    contact_phone: phone,
+    contact_email: email,
+    address_line1: bounded(contact.address.line1 ?? existing?.address_line1, 240),
+    city: bounded(contact.address.city ?? existing?.city, 120),
+    province: bounded(contact.address.province ?? existing?.province, 80),
+    postal_code: bounded(contact.address.postal_code ?? existing?.postal_code, 24),
+  };
+}
+
+function bounded(value: string | null | undefined, max: number): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed.slice(0, max) : null;
 }
 
 /** Is the alert recorded as sent? A marker that cannot be read counts as not sent. */

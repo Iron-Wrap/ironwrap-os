@@ -2296,8 +2296,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // people found about a send, and their corrections, without changing it; holds the late-answer
     // wait in D1 with a window per provider; and names the permit holder of each new publication.
     // 0163 keeps the first time a customer's portal link opened a published proposal.
+    // 0165 names who lifted a safety-occurrence stop and refuses a lift by the person who raised it
+    // (L06) or one without its own `released` event. 0168 records the callback a Newo caller is
+    // owed and lets a person close it through the 0151 resolution.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 138);
+    assert.equal(migrations.length, 140);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2448,10 +2451,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
     // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
     // portal first-open table, one named index and four validation, update, age-gated delete and
-    // no-replace guards.
+    // no-replace guards. 0165 adds one column and one safety stop release guard. 0168 adds the
+    // Newo callback record table and its clock, event, append-only and no-replace guards (four),
+    // and re-creates the 0151 insert and no-replace guards under their names, so it adds no index.
     assert.deepEqual(
       { ...counts },
-      { tables: 279, indexes: 380, triggers: 765 },
+      { tables: 280, indexes: 380, triggers: 770 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -2979,6 +2984,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     assert.deepEqual(
       newoTables.map(({ name }) => name),
       [
+        "newo_callback_records",
         "newo_control_actions",
         "newo_event_receipts",
         "newo_handoff_resolutions",

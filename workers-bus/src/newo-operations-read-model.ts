@@ -4,6 +4,7 @@ import {
   getLatestNewoReconciliationRun,
   newoOperationalCounts,
   newoTenantId,
+  OPEN_CALLBACK,
   UNRESOLVED_FAILED_HANDOFF,
   type NewoReconciliationRun,
 } from "./newo-store.ts";
@@ -59,6 +60,22 @@ export interface NewoOperationsEventFailure {
   last_seen_at: string;
 }
 
+/**
+ * A callback no person has closed (migration 0168): a requested callback, or a failed session's.
+ * Like every list here it carries no caller identity or content: the person who calls back reads
+ * the record on the resolution route.
+ */
+export interface NewoOperationsOpenCallback {
+  callback_id: string;
+  session_id: string;
+  /** Why the caller is owed it; a failed handoff's callback is listed under `failed_handoffs`. */
+  reason: "callback_requested" | "session_failed";
+  /** The higher of the urgency recorded with the callback and the session's urgency now. */
+  urgency: "routine" | "urgent" | "emergency";
+  /** When D1 recorded the callback. */
+  requested_at: string;
+}
+
 export interface NewoOperationsDeadLetter {
   id: number;
   stage: string;
@@ -111,6 +128,8 @@ export interface NewoOperationsReadModel {
     missing_reports: number;
     /** Failed handoffs no person has resolved; each one keeps the model in `attention`. */
     failed_handoffs: number;
+    /** Callbacks no person has closed (requested, or a failed session's); each keeps `attention`. */
+    open_callbacks: number;
     pending_bookings: number;
     control_failures: number;
     dlq_items: number;
@@ -121,6 +140,7 @@ export interface NewoOperationsReadModel {
   exceptions: {
     missing_reports: NewoOperationsSession[];
     failed_handoffs: NewoOperationsSession[];
+    open_callbacks: NewoOperationsOpenCallback[];
     pending_bookings: NewoOperationsSession[];
     sync_failures: NewoOperationsSession[];
     failed_events: NewoOperationsEventFailure[];
@@ -147,10 +167,27 @@ const SESSION_COLUMNS = `session_id, channel, direction, status, outcome, divisi
 
 const OPERATIONS_LIMIT = 25;
 
+/** Where the model reads the integration's readiness and Frappe's open Newo incidents. */
+export interface NewoOperationsSources {
+  readiness: (env: Env) => ReturnType<typeof getReadiness>;
+  openIncidentCount: (env: Env) => Promise<number | null>;
+}
+
+const DEFAULT_SOURCES: NewoOperationsSources = {
+  readiness: getReadiness,
+  openIncidentCount: getNewoOpenIncidentCount,
+};
+
+/**
+ * The owner and ops view of Newo operations. `sources` replaces the readiness and incident reads,
+ * which call Newo and Frappe; tests use it to reach a ready integration.
+ */
 export async function buildNewoOperationsReadModel(
   env: Env,
   now = new Date(),
+  sources: Partial<NewoOperationsSources> = {},
 ): Promise<NewoOperationsReadModel> {
+  const read = { ...DEFAULT_SOURCES, ...sources };
   const [
     readiness,
     counts,
@@ -158,6 +195,7 @@ export async function buildNewoOperationsReadModel(
     recentSessions,
     missingReports,
     failedHandoffs,
+    openCallbacks,
     pendingBookings,
     syncFailures,
     failedEvents,
@@ -167,12 +205,13 @@ export async function buildNewoOperationsReadModel(
     fiveMinute,
     daily,
   ] = await Promise.all([
-    getReadiness(env),
+    read.readiness(env),
     newoOperationalCounts(env),
-    getNewoOpenIncidentCount(env),
+    read.openIncidentCount(env),
     listSessions(env, "recent", OPERATIONS_LIMIT),
     listSessions(env, "missing_report", OPERATIONS_LIMIT),
     listSessions(env, "failed_handoff", OPERATIONS_LIMIT),
+    listOpenCallbacks(env, OPERATIONS_LIMIT),
     listSessions(env, "pending_booking", OPERATIONS_LIMIT),
     listSessions(env, "sync_failure", OPERATIONS_LIMIT),
     listFailedEvents(env, OPERATIONS_LIMIT),
@@ -191,19 +230,12 @@ export async function buildNewoOperationsReadModel(
       : "not_ready";
   const normalizedFiveMinute = normalizeReconciliation(fiveMinute);
   const normalizedDaily = normalizeReconciliation(daily);
-  const hasExceptions =
-    counts.failed_sync > 0 ||
-    counts.failed_events > 0 ||
-    counts.missing_reports > 0 ||
-    counts.failed_handoffs > 0 ||
-    counts.pending_bookings > 0 ||
-    counts.control_failures > 0 ||
-    deadLetterCount > 0 ||
-    unresolvedIncidents === null ||
-    unresolvedIncidents > 0 ||
-    normalizedDaily?.status === "degraded" ||
-    normalizedDaily?.status === "failed" ||
-    normalizedDaily?.usage_status === "threshold_exceeded";
+  const hasExceptions = newoOperationsNeedAttention({
+    counts,
+    dlqItems: deadLetterCount,
+    unresolvedIncidents,
+    daily: normalizedDaily,
+  });
 
   return {
     version: 1,
@@ -227,6 +259,7 @@ export async function buildNewoOperationsReadModel(
     exceptions: {
       missing_reports: missingReports,
       failed_handoffs: failedHandoffs,
+      open_callbacks: openCallbacks,
       pending_bookings: pendingBookings,
       sync_failures: syncFailures,
       failed_events: failedEvents,
@@ -245,6 +278,42 @@ export async function buildNewoOperationsReadModel(
       checked_at: normalizedDaily?.ran_at ?? null,
     },
   };
+}
+
+/**
+ * Whether the owned record holds anything a person must still act on. Any one keeps the model in
+ * `attention`, however ready the integration is: an open requested callback or an unresolved
+ * failed handoff stays there until a person closes it.
+ */
+export function newoOperationsNeedAttention(input: {
+  counts: Pick<
+    NewoOperationsReadModel["counts"],
+    | "failed_sync"
+    | "failed_events"
+    | "missing_reports"
+    | "failed_handoffs"
+    | "open_callbacks"
+    | "pending_bookings"
+    | "control_failures"
+  >;
+  dlqItems: number;
+  unresolvedIncidents: number | null;
+  daily: NewoOperationsReconciliation | null;
+}): boolean {
+  const { counts, daily } = input;
+  return counts.failed_sync > 0 ||
+    counts.failed_events > 0 ||
+    counts.missing_reports > 0 ||
+    counts.failed_handoffs > 0 ||
+    counts.open_callbacks > 0 ||
+    counts.pending_bookings > 0 ||
+    counts.control_failures > 0 ||
+    input.dlqItems > 0 ||
+    input.unresolvedIncidents === null ||
+    input.unresolvedIncidents > 0 ||
+    daily?.status === "degraded" ||
+    daily?.status === "failed" ||
+    daily?.usage_status === "threshold_exceeded";
 }
 
 function readinessChecks(
@@ -298,6 +367,31 @@ function normalizeSession(row: NewoOperationsSession): NewoOperationsSession {
     duration_seconds: row.duration_seconds === null ? null : Number(row.duration_seconds),
     sync_attempts: Number(row.sync_attempts),
   };
+}
+
+/**
+ * The open callbacks, most urgent first and then the longest waiting. A resolution, never age,
+ * takes one off the list; a callback whose session's handoff failed is listed as a failed handoff.
+ */
+async function listOpenCallbacks(env: Env, limit: number): Promise<NewoOperationsOpenCallback[]> {
+  const urgency = `CASE
+         WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
+         WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'
+         ELSE 'routine'
+       END`;
+  const result = await env.DB.prepare(
+    `SELECT callback.callback_id, callback.session_id, callback.reason, ${urgency} AS urgency,
+            callback.recorded_at AS requested_at
+       FROM newo_callback_records callback
+       LEFT JOIN newo_sessions session ON session.session_id = callback.session_id
+      WHERE ${OPEN_CALLBACK}
+      ORDER BY CASE ${urgency} WHEN 'emergency' THEN 0 WHEN 'urgent' THEN 1 ELSE 2 END,
+               callback.recorded_at ASC, callback.callback_id ASC
+      LIMIT ?`,
+  )
+    .bind(newoTenantId(env), limit)
+    .all<NewoOperationsOpenCallback>();
+  return result.results ?? [];
 }
 
 async function listFailedEvents(env: Env, limit: number): Promise<NewoOperationsEventFailure[]> {

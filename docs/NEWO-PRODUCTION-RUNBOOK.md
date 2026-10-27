@@ -92,7 +92,7 @@ NEWO_CONTROL_WRITE_ENABLED=false
 NEWO_JOBNIMBUS_BOOKING_PROVEN=false
 ```
 
-`NEWO_ENABLED=true` is refused by `node tools/validate-newo-config.mjs` and the readiness contract until a D1 callback record exists: the slice that builds it adds the migration `NNNN_newo_callback_records.sql`, which must create the `newo_callback_records` table. A file with that name that creates no such table does not count, and a JSON boolean `true` counts as on, as it does in the Worker.
+`node tools/validate-newo-config.mjs` and the readiness contract refuse `NEWO_ENABLED=true` unless the D1 callback record exists. They apply the migrations to an in-memory SQLite and read the schema: with migration `0168_newo_callback_records.sql` the `newo_callback_records` table exists, so the gate passes. A JSON boolean `true` counts as on, as it does in the Worker. `NEWO_ENABLED` stays `false` in `wrangler.jsonc` until the go-live change that switches it on. Before that change, confirm that the migrations through `0168` are applied to the production D1 database, so every requested callback lands in a record a person can close.
 
 Control writes may be enabled later without enabling customer sends. Outbound customer operations require both governed approval and `NEWO_OUTBOUND_ENABLED=true`.
 
@@ -148,6 +148,8 @@ NEWO_BOOKING_MODE=confirmed
 If the contract is absent or any test fails, remain request-only.
 
 ## 8. Cutover gates
+
+Before the change that sets `NEWO_ENABLED=true`, apply the D1 migrations through `0168_newo_callback_records.sql` to the production database (`npm run db:migrate --prefix workers-bus`) and confirm that none is pending. Without 0168 the D1 batch that writes a session and its callback record fails, so every event that owes a callback gets a 500 and nothing holds that caller's callback. Flip `NEWO_ENABLED` only after that.
 
 After-hours forwarding requires the repository gate, production config gate, 31-case evaluation, wrong-credential proof, owned landing proof, callback request proof, usage alert proof, and owner approval.
 

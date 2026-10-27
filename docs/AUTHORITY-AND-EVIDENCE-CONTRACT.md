@@ -328,6 +328,23 @@ the same version, unlocks nothing. Refusals are distinct:
 `work_package_stop_release_evidence_before_stop` and `work_package_stop_release_replay_conflict`
 (409).
 
+A stop on a safety occurrence follows the same rule (owner rule L06). Its only lift path is the
+`released` command, `POST /api/v1/safety/occurrences/{occurrence}/commands` (CSRF). That command
+admits only a person's own cookie session (`safety_stop_release_person_required`, 403) in the
+owner, ops or production role. It never admits the person who raised the stop, under any
+identity either of them carries: user id, email or Frappe user, compared exactly as a crew stop
+release compares them (`safety_stop_release_by_raiser_forbidden`, 403). There is no exception for
+working alone: if nobody else can release the stop, it stays active. Release by another Staff
+member or a named outside person (`docs/AI-TEAM-CONTRACT.md`, Q7) is not built. The stop lifts only
+from `controlled` once any required rescue is complete (`safety_stop_release_not_permitted`), and
+only once (`safety_stop_already_released`, 409). Every command's detail and evidence are checked
+before anything is written (`safety_command_invalid`, `safety_evidence_invalid`, 400), and the
+occurrence moves in one batch with the event that records the command, so no transition stands
+without its journal entry. Migration `0165` records who lifted the stop (`released_by_user_id`) and
+repeats the rule in D1 for any write. A lift must name an active user of the tenant who is not the
+raiser and whose own `released` event for that version is already written, and the recorded name
+never changes afterwards.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's
@@ -611,6 +628,11 @@ and institutional error.
 Stops may be cleared only by the actor and evidence defined in policy. Model confidence, a plan,
 or an AI explanation is never a clearance reason.
 
+A safety raise (`report_occurrence` or `rescue_request` on `POST /api/v1/safety/actions`) is never
+refused for its scope: the stop is recorded and active, and the answer's `scope_unresolved` is true
+when the job, Work Package or tenant it names is not this tenant's (absent when nothing was checked:
+a `shop` or `vehicle` scope, or a lookup that failed).
+
 ## Degraded operation
 
 Every critical workflow defines:
@@ -670,29 +692,50 @@ does.
   stay on the call-the-office path. A crew write that exists but is not settled cannot be answered
   either way.
 
-### Failed Newo handoffs
+### Newo callbacks and failed handoffs
 
-A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller's request for a person
-that did not arrive or could not be processed. It stays open until a person records how it ended;
-there is no lookback window, because a window would retire a failure nobody decided. The
-receptionist is callback only and never transfers a call live: a callback it requests is
-recorded as `requested` on its session and is not a failed handoff, while an emergency session
-that closes without a handoff request is recorded as failed
-([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
+The receptionist is callback only and never transfers a call live, so a callback is the only way
+a caller who asked for a person reaches one. A callback the receptionist requests is recorded as
+`requested` on its session. A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a
+caller's request for a person that did not arrive or could not be processed, including an emergency
+session that closes without one ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
+A failed session (`session_failed`) with no failed handoff is owed a callback too when the session
+knows the caller's phone or email: no caller rests on an owner email alone. Each stays open until
+a person records how it ended; there is no lookback window, because a window would retire a
+callback nobody made.
 
+- The callback record (`newo_callback_records`, migration `0168`): the Worker writes one
+  append-only row per tenant and session, in the same D1 batch as the session, once an accepted
+  event leaves a callback owed. Its `reason` is `callback_requested`, `handoff_failed` or
+  `session_failed`; D1 refuses any other reason, and a `session_failed` record with neither a phone
+  nor an email. It holds the event that wrote it, the urgency then, the receptionist's handoff
+  summary, and the caller's contact details as the session knows them. D1 stamps `recorded_at`
+  from its own clock and refuses another time, an event the Worker did not claim for that
+  session, an update, a delete and a replace.
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
-  records `outcome` = `called_back`, `unreachable` or `not_needed` and an optional note, with
-  `resolved_by` (the person's user id), their role and `resolved_at`. `GET` on the same path returns
-  the handoff and its resolution.
-- People-only: a person's own cookie session in the owner or ops role, read from the live session
-  (`newo_handoff_resolution_person_required`, `newo_handoff_resolution_role_required`). Agents,
-  automations, connectors, service tokens, the effect runtime and MCP actors are refused.
-- `newo_handoff_resolutions` (migration `0151`) is append-only and tenant-scoped with at most one
-  resolution per failed handoff. D1 re-checks that the session is failed and that the resolver is an
-  active owner or ops user holding that role; an exact replay returns the stored record and a
-  changed intent conflicts (`newo_handoff_resolution_replay_conflict`, `newo_handoff_already_resolved`).
-- The Newo reconcile count (`failed_handoffs`) and the operations exception list count only failed
-  handoffs with no resolution, through one shared predicate.
+  records `outcome` = `called_back`, `unreachable` or `not_needed` and a required note, with
+  `resolved_by` (the person's user id) and their role. D1 stamps `resolved_at`, and one `audit_log`
+  row (`newo_callback_resolution`) commits in the same batch or not at all. `GET` on the same path
+  returns the session's handoff, its callback record with the caller's contact details, and its
+  resolution.
+- People-only: a person's own cookie session in the owner or ops role, read from the live session.
+  Agents, automations, connectors, service tokens, the effect runtime and MCP actors are refused.
+- `newo_handoff_resolutions` (migration `0151`; `0168` re-creates its insert guard) is append-only
+  and tenant-scoped with at most one resolution per session. D1 re-checks that the session's handoff
+  is `failed` or `requested`, or that it has a callback record; that the resolver is an active
+  owner or ops user holding that role; that a note is present; and that `resolved_at` is D1's own
+  clock. An exact replay returns the stored record.
+- Each refusal has its own code: `newo_handoff_resolution_tenant_mismatch` (a person of another
+  tenant, refused before any lookup), `newo_handoff_resolution_person_required`,
+  `newo_handoff_resolution_role_required`, `csrf_failed`, `idempotency_key_required`,
+  `invalid_newo_handoff_resolution`, `newo_handoff_resolution_outcome_required`,
+  `newo_handoff_resolution_note_required`, `newo_handoff_resolution_note_too_long`,
+  `newo_handoff_not_found`, `newo_handoff_not_open`, `newo_handoff_already_resolved` and
+  `newo_handoff_resolution_replay_conflict`.
+- The operations read model lists the open requested and failed-session callbacks
+  (`open_callbacks`, with their reason) and the unresolved failed handoffs (`failed_handoffs`), each
+  caller in one list, and either keeps the model in `attention`. The Newo reconcile count (`failed_handoffs`) and the operations list share
+  one predicate per list.
 
 ## Customer-facing behavior
 

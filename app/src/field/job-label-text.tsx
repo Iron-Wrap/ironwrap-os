@@ -1,8 +1,8 @@
 import { jobLabelParts } from "../lib/job-label";
 
 /**
- * A job named the ruled way (D5): "{customer} · {street} · {code}", with the code kept whole on
- * one line ("IW-" and "ACCEPTANCE" on two lines read as two things). Renders nothing when the read
+ * A job named the ruled way (D5): "{customer} · {street} · Ref {code}", with "Ref" and the code
+ * kept whole on one line ("IW-" and "ACCEPTANCE" on two lines read as two things). Renders nothing when the read
  * has none of the three, so the screen can say what it does instead.
  */
 export function JobLabelText(job: {
@@ -17,8 +17,12 @@ export function JobLabelText(job: {
     <>
       {lead?.replaceAll(" · ", "\u00a0· ")}
       {lead && code ? "\u00a0· " : null}
-      {/* plain-language-allow: unlabelled-code - D5 puts the code last, after the customer and street */}
-      {code ? <span className="whitespace-nowrap">{code}</span> : null}
+      {code ? (
+        <span className="whitespace-nowrap">
+          {/* plain-language-allow: unlabelled-code - D5 labels the code "Ref" in the line itself */}
+          Ref {code}
+        </span>
+      ) : null}
     </>
   );
 }

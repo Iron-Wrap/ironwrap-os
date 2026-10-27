@@ -188,7 +188,7 @@ describe("CheckInPage", () => {
     });
     const heading = await screen.findByRole("heading", { name: "Add job proof" });
     expect(heading.nextElementSibling).toHaveTextContent(
-      "Saving to the job: Jamie Homeowner · 123 Example Avenue · IW-1042",
+      "Saving to the job: Jamie Homeowner · 123 Example Avenue · Ref IW-1042",
     );
   });
 

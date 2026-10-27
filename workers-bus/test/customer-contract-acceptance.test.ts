@@ -4092,7 +4092,11 @@ test("an older contract's confirmed copy is no start for a newer contract whose 
       h.env,
       await personAuth(h, OWNER_ID),
     );
-    assert.deepEqual((await gates.json() as Record<string, any>).cancellation_window, window);
+    // The office's gates read says the same, but for the moment it was read.
+    assert.deepEqual(
+      { ...(await gates.json() as Record<string, any>).cancellation_window, as_of: undefined },
+      { ...window, as_of: undefined },
+    );
     // Every hold holds, and the work queue lists the newer contract's unconfirmed copy.
     const schedule = readyToSchedule(h, { waiveMaterials: true });
     backorderedJobLine(h);

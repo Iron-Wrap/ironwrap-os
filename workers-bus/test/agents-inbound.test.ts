@@ -19,7 +19,9 @@ import {
   SWEEP_WINDOW_MS,
   type InboundSender,
 } from "../src/agents/inbound.ts";
+import { INBOUND_ONLY } from "../src/agents/policy.ts";
 import { OBJECT_MODELS } from "../src/agents/read-models.ts";
+import { INBOUND_CHANNELS as REPLAY_INBOUND_CHANNELS, INBOUND_ONLY as REPLAY_INBOUND_ONLY } from "../../agent-host/src/replay/case-run.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import type { BoundStatement } from "../src/agents/store.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
@@ -391,6 +393,9 @@ test("each intake path's envelope maps to its channel, and the channel set is ex
     channels.add(channel);
   }
   assert.deepEqual([...INBOUND_CHANNELS].sort(), [...channels].sort());
+  // The eval replay applies the same inbound-only rule (agent-host/src/replay/case-run.ts).
+  assert.deepEqual([...REPLAY_INBOUND_CHANNELS].sort(), [...INBOUND_CHANNELS].sort());
+  assert.deepEqual([...REPLAY_INBOUND_ONLY].sort(), [...INBOUND_ONLY].sort());
   // A source no intake path writes is not inbound.
   assert.equal(await inboundSignal(TENANT, envelope({ source: "quickbooks" }), NO_MATCH), null);
   // The signal is about the lead the operating core derives for the envelope, for its tenant.

@@ -584,3 +584,32 @@ test("lead_fact.propose answers only an event that came by an inbound channel", 
     assert.deepEqual([stopped.outcome, stopped.reason_codes, stopped.checks.at(-1)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], source);
   }
 });
+
+test("the eval replay stops an inbound-only step exactly where policy does", async () => {
+  const { fromItsInbound } = await import("../../agent-host/src/replay/case-run.ts");
+  const fields = { service: "metal_roofing", scope: null, address: null, timing: null };
+  // The replay's signal fact is `signal`; the Worker's is `signal/<id>`.
+  const citations = [[], ["signal"], ["signal", "other"], ["other"]];
+  const worker = (fact: string) => (fact === "signal" ? "signal/sig_1" : "lead/L-1");
+  let compared = 0;
+  for (const kind of ["event", "watch", "owner_request", "handoff"])
+    for (const source of ["web_form", "newo_call", "referral", "email", "sms", "website", ""])
+      for (const subject of [{ aggregate: "lead", id: "L-1" }, { aggregate: "lead", id: "L-2" }, { aggregate: "job", id: "L-1" }, null])
+        for (const leadId of ["L-1", "L-2", undefined, 42, null])
+          for (const cited of citations) {
+            const args = leadId === undefined ? { fields } : { lead_id: leadId, fields };
+            const decision = evaluateStep(
+              input({
+                actionId: "lead_fact.propose",
+                args,
+                citations: cited.map((fact) => ({ fact_id: worker(fact), version: 1 })),
+                requester: { signal_ref: "signal/sig_1", kind, source, actor: null, subject },
+              } as Partial<StepInput>),
+            );
+            const stops = decision.checks.find((check) => check.check === "requester")?.passed === false;
+            const label = JSON.stringify({ kind, source, subject, leadId, cited });
+            assert.equal(!fromItsInbound({ kind, source, subject }, args, cited.map((fact_id) => ({ fact_id }))), stops, label);
+            compared += 1;
+          }
+  assert.equal(compared, 4 * 7 * 4 * 5 * 4);
+});

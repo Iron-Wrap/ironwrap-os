@@ -757,7 +757,7 @@ export async function handleAuthenticatedRoute(
   const recipientResponse = await handleAutomationRecipientRoute(req, env, auth);
   if (recipientResponse) return recipientResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
-    const response = appJson(sessionPayload(auth, env));
+    const response = appJson(await sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");
     return response;
   }
@@ -775,7 +775,7 @@ export async function handleAuthenticatedRoute(
     try {
       return privateAppJson({
         version: APP_API_VERSION,
-        session: sessionPayload(auth, env),
+        session: await sessionPayload(auth, env),
         // A field device gets one call before it goes offline, so the capability signal rides
         // with it rather than costing a second round trip on a bad connection. It stays a hint:
         // the server re-derives and re-enforces on every write, and a cached state never admits

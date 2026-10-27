@@ -2301,7 +2301,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0165 names who lifted a safety-occurrence stop and refuses a lift by the person who raised it
     // (L06) or one without its own `released` event.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 139);
+    assert.equal(migrations.length, 140);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2457,7 +2457,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0165 adds one column and one safety stop release guard.
     assert.deepEqual(
       { ...counts },
-      { tables: 279, indexes: 380, triggers: 766 },
+      { tables: 279, indexes: 380, triggers: 770 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

@@ -250,9 +250,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
   too, and never under Done for you. It closes once: `applied_by_person` when the person's role
-  change or the owner's delegation or practice setting for its record lands, `superseded` when a
-  newer draft for the same record replaces it; migration 0206 lets only that close past the
-  decided-step guard. A "Not now" for it is not built yet.
+  change or the owner's delegation or practice setting for its record lands, naming what is set
+  and whether it is what the draft proposed (`as_proposed`: the same role, or the same setting and,
+  within limits, the same ceiling), `superseded` when a newer draft for the same record replaces
+  it; migration 0206 lets only that close past the decided-step guard. A "Not now" for it is not
+  built yet.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: owner, staff and worker actors for a person's

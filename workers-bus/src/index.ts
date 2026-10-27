@@ -1291,7 +1291,8 @@ async function runNewoDailyReconcile(env: Env): Promise<void> {
       "Newo daily reconciliation requires review",
       `<p>Newo readiness or owned landing checks are degraded.</p>
        <p>Missing reports: ${counts.missing_reports}; failed syncs: ${counts.failed_sync};
-       unresolved callback incidents: ${unresolvedIncidents ?? "unavailable"}.</p>
+       open callbacks: ${counts.open_callbacks}; failed handoffs not closed: ${counts.failed_handoffs};
+       open Frappe Newo incidents: ${unresolvedIncidents ?? "unavailable"}.</p>
        <p>Configuration/API reasons: ${driftReasons.map(escapeHtml).join(", ") || "none"}.</p>`,
     ).catch(() => {});
   }

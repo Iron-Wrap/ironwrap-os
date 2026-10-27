@@ -83,13 +83,20 @@ export async function sendInstantAck(
   };
 }
 
+/**
+ * The owner alert, to the owner and the backup mailbox. Both sends settle before this returns or
+ * throws: a caller that hands it to `waitUntil` must not let the isolate end while one send is
+ * still in flight, which would leave that send's effect without an outcome.
+ */
 export async function sendOwnerAlert(env: Env, subject: string, html: string): Promise<void> {
-  await Promise.all([
+  const settled = await Promise.allSettled([
     sendEmail(env, env.OWNER_ALERT_EMAIL, subject, html),
     env.BACKUP_ALERT_EMAIL && (env.BACKUP_ALERT_EMAIL as string) !== (env.OWNER_ALERT_EMAIL as string)
       ? sendEmail(env, env.BACKUP_ALERT_EMAIL, subject, html)
       : Promise.resolve(),
   ]);
+  const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 /** Daily reconciliation digest → owner + backup. Its ARRIVAL is the heartbeat; absence ⇒ escalate. */

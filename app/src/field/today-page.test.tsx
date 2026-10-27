@@ -229,7 +229,8 @@ describe("TodayPage", () => {
       "href",
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
     );
-    expect(screen.getByText("See job plan")).toBeVisible();
+    // The next step and the button now read the same: the step is the button.
+    expect(screen.getByText("See job plan", { selector: "dd" })).toBeVisible();
     await user.click(link);
     expect(window.location.pathname).toBe(
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",

@@ -748,6 +748,8 @@ test("out of either kind of conflict, not delivered passes when it cites a newer
     // Through the Worker: the person's check, then the person's record citing it.
     const effectId = await make(env, `cited:${origin}:worker`);
     const ops = await person(db, env, "ops");
+    // A person's check comes after the conflict, never in its millisecond.
+    await new Promise((done) => setTimeout(done, 5));
     const checked = await check(env, effectId, `cited:${origin}:check`, notFoundComplete);
     assert.equal(checked.check.outcome, "not_found");
     assert.equal(checked.check.scan_complete, 1);
@@ -982,6 +984,13 @@ test("a silent provider's exception keeps 0156's path; a citation there must sti
   const plain = await silent("silent:plain");
   insertConfirmation(db, plain, "not_delivered");
   assert.equal(stateOf(db, plain), "reconciled");
+  // The found-check rule is about citations: an uncited record on a silent provider's exception keeps
+  // 0156's person path even beside a check that found the message. Whether that path should yield to
+  // such a check is a B2 follow-up, recorded in the pull request.
+  const foundSilent = await silent("silent:found");
+  insertCheck(db, foundSilent, { outcome: "sent" });
+  insertConfirmation(db, foundSilent, "not_delivered");
+  assert.equal(stateOf(db, foundSilent), "reconciled");
   // A citation that proves nothing is refused all the same.
   const cited = await silent("silent:cited");
   const unclear = insertCheck(db, cited, { outcome: "unknown" });
@@ -1097,6 +1106,13 @@ test("the readback is chosen by the send's provider, and a stand-in only on a sy
     );
   }
   assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks"), 0);
+  // The read says the same: no check is offered where this Worker may not read the provider back.
+  await send(synthetic, "route:adapter:qa-lost", "lost", { provider: QA });
+  const readOn = async (env: AppEnv) =>
+    await readProposalDeliveryState(env, TENANT, "proposal-pack:route:adapter:qa-lost", "proposal-revision:route:adapter:qa-lost");
+  const [businessRead, syntheticRead] = [await readOn(workerEnv(db, "business")), await readOn(synthetic)];
+  assert.deepEqual([businessRead.state, businessRead.check_allowed], ["7", false]);
+  assert.deepEqual([syntheticRead.state, syntheticRead.check_allowed], ["7", true]);
   // Every provider without a readback yet answers "unknown", named.
   const business = workerEnv(db, "business");
   const real = await post(business, await person(db, business, "ops"), CHECK_PATH, { external_effect_id: realSend }, "adapter-real");

@@ -668,7 +668,7 @@ const MISSING_SCOPE_ID = "unknown";
 
 /**
  * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by
- * its ruled label, "{customer} · {street} · {code}" (D5), never by record ids or a placeholder
+ * its ruled label, "{customer} · {street} · Ref {code}" (D5), never by record ids or a placeholder
  * (gate e-crew-version-copy: "Roof Job · unknown"); a bare code read as a site id (e-plan-scope).
  * Any other scope keeps its type and id, and leaves out an id the read did not get.
  */

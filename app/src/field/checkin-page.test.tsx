@@ -190,6 +190,8 @@ describe("CheckInPage", () => {
     expect(heading.nextElementSibling).toHaveTextContent(
       "Saving to the job: Jamie Homeowner · 123 Example Avenue · Ref IW-1042",
     );
+    // No-break spaces keep each dot with the part before it and "Ref" with its code.
+    expect(heading.nextElementSibling?.textContent).toContain("Avenue\u00a0· Ref IW-1042");
   });
 
   it("says Saving to this job when the read names no customer, street or code", async () => {

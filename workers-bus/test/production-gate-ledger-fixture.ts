@@ -78,8 +78,9 @@ function currentGate(
 }
 
 /**
- * Whether the job's OD-01 cancellation window has ended (0160): a copy shown for the job's latest
- * contract, or a record at or after its signature, and no end on the job after D1's now.
+ * Whether the job's OD-01 cancellation window has ended (0160): a copy confirmed served for the
+ * job's latest contract, or a record at or after its signature, and no end on the job after D1's
+ * now.
  */
 export function cancellationWindowEnded(
   db: DatabaseSync,
@@ -88,6 +89,7 @@ export function cancellationWindowEnded(
   const row = db.prepare(
     `SELECT (EXISTS (
               SELECT 1 FROM contract_signed_copy_events shown
+                JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
                WHERE shown.tenant_id = :tenant AND shown.roof_job_id = :job
                  AND NOT EXISTS (
                    SELECT 1 FROM commercial_acceptance_bindings contract
@@ -107,6 +109,7 @@ export function cancellationWindowEnded(
             )) AS known,
             (EXISTS (
               SELECT 1 FROM contract_signed_copy_events shown
+                JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
                WHERE shown.tenant_id = :tenant AND shown.roof_job_id = :job
                  AND julianday(shown.window_ends_at) > julianday('now')
             ) OR EXISTS (

@@ -1291,13 +1291,14 @@ async function signedCopyContent(
 
 /**
  * An accepted answer with the signed copy added, for a client that asked for it (0160). The copy is
- * built first; only then is it recorded as shown, which starts the OD-01 cancellation window at
- * that event's D1 write time, then confirmed served, and served with the event's times. A copy that
- * cannot be built is never recorded as shown: the answer is the plain accepted one, no window
- * starts, and every hold stays. A copy recorded as shown but never confirmed served (D1 failing past
- * the retries) is not claimed either: the window has started, and the job is on the owner and ops
- * work queue until a copy is confirmed served or a person records the receipt. Only a 200 for an
- * accepted acceptance carries a copy; a 409 or a 202 writes nothing.
+ * built first; only then is it recorded as shown and confirmed served, which starts the OD-01
+ * cancellation window at that event's D1 write time, and it is served with the event's times. A
+ * copy that cannot be built is never recorded as shown: the answer is the plain accepted one, no
+ * window starts, and every hold stays. A copy recorded as shown but never confirmed served (D1
+ * failing past the retries) starts nothing and is not claimed either: the window stays unknown,
+ * every hold stays, and the job is on the owner and ops work queue until a copy is confirmed served
+ * or a person records the receipt. Only a 200 for an accepted acceptance carries a copy; a 409 or a
+ * 202 writes nothing.
  */
 async function withSignedCopy(
   env: AppEnv,

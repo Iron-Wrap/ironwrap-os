@@ -17,15 +17,17 @@
 --    only after the acceptance has committed and it has built the copy (terms plus receipt) for a
 --    client that renders it, in its own statement conditional on that committed binding; never
 --    from the acceptance alone, and never for a copy it could not build. The window starts at the
---    event's D1 write time, `shown_at`, D1's own clock. The Worker then confirms the copy served
---    (`contract_signed_copy_served`, append-only, D1's clock, within a minute of its event) and
---    only then sends it. An event with no confirmation (the Worker stopped, or D1's answers were
---    lost past its retries) has started the window though no copy may have reached the customer:
---    the owner and ops work queue lists the job until a copy of that contract is confirmed served or
---    a person records the receipt. A later attempt never reuses an unconfirmed event: it appends a
---    new one with D1's time then, so a copy served later never carries a back-dated start. Once a
---    contract's copy is confirmed served, no further event is appended for it. Each event and each
---    confirmation writes one `audit_log` row as it lands.
+--    event's D1 write time, `shown_at`, D1's own clock, once the Worker confirms the copy served
+--    (`contract_signed_copy_served`, append-only, D1's clock, within a minute of its event); only
+--    then does it send the copy. **Only a confirmed event counts**: every hold below, and every
+--    check that reads a previous start or end, joins the confirmation. An event with no
+--    confirmation (the Worker stopped, or D1's answers were lost past its retries) starts nothing
+--    and ends nothing: the window stays unknown and every hold holds, and the owner and ops work
+--    queue lists the job until a copy of that contract is confirmed served or a person records the
+--    receipt. A later attempt never reuses an unconfirmed event: it appends a new one with D1's time
+--    then, so a copy served later never carries a back-dated start. Once a contract's copy is
+--    confirmed served, no further event is appended for it. Each event and each confirmation writes
+--    one `audit_log` row as it lands.
 -- 2. `production_cancellation_window_receipts`: a person's record, for a contract whose copy the
 --    portal did not show (every contract signed before this, or one signed outside D1). An active
 --    owner or ops person, never the QA seed owner, records when the customer received the copy,
@@ -54,8 +56,9 @@
 -- to no earlier than the job's previous end: no writer can shorten a window.
 --
 -- The window is derived and read-only. It is not a gate: it has no ledger and no waiver.
---   * Unknown while the job has neither a copy event for its latest contract nor a record at or
---     after that contract's signature: nothing at all, or only from before a later contract.
+--   * Unknown while the job has neither a confirmed copy event for its latest contract nor a record
+--     at or after that contract's signature: nothing at all, only an unconfirmed copy event, or only
+--     records from before a later contract.
 --   * Open while any end on the job is after D1's now (ends never move earlier); ended at the end.
 --   * Ended otherwise.
 -- While a job's window is unknown or open, D1 refuses each of these by its own code, read with
@@ -227,6 +230,7 @@ BEGIN
      OR EXISTS (
        SELECT 1
          FROM contract_signed_copy_events shown
+         JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
         WHERE shown.tenant_id = NEW.tenant_id
           AND shown.roof_job_id = NEW.roof_job_id
           AND shown.window_ends_at > NEW.window_ends_at
@@ -451,6 +455,7 @@ BEGIN
      OR EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND shown.shown_at > NEW.received_at
@@ -466,6 +471,7 @@ BEGIN
      OR EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND shown.shown_at = NEW.received_at
@@ -486,6 +492,7 @@ BEGIN
      OR EXISTS (
        SELECT 1
          FROM contract_signed_copy_events shown
+         JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
         WHERE shown.tenant_id = NEW.tenant_id
           AND shown.roof_job_id = NEW.roof_job_id
           AND shown.window_ends_at > NEW.window_ends_at
@@ -542,6 +549,7 @@ BEGIN
   WHERE NOT EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND NOT EXISTS (
@@ -569,6 +577,7 @@ BEGIN
   WHERE EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND julianday(shown.window_ends_at) > julianday('now')
@@ -592,6 +601,7 @@ BEGIN
   WHERE NOT EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND NOT EXISTS (
@@ -619,6 +629,7 @@ BEGIN
   WHERE EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND julianday(shown.window_ends_at) > julianday('now')
@@ -652,6 +663,7 @@ BEGIN
   WHERE NOT EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND NOT EXISTS (
@@ -679,6 +691,7 @@ BEGIN
   WHERE EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
        AND julianday(shown.window_ends_at) > julianday('now')
@@ -707,6 +720,7 @@ BEGIN
     AND NOT EXISTS (
       SELECT 1
         FROM contract_signed_copy_events shown
+        JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
        WHERE shown.tenant_id = NEW.tenant_id
          AND shown.roof_job_id = NEW.roof_job_id
          AND NOT EXISTS (
@@ -738,6 +752,7 @@ BEGIN
       EXISTS (
         SELECT 1
           FROM contract_signed_copy_events shown
+          JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
          WHERE shown.tenant_id = NEW.tenant_id
            AND shown.roof_job_id = NEW.roof_job_id
            AND julianday(shown.window_ends_at) > julianday('now')

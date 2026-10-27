@@ -21,20 +21,23 @@
 //     counts as received). Only after the acceptance has committed and the copy has been built, for
 //     a client that renders it on the confirm screen, does the confirm route record the copy as
 //     shown (`recordSignedCopyShown` below): one `contract_signed_copy_events` row in its own D1
-//     statement, conditional on the committed binding. The window starts at that event's D1 write
-//     time. Then the Worker confirms the copy served (`contract_signed_copy_served`, D1's clock)
-//     and only then sends it. A copy that cannot be built starts no window. A copy recorded as
-//     shown but never confirmed served is not claimed in the answer; its window has started, and
-//     the job is on the work queue below until a copy is confirmed served or a person records the
-//     receipt. A later attempt appends a new event rather than reuse an unconfirmed one, so a copy
-//     sent later never carries a back-dated start (customer-contract-acceptance.ts);
+//     statement, conditional on the committed binding. Then the Worker confirms the copy served
+//     (`contract_signed_copy_served`, D1's clock) and only then sends it. Only a confirmed event
+//     counts, in every hold and every read: the window starts at that event's D1 write time. A copy
+//     that cannot be built starts no window. A copy recorded as shown but never confirmed served
+//     starts nothing either: it is not claimed in the answer, the window reads unknown
+//     (`signed_copy_unconfirmed`) and every hold holds, and the job is on the work queue below until
+//     a copy is confirmed served or a person records the receipt. A later attempt appends a new
+//     event rather than reuse an unconfirmed one, so a copy sent later never carries a back-dated
+//     start (customer-contract-acceptance.ts);
 //   * otherwise an owner or ops person records when the customer received it (the route below).
 // The window is a read-only System state next to the gates, not a gate: it has no ledger and no
 // waiver, so nothing a person waives lifts it. Its state is read with D1's own clock:
 //   * `unknown`, with `unknown_reason`: `signed_copy_time_missing` when there is no record of
-//     either kind, or `signed_copy_before_contract` when every record is from before the job's
-//     latest contract (a later contract needs its own copy). The UI offers the one fix, "Add when
-//     {name} received the signed copy";
+//     either kind, `signed_copy_unconfirmed` when the latest contract's copy was recorded as shown
+//     but never confirmed served, or `signed_copy_before_contract` when every record is from before
+//     the job's latest contract (a later contract needs its own copy). The UI offers the one fix,
+//     "Add when {name} received the signed copy";
 //   * `open` until `ends_at`;
 //   * `ended` at `ends_at`.
 // While it is unknown or open, each of these is refused on the route and in D1, by name:
@@ -89,11 +92,11 @@
 //   GET /api/v1/production/jobs/{job}/gates
 //     Carries `cancellation_window` next to the gates.
 //   GET /api/v1/production/cancellation-window/signed-copy-missing
-//     Owner and ops: the tenant's open signed jobs whose window is unknown, and those whose window
-//     started from a copy the Worker never confirmed served, with a count for each. Signed means a
-//     contract in D1, or a Deposit gate that has cleared for a contract signed outside D1. A job
-//     leaves the list once a copy of its latest contract is confirmed served or its time is
-//     recorded.
+//     Owner and ops: the tenant's open signed jobs whose window is unknown, with a count for each
+//     category: no copy and no record, or a copy recorded as shown that the Worker never confirmed
+//     served. Signed means a contract in D1, or a Deposit gate that has cleared for a contract
+//     signed outside D1. A job leaves the list once a copy of its latest contract is confirmed
+//     served or its time is recorded.
 
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -123,6 +126,7 @@ const RECORDER_ROLES = ["owner", "ops"] as const;
 
 export type CancellationWindowUnknownReason =
   | "signed_copy_time_missing"
+  | "signed_copy_unconfirmed"
   | "signed_copy_before_contract";
 
 export interface CancellationWindowState {
@@ -154,7 +158,10 @@ export interface CancellationWindowState {
   /** The latest person's record of when the customer received their signed copy. */
   signed_copy_received: SignedCopyReceipt | null;
   holds: readonly string[];
-  /** The business time zone, to read every time here on the business clock. */
+  /**
+   * The zone to read every time here in: the one the latest start was read in, which `starts_at`,
+   * `last_day` and its end were computed in, or the business time zone while there is none.
+   */
   time_zone: string;
   /** D1's clock when this was read. */
   as_of: string;
@@ -248,13 +255,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // ------------------------------------------------------------------------------- the derived state
 
 /**
- * The window's two predicates over `job`, exactly as 0160's holds read them. Unknown: neither a
- * copy shown for the job's latest contract nor a record at or after its signature. Open: an end on
- * the job after D1's now; ends never move earlier, so that is the latest end.
+ * The window's two predicates over `job`, exactly as 0160's holds read them. Only a copy event the
+ * Worker confirmed served counts; an unconfirmed one starts and ends nothing. Unknown: neither a
+ * confirmed copy for the job's latest contract nor a record at or after its signature. Open: an end
+ * on the job after D1's now; ends never move earlier, so that is the latest end.
  */
 const UNKNOWN_SQL = `(NOT EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = job.tenant_id
        AND shown.roof_job_id = job.roof_job_id
        AND NOT EXISTS (
@@ -281,6 +290,7 @@ const UNKNOWN_SQL = `(NOT EXISTS (
 const OPEN_SQL = `(EXISTS (
     SELECT 1
       FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = job.tenant_id
        AND shown.roof_job_id = job.roof_job_id
        AND julianday(shown.window_ends_at) > julianday('now')
@@ -303,34 +313,21 @@ const LATEST_CONTRACT_SQL = `NOT EXISTS (
                   AND later.acceptance_binding_id > contract.acceptance_binding_id))
     )`;
 /**
- * A window started from a copy recorded as shown that the Worker never confirmed served: an event
- * for the job's latest contract, no copy of that contract confirmed served, and no person's record
- * at or after the event. The window runs, but the customer may not have the copy.
+ * A copy event for the job's latest contract, which, when the window is unknown, is one the Worker
+ * never confirmed served (it stopped, or D1's answers were lost past its retries). The customer may
+ * not have the copy, so it starts nothing; this names why the window is unknown.
  */
-const UNCONFIRMED_SQL = `EXISTS (
+const COPY_UNCONFIRMED_SQL = `EXISTS (
     SELECT 1
-      FROM contract_signed_copy_events shown
-     WHERE shown.tenant_id = job.tenant_id
-       AND shown.roof_job_id = job.roof_job_id
+      FROM contract_signed_copy_events pending
+     WHERE pending.tenant_id = job.tenant_id
+       AND pending.roof_job_id = job.roof_job_id
        AND NOT EXISTS (
          SELECT 1
            FROM commercial_acceptance_bindings contract
-          WHERE contract.tenant_id = shown.tenant_id
-            AND contract.roof_job_id = shown.roof_job_id
-            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
-       )
-       AND NOT EXISTS (
-         SELECT 1
-           FROM contract_signed_copy_served served
-          WHERE served.tenant_id = shown.tenant_id
-            AND served.acceptance_binding_id = shown.acceptance_binding_id
-       )
-       AND NOT EXISTS (
-         SELECT 1
-           FROM production_cancellation_window_receipts receipt
-          WHERE receipt.tenant_id = shown.tenant_id
-            AND receipt.roof_job_id = shown.roof_job_id
-            AND julianday(receipt.received_at) >= julianday(shown.shown_at)
+          WHERE contract.tenant_id = pending.tenant_id
+            AND contract.roof_job_id = pending.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(pending.contract_signed_at)
        )
   )`;
 /** A signed job: a contract in D1, or a Deposit gate cleared for a contract signed outside D1. */
@@ -348,6 +345,7 @@ interface WindowFacts {
   now: string;
   unknown: number;
   open: number;
+  copy_unconfirmed: number;
   binding_id: string | null;
   contract_signed_at: string | null;
   ends_at: string | null;
@@ -381,10 +379,12 @@ async function windowFacts(
     `SELECT ${D1_NOW} AS now,
             ${UNKNOWN_SQL} AS unknown,
             ${OPEN_SQL} AS open,
+            ${COPY_UNCONFIRMED_SQL} AS copy_unconfirmed,
             contract.acceptance_binding_id AS binding_id,
             contract.accepted_at AS contract_signed_at,
             max(
-              COALESCE((SELECT MAX(window_ends_at) FROM contract_signed_copy_events every
+              COALESCE((SELECT MAX(every.window_ends_at) FROM contract_signed_copy_events every
+                         JOIN contract_signed_copy_served confirmed ON confirmed.event_id = every.event_id
                          WHERE every.tenant_id = job.tenant_id
                            AND every.roof_job_id = job.roof_job_id), ''),
               COALESCE((SELECT MAX(window_ends_at) FROM production_cancellation_window_receipts every
@@ -409,9 +409,11 @@ async function windowFacts(
        LEFT JOIN contract_signed_copy_events shown
          ON shown.tenant_id = job.tenant_id
         AND shown.roof_job_id = job.roof_job_id
+        AND EXISTS (SELECT 1 FROM contract_signed_copy_served confirmed WHERE confirmed.event_id = shown.event_id)
         AND NOT EXISTS (
           SELECT 1
             FROM contract_signed_copy_events newer
+            JOIN contract_signed_copy_served confirmed ON confirmed.event_id = newer.event_id
            WHERE newer.tenant_id = shown.tenant_id
              AND newer.roof_job_id = shown.roof_job_id
              AND (newer.shown_at > shown.shown_at
@@ -500,19 +502,21 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
   const start = latestStart(facts);
   const state = Number(facts.unknown) === 1 ? "unknown" : Number(facts.open) === 1 ? "open" : "ended";
   // The deadline, read in the zone the latest start was read in.
-  const reading = start && state !== "unknown"
-    ? calendarReading(
-      start.at,
-      (start.from === "manual_record" ? facts.receipt_time_zone : facts.shown_time_zone) ?? timeZone,
-    )
-    : null;
+  const startZone = start
+    ? (start.from === "manual_record" ? facts.receipt_time_zone : facts.shown_time_zone) ?? timeZone
+    : timeZone;
+  const reading = start && state !== "unknown" ? calendarReading(start.at, startZone) : null;
   return {
     kind: "system_state",
     state,
     waivable: false,
     unknown_reason: state !== "unknown"
       ? null
-      : start ? "signed_copy_before_contract" : "signed_copy_time_missing",
+      : Number(facts.copy_unconfirmed) === 1
+      ? "signed_copy_unconfirmed"
+      : start
+      ? "signed_copy_before_contract"
+      : "signed_copy_time_missing",
     starts_at: start?.at ?? null,
     started_from: start?.from ?? null,
     last_day: reading?.lastDay ?? null,
@@ -524,7 +528,7 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
     signed_copy_shown: shownOf(facts),
     signed_copy_received: receiptOf(facts),
     holds: state === "ended" ? [] : CANCELLATION_WINDOW_HOLDS,
-    time_zone: timeZone,
+    time_zone: reading ? startZone : timeZone,
     as_of: facts.now,
   };
 }
@@ -889,6 +893,7 @@ export async function recordSignedCopyShown(
                 max(
                   ${windowEndSql("clock.now")},
                   COALESCE((SELECT MAX(shown.window_ends_at) FROM contract_signed_copy_events shown
+                             JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
                              WHERE shown.tenant_id = binding.tenant_id
                                AND shown.roof_job_id = binding.roof_job_id), ''),
                   COALESCE((SELECT MAX(receipt.window_ends_at) FROM production_cancellation_window_receipts receipt
@@ -1160,25 +1165,25 @@ interface MissingRow {
   address_line1: string | null;
   contract_signed_at: string | null;
   has_record: number;
-  window_unknown: number;
-  window_started_at: string | null;
+  copy_unconfirmed: number;
+  copy_shown_at: string | null;
 }
 
-/** The two kinds of job the work queue lists. */
-export const SIGNED_COPY_QUEUE_CATEGORIES = ["window_unknown", "window_started_copy_unconfirmed"] as const;
+/** The two kinds of job the work queue lists; both read unknown and hold everything. */
+export const SIGNED_COPY_QUEUE_CATEGORIES = ["window_unknown", "signed_copy_unconfirmed"] as const;
 
 /**
  * `GET /api/v1/production/cancellation-window/signed-copy-missing`: owner and ops. The tenant's
- * open signed jobs that need a person to say when the customer received the signed copy, oldest
- * first, with their count and a count per category:
- *   * `window_unknown`: no copy shown for the job's latest contract and no record at or after it.
- *     The row says why (`unknown_reason`);
- *   * `window_started_copy_unconfirmed`: the window started from a copy recorded as shown that the
- *     Worker never confirmed served (it stopped, or D1's answers were lost past its retries). The
- *     window runs from `window_started_at`, but the customer may not have the copy. A copy of that
- *     contract confirmed served later, or a person's record, takes the job off the list.
- * Signed means a contract in D1, or a Deposit gate that has cleared for a contract signed outside
- * D1. Each row says whether D1 holds a contract for the job.
+ * open signed jobs whose window is unknown, so a person needs to say when the customer received the
+ * signed copy, oldest first, with their count and a count per category:
+ *   * `window_unknown`: no copy of the job's latest contract and no record at or after it, with
+ *     `unknown_reason` (`signed_copy_time_missing` or `signed_copy_before_contract`);
+ *   * `signed_copy_unconfirmed`: a copy of the latest contract was recorded as shown at
+ *     `copy_shown_at`, but the Worker never confirmed it served (it stopped, or D1's answers were
+ *     lost past its retries). The customer may not have the copy, so it started nothing.
+ * Either leaves the list once a copy of that contract is confirmed served or a person records the
+ * receipt. Signed means a contract in D1, or a Deposit gate that has cleared for a contract signed
+ * outside D1. Each row says whether D1 holds a contract for the job.
  */
 export async function handleCancellationWindowSignedCopyMissing(
   env: AppEnv,
@@ -1190,26 +1195,27 @@ export async function handleCancellationWindowSignedCopyMissing(
   try {
     const tenantId = auth.session.tenant_id;
     const missing = `job.tenant_id = ? AND job.job_status IN ('qualified', 'in_progress')
-        AND ${SIGNED_SQL} AND (${UNKNOWN_SQL} OR ${UNCONFIRMED_SQL})`;
+        AND ${SIGNED_SQL} AND ${UNKNOWN_SQL}`;
     const [count, rows] = await Promise.all([
       env.DB.prepare(
-        `SELECT COUNT(*) AS n, COALESCE(SUM(${UNKNOWN_SQL}), 0) AS unknown
+        `SELECT COUNT(*) AS n, COALESCE(SUM(${COPY_UNCONFIRMED_SQL}), 0) AS unconfirmed
            FROM operating_roof_jobs job WHERE ${missing}`,
-      ).bind(tenantId).first<{ n: number; unknown: number }>(),
+      ).bind(tenantId).first<{ n: number; unconfirmed: number }>(),
       env.DB.prepare(
         `SELECT job.roof_job_id, job.job_number, customer.display_name AS customer_display_name,
                 property.address_line1, contract.accepted_at AS contract_signed_at,
-                ${UNKNOWN_SQL} AS window_unknown,
-                (SELECT MIN(shown.shown_at)
-                   FROM contract_signed_copy_events shown
-                  WHERE shown.tenant_id = job.tenant_id
-                    AND shown.roof_job_id = job.roof_job_id
-                    AND shown.acceptance_binding_id = contract.acceptance_binding_id) AS window_started_at,
+                ${COPY_UNCONFIRMED_SQL} AS copy_unconfirmed,
+                (SELECT MIN(pending.shown_at)
+                   FROM contract_signed_copy_events pending
+                  WHERE pending.tenant_id = job.tenant_id
+                    AND pending.roof_job_id = job.roof_job_id
+                    AND pending.acceptance_binding_id = contract.acceptance_binding_id) AS copy_shown_at,
                 (EXISTS (
                   SELECT 1 FROM production_cancellation_window_receipts receipt
                    WHERE receipt.tenant_id = job.tenant_id AND receipt.roof_job_id = job.roof_job_id
                 ) OR EXISTS (
                   SELECT 1 FROM contract_signed_copy_events shown
+                    JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
                    WHERE shown.tenant_id = job.tenant_id AND shown.roof_job_id = job.roof_job_id
                 )) AS has_record
            FROM operating_roof_jobs job
@@ -1228,25 +1234,25 @@ export async function handleCancellationWindowSignedCopyMissing(
     ]);
     const jobs = rows.results ?? [];
     const total = Number(count?.n ?? 0);
-    const unknown = Number(count?.unknown ?? 0);
+    const unconfirmed = Number(count?.unconfirmed ?? 0);
     return json({
       count: total,
-      counts: { window_unknown: unknown, window_started_copy_unconfirmed: total - unknown },
+      counts: { window_unknown: total - unconfirmed, signed_copy_unconfirmed: unconfirmed },
       complete: jobs.length <= MISSING_LIST_LIMIT,
       jobs: jobs.slice(0, MISSING_LIST_LIMIT).map((row) => {
-        const windowUnknown = Number(row.window_unknown) === 1;
+        const copyUnconfirmed = Number(row.copy_unconfirmed) === 1;
         return {
           roof_job_id: row.roof_job_id,
           job_number: row.job_number,
           customer_display_name: row.customer_display_name,
           address_line1: row.address_line1,
-          category: windowUnknown ? "window_unknown" : "window_started_copy_unconfirmed",
-          unknown_reason: !windowUnknown
-            ? null
+          category: copyUnconfirmed ? "signed_copy_unconfirmed" : "window_unknown",
+          unknown_reason: copyUnconfirmed
+            ? "signed_copy_unconfirmed"
             : Number(row.has_record) === 1
             ? "signed_copy_before_contract"
             : "signed_copy_time_missing",
-          window_started_at: windowUnknown ? null : row.window_started_at,
+          copy_shown_at: copyUnconfirmed ? row.copy_shown_at : null,
           contract_on_record: row.contract_signed_at !== null,
           contract_signed_at: row.contract_signed_at,
         };

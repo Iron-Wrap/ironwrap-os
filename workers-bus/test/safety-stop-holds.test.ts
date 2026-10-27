@@ -20,6 +20,7 @@ import {
   type SafetyScopeRef,
 } from "../src/safety-lifecycle.ts";
 import { safetyReleaseGate } from "../src/safety-release-gate.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 import {
   issueNativeWorkPackage,
   nativeWorkPackageAction,
@@ -325,11 +326,12 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
         `INSERT OR IGNORE INTO operating_production_gates
           (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key, gate, state,
            owner_user, assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'blocked', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
       )
       .run(`gate:wp:${suffix}:${gate.toLowerCase()}`, packet.tenantId, packet.jobId, envelopeId,
         rawKey, gate, owner.id, now, packet.expiresAt, now, now);
   }
+  recordLegacyGateStates(sqlite, { tenantId: packet.tenantId, roofJobId: packet.jobId, at: now });
   sqlite
     .prepare(
       `INSERT OR IGNORE INTO fleet_crews

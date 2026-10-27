@@ -184,8 +184,8 @@ export interface MoveBlocker {
  * than one generic "something went wrong".
  *
  * The codes are transcribed from `workers-bus/src/pipeline-board-api.ts`; the details the
- * server attaches to them (`required_role`, `card_version`) are read back out of the error
- * body so the message names the actual reason, not a category of reason.
+ * server attaches to them (`required_role`) are read back out of the error body so the message
+ * names the actual reason, not a category of reason. A card's version never reaches the words.
  */
 export function describeMoveBlocker(
   error: unknown,
@@ -205,17 +205,15 @@ export function describeMoveBlocker(
     return { code: error.code, message: "", outcome: "confirm", refresh: false };
   }
   switch (error.code) {
-    case "pipeline_card_version_conflict": {
-      const version = error.detailNumber("card_version");
+    case "pipeline_card_version_conflict":
+      // A version number never stands in a person's line; the card's change is what matters.
       return {
         code: error.code,
-        message: `Someone else changed this card first${
-          version === undefined ? "." : `. It is now at version ${version}.`
-        } The board has been refreshed; check the card and move it again.`,
+        message:
+          "Someone else changed this card first. The board has been refreshed; check the card and move it again.",
         outcome: "refused",
         refresh: true,
       };
-    }
     case "stage_entry_role_required": {
       const required = error.detailText("required_role");
       return {
@@ -347,17 +345,14 @@ export function describeUndoBlocker(
         outcome: "refused",
         refresh: true,
       };
-    case "pipeline_card_version_conflict": {
-      const version = error.detailNumber("card_version");
+    case "pipeline_card_version_conflict":
       return {
         code: error.code,
-        message: `Someone else changed this card first${
-          version === undefined ? "." : `. It is now at version ${version}.`
-        } The undo was refused. The board has been refreshed.`,
+        message:
+          "Someone else changed this card first. The undo was refused. The board has been refreshed.",
         outcome: "refused",
         refresh: true,
       };
-    }
     default:
       return {
         code: error.code,

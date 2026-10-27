@@ -525,6 +525,7 @@ const COPY_MODULES = [
   "src/lib/roles.ts",
   "src/now/decision-presentation.ts",
   "src/owner/owner-now-utils.ts",
+  "src/owner/owner-stop-copy.ts",
   "src/people/authority-contracts.ts",
   "src/pipeline/pipeline-board-model.ts",
   "src/production/production-gate-clearance-contracts.ts",

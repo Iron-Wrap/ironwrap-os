@@ -198,7 +198,7 @@ function OfficeSettledItems({ actions }: { actions: OutboxAction[] }) {
 
 const actionNames: Record<OutboxAction["kind"], string> = {
   field_checkin: "Field check-in",
-  work_package_acknowledgement: "Work plan review",
+  work_package_acknowledgement: "Job plan review",
   work_package_stop: "Stop Work report",
   inventory_command: "Inventory action",
   inventory_scan: "Inventory scan",

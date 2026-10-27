@@ -102,7 +102,7 @@ const fieldNames: Readonly<Record<string, string>> = {
   "packet.materials.supplier_orders.native_unavailable": "Supplier orders",
   "packet.change_orders.native_unavailable": "Change orders",
   "packet.safety_plan.native_unavailable": "Safety plan",
-  "packet.work_package.native_unavailable": "Work plan",
+  "packet.work_package.native_unavailable": "Job plan",
   "proof_stream.native_scope_unavailable": "Photos and notes",
   "proof_stream.unavailable": "Photos and notes",
 };

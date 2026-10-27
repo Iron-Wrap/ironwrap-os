@@ -262,7 +262,7 @@ describe("equipment inspections", () => {
       detail: "Webbing is damaged.",
       expected_version: record.version,
     });
-    expect(screen.getByText(/revision 2/)).toBeInTheDocument();
+    expect(screen.queryByText(/revision \d/)).not.toBeInTheDocument();
   });
 
   it("blocks a draft started on an older revision once the record refetches, until explicit reconsideration", async () => {
@@ -283,7 +283,7 @@ describe("equipment inspections", () => {
     // BEFORE the inspector submits.
     vi.mocked(loadSafetyEquipment).mockResolvedValue({ version: 1, equipment: quarantinedByOther });
     fireEvent.click(screen.getByRole("button", { name: "Refresh equipment" }));
-    expect(await screen.findByText(/Record eq_harness_0001, revision 2/)).toBeInTheDocument();
+    expect(await screen.findByText(/Record eq_harness_0001\. Updated/)).toBeInTheDocument();
     expect(screen.getByText("Quarantined")).toBeInTheDocument();
     expect(screen.getByText("This record changed while you were writing")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record inspection" })).toBeDisabled();
@@ -292,7 +292,9 @@ describe("equipment inspections", () => {
     expect(screen.getByLabelText("Inspection findings")).toHaveValue("Looked fine this morning.");
 
     // Only an explicit re-read re-binds the draft, and then to revision 2, never silently.
-    fireEvent.click(screen.getByRole("button", { name: "I have read revision 2, decide again" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "I have read the current record, decide again" }),
+    );
     expect(screen.getByRole("button", { name: "Record inspection" })).toBeEnabled();
     vi.mocked(inspectSafetyEquipment).mockResolvedValue({
       version: 1,
@@ -344,7 +346,7 @@ describe("equipment inspections", () => {
       detail: "Looked fine this morning.",
       expected_version: 1,
     });
-    expect(await screen.findByText(/Record eq_harness_0001, revision 2/)).toBeInTheDocument();
+    expect(await screen.findByText(/Record eq_harness_0001\. Updated/)).toBeInTheDocument();
     expect(screen.getByText("Quarantined")).toBeInTheDocument();
     expect(screen.getByLabelText("Inspection findings")).toHaveValue("Looked fine this morning.");
     expect(screen.getByRole("button", { name: "Record inspection" })).toBeDisabled();

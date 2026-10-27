@@ -293,7 +293,7 @@ describe("EntityDocumentsSection", () => {
       const make = await screen.findByRole("button", { name: "Make this document" });
       await userEvent.click(make);
       expect(await screen.findByText("Document made")).toBeInTheDocument();
-      expect(screen.getByText(/Receipt dgr_0001, template revision 1/)).toBeInTheDocument();
+      expect(screen.getByText(/Receipt dgr_0001/)).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "Open the document" })).toHaveAttribute(
         "href",
         "/api/v1/document-generations/dgr_0001/document",

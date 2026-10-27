@@ -304,8 +304,7 @@ function MakeDocumentAction({
           }
           title={outcomeCopy[result.outcome].title}
         >
-          {outcomeCopy[result.outcome].body} Receipt {result.generation.receipt_id}, template
-          revision {result.generation.template_version}
+          {outcomeCopy[result.outcome].body} Receipt {result.generation.receipt_id}
           {result.generation.provider_document_id
             ? `, stored as ${result.generation.provider_document_id}`
             : ""}

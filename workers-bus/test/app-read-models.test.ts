@@ -2040,7 +2040,7 @@ test("crew job keeps customer and public office contact separate", async () => {
   }
 });
 
-test("a stopped plan carries its own crew stop, never another job's or another tenant's", async () => {
+test("a stopped plan lists its own crew stop, never another job's or another tenant's", async () => {
   const stop = (overrides: Partial<Record<string, unknown>>) =>
     nativeWorkPackageEvent("stop_work", {
       event_id: "wpe_stop_job_a",
@@ -2078,10 +2078,16 @@ test("a stopped plan carries its own crew stop, never another job's or another t
   });
   const model = await buildJobReadModel(appEnv, auth("field", "crew@example.com"), "JOB-A");
   assert.equal(model?.packet.work_package?.status, "Blocked");
-  assert.deepEqual(model?.packet.work_package?.active_stop, {
-    reported_at: "2026-07-10T13:40:00.000Z",
-    summary: "Ice on the north slope",
-  });
+  // One job-scoped entry: the stop that blocked this plan. The Owner Now read carries no raiser.
+  assert.deepEqual(model?.active_stops, [
+    {
+      occurrence_id: "wpe_stop_job_a",
+      scope: "job",
+      reported_at: "2026-07-10T13:40:00.000Z",
+      summary: "Ice on the north slope",
+      raiser_display_name: null,
+    },
+  ]);
 
   const onlyForeign = env({
     workPackages: [nativeWorkPackageRow({ status: "Blocked" })],
@@ -2095,14 +2101,14 @@ test("a stopped plan carries its own crew stop, never another job's or another t
   });
   const unstated = await buildJobReadModel(onlyForeign, auth("field", "crew@example.com"), "JOB-A");
   assert.equal(unstated?.packet.work_package?.status, "Blocked");
-  assert.equal(unstated?.packet.work_package?.active_stop, null);
+  assert.deepEqual(unstated?.active_stops, []);
 
   const released = await buildJobReadModel(
     env({ workPackages: [nativeWorkPackageRow()], workPackageEvents: [stop({})] }),
     auth("field", "crew@example.com"),
     "JOB-A",
   );
-  assert.equal(released?.packet.work_package?.active_stop, null);
+  assert.deepEqual(released?.active_stops, []);
 });
 
 test("field read model fails closed on corrupt or unavailable current authority", async (t) => {
@@ -2307,6 +2313,42 @@ test("typed completion capability requires the immutable assignment authority an
       ),
       true,
     );
+    assert.deepEqual(authority?.active_stops, [], "a plan in progress lists no stop");
+    // A stopped typed plan lists its own stop, never another tenant's later one.
+    const stopped = await buildUniversalWorkPackageReadModel(
+      env({
+        ...nativeSource,
+        workPackages: [{ ...shopPackage, status: "Blocked" }],
+        workPackageEvents: [
+          ...nativeSource.workPackageEvents,
+          nativeWorkPackageEvent("stop_work", {
+            ...eventScope,
+            event_id: "wpe_stop_shop_1",
+            occurred_at: "2026-07-10T07:45:00.000Z",
+            payload_json: JSON.stringify({ blocker_reason: "Saw guard missing" }),
+          }),
+          nativeWorkPackageEvent("stop_work", {
+            ...eventScope,
+            tenant_id: "other-tenant",
+            event_id: "wpe_stop_shop_other_tenant",
+            occurred_at: "2026-07-10T07:50:00.000Z",
+            payload_json: JSON.stringify({ blocker_reason: "Another tenant's stop" }),
+          }),
+        ],
+        typedAssignments: [nativeTypedAssignment()],
+      }),
+      auth("owner", "authority@example.com"),
+      scope,
+    );
+    assert.deepEqual(stopped?.active_stops, [
+      {
+        occurrence_id: "wpe_stop_shop_1",
+        scope: "job",
+        reported_at: "2026-07-10T07:45:00.000Z",
+        summary: "Saw guard missing",
+        raiser_display_name: null,
+      },
+    ]);
     const dispatcher = auth("owner", "dispatcher@example.com");
     dispatcher.session.user_id = "appu_dispatcher";
     const assigningAuthority = await buildUniversalWorkPackageReadModel(
@@ -3956,7 +3998,6 @@ test("field packet contains job-safe contact details and excludes email, financi
       physical_context_id: "JOB-A",
       release_attempt_id: "attempt-a",
       supersession: null,
-      active_stop: null,
       acknowledgement: {
         current_user_acknowledged: false,
         acknowledged_at: null,

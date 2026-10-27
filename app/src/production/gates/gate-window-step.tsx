@@ -79,7 +79,10 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
   });
 
   const focus = (id: string) =>
-    globalThis.setTimeout(() => document.getElementById(id)?.focus(), 0);
+    globalThis.setTimeout(
+      () => document.querySelector<HTMLElement>(`[data-focus="${id}"]`)?.focus(),
+      0,
+    );
   const heldSchedule = heldScheduleLabel(screen.model);
   const contractStamp = cw.contract ? stampIn(cw.contract.signed_at) : null;
   const typedInstant = instantFromLocal(received, zone);
@@ -304,7 +307,7 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
         {(control) => (
           <Input
             {...control}
-            id={IDS.received}
+            data-focus={IDS.received}
             type="datetime-local"
             value={received}
             onChange={(event) => setReceived(event.target.value)}
@@ -315,7 +318,7 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
         {(control) => (
           <Textarea
             {...control}
-            id={IDS.reason}
+            data-focus={IDS.reason}
             value={reason}
             maxLength={MAX_REASON_LENGTH}
             onChange={(event) => setReason(event.target.value)}
@@ -326,7 +329,7 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
         {(control) => (
           <Input
             {...control}
-            id={IDS.evidence}
+            data-focus={IDS.evidence}
             value={evidence}
             maxLength={MAX_EVIDENCE_LENGTH}
             onChange={(event) => setEvidence(event.target.value)}

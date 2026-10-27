@@ -574,6 +574,68 @@ describe("OwnerNowPage", () => {
     expect(loadOwnerRuntime).toHaveBeenCalledOnce();
   });
 
+  it("puts a work stop naming a job or job plan that doesn't exist first, with who raised it (N1, N1b)", async () => {
+    const base = ownerNowModel();
+    const stop = (kind: string, title: string, id: string) => ({
+      id,
+      kind,
+      severity: null,
+      title,
+      why: "Safety and scheduling stay held on every job while this work stop is active.",
+      next_action: null,
+      job_id: null,
+      occurred_at: "2026-07-10T16:05:00.000Z",
+      due_at: null,
+      ...noLeadEvidence,
+      reported_by_name: kind === "stop_job_unknown" ? "Sam Keewatin" : null,
+      summary: "Soft deck boards by the back stairs. Crew is off the roof.",
+    });
+    vi.mocked(loadOwnerNow).mockResolvedValue({
+      ...base,
+      exceptions: [
+        ...base.exceptions,
+        stop("stop_job_unknown", "This work stop names a job that doesn’t exist", "occ_job"),
+        stop(
+          "stop_work_package_unknown",
+          "This work stop names a job plan that doesn’t exist",
+          "occ_plan",
+        ),
+      ],
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T18:00:00.000Z"));
+    renderOwner();
+
+    const heading = await screen.findByRole("heading", { level: 2, name: "Work stopped" });
+    const list = document.getElementById(`${heading.id}-items`)!;
+    const items = within(list).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("This work stop names a job");
+    expect(items[1]).toHaveTextContent("This work stop names a job");
+    expect(
+      screen.getAllByText(
+        "Safety and scheduling stay held on every job while this work stop is active.",
+      ),
+    ).toHaveLength(2);
+    expect(screen.getByText("Sam Keewatin · Today 10:05")).toBeVisible();
+    expect(screen.getByText("Name not on record · Today 10:05")).toBeVisible();
+    expect(
+      screen.getAllByText("“Soft deck boards by the back stairs. Crew is off the roof.”"),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(
+        "Releasing it, or raising it again on the right job, isn’t in the app yet. Clearing it needs IronWrap support.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Releasing it, or raising it again on the right job plan, isn’t in the app yet. Clearing it needs IronWrap support.",
+      ),
+    ).toBeVisible();
+    expect(within(items[0]!).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(items[0]!).queryByRole("button")).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it("keeps lane order, dates, and job links deterministic and defensive", () => {
     const lanes = buildDecisionLanes(ownerNowModel().exceptions, { dueTimingAvailable: false });
 

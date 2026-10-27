@@ -80,7 +80,7 @@ export function AttestStep({
     setForm((current) => ({ ...current, [key]: value }));
   const focusLater = (id: string) =>
     window.setTimeout(() => {
-      const target = document.getElementById(id);
+      const target = document.querySelector<HTMLElement>(`[data-focus="${id}"]`);
       target?.focus();
       focusRef.current = target;
     }, 0);
@@ -221,7 +221,7 @@ function Choice<T extends string>({
   id: string;
 }) {
   return (
-    <fieldset className="grid gap-2" id={id} tabIndex={-1}>
+    <fieldset className="grid gap-2" data-focus={id} tabIndex={-1}>
       <legend className="mb-1.5 text-[length:var(--type-label-size)] font-semibold">
         {legend}
       </legend>
@@ -266,7 +266,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.supplier}
+              data-focus={ids.supplier}
               value={form.supplier}
               maxLength={MAX_NOTE_LENGTH}
               onChange={(event) => set("supplier", event.target.value)}
@@ -285,7 +285,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.reference}
+              data-focus={ids.reference}
               value={form.reference}
               maxLength={80}
               onChange={(event) => set("reference", event.target.value)}
@@ -314,7 +314,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.confirmedAt}
+              data-focus={ids.confirmedAt}
               type="datetime-local"
               value={form.confirmedAt}
               onChange={(event) => set("confirmedAt", event.target.value)}
@@ -346,7 +346,7 @@ function GateFormFields({
             {(control) => (
               <Input
                 {...control}
-                id={ids.windowStart}
+                data-focus={ids.windowStart}
                 type="datetime-local"
                 value={form.windowStart}
                 onChange={(event) => set("windowStart", event.target.value)}
@@ -388,7 +388,7 @@ function GateFormFields({
             {(control) => (
               <Input
                 {...control}
-                id={ids.forecastAt}
+                data-focus={ids.forecastAt}
                 type="datetime-local"
                 value={form.forecastAt}
                 onChange={(event) => set("forecastAt", event.target.value)}
@@ -425,7 +425,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.hazard}
+              data-focus={ids.hazard}
               value={form.hazardRef}
               maxLength={80}
               onChange={(event) => set("hazardRef", event.target.value)}
@@ -436,7 +436,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.assessedAt}
+              data-focus={ids.assessedAt}
               type="datetime-local"
               value={form.assessedAt}
               onChange={(event) => set("assessedAt", event.target.value)}
@@ -469,7 +469,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.permitNumber}
+              data-focus={ids.permitNumber}
               value={form.permitNumber}
               maxLength={80}
               onChange={(event) => set("permitNumber", event.target.value)}
@@ -493,7 +493,7 @@ function GateFormFields({
           {(control) => (
             <Input
               {...control}
-              id={ids.fallPlan}
+              data-focus={ids.fallPlan}
               value={form.fallPlanRef}
               maxLength={80}
               onChange={(event) => set("fallPlanRef", event.target.value)}

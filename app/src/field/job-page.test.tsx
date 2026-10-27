@@ -717,6 +717,32 @@ describe("JobPage", () => {
     expect(screen.queryByRole("heading", { name: "Proof obligations" })).not.toBeInTheDocument();
   });
 
+  it("offers 911 and the office's own number in an emergency, never a number written in code", async () => {
+    const { unmount } = renderJob(jobModel(), {
+      ...fieldSession,
+      tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" },
+    });
+    const emergency = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office, 780-555-0142",
+    });
+    expect(within(emergency).getByRole("link", { name: "Call 911" })).toHaveAttribute(
+      "href",
+      "tel:911",
+    );
+    expect(within(emergency).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+    unmount();
+    // Without the office's number in the company profile, 911 still stands and nothing is made up.
+    renderJob();
+    const bare = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office",
+    });
+    expect(within(bare).getByRole("link", { name: "Call 911" })).toBeVisible();
+    expect(within(bare).queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
+  });
+
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {
     renderJob();
 

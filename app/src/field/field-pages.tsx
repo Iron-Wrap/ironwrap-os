@@ -1697,6 +1697,7 @@ function SafetyAndAccess({
 }) {
   const safety = model.packet.safety_plan;
   const contact = model.packet.contact;
+  const officePhone = useSession().tenant.office_phone ?? null;
   const safetyFacts = safety
     ? [
         [
@@ -1721,6 +1722,7 @@ function SafetyAndAccess({
           Safety and site
         </h2>
       </header>
+      <EmergencyLine officePhone={officePhone} />
       <div className="grid gap-4 @3xl:grid-cols-2">
         <article className="border border-border bg-surface-raised p-4 sm:p-5">
           <div className="flex items-start gap-3">
@@ -1938,6 +1940,42 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
     <div className="border-b border-border pb-3 last:border-b-0 last:pb-0">
       <p className="font-bold">{title}</p>
       {detail ? <p className="mt-1 text-sm leading-6 text-muted">{detail}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Who to call in an emergency, with a control for each: 911 first, then the office from the
+ * company's profile (safety block, rework ruling). Never a literal office number in code; while the
+ * profile gives none, the line still says to call the office and offers 911.
+ */
+function EmergencyLine({ officePhone }: { officePhone: string | null }) {
+  const dialable = officePhone?.replace(/[^\d+]/g, "") ?? "";
+  return (
+    <div
+      className="border-2 border-danger/45 bg-danger-soft p-4 sm:p-5"
+      role="region"
+      aria-labelledby="emergency-line"
+    >
+      <p id="emergency-line" className="font-bold leading-6">
+        Emergency: call 911 · then the office{officePhone ? `, ${officePhone}` : ""}
+      </p>
+      <div className="@container mt-3 grid gap-2 @md:grid-cols-2">
+        <Button asChild variant="danger" size="field" fullWidth>
+          <a href="tel:911">
+            <Phone aria-hidden="true" />
+            Call 911
+          </a>
+        </Button>
+        {dialable ? (
+          <Button asChild variant="outline" size="field" fullWidth>
+            <a href={`tel:${dialable}`}>
+              <Phone aria-hidden="true" />
+              Call the office
+            </a>
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

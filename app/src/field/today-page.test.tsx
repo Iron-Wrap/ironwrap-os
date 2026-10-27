@@ -230,6 +230,7 @@ describe("TodayPage", () => {
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
     );
     expect(screen.getByText("See job plan")).toBeVisible();
+    expect(screen.getByText("Shop crew · Assigned")).toBeVisible();
     await user.click(link);
     expect(window.location.pathname).toBe(
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",

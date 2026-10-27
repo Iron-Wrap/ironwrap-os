@@ -5,9 +5,9 @@
  */
 const ROLE_OF_TYPE: Record<string, string> = {
   Inspection: "Inspection crew",
-  Estimate: "Estimator",
+  Estimate: "Estimate crew",
   Production: "Production crew",
-  Quality: "Quality checker",
+  Quality: "Quality crew",
   Closeout: "Closeout crew",
   Service: "Service crew",
   Field: "Field crew",
@@ -23,6 +23,14 @@ const STATUS_WORDS: Record<string, string> = {
   Completed: "Done",
   Superseded: "Replaced",
 };
+
+/** A crew phone reads the fact as its own; an office role looking at the job reads the crew's. */
+export function assignmentRoleLabel(userRole: string): string {
+  return userRole === "field" ? "Your role" : "Crew role";
+}
+
+/** Shown under the label when the read has no assignment for this crew. */
+export const ASSIGNMENT_ROLE_MISSING = "Not set yet";
 
 /** "Production crew · Assigned"; empty when the assignment says neither. */
 export function assignmentRole(

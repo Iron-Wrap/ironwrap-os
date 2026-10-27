@@ -16,7 +16,7 @@ import {
   type FieldDateOptions,
 } from "./field-formatting";
 import { messageForLoad } from "../lib/plain-error";
-import { assignmentRole } from "./assignment-words";
+import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 import { OfflineReadiness } from "./offline-readiness";
 
@@ -372,6 +372,7 @@ function TodayJobRow({
       ? "Open job"
       : "Review job";
   const assignment = assignmentRole(job.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   // The card follows its own width, not the window's: the crew shell centres a phone-wide column
   // on a desktop, where window breakpoints squeezed three columns into it.
   return (
@@ -408,7 +409,7 @@ function TodayJobRow({
             </div>
           ) : null}
           <dl className="mt-4 grid gap-3 text-sm @sm:grid-cols-2">
-            <DispatchFact label="Your role" value={assignment || "Assignment detail unavailable"} />
+            <DispatchFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
             <DispatchFact label="Next step" value={job.next_action} />
           </dl>
           <PacketAvailabilityBadge availability={availability} />
@@ -445,6 +446,7 @@ function TodayWorkObjectRow({
     physicalContextId: workObject.physical_context_id,
   };
   const assignment = assignmentRole(workObject.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   return (
     <li className="@container py-5 sm:py-6">
       <article className="grid gap-5 @3xl:grid-cols-[8rem_minmax(0,1fr)_15rem] @3xl:items-start">
@@ -468,7 +470,7 @@ function TodayWorkObjectRow({
             {workObject.physical_context_type} · {workObject.physical_context_id}
           </h3>
           <dl className="mt-4 grid gap-4 text-sm @sm:grid-cols-2">
-            <DispatchFact label="Your role" value={assignment || "Assignment detail unavailable"} />
+            <DispatchFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
             <DispatchFact label="Next step" value={workObject.next_action} />
           </dl>
         </div>

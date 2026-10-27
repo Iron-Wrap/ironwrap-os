@@ -472,6 +472,8 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
+    expect(screen.getByText("Your role")).toBeVisible();
+    expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: /Add proof/ })[0]).toHaveAttribute(
@@ -745,6 +747,9 @@ describe("JobPage", () => {
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "Production" })).toHaveAttribute("href", "/production");
     expect(screen.getByRole("heading", { name: "View only" })).toBeVisible();
+    // An office role reads the crew's role, never "Your role" about a crew it is not on.
+    expect(screen.getByText("Crew role")).toBeVisible();
+    expect(screen.queryByText("Your role")).toBeNull();
     expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "I reviewed this plan" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();

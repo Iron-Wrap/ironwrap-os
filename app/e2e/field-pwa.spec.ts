@@ -19,7 +19,7 @@ test.describe("Field Companion PWA acceptance", () => {
       const card = page.locator("li article").first();
       const facts = card.locator("dl");
       await expect(facts).toBeVisible();
-      // Squeezed, the labels and values spill past their cells ("Assignment" ran into "Next step").
+      // Squeezed, the labels and values spill past their cells ("Your role" ran into "Next step").
       const cells = await facts.locator("dt, dd").all();
       expect(cells.length).toBe(4);
       for (const cell of [card, ...cells])

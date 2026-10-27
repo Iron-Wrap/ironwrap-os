@@ -293,8 +293,9 @@ function readableStop(value: unknown, index: number): unknown {
     occurrence_id:
       typeof raw.occurrence_id === "string"
         ? raw.occurrence_id
-        : // The same unreadable stop on every job keeps one id, so it shows once.
-          `unreadable_${typeof raw.reported_at === "string" ? raw.reported_at : String(index)}`,
+        : // The same unreadable stop on every job keeps one id, so it shows once; scope keeps a job
+          // stop and an every-job stop at the same moment apart.
+          `unreadable_${raw.scope === "tenant" ? "tenant" : "job"}_${typeof raw.reported_at === "string" ? raw.reported_at : String(index)}`,
     scope: raw.scope === "tenant" ? "tenant" : "job",
     reported_at: typeof raw.reported_at === "string" ? raw.reported_at : "",
     summary: typeof raw.summary === "string" ? raw.summary : null,

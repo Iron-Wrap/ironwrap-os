@@ -317,6 +317,33 @@ describe("TodayPage", () => {
     );
   });
 
+  it("never names the run sheet's generic next step as a stopped job's work check", async () => {
+    const [blocked] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        jobs: [
+          {
+            ...blocked!,
+            next_action: "Open field check-in",
+            active_stops: [
+              {
+                occurrence_id: "so_5",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: null,
+                raiser_display_name: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(
+      await screen.findByText("A separate work check is open. Clearing it doesn't restart work."),
+    ).toBeVisible();
+    expect(screen.queryByText(/Separate work check: Open field check-in/)).toBeNull();
+  });
+
   it("offers the office call on the every-job banner too", async () => {
     const tenantStop = {
       occurrence_id: "so_4",

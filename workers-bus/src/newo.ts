@@ -816,11 +816,52 @@ function scheduleNotifications(
     ctx.waitUntil(sendInstantAck(env, envelope).catch((error) =>
       console.log(JSON.stringify({ at: "newo_missed_call_ack", event_id: event.event_id, error: String(error) }))));
   }
-  // Best effort: a send that fails leaves only this log line. The D1 session row is the record.
+  // Best effort: a send that fails leaves this log line and no sent marker, so the session's next
+  // accepted event (Newo's retry of this one included) owes the alert again. The D1 session row is
+  // the record.
   for (const alert of newoOwnerAlerts(event, existing)) {
-    ctx.waitUntil(sendOwnerAlert(env, alert.subject, alert.html).catch((error) =>
+    ctx.waitUntil(deliverNewoOwnerAlert(env, event, alert).catch((error) =>
       console.log(JSON.stringify({ at: `newo_${alert.kind}_alert`, event_id: event.event_id, error: String(error) }))));
   }
+}
+
+/**
+ * Sends an owner alert unless one was already recorded as sent, then records it. Whether an alert
+ * is owed never rests on the session state the request found: a request that wrote the failed
+ * session and then failed (a queue outage, say) is retried by Newo, and its retry finds `failed`
+ * already stored. The R2 marker is written only after the send succeeds, under `raw/newo/` and so
+ * under its 30-day lifecycle, and holds no caller details. Two events of one session racing can
+ * both send; a duplicate urgent email is the safe side of a lost one.
+ */
+async function deliverNewoOwnerAlert(env: NewoRuntimeEnv, event: NewoEventV1, alert: NewoOwnerAlert): Promise<void> {
+  if (await newoOwnerAlertSent(env, alert.marker)) return;
+  await sendOwnerAlert(env, alert.subject, alert.html);
+  await store.putRaw(env, alert.marker, JSON.stringify({
+    schema_version: "newo.owner-alert-sent.v1",
+    kind: alert.kind,
+    session_id: event.session_id,
+    event_id: event.event_id,
+    sent_at: new Date().toISOString(),
+  }), "application/json");
+}
+
+/** Is the alert recorded as sent? A marker that cannot be read counts as not sent. */
+async function newoOwnerAlertSent(env: NewoRuntimeEnv, marker: string): Promise<boolean> {
+  try {
+    return (await env.RAW.head(marker)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where an alert's sent marker lives. The failure alert is owed once per session; a callback
+ * request alert once per handoff event, so a retry of the same event does not repeat it.
+ */
+export function newoOwnerAlertMarker(sessionId: string, kind: "handoff" | "failure", eventId: string): string {
+  const safe = (value: string) => value.replace(/[^A-Za-z0-9_.:-]/g, "_");
+  const name = kind === "failure" ? "failure" : `handoff-${safe(eventId)}`;
+  return `raw/newo/owner-alerts/${safe(sessionId)}/${name}.json`;
 }
 
 const HANDOFF_RANK: Readonly<Record<string, number>> = { requested: 1, failed: 2 };
@@ -869,15 +910,25 @@ function callerHtml(event: NewoEventV1, existing: NewoSessionRecord | null): str
     `<li>Session: ${escapeHtml(event.session_id)}</li></ul>`;
 }
 
+export interface NewoOwnerAlert {
+  kind: "handoff" | "failure";
+  subject: string;
+  html: string;
+  /** The R2 key that records the alert as sent (`newoOwnerAlertMarker`). */
+  marker: string;
+}
+
 /**
- * The owner alerts one accepted event raises: a callback request, or a handoff or session that
- * failed. Each email carries the caller's name, phone and address, because it is the work list.
+ * The owner alerts one accepted event owes: a callback request, or a handoff or session that
+ * failed. A failed session owes the failure alert on every event until one is recorded as sent;
+ * the sent marker, not the session state before this event, keeps it to one email. Each email
+ * carries the caller's name, phone and address, because it is the work list.
  */
 export function newoOwnerAlerts(
   event: NewoEventV1,
   existing: NewoSessionRecord | null = null,
-): Array<{ kind: "handoff" | "failure"; subject: string; html: string }> {
-  const alerts: Array<{ kind: "handoff" | "failure"; subject: string; html: string }> = [];
+): NewoOwnerAlert[] {
+  const alerts: NewoOwnerAlert[] = [];
   const caller = callerHtml(event, existing);
   if (event.event_type === "handoff_requested") {
     const urgency = newoUrgency(event, existing);
@@ -885,14 +936,15 @@ export function newoOwnerAlerts(
       kind: "handoff",
       subject: urgency === "routine" ? "Newo callback requested" : `Urgent Newo callback requested - ${urgency}`,
       html: `<p>Call this caller back. Reason: ${escapeHtml(event.handoff_summary ?? "No reason supplied")}</p>${caller}`,
+      marker: newoOwnerAlertMarker(event.session_id, "handoff", event.event_id),
     });
   }
-  const failedNow = newoHandoffStatus(event, existing) === "failed" && existing?.handoff_status !== "failed";
-  if (event.event_type === "session_failed" || failedNow) {
+  if (event.event_type === "session_failed" || newoHandoffStatus(event, existing) === "failed") {
     alerts.push({
       kind: "failure",
       subject: "Urgent Newo callback required",
       html: `<p>The handoff request or the session failed. Call this caller back.</p>${caller}`,
+      marker: newoOwnerAlertMarker(event.session_id, "failure", event.event_id),
     });
   }
   return alerts;

@@ -130,6 +130,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
           scheduled_end: null,
           blocker_reason: null,
         },
+        active_stops: [],
       },
       {
         id: "JOB-NEXT",
@@ -151,6 +152,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
           scheduled_end: null,
           blocker_reason: null,
         },
+        active_stops: [],
       },
     ],
     work_objects: [],

@@ -18,7 +18,7 @@ function StopLines({
   return (
     <>
       {stops.map((stop) => (
-        <p key={stop.occurrence_id} className="leading-6">
+        <p key={stop.occurrence_id} className="leading-6 break-words">
           {stopDetail(stop, dateOptions, now)}
         </p>
       ))}

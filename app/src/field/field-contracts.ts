@@ -282,6 +282,29 @@ export const activeStopSchema = z.object({
 
 export type ActiveStop = z.infer<typeof activeStopSchema>;
 
+/**
+ * A run sheet's stops, read one by one: an entry the app cannot read still shows as a stop on this
+ * job (its id kept when it has one), never dropped and never failing the whole run sheet.
+ */
+function readableStop(value: unknown, index: number): unknown {
+  if (activeStopSchema.safeParse(value).success) return value;
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  return {
+    occurrence_id:
+      typeof raw.occurrence_id === "string" ? raw.occurrence_id : `unreadable_${String(index)}`,
+    scope: raw.scope === "tenant" ? "tenant" : "job",
+    reported_at: typeof raw.reported_at === "string" ? raw.reported_at : "",
+    summary: typeof raw.summary === "string" ? raw.summary : null,
+    raiser_display_name:
+      typeof raw.raiser_display_name === "string" ? raw.raiser_display_name : null,
+  };
+}
+
+const activeStopsSchema = z.preprocess(
+  (value) => (Array.isArray(value) ? value.map(readableStop) : []),
+  z.array(activeStopSchema),
+);
+
 export const todayResponseSchema = envelopeSchema.extend({
   date: z.string().min(1),
   jobs: z.array(
@@ -297,7 +320,7 @@ export const todayResponseSchema = envelopeSchema.extend({
       next_action: z.string().min(1),
       assignment: assignmentSchema.nullable(),
       // Absent on run sheets from before the Worker carried it; empty when no stop holds the job.
-      active_stops: z.array(activeStopSchema).default([]),
+      active_stops: activeStopsSchema,
     }),
   ),
   work_objects: z

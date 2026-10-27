@@ -1,3 +1,4 @@
+import { dateTimeFormatter } from "../lib/intl-cache";
 import type { ActiveStop } from "./field-contracts";
 
 /** The crew's words for a work stop that holds a job (one module, so ruled copy swaps in here). */
@@ -19,24 +20,29 @@ export function crewStopStamp(
 ): string | null {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return null;
-  const zone = options.timeZone;
-  const day = (value: Date) =>
-    new Intl.DateTimeFormat("en-CA", { timeZone: zone, dateStyle: "short" }).format(value);
-  const time = new Intl.DateTimeFormat("en-CA", {
-    timeZone: zone,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(at);
-  if (day(at) === day(now)) return `Today ${time}`;
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: zone,
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-  }).formatToParts(at);
-  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
-  return `${part("weekday")} ${part("day")} ${part("month")} ${time}`;
+  try {
+    const timeZone = options.timeZone;
+    const day = (value: Date) =>
+      dateTimeFormatter("en-CA", { timeZone, dateStyle: "short" }).format(value);
+    const time = dateTimeFormatter("en-CA", {
+      timeZone,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(at);
+    if (day(at) === day(now)) return `Today ${time}`;
+    const parts = dateTimeFormatter("en-CA", {
+      timeZone,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    }).formatToParts(at);
+    const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+    return `${part("weekday")} ${part("day")} ${part("month")} ${time}`;
+  } catch {
+    // A time zone this device cannot read: the stop still shows, without a time.
+    return null;
+  }
 }
 
 /** "Tom Lachance stopped it · Today 10:24 a.m. · Ice on the north slope"; parts it lacks are left out. */
@@ -59,5 +65,6 @@ export function uniqueStops(stopLists: ActiveStop[][]): ActiveStop[] {
   const seen = new Map<string, ActiveStop>();
   for (const stop of stopLists.flat())
     if (!seen.has(stop.occurrence_id)) seen.set(stop.occurrence_id, stop);
-  return [...seen.values()].sort((a, b) => a.reported_at.localeCompare(b.reported_at));
+  const at = (stop: ActiveStop) => Date.parse(stop.reported_at) || 0;
+  return [...seen.values()].sort((a, b) => at(a) - at(b));
 }

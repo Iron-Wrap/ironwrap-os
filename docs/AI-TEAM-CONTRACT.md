@@ -463,8 +463,8 @@ An action's class is fixed by its consequence. It never changes at runtime.
 |---|---|---|---|
 | `A0` | Suggest | Observe, evaluate and explain, with citations | None |
 | `A1` | Suggest | Draft or propose; the output is stored as proposed | None |
-| `A2` | The current setting on the dial (Auto with undo, Act with approval or Off) | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
-| `A3` | The current setting on the dial (Act with approval, Auto with undo or Off) | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
+| `A2` | The current setting on the dial (Auto with undo, Act with approval, Off or Suggest; see item 14) | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
+| `A3` | The current setting on the dial (Act with approval, Auto with undo, Off or Suggest; see item 14) | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
 | `H` | Locked | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
@@ -1180,7 +1180,7 @@ A receipt has exactly these fields:
 | `needs_from_you` | `null`, or `{reviewer_role, person_id, ask}` | "Needs you", with the ask and its buttons |
 | `sources` | A list of `{fact_id, version, hash}` | "Sources" |
 | `policy` | `{policy_id, version, result, checks, reason_codes}`; `result` is `allow`, `needs_approval` or `deny` | "Checked", each check in words |
-| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "within your limits", or "Practice run" |
+| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "Auto with undo", or "Practice run" |
 | `tool` | `{name, binding, idempotency_key, request_hash}`, or `null` for `A0` and `A1` | "Used" |
 | `readback` | `{source, reference, response_hash, matched}`, or `null` | "Confirmed by" |
 | `outcome` | `null` while the step is open, then `succeeded`, `failed`, `unknown` or `abstained` | The state, in words |
@@ -2546,7 +2546,7 @@ that proposes it abstains with `policy_missing`. Only 14 actions are registered 
 
 | Row | On the screen | Rule | Catalog actions | Notes and status |
 |---|---|---|---|---|
-| L01 | Stop contact when permission is withdrawn | Always on | `suppression.apply` (protective) | Takes no setting. Not registered |
+| L01 | Stop contact when permission is withdrawn | Always on: protects you (off the dial) | `suppression.apply` (protective) | Takes no setting. Not registered |
 | L02 | Contact without permission or outside calling hours | Never | The `consent` and `quiet_hours` checks on every customer send (`customer_message.send`, `visit.confirm`, `campaign.send` and the other sends) | The calling hours are tenant policy. No customer send is registered yet |
 | L03 | Give a price on a call | Never | The `live_session` and `no_commitment` checks on `conversation.answer_live`; the AI receptionist's hard boundary | Nothing answers live yet |
 | L04 | Resend an outside message (a proposal, a confirmation, an invoice or an order) while the last result is unknown | Never | Every outside send; no step retries a dispatched effect whose outcome is unknown ("Ceilings") | Built for proposal publication only: preparing a publish is refused while the last delivery is unconfirmed (migration 0156). Not built yet for every other send |

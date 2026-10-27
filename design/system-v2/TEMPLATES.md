@@ -421,12 +421,14 @@ record, the calendar). The link from a view keeps its target and names the surfa
 
 ### 5.2 How each delegation appears in a generated view
 
-**Owner dial ruling** on this section (it wins over the words below): the chip says the owner's
-dial words, and the contract settings stay internal. Reads and watches, Prepares and Practice only
+**Owner dial ruling** on every delegation chip in this file (it wins over the words below and over
+the sample chips in later sections): the chip says the owner's dial words, and the contract settings
+stay internal. Reads and watches, Prepares and Practice only
 read "Suggest"; Asks first reads "Act with approval"; Acts within your limits reads "Auto with
 undo"; Off, Off until you turn it on and Paused read "Off"; People only reads "Locked"; Always asks
 first reads "Act with approval · always" with the Locked lock; Always on: protects you stays, off
-the dial. "Paused here" names a state of the thing in view, not a setting, and stays.
+the dial. A paused specialist's own control reads "Off", and its actions read "Act with approval".
+"Paused here" names a state of the thing in view, not a setting, and stays.
 
 The renderer derives the words from the contract and the current setting; the spec never states them. The chip
 shows the state of that action for that thing in that place (gate r2c lesson): "Paused here" after a person took

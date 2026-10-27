@@ -453,6 +453,53 @@ describe("Receipt", () => {
   });
 });
 
+describe("who allowed a step, in words beside the dial", () => {
+  it("says a step done within your limits had no one approve it, beside the screen's check", () => {
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, kind: "within_limits", approved_by: null },
+        })}
+        display={{ ...display, delegation: "within_limits", checked: "IronWrap shows it." }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("Auto with undo")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "It did this on its own; nobody approved it first. IronWrap shows it.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("never says it acted on its own when a person approved it", () => {
+    render(<Receipt receipt={receipt()} display={display} />);
+    expect(screen.getByRole("article").textContent).not.toMatch(/on its own/);
+  });
+
+  it("says an action the owner can never raise can never act on its own", () => {
+    const { unmount } = render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "always_asks_first", why: "A person reads it first." }}
+        viewerMayDecide
+      />,
+    );
+    expect(
+      screen.getByText("A person reads it first. It can never be set to do this on its own."),
+    ).toBeVisible();
+    unmount();
+    render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "asks_first", why: "A person reads it first." }}
+        viewerMayDecide
+      />,
+    );
+    expect(screen.getByRole("article").textContent).not.toMatch(/never be set/);
+  });
+});
+
 describe("ReceiptRow", () => {
   it("is one target named by the summary and the state, with one outlined action", async () => {
     const open = vi.fn();

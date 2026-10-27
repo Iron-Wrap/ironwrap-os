@@ -422,9 +422,26 @@ test.describe("Job gates acceptance (PR-C)", () => {
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForTimeout(150);
       const text = await page.locator("main").first().innerText();
+      // Typed values are visible too, but innerText leaves them out.
+      const values = await page.evaluate(() =>
+        [
+          ...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+            "main input:not([type=radio]), main textarea, main select",
+          ),
+        ]
+          .filter((control) => control.value)
+          .map((control) => {
+            const label = control.labels?.[0]?.textContent?.trim() ?? "";
+            const shown =
+              control instanceof HTMLSelectElement
+                ? (control.selectedOptions[0]?.textContent ?? control.value)
+                : control.value;
+            return `${label}: ${shown}`;
+          }),
+      );
       const top = `${name}-top.png`;
       await page.screenshot({ path: `${shotsDir}/${top}` });
-      index.push({ file: top, frame, title, position: "top", text });
+      index.push({ file: top, frame, title, position: "top", text, values });
       const scrolls = await page.evaluate(
         () => document.documentElement.scrollHeight > window.innerHeight + 2,
       );
@@ -433,7 +450,14 @@ test.describe("Job gates acceptance (PR-C)", () => {
         await page.waitForTimeout(150);
         const bottom = `${name}-bottom.png`;
         await page.screenshot({ path: `${shotsDir}/${bottom}` });
-        index.push({ file: bottom, frame, title, position: "fully scrolled", text: "" });
+        index.push({
+          file: bottom,
+          frame,
+          title,
+          position: "fully scrolled",
+          text: "",
+          values: [],
+        });
       }
     };
 

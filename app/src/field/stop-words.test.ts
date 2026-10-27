@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { todayResponseSchema } from "./field-contracts";
-import { crewStopStamp, stopDetail, uniqueStops } from "./stop-words";
+import { crewStopStamp, STOP_WORDS, stopDetail, uniqueStops } from "./stop-words";
 
 const zone = { timeZone: "America/Edmonton" };
 
@@ -102,5 +102,17 @@ describe("stop words", () => {
     expect(read(null).data?.jobs[0]?.active_stops).toEqual([]);
     expect(read(undefined).data?.jobs[0]?.active_stops).toEqual([]);
     expect(read([42]).data?.jobs[0]?.active_stops[0]?.occurrence_id).toBe("unreadable_0");
+    // A single stop sent without its list is still a stop, never dropped.
+    expect(read(good).data?.jobs[0]?.active_stops).toEqual([{ ...good, scope: "job" }]);
+    expect(read("stopped").data?.jobs[0]?.active_stops).toHaveLength(1);
+  });
+
+  it("words a separate work check without a doubled period or a next step as its name", () => {
+    expect(STOP_WORDS.separateCheck("Delivery confirmation is missing.")).toBe(
+      "Separate work check: Delivery confirmation is missing. Clearing it doesn't restart work.",
+    );
+    expect(STOP_WORDS.separateCheck(null)).toBe(
+      "A separate work check is open. Clearing it doesn't restart work.",
+    );
   });
 });

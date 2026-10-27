@@ -291,7 +291,10 @@ function readableStop(value: unknown, index: number): unknown {
   const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   return {
     occurrence_id:
-      typeof raw.occurrence_id === "string" ? raw.occurrence_id : `unreadable_${String(index)}`,
+      typeof raw.occurrence_id === "string"
+        ? raw.occurrence_id
+        : // The same unreadable stop on every job keeps one id, so it shows once.
+          `unreadable_${typeof raw.reported_at === "string" ? raw.reported_at : String(index)}`,
     scope: raw.scope === "tenant" ? "tenant" : "job",
     reported_at: typeof raw.reported_at === "string" ? raw.reported_at : "",
     summary: typeof raw.summary === "string" ? raw.summary : null,
@@ -301,7 +304,9 @@ function readableStop(value: unknown, index: number): unknown {
 }
 
 const activeStopsSchema = z.preprocess(
-  (value) => (Array.isArray(value) ? value.map(readableStop) : []),
+  // A single stop sent without its list is still a stop: only an absent value means none.
+  (value) =>
+    value == null ? [] : Array.isArray(value) ? value.map(readableStop) : [readableStop(value, 0)],
   z.array(activeStopSchema),
 );
 

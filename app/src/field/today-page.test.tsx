@@ -276,6 +276,9 @@ describe("TodayPage", () => {
       ),
     ).toBeVisible();
     expect(within(card).queryByText("1 check blocks work")).toBeNull();
+    expect(within(card).getByRole("link", { name: "Check what blocks work" })).not.toHaveClass(
+      "bg-primary",
+    );
     // With no office number in the profile, the banner offers no call and invents none.
     expect(within(notice).queryByRole("link", { name: "Call the office" })).toBeNull();
     // Only the stopped job's card says so; no stop holds every job.
@@ -314,6 +317,32 @@ describe("TodayPage", () => {
     );
   });
 
+  it("offers the office call on the every-job banner too", async () => {
+    const tenantStop = {
+      occurrence_id: "so_4",
+      scope: "tenant" as const,
+      reported_at: "2026-07-10T15:50:00.000Z",
+      summary: null,
+      raiser_display_name: "Priya Nand",
+    };
+    renderToday(
+      todayModel({
+        jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
+      }),
+      undefined,
+      { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
+    );
+    const banner = (
+      await screen.findByText(
+        "Work is stopped on every job: a stop's job wasn't found. The office is told.",
+      )
+    ).closest("section")!;
+    expect(within(banner).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+  });
+
   it("shows a stop whose job wasn't found once, above every job", async () => {
     const tenantStop = {
       occurrence_id: "so_2",
@@ -332,6 +361,13 @@ describe("TodayPage", () => {
         "Work is stopped on every job: a stop's job wasn't found. The office is told.",
       ),
     ).toHaveLength(1);
+    // Every card it holds waits on the office, with its work check separate and its button demoted.
+    for (const card of screen.getAllByRole("article")) {
+      expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();
+      expect(
+        within(card).getByRole("link", { name: /Check what blocks work|Open job|Review job/ }),
+      ).not.toHaveClass("bg-primary");
+    }
     // A stop whose raiser and words the read lacks still says when.
     expect(screen.getByText(/^Stopped on \w{3} 10 Jul at 9:50\sa\.m\.$/)).toBeVisible();
     expect(screen.queryByText(/^Work is stopped on the job/)).toBeNull();

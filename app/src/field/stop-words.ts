@@ -13,8 +13,10 @@ export const STOP_WORDS = {
   /** The card's next step while a stop holds its job. */
   nextStep: "Wait for the office to release the stop",
   /** A work check on a stopped job is its own thing: clearing it never restarts work. */
-  separateCheck: (check: string) =>
-    `Separate work check: ${check}. Clearing it doesn't restart work.`,
+  separateCheck: (check: string | null) =>
+    check
+      ? `Separate work check: ${check.trim().replace(/\.+$/, "")}. Clearing it doesn't restart work.`
+      : "A separate work check is open. Clearing it doesn't restart work.",
   callOffice: "Call the office",
 } as const;
 

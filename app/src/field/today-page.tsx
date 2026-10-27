@@ -358,6 +358,9 @@ function TodayDataLimits({ fields }: { fields: string[] }) {
   );
 }
 
+/** The Worker's next step for a job when no work check gives a reason (app-read-models.ts). */
+const GENERIC_NEXT_ACTIONS = new Set(["Open field check-in", "Assign field work"]);
+
 function TodayJobRow({
   job,
   availability,
@@ -420,7 +423,10 @@ function TodayJobRow({
           </div>
           {blocked && held ? (
             <p className="mt-3 text-sm leading-6 text-muted">
-              {STOP_WORDS.separateCheck(job.next_action)}
+              {STOP_WORDS.separateCheck(
+                // The run sheet's own next steps when a check gives no reason are not a check's name.
+                GENERIC_NEXT_ACTIONS.has(job.next_action) ? null : job.next_action,
+              )}
             </p>
           ) : blocked ? (
             <div className="mt-3 flex items-start gap-2 text-danger">

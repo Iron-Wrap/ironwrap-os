@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 137,
+      "count": 138,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -711,6 +711,30 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
 - `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.
+
+Customer portal first open of a proposal (B1, migration 0163):
+
+- `customer_portal_proposal_views` keeps one row per portal link and proposal publication, never
+  updated and deleted only once it is older than 3 years: the first time someone holding the
+  customer's link opened that published proposal. It stores ids and one timestamp, never an IP
+  address, user agent, location or later visit. D1 checks the link, job, customer and `published`
+  publication, and holds the time to within 60 seconds of its own clock. The data class, its
+  retention (at most 3 years) and its notice are recorded in
+  [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
+- Fail-closed by default. `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in production,
+  local and qa, and can go on once the owner approves the portal privacy notice text that says the
+  first open is recorded and kept for at most 3 years.
+- Staff: the app sends `staff_preview: true` while an office sign-in is live in that browser, and
+  the Worker never records such a request; nor one from the device that issued the link. A staff
+  member on another device or browser without a sign-in counts as the customer.
+- The record is written after the response (`waitUntil`), so a slow or failed write never changes
+  the customer's page.
+- Retention: D1 refuses to delete a row younger than 3 years by its own clock, and the daily cron
+  deletes older rows before it prunes portal links. That link prune now keeps every link that a
+  RESTRICT key names (acceptance challenges and intents, material decisions, first opens), instead
+  of failing as a whole once one such link is a year past its end.
+- No staff read model shows the first open yet; the delivery read model behind frame 8(b) is not
+  built.
 
 ELEC-133 legible authority refusals and a clean first boot (2026-08-21):
 

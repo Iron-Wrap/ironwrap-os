@@ -341,6 +341,12 @@ export async function reportSafetyOccurrence(
 ): Promise<ReportSafetyOccurrenceResult> {
   assertReportInput(input);
   const actor = await safetyActor(env, input.tenantId, input.reportedByUserId);
+  // The id is derived from the device action, so a row under it is this raise's own first answer,
+  // even when a defaulted summary would now read differently (a job number set in between).
+  const recorded = await occurrenceById(env, input.tenantId, input.occurrenceId);
+  if (recorded && recorded.reported_by_user_id === input.reportedByUserId) {
+    return { kind: "duplicate", occurrence: recorded };
+  }
   const fingerprint = await occurrenceFingerprint(input);
   const existing = await occurrenceByFingerprint(
     env,
@@ -425,6 +431,11 @@ export interface MakeSafeInput {
   tenantId: string;
   occurrenceId: string;
   actorUserId: string;
+  /**
+   * The person on site who confirmed the area is safe. Required when the recorder is not a field
+   * worker (an office made-safe, P33), optional for a crew member; never the recorder.
+   */
+  confirmerUserId?: string | null;
   detail: string;
   evidence: SafetyEvidence | null;
   capturedOffline: boolean;
@@ -435,7 +446,10 @@ export interface MakeSafeInput {
 
 /**
  * Making an area safe is a worker right. It advances `reported -> made_safe`
- * and never clears the stop; only an authorized release can do that.
+ * and never clears the stop; only an authorized release can do that. A person
+ * who is not a field worker records it only with a named on-site confirmer:
+ * an active user of the tenant who is not the recorder under any identity
+ * (migration 0170 repeats this in D1).
  */
 export async function recordMakeSafe(
   env: AppEnv,
@@ -464,6 +478,7 @@ export async function recordMakeSafe(
       "This occurrence is past the make-safe step.",
     );
   }
+  const confirmerUserId = await onSiteConfirmer(env, input, actor);
   const nextVersion = occurrence.version + 1;
   await advanceOccurrence(
     env,
@@ -498,9 +513,56 @@ export async function recordMakeSafe(
       occurredAt: input.occurredAt,
       recordedAt: input.now,
       deviceActionId: input.deviceActionId,
+      confirmedByUserId: confirmerUserId,
     },
   );
   return await requireOccurrence(env, input.tenantId, input.occurrenceId);
+}
+
+/** The named on-site confirmer of a made-safe record, checked before anything is written. */
+async function onSiteConfirmer(
+  env: AppEnv,
+  input: MakeSafeInput,
+  actor: SafetyActor,
+): Promise<string | null> {
+  const named = input.confirmerUserId?.trim() || null;
+  if (!named) {
+    if (actor.role === "field") return null;
+    throw new SafetyError(
+      "safety_make_safe_confirmer_required",
+      400,
+      "Recording an area made safe from away from the site needs the person on site who confirmed it.",
+    );
+  }
+  if (!USER_ID.test(named)) {
+    throw new SafetyError(
+      "safety_make_safe_confirmer_unknown",
+      400,
+      "The on-site confirmer must be an active person of this company.",
+    );
+  }
+  const confirmer = await env.DB.prepare(
+    `SELECT user_id FROM app_users WHERE tenant_id = ? AND user_id = ? AND active = 1`,
+  )
+    .bind(input.tenantId, named)
+    .first<{ user_id: string }>();
+  if (!confirmer) {
+    throw new SafetyError(
+      "safety_make_safe_confirmer_unknown",
+      400,
+      "The on-site confirmer must be an active person of this company.",
+    );
+  }
+  const recorder = await userIdentities(env, input.tenantId, actor.userId);
+  const confirmerIdentities = await userIdentities(env, input.tenantId, confirmer.user_id);
+  if ([...confirmerIdentities].some((identity) => recorder.has(identity))) {
+    throw new SafetyError(
+      "safety_make_safe_confirmer_is_recorder",
+      400,
+      "The on-site confirmer is someone other than the person recording it.",
+    );
+  }
+  return confirmer.user_id;
 }
 
 export type SafetyResponseCommand =
@@ -520,6 +582,13 @@ export interface SafetyResponseInput {
   detail: string;
   evidence: SafetyEvidence | null;
   now: string;
+  /**
+   * `released` only: whether the person signed in within the last 5 minutes (P33 step-up). The
+   * route always says; `false` refuses the release with `recent_session_required` once every
+   * other check has passed, so a person is asked to sign in again only for a release that would
+   * otherwise go through.
+   */
+  sessionRecent?: boolean;
 }
 
 /**
@@ -576,6 +645,13 @@ export async function recordSafetyResponse(
   const nextVersion = occurrence.version + 1;
   if (input.command === "closed") {
     await assertClosureAllowed(env, occurrence);
+  }
+  if (input.command === "released" && input.sessionRecent === false) {
+    throw new SafetyError(
+      "recent_session_required",
+      403,
+      "Releasing a safety stop asks you to sign in again if you signed in more than 5 minutes ago.",
+    );
   }
   await advanceOccurrence(
     env,
@@ -2420,9 +2496,15 @@ export interface SafetyLifecycleStep {
  * and closed. Each step is the event that moved the occurrence there, so a stop lifted before 0165
  * still shows who released it.
  */
+/** Made safe also names who confirmed it on site, when someone else recorded it (0170). */
+export interface SafetyMadeSafeStep extends SafetyLifecycleStep {
+  confirmed_by_user_id: string | null;
+  confirmed_by_display_name: string | null;
+}
+
 export interface SafetyStopLifecycle {
   reported: SafetyLifecycleStep | null;
-  made_safe: SafetyLifecycleStep | null;
+  made_safe: SafetyMadeSafeStep | null;
   investigating: SafetyLifecycleStep | null;
   controlled: SafetyLifecycleStep | null;
   released: SafetyLifecycleStep | null;
@@ -2438,13 +2520,195 @@ const LIFECYCLE_STEP_BY_EVENT: Record<string, keyof SafetyStopLifecycle> = {
   closed: "closed",
 };
 
+/** A "Keep the stop" decision: history only, it changed nothing on the stop. */
+export interface SafetyStopKeepDecision {
+  keep_id: string;
+  occurrence_id: string;
+  occurrence_version: number;
+  kept_by_user_id: string;
+  kept_by_display_name: string | null;
+  kept_by_role: string;
+  reason: string;
+  kept_at: string;
+}
+
 export interface SafetyOccurrenceDetail {
   version: 1;
   occurrence: SafetyOccurrenceRecord;
   raised_by_display_name: string | null;
   lifecycle: SafetyStopLifecycle;
+  /** Every "Keep the stop" decision on this stop, newest first. */
+  keep_decisions: SafetyStopKeepDecision[];
   can_release: boolean;
   release_unavailable_reason: SafetyReleaseUnavailableReason | null;
+}
+
+const KEEP_COLUMNS = `keep.keep_id, keep.occurrence_id, keep.occurrence_version,
+  keep.kept_by_user_id, keeper.display_name AS kept_by_display_name, keep.kept_by_role,
+  keep.reason, keep.kept_at`;
+
+async function stopKeepDecisions(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+): Promise<SafetyStopKeepDecision[]> {
+  const rows = await env.DB.prepare(
+    `SELECT ${KEEP_COLUMNS}
+       FROM safety_stop_keep_decisions keep
+       LEFT JOIN app_users keeper
+         ON keeper.tenant_id = keep.tenant_id AND keeper.user_id = keep.kept_by_user_id
+      WHERE keep.tenant_id = ? AND keep.occurrence_id = ?
+      ORDER BY keep.kept_at DESC, keep.keep_id DESC
+      LIMIT 50`,
+  )
+    .bind(tenantId, occurrenceId)
+    .all<SafetyStopKeepDecision>();
+  return rows.results.map((row) => ({ ...row }));
+}
+
+export interface KeepSafetyStopInput {
+  tenantId: string;
+  occurrenceId: string;
+  actorUserId: string;
+  /** The version the person reviewed; the decision is refused if the stop has moved since. */
+  occurrenceVersion: number;
+  reason: string;
+  idempotencyKey: string;
+}
+
+/**
+ * "Keep the stop" (P33): a person who may release this stop decides not to, and says why. It is
+ * recorded to the stop's history only and changes nothing on the occurrence. The same checks as a
+ * release decide who may record it: release authority, never the raiser under any identity, and
+ * the stop still active at the version they reviewed. The record's time is D1's clock. A replay of
+ * the same idempotency key with the same request returns the first answer; a different request
+ * under that key is a conflict.
+ */
+export async function keepSafetyStop(
+  env: AppEnv,
+  input: KeepSafetyStopInput,
+): Promise<{ replayed: boolean; keep: SafetyStopKeepDecision }> {
+  if (
+    !journalDetail(input.reason) ||
+    !Number.isInteger(input.occurrenceVersion) ||
+    input.occurrenceVersion < 1 ||
+    input.occurrenceVersion > 1_000_000
+  ) {
+    throw new SafetyError(
+      "safety_stop_keep_invalid",
+      400,
+      "Keeping a stop needs the version you reviewed and a reason of 3 to 4000 characters.",
+    );
+  }
+  const requestSha256 = await sha256Hex(
+    JSON.stringify({
+      occurrence_id: input.occurrenceId,
+      occurrence_version: input.occurrenceVersion,
+      reason: input.reason,
+      user_id: input.actorUserId,
+    }),
+  );
+  const keepId = `ssk_${(await sha256Hex(`${input.tenantId}:${input.idempotencyKey}:stop-keep`)).slice(0, 32)}`;
+  const replay = await keepById(env, input.tenantId, keepId);
+  if (replay) return replayedKeep(env, input.tenantId, keepId, requestSha256);
+
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    RESPONSE_AUTHORITY_ROLES,
+    "safety_release_authority_required",
+    "Keeping or releasing a safety stop requires current production authority.",
+  );
+  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  const raiser = await userIdentities(env, input.tenantId, occurrence.reported_by_user_id);
+  const keeper = await userIdentities(env, input.tenantId, actor.userId);
+  if ([...keeper].some((identity) => raiser.has(identity))) {
+    throw new SafetyError(
+      "safety_stop_release_by_raiser_forbidden",
+      403,
+      "The person who raised a safety stop never decides its release.",
+    );
+  }
+  if (occurrence.stop_active !== 1) {
+    throw new SafetyError("safety_stop_already_released", 409, "This stop has already been released.");
+  }
+  if (occurrence.version !== input.occurrenceVersion) {
+    throw new SafetyError(
+      "safety_occurrence_version_conflict",
+      409,
+      "This stop changed after you reviewed it. Review it again.",
+    );
+  }
+  try {
+    await env.DB.prepare(
+      `INSERT INTO safety_stop_keep_decisions
+         (keep_id, tenant_id, idempotency_key, request_sha256, occurrence_id, occurrence_version,
+          kept_by_user_id, kept_by_role, reason, kept_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    )
+      .bind(keepId, input.tenantId, input.idempotencyKey, requestSha256, input.occurrenceId,
+        input.occurrenceVersion, actor.userId, actor.role, input.reason)
+      .run();
+  } catch (error) {
+    // A concurrent retry under the same key won; anything else is D1 refusing what changed.
+    if (await keepById(env, input.tenantId, keepId)) {
+      return replayedKeep(env, input.tenantId, keepId, requestSha256);
+    }
+    throw keepRefusal(error);
+  }
+  const stored = await keepById(env, input.tenantId, keepId);
+  if (!stored) throw new Error("safety_stop_keep_readback_missing");
+  const { request_sha256: _hash, ...keep } = stored;
+  return { replayed: false, keep };
+}
+
+async function keepById(
+  env: AppEnv,
+  tenantId: string,
+  keepId: string,
+): Promise<(SafetyStopKeepDecision & { request_sha256: string }) | null> {
+  const row = await env.DB.prepare(
+    `SELECT ${KEEP_COLUMNS}, keep.request_sha256
+       FROM safety_stop_keep_decisions keep
+       LEFT JOIN app_users keeper
+         ON keeper.tenant_id = keep.tenant_id AND keeper.user_id = keep.kept_by_user_id
+      WHERE keep.tenant_id = ? AND keep.keep_id = ?`,
+  )
+    .bind(tenantId, keepId)
+    .first<SafetyStopKeepDecision & { request_sha256: string }>();
+  return row ? { ...row } : null;
+}
+
+async function replayedKeep(
+  env: AppEnv,
+  tenantId: string,
+  keepId: string,
+  requestSha256: string,
+): Promise<{ replayed: boolean; keep: SafetyStopKeepDecision }> {
+  const row = await keepById(env, tenantId, keepId);
+  if (!row) throw new Error("safety_stop_keep_readback_missing");
+  if (row.request_sha256 !== requestSha256) {
+    throw new SafetyError(
+      "idempotency_conflict",
+      409,
+      "This idempotency key was already used for a different decision.",
+    );
+  }
+  const { request_sha256: _hash, ...keep } = row;
+  return { replayed: true, keep };
+}
+
+/** D1's refusals of a keep decision, as the named codes the Worker gives the same facts. */
+function keepRefusal(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  const refusals: Array<[string, number, string]> = [
+    ["safety_stop_release_by_raiser_forbidden", 403, "The person who raised a safety stop never decides its release."],
+    ["safety_actor_unknown", 403, "This safety actor is not recognized."],
+    ["safety_stop_already_released", 409, "This stop has already been released."],
+    ["safety_occurrence_version_conflict", 409, "This stop changed after you reviewed it. Review it again."],
+  ];
+  const refusal = refusals.find(([code]) => message.includes(code));
+  return refusal ? new SafetyError(refusal[0], refusal[1], refusal[2]) : error;
 }
 
 /**
@@ -2470,10 +2734,13 @@ export async function safetyOccurrenceDetail(
     .first<{ display_name: string; email_normalized: string; frappe_user_id: string | null }>();
   const steps = await env.DB.prepare(
     `SELECT event.event_kind, event.occurred_at, event.actor_user_id, event.detail,
-            actor.display_name AS actor_display_name
+            actor.display_name AS actor_display_name, event.confirmed_by_user_id,
+            confirmer.display_name AS confirmer_display_name
        FROM safety_occurrence_events event
        LEFT JOIN app_users actor
          ON actor.tenant_id = event.tenant_id AND actor.user_id = event.actor_user_id
+       LEFT JOIN app_users confirmer
+         ON confirmer.tenant_id = event.tenant_id AND confirmer.user_id = event.confirmed_by_user_id
       WHERE event.tenant_id = ? AND event.occurrence_id = ?
         AND event.event_kind IN ('reported', 'make_safe', 'investigation_opened', 'controlled',
           'released', 'closed')
@@ -2486,6 +2753,8 @@ export async function safetyOccurrenceDetail(
       actor_user_id: string;
       detail: string;
       actor_display_name: string | null;
+      confirmed_by_user_id: string | null;
+      confirmer_display_name: string | null;
     }>();
   const lifecycle: SafetyStopLifecycle = {
     reported: null,
@@ -2499,12 +2768,21 @@ export async function safetyOccurrenceDetail(
     const step = LIFECYCLE_STEP_BY_EVENT[row.event_kind];
     // Every transition is one-way, so each step happens once; the first record is the step.
     if (!step || lifecycle[step]) continue;
-    lifecycle[step] = {
+    const recorded: SafetyLifecycleStep = {
       at: row.occurred_at,
       by_user_id: row.actor_user_id,
       by_display_name: row.actor_display_name,
       detail: row.detail,
     };
+    if (step === "made_safe") {
+      lifecycle.made_safe = {
+        ...recorded,
+        confirmed_by_user_id: row.confirmed_by_user_id,
+        confirmed_by_display_name: row.confirmed_by_user_id ? row.confirmer_display_name : null,
+      };
+    } else {
+      lifecycle[step] = recorded;
+    }
   }
   const reason = releaseUnavailableReason(
     occurrence,
@@ -2523,6 +2801,7 @@ export async function safetyOccurrenceDetail(
     occurrence,
     raised_by_display_name: raiser?.display_name ?? null,
     lifecycle,
+    keep_decisions: await stopKeepDecisions(env, tenantId, occurrenceId),
     can_release: reason === null,
     release_unavailable_reason: reason,
   };
@@ -2646,8 +2925,8 @@ async function advanceOccurrence(
   try {
     results = await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO safety_occurrence_events (${OCCURRENCE_EVENT_COLUMNS})
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        `INSERT INTO safety_occurrence_events (${occurrenceEventColumns(event).columns})
+         SELECT ${occurrenceEventColumns(event).placeholders}
           WHERE EXISTS (
             SELECT 1 FROM safety_occurrences
              WHERE tenant_id = ? AND occurrence_id = ? AND version = ?
@@ -2729,11 +3008,23 @@ interface OccurrenceEventRow {
   occurredAt: string;
   recordedAt: string;
   deviceActionId: string | null;
+  /** `make_safe` only: the named on-site confirmer (0170). */
+  confirmedByUserId?: string | null;
 }
 
 const OCCURRENCE_EVENT_COLUMNS = `event_id, tenant_id, occurrence_id, occurrence_version,
   event_kind, actor_user_id, actor_role, detail, evidence_refs_json, evidence_sha256,
   captured_offline, occurred_at, recorded_at, device_action_id`;
+
+/** The event columns this row writes: the confirmer column (0170) only when a confirmer is named. */
+function occurrenceEventColumns(row: OccurrenceEventRow): { columns: string; placeholders: string } {
+  const confirmed = row.confirmedByUserId != null;
+  const count = confirmed ? 15 : 14;
+  return {
+    columns: confirmed ? `${OCCURRENCE_EVENT_COLUMNS}, confirmed_by_user_id` : OCCURRENCE_EVENT_COLUMNS,
+    placeholders: Array.from({ length: count }, () => "?").join(", "),
+  };
+}
 
 function occurrenceEventValues(row: OccurrenceEventRow): unknown[] {
   return [
@@ -2751,6 +3042,7 @@ function occurrenceEventValues(row: OccurrenceEventRow): unknown[] {
     row.occurredAt,
     row.recordedAt,
     row.deviceActionId,
+    ...(row.confirmedByUserId != null ? [row.confirmedByUserId] : []),
   ];
 }
 
@@ -2760,8 +3052,8 @@ async function appendOccurrenceEventRow(
 ): Promise<void> {
   assertEvidence(row.evidence);
   await env.DB.prepare(
-    `INSERT INTO safety_occurrence_events (${OCCURRENCE_EVENT_COLUMNS})
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO safety_occurrence_events (${occurrenceEventColumns(row).columns})
+     VALUES (${occurrenceEventColumns(row).placeholders})
      ON CONFLICT DO NOTHING`,
   )
     .bind(...occurrenceEventValues(row))

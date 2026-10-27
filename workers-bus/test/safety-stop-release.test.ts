@@ -172,6 +172,8 @@ async function raisedStop(
     tenantId: TENANT,
     occurrenceId,
     actorUserId: raiser.id,
+    // Away from the site, the record names the crew member who confirmed it on site (0170).
+    confirmerUserId: raiser.access === "field" ? null : USERS.crew.id,
     detail: "Area taped off below the ridge.",
     evidence: null,
     capturedOffline: false,

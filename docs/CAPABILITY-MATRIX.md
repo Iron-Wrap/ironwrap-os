@@ -886,8 +886,10 @@ stale from before that merge):
   acknowledge, start and complete answer `safety_stop_active` with the holding stops, and migration
   `0170` repeats the rule in D1. Stopping work and captures stay open. The crew Today, job and
   typed-work reads list the holding stops (`active_stops`); the stop detail and safety panel carry
-  the raiser's name, the controlled step and an L06-aware `can_release`. Proof is repository tests
-  only.
+  the raiser's name, the controlled step and an L06-aware `can_release`. A raise with no category,
+  severity or words is a high hazard that says "Work stopped on {job}". An office made-safe names an
+  on-site confirmer, in the Worker and in D1. "Keep the stop" is recorded to history only, and a
+  release asks for a sign-in no older than 5 minutes. Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

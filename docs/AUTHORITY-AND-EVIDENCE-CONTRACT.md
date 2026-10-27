@@ -360,6 +360,22 @@ stale marker when it could not be read. The stop detail and the safety panel nam
 say whether this viewer may release the stop now (`can_release`, with a named
 `release_unavailable_reason`); the raiser never may, under any identity.
 
+A crew raise may say nothing but "stop": a report with no category is a `hazard`, with no severity
+`high`, and with no words "Work stopped on {job}", naming the job by its number. The Worker applies
+these defaults; the stop is never refused for its summary. Anyone may record an area made safe, but
+a person who is not a field worker records it only with a named on-site confirmer, an active person
+of the tenant who is not the recorder under any identity (`safety_make_safe_confirmer_required`,
+`safety_make_safe_confirmer_unknown`, `safety_make_safe_confirmer_is_recorder`, 400). Migration
+`0170` keeps the confirmer on the `make_safe` event, refuses those records in D1, and lets an
+occurrence become `made_safe` only with its own `make_safe` event. "Keep the stop" (`POST
+/api/v1/safety/occurrences/{occurrence}/keep`, CSRF and an `Idempotency-Key`) is the release
+decision's other answer: the same person-session, authority and raiser checks, the version the
+person reviewed, and a reason. It is recorded to the stop's history only
+(`safety_stop_keep_decisions`, append-only, timed by D1's clock) and changes nothing on the stop.
+A release also asks the person to sign in again when their session is more than 5 minutes old
+(`recent_session_required`, 403), checked after every other release check and before anything is
+written. That is the existing session-age check; no passkey is claimed.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's

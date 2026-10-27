@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "field_safety",
-  "catalog_sha256": "86ae29d7af105098e5214bbe754af3f19c0f1611e0687d0b58574a8deac80ab4",
+  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
   "actions": [
     { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer a crew member, the owner, or staff from cited package and safety facts, including who can release a stop or hold" },
     { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Route worker-data and deletion requests to compliance and customer requests for extra work to customer care" },

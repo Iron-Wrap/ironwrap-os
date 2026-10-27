@@ -19,13 +19,15 @@ import {
   humanGuard,
   openException,
   specialistControl,
+  specialistState,
   type HumanPrincipal,
   type Notify,
 } from "./control.ts";
-import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
+import { effectiveDelegation, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson } from "./schema.ts";
 import type { AgentDb, BoundStatement, StoreError } from "./store.ts";
+import { closeDelegationDrafts } from "./drafts.ts";
 
 /** Track D's catastrophe ids (agent-host/evals/catastrophes.v1.json); a test keeps them equal. */
 export const CATASTROPHE_IDS = [
@@ -207,6 +209,17 @@ export async function setShadow(
     return same ? { setting_id: prior.setting_id, revision: prior.revision } : { error: "idempotency_conflict", status: 409 };
   }
   const settingId = `shd_${crypto.randomUUID()}`;
+  // Turning practice on or off answers the face's open proposals for the pair (contract f5); off,
+  // the pair is back on the setting in force, with its ceiling.
+  const delegation = input.shadow ? null : await currentDelegation(db, tenantId, input.specialist_id, input.action_id);
+  const inForce = input.shadow
+    ? "shadow"
+    : effectiveDelegation(catalogAction(input.action_id)!, {
+        delegation,
+        specialistState: specialistState(await specialistControl(db, tenantId, input.specialist_id)),
+      });
+  const ceiling = inForce === "within_limits" ? (delegation?.ceiling ?? null) : null;
+  const answered = await closeDelegationDrafts(db, tenantId, input, inForce, actor.user_id, ceiling);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),
@@ -230,6 +243,7 @@ export async function setShadow(
         WHERE tenant_id=? AND specialist_id=? AND action_id=? AND outcome IS NULL AND json_extract(permit_json,'$.delegation_id') IS NOT NULL AND ? = 1`,
         )
         .bind(now, tenantId, input.specialist_id, input.action_id, input.shadow ? 1 : 0),
+      answered,
     ]);
   } catch (error) {
     const refusal = controlError(error) ?? (String(error).includes("agent_shadow_settings_append_only") ? { error: "stale_version", status: 409 } : null);
@@ -758,8 +772,7 @@ export async function previewablePairs(db: AgentDb, tenantId: string, bar = CAND
  * Null for an id that names no pair whose autonomy can be earned. Its value moves with every
  * proposal of the pair, so a step that cites it may meet `fact_stale` and stop; the watch's run
  * also cites its immutable signal, whose digest carries each pair's bar result.
- * ponytail: several of its reads scan the tenant's steps (no index on specialist and action); add
- * `agent_run_steps (tenant_id, specialist_id, action_id, created_at)` if the review runs slow.
+ * Its step reads use idx_agent_run_steps_pair (migration 0205).
  */
 export async function delegationRecord(db: AgentDb, tenantId: string, id: string): Promise<Record<string, unknown> | null> {
   const split = id.indexOf(":");
@@ -787,10 +800,10 @@ export async function delegationRecord(db: AgentDb, tenantId: string, id: string
   const counts = current
     ? await db
         .prepare(
-          `SELECT COUNT(*) AS n FROM agent_run_steps WHERE tenant_id = ? AND json_extract(permit_json, '$.delegation_id') = ?
-            AND (outcome = 'unknown' OR reason_code = 'readback_mismatch')`,
+          `SELECT COUNT(*) AS n FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = ? AND action_id = ?
+            AND json_extract(permit_json, '$.delegation_id') = ? AND (outcome = 'unknown' OR reason_code = 'readback_mismatch')`,
         )
-        .bind(tenantId, current.delegation_id)
+        .bind(tenantId, specialistId, actionId, current.delegation_id)
         .first<{ n: number }>()
     : null;
   const proposed = await db
@@ -849,7 +862,8 @@ export async function delegationRecord(db: AgentDb, tenantId: string, id: string
 export async function proposalAwaitsOwner(db: AgentDb, tenantId: string, specialistId: string, actionId: string): Promise<boolean> {
   const row = await db
     .prepare(
-      `SELECT 1 AS found FROM agent_run_steps s WHERE s.tenant_id = ?1 AND s.action_id = 'delegation.propose_change' AND s.outcome = 'succeeded'
+      `SELECT 1 AS found FROM agent_run_steps s WHERE s.tenant_id = ?1 AND s.specialist_id = 'orchestrator'
+        AND s.action_id = 'delegation.propose_change' AND s.outcome = 'succeeded'
         AND json_extract(s.args_json, '$.specialist_id') = ?2 AND json_extract(s.args_json, '$.action_id') = ?3
         AND s.created_at > COALESCE((SELECT MAX(set_at) FROM (
           SELECT set_at FROM agent_delegation_settings WHERE tenant_id = ?1 AND specialist_id = ?2 AND action_id = ?3

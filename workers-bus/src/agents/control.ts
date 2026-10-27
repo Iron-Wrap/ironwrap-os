@@ -12,6 +12,7 @@ import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist } from "./ca
 import { citedFacts } from "./memory.ts";
 import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSetting } from "./policy.ts";
 import { CEILING_SCHEMA, competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
+import { closeDelegationDrafts } from "./drafts.ts";
 import { afterCatastrophe, decisionAgreement, shadowSetting, unqualifiedSince } from "./shadow.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 import {
@@ -141,11 +142,11 @@ export async function currentDelegation(
     .first<{ revision: number }>();
   const failed = await db
     .prepare(
-      `SELECT step_id FROM agent_run_steps WHERE tenant_id = ?
+      `SELECT step_id FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = ? AND action_id = ?
     AND json_extract(permit_json, '$.delegation_id') = ?
     AND (outcome = 'unknown' OR reason_code IN ('readback_mismatch', 'done_by_person')) LIMIT 1`,
     )
-    .bind(tenantId, row.setting_id)
+    .bind(tenantId, specialistId, actionId, row.setting_id)
     .first<{ step_id: string }>();
   // Each trigger holds until the owner sets the action again (contract "Delegation" item 7); a
   // release that changed without passing qualification counts from the setting's own time.
@@ -289,6 +290,8 @@ export async function setDelegation(
   const control = await specialistControl(db, tenantId, input.specialist_id);
   if (control.held && input.setting === "within_limits") return { error: "specialist_held", status: 409 };
   const settingId = `dlg_${crypto.randomUUID()}`;
+  // The owner's own change answers the face's open proposals for the pair (contract f5).
+  const answered = await closeDelegationDrafts(db, tenantId, input, input.setting, actor.user_id, input.ceiling);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),
@@ -361,6 +364,7 @@ export async function setDelegation(
           AND json_extract(permit_json,'$.delegation_id') IS NOT NULL`,
         )
         .bind(now, tenantId, input.specialist_id, input.action_id),
+      answered,
     ]);
   } catch (error) {
     const refusal = controlError(error);

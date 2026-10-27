@@ -203,6 +203,13 @@ gate. It never writes D1 directly, calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.
 
+`EFFECT_RUNTIME_TOKEN` serves the MCP host's `mcp.*` effects and never an outside send: a proposal
+publish or withdrawal and a customer or operations email may be executed only by the bus, and the
+token's claim, settle, reconcile and retry answer 403 for them. The seed's
+`qa-synthetic-publication` stand-in passes only because qa's `AGENT_DATA_CLASS` is `synthetic`. On
+production (`business`) the same claim answers 403 `effect_provider_not_allowed`, and the seed
+stops before anything is published.
+
 ```bash
 node tools/qa-seed-owner.mjs --sql-out output/qa/owner-access/qa-seed-owner.sql \
   --secrets ~/.secrets/ironwrap/qa-release.env --apply
@@ -447,7 +454,7 @@ deploy/backup-to-r2.sh
 `deploy/backup-d1-to-r2.sh` accepts no arguments. It uses only the locked
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
-`f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
+`8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d`. It performs `d1 export --remote`, imports the SQL into an
 isolated SQLite file, runs integrity checks, and requires the complete migration-derived table,
 index, and invariant-trigger inventories before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
@@ -567,14 +574,14 @@ not prove this live gate.
 
 ## Field Device Loss, Replacement, And Revocation
 
-This procedure applies only after the Field Companion BFF and the office **Crew devices** setting
+This procedure applies only after the Field Companion BFF and the office **Crew phones** setting
 are deployed. It is intentionally an office action: a field account cannot issue, list, or revoke
 devices, and crew members never receive a passwordless magic-link session.
 
 1. Treat a lost or reassigned phone as a credential incident. Record the field user, device id,
    reporter, and UTC time in the incident record. Do not copy a QR image, pairing URL, token, or
    device proof into the record.
-2. An owner or operations user opens **Settings -> Crew devices**, identifies the active device,
+2. An owner or operations user opens **Settings -> Crew phones**, identifies the active device,
    and selects **Revoke lost device**. Confirm the resulting `device_id` and `revoked_at` response.
 3. Verify the device appears as revoked on a freshly loaded office list. The old device must fail a
    current `/api/v1/session` request even if it still has its session cookie and local proof; a

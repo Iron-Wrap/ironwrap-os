@@ -79,6 +79,8 @@ export interface StepInput {
     actor: { type: string; authenticated: boolean } | null;
     /** The action a press on a view's action asked for (ask.ts postRequest); null for an ask. */
     expected_action_id?: string | null;
+    /** The record the signal is about; an inbound event's is the lead the envelope becomes. */
+    subject?: { aggregate: string; id: string } | null;
   } | null;
 }
 
@@ -94,6 +96,37 @@ export const PERSON_REQUEST_ONLY: ReadonlyMap<string, { sources: ReadonlySet<str
   ["access.prepare_change", { sources: new Set(["ask", "request"]), named: true, pressFor: false }],
   // The press is on compliance's view for this action, never one for another action.
   ["authority.record", { sources: new Set(["request"]), named: false, pressFor: true }],
+]);
+
+/** A lead id other than `leadId`; an argument with none is left to the schema. */
+function otherLead(args: unknown, leadId: string): boolean {
+  const named = typeof args === "object" && args !== null ? (args as { lead_id?: unknown }).lead_id : undefined;
+  return typeof named === "string" && named !== leadId;
+}
+
+/**
+ * Actions that propose from the inbound a run answers and cite only that inbound (contract
+ * `lead_fact.propose`: raw inbound receipts only, never conversation text or another record): the
+ * run answers an inbound event that came by an inbound channel, and every citation is that event's
+ * signal fact. A handoff run's snapshot does not hold an event at the root of its chain, so a
+ * handoff run cannot propose one.
+ */
+export const INBOUND_ONLY: ReadonlySet<string> = new Set(["lead_fact.propose"]);
+
+/**
+ * The channels an inbound event comes by: the source of every signal the inbound producer writes
+ * from an envelope (inbound.ts). An event from any other source is not inbound.
+ */
+export const INBOUND_CHANNELS: ReadonlySet<string> = new Set([
+  "web_form",
+  "instant_estimate",
+  "phone",
+  "newo_call",
+  "walk_in",
+  "office",
+  "gbp",
+  "ad",
+  "referral",
 ]);
 
 /**
@@ -164,6 +197,21 @@ export function evaluateStep(input: StepInput): PolicyDecision {
       (personRequest.pressFor && request.expected_action_id !== input.actionId) ||
       (personRequest.named && (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref) ||
       !input.citations.some((citation) => citation.fact_id === request.signal_ref)
+    )
+      return stop("abstained", "out_of_scope", "requester");
+    pass("requester");
+  }
+  if (INBOUND_ONLY.has(input.actionId)) {
+    const inbound = input.requester;
+    if (
+      !inbound ||
+      inbound.kind !== "event" ||
+      !INBOUND_CHANNELS.has(inbound.source) ||
+      // Only for the lead that inbound is about: text in one lead's message never proposes another's.
+      inbound.subject?.aggregate !== "lead" ||
+      otherLead(input.args, inbound.subject.id) ||
+      input.citations.length === 0 ||
+      input.citations.some((citation) => citation.fact_id !== inbound.signal_ref)
     )
       return stop("abstained", "out_of_scope", "requester");
     pass("requester");

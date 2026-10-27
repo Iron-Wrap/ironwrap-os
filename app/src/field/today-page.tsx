@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ChevronRight, CircleDashed, PackageCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { useInitialToday, useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
@@ -16,9 +16,14 @@ import {
   type FieldDateOptions,
 } from "./field-formatting";
 import { messageForLoad } from "../lib/plain-error";
-import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 import { OfflineReadiness } from "./offline-readiness";
+
+// Office roles only (see the note where it renders). A static import made the crew phone fetch
+// this chunk, in a round trip of its own, before its run sheet could render.
+const OperatingIntakePanel = lazy(async () => ({
+  default: (await import("../operating-intake/operating-intake-panel")).OperatingIntakePanel,
+}));
 
 type PacketAvailability = "checking" | "saving" | "saved" | "not_saved" | "unavailable";
 type TodayJob = TodayResponse["jobs"][number];
@@ -247,7 +252,11 @@ export function TodayPage() {
           device proof, so the Worker answers 401 and expires the session cookie with it —
           the run sheet was signing the paired phone out on every visit and the next cold
           start showed "Pair this crew phone again" (ELEC-157). */}
-      {session.user.role === "field" ? null : <OperatingIntakePanel />}
+      {session.user.role === "field" ? null : (
+        <Suspense fallback={null}>
+          <OperatingIntakePanel />
+        </Suspense>
+      )}
     </section>
   );
 }
@@ -362,12 +371,14 @@ function TodayJobRow({
       ? "Open job"
       : "Review job";
   const assignment = [job.assignment?.type, job.assignment?.status].filter(Boolean).join(" · ");
+  // The card follows its own width, not the window's: the crew shell centres a phone-wide column
+  // on a desktop, where window breakpoints squeezed three columns into it.
   return (
-    <li>
+    <li className="@container">
       <article
-        className={`grid overflow-hidden border bg-surface-raised lg:grid-cols-[10rem_minmax(0,1fr)_13rem] ${blocked ? "border-danger/35 shadow-[inset_0_2px_0_var(--danger)]" : "border-border"}`}
+        className={`grid overflow-hidden border bg-surface-raised @3xl:grid-cols-[10rem_minmax(0,1fr)_13rem] ${blocked ? "border-danger/35 shadow-[inset_0_2px_0_var(--danger)]" : "border-border"}`}
       >
-        <div className="border-b border-border bg-surface-muted/55 p-4 lg:border-b-0 lg:border-r">
+        <div className="border-b border-border bg-surface-muted/55 p-4 @3xl:border-b-0 @3xl:border-r">
           <p className="text-sm font-bold text-muted">On the board</p>
           <p className="mt-1 text-base font-bold leading-6">
             {formatFieldSchedule(job.scheduled_start, dateOptions)}
@@ -378,7 +389,7 @@ function TodayJobRow({
             </p>
           ) : null}
         </div>
-        <div className="min-w-0 p-4 sm:p-5">
+        <div className="@container min-w-0 p-4 sm:p-5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <p className="font-bold tracking-[-0.02em]">{job.job_number ?? job.id}</p>
             {job.status ? <p className="text-sm font-semibold text-muted">{job.status}</p> : null}
@@ -395,7 +406,7 @@ function TodayJobRow({
               </p>
             </div>
           ) : null}
-          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+          <dl className="mt-4 grid gap-3 text-sm @sm:grid-cols-2">
             <DispatchFact
               label="Assignment"
               value={assignment || "Assignment detail unavailable"}
@@ -404,7 +415,7 @@ function TodayJobRow({
           </dl>
           <PacketAvailabilityBadge availability={availability} />
         </div>
-        <div className="space-y-2 border-t border-border p-4 lg:flex lg:flex-col lg:justify-center lg:border-l lg:border-t-0">
+        <div className="space-y-2 border-t border-border p-4 @3xl:flex @3xl:flex-col @3xl:justify-center @3xl:border-l @3xl:border-t-0">
           <Button asChild size="field" fullWidth variant={blocked ? "default" : "accent"}>
             <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
               {actionLabel}
@@ -439,9 +450,9 @@ function TodayWorkObjectRow({
     .filter(Boolean)
     .join(" · ");
   return (
-    <li className="py-5 sm:py-6">
-      <article className="grid gap-5 lg:grid-cols-[8rem_minmax(0,1fr)_15rem] lg:items-start">
-        <div className="border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
+    <li className="@container py-5 sm:py-6">
+      <article className="grid gap-5 @3xl:grid-cols-[8rem_minmax(0,1fr)_15rem] @3xl:items-start">
+        <div className="border-b border-border pb-3 @3xl:border-b-0 @3xl:border-r @3xl:pb-0 @3xl:pr-5">
           <p className="text-sm font-bold text-muted">On the board</p>
           <p className="mt-1 text-base font-bold leading-6">
             {formatFieldSchedule(workObject.scheduled_start, dateOptions)}
@@ -452,7 +463,7 @@ function TodayWorkObjectRow({
             </p>
           ) : null}
         </div>
-        <div className="min-w-0">
+        <div className="@container min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <p className="font-bold tracking-[-0.02em]">{workObject.work_object_id}</p>
             <p className="text-sm font-semibold text-muted">{workObject.work_object_type}</p>
@@ -460,7 +471,7 @@ function TodayWorkObjectRow({
           <h3 className="mt-1 text-xl font-bold leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
             {workObject.physical_context_type} · {workObject.physical_context_id}
           </h3>
-          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+          <dl className="mt-4 grid gap-4 text-sm @sm:grid-cols-2">
             <DispatchFact
               label="Assignment"
               value={assignment || "Assignment detail unavailable"}
@@ -468,7 +479,7 @@ function TodayWorkObjectRow({
             <DispatchFact label="Next step" value={workObject.next_action} />
           </dl>
         </div>
-        <div className="space-y-3 lg:pt-1">
+        <div className="space-y-3 @3xl:pt-1">
           <Button asChild size="field" fullWidth variant="accent">
             <Link
               to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId"

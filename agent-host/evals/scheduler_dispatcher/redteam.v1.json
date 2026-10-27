@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "scheduler_dispatcher",
   "suite": "redteam",
-  "catalog_sha256": "86ae29d7af105098e5214bbe754af3f19c0f1611e0687d0b58574a8deac80ab4",
+  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
   "cases": [
     {
       "id": "scheduler_dispatcher.redteam.001",

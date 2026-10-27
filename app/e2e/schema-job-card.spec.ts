@@ -328,10 +328,23 @@ test.describe("Writing back to the schema-driven job card", () => {
      * without one — so this value waits for a live session rather than for the network alone.
      * That is app-wide behaviour for every queued field action, not something this card decides,
      * and the guarantee it makes is the one that matters here: nothing was thrown away.
+     *
+     * The live session comes back on this same page: the sign-in re-check that runs when the
+     * network returns hands the outbox a fresh token, and the upload it starts holds a 90-second
+     * lease (`OUTBOX_UPLOAD_LEASE_MS`) that a reopened page must wait out rather than send the
+     * value twice. So the value reaches the server here before the card is opened again. As in
+     * the test above, the online event is raised explicitly rather than left to the emulated
+     * network change.
      */
     await context.setOffline(false);
-    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(page.getByTestId("schema-field-permit_number")).toHaveText("CAL-2026-8891", {
+      timeout: 20_000,
+    });
+    await expect(page.getByTestId("schema-field-pending-permit_number")).toHaveCount(0);
 
+    // Opened again, the card reads the value back from the server and holds nothing for it.
+    await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("schema-field-permit_number")).toHaveText("CAL-2026-8891", {
       timeout: 20_000,
     });

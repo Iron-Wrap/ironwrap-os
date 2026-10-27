@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getDeviceSecret, storeDeviceSecret } from "./device-credential";
 import { resetDatabaseForTests } from "../storage/db";
-import { fetchSession, sessionResponseSchema } from "./session";
+import {
+  clearSessionSnapshot,
+  fetchSession,
+  officeSessionIsLive,
+  persistAuthenticatedSession,
+  sessionResponseSchema,
+} from "./session";
 
 const authenticatedSession = {
   version: 1,
@@ -38,6 +44,19 @@ describe("sessionResponseSchema", () => {
 
   it("accepts the exact authenticated BFF envelope", () => {
     expect(sessionResponseSchema.parse(authenticatedSession)).toEqual(authenticatedSession);
+  });
+
+  it("reads the office phone as optional, so a blank one never blocks sign-in", () => {
+    const withPhone = (office_phone: unknown) =>
+      sessionResponseSchema.parse({
+        ...authenticatedSession,
+        tenant: { ...authenticatedSession.tenant, office_phone },
+      });
+    expect(sessionResponseSchema.parse(authenticatedSession)).toEqual(authenticatedSession);
+    expect(withPhone(null).tenant?.office_phone).toBeNull();
+    expect(withPhone("").tenant?.office_phone).toBeNull();
+    expect(withPhone("   ").tenant?.office_phone).toBeNull();
+    expect(withPhone("  780-555-0142 ").tenant?.office_phone).toBe("780-555-0142");
   });
 
   it("rejects unknown roles and missing CSRF truth", () => {
@@ -111,5 +130,45 @@ describe("sessionResponseSchema", () => {
       stale_fields: ["field_device_repair_required"],
     });
     expect(await getDeviceSecret()).toBeUndefined();
+  });
+});
+
+describe("officeSessionIsLive", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+    await resetDatabaseForTests();
+  });
+
+  it("is true only while this browser keeps an unexpired sign-in, read without the local database", async () => {
+    expect(officeSessionIsLive()).toBe(false);
+
+    const expiresAt = Date.now() + 60 * 60_000;
+    await persistAuthenticatedSession({
+      ...authenticatedSession,
+      user: { ...authenticatedSession.user, role: "owner" },
+      permissions: [...authenticatedSession.permissions],
+      allowed_actions: [...authenticatedSession.allowed_actions],
+      stale_fields: [],
+      session_expires_at: new Date(expiresAt).toISOString(),
+    });
+    const open = vi.spyOn(indexedDB, "open");
+    expect(officeSessionIsLive()).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+
+    vi.spyOn(Date, "now").mockReturnValue(expiresAt + 1);
+    expect(officeSessionIsLive()).toBe(false);
+    vi.restoreAllMocks();
+
+    await clearSessionSnapshot();
+    expect(officeSessionIsLive()).toBe(false);
+  });
+
+  it("answers false when storage cannot be read", () => {
+    const getItem = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
+      throw new Error("SecurityError: storage disabled");
+    });
+    expect(officeSessionIsLive()).toBe(false);
+    expect(getItem).toHaveBeenCalled();
   });
 });

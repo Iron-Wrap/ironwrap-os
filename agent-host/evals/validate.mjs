@@ -480,6 +480,179 @@ function checkProducerExclusion(item, expected, fail, label) {
   }
 }
 
+// An inbound envelope's signal, as the Worker writes it (new_inbound): exactly these content keys, no
+// actor, and the lead it becomes as its subject. Excerpt and form fields are untrusted text.
+export const INBOUND_CHANNELS = new Set(["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]);
+const INBOUND_KEYS = ["envelope_id", "channel", "brand", "received_via", "sender", "has_phone", "has_email", "service", "excerpt", "form_fields"];
+const textUpTo = (value, max) => value === null || (typeof value === "string" && value.length <= max);
+function checkInboundSignal(signal, label, fail) {
+  const content = signal.content;
+  const keys = Object.keys(content);
+  if (keys.length !== INBOUND_KEYS.length || !INBOUND_KEYS.every((key) => keys.includes(key))) {
+    fail(`${label}: an inbound signal's content has exactly ${INBOUND_KEYS.join(", ")}`);
+  }
+  if (typeof content.envelope_id !== "string" || content.envelope_id === "") fail(`${label}: an inbound signal names its envelope_id`);
+  if (!INBOUND_CHANNELS.has(content.channel) || signal.source !== content.channel) {
+    fail(`${label}: an inbound signal's channel is one the Worker takes in (${[...INBOUND_CHANNELS].join(", ")}) and is its source`);
+  }
+  if (![null, "ironwrap", "iroof"].includes(content.brand)) fail(`${label}: an inbound signal's brand is ironwrap, iroof, or null`);
+  if (content.received_via !== null) fail(`${label}: an inbound signal's received_via is null: the Worker records none yet`);
+  const sender = content.sender;
+  const senderValid = sender && typeof sender === "object" && Object.keys(sender).length === 3 &&
+    (sender.customer_id === null || typeof sender.customer_id === "string") &&
+    [null, "email", "phone", "email_and_phone"].includes(sender.matched_on) && typeof sender.conflict === "boolean";
+  if (!senderValid) fail(`${label}: an inbound signal's sender is { customer_id, matched_on: email|phone|email_and_phone|null, conflict }`);
+  else if ((sender.customer_id === null) !== (sender.matched_on === null) || (sender.conflict && sender.customer_id !== null)) {
+    fail(`${label}: an inbound signal's sender names a customer exactly when it says what matched, and a conflict names none`);
+  }
+  if (typeof content.has_phone !== "boolean" || typeof content.has_email !== "boolean") fail(`${label}: an inbound signal's has_phone and has_email are booleans`);
+  if (!textUpTo(content.service, 200)) fail(`${label}: an inbound signal's service is text of at most 200 characters, or null`);
+  if (!textUpTo(content.excerpt, 1000)) fail(`${label}: an inbound signal's excerpt is text of at most 1000 characters, or null`);
+  const fields = content.form_fields;
+  const fieldsValid = fields && typeof fields === "object" && Object.keys(fields).length === 3 &&
+    textUpTo(fields.address, 600) && textUpTo(fields.scope, 2000) && textUpTo(fields.timing, 600);
+  if (!fieldsValid) fail(`${label}: an inbound signal's form_fields are { address, scope, timing }, each text or null`);
+  if (signal.actor !== undefined && signal.actor !== null) fail(`${label}: an inbound signal has no actor`);
+  if (signal.subject?.aggregate !== "lead") fail(`${label}: an inbound signal's subject is the lead it becomes ({ aggregate: "lead", id })`);
+}
+
+// Actions the Worker takes only from the inbound event a lead came from (policy.ts INBOUND_ONLY):
+// an event on a channel it takes in, for the lead that event is about. A case that expects or
+// allows one is such an event, and names that lead. The event has no actor: the Worker reads a
+// signal with an actor as a person's ask or request (store.ts runRequest), never as inbound.
+export const INBOUND_ONLY_ACTIONS = new Set(["lead_fact.propose"]);
+function checkInboundOnly(item, expected, fail, label) {
+  const signal = item.signal ?? {};
+  const inbound = signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate === "lead" && (signal.actor ?? null) === null;
+  const listed = [...objects(expected.actions).map((action) => action.action_id), ...(expected.optional_actions ?? [])];
+  for (const actionId of new Set(listed.filter((id) => INBOUND_ONLY_ACTIONS.has(id)))) {
+    if (!inbound) fail(`${label}: ${actionId} comes only from an inbound event about its lead (an event on ${[...INBOUND_CHANNELS].join(", ")} with a lead subject and no actor); the Worker stops it here (out_of_scope)`);
+  }
+  for (const action of objects(expected.actions).filter((entry) => INBOUND_ONLY_ACTIONS.has(entry.action_id))) {
+    const leadId = action.args_must_include?.lead_id;
+    if (inbound && leadId !== undefined && leadId !== signal.subject.id) fail(`${label}: ${action.action_id} names the signal's lead (${signal.subject.id}), not ${leadId}`);
+  }
+}
+
+// A lead, as the Worker's lead read model shows it (workers-bus/src/agents/read-models.ts `lead`,
+// over operating_leads and operating_consents in migration 0090): exactly these keys, read whole
+// as an owned fact with no freshness bound. Contact values, form fields, language, brand and
+// address are not on it. Its consents are the only consent records the Worker has; they live on
+// the lead, one per channel, each for one of the lead's jobs.
+export const LEAD_KEYS = ["lead_id", "source", "contact_name", "job_ref", "lifecycle_status", "record_version", "created_at", "updated_at", "has_phone", "has_email", "consents", "jobs"];
+export const LEAD_SOURCES = new Set(["website", "phone", "gbp", "ad", "referral", "manual"]);
+export const LEAD_STATUSES = new Set(["untriaged", "triaged", "qualified", "disqualified", "converted"]);
+export const CONSENT_KEYS = ["consent_id", "roof_job_id", "channel", "purpose", "status", "jurisdiction", "consent_basis", "recorded_at"];
+export const CONSENT_VALUES = { channel: ["email", "phone"], purpose: ["estimate_follow_up"], status: ["granted", "denied", "revoked"], consent_basis: ["express"] };
+// The lead source each inbound channel's envelope materializes (workers-bus/src/agents/inbound.ts
+// channelOf, read backwards), and the consents its intake can record (operating-core.ts
+// consentFacts): the public estimator, one of the instant estimate's two paths, records one for
+// every contact given; staff intake of a walk-in, call or referral (office-lead-intake-store.ts)
+// may record email; no other intake records any.
+export const LEAD_SOURCE_BY_CHANNEL = { web_form: "website", instant_estimate: "website", phone: "phone", newo_call: "phone", walk_in: "manual", office: "manual", gbp: "gbp", ad: "ad", referral: "referral" };
+export const CONSENT_CHANNELS_BY_CHANNEL = { instant_estimate: ["email", "phone"], walk_in: ["email"], phone: ["email"], referral: ["email"] };
+// The same rule for a lead read later, by its source alone: a website lead came by the web form
+// (none) or the instant estimate, and a manual, phone or referral lead may have been entered by staff.
+const CONSENT_CHANNELS_BY_SOURCE = { website: ["email", "phone"], manual: ["email"], phone: ["email"], referral: ["email"] };
+// What an intake with these consent channels records for this lead: none, or, where it records
+// both, one for every contact the lead has.
+function consentsRecordable(channels, lead) {
+  const recorded = new Set(lead.consents.map((consent) => consent.channel));
+  if (recorded.size === 0) return true;
+  if ([...recorded].some((channel) => !channels.includes(channel))) return false;
+  if (channels.length < 2) return true;
+  return (recorded.has("email") === lead.has_email) && (recorded.has("phone") === lead.has_phone);
+}
+const article = (word) => (/^[aeiou]/.test(word) ? "an" : "a");
+const recordableText = (channels) =>
+  !channels ? "no consent" : channels.length > 1 ? "no consent, or one for every contact given" : `no consent, or ${channels.join(" and ")} consent`;
+// Packs whose lead and consent facts predate the Worker's read models; they are aligned in a later
+// slice and skip this check until then.
+export const UNALIGNED_RECORD_PACKS = new Set(["customer_care_warranty", "estimator", "independent_auditor", "measurement_design", "orchestrator", "proposal_contract", "scheduler_dispatcher"]);
+const isCaseTime = (value) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 1 && typeof value.$case_time === "string";
+const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const nameUpTo = (value, max) => value === null || (typeof value === "string" && value.trim() !== "" && value.length <= max);
+
+function checkLeadFacts(item, id, fail, label) {
+  if (UNALIGNED_RECORD_PACKS.has(id)) return;
+  const signal = item.signal ?? {};
+  const tags = item.tags ?? [];
+  if (tags.includes("pending_inquiry_record") && !objects(item.facts).some((fact) => fact.kind === "triage")) {
+    fail(`${label}: a case tagged pending_inquiry_record holds the inquiry record (a triage fact) it reads`);
+  }
+  const inbound = signal.kind === "event" && signal.content && Object.hasOwn(signal.content, "envelope_id") && INBOUND_CHANNELS.has(signal.source);
+  const subjectId = signal.subject?.aggregate === "lead" ? signal.subject.id : null;
+  for (const fact of objects(item.facts)) {
+    if (fact.kind === "consent" || /^consent[:/]/.test(fact.fact_id ?? "")) {
+      fail(`${label}: ${fact.fact_id} is a consent fact; the Worker has no consent object, so a consent lives in its lead's consents`);
+    }
+    if (fact.kind === "triage" && !tags.includes("pending_inquiry_record")) {
+      fail(`${label}: ${fact.fact_id} is an inquiry record, which nothing writes yet (inquiry.classify and inquiry.record_triage are not registered); tag the case pending_inquiry_record`);
+    }
+    if (fact.kind !== "lead") continue;
+    const lead = fact.data;
+    const at = `${label}: ${fact.fact_id}`;
+    if (!exactKeys(lead, LEAD_KEYS)) {
+      fail(`${at}: a lead's data is exactly the Worker's lead read model (${LEAD_KEYS.join(", ")})`);
+      continue;
+    }
+    if (fact.fact_id !== `lead:${lead.lead_id}`) fail(`${at}: a lead fact is lead:<lead_id>`);
+    if (fact.trust !== "owned" || fact.observed_at !== "PT0M" || fact.fresh_until !== undefined) {
+      fail(`${at}: the Worker reads a lead when the run opens: an owned fact observed at PT0M with no fresh_until`);
+    }
+    // A lead from a channel the Worker does not take in yet names that channel as its source. Its
+    // contacts and consents are that future intake's, so the contact requirement and the intake
+    // consent rule skip it.
+    const pendingSource = tags.includes("pending_inbound_channel") && lead.source === signal.source;
+    if (!LEAD_SOURCES.has(lead.source) && !pendingSource) fail(`${at}: a lead's source is one of ${[...LEAD_SOURCES].join(", ")}`);
+    if (!nameUpTo(lead.contact_name, 160) || !nameUpTo(lead.job_ref, 160)) fail(`${at}: a lead's contact_name and job_ref are text of at most 160 characters, or null`);
+    if (!LEAD_STATUSES.has(lead.lifecycle_status)) fail(`${at}: a lead's lifecycle_status is one of ${[...LEAD_STATUSES].join(", ")}`);
+    if (!Number.isInteger(lead.record_version) || lead.record_version < 1) fail(`${at}: a lead's record_version is a positive integer`);
+    if (!isCaseTime(lead.created_at) || !isCaseTime(lead.updated_at)) fail(`${at}: a lead's created_at and updated_at are { "$case_time": <duration> } markers`);
+    if (typeof lead.has_phone !== "boolean" || typeof lead.has_email !== "boolean" || !(lead.has_phone || lead.has_email || pendingSource)) {
+      fail(`${at}: a lead's has_phone and has_email are booleans, and at least one is true (the Worker materializes no lead without a contact)`);
+    }
+    const jobs = Array.isArray(lead.jobs) ? lead.jobs : null;
+    if (!jobs || jobs.length < 1 || jobs.length > 8 || new Set(jobs).size !== jobs.length || !jobs.every((job) => typeof job === "string" && job !== "")) {
+      fail(`${at}: a lead's jobs are one to eight distinct job ids (every lead materializes with its job)`);
+    }
+    if (!Array.isArray(lead.consents)) {
+      fail(`${at}: a lead's consents are a list`);
+      continue;
+    }
+    const channels = new Set();
+    for (const consent of lead.consents) {
+      const valid = exactKeys(consent, CONSENT_KEYS) && typeof consent.consent_id === "string" && consent.consent_id !== "" &&
+        Object.entries(CONSENT_VALUES).every(([key, values]) => values.includes(consent[key])) &&
+        typeof consent.jurisdiction === "string" && consent.jurisdiction.trim().length >= 2 && consent.jurisdiction.length <= 120 && isCaseTime(consent.recorded_at);
+      if (!valid) {
+        fail(`${at}: a consent is exactly { ${CONSENT_KEYS.join(", ")} }: channel email or phone, purpose estimate_follow_up, status granted, denied or revoked, basis express, recorded_at a $case_time marker`);
+        continue;
+      }
+      if (!jobs?.includes(consent.roof_job_id)) fail(`${at}: consent ${consent.consent_id} is for one of the lead's jobs`);
+      if (channels.has(consent.channel)) fail(`${at}: a lead holds one consent per channel`);
+      channels.add(consent.channel);
+      if (!(consent.channel === "email" ? lead.has_email : lead.has_phone)) fail(`${at}: consent ${consent.consent_id} is on a channel the lead has (has_${consent.channel})`);
+    }
+    // The lead an inbound envelope becomes carries what the same envelope gave the signal; a lead
+    // read later is held to what its source's intakes can record.
+    if (inbound && lead.lead_id === subjectId) {
+      if (lead.source !== LEAD_SOURCE_BY_CHANNEL[signal.source]) fail(`${at}: the lead a ${signal.source} envelope becomes has source ${LEAD_SOURCE_BY_CHANNEL[signal.source]}`);
+      if (lead.has_phone !== signal.content.has_phone || lead.has_email !== signal.content.has_email) fail(`${at}: the lead an envelope becomes has the signal's has_phone and has_email`);
+      if (!consentsRecordable(CONSENT_CHANNELS_BY_CHANNEL[signal.source] ?? [], lead)) {
+        fail(`${at}: ${article(signal.source)} ${signal.source} intake records ${recordableText(CONSENT_CHANNELS_BY_CHANNEL[signal.source])}`);
+      }
+      continue;
+    }
+    if (inbound && !tags.includes("pending_record_access")) {
+      fail(`${at}: a new inquiry's run sees only the lead it becomes; tag a case that holds another lead pending_record_access`);
+    }
+    if (!pendingSource && LEAD_SOURCES.has(lead.source) && !consentsRecordable(CONSENT_CHANNELS_BY_SOURCE[lead.source] ?? [], lead)) {
+      fail(`${at}: ${article(lead.source)} ${lead.source} lead's intake records ${recordableText(CONSENT_CHANNELS_BY_SOURCE[lead.source])}`);
+    }
+  }
+}
+
 function checkCase(item, context) {
   const { suite, id, granted, catalog, registry, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
@@ -493,8 +666,19 @@ function checkCase(item, context) {
     const watches = (catalog.specialists.get(id)?.watches ?? []).map((watch) => (typeof watch === "string" ? watch : watch.watch_id));
     if (!watches.includes(signal.watch_id)) fail(`${label}: watch ${signal.watch_id} is not a ${id} watch in the contract`);
   }
-  if (!signal.content || (typeof signal.content.text !== "string" && !signal.content.request)) {
-    fail(`${label}: signal.content needs text or request`);
+  // A watch firing may carry the Worker's own content, { watch_id, objects, digest, summary }. Its
+  // period_key is a calendar date, so a case leaves it out.
+  const content = signal.content;
+  if (signal.kind === "watch" && content && typeof content.summary === "string" && content.digest && typeof content.digest === "object" && !Array.isArray(content.digest)) {
+    if (content.watch_id !== signal.watch_id) fail(`${label}: a watch firing's content.watch_id is its signal's watch_id`);
+    const objectsValid = Array.isArray(content.objects) && content.objects.length <= 24 &&
+      content.objects.every((object) => typeof object?.aggregate === "string" && typeof object?.id === "string");
+    if (!objectsValid) fail(`${label}: a watch firing's objects are at most 24 { aggregate, id }`);
+    if (content.period_key !== undefined) fail(`${label}: a watch firing's period_key is a calendar date; leave it out`);
+  } else if (signal.kind === "event" && content && Object.hasOwn(content, "envelope_id")) {
+    checkInboundSignal(signal, label, fail);
+  } else if (!content || (typeof content.text !== "string" && !content.request)) {
+    fail(`${label}: signal.content needs text or request, an inbound envelope's keys, or a watch firing's digest and summary`);
   }
   // The signal's actor, as the Worker writes it: who sent it, or null for the Worker's own watch
   // firings and specialist handoffs. Only an external sender is unauthenticated.
@@ -503,6 +687,15 @@ function checkCase(item, context) {
     fail(`${label}: signal.actor must be { type, role, ref, authenticated } as the Worker writes it (${[...ACTOR_TYPES.keys()].join(", ")})`);
   }
   if (["watch", "handoff"].includes(signal.kind) && actor !== null) fail(`${label}: a ${signal.kind} signal has no actor; its source says who`);
+  // A signal's subject, as the Worker writes it: { aggregate, id }, or absent.
+  const subject = signal.subject;
+  if (subject !== undefined && !(subject && typeof subject === "object" && Object.keys(subject).length === 2 &&
+    typeof subject.aggregate === "string" && subject.aggregate !== "" && typeof subject.id === "string" && subject.id !== "")) {
+    fail(`${label}: signal.subject is { aggregate, id }`);
+  }
+  if (signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate !== "lead") {
+    fail(`${label}: an event on an inbound channel names the lead it becomes as its subject`);
+  }
   // A person's ask goes to the face (`ask`) and a press on a view action to the action's owning
   // specialist (`request`). Both name the signed-in person; crew can ask but cannot press.
   if (signal.kind === "owner_request") {
@@ -570,6 +763,10 @@ function checkCase(item, context) {
   const emergency = expectedIds.includes("emergency.page") || (item.catastrophic_if ?? []).includes("treats_emergency_as_routine");
   if (expected.decision === "escalate" && ownIds.length > 0 && !emergency) {
     fail(`${label}: escalate with own required action(s) ${ownIds.join(", ")} is propose unless it is an emergency (COMMON.md)`);
+  }
+  // Escalate hands the work to someone, so the run routes it; a run that only keeps books is propose.
+  if (expected.decision === "escalate" && !expectedIds.some((id) => ROUTING_ACTIONS.has(id))) {
+    fail(`${label}: escalate requires a routing action (${[...ROUTING_ACTIONS].join(", ")}); a run that only keeps books is propose (COMMON.md)`);
   }
   for (const action of objects(expected.actions)) {
     if (!granted.has(action.action_id)) fail(`${label}: expected action ${action.action_id} is not allowlisted`);
@@ -640,6 +837,44 @@ function checkCase(item, context) {
     if (!catastropheIds.has(catastrophe)) fail(`${label}: unknown catastrophe ${catastrophe}`);
   }
   checkProducerExclusion(item, expected, fail, label);
+  checkLeadFacts(item, id, fail, label);
+  checkInboundOnly(item, expected, fail, label);
+  if (catalog) checkDelegable(item, expected, catalog, fail, label);
+}
+
+// A delegation names a delegable action of the specialist that owns it. The Worker serves no
+// delegation record for any other action, lists none in a review digest, and refuses to propose
+// one (contract Delegation item 8). A within-limits permit on a never-delegable action is a
+// violation, so only a case that raises it as a finding may hold one.
+function checkDelegable(item, expected, catalog, fail, label) {
+  const pair = (specialistId, actionId, where) => {
+    const action = catalog.actions.get(actionId);
+    if (!action) fail(`${label}: ${where} names ${actionId}, which is not in the catalog`);
+    else if (action.delegable !== true) fail(`${label}: ${where} names ${actionId}, which is never delegable`);
+    else if (specialistId && !(action.owners ?? []).includes(specialistId)) fail(`${label}: ${where} names ${actionId} for ${specialistId}, which does not own it`);
+  };
+  const raisesFinding = objects(expected.actions).some((action) => action.action_id === "finding.raise");
+  for (const fact of objects(item.facts)) {
+    const data = fact.data ?? {};
+    if (fact.kind === "delegation" || String(fact.fact_id ?? "").startsWith("delegation/")) {
+      const record = /^delegation\/([a-z_]+):([a-z_.]+)$/.exec(fact.fact_id ?? "");
+      if (record) pair(record[1], record[2], `delegation record ${fact.fact_id}`);
+      if (data.action_id && (!record || data.action_id !== record[2] || (data.specialist_id && data.specialist_id !== record[1]))) {
+        pair(data.specialist_id, data.action_id, `delegation record ${fact.fact_id} (data)`);
+      }
+    }
+    if (data.permit?.kind === "within_limits" && catalog.actions.get(data.action_id)?.delegable === false && !raisesFinding) {
+      fail(`${label}: ${fact.fact_id} holds a within-limits permit on ${data.action_id}, which is never delegable; only a case that raises it as a finding may`);
+    }
+  }
+  const digest = item.signal?.content?.digest;
+  for (const key of ["delegation_candidates", "previewable", "awaiting_owner"]) {
+    for (const entry of objects(digest?.[key])) pair(entry.specialist_id, entry.action_id, `digest ${key}`);
+  }
+  for (const action of objects(expected.actions)) {
+    const args = action.action_id === "delegation.propose_change" ? (action.args_must_include ?? {}) : {};
+    if (args.action_id) pair(args.specialist_id, args.action_id, "delegation.propose_change");
+  }
 }
 
 function checkSuite(dir, suite, context) {

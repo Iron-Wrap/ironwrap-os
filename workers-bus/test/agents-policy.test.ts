@@ -238,9 +238,9 @@ test("handoffs stop at the depth and repeat limits", () => {
 
 
 test("the followup contract keeps closed machine reasons, auditor protection and protective revoke", () => {
-  assert.equal(CATALOG.actions.length, 162);
-  assert.equal(CATALOG.watches.length, 115);
-  assert.equal(CATALOG_VERSION, "86ae29d7af105098e5214bbe754af3f19c0f1611e0687d0b58574a8deac80ab4");
+  assert.equal(CATALOG.actions.length, 163);
+  assert.equal(CATALOG.watches.length, 116);
+  assert.equal(CATALOG_VERSION, "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6");
   assert.deepEqual(catalogAction("specialist.hold")?.never_targets, ["independent_auditor"]);
   assert.equal(catalogAction("portal_link.revoke")?.protective, true);
   assert.equal(catalogAction("portal_link.revoke")?.side_effect_class, "internal_reversible");
@@ -526,5 +526,61 @@ test("a prepared people-only act names the person who performs it, under a hold 
   ] as const) {
     assert.equal(prepared(specialistId, actionId, false).reviewer_role, person, `${actionId} draft`);
     assert.equal(prepared(specialistId, actionId, true).reviewer_role, person, `${actionId} under a hold`);
+  }
+});
+
+test("lead_fact.propose proposes from the inbound the run answers and cites only it", () => {
+  const INBOUND = { signal_ref: "signal/sig_1", kind: "event", source: "web_form", actor: null, subject: { aggregate: "lead", id: "L-5401" } };
+  const fields = { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null };
+  const propose = (overrides: Partial<StepInput> = {}, args: unknown = { lead_id: "L-5401", fields }) =>
+    evaluateStep(input({ specialistId: "lead_concierge", actionId: "lead_fact.propose", args, requester: INBOUND, ...overrides }));
+  const requester = (decision: ReturnType<typeof evaluateStep>) => decision.checks.find((check) => check.check === "requester");
+  const proposed = propose();
+  assert.deepEqual([proposed.result, proposed.outcome, proposed.permit_kind, requester(proposed)], ["allow", "succeeded", "draft", { check: "requester", passed: true }]);
+  // Any other root, or any other citation beside the inbound, stops before the arguments are read.
+  const leadFact = { fact_id: "lead/L-5401", version: 1, hash: "sha256:02", trust: "owned" as const, fresh_until: null };
+  for (const [label, overrides] of [
+    ["an owner's request", { requester: { ...INBOUND, kind: "owner_request", source: "ask" } }],
+    ["a watch", { requester: { ...INBOUND, kind: "watch", source: "watch_scheduler" } }],
+    ["no root", { requester: null }],
+    ["a record cited beside it", { citations: [{ fact_id: "signal/sig_1", version: 1 }, { fact_id: "lead/L-5401", version: 1 }], snapshot: new Map([[SIGNAL_FACT.fact_id, SIGNAL_FACT], [leadFact.fact_id, leadFact]]), currentVersions: new Map([["signal/sig_1", 1], ["lead/L-5401", 1]]) }],
+    ["another signal", { citations: [{ fact_id: "signal/sig_2", version: 1 }] }],
+    ["nothing cited", { citations: [] }],
+    ["another lead than the inbound's", { args: { lead_id: "L-5402", fields } }],
+    ["an inbound about no lead", { requester: { ...INBOUND, subject: null } }],
+    ["an inbound about another record", { requester: { ...INBOUND, subject: { aggregate: "customer", id: "L-5401" } } }],
+  ] as const) {
+    const stopped = propose(overrides as Partial<StepInput>);
+    assert.deepEqual([stopped.outcome, stopped.reason_codes, requester(stopped)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
+  }
+  // The four facts, exactly as lead_fact.confirm takes them, at least one set.
+  for (const args of [
+    { lead_id: "L-5401", fields: { service: null, scope: null, address: null, timing: null } },
+    { lead_id: "L-5401", fields: { service: "metal_roofing" } },
+    { lead_id: "L-5401", fields, proposal_id: "LP-1" },
+    { fields },
+  ])
+    assert.deepEqual(propose({}, args).reason_codes, ["action_unregistered"], JSON.stringify(args));
+});
+
+test("lead_fact.propose answers only an event that came by an inbound channel", () => {
+  const propose = (source: string) =>
+    evaluateStep(
+      input({
+        specialistId: "lead_concierge",
+        actionId: "lead_fact.propose",
+        args: { lead_id: "L-5401", fields: { service: "metal_roofing", scope: null, address: null, timing: null } },
+        requester: { signal_ref: "signal/sig_1", kind: "event", source, actor: null, subject: { aggregate: "lead", id: "L-5401" } },
+      }),
+    );
+  for (const channel of ["web_form", "instant_estimate", "phone", "newo_call", "walk_in", "office", "gbp", "ad", "referral"]) {
+    const proposed = propose(channel);
+    assert.deepEqual([proposed.result, proposed.outcome, proposed.checks.find((check) => check.check === "requester")], ["allow", "succeeded", { check: "requester", passed: true }], channel);
+  }
+  // Any other event is not inbound: an envelope's source rather than its channel, a channel the
+  // Worker does not take yet, or a source no producer writes.
+  for (const source of ["website", "manual", "email", "sms", "whatsapp", "synthetic-test", "watch_scheduler", ""]) {
+    const stopped = propose(source);
+    assert.deepEqual([stopped.outcome, stopped.reason_codes, stopped.checks.at(-1)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], source);
   }
 });

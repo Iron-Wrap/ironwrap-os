@@ -88,8 +88,11 @@ vi.mock("@tanstack/react-query", async () => {
 });
 
 vi.mock("../field/safety-action-panel", () => ({
-  SafetyActionPanel: () => (
-    <div data-testid="safety-action-panel">
+  SafetyActionPanel: ({ scope }: { scope?: { type: string; id: string } }) => (
+    <div
+      data-testid="safety-action-panel"
+      data-scope={scope ? `${scope.type}:${scope.id}` : "company"}
+    >
       <input aria-label="Synthetic safety draft" />
     </div>
   ),
@@ -222,6 +225,21 @@ describe("AppShell", () => {
     }
   });
 
+  it("scopes a safety report from an open job to that job, and to the company elsewhere", () => {
+    mocks.pathname = "/jobs/JOB-1";
+    const view = renderShell(ownerSession);
+    expect(screen.getByTestId("safety-action-panel")).toHaveAttribute(
+      "data-scope",
+      "roof_job:JOB-1",
+    );
+    mocks.pathname = "/jobs/JOB-1/history";
+    view.rerenderShell();
+    expect(screen.getByTestId("safety-action-panel")).toHaveAttribute("data-scope", "company");
+    mocks.pathname = "/sales";
+    view.rerenderShell();
+    expect(screen.getByTestId("safety-action-panel")).toHaveAttribute("data-scope", "company");
+  });
+
   it("names the destination and the record in the breadcrumb", () => {
     mocks.pathname = "/jobs/JOB-1";
     renderShell(ownerSession);
@@ -234,6 +252,69 @@ describe("AppShell", () => {
     expect(within(railOf()).getByRole("link", { name: "Production" })).toHaveAttribute(
       "aria-current",
       "page",
+    );
+  });
+
+  it.each([
+    ["/settings", "Settings"],
+    ["/settings/company", "Settings/Company details"],
+    ["/settings/team", "Settings/People"],
+    ["/settings/devices", "Settings/Crew phones"],
+    ["/settings/integrations", "Settings/Integration readiness"],
+    ["/settings/configuration", "Settings/Owner configuration"],
+    ["/settings/configuration/pipelines", "Settings/Owner configuration/Pipelines"],
+    ["/settings/configuration/fields", "Settings/Owner configuration/Fields"],
+    ["/settings/configuration/automations", "Settings/Owner configuration/Automations"],
+    ["/settings/configuration/automations/recipients", "Settings/Owner configuration/Recipients"],
+    ["/settings/configuration/documents", "Settings/Owner configuration/Documents"],
+    ["/accounting/quickbooks", "Settings/QuickBooks"],
+  ])("says Settings once and names the page as its heading does on %s", (pathname, trail) => {
+    mocks.pathname = pathname;
+    renderShell(ownerSession);
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(crumbs.textContent).toBe(trail);
+    // Only the page itself is current, never the crumb that links back.
+    const current = crumbs.querySelectorAll("[aria-current]");
+    expect(current).toHaveLength(1);
+    expect(current[0]).toHaveTextContent(trail.split("/").at(-1)!);
+    if (pathname === "/settings") expect(within(crumbs).queryByRole("link")).toBeNull();
+    // A settings page links its Settings crumb back to the settings desk.
+    if (pathname.startsWith("/settings/")) {
+      expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute(
+        "href",
+        "/settings",
+      );
+    }
+    if (pathname.startsWith("/settings/configuration/")) {
+      expect(within(crumbs).getByRole("link", { name: "Owner configuration" })).toHaveAttribute(
+        "href",
+        "/settings/configuration",
+      );
+    }
+  });
+
+  it("says a destination named like its workspace once", () => {
+    mocks.pathname = "/now";
+    renderShell(ownerSession);
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" }).textContent).toBe("Now");
+
+    cleanup();
+    const accounting = {
+      ...ownerSession,
+      user: { ...ownerSession.user, role: "accounting" as const },
+    };
+    mocks.pathname = "/accounting/quickbooks";
+    renderShell(accounting);
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" }).textContent).toBe("Settings");
+
+    cleanup();
+    mocks.pathname = "/accounting/quickbooks/final-invoices/inv-1";
+    renderShell(accounting);
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(crumbs.textContent).toBe("Settings/Final invoice");
+    expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "href",
+      "/accounting/quickbooks",
     );
   });
 

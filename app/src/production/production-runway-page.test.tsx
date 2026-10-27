@@ -186,7 +186,7 @@ describe("ProductionRunwayPage", () => {
       "href",
       "/jobs/JOB-A",
     );
-    expect(screen.getByRole("link", { name: "History of IW-1001" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Full job record IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A/history",
     );

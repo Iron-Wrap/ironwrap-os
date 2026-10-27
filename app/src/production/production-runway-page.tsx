@@ -421,9 +421,9 @@ function RunwayJobCard({
               <Link
                 to="/jobs/$jobId/history"
                 params={{ jobId: job.id }}
-                aria-label={`History of ${job.job_number ?? job.id}`}
+                aria-label={`Full job record ${job.job_number ?? job.id}`}
               >
-                Job record
+                Full job record
                 <ChevronRight aria-hidden="true" />
               </Link>
             </Button>

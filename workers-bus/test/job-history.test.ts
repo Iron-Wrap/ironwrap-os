@@ -311,7 +311,7 @@ interface HistoryModel {
   };
   customer: { display_name: string | null; phone: string | null } | null;
   proof: {
-    items: Array<{ id: string; summary: string | null }>;
+    items: Array<{ id: string; type: string | null; summary: string | null }>;
     next_cursor: string | null;
   };
   openable: boolean;
@@ -361,6 +361,11 @@ test("it carries the proof of what was done, after the assignment is long gone",
     "Finished roof, north slope",
     "Tear-off complete",
   ]);
+  // The history page shows this label beside each event, so it uses the product word.
+  assert.deepEqual(
+    model.proof.items.map((item) => item.type),
+    ["Job plan evidence", "Job plan evidence"],
+  );
   assert.equal(model.proof_unavailable, false);
 });
 

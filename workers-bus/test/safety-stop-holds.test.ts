@@ -9,7 +9,8 @@ import {
   recordAuthorityReadback,
   type AuthorityCurrentPrecondition,
 } from "../src/authority-records.ts";
-import type { AppEnv } from "../src/app-types.ts";
+import { buildJobReadModel, buildTodayReadModel } from "../src/app-read-models.ts";
+import { permissionsForRole, type AppEnv, type AuthContext } from "../src/app-types.ts";
 import {
   evaluateSafetyReadiness,
   holdingSafetyStops,
@@ -571,6 +572,33 @@ async function expectHeld(
 
 const raiserName = USERS.crew.name;
 
+/** A field session as the router hands it to a read: the crew member's own assigned view. */
+function fieldAuth(user: FixtureUser): AuthContext {
+  return {
+    rawSessionToken: "",
+    csrfToken: "",
+    permissions: permissionsForRole("field"),
+    session: {
+      session_hash: "f".repeat(64),
+      session_created_at: new Date(Date.now() - 60_000).toISOString(),
+      session_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      revoked_at: null,
+      device_id: "device-synthetic-crew",
+      device_proof_hash: null,
+      user_id: user.id,
+      tenant_id: TENANT,
+      email_normalized: user.email,
+      display_name: user.name,
+      role: "field",
+      frappe_user_id: user.frappe ?? null,
+      active: 1,
+      created_by: USERS.owner.email,
+      created_at: at(-60),
+      updated_at: at(-60),
+    },
+  };
+}
+
 // --- Holds -------------------------------------------------------------------------------------
 
 test("a stop on a job that doesn't exist holds every job of the tenant, for every crew", async () => {
@@ -706,4 +734,36 @@ test("the crew read lists exactly the stops that hold each job, oldest first", a
     now: new Date().toISOString(),
   });
   assert.deepEqual(readiness.blockers.map((blocker) => blocker.stop), byJob.get(jobA.jobId));
+});
+
+test("the crew Today and job reads carry each job's holding stops, and never another tenant's", async () => {
+  const env = testEnv();
+  const { jobA, jobB } = await twoJobs(env);
+  const onA = await raise(env, { type: "roof_job", id: jobA.jobId }, USERS.mate, { minute: 110 });
+  const tenantWide = await raise(env, { type: "work_package", id: "wp_hold_typo" }, USERS.crew, { minute: 120 });
+  await raise(env, { type: "tenant", id: OTHER_TENANT }, OTHER_USERS.crew, { tenantId: OTHER_TENANT, minute: 100 });
+  const crew = fieldAuth(USERS.crew);
+  const today = await buildTodayReadModel(env, crew);
+  assert.deepEqual(today.jobs.map((job) => [job.id, job.active_stops?.map((stop) => stop.occurrence_id)]),
+    [[jobA.jobId, [onA, tenantWide]]]);
+  assert.equal(today.stale_fields.includes("jobs.active_stops_unavailable"), false);
+  const job = await buildJobReadModel(env, crew, jobA.jobId);
+  assert.deepEqual(job?.job.active_stops, (await holdingSafetyStops(env, TENANT, [jobA.jobId])).get(jobA.jobId));
+  const other = await buildJobReadModel(env, fieldAuth(USERS.other), jobB.jobId);
+  assert.deepEqual(other?.job.active_stops?.map((stop) => [stop.occurrence_id, stop.scope]),
+    [[tenantWide, "tenant"]]);
+  // A stop read that fails says so, rather than looking like no stop.
+  const broken = {
+    ...env,
+    DB: {
+      prepare(sql: string) {
+        if (sql.includes("AS held_job_ids")) throw new Error("synthetic_read_failure");
+        return env.DB.prepare(sql);
+      },
+      batch: env.DB.batch.bind(env.DB),
+    },
+  } as unknown as TestEnv;
+  const degraded = await buildTodayReadModel(broken, crew);
+  assert.deepEqual(degraded.jobs.map((row) => row.active_stops), [null]);
+  assert.ok(degraded.stale_fields.includes("jobs.active_stops_unavailable"));
 });

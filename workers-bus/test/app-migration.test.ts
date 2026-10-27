@@ -2302,8 +2302,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (L06) or one without its own `released` event.
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
+    // 0170 lets no crew acknowledge, start or complete work on a job an active safety stop holds.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 141);
+    assert.equal(migrations.length, 142);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2458,10 +2459,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
     // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
     // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
-    // evidence and readback-conflict guards under their names.
+    // evidence and readback-conflict guards under their names. 0170 adds the safety stop hold guard
+    // on Work Package events.
     assert.deepEqual(
       { ...counts },
-      { tables: 280, indexes: 381, triggers: 774 },
+      { tables: 280, indexes: 381, triggers: 775 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

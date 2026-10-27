@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 141,
+      "count": 142,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -880,6 +880,14 @@ stale from before that merge):
   `released` event. The occurrence and its event now commit in one batch. The release by another
   Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
   Proof is repository tests only.
+- An active safety-occurrence stop holds every job it names, for every crew: a job stop holds its
+  job, a Work Package stop holds every package of its job (Superseded included), and a tenant stop
+  or a stop on a job or package that doesn't exist holds every job of the tenant. Work Package
+  acknowledge, start and complete answer `safety_stop_active` with the holding stops, and migration
+  `0170` repeats the rule in D1. Stopping work and captures stay open. The crew Today, job and
+  typed-work reads list the holding stops (`active_stops`); the stop detail and safety panel carry
+  the raiser's name, the controlled step and an L06-aware `can_release`. Proof is repository tests
+  only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

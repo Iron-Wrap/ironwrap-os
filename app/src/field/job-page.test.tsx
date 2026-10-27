@@ -243,7 +243,8 @@ function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"
     stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
     make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
     issued_at: "2026-07-10T15:00:00.000Z",
-    released_at: "2026-07-10T15:15:00.000Z",
+    // Released in the same step that issues it, as the Worker writes both from one input.issuedAt.
+    released_at: "2026-07-10T15:00:00.000Z",
     expires_at: "2026-07-10T23:00:00.000Z",
     work_object_type: "Roof Job",
     work_object_id: "JOB-1",
@@ -1259,7 +1260,7 @@ describe("JobPage", () => {
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
     // The header and the plan card name the plan by its release, never by a version number.
-    expect(screen.getAllByText("Issued to the crew · Fri 10 Jul 09:15")).toHaveLength(2);
+    expect(screen.getAllByText("Issued to the crew · Fri 10 Jul 09:00")).toHaveLength(2);
     expect(screen.queryByText(/Version \d|\bv\d/)).not.toBeInTheDocument();
   });
 
@@ -1274,7 +1275,7 @@ describe("JobPage", () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("Issued to the crew · Fri 10 Jul 9:15 a.m.")).toBeVisible();
+    expect(screen.getByText("Issued to the crew · Fri 10 Jul 9:00 a.m.")).toBeVisible();
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();

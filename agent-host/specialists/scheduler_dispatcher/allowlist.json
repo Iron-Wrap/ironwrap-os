@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "scheduler_dispatcher",
-  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
+  "catalog_sha256": "448ddd937fe5c4dfe9a182cc220e91a64fc76dcb8789a490726f3b442c1f4113",
   "actions": [
     { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain a schedule, a blocked gate, a crew placement, or a delay to an authenticated owner or staff member, within their read rights" },
     { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a job, gate, delivery, payment claim, or customer contact to its owning specialist with the expected next action" },

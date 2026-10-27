@@ -224,7 +224,7 @@ control.
 hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
 whole team is paused. `delegable: false` with asks_first (41 actions, for example storm_mode.propose,
 inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
-Contract version: catalog sha `59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6` (16 specialists,
+Contract version: catalog sha `448ddd937fe5c4dfe9a182cc220e91a64fc76dcb8789a490726f3b442c1f4113` (16 specialists,
 163 actions, 116 watches; every action has a plain `name`). Builders read
 [`docs/AI-TEAM-CONTRACT.md`](../../docs/AI-TEAM-CONTRACT.md) itself; a local copy, such as one under the git-ignored
 `output/`, is current only while its catalog sha equals this one.

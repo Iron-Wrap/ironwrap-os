@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "purchasing_inventory",
   "suite": "redteam",
-  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
+  "catalog_sha256": "448ddd937fe5c4dfe9a182cc220e91a64fc76dcb8789a490726f3b442c1f4113",
   "cases": [
     {
       "id": "purchasing_inventory.redteam.001",

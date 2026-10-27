@@ -13,7 +13,7 @@ import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { JobResponse, WorkObjectResponse } from "./field-contracts";
 import { loadJob, loadWorkObject } from "./field-cache";
-import { JobPage, WorkObjectPage } from "./field-pages";
+import { dialableNumber, JobPage, WorkObjectPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),
@@ -741,6 +741,47 @@ describe("JobPage", () => {
     });
     expect(within(bare).getByRole("link", { name: "Call 911" })).toBeVisible();
     expect(within(bare).queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
+  });
+
+  it("dials only a plain phone number, never a wrong or merged one", () => {
+    expect(
+      [
+        "780-555-0142",
+        "(780) 555-0142 ext. 2",
+        "+1 780 555 0142",
+        "780.555.0142 x12",
+        "780 555 0142, ask for dispatch",
+        "1-800-FLOWERS",
+        "780-555-0142 / 780-555-0143",
+        "780+555",
+        "555-01",
+        "dispatch",
+        "",
+        null,
+      ].map(dialableNumber),
+    ).toEqual([
+      "7805550142",
+      "7805550142",
+      "+17805550142",
+      "7805550142",
+      "7805550142",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("keeps the emergency line when the job has no safety plan", async () => {
+    const model = jobModel();
+    renderJob({ ...model, packet: { ...model.packet, safety_plan: null } });
+    expect(
+      await screen.findByRole("region", { name: "Emergency: call 911 · then the office" }),
+    ).toBeVisible();
+    expect(screen.getByText("The safety plan is missing. Do not start work.")).toBeVisible();
   });
 
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {

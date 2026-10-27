@@ -496,6 +496,12 @@ test.describe("Field Companion PWA acceptance", () => {
       await page.setViewportSize(viewport);
       await page.goto("/jobs/JOB-ACCEPTANCE");
       await expect(page.getByRole("heading", { name: "Safety and site" })).toBeVisible();
+      // The emergency line dials 911 and the office's own number from the company profile.
+      await expect(page.getByRole("link", { name: "Call 911" })).toHaveAttribute("href", "tel:911");
+      await expect(page.getByRole("link", { name: "Call the office" })).toHaveAttribute(
+        "href",
+        "tel:7805550142",
+      );
       const cells = await page
         .locator(
           "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",

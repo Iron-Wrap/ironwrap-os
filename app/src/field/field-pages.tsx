@@ -344,9 +344,12 @@ function WorkObjectPacketHeader({
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
         <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        {/* A version number never stands in a person's line; the plan says its state. */}
         <JobFact
           label="Work plan"
-          value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
+          value={
+            model.work_package ? workPackageStateWords(model.work_package.status) : "Not ready"
+          }
         />
       </dl>
     </header>
@@ -1007,8 +1010,7 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            v{workPackage.version} ·{" "}
-            {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
+            {workPackageStateWords(workPackage.status)}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
@@ -1726,9 +1728,7 @@ function SafetyAndAccess({
           <div className="flex items-start gap-3">
             <HardHat className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
             <div>
-              <p className="font-bold">
-                Safety plan{safety?.version ? ` · v${safety.version}` : ""}
-              </p>
+              <p className="font-bold">Safety plan</p>
               <p className="mt-1 text-sm leading-6 text-muted">
                 {safety?.status ?? "No safety plan is in this job."}
               </p>
@@ -1876,11 +1876,7 @@ function PacketDetails({
             <PacketEvidenceLine
               key={item.id}
               title={item.title ?? item.number ?? "Change order"}
-              detail={joinKnown([
-                item.status,
-                item.scope_delta,
-                item.version !== null ? `v${item.version}` : null,
-              ])}
+              detail={joinKnown([item.status, item.scope_delta])}
             />
           ))}
         </PacketDetail>
@@ -1940,6 +1936,11 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
       {detail ? <p className="mt-1 text-sm leading-6 text-muted">{detail}</p> : null}
     </div>
   );
+}
+
+/** A work plan's state in the crew's words; its version stays in history. */
+function workPackageStateWords(status: string): string {
+  return status === "Acknowledged" ? "Reviewed" : status;
 }
 
 function JobFact({ label, value }: { label: string; value: string }) {

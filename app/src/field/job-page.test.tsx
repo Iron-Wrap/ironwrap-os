@@ -720,7 +720,9 @@ describe("JobPage", () => {
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {
     renderJob();
 
-    expect(await screen.findByText("Safety plan · v2")).toBeVisible();
+    expect(await screen.findByText("Safety plan")).toBeVisible();
+    // A version number never stands in a person's line (ruling); history keeps it.
+    expect(screen.queryByText(/\bv\d+\b|\bversion \d/i)).toBeNull();
     expect(screen.getByText("Steep-slope fall exposure")).toBeVisible();
     expect(screen.getByText("Use roof anchors and harnesses")).toBeVisible();
     expect(screen.getByText(/field_checkin · Team only/i)).toBeVisible();
@@ -922,7 +924,9 @@ describe("JobPage", () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("v3 · Released")).toBeVisible();
+    const plan = screen.getByRole("region", { name: "North slope replacement" });
+    expect(within(plan).getAllByText("Released")[0]).toBeVisible();
+    expect(plan.textContent).not.toMatch(/\bv3\b|version 3/i);
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();

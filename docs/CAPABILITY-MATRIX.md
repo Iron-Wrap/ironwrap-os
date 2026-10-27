@@ -668,8 +668,9 @@ IRO-38 branch-local side-effect substrate:
   `proposal_delivery_checks` row (`sent`, `bounced`, `not_found`, `unknown` or
   `provider_unavailable`), dated as the readback starts. No check moves the send, and none sends
   anything; a send whose lease ran out is checked only once the `*/5` lease sweep has recorded it as
-  unknown. Each send keeps at most 20 checks of each kind (a citable complete-scan `not_found`, and
-  every other answer), and the read's `check_allowed` is false once no further check could be kept.
+  unknown. Each send keeps at most 20 checks of each kind (a citable complete-scan `not_found`, a
+  found message `sent`, and every other answer), and the read's `check_allowed` is false once no
+  further check could be kept.
   Only the QA stand-in has a readback, on a synthetic Worker; every other provider answers `unknown`
   / `readback_not_supported`, so `not_found` (a complete scan begun after the provider's window) is
   never written before Proof P1. `GET …/proposal-publications/delivery` derives one delivery state
@@ -678,8 +679,10 @@ IRO-38 branch-local side-effect substrate:
   `PROPOSAL_DELIVERY_ESCALATION_MS` (four hours, an interim technical default) after its attempt
   ended. A send whose provider answered (a readback conflict from `reconciling` or from `failed`)
   may be recorded as not delivered only by citing a check of that send, newer than the conflict,
-  with `not_found` and a complete scan, while no check of the send found the message (`sent` or
-  `bounced`); until P1 it stays an exception. 0167 re-creates 0164's evidence guard so that, from B2
+  with `not_found` and a complete scan; until P1 it stays an exception. Once a check found the
+  message `sent`, no send is recorded as not delivered, cited or not, through 0156's path or out of
+  a conflict (409 `proposal_delivery_confirmation_check_contradicted`); a `bounced` check leaves "not
+  delivered" open, the way to send again. 0167 re-creates 0164's evidence guard so that, from B2
   on, a check dated at the move may justify it; a check-justified move to `succeeded` needs the
   send's own permit, whose holder records the publication (D1 refuses it otherwise:
   `proposal_delivery_settle_permit_holder_missing`). No Worker path makes that move yet: the in-bus

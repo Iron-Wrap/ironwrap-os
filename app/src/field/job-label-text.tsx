@@ -2,8 +2,8 @@ import { jobLabelParts } from "../lib/job-label";
 
 /**
  * A job named the ruled way (D5): "{customer} · {street} · Ref {code}", with "Ref" and the code
- * kept whole on one line ("IW-" and "ACCEPTANCE" on two lines read as two things). Renders nothing when the read
- * has none of the three, so the screen can say what it does instead.
+ * kept whole on one line ("IW-" and "ACCEPTANCE" on two lines read as two things). Renders nothing
+ * when the read has none of the three, so the screen can say what it does instead.
  */
 export function JobLabelText(job: {
   customer?: string | null;

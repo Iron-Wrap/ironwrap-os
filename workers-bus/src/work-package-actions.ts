@@ -173,7 +173,7 @@ export async function handleWorkPackageAction(
       throw new FieldActionError(
         "not_found",
         404,
-        "No current work package is available for this tenant.",
+        "This sign-in is for a different company than this job plan. Sign in again with your work account.",
       );
     }
     const assignmentId = text(assignment.name);
@@ -181,7 +181,7 @@ export async function handleWorkPackageAction(
       throw new FieldActionError(
         "work_package_not_available",
         404,
-        "No current work package is available for this assignment.",
+        "This job has no current job plan. Ask production to issue one.",
       );
     }
     const submission = await parseWorkPackageActionRequest(
@@ -261,7 +261,7 @@ export async function replayVerifiedWorkPackageAction(
       throw new FieldActionError(
         "idempotency_conflict",
         409,
-        "This device action id is already bound to a different work-package action.",
+        "The office already has a different request from this phone for this job plan. Check the job plan, then tap the button again.",
       );
     }
     if (row.status !== "verified") {
@@ -438,14 +438,14 @@ export async function processWorkPackageAction(
     throw new FieldActionError(
       "idempotency_conflict",
       409,
-      "This device action id is already bound to a different work-package action.",
+      "The office already has a different request from this phone for this job plan. Check the job plan, then tap the button again.",
     );
   }
   if (claim.state === "busy") {
     throw new FieldActionError(
       "action_in_progress",
       503,
-      "This work-package action is already being verified.",
+      "This request is still being checked. Wait a few seconds for the answer.",
       3,
     );
   }
@@ -528,7 +528,7 @@ export async function processWorkPackageAction(
       : new FieldActionError(
           code,
           502,
-          "The work-package action remains unverified until its owned event and evidence binding both succeed.",
+          "This request is not confirmed yet. Load the job again in a few seconds and check the job plan before you tap again.",
           5,
         );
   }
@@ -584,7 +584,7 @@ async function assertCurrentActionAllowed(
     throw new FieldActionError(
       "work_package_not_available",
       404,
-      "No current work package is available for this assignment.",
+      "The job plan on this phone is not the current one. Load the job again to see the current plan.",
     );
   }
   const capability = {
@@ -658,7 +658,7 @@ async function assertCurrentActionAllowed(
         ? `Safety readiness blocks this action: ${safetyBlockers
             .map((blocker) => blocker.code)
             .join(", ")}.`
-        : "That work-package action is no longer allowed.",
+        : "This request is no longer allowed on this job plan. Load the job again to see what you can do now.",
     );
   }
   return authorityPreconditions;
@@ -858,7 +858,7 @@ async function renewLease(
     throw new FieldActionError(
       "action_lease_lost",
       503,
-      "Another retry now owns this work-package action.",
+      "This request is still being checked. Wait a few seconds for the answer.",
       3,
     );
 }
@@ -1040,7 +1040,7 @@ function invalidWorkPackageAction(): FieldActionError {
   return new FieldActionError(
     "invalid_work_package_action",
     400,
-    "The work-package action is invalid.",
+    "This request could not be read. Load the job again, then tap the button again.",
   );
 }
 
@@ -1048,7 +1048,7 @@ function actionPayloadTooLarge(): FieldActionError {
   return new FieldActionError(
     "work_package_action_too_large",
     413,
-    "The work-package action is too large.",
+    "This request is too large to send. Shorten the note, then tap the button again.",
   );
 }
 
@@ -1073,7 +1073,7 @@ function workPackageFailureResponse(error: unknown): Response {
       : new FieldActionError(
           "work_package_action_failed",
           502,
-          "The work-package action could not be verified yet.",
+          "This request is not confirmed yet. Load the job again in a few seconds and check the job plan before you tap again.",
           5,
         );
   const response = workPackageJson(

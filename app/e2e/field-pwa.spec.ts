@@ -413,7 +413,9 @@ test.describe("Field Companion PWA acceptance", () => {
     await seedPairedFieldDevice(page);
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    await expect(page.getByText("v3 · Released")).toBeVisible();
+    await expect(
+      page.getByText("Issued to the crew · Fri 10 Jul 9:15 a.m.", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText(/Waiting for Production manager/i)).toBeVisible();
     await expect
       .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then(Boolean)))

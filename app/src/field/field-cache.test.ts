@@ -70,7 +70,7 @@ function today(jobIds: string[]): TodayResponse {
       scheduled_start: "2026-07-10T10:00:00.000Z",
       scheduled_end: null,
       blocked_gate_count: 0,
-      next_action: "Open field check-in",
+      next_action: "Add job proof",
       assignment: { ...assignment, id: `ASSIGN-${id}` },
     })),
     work_objects: [],

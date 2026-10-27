@@ -626,7 +626,7 @@ test("the route states terminal vs retryable in the body so the outbox never gue
   assert.deepEqual(await refused.json(), {
     error: "field_action_evidence_requires_work_package",
     message:
-      "This capture is bound to a Work Package evidence slot, but the job has no released Work Package to attribute it to. Send it as a check-in without evidence binding, or capture it again once the package is released.",
+      "Production has not issued a job plan for this job yet, so this proof cannot go on a plan step. Ask production to issue the job plan, then add the proof again.",
     retryable: false,
   });
   assert.equal(

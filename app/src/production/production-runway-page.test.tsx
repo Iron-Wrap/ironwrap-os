@@ -182,14 +182,19 @@ describe("ProductionRunwayPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Production plan" })).toBeVisible();
     expect(loadProductionRunway).toHaveBeenCalledOnce();
-    expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "See job IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );
-    expect(screen.getByRole("link", { name: "History of IW-1001" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Full job record IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A/history",
     );
+    expect(
+      screen.getAllByText(
+        "See job opens the job to work on it. Full job record shows its events, gates, money and approvals, read only.",
+      )[0],
+    ).toBeVisible();
 
     productionView.unmount();
     vi.clearAllMocks();
@@ -225,7 +230,7 @@ describe("ProductionRunwayPage", () => {
     expect(
       screen.getAllByText(/Final work is checked when the job is done/i).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "See job IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );

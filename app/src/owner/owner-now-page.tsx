@@ -715,7 +715,7 @@ function DecisionRow({
   const dueAt = dueTimingAvailable ? safeFormattedDate(exception.due_at, locale) : null;
   const receivedAt = safeFormattedDate(exception.received_at, locale);
   const jobLabel = exception.job_id?.startsWith("job:") ? "Attached" : (exception.job_id ?? "");
-  const openJobLabel = jobLabel === "Attached" ? "Open attached job" : `Open job ${jobLabel}`;
+  const openJobLabel = jobLabel === "Attached" ? "See attached job" : `See job ${jobLabel}`;
 
   return (
     <li className="py-4 sm:py-5">
@@ -757,7 +757,7 @@ function DecisionRow({
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-bold text-background transition-colors hover:bg-foreground/88 focus-visible:outline-offset-3 sm:mt-0"
             aria-label={openJobLabel}
           >
-            Open job
+            See job
             <ChevronRight className="size-5" aria-hidden="true" />
           </Link>
         ) : null}

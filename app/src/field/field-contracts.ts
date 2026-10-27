@@ -33,6 +33,13 @@ const workPackageSchema = z.lazy(() =>
         changed_hold_points: z.array(z.number().int().positive()),
       })
       .nullable(),
+    // The crew stop that holds a Blocked plan: when it was reported and the crew's own words.
+    // Absent on reads from before the Worker carried it, and null for any other status.
+    active_stop: z
+      .object({ reported_at: z.string().min(1), summary: nullableText })
+      .nullable()
+      .optional()
+      .default(null),
     acknowledgement: z.object({
       current_user_acknowledged: z.boolean(),
       acknowledged_at: nullableText,

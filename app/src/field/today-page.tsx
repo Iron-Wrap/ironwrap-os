@@ -368,7 +368,7 @@ function TodayJobRow({
   const actionLabel = blocked
     ? "Check what blocks work"
     : fieldCaptureAllowed
-      ? "Open job"
+      ? "See job"
       : "Review job";
   const assignment = [job.assignment?.type, job.assignment?.status].filter(Boolean).join(" · ");
   // The card follows its own width, not the window's: the crew shell centres a phone-wide column
@@ -485,7 +485,7 @@ function TodayWorkObjectRow({
               to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId"
               params={params}
             >
-              Open work plan
+              See job plan
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>

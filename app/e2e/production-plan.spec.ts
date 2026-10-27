@@ -110,12 +110,12 @@ test.describe("Production plan acceptance", () => {
     await expect(page.getByText("Shortage · Asked for: date not found")).toBeVisible();
     await expect(page.getByText("JOB-A", { exact: true })).toBeHidden();
 
-    const jobLink = page.getByRole("link", { name: "Open IW-1001" });
+    const jobLink = page.getByRole("link", { name: "See job IW-1001" });
     // KNOWN FAILING — owner ELEC-239, recorded 2026-08-31 (PO decision on ELEC-233/G1).
     //
     // IW-1004 sits in "Ready to check" with six ready gates and
     // `scheduling_preparation_allowed: true`, and the app offers no route to a schedule check at
-    // all: `production-runway-page.tsx` renders only "Open job", nothing reads
+    // all: `production-runway-page.tsx` renders only "See job", nothing reads
     // `scheduling_preparation_allowed`, and no `/production/schedule/$jobId` route exists. The
     // successor API `POST /api/v1/jobs/{job}/schedule` shipped and is unit-tested; its UI half
     // never did.

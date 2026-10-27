@@ -710,7 +710,7 @@ export async function processFieldSubmission(
     throw new FieldActionError(
       "evidence_release_attempt_missing",
       409,
-      "Refresh this Work Package before capturing evidence for its current release attempt.",
+      "This proof was started from an older copy of the job plan. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (
@@ -734,7 +734,7 @@ export async function processFieldSubmission(
     throw new FieldActionError(
       "evidence_device_mismatch",
       409,
-      "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
+      "This proof was started under an earlier sign-in on this phone. Sign in again, then tap Add proof on the step.",
     );
   }
   if (typedEvidence) {
@@ -742,7 +742,7 @@ export async function processFieldSubmission(
       throw new FieldActionError(
         "field_evidence_authorization_unavailable",
         503,
-        "The current Work Package evidence authorization is unavailable. Refresh the package before retrying.",
+        "This proof could not be checked against the job plan just now. Nothing was lost. Tap Try again in a few seconds.",
         5,
       );
     }
@@ -757,7 +757,7 @@ export async function processFieldSubmission(
       throw new FieldActionError(
         "field_evidence_authorization_unavailable",
         503,
-        "The current Work Package evidence authorization is unavailable. Refresh the package before retrying.",
+        "This proof could not be checked against the job plan just now. Nothing was lost. Tap Try again in a few seconds.",
         5,
       );
     }
@@ -1901,14 +1901,14 @@ function applyTypedEvidenceAuthorization(
     throw new FieldActionError(
       "work_package_not_available",
       409,
-      "The saved evidence targets a Work Package that is not current for this assignment.",
+      "This proof was taken for a job plan that is no longer current. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (payload.work_package_version !== authorization.workPackageVersion) {
     throw new FieldActionError(
       "work_package_version_conflict",
       409,
-      "The saved evidence targets a stale Work Package version.",
+      "The job plan changed after this proof was taken. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (
@@ -1917,21 +1917,21 @@ function applyTypedEvidenceAuthorization(
     throw new FieldActionError(
       "work_package_release_attempt_conflict",
       409,
-      "The saved evidence targets a stale Work Package release attempt.",
+      "The job plan changed after this proof was taken. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (payload.evidence_slot_id !== authorization.slotId) {
     throw new FieldActionError(
       "work_package_evidence_slot_not_found",
       409,
-      "The saved evidence slot is not declared by the current Work Package.",
+      "The current job plan no longer has this proof step. Pick the job again on Today to see which steps need proof.",
     );
   }
   if (payload.evidence_requirement !== authorization.requirement) {
     throw new FieldActionError(
       "work_package_evidence_requirement_conflict",
       409,
-      "The saved evidence requirement does not match the frozen Work Package slot.",
+      "The proof this step asks for changed in the job plan. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (payload.evidence_source !== authorization.source) {
@@ -1948,7 +1948,7 @@ function applyTypedEvidenceAuthorization(
     throw new FieldActionError(
       "evidence_device_mismatch",
       409,
-      "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
+      "This proof was started under an earlier sign-in on this phone. Sign in again, then tap Add proof on the step.",
     );
   }
   if (
@@ -1994,7 +1994,7 @@ function applyTypedEvidenceAuthorization(
     throw new FieldActionError(
       "work_object_scope_mismatch",
       409,
-      "The saved evidence scope does not match the current Work Package.",
+      "This proof is for a different part of the job than the current job plan. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   return {
@@ -2379,7 +2379,7 @@ function evidenceRequiresWorkPackage(): FieldActionError {
   return new FieldActionError(
     "field_action_evidence_requires_work_package",
     422,
-    "This capture is bound to a Work Package evidence slot, but the job has no released Work Package to attribute it to. Send it as a check-in without evidence binding, or capture it again once the package is released.",
+    "Production has not issued a job plan for this job yet, so this proof cannot go on a plan step. Ask production to issue the job plan, then add the proof again.",
     undefined,
     false,
   );

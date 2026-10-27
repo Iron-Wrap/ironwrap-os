@@ -589,6 +589,8 @@ export interface JobReadModel extends ReadModelEnvelope {
         acceptance_criteria: string;
         released: boolean;
       }>;
+      /** The crew stop that holds a Blocked plan; null for any other status or an unread stop. */
+      active_stop?: ActiveCrewStop | null;
     } | null;
     contact: {
       display_name: string | null;
@@ -1345,7 +1347,17 @@ export async function buildUniversalWorkPackageReadModel(
     office_contact: officeContact.contact,
     work_object: scope,
     assignment: assignmentModel(assignment),
-    work_package: projection.work_package,
+    work_package: projection.work_package
+      ? {
+          ...projection.work_package,
+          active_stop: await activeCrewStop(
+            env,
+            auth.session.tenant_id,
+            scope.workObjectId,
+            projection.work_package,
+          ),
+        }
+      : null,
     allowed_actions: [...new Set(allowedActions)],
   };
 }
@@ -1405,7 +1417,7 @@ export async function buildTodayReadModel(
           next_action:
             assignment?.blocker_reason ??
             text(blocked[0]?.blocker_reason) ??
-            (assignment ? "Open field check-in" : "Assign field work"),
+            (assignment ? "Add job proof" : "Assign field work"),
           assignment,
         },
       ];
@@ -1804,6 +1816,12 @@ export async function buildJobReadModel(
       authorityDenials: workPackageAuthorityDenials,
     },
   );
+  const activeStop = await activeCrewStop(
+    env,
+    auth.session.tenant_id,
+    jobName,
+    workPackagePacket.work_package,
+  );
   const stale = [
     "packet.contact.access_instructions",
     "packet.scope_clauses.native_unavailable",
@@ -1901,7 +1919,9 @@ export async function buildJobReadModel(
       },
       change_orders: [],
       safety_plan: null,
-      work_package: workPackagePacket.work_package,
+      work_package: workPackagePacket.work_package
+        ? { ...workPackagePacket.work_package, active_stop: activeStop }
+        : null,
       contact: customer
         ? {
             display_name: text(customer.display_name),
@@ -3494,6 +3514,36 @@ async function nativeMaterialExceptions(
     [tenantId, ...selected],
     limit,
   );
+}
+
+/** What a crew phone may read of the stop that holds its plan: when, and the crew's own words. */
+interface ActiveCrewStop {
+  reported_at: string;
+  summary: string | null;
+}
+
+/**
+ * The crew stop that set a job plan Blocked, read through the same query Owner Now uses and scoped
+ * to this tenant and this job. Only the report time and the summary the crew wrote leave the
+ * Worker. A read that fails leaves the stop unstated rather than failing the whole job read.
+ */
+async function activeCrewStop(
+  env: AppEnv,
+  tenantId: string,
+  jobId: string,
+  workPackage: { id: string; version: number; status: string } | null,
+): Promise<ActiveCrewStop | null> {
+  if (!workPackage || workPackage.status !== "Blocked") return null;
+  const blockers = await nativeOwnerFieldBlockers(env, tenantId, [jobId]).catch(() => null);
+  const stop = blockers?.rows.find(
+    (row) =>
+      row.work_package_id === workPackage.id &&
+      Number(row.version) === workPackage.version &&
+      String(row.job_id) === jobId &&
+      Boolean(row.stop_event_id),
+  );
+  const reportedAt = text(stop?.occurred_at);
+  return stop && reportedAt ? { reported_at: reportedAt, summary: text(stop.blocker_reason) } : null;
 }
 
 async function nativeOwnerFieldBlockers(

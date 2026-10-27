@@ -340,7 +340,7 @@ describe("OwnerNowPage", () => {
     expect(screen.queryByText(/sent|delivered|human follow-up/i)).not.toBeInTheDocument();
     expect(screen.queryByText("No verified next action was returned.")).not.toBeInTheDocument();
 
-    expect(screen.getAllByRole("link", { name: "Open job JOB-A" })[0]!).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "See job JOB-A" })[0]!).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );

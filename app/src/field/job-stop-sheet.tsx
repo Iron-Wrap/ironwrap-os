@@ -226,9 +226,9 @@ export function JobStopSheet({
             .filter(Boolean)
             .join(" · ")}
         </p>
-        {/* The frame names the owner; no read gives a crew phone that name yet. */}
+        {/* One party fixes it in both lines: the office (gate e-s21). No read gives a crew phone a name. */}
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          Job: not found · The owner fixes it
+          Job: not found · The office fixes it
         </p>
         <Button type="button" size="field" onClick={() => setAcknowledged(true)}>
           Done

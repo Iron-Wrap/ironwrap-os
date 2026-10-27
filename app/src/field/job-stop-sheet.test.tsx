@@ -282,7 +282,7 @@ describe("JobStopSheet", () => {
     expect(screen.getByText(/^Stop · \w{3} \d{1,2}:\d{2}/)).toHaveTextContent(
       "· Sam Keewatin · Ice on the north slope",
     );
-    expect(screen.getByText("Job: not found · The owner fixes it")).toBeVisible();
+    expect(screen.getByText("Job: not found · The office fixes it")).toBeVisible();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
     expect(onStage).toHaveBeenLastCalledWith("stopped");
     await user.click(screen.getByRole("button", { name: "Done" }));

@@ -1005,7 +1005,7 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            v{workPackage.version} ·{" "}
+            Version {workPackage.version} ·{" "}
             {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
           </p>
         </div>

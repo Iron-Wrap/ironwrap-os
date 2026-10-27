@@ -170,7 +170,7 @@ export function WorkPackageIssueForm({
     >
       <p className="text-sm font-semibold text-info">Production authority</p>
       <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-        {workPackage ? `Issue corrected job plan, version ${nextVersion}` : "Issue job plan"}
+        {workPackage ? `Issue corrected job plan version ${nextVersion}` : "Issue job plan"}
       </h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
         When you issue, the job's crew, assignment and scope lock in. This form adds the steps, hold

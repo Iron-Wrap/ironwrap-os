@@ -906,7 +906,7 @@ describe("JobPage", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "Issue corrected job plan, version 4" }),
+      await screen.findByRole("heading", { name: "Issue corrected job plan version 4" }),
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
   });
@@ -922,7 +922,7 @@ describe("JobPage", () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("v3 · Released")).toBeVisible();
+    expect(screen.getByText("Version 3 · Released")).toBeVisible();
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();

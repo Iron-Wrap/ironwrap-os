@@ -507,6 +507,12 @@ export async function consumeDevicePairing(
     limit: MAGIC_LINK_CONSUME_IP_LIMIT,
   });
   if (!allowed) return authJson({ error: "invalid_or_expired_pairing" }, 401);
+  // A pairing belongs to exactly one tenant. One issued for any tenant other than this
+  // deployment's is refused like an unknown token -- before it is consumed, a device is bound or
+  // a session is written -- so a crew phone is never paired into this tenant's envelope as
+  // someone else's crew, with someone else's office line.
+  const tenantId = configuredTenantId(env);
+  if (!tenantId) return authJson({ error: "invalid_or_expired_pairing" }, 401);
 
   const rawSessionToken = randomToken();
   const sessionHash = await sessionHashFor(env, rawSessionToken);
@@ -516,6 +522,7 @@ export async function consumeDevicePairing(
   try {
     pairing = await authStore.consumeDevicePairing(env, {
       tokenHash: await sha256Hex(rawToken),
+      tenantId,
       deviceId,
       deviceProofHash: await sha256Hex(rawDeviceProof),
       sessionHash,
@@ -902,8 +909,11 @@ async function sessionEnvelopeForUser(
 ): Promise<Record<string, unknown>> {
   const permissions = permissionsForRole(user.role);
   const tenant = publicTenant(env);
+  // The office line is read for the tenant this envelope names, never for the user's row: both
+  // consume flows refuse a foreign-tenant user, and this keeps the phone and the tenant it is
+  // shown under from ever disagreeing.
   const officePhone = tenant
-    ? await sessionOfficePhone(env, user.tenant_id)
+    ? await sessionOfficePhone(env, tenant.id)
     : { phone: null, unavailable: false };
   return {
     version: 1,

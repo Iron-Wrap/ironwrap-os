@@ -568,6 +568,8 @@ export async function consumeDevicePairing(
   env: Env,
   input: {
     tokenHash: string;
+    /** This deployment's configured tenant; a pairing issued for any other is never consumed. */
+    tenantId: string;
     deviceId: string;
     deviceProofHash: string;
     sessionHash: string;
@@ -585,8 +587,9 @@ export async function consumeDevicePairing(
      WHERE p.token_hash = ? AND p.consumed_at IS NULL AND p.revoked_at IS NULL
        AND p.expires_at > ? AND u.active = 1
        AND u.access_role = 'field'
+       AND p.tenant_id = ?
      LIMIT 1`,
-  ).bind(input.tokenHash, input.createdAt).first<AppUserRecord>();
+  ).bind(input.tokenHash, input.createdAt, input.tenantId).first<AppUserRecord>();
   if (!candidate) return null;
 
   // Claim before creating a session. The compare-and-set makes the opaque QR secret
@@ -595,8 +598,8 @@ export async function consumeDevicePairing(
   const claim = await env.DB.prepare(
     `UPDATE app_device_pairings SET consumed_at = ?
      WHERE token_hash = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
-       AND expires_at > ?`,
-  ).bind(input.createdAt, input.tokenHash, candidate.user_id, input.createdAt).run();
+       AND expires_at > ? AND tenant_id = ?`,
+  ).bind(input.createdAt, input.tokenHash, candidate.user_id, input.createdAt, input.tenantId).run();
   if (d1Changes(claim) !== 1) return null;
 
   try {

@@ -6,8 +6,9 @@ import {
   consumeMagicLink,
   requestMagicLink,
   sessionHashFor,
+  sha256Hex,
 } from "../src/app-auth.ts";
-import { upsertAppUser } from "../src/app-auth-store.ts";
+import { replaceDevicePairing, upsertAppUser } from "../src/app-auth-store.ts";
 import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
 
 interface MagicRow {
@@ -75,6 +76,8 @@ class AuthMemoryDb {
   /** Saved company profiles by tenant; a tenant with no entry has never saved one. */
   companyProfiles = new Map<string, { phone: string }>();
   companyProfileUnavailable = false;
+  /** The tenant id every company-profile read was bound to, in order. */
+  companyProfileReads: string[] = [];
 
   prepare(sql: string) {
     return {
@@ -100,6 +103,7 @@ class AuthMemoryDb {
   private first(sql: string, args: unknown[]): unknown {
     if (sql.includes("FROM tenant_company_profiles")) {
       if (this.companyProfileUnavailable) throw new Error("company_profile_unavailable");
+      this.companyProfileReads.push(String(args[0]));
       const profile = this.companyProfiles.get(String(args[0]));
       return profile ? { ...profile } : null;
     }
@@ -125,6 +129,7 @@ class AuthMemoryDb {
     if (sql.includes("FROM app_device_pairings p")) {
       const pairing = this.pairings.get(String(args[0]));
       if (!pairing || pairing.consumed_at || pairing.revoked_at || pairing.expires_at <= String(args[1])) return null;
+      if (sql.includes("p.tenant_id = ?") && pairing.tenant_id !== String(args[2])) return null;
       const user = this.users.get(pairing.user_id);
       return user?.active === 1 && user.tenant_id === pairing.tenant_id && user.role === "field" ? { ...user } : null;
     }
@@ -338,11 +343,12 @@ class AuthMemoryDb {
       return changed(1);
     }
     if (sql.includes("UPDATE app_device_pairings SET consumed_at")) {
-      const [now, tokenHash, userId, expiryNow] = args;
+      const [now, tokenHash, userId, expiryNow, tenantId] = args;
       const pairing = this.pairings.get(String(tokenHash));
       if (!pairing || pairing.user_id !== String(userId) || pairing.consumed_at || pairing.revoked_at || pairing.expires_at <= String(expiryNow)) {
         return changed(0);
       }
+      if (sql.includes("tenant_id = ?") && pairing.tenant_id !== String(tenantId)) return changed(0);
       pairing.consumed_at = String(now);
       return changed(1);
     }
@@ -536,6 +542,8 @@ async function signInOffice(
   user: AppUserRecord;
   cookiePair: string;
   csrfToken: string;
+  /** `tenant.office_phone` from the consume response itself, the session the PWA first stores. */
+  officePhone: string | null;
 }> {
   const user = await addOfficeUser(env, role);
   let token = "";
@@ -549,11 +557,15 @@ async function signInOffice(
   await waiter.flush();
   const consumed = await consumeMagicLink(jsonRequest("/api/v1/auth/magic-link/consume", { token }), env);
   assert.equal(consumed.status, 200);
-  const body = await consumed.json() as { csrf_token: string };
+  const body = await consumed.json() as {
+    csrf_token: string;
+    tenant: { office_phone: string | null };
+  };
   return {
     user,
     cookiePair: (consumed.headers.get("set-cookie") ?? "").split(";")[0],
     csrfToken: body.csrf_token,
+    officePhone: body.tenant.office_phone,
   };
 }
 
@@ -1712,6 +1724,7 @@ test("a signed-in session carries the saved company phone as the office line", a
   db.companyProfiles.set("ironwrap", { phone: "  780-555-0142  " });
   const env = baseEnv(db);
   const office = await signInOffice(env);
+  assert.equal(office.officePhone, "780-555-0142");
 
   // Trimmed, and otherwise exactly what the owner saved: the app builds the tel: link.
   const session = await sessionRead(env, { cookie: office.cookiePair });
@@ -1745,6 +1758,7 @@ test("the office line is null with no saved profile, a blank phone, or a phone t
     db.companyProfiles.set("other-tenant", { phone: "780-555-0199" });
     const env = baseEnv(db);
     const office = await signInOffice(env);
+    assert.equal(office.officePhone, null, label);
     const session = await sessionRead(env, { cookie: office.cookiePair });
     assert.equal(session.status, 200, label);
     assert.equal(session.body.authenticated, true, label);
@@ -1792,7 +1806,59 @@ test("an unreadable company profile leaves the office line null and says so with
 
   // A fresh sign-in still issues its session; only the optional line is missing.
   const office = await signInOffice(env);
+  assert.equal(office.officePhone, null);
   const officeSession = await sessionRead(env, { cookie: office.cookiePair });
   assert.equal(officeSession.body.authenticated, true);
   assert.deepEqual(officeSession.body.stale_fields, ["office_phone.unavailable"]);
+});
+
+test("a pairing issued for another tenant is refused before it binds a device or shows a phone", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "780-555-0142" });
+  db.companyProfiles.set("other-tenant", { phone: "780-555-0199" });
+  const env = baseEnv(db);
+  const foreignCrew = await upsertAppUser(env, {
+    tenant_id: "other-tenant",
+    email_normalized: "crew@other-tenant.example.invalid",
+    display_name: "Other Crew",
+    role: "field",
+    frappe_user_id: null,
+    active: true,
+    provisioned_by: "owner@other-tenant.example.invalid",
+  });
+  const rawToken = "f".repeat(43);
+  const issuedAt = new Date();
+  await replaceDevicePairing(env, {
+    tokenHash: await sha256Hex(rawToken),
+    user: foreignCrew,
+    issuedByUserId: "appu_other_owner",
+    createdAt: issuedAt.toISOString(),
+    expiresAt: new Date(issuedAt.getTime() + 10 * 60 * 1000).toISOString(),
+    request: { ip_hash: "a".repeat(64), user_agent_hash: "b".repeat(64) },
+  });
+
+  const refused = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: rawToken,
+    device_proof: "p".repeat(43),
+  }), env, waitContext().ctx as never);
+  const refusedText = await refused.text();
+  assert.equal(refused.status, 401);
+  assert.deepEqual(JSON.parse(refusedText), { error: "invalid_or_expired_pairing" });
+  assert.equal(refusedText.includes("555-0199"), false);
+  assert.equal(refused.headers.get("set-cookie"), null);
+  // Nothing was written: the token is still unconsumed, and no device or session exists.
+  assert.equal([...db.pairings.values()][0].consumed_at, null);
+  assert.equal(db.devices.size, 0);
+  assert.equal(db.sessions.size, 0);
+  assert.deepEqual(db.companyProfileReads, []);
+
+  // A pairing this deployment issued still works, and shows only this tenant's line.
+  const crew = await pairCrewPhone(env);
+  assert.equal(crew.consumed.status, 200);
+  assert.equal(crew.consumed.body.tenant?.id, "ironwrap");
+  assert.equal(crew.consumed.body.tenant?.office_phone, "780-555-0142");
+  const session = await sessionRead(env, crew.headers);
+  assert.equal(session.body.tenant?.office_phone, "780-555-0142");
+  assert.equal(JSON.stringify([crew.consumed.body, session.body]).includes("555-0199"), false);
+  assert.deepEqual(new Set(db.companyProfileReads), new Set(["ironwrap"]));
 });

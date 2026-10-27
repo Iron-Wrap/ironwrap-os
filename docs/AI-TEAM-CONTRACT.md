@@ -461,11 +461,11 @@ An action's class is fixed by its consequence. It never changes at runtime.
 
 | Class | Shown as | Meaning | Effect |
 |---|---|---|---|
-| `A0` | Reads and watches | Observe, evaluate and explain, with citations | None |
-| `A1` | Prepares | Draft or propose; the output is stored as proposed | None |
-| `A2` | Acts within your limits | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
-| `A3` | Asks first | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
-| `H` | People only | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
+| `A0` | Suggest | Observe, evaluate and explain, with citations | None |
+| `A1` | Suggest | Draft or propose; the output is stored as proposed | None |
+| `A2` | The current setting on the dial (Auto with undo, Act with approval or Off) | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
+| `A3` | The current setting on the dial (Act with approval, Auto with undo or Off) | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
+| `H` | Locked | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
 `payee.unfreeze_prepare`, `safety_stop.release_prepare` and `access.prepare_change` do at class
@@ -647,10 +647,11 @@ actions only.
     within limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action
     and no action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
     lowering one needs an owner decision recorded in this contract.
-14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
-    your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
-    actions the words shown are the current setting's. The owner's autonomy screen shows the dial
-    levels instead (see "Dial levels").
+14. **Words, not codes.** Screens show the owner's dial words (owner ruling; see "Dial levels"):
+    Off, Suggest, Act with approval, Auto with undo, and Locked for people-only acts. For `A2` and
+    `A3` actions the words shown are the current setting's. Two words stand apart: an action that
+    always asks first reads "Act with approval · always" with the lock a Locked row carries, and a
+    protective action reads "Always on: protects you", off the dial.
 
 "Per specialist" means the owner can change several actions of one specialist at once (each still
 stored per action) or pause the specialist. Pausing sets every non-protective action of the
@@ -672,11 +673,11 @@ onto the classes and settings above; internal codes and catalog fields keep thei
 | Locked | The owner cannot change the row, and the screen gives the reason in one line | People only (`H`) | It takes no setting |
 
 An action that always asks first (item 8) shows "Act with approval · always" with the lock a Locked
-row carries, and no higher level, every send outside IronWrap and every price commitment among them. The dial also offers Off
-for those, but the Worker accepts no setting for an action whose `delegable` is false, so Off for
-them is not built yet. Practice only (`shadow`) shows as Suggest; it stays the owner's own trial
-setting (item 11). Protective actions are not on the dial: they show "Always on: protects you" and
-keep running while a specialist is paused.
+row carries, and no higher level; every send outside IronWrap and every price commitment are among
+them. The dial also offers Off for those, but the Worker accepts no setting for an action whose
+`delegable` is false, so Off for them is not built yet. Practice only (`shadow`) shows as Suggest;
+it stays the owner's own trial setting (item 11). Protective actions are not on the dial: they show
+"Always on: protects you" and keep running while a specialist is paused.
 
 The dial has one named variant. "Facts only, live" is `conversation.answer_live` once the owner
 turns it on (decision 15): it states only facts from the record, says it is AI and hands anything
@@ -687,9 +688,9 @@ customer, a reminder included, ever runs automatically. Reminders are not built 
 message purpose covers a visit reminder (`payment_reminder` is the only reminder purpose), and
 `customer_message.send` is not registered.
 
-Screens show the dial words only on the owner's autonomy screen, which is not built yet; today the
-app shows the words of item 14 (`app/src/components/ai/words.ts`). The appendix ("Appendix:
-autonomy screen mapping") maps each row of that screen to its catalog actions.
+The app's delegation pills show the dial words (`app/src/components/ai/words.ts`); the owner's
+autonomy screen, which sets them, is not built yet. The appendix ("Appendix: autonomy screen
+mapping") maps each row of that screen to its catalog actions.
 
 ### The owner's launch rule
 

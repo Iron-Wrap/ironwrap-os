@@ -116,11 +116,11 @@ export type DelegationSetting =
 export const DELEGATION: Record<DelegationSetting, { words: string; glyph: LucideIcon }> = {
   reads: { words: DIAL.suggest, glyph: Eye },
   prepares: { words: DIAL.suggest, glyph: Pencil },
-  within_limits: { words: DIAL.auto, glyph: CircleGauge },
-  asks_first: { words: DIAL.approval, glyph: UserCheck },
+  within_limits: { words: DIAL_OF.within_limits, glyph: CircleGauge },
+  asks_first: { words: DIAL_OF.asks_first, glyph: UserCheck },
   people_only: { words: DIAL.locked, glyph: Lock },
   paused: { words: DIAL.off, glyph: Pause },
-  off_until_enabled: { words: DIAL.off, glyph: CircleOff },
+  off_until_enabled: { words: DIAL_OF.off_until_enabled, glyph: CircleOff },
   always_on: { words: "Always on: protects you", glyph: ShieldCheck },
   always_asks_first: { words: `${DIAL.approval} · always`, glyph: Lock },
 };

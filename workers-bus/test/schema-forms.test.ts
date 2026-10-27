@@ -18,6 +18,7 @@ import {
   type SchemaFieldActor,
   type SchemaFieldDefinitionInput,
 } from "../src/schema-forms.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const OTHER_TENANT = "othertenant";
@@ -830,10 +831,11 @@ function seedJobAuthority(db: DatabaseSync): void {
     `INSERT INTO operating_production_gates
      (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, state, owner_user,
       assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-     VALUES (?, ?, ?, 'ow_schema_job_0001', ?, 'ready', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
+     VALUES (?, ?, ?, 'ow_schema_job_0001', ?, 'blocked', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
   );
   for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"])
     insertGate.run(`gate:schema:${gate.toLowerCase()}`, TENANT, JOB_ID, gate, OWNER_ID, now, "2030-01-01T00:00:00.000Z", now, now);
+  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB_ID, at: now });
   db.prepare(
     `INSERT INTO fleet_crews
      (crew_id, tenant_id, display_name, status, version, created_at, updated_at)

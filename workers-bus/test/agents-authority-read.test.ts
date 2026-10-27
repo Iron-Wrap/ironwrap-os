@@ -11,6 +11,7 @@ import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
 import { ROLE_PERMISSIONS, type AppEnv } from "../src/app-types.ts";
 import { recordAuthorityReadback, type AuthorityRequirement } from "../src/authority-records.ts";
 import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const TOKEN = "synthetic-agent-host-token-0001";
@@ -118,9 +119,10 @@ async function seed(db: SqliteD1) {
     .run(JOB, TENANT, NOW, NOW);
   const gate = db.raw.prepare(
     `INSERT INTO operating_production_gates (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key, gate, state, owner_user, assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-     VALUES (?, ?, ?, 'ow_authority_read_0001', 'raw/authority-read/0001.json', ?, 'ready', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
+     VALUES (?, ?, ?, 'ow_authority_read_0001', 'raw/authority-read/0001.json', ?, 'blocked', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
   );
   for (const name of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) gate.run(`gate:authority-read:${name.toLowerCase()}`, TENANT, JOB, name, OWNER, NOW, NOW, NOW, NOW);
+  recordLegacyGateStates(db.raw, { tenantId: TENANT, roofJobId: JOB, at: NOW });
   db.raw.prepare("INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at) VALUES (?, ?, 'Synthetic Crew', 'Active', 1, ?, ?)").run(CREW, TENANT, NOW, NOW);
   WORKERS.forEach((worker, n) =>
     db.raw

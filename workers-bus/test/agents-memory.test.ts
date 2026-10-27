@@ -20,6 +20,7 @@ import {
 import { minorUnits } from "../src/agents/read-models.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import { appendSignal, openRun, proposeStep, runContext, type BoundStatement, type RunContext, type RunRow } from "../src/agents/store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const AT = "2026-01-01T00:00:00.000Z";
@@ -502,7 +503,7 @@ test("a step citing a job fact succeeds while it is current and abstains stale o
   assert.deepEqual(JSON.parse(current.sources_json), [{ fact_id: "job/job_mem_0001#/facts/production/gates/0", version: jobFact.version, hash: sha(gate) }]);
 
   // A gate clears: the job's value changes, so its ledger version moves and the old citation is stale.
-  db.raw.exec("UPDATE operating_production_gates SET state = 'ready', blocker_reason = 'No active blocker', version = version + 1 WHERE gate_id = 'gate_mem_access'");
+  recordLegacyGateStates(db.raw, { tenantId: TENANT, roofJobId: "job_mem_0001", gates: ["Access"] });
   const stale = await explain("job/job_mem_0001", jobFact.version, "a2");
   assert.ok(!("error" in stale), JSON.stringify(stale));
   assert.deepEqual([stale.outcome, stale.reason_code], ["abstained", "fact_stale"]);

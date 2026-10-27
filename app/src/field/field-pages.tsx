@@ -863,6 +863,7 @@ function WorkPackagePanel({
     model.allowed_actions.includes("work_package.start");
   const completionAllowed = model.allowed_actions.includes("work_package.complete");
   const canComplete = completionAllowed && !offline && canAttemptSync;
+  const scopeFacts = planScopeFacts(workPackage, model.job);
 
   function showActionFailure(error: unknown, copy?: PlainErrorCopy) {
     setActionError({ text: messageFor(error, copy), error });
@@ -1055,8 +1056,10 @@ function WorkPackagePanel({
             value={formatFieldTimestamp(workPackage.expires_at, dateOptions)}
           />
         </dl>
-        <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
-          {planScopeFacts(workPackage, model.job).map((fact) => (
+        <dl
+          className={`mt-4 grid gap-4 border-t border-border pt-4 text-sm ${scopeFacts.length > 1 ? "sm:grid-cols-2" : ""}`}
+        >
+          {scopeFacts.map((fact) => (
             <JobFact key={fact.label} label={fact.label} value={fact.value} />
           ))}
         </dl>

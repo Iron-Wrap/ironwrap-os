@@ -73,6 +73,7 @@ const principal = { tenantId: fieldSession.tenant.id, userId: fieldSession.user.
 
 function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"]> {
   return {
+    active_stop: null,
     id: "WP-1042-v3",
     version: 3,
     status: "Released",

@@ -430,6 +430,13 @@ function RunwayJobCard({
           ) : null}
         </div>
       </div>
+      {canOpenJob && canOpenHistory ? (
+        // One line under the pair says what each opens, since the labels alone read alike.
+        <p className="mt-2 text-sm leading-5 text-muted">
+          See job opens the job to work on it. Full job record shows its events, gates, money and
+          approvals, read only.
+        </p>
+      ) : null}
 
       <dl className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/80 py-3 text-sm sm:grid-cols-2">
         <div>

@@ -231,6 +231,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
 
 function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"]> {
   return {
+    active_stop: null,
     id: "WP-1",
     version: 3,
     status: "Released",
@@ -1095,6 +1096,67 @@ describe("JobPage", () => {
       .getByRole("heading", { name: "North slope replacement" })
       .closest("header")!;
     expect(within(card).queryByText(/Version \d|\bv\d/)).not.toBeInTheDocument();
+  });
+
+  it("says when the crew stopped work and why, in the crew's own words", async () => {
+    const stopped = workPackageModel();
+    stopped.packet.work_package = {
+      ...stopped.packet.work_package!,
+      status: "Blocked",
+      active_stop: { reported_at: "2026-07-10T13:40:00.000Z", summary: "Ice on the north slope" },
+    };
+    renderJob(stopped);
+    expect(
+      await screen.findByText("Work stopped · Fri 10 Jul 7:40 a.m. · Ice on the north slope"),
+    ).toBeVisible();
+  });
+
+  it("says only that work stopped when the read carries no stop", async () => {
+    const stopped = workPackageModel();
+    stopped.packet.work_package = { ...stopped.packet.work_package!, status: "Blocked" };
+    renderJob(stopped);
+    expect(await screen.findByText("Work stopped")).toBeVisible();
+  });
+
+  it("tells the office an expired plan takes no proof, by the server's clock at the read", async () => {
+    const office = {
+      permissions: ["jobs:read:any", "production:read"],
+      allowed_actions: ["job.read", "work_package.issue"],
+    };
+    const expired = workPackageModel(office);
+    // Expired an hour before the server made this read, whatever the device clock says.
+    expired.read_model_generated_at = "2026-07-11T00:00:00.000Z";
+    const view = renderJob(expired, ownerSession);
+    expect(
+      await screen.findByText(
+        "Expired: the crew can't add proof. Issue a corrected plan to set a new time.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Set it after the last work day. After this time the crew can still use the plan but can't add proof.",
+      ),
+    ).toBeVisible();
+    view.unmount();
+
+    const stoppedAndExpired = workPackageModel(office);
+    stoppedAndExpired.read_model_generated_at = "2026-07-11T00:00:00.000Z";
+    stoppedAndExpired.packet.work_package = {
+      ...stoppedAndExpired.packet.work_package!,
+      status: "Blocked",
+    };
+    const stoppedView = renderJob(stoppedAndExpired, ownerSession);
+    expect(
+      await screen.findByText(
+        "Expired: the crew can't add proof. Lift the stop, then issue a corrected plan.",
+      ),
+    ).toBeVisible();
+    stoppedView.unmount();
+
+    // Before the expiry at the read, there is no expired line.
+    renderJob(workPackageModel(office), ownerSession);
+    await screen.findByRole("heading", { name: "Issue the corrected job plan" });
+    expect(screen.queryByText(/^Expired:/)).not.toBeInTheDocument();
   });
 
   it("leaves the stamp off when the read does not carry the moment", async () => {

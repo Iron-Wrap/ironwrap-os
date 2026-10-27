@@ -190,6 +190,11 @@ describe("ProductionRunwayPage", () => {
       "href",
       "/jobs/JOB-A/history",
     );
+    expect(
+      screen.getAllByText(
+        "See job opens the job to work on it. Full job record shows its events, gates, money and approvals, read only.",
+      )[0],
+    ).toBeVisible();
 
     productionView.unmount();
     vi.clearAllMocks();

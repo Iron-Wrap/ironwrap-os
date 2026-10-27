@@ -280,6 +280,7 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
   const workPackage = model.work_package;
   const panelModel: WorkPackagePanelModel = {
     job: { id: model.work_object.workObjectId },
+    read_model_generated_at: model.read_model_generated_at,
     assignment: model.assignment,
     allowed_actions: model.allowed_actions,
     packet: { work_package: workPackage },
@@ -647,6 +648,8 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 
 type WorkPackagePanelModel = {
   job: Pick<JobResponse["job"], "id">;
+  /** When the server made this read: the clock the issue form judges expiry by. */
+  read_model_generated_at: string;
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
   packet: Pick<JobResponse["packet"], "work_package">;
@@ -805,6 +808,7 @@ function WorkPackagePanel({
       endpoint={workPackageEndpointBase(model.job.id, issueScope)}
       allowed={model.allowed_actions.includes("work_package.issue")}
       offline={offline}
+      readAt={model.read_model_generated_at}
       issuedVersion={issuedPlan?.packet === issuePacket ? issuedPlan.version : null}
       onIssuedVersionChange={(version) =>
         setIssuedPlan(version === null ? null : { packet: issuePacket, version })

@@ -28,11 +28,15 @@ export function jobPlanBadge(
     case "In Progress":
       // The read carries no start time, so this badge has no stamp.
       return "Work started";
-    case "Blocked":
+    case "Blocked": {
       // Only a crew's Stop Work sets a plan to Blocked (the D1 package triggers), so this is always a
-      // work stop. The read carries no stop time or reason, and no section of the crew job page
-      // shows them after a reload, so the badge points nowhere and prints neither.
-      return "Work stopped";
+      // work stop. Every phone reads the stop's time and the crew's own words from the job read;
+      // when the read carries none, the badge says only that work stopped.
+      const stop = plan.active_stop;
+      if (!stop) return "Work stopped";
+      const stopped = stamped("Work stopped", stop.reported_at);
+      return stop.summary ? `${stopped} · ${stop.summary}` : stopped;
+    }
   }
 }
 

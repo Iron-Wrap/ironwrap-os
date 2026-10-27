@@ -51,6 +51,7 @@ export function WorkPackageIssueForm({
   endpoint,
   allowed,
   offline,
+  readAt,
   issuedVersion,
   onIssuedVersionChange,
   onIssued,
@@ -62,6 +63,8 @@ export function WorkPackageIssueForm({
   endpoint: string;
   allowed: boolean;
   offline: boolean;
+  /** When the server made the job read: expiry is judged by this clock, never the device's. */
+  readAt: string;
   /**
    * The version this person issued from this page, held by the page: a first issue swaps the
    * empty state for the plan, which remounts this form, and the issued line must outlive that.
@@ -130,6 +133,12 @@ export function WorkPackageIssueForm({
     (issuedPlan.status === "Acknowledged" ||
       issuedPlan.status === "In Progress" ||
       reviewedAt !== null);
+  // Past its expiry by the server's clock at this read: the crew can no longer add proof to it.
+  const expired =
+    workPackage !== null &&
+    Number.isFinite(Date.parse(readAt)) &&
+    Number.isFinite(Date.parse(workPackage.expires_at)) &&
+    Date.parse(workPackage.expires_at) <= Date.parse(readAt);
   const expiresLabel = Number.isFinite(new Date(expiresAt).getTime())
     ? `Expires ${formatFieldStamp(new Date(expiresAt).toISOString(), officeDates)}`
     : undefined;
@@ -240,6 +249,16 @@ export function WorkPackageIssueForm({
           loads the job.
         </p>
       ) : null}
+      {expired ? (
+        <p
+          className="mt-3 max-w-3xl border border-warning/45 bg-warning-soft p-3 font-semibold text-warning"
+          role="status"
+        >
+          {workPackage?.status === "Blocked"
+            ? "Expired: the crew can't add proof. Lift the stop, then issue a corrected plan."
+            : "Expired: the crew can't add proof. Issue a corrected plan to set a new time."}
+        </p>
+      ) : null}
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
         When you issue, the job's crew, assignment and scope lock in. This form adds the steps, hold
         points and the proof the crew must add.
@@ -274,6 +293,7 @@ export function WorkPackageIssueForm({
             onChange={setExpiresAt}
             type="datetime-local"
             note={expiresLabel}
+            hint="Set it after the last work day. After this time the crew can still use the plan but can't add proof."
           />
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
@@ -515,6 +535,7 @@ function TextField({
   maxLength = 4000,
   type = "text",
   note,
+  hint,
 }: {
   id: string;
   label: string;
@@ -524,6 +545,8 @@ function TextField({
   type?: InputHTMLAttributes<HTMLInputElement>["type"];
   /** A line under the control that reads its value back in words, such as an expiry stamp. */
   note?: string;
+  /** What the value does, under the note. */
+  hint?: string;
 }) {
   return (
     <div>
@@ -538,12 +561,20 @@ function TextField({
         value={value}
         maxLength={maxLength}
         required
-        aria-describedby={note ? `${id}-note` : undefined}
+        aria-describedby={
+          [note ? `${id}-note` : null, hint ? `${id}-hint` : null].filter(Boolean).join(" ") ||
+          undefined
+        }
         onChange={(event) => onChange(event.target.value)}
       />
       {note ? (
         <p id={`${id}-note`} className="mt-1 text-sm text-muted">
           {note}
+        </p>
+      ) : null}
+      {hint ? (
+        <p id={`${id}-hint`} className="mt-1 max-w-md text-sm text-muted">
+          {hint}
         </p>
       ) : null}
     </div>

@@ -518,14 +518,15 @@ function checkInboundSignal(signal, label, fail) {
 
 // Actions the Worker takes only from the inbound event a lead came from (policy.ts INBOUND_ONLY):
 // an event on a channel it takes in, for the lead that event is about. A case that expects or
-// allows one is such an event, and names that lead.
+// allows one is such an event, and names that lead. The event has no actor: the Worker reads a
+// signal with an actor as a person's ask or request (store.ts runRequest), never as inbound.
 export const INBOUND_ONLY_ACTIONS = new Set(["lead_fact.propose"]);
 function checkInboundOnly(item, expected, fail, label) {
   const signal = item.signal ?? {};
-  const inbound = signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate === "lead";
+  const inbound = signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate === "lead" && (signal.actor ?? null) === null;
   const listed = [...objects(expected.actions).map((action) => action.action_id), ...(expected.optional_actions ?? [])];
   for (const actionId of new Set(listed.filter((id) => INBOUND_ONLY_ACTIONS.has(id)))) {
-    if (!inbound) fail(`${label}: ${actionId} comes only from an inbound event about its lead (an event on ${[...INBOUND_CHANNELS].join(", ")} with a lead subject); the Worker stops it here (out_of_scope)`);
+    if (!inbound) fail(`${label}: ${actionId} comes only from an inbound event about its lead (an event on ${[...INBOUND_CHANNELS].join(", ")} with a lead subject and no actor); the Worker stops it here (out_of_scope)`);
   }
   for (const action of objects(expected.actions).filter((entry) => INBOUND_ONLY_ACTIONS.has(entry.action_id))) {
     const leadId = action.args_must_include?.lead_id;

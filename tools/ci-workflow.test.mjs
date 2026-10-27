@@ -372,7 +372,7 @@ test("the e2e matrix runs every one of the Makefile's E2E_SUITES exactly once, g
   const workflow = await readFile(workflowUrl, "utf8");
   const makefile = await readFile(makefileUrl, "utf8");
   const suites = makefileSuites(makefile);
-  assert.equal(suites.length, 17);
+  assert.equal(suites.length, 18);
 
   const groups = e2eGroups(workflow);
   assert.ok(groups.length >= 2, `expected at least two e2e groups, found ${groups.length}`);

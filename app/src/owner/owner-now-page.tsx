@@ -410,7 +410,7 @@ function DecisionSummary({ model }: { model: OwnerNowResponse }) {
             <dd className={`mt-2 text-2xl font-bold tracking-[-0.03em] ${signal.tone}`}>
               {signal.value}
             </dd>
-            <p className="mt-1 text-sm leading-5 text-muted">{signal.detail}</p>
+            <dd className="mt-1 text-sm leading-5 text-muted">{signal.detail}</dd>
           </div>
         ))}
       </dl>

@@ -257,7 +257,7 @@ jobs:
       fail-fast: false
       matrix:
         group:
-          - "test:pwa test:pwa:owner-configuration test:pwa:people test:pwa:capabilities"
+          - "test:pwa test:pwa:owner-configuration test:pwa:people test:pwa:capabilities test:pwa:gates"
           - "test:pwa:manual-measurements test:pwa:quote-revision test:pwa:documents test:pwa:onboarding test:pwa:board"
           - "test:pwa:sales-intake test:pwa:decisions test:pwa:safety test:pwa:placement test:pwa:capabilities:accounting test:pwa:job-history test:pwa:accounting test:pwa:service-calls"
     runs-on: ubuntu-latest

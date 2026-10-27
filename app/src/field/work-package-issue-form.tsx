@@ -15,6 +15,8 @@ import { useOnlineStatus } from "../hooks/use-online-status";
 import { apiCommand } from "../lib/api";
 import type { JobResponse } from "./field-contracts";
 import { messageFor } from "../lib/plain-error";
+import { formatFieldStamp } from "./field-formatting";
+import { firstCrewReview } from "./job-plan-status";
 
 type WorkPackage = JobResponse["packet"]["work_package"];
 
@@ -118,10 +120,19 @@ export function WorkPackageIssueForm({
   const nextVersion = workPackage ? workPackage.version + 1 : 1;
   const online = connected && !offline && navigator.onLine;
   const issued = issuedVersion !== null;
-  // "Acknowledged" is the status the Worker records when a crew phone sends I reviewed this plan,
-  // so only then, and only for the plan this person issued, may the line say the crew has it.
-  const crewHasIt =
-    issued && workPackage?.version === issuedVersion && workPackage.status === "Acknowledged";
+  const officeDates = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
+  // A crew phone sending I reviewed this plan turns the plan Acknowledged, and Start keeps that
+  // review on record. Only for the plan this person issued, and only then, may the line say so.
+  const issuedPlan = issued && workPackage?.version === issuedVersion ? workPackage : null;
+  const reviewedAt = issuedPlan ? firstCrewReview(issuedPlan) : null;
+  const crewReviewed =
+    issuedPlan !== null &&
+    (issuedPlan.status === "Acknowledged" ||
+      issuedPlan.status === "In Progress" ||
+      reviewedAt !== null);
+  const expiresLabel = Number.isFinite(new Date(expiresAt).getTime())
+    ? `Expires ${formatFieldStamp(new Date(expiresAt).toISOString(), officeDates)}`
+    : undefined;
   /** The issue button's words. Every line that tells a person to tap it uses these. */
   const issueLabel = issued
     ? "Issue a corrected plan"
@@ -262,6 +273,7 @@ export function WorkPackageIssueForm({
             value={expiresAt}
             onChange={setExpiresAt}
             type="datetime-local"
+            note={expiresLabel}
           />
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
@@ -446,25 +458,34 @@ export function WorkPackageIssueForm({
             </p>
             {reloadOffered ? (
               // Offline, a reload cannot reach the office: the control stays off, as the app's
-              // other online-only controls do, and the line beside it already says "while online".
-              <Button
-                type="button"
-                variant="secondary"
-                size="compact"
-                busy={reloading}
-                disabled={!online}
-                onClick={() => void reload()}
-              >
-                <RefreshCw aria-hidden="true" /> Reload job
-              </Button>
+              // other online-only controls do, and says why beside it.
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="compact"
+                  busy={reloading}
+                  disabled={!online}
+                  onClick={() => void reload()}
+                >
+                  <RefreshCw aria-hidden="true" /> Reload job
+                </Button>
+                {!online ? (
+                  <span className="text-sm text-muted">
+                    Reload job works once you're back online.
+                  </span>
+                ) : null}
+              </>
             ) : null}
           </div>
         ) : null}
         {issued ? (
           <p className="font-semibold text-ok" role="status">
-            {crewHasIt
-              ? "Job plan issued and checked. The crew has it. Nothing more to send."
-              : "Job plan issued and checked. The crew sees it on Today the next time their phone loads the job. Nothing more to send."}
+            {crewReviewed
+              ? reviewedAt
+                ? `Reviewed by the crew · ${formatFieldStamp(reviewedAt, officeDates)}. Nothing more to send.`
+                : "Reviewed by the crew. Nothing more to send."
+              : "Job plan issued. The crew hasn't reviewed it yet. It shows on their Today screen the next time their phone loads the job. Nothing more to send."}
           </p>
         ) : null}
         {!canSend ? (
@@ -493,6 +514,7 @@ function TextField({
   onChange,
   maxLength = 4000,
   type = "text",
+  note,
 }: {
   id: string;
   label: string;
@@ -500,6 +522,8 @@ function TextField({
   onChange: (value: string) => void;
   maxLength?: number;
   type?: InputHTMLAttributes<HTMLInputElement>["type"];
+  /** A line under the control that reads its value back in words, such as an expiry stamp. */
+  note?: string;
 }) {
   return (
     <div>
@@ -514,8 +538,14 @@ function TextField({
         value={value}
         maxLength={maxLength}
         required
+        aria-describedby={note ? `${id}-note` : undefined}
         onChange={(event) => onChange(event.target.value)}
       />
+      {note ? (
+        <p id={`${id}-note`} className="mt-1 text-sm text-muted">
+          {note}
+        </p>
+      ) : null}
     </div>
   );
 }

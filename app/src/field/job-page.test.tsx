@@ -996,6 +996,10 @@ describe("JobPage", () => {
     expect(
       screen.getByText("Issuing doesn't wait for the gates. The gates hold the firm start."),
     ).toBeVisible();
+    // The expiry reads back beside its picker as a label stamp on the office clock.
+    expect(
+      screen.getByText(/^Expires (Today|[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}) \d\d:\d\d$/),
+    ).toBeVisible();
   });
 
   it("keeps saying the first job plan went out after the plan replaces the empty state", async () => {
@@ -1016,7 +1020,7 @@ describe("JobPage", () => {
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
     expect(
       await screen.findByText(
-        "Job plan issued and checked. The crew sees it on Today the next time their phone loads the job. Nothing more to send.",
+        "Job plan issued. The crew hasn't reviewed it yet. It shows on their Today screen the next time their phone loads the job. Nothing more to send.",
       ),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Issue the corrected job plan" })).toBeVisible();
@@ -1039,10 +1043,19 @@ describe("JobPage", () => {
       ),
     ).toBeVisible();
     const reviewed = workPackageModel(office);
+    const plan = reviewed.packet.work_package!;
     reviewed.packet.work_package = {
-      ...reviewed.packet.work_package!,
+      ...plan,
       version: 4,
       status: "Acknowledged",
+      acknowledgement: {
+        ...plan.acknowledgement,
+        workers: plan.acknowledgement.workers.map((worker) => ({
+          ...worker,
+          acknowledged: true,
+          acknowledged_at: "2026-07-10T15:40:00.000Z",
+        })),
+      },
     };
     vi.mocked(loadJob).mockResolvedValue(reviewed);
 
@@ -1052,12 +1065,11 @@ describe("JobPage", () => {
     const heading = screen.getByRole("heading", { name: "Issue the corrected job plan" });
     fireEvent.submit(heading.closest("section")!.querySelector("form")!);
 
+    // The office reads its own 24-hour clock in the line and on the badge.
     expect(
-      await screen.findByText(
-        "Job plan issued and checked. The crew has it. Nothing more to send.",
-      ),
+      await screen.findByText("Reviewed by the crew · Fri 10 Jul 09:40. Nothing more to send."),
     ).toBeVisible();
-    expect(screen.getByText("Reviewed by the crew")).toBeVisible();
+    expect(screen.getByText("Reviewed by the crew · Fri 10 Jul 09:40")).toBeVisible();
   });
 
   it("stamps the plan badge with the moment each status began, when the read carries it", async () => {
@@ -1076,7 +1088,8 @@ describe("JobPage", () => {
       },
     };
     renderJob(reviewed);
-    expect(await screen.findByText("Reviewed by the crew · Fri 10 Jul 09:40")).toBeVisible();
+    // The crew phone reads a.m. and p.m.
+    expect(await screen.findByText("Reviewed by the crew · Fri 10 Jul 9:40 a.m.")).toBeVisible();
     // The plan card names no version (the safety plan and change order lines are Track E's).
     const card = screen
       .getByRole("heading", { name: "North slope replacement" })
@@ -1153,6 +1166,7 @@ describe("JobPage", () => {
     );
     fireEvent.submit(form);
     expect(await screen.findByRole("button", { name: "Reload job" })).toBeDisabled();
+    expect(screen.getByText("Reload job works once you're back online.")).toBeVisible();
     expect(apiCommand).not.toHaveBeenCalled();
   });
 
@@ -1176,7 +1190,7 @@ describe("JobPage", () => {
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
     // The header and the plan card name the plan by its release, never by a version number.
-    expect(screen.getAllByText("Released · Fri 10 Jul 09:15")).toHaveLength(2);
+    expect(screen.getAllByText("Issued to the crew · Fri 10 Jul 09:15")).toHaveLength(2);
     expect(screen.queryByText(/Version \d|\bv\d/)).not.toBeInTheDocument();
   });
 
@@ -1191,7 +1205,7 @@ describe("JobPage", () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("Released · Fri 10 Jul 09:15")).toBeVisible();
+    expect(screen.getByText("Issued to the crew · Fri 10 Jul 9:15 a.m.")).toBeVisible();
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();

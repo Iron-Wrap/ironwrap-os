@@ -35,14 +35,18 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await seedPairedFieldDevice(page);
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    await expect(page.getByText("Released · Fri 10 Jul 09:15", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Issued to the crew · Fri 10 Jul 9:15 a.m.", { exact: true }),
+    ).toBeVisible();
 
     // 1. Review -- requires the review checkbox first, matching the real UI gate.
     await page.getByRole("checkbox").check();
     await page.getByRole("button", { name: "I reviewed this plan" }).click();
     await expect(page.getByText(/You reviewed this job plan/i)).toBeVisible();
     // Stamped with the review this phone just sent, in the company's zone.
-    await expect(page.getByText(/^Reviewed by the crew · Today \d\d:\d\d$/)).toBeVisible();
+    await expect(
+      page.getByText(/^Reviewed by the crew · Today \d{1,2}:\d\d [ap]\.m\.$/),
+    ).toBeVisible();
 
     // 2. Start -- online-only direct command, not the offline outbox.
     await page.getByRole("button", { name: "Start work" }).click();

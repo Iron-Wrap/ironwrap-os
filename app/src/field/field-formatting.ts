@@ -31,14 +31,15 @@ export function formatFieldTimestamp(value: string, options: FieldDateOptions): 
 }
 
 /**
- * A moment in label form, the way the rulings write stamps on badges and labels: "Today 14:05",
- * otherwise "Tue 20 Oct 14:05". The time is 24-hour in the company's zone, and there is never a
- * year. Prose says "today at 14:05"; this is only for labels.
+ * A moment in label form, the way the time ruling writes stamps on badges and labels: "Today 14:05",
+ * otherwise "Fri 10 Jul 09:15", in the company's zone and never with a year. The office reads a
+ * 24-hour clock; the crew phone reads a.m. and p.m. ("Today 2:05 p.m.", "Fri 10 Jul 9:15 a.m.").
+ * Prose says "today at 14:05"; this is only for labels.
  */
 export function formatFieldStamp(
   value: string,
   options: FieldDateOptions,
-  now: number = Date.now(),
+  { now = Date.now(), clock = "24h" }: { now?: number; clock?: "24h" | "12h" } = {},
 ): string {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return "time unavailable";
@@ -60,8 +61,16 @@ export function formatFieldStamp(
     const part = parts(date, { year: "numeric", month: "2-digit", day: "2-digit" });
     return `${part("year")}-${part("month")}-${part("day")}`;
   };
-  const clock = parts(instant, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  const time = `${clock("hour")}:${clock("minute")}`;
+  const time =
+    clock === "12h"
+      ? (() => {
+          const part = parts(instant, { hour: "numeric", minute: "2-digit", hour12: true });
+          return `${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
+        })()
+      : (() => {
+          const part = parts(instant, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+          return `${part("hour")}:${part("minute")}`;
+        })();
   if (calendarDay(instant) === calendarDay(new Date(now))) return `Today ${time}`;
   const day = parts(instant, { weekday: "short", day: "numeric", month: "short" });
   return `${day("weekday")} ${day("day")} ${day("month")} ${time}`;

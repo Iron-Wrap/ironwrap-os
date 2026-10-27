@@ -45,6 +45,7 @@ import {
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { jobPlanBadge, type StampClock } from "./job-plan-status";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -304,7 +305,12 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
             Today
           </Link>
         </Button>
-        <WorkObjectPacketHeader model={model} offline={offline} dateOptions={workObjectDates} />
+        <WorkObjectPacketHeader
+          model={model}
+          offline={offline}
+          dateOptions={workObjectDates}
+          clock={session.user.role === "field" ? "12h" : "24h"}
+        />
         <WorkPackagePanel
           model={panelModel}
           offline={offline}
@@ -327,10 +333,12 @@ function WorkObjectPacketHeader({
   model,
   offline,
   dateOptions,
+  clock,
 }: {
   model: WorkObjectResponse;
   offline: boolean;
   dateOptions: FieldDateOptions;
+  clock: StampClock;
 }) {
   const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
   return (
@@ -355,7 +363,7 @@ function WorkObjectPacketHeader({
           label="Job plan"
           value={
             model.work_package
-              ? `Released · ${formatFieldStamp(model.work_package.released_at, dateOptions)}`
+              ? `Issued to the crew · ${formatFieldStamp(model.work_package.released_at, dateOptions, { clock })}`
               : "Not ready"
           }
         />
@@ -652,43 +660,6 @@ type TypedWorkObjectScope = {
   physical_context_type: string;
   physical_context_id: string;
 };
-
-/**
- * The job plan card's badge: never a version number (versions live in System details and the
- * record). Each status carries the moment it began, as a label stamp ("Released · Today 14:05"),
- * when the read carries that moment; when it does not, the badge leaves the stamp off rather than
- * guess. The read sends only the current plan, so a Completed, Expired or Superseded plan never
- * reaches this card (it reads back as no plan at all).
- */
-function jobPlanBadge(workPackage: FieldWorkPackage, dateOptions: FieldDateOptions): string {
-  const stamped = (words: string, at: string | null) =>
-    at ? `${words} · ${formatFieldStamp(at, dateOptions)}` : words;
-  switch (workPackage.status) {
-    case "Released":
-      return stamped("Released", workPackage.released_at);
-    case "Acknowledged":
-      // The plan turned Acknowledged when the first crew phone sent I reviewed this plan.
-      return stamped("Reviewed by the crew", firstCrewReview(workPackage));
-    case "In Progress":
-      // The read carries no start time, so this badge has no stamp.
-      return "Work started";
-    case "Blocked":
-      // Only a crew's Stop Work sets a plan to Blocked (the D1 package triggers), so this is
-      // always a work stop. The read carries no stop time, so this badge has no stamp.
-      return "Work stopped";
-  }
-}
-
-/** The earliest crew review the read carries, or null when it carries none. */
-function firstCrewReview(workPackage: FieldWorkPackage): string | null {
-  const times = [
-    ...workPackage.acknowledgement.workers.map((worker) => worker.acknowledged_at),
-    workPackage.acknowledgement.acknowledged_at,
-  ]
-    .filter((value): value is string => Boolean(value) && Number.isFinite(Date.parse(value!)))
-    .sort((left, right) => Date.parse(left) - Date.parse(right));
-  return times[0] ?? null;
-}
 
 function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObjectScope | null {
   if (
@@ -1066,7 +1037,7 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            {jobPlanBadge(workPackage, dateOptions)}
+            {jobPlanBadge(workPackage, dateOptions, session.user.role === "field" ? "12h" : "24h")}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">

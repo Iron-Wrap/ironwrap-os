@@ -20,4 +20,18 @@ describe("jobLabel", () => {
     expect(jobLabel({ customer: "Elena Ruiz", address: null, code: null })).toBe("Elena Ruiz");
     expect(jobLabel({ customer: " ", address: " ", code: null })).toBeNull();
   });
+
+  it("keeps a unit that comes before the street, and trims around commas", () => {
+    expect(
+      jobLabel({ customer: "Jo", address: "Unit 4, 118 Larkspur Way NW, Calgary AB", code: "J-1" }),
+    ).toBe("Jo · Unit 4, 118 Larkspur Way NW · J-1");
+    expect(jobLabel({ address: "#12 , 9 Main St, Calgary", code: null })).toBe("#12, 9 Main St");
+    expect(jobLabel({ address: "  118 Larkspur Way NW  , Calgary", code: null })).toBe(
+      "118 Larkspur Way NW",
+    );
+    // A number-led street is not a unit.
+    expect(jobLabel({ address: "118 Larkspur Way NW, Calgary", code: null })).toBe(
+      "118 Larkspur Way NW",
+    );
+  });
 });

@@ -58,6 +58,7 @@
     "machine-name": 2
   },
   "src/field/field-pages.tsx": {
+    "banned-term": 1,
     "unlabelled-code": 2
   },
   "src/field/fleet-page.tsx": {

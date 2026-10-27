@@ -344,12 +344,9 @@ function WorkObjectPacketHeader({
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
         <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
-        {/* A version number never stands in a person's line; the plan says its state. */}
         <JobFact
           label="Work plan"
-          value={
-            model.work_package ? workPackageStateWords(model.work_package.status) : "Not ready"
-          }
+          value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
         />
       </dl>
     </header>
@@ -1010,7 +1007,8 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            {workPackageStateWords(workPackage.status)}
+            v{workPackage.version} ·{" "}
+            {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
@@ -1974,11 +1972,6 @@ function EmergencyLine({ officePhone }: { officePhone: string | null }) {
       </div>
     </div>
   );
-}
-
-/** A work plan's state in the crew's words; its version stays in history. */
-function workPackageStateWords(status: string): string {
-  return status === "Acknowledged" ? "Reviewed" : status;
 }
 
 function JobFact({ label, value }: { label: string; value: string }) {

@@ -977,18 +977,19 @@ describe("JobPage", () => {
 
     expect(await screen.findByText("This plan replaces an earlier one")).toBeVisible();
     expect(screen.getByText(/I read this plan\./)).toBeInTheDocument();
-    const page = document.body.textContent ?? "";
-    expect(page).not.toMatch(/\bv\d+\b|\bversion \d/i);
-    expect(page).not.toContain("WP-PRIOR-0042");
+    // The plan header and badge are Track C's (#55); here the safety plan, the change order, the
+    // replaced plan and the review box carry no version number and no old plan's id.
+    const safety = screen.getByRole("region", { name: "Safety and site" });
+    expect(safety.textContent).not.toMatch(/\bv\d+\b|\bversion \d/i);
+    expect(screen.getByText(/Accepted · Two more deck sheets/).textContent).not.toMatch(/\bv2\b/);
+    expect(document.body.textContent).not.toContain("WP-PRIOR-0042");
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    const plan = screen.getByRole("region", { name: "North slope replacement" });
-    expect(within(plan).getAllByText("Released")[0]).toBeVisible();
-    expect(plan.textContent).not.toMatch(/\bv3\b|version 3/i);
+    expect(screen.getByText("v3 · Released")).toBeVisible();
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();

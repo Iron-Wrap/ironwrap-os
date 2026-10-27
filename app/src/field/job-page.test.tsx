@@ -818,6 +818,18 @@ describe("JobPage", () => {
     expect(screen.getByText("The safety plan is missing. Do not start work.")).toBeVisible();
   });
 
+  it("names the job by its customer and place, with the code after as a reference", async () => {
+    renderJob();
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: "123 Example Avenue, Calgary, AB",
+    });
+    expect(heading.previousElementSibling).toHaveTextContent("Jamie Homeowner");
+    expect(heading.nextElementSibling).toHaveTextContent("Reference IW-1042");
+    // The code never leads the header.
+    expect(heading.parentElement?.firstElementChild).not.toHaveTextContent("IW-1042");
+  });
+
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {
     renderJob();
 

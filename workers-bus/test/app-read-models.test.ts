@@ -273,7 +273,7 @@ function nativeWorkPackageRow(
     definition_json: JSON.stringify(definition),
     issued_at: "2026-07-10T07:00:00.000Z",
     expires_at: "2026-07-11T07:00:00.000Z",
-    released_at: "2026-07-10T07:05:00.000Z",
+    released_at: "2026-07-10T07:00:00.000Z",
     release_attempt_id: "attempt-a",
     supersedes_id: null,
     correction_reason: null,
@@ -1696,7 +1696,7 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
         make_safe_procedure: "Secure the work area and notify the supervisor.",
         issued_at: "2026-07-10T07:00:00.000Z",
         expires_at: "2026-07-11T07:00:00.000Z",
-        released_at: "2026-07-10T07:05:00.000Z",
+        released_at: "2026-07-10T07:00:00.000Z",
         release_attempt_id: null,
         supersedes: null,
         correction_reason: null,
@@ -3987,7 +3987,7 @@ test("field packet contains job-safe contact details and excludes email, financi
       make_safe_procedure: "Secure the work area and notify the supervisor.",
       issued_at: "2026-07-10T07:00:00.000Z",
       expires_at: "2026-07-11T07:00:00.000Z",
-      released_at: "2026-07-10T07:05:00.000Z",
+      released_at: "2026-07-10T07:00:00.000Z",
       // No safety occurrence, unserviceable PPE, outstanding notification, or
       // overdue high-risk action applies to this package.
       safety_blockers: [],

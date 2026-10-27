@@ -85,7 +85,7 @@ function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"
     make_safe_procedure: "Clear the drop zone and tie off.",
     issued_at: "2026-07-10T13:00:00.000Z",
     expires_at: "2026-07-11T13:00:00.000Z",
-    released_at: "2026-07-10T13:05:00.000Z",
+    released_at: "2026-07-10T13:00:00.000Z",
     work_object_type: "Roof Job",
     work_object_id: "roof-job-1",
     physical_context_type: "Roof Site",

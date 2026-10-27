@@ -3,6 +3,8 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_TIME_ZONE,
   DELEGATION,
+  DIAL,
+  DIAL_OF,
   RECEIPT_FIELDS,
   appliedByPersonNote,
   appliedOf,
@@ -448,26 +450,45 @@ describe("delegation words", () => {
     expect(
       delegationOf(action({ autonomy: "H", human_only: true, delegable: false }), paused),
     ).toBe("people_only");
-    // "Paused" names the specialist-level control only, never one action.
+    // The paused control is the specialist's only, never one action's; on the dial it reads Off.
     expect(specialistDelegation({ paused: true })).toEqual({
       setting: "paused",
-      words: "Paused",
+      words: "Off",
     });
     expect(specialistDelegation({ paused: false })).toBeNull();
   });
 
-  it("uses the words of AI-PRIMITIVES and never a class code", () => {
-    expect(Object.values(DELEGATION).map((entry) => entry.words)).toEqual([
-      "Reads and watches",
-      "Prepares",
-      "Acts within your limits",
-      "Asks first",
-      "People only",
-      "Paused",
-      "Off until you turn it on",
-      "Always on: protects you",
-      "Always asks first",
+  it("says every setting on the owner's dial and never a class code", () => {
+    expect(Object.values(DIAL)).toEqual([
+      "Off",
+      "Suggest",
+      "Act with approval",
+      "Auto with undo",
+      "Locked",
     ]);
+    expect(DIAL_OF).toEqual({
+      off: "Off",
+      off_until_enabled: "Off",
+      shadow: "Suggest",
+      asks_first: "Act with approval",
+      within_limits: "Auto with undo",
+    });
+    expect(
+      Object.fromEntries(Object.entries(DELEGATION).map(([key, { words }]) => [key, words])),
+    ).toEqual({
+      reads: "Suggest",
+      prepares: "Suggest",
+      within_limits: "Auto with undo",
+      asks_first: "Act with approval",
+      people_only: "Locked",
+      paused: "Off",
+      off_until_enabled: "Off",
+      // Protective actions are not on the dial.
+      always_on: "Always on: protects you",
+      always_asks_first: "Act with approval · always",
+    });
+    // An action the owner can never raise carries the lock a Locked row carries.
+    expect(DELEGATION.always_asks_first.glyph).toBe(DELEGATION.people_only.glyph);
     for (const { words } of Object.values(DELEGATION))
       expect(words).not.toMatch(/\bA[0-3]\b|\bH\b/);
   });

@@ -250,9 +250,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
   too, and never under Done for you. It closes once: `applied_by_person` when the person's role
-  change or the owner's delegation or practice setting for its record lands, `superseded` when a
-  newer draft for the same record replaces it; migration 0206 lets only that close past the
-  decided-step guard. A "Not now" for it is not built yet.
+  change or the owner's delegation or practice setting for its record lands, naming what is set
+  and whether it is what the draft proposed (`as_proposed`: the same role, or the same setting and,
+  within limits, the same ceiling), `superseded` when a newer draft for the same record replaces
+  it; migration 0206 lets only that close past the decided-step guard. A "Not now" for it is not
+  built yet.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: owner, staff and worker actors for a person's
@@ -340,9 +342,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
     a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
     no undo flow, no non-protective action has a proven machine path (a within-limits step asks
-    first), and the Worker accepts within limits whatever an action's undo; no screen shows the dial
-    words (the app shows the contract words, `app/src/components/ai/words.ts`); "Facts only, live"
-    has no live conversation runtime.
+    first), and the Worker accepts within limits whatever an action's undo, so the app's "Auto with
+    undo" pill (`app/src/components/ai/words.ts`, owner ruling) runs ahead of any undo flow; no
+    autonomy screen shows the dial; "Facts only, live" has no live conversation runtime.
   - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
     message purpose covers a visit reminder, and `customer_message.send` is not registered; it
     always asks first, so no reminder can run automatically.

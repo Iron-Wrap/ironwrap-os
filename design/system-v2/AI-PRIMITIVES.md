@@ -25,7 +25,9 @@ are named R8d-1 to R8d-6, so they never collide with the TEMPLATES numbers or wi
   Proposed is not fact; words, not codes; exact facts. Under original rule 1, callers and customers hear the Business's name:
   the speaker is Iron Wrap Exteriors, never "IronWrap", and the disclosure stays "AI receptionist at Iron Wrap
   Exteriors" with a way to reach a person (K-22). Who answers the customer's ask entry follows MD-19.
-- The delegation words, the launch rule (every action with an outside effect asks first) and People only (customer
+- The delegation words, now on the owner's dial (owner ruling: Off, Suggest, Act with approval, Auto with undo, and
+  Locked for people-only acts; see "Delegation words"), the launch rule (every action with an outside effect asks
+  first) and people-only acts (customer
   acceptance, releasing a safety stop, waiving a gate, refunds and write-offs, legal sign-offs). They apply whenever
   the owner turns AI help on; the walkthrough's default is AI off.
 - Every component, used inline on the work screen. Receipts stay the record of what the AI did, so the audit is a
@@ -48,7 +50,7 @@ are named R8d-1 to R8d-6, so they never collide with the TEMPLATES numbers or wi
    the happy path (TEMPLATES IRW-R8d rule 5).
 - **R8d-4. Decisions is a queue for set rules.** A Needs you receipt sits on the work screen of the thing it is about. It
    also appears on Decisions only when an operation-set rule sends it to someone else. The working list until MD-01
-   and MD-03 are answered: a limit, an item the person prepared (OD-23), the OD-32 margin floor, or a People only
+   and MD-03 are answered: a limit, an item the person prepared (OD-23), the OD-32 margin floor, or a people-only
    step for a set holder. "Who may decide" names the
    person and, where it matters, the set; never a job title or a department (TEMPLATES IRW-R8d rules 3, 6 and 7).
 - **R8d-5. Times, Alberta time, payments.** Receipts, timelines, the brief and every AI message write weekday plus time and,
@@ -105,19 +107,21 @@ Figma: `03 Components` › `Board 6 · AI team`. Builders use the instances, nev
 ## Delegation words
 
 The action class is fixed by consequence; the delegation setting is per action and per
-specialist, and only the owner changes it. Agents never change their own setting.
+specialist, and only the owner changes it. Agents never change their own setting. Screens say a
+setting on the owner's dial (owner ruling); the contract settings stay internal.
 
-| Class (System details only) | Words people see | Meaning |
+| Class or setting (System details only) | Words people see | Meaning |
 |---|---|---|
-| A0 | Reads and watches | Runs all the time; changes nothing |
-| A1 | Prepares | Drafts and fills inside IronWrap; nothing leaves; can be undone |
-| A2 | Acts within your limits | Acts outward inside an owner-set ceiling (amount, count, recipients) and tells you after |
-| A3 | Asks first | A person approves each time; the start state for every action with an outside effect |
-| H | People only | Never delegable: customer acceptance, releasing a safety stop, waiving a gate, refunds and write-offs, legal sign-offs |
-| (setting) | Paused | The owner paused this specialist or action; nothing new starts |
-| (fixed) | Always on: protects you | Protective actions; cannot be set to Asks first; keep running while paused |
-| (fixed) | Always asks first | Actions the owner can never delegate (no control is shown) |
-| (setting) | Off until you turn it on | An action the owner has not enabled yet (for example live answering, contract action `conversation.answer_live`); nothing happens until it is turned on |
+| A0 reads and watches | Suggest | Runs all the time; changes nothing |
+| A1 prepares | Suggest | Drafts and fills inside IronWrap; nothing leaves; can be undone |
+| A2 within limits | Auto with undo | Acts outward inside an owner-set ceiling (amount, count, recipients) and tells you after |
+| A3 asks first | Act with approval | A person approves each time; the start state for every action with an outside effect |
+| H | Locked | Never delegable: customer acceptance, releasing a safety stop, waiving a gate, refunds and write-offs, legal sign-offs |
+| (setting) paused | Off | The owner paused this specialist; nothing new starts |
+| (fixed) protective | Always on: protects you | Protective actions, off the dial; cannot be set to Act with approval; keep running while paused |
+| (fixed) always asks first | Act with approval · always | Actions the owner can never raise, with the lock a Locked row carries (no control is shown) |
+| (setting) off until enabled, off | Off | An action the owner has not enabled yet (for example live answering, contract action `conversation.answer_live`), or one the owner turned off; nothing happens |
+| (setting) practice only | Suggest | Practice runs that change nothing; a person still does the real work |
 
 ## Copy table (one name per state)
 
@@ -153,7 +157,7 @@ AI is on.
 | `AI/Badge` | Who (IronWrap and the 15 specialists) × Size (Small 24, Default 32, Large 48) | Rounded square, `radius/8`, `line/strong` edge, `surface/rail` fill, specialist glyph in `text/primary`. IronWrap uses the tenant brand mark. |
 | `Avatar/Person` | Size (Small, Default, Large) | Circle with initials, `surface/rail` fill, `line/hairline` edge |
 | `AI/Name` | Size (Row, Header) | Badge, name ("AI estimator"), optional line ("Prices quotes") |
-| `AI/Delegation` | Setting (Reads and watches, Prepares, Acts within your limits, Asks first, People only, Paused, Off) | Outlined pill, glyph plus words, ink only |
+| `AI/Delegation` | Setting (Off, Suggest, Act with approval, Auto with undo, Locked, Act with approval · always, Always on: protects you) | Outlined pill, glyph plus words, ink only |
 | `Signal chip` (added kinds) | Proposed, Working on it | Proposed: open diamond, dotted edge. Working on it: loader glyph |
 | `AI/Proposed value` | Kind (Inline, Field, Block) | Open diamond, dotted edge, "Proposed" caption with who proposed it and from what; Field adds Accept and Edit (IRW-R8d; was "Accept and Change") |
 | `AI/Source chip` | Kind (Record, Document, Message, Photo, Reading) | Glyph, plain label, code in mono after it |
@@ -213,17 +217,19 @@ Outcome and policy result to words:
 | outcome abstained: safety_event | Held: a work stop or safety report stopped it; a person takes over |
 | outcome abstained: emergency | Held: an emergency; it paged a person and does nothing else |
 
-Delegation in the contract: `default_delegation` asks_first → "Asks first"; within_limits → "Acts within your
-limits"; off_until_enabled → "Off until you turn it on". The owner's `shadow` setting, never a start state → "Practice
-only"; its receipts read "Practice run" and never show under Done for you or in Decisions. `human_only` (16 actions:
+Delegation on the owner's dial (owner ruling; the contract settings stay internal): `default_delegation`
+asks_first → "Act with approval"; within_limits → "Auto with undo"; off_until_enabled and off → "Off"; A0 reads
+and A1 prepares → "Suggest"; a paused specialist's control → "Off". The owner's `shadow` setting, never a start
+state → "Suggest"; its receipts read "Practice run" and never show under Done for you or in Decisions. `human_only` (16 actions:
 delegation.set, policy.activate, settings.apply, onboarding.go_live, acceptance.customer_decision,
 terms.legal_signoff, safety_stop.release, hold_point.release, completion.accept, payee.change_details,
-payee.unfreeze, refund.issue, write_off.record, filing.submit, gate.waive, access.change) → "People only" with no
+payee.unfreeze, refund.issue, write_off.record, filing.submit, gate.waive, access.change) → "Locked" with no
 control.
 `protective` (17 actions: stop, hold, block, freeze, escalate, quarantine, page, revoke a portal link, raise a finding,
-hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
-whole team is paused. `delegable: false` with asks_first (41 actions, for example storm_mode.propose,
-inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
+hold a specialist) → "Always on: protects you", off the dial: never "Act with approval", and they keep running while a
+specialist or the whole team is paused. `delegable: false` with asks_first (41 actions, for example storm_mode.propose,
+inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Act with approval · always" with the
+Locked lock and no control.
 Contract version: catalog sha `448ddd937fe5c4dfe9a182cc220e91a64fc76dcb8789a490726f3b442c1f4113` (16 specialists,
 163 actions, 116 watches; every action has a plain `name`). Builders read
 [`docs/AI-TEAM-CONTRACT.md`](../../docs/AI-TEAM-CONTRACT.md) itself; a local copy, such as one under the git-ignored
@@ -236,14 +242,14 @@ Contract version: catalog sha `448ddd937fe5c4dfe9a182cc220e91a64fc76dcb8789a4907
   Customer pages: `AI/Ask entry` Customer.
 - Now: `AI/Macro tile` strip, then `AI/Brief section` Needs you, Found, Done for you,
   Working on it.
-- Decisions: only "Asks first" and "People only" items, each an `AI/Receipt` in Needs you.
+- Decisions: only "Act with approval" and "Locked" (people-only) items, each an `AI/Receipt` in Needs you.
 - Records (job, property and roof): `AI/Timeline item` mixing people and agents; proposed
   facts as `AI/Proposed value`.
 - Proposal-first pages: the agent's proposal on top (`AI/Receipt` or a page-specific proposal
   card using `AI/Proposed value`), today's manual screen behind "Do it myself".
 
 **IRW-R8d** on this list. The Ask entry bullet and the Records bullet stay. Superseded:
-- "Decisions: only Asks first and People only items". Each Needs you receipt sits on the work
+- "Decisions: only Act with approval and Locked items". Each Needs you receipt sits on the work
   screen of the thing it is about; Decisions is the queue only for what an operation-set rule
   sends to someone else (R8d-4).
 - "Proposal-first pages". There are none. The manual screen is the page, and the agent's

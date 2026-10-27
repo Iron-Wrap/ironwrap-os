@@ -558,8 +558,10 @@ function JobPacketHeader({
   dateOptions: FieldDateOptions;
 }) {
   const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  // The job's facts follow the header's own width: the crew shell is a phone-wide column even on
+  // a desktop, where window breakpoints squeezed three facts into it.
   return (
-    <header className="border-b border-border pb-5 sm:pb-6">
+    <header className="@container border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">
@@ -573,7 +575,7 @@ function JobPacketHeader({
           {offline ? "Saved copy" : "Office update"}
         </p>
       </div>
-      <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+      <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
         <JobFact label="Service" value={model.job.service_type ?? "Service details are missing"} />
         <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
         <JobFact
@@ -1055,7 +1057,7 @@ function WorkPackagePanel({
       aria-labelledby="work-package-heading"
     >
       {issueForm}
-      <header className="border-b border-border px-4 py-4 sm:px-5">
+      <header className="@container border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-muted">Job plan</p>
@@ -1067,7 +1069,7 @@ function WorkPackagePanel({
             {jobPlanBadge(workPackage, dateOptions)}
           </p>
         </div>
-        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+        <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
           <JobFact
             label="Issued"
             value={formatFieldTimestamp(workPackage.issued_at, dateOptions)}
@@ -1753,6 +1755,7 @@ function SafetyAndAccess({
 }) {
   const safety = model.packet.safety_plan;
   const contact = model.packet.contact;
+  const officePhone = useSession().tenant.office_phone ?? null;
   const safetyFacts = safety
     ? [
         [
@@ -1767,7 +1770,7 @@ function SafetyAndAccess({
       ].filter((entry): entry is [string, string] => Boolean(entry[1]))
     : [];
   return (
-    <section aria-labelledby="safety-access-heading" className="space-y-4">
+    <section aria-labelledby="safety-access-heading" className="@container space-y-4">
       <header className="border-b border-border pb-4">
         <p className="text-sm font-semibold text-muted">Check before work</p>
         <h2
@@ -1777,7 +1780,8 @@ function SafetyAndAccess({
           Safety and site
         </h2>
       </header>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <EmergencyLine officePhone={officePhone} />
+      <div className="grid gap-4 @3xl:grid-cols-2">
         <article className="border border-border bg-surface-raised p-4 sm:p-5">
           <div className="flex items-start gap-3">
             <HardHat className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
@@ -1812,13 +1816,15 @@ function SafetyAndAccess({
               </p>
             </div>
           </div>
-          {contact?.phone ? (
+          {dialableNumber(contact?.phone) ? (
             <Button asChild variant="outline" size="field" fullWidth className="mt-5">
-              <a href={`tel:${contact.phone}`}>
+              <a href={`tel:${dialableNumber(contact?.phone)}`}>
                 <Phone aria-hidden="true" />
                 Call job contact
               </a>
             </Button>
+          ) : contact?.phone ? (
+            <p className="mt-5 text-sm font-semibold">{contact.phone}</p>
           ) : (
             <p className="mt-5 text-sm font-semibold text-muted">Phone number is missing</p>
           )}
@@ -1996,6 +2002,67 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
       {detail ? <p className="mt-1 text-sm leading-6 text-muted">{detail}</p> : null}
     </div>
   );
+}
+
+/**
+ * Who to call in an emergency, with a control for each: 911 first, then the office from the
+ * company's profile (safety block, rework ruling). Never a literal office number in code; while the
+ * profile gives none, the line still says to call the office and offers 911.
+ */
+function EmergencyLine({ officePhone }: { officePhone: string | null }) {
+  const dialable = dialableNumber(officePhone);
+  return (
+    <div
+      className="border-2 border-danger/45 bg-danger-soft p-4 sm:p-5"
+      role="region"
+      aria-labelledby="emergency-line"
+    >
+      <p id="emergency-line" className="font-bold leading-6">
+        Emergency: call 911 · then the office{officePhone ? `, ${officePhone}` : ""}
+      </p>
+      <div className="mt-3 grid gap-2 @md:grid-cols-2">
+        <Button asChild variant="danger" size="field" fullWidth>
+          <a href="tel:911">
+            <Phone aria-hidden="true" />
+            Call 911
+          </a>
+        </Button>
+        {dialable ? (
+          <Button asChild variant="outline" size="field" fullWidth>
+            <a href={`tel:${dialable}`}>
+              <Phone aria-hidden="true" />
+              Call the office
+            </a>
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The number a tel: link may dial, or null when the text is not one plain phone number. A label
+ * before it ("Cell:") and anything after an extension mark ("ext", "x", "#", ",") are left out;
+ * only digits, spaces, dots, dashes and brackets may stand around the digits, a "+" only first.
+ * A local number has 7 or 10 digits, or 11 starting with 1; an international one ("+") 8 to 15
+ * digits with no "(0)" trunk group. A shown number that is not dialable gets no Call button,
+ * never a wrong one.
+ */
+export function dialableNumber(text: string | null | undefined): string | null {
+  const number = (text ?? "")
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/^[^\d+(]*:\s*/, "")
+    .split(/\s*(?:ext\.?|x|#|,)/i)[0]!
+    .trim();
+  if (!/^\+?[\d\s().-]+$/.test(number)) return null;
+  const digits = number.replace(/\D/g, "");
+  if (number.startsWith("+")) {
+    if (/\(\s*0\s*\)/.test(number) || digits.length < 8 || digits.length > 15) return null;
+    return `+${digits}`;
+  }
+  const local =
+    digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+  return local ? digits : null;
 }
 
 function JobFact({ label, value }: { label: string; value: string }) {

@@ -204,7 +204,8 @@ gate. The job's OD-01 cancellation window reads unknown (migration `0160`): noth
 a signed copy, and D1 refuses the seed identity's record of one, so the window holds the schedule,
 the Materials attestation and the job's D1 purchase order lines, as intended. It does not hold a
 Frappe Supplier Order (written through the ERPNext MCP, outside D1); that hold is required before
-supplier send opens. It never writes D1 directly,
+supplier send opens. Nor does it hold a Shop Order's `scheduled_start` on the typed work-object
+assignment; that hold comes with the shop-run contract rule. It never writes D1 directly,
 calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.

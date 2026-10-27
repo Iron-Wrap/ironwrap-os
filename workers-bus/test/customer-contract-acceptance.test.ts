@@ -112,10 +112,14 @@ class SqliteD1 {
   failNextPolicyRead = false;
   /** Fails the next read the signed copy is built from, as an unavailable D1 would (0160). */
   failNextSignedCopyBuild = false;
-  /** Fails the next write of a signed-copy event before it runs, as an unavailable D1 would. */
-  failNextSignedCopyEvent = false;
-  /** Commits the next signed-copy event, then loses D1's answer. */
-  loseNextSignedCopyEventAnswer = false;
+  /** Fails the next this many signed-copy event writes before they run, as an unavailable D1 would. */
+  failSignedCopyEvents = 0;
+  /** Commits the next this many signed-copy events, then loses D1's answer. */
+  loseSignedCopyEventAnswers = 0;
+  /** Fails the next this many served confirmations before they run. */
+  failSignedCopyConfirmations = 0;
+  /** Commits the next this many served confirmations, then loses D1's answer. */
+  loseSignedCopyConfirmationAnswers = 0;
   /** Every error a batch raised, so a case can tell which writer refused. */
   readonly batchErrors: string[] = [];
 
@@ -143,13 +147,17 @@ class SqliteD1 {
       this.failNextSignedCopyBuild = false;
       throw new Error("simulated_d1_unavailable");
     }
-    if (sql.includes("INSERT INTO contract_signed_copy_events")) {
-      if (this.failNextSignedCopyEvent) {
-        this.failNextSignedCopyEvent = false;
+    for (const [table, fail, lose] of [
+      ["contract_signed_copy_events", "failSignedCopyEvents", "loseSignedCopyEventAnswers"],
+      ["contract_signed_copy_served", "failSignedCopyConfirmations", "loseSignedCopyConfirmationAnswers"],
+    ] as const) {
+      if (!sql.includes(`INSERT INTO ${table} (`)) continue;
+      if (this[fail] > 0) {
+        this[fail] -= 1;
         throw new Error("simulated_d1_unavailable");
       }
-      if (this.loseNextSignedCopyEventAnswer) {
-        this.loseNextSignedCopyEventAnswer = false;
+      if (this[lose] > 0) {
+        this[lose] -= 1;
         return new SqliteStatement(this.raw, this.raw.prepare(sql), [], true);
       }
     }
@@ -206,7 +214,9 @@ class SqliteStatement {
   }
 
   async first<T>(): Promise<T | null> {
-    return (this.statement.get(...this.args) ?? null) as T | null;
+    const row = (this.statement.get(...this.args) ?? null) as T | null;
+    if (this.loseAnswer) throw new Error("simulated_lost_d1_response");
+    return row;
   }
 
   async all<T>(): Promise<{ results: T[] }> {
@@ -3193,6 +3203,22 @@ function shownEvents(h: Harness): Array<Record<string, string>> {
     .all().map((row) => ({ ...row }) as Record<string, string>);
 }
 
+function servedCopies(h: Harness): Array<Record<string, string>> {
+  return h.db.raw.prepare("SELECT * FROM contract_signed_copy_served ORDER BY served_at")
+    .all().map((row) => ({ ...row }) as Record<string, string>);
+}
+
+/** The owner and ops work queue, as an owner reads it. */
+async function signedCopyQueue(h: Harness): Promise<Record<string, any>> {
+  const response = await handleAuthenticatedRoute(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/production/cancellation-window/signed-copy-missing`),
+    h.env,
+    await personAuth(h, OWNER_ID),
+  );
+  assert.equal(response.status, 200);
+  return await response.json() as Record<string, any>;
+}
+
 async function recordReceivedCopy(
   h: Harness,
   person: AuthContext,
@@ -3362,6 +3388,21 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
     const [event, ...more] = shownEvents(h);
     assert.ok(event);
     assert.deepEqual(more, []);
+    // Confirmed served once, with D1's clock, at or just after the event: then sent.
+    const [served, ...moreServed] = servedCopies(h);
+    assert.ok(served);
+    assert.deepEqual(moreServed, []);
+    assert.deepEqual(
+      { ...served, served_at: undefined },
+      {
+        event_id: event.event_id,
+        tenant_id: TENANT,
+        acceptance_binding_id: binding.acceptance_binding_id,
+        roof_job_id: JOB_ID,
+        served_at: undefined,
+      },
+    );
+    assert.ok(served.served_at >= event.shown_at && Date.parse(served.served_at) - Date.parse(event.shown_at) < MINUTE_MS);
     const proposal = h.db.raw.prepare(
       "SELECT title FROM commercial_proposal_revisions WHERE proposal_revision_id = ?",
     ).get(binding.proposal_revision_id) as { title: string };
@@ -3383,6 +3424,7 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
         accepted_at: binding.accepted_at,
         receipt_sha256: binding.receipt_hash,
         shown_at: event.shown_at,
+        served_at: served.served_at,
         // The stored end, the first instant after the 10th local day: the confirm screen's "You
         // can cancel until ..." reads the day before it.
         window_ends_at: event.window_ends_at,
@@ -3409,13 +3451,19 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
       },
     );
     assert.deepEqual(
-      h.db.raw.prepare("SELECT ts, automation, trigger, action, approved_by FROM audit_log WHERE run_id = ?")
-        .all(event.event_id).map((row) => ({ ...row })),
+      h.db.raw.prepare("SELECT ts, automation, trigger, action, approved_by FROM audit_log WHERE run_id IN (?, ?) ORDER BY id")
+        .all(event.event_id, `${event.event_id}:served`).map((row) => ({ ...row })),
       [{
         ts: event.shown_at,
         automation: "production_cancellation_window",
         trigger: "customer_portal",
         action: "shown:signed_copy",
+        approved_by: null,
+      }, {
+        ts: served.served_at,
+        automation: "production_cancellation_window",
+        trigger: "customer_portal",
+        action: "served:signed_copy",
         approved_by: null,
       }],
     );
@@ -3425,6 +3473,10 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
     assert.equal(window.starts_at, event.shown_at);
     assert.equal(window.ends_at, event.window_ends_at);
     assert.equal(window.signed_copy_shown?.id, event.event_id);
+    assert.equal(window.signed_copy_shown?.served_at, served.served_at);
+    assert.deepEqual(await signedCopyQueue(h), {
+      count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
+    });
     // The window it starts holds ordering in D1 at once.
     assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_open/);
 
@@ -3437,6 +3489,7 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
     assert.equal(replay.status, 200);
     assert.deepEqual(await replay.json(), body);
     assert.deepEqual(shownEvents(h), [event]);
+    assert.deepEqual(servedCopies(h), [served]);
     assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).ends_at, event.window_ends_at);
     // The same key without the request for the copy is another request: a fingerprint conflict.
     const mismatch = await worker.fetch(
@@ -3549,45 +3602,216 @@ test("a signed copy that cannot be built is never recorded as shown: no window s
   }
 });
 
-test("a copy whose event D1 does not write claims no window; one whose answer D1 lost is read back and served", async () => {
+test("a copy whose event D1 never writes claims no window: it stays unknown, and the replay starts it then", async () => {
   const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
   try {
     seedGates(h);
     const portalToken = await seedPortalLink(h.db);
-    h.db.failNextSignedCopyEvent = true;
+    // Every attempt fails before D1 writes the event.
+    h.db.failSignedCopyEvents = 3;
     const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-unwritten-0001");
     assert.equal(first.status, 200);
-    assert.equal(h.db.failNextSignedCopyEvent, false, "the event was being written when D1 failed");
+    assert.equal(h.db.failSignedCopyEvents, 0, "the Worker tried three times");
     const text = await first.text();
     const acceptanceId = (JSON.parse(text) as { acceptance_id: string }).acceptance_id;
     assert.equal(text, JSON.stringify({ acceptance_id: acceptanceId, status: "accepted" }));
     assert.deepEqual(shownEvents(h), []);
     assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "unknown");
     assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_unknown/);
+    assert.deepEqual((await signedCopyQueue(h)).counts, { window_unknown: 1, window_started_copy_unconfirmed: 0 });
 
-    // The replay writes it; D1 commits it and loses the answer. The event is read back, and the copy
-    // is served with its times and its one audit row.
-    h.db.loseNextSignedCopyEventAnswer = true;
     const replay = await worker.fetch(
       confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unwritten-0001"),
       h.env as never,
       {} as never,
     );
     assert.equal(replay.status, 200);
-    assert.equal(h.db.loseNextSignedCopyEventAnswer, false, "the event's answer was lost");
     const body = await replay.json() as Record<string, any>;
     const [event, ...more] = shownEvents(h);
     assert.ok(event);
     assert.deepEqual(more, []);
+    assert.deepEqual(servedCopies(h).map((row) => row.event_id), [event.event_id]);
     assert.deepEqual(
       [body.signed_copy.shown_at, body.signed_copy.window_ends_at],
       [event.shown_at, event.window_ends_at],
     );
-    assert.equal(
-      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE run_id = ?").get(event.event_id) as { n: number }).n,
-      1,
-    );
     assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "open");
+    assert.equal((await signedCopyQueue(h)).count, 0);
+  } finally {
+    h.restore();
+  }
+});
+
+test("an answer D1 loses is never trusted: the retry records the copy as shown again, reads its confirmation back, and serves that", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    // The first event commits and its answer is lost; the second commits, and so does its
+    // confirmation, whose answer is lost too. No separate read-back stands between them.
+    h.db.loseSignedCopyEventAnswers = 1;
+    h.db.loseSignedCopyConfirmationAnswers = 1;
+    const response = await acceptShowingCopy(h, portalToken, "acceptance-a5-lost-0001");
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+      [h.db.loseSignedCopyEventAnswers, h.db.loseSignedCopyConfirmationAnswers],
+      [0, 0],
+      "both answers were lost",
+    );
+    const body = await response.json() as Record<string, any>;
+    // The lost event is never reused: a second one was appended and confirmed, and the copy carries it.
+    const events = shownEvents(h);
+    assert.equal(events.length, 2);
+    const [served, ...moreServed] = servedCopies(h);
+    assert.ok(served);
+    assert.deepEqual(moreServed, []);
+    const written = (h.db.raw.prepare(
+      "SELECT run_id FROM audit_log WHERE action = 'shown:signed_copy' ORDER BY id",
+    ).all() as Array<{ run_id: string }>).map((row) => row.run_id);
+    assert.equal(written.length, 2);
+    assert.equal(served.event_id, written[1], "the confirmation is of the second event");
+    const lost = events.find((row) => row.event_id === written[0])!;
+    const shown = events.find((row) => row.event_id === served.event_id)!;
+    assert.deepEqual(
+      [body.signed_copy.shown_at, body.signed_copy.served_at, body.signed_copy.window_ends_at],
+      [shown.shown_at, served.served_at, shown.window_ends_at],
+    );
+    assert.ok(shown.window_ends_at >= lost.window_ends_at);
+    // A copy of the contract is confirmed served, so the job is not on the work queue.
+    assert.deepEqual(await signedCopyQueue(h), {
+      count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
+    });
+    // The exact replay answers with the same copy and writes nothing.
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-lost-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.deepEqual(await replay.json(), body);
+    assert.equal(shownEvents(h).length, 2);
+    assert.equal(servedCopies(h).length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a window started with no copy confirmed served is on the work queue, and the replay serves a copy that starts then", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    // Each attempt writes its event, and D1 refuses every confirmation: the window has started, but
+    // no copy is confirmed served, so none is sent.
+    h.db.failSignedCopyConfirmations = 3;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-unconfirmed-0001");
+    assert.equal(first.status, 200);
+    assert.equal(h.db.failSignedCopyConfirmations, 0, "the Worker tried three times");
+    const text = await first.text();
+    const acceptanceId = (JSON.parse(text) as { acceptance_id: string }).acceptance_id;
+    assert.equal(text, JSON.stringify({ acceptance_id: acceptanceId, status: "accepted" }));
+    const unconfirmed = shownEvents(h);
+    assert.equal(unconfirmed.length, 3);
+    assert.deepEqual(servedCopies(h), []);
+    const binding = bindingFor(h, acceptanceId);
+    // The window started at the first event's D1 write time, and holds.
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.equal(window.state, "open");
+    assert.equal(window.started_from, "signed_copy_shown");
+    assert.equal(window.signed_copy_shown?.served_at, null);
+    assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_open/);
+    // The work queue lists it, in its own category with its own count.
+    const queue = await signedCopyQueue(h);
+    assert.deepEqual(queue, {
+      count: 1,
+      counts: { window_unknown: 0, window_started_copy_unconfirmed: 1 },
+      complete: true,
+      jobs: [{
+        roof_job_id: JOB_ID,
+        job_number: (h.db.raw.prepare("SELECT job_number FROM operating_roof_jobs WHERE roof_job_id = ?")
+          .get(JOB_ID) as { job_number: string | null }).job_number,
+        customer_display_name: (h.db.raw.prepare("SELECT display_name FROM operating_customers WHERE customer_id = ?")
+          .get(CUSTOMER_ID) as { display_name: string }).display_name,
+        address_line1: null,
+        category: "window_started_copy_unconfirmed",
+        unknown_reason: null,
+        window_started_at: unconfirmed[0]!.shown_at,
+        contract_on_record: true,
+        contract_signed_at: binding.accepted_at,
+      }],
+    });
+
+    // The replay never reuses an unconfirmed event: it appends one with D1's time now, confirms it,
+    // and serves the copy with it. The copy's start is the replay's, not the first attempt's.
+    const afterFirst = new Date(d1Now(h.db.raw)).toISOString();
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unconfirmed-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    const body = await replay.json() as Record<string, any>;
+    const [served] = servedCopies(h);
+    assert.ok(served);
+    const event = shownEvents(h).find((row) => row.event_id === served.event_id)!;
+    assert.ok(!unconfirmed.some((row) => row.event_id === event.event_id), "a new event");
+    assert.ok(event.shown_at >= afterFirst, `${event.shown_at} is before ${afterFirst}`);
+    assert.deepEqual(
+      [body.signed_copy.shown_at, body.signed_copy.served_at, body.signed_copy.window_ends_at],
+      [event.shown_at, served.served_at, event.window_ends_at],
+    );
+    assert.ok(event.window_ends_at >= unconfirmed[2]!.window_ends_at);
+    const opened = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual([opened.starts_at, opened.signed_copy_shown?.served_at], [event.shown_at, served.served_at]);
+    assert.equal((await signedCopyQueue(h)).count, 0);
+    // Replayed again: the same copy, and nothing more is written.
+    const again = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unconfirmed-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.deepEqual(await again.json(), body);
+    assert.equal(shownEvents(h).length, 4);
+    assert.equal(servedCopies(h).length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a copy served after an unconfirmed event never ends before that event's end", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextSignedCopyBuild = true;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-event-end-0001");
+    assert.equal(first.status, 200);
+    const binding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
+    // An event left unconfirmed, ending at its 266th hour, which D1 allows: later than a copy's own
+    // end will be, as for one read at an offset hours behind this one.
+    h.db.raw.prepare(
+      `INSERT INTO contract_signed_copy_events (
+         event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
+         window_ends_at, time_zone
+       ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+266 hours'), 'Pacific/Honolulu')`,
+    ).run(`scs_${"7".repeat(40)}`, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at);
+    const [unconfirmed] = shownEvents(h);
+    assert.equal((await signedCopyQueue(h)).counts.window_started_copy_unconfirmed, 1);
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-event-end-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 200);
+    const body = await replay.json() as Record<string, any>;
+    const [served] = servedCopies(h);
+    assert.ok(served && served.event_id !== unconfirmed!.event_id);
+    const event = shownEvents(h).find((row) => row.event_id === served.event_id)!;
+    // Its own end would come sooner, so it keeps the earlier event's end, and serves it.
+    assert.ok(cancellationWindowEndsAt(event.shown_at, ZONE) < unconfirmed!.window_ends_at);
+    assert.equal(event.window_ends_at, unconfirmed!.window_ends_at);
+    assert.equal(body.signed_copy.window_ends_at, unconfirmed!.window_ends_at);
+    assert.equal((await signedCopyQueue(h)).count, 0);
   } finally {
     h.restore();
   }
@@ -3826,6 +4050,7 @@ test("a later contract needs its own copy: the window is unknown again until it 
     assert.equal(missing.status, 200);
     assert.deepEqual(await missing.json(), {
       count: 1,
+      counts: { window_unknown: 1, window_started_copy_unconfirmed: 0 },
       complete: true,
       jobs: [{
         roof_job_id: JOB_ID,
@@ -3834,7 +4059,9 @@ test("a later contract needs its own copy: the window is unknown again until it 
         customer_display_name: (h.db.raw.prepare("SELECT display_name FROM operating_customers WHERE customer_id = ?")
           .get(CUSTOMER_ID) as { display_name: string }).display_name,
         address_line1: null,
+        category: "window_unknown",
         unknown_reason: "signed_copy_before_contract",
+        window_started_at: null,
         contract_on_record: true,
         contract_signed_at: binding.accepted_at,
       }],
@@ -3848,7 +4075,9 @@ test("a later contract needs its own copy: the window is unknown again until it 
       h.env,
       owner,
     );
-    assert.deepEqual(await after.json(), { count: 0, complete: true, jobs: [] });
+    assert.deepEqual(await after.json(), {
+      count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
+    });
   } finally {
     h.restore();
   }
@@ -3934,8 +4163,11 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
     insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 266) });
     const [event] = shownEvents(h);
     assert.ok(event);
-    // One event per contract; it is never updated or deleted.
-    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 266) }), /contract_signed_copy_event_append_only/);
+    // An event's id is never reused, and an event is never updated or deleted.
+    assert.throws(
+      () => insertEvent({ event_id: event.event_id, window_ends_at: plusHours(firstShown, 266) }),
+      /contract_signed_copy_event_append_only/,
+    );
     assert.throws(
       () => h.db.raw.prepare("UPDATE contract_signed_copy_events SET time_zone = 'UTC' WHERE event_id = ?").run(event.event_id),
       /contract_signed_copy_event_append_only/,
@@ -3983,6 +4215,96 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
     }
     insertReceipt(now(), event.window_ends_at, secondBinding);
     assert.equal(count(h, "production_cancellation_window_receipts"), 2);
+  } finally {
+    h.restore();
+  }
+});
+
+test("D1 holds a served confirmation to its event and its clock, once per contract, and a confirmed contract to no further event", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextSignedCopyBuild = true;
+    const accepted = await acceptShowingCopy(h, portalToken, "acceptance-a5-confirm-0001");
+    assert.equal(accepted.status, 200);
+    const binding = bindingFor(h, (await accepted.json() as { acceptance_id: string }).acceptance_id);
+    // An event 59 seconds old by D1's clock, as a writer that skips the Worker would leave it.
+    const eventId = `scs_${"5".repeat(40)}`;
+    h.db.raw.prepare(
+      `INSERT INTO contract_signed_copy_events (
+         event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
+         window_ends_at, time_zone
+       ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-59 seconds'),
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-59 seconds', '+250 hours'), ?)`,
+    ).run(eventId, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at, ZONE);
+    const [event] = shownEvents(h);
+    const confirm = (overrides: Record<string, unknown> = {}, servedAt = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')") => {
+      const row: Record<string, unknown> = {
+        event_id: eventId,
+        tenant_id: TENANT,
+        acceptance_binding_id: binding.acceptance_binding_id,
+        roof_job_id: JOB_ID,
+        ...overrides,
+      };
+      const columns = Object.keys(row);
+      h.db.raw.prepare(
+        `INSERT INTO contract_signed_copy_served (${columns.join(", ")}, served_at)
+         VALUES (${columns.map(() => "?").join(", ")}, ${servedAt})`,
+      ).run(...(columns.map((column) => row[column]) as never[]));
+    };
+    // It confirms that event, of this contract on this job.
+    refusedWith(() => confirm({ event_id: `scs_${"4".repeat(40)}` }), "contract_signed_copy_served_event_invalid");
+    refusedWith(() => confirm({ roof_job_id: "job:acceptance:other" }), "contract_signed_copy_served_event_invalid");
+    refusedWith(() => confirm({ acceptance_binding_id: "commercial-acceptance:other" }), "contract_signed_copy_served_event_invalid");
+    // With D1's clock, never before its event, and never more than a minute after it.
+    refusedWith(() => confirm({}, "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')"), "contract_signed_copy_served_at_invalid");
+    refusedWith(() => confirm({}, `strftime('%Y-%m-%dT%H:%M:%fZ', '${event!.shown_at}', '-1 seconds')`), "contract_signed_copy_served_at_invalid");
+    refusedWith(() => confirm({}, "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+2 seconds')"), "contract_signed_copy_served_at_invalid");
+    assert.deepEqual(servedCopies(h), []);
+    confirm();
+    const [served] = servedCopies(h);
+    assert.ok(served);
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE run_id = ? AND action = 'served:signed_copy'")
+        .get(`${eventId}:served`) as { n: number }).n,
+      1,
+    );
+    // Once per contract; never updated or deleted.
+    refusedWith(() => confirm(), "contract_signed_copy_served_append_only");
+    refusedWith(
+      () => h.db.raw.prepare("UPDATE contract_signed_copy_served SET served_at = served_at WHERE event_id = ?").run(eventId),
+      "contract_signed_copy_served_append_only",
+    );
+    refusedWith(
+      () => h.db.raw.prepare("DELETE FROM contract_signed_copy_served WHERE event_id = ?").run(eventId),
+      "contract_signed_copy_served_append_only",
+    );
+    // A contract whose copy is confirmed served gets no further event.
+    refusedWith(
+      () => h.db.raw.prepare(
+        `INSERT INTO contract_signed_copy_events (
+           event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
+           window_ends_at, time_zone
+         ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+250 hours'), ?)`,
+      ).run(`scs_${"3".repeat(40)}`, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at, ZONE),
+      "contract_signed_copy_event_already_served",
+    );
+    assert.equal(shownEvents(h).length, 1);
+    // The exact replay serves that copy, with its event's times, and writes nothing.
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-confirm-0001"),
+      h.env as never,
+      {} as never,
+    );
+    const body = await replay.json() as Record<string, any>;
+    assert.deepEqual(
+      [body.signed_copy.shown_at, body.signed_copy.served_at, body.signed_copy.window_ends_at],
+      [event!.shown_at, served.served_at, event!.window_ends_at],
+    );
+    assert.equal(shownEvents(h).length, 1);
+    assert.equal(servedCopies(h).length, 1);
   } finally {
     h.restore();
   }

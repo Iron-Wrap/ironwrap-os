@@ -13,12 +13,19 @@
 -- The window starts from one of two records of that receipt:
 --
 -- 1. `contract_signed_copy_events`: the portal served the customer the signed copy. By the owner's
---    ruling a copy shown in the portal at signing counts as received. The Worker appends the event
+--    ruling a copy shown in the portal at signing counts as received. The Worker appends an event
 --    only after the acceptance has committed and it has built the copy (terms plus receipt) for a
---    client that renders it, in its own statement conditional on that committed binding, and then
---    serves the copy; never from the acceptance alone, and never for a copy it could not build.
---    One per acceptance binding; `shown_at` is D1's own clock; each event writes one `audit_log`
---    row as it lands.
+--    client that renders it, in its own statement conditional on that committed binding; never
+--    from the acceptance alone, and never for a copy it could not build. The window starts at the
+--    event's D1 write time, `shown_at`, D1's own clock. The Worker then confirms the copy served
+--    (`contract_signed_copy_served`, append-only, D1's clock, within a minute of its event) and
+--    only then sends it. An event with no confirmation (the Worker stopped, or D1's answers were
+--    lost past its retries) has started the window though no copy may have reached the customer:
+--    the owner and ops work queue lists the job until a copy of that contract is confirmed served or
+--    a person records the receipt. A later attempt never reuses an unconfirmed event: it appends a
+--    new one with D1's time then, so a copy served later never carries a back-dated start. Once a
+--    contract's copy is confirmed served, no further event is appended for it. Each event and each
+--    confirmation writes one `audit_log` row as it lands.
 -- 2. `production_cancellation_window_receipts`: a person's record, for a contract whose copy the
 --    portal did not show (every contract signed before this, or one signed outside D1). An active
 --    owner or ops person, never the QA seed owner, records when the customer received the copy,
@@ -67,7 +74,7 @@
 --     `ordered`. No line has a `sent` status (0067).
 --
 -- This file may apply after higher-numbered migrations already on a database (0200-0205 on qa and
--- production). It creates two tables and twelve triggers, adds one column, and re-creates 0098's
+-- production). It creates three tables and sixteen triggers, adds one column, and re-creates 0098's
 -- assignment validate trigger and 0153's replace guard under their names; no higher-numbered
 -- migration touches any of them.
 
@@ -85,19 +92,38 @@ CREATE TABLE IF NOT EXISTS contract_signed_copy_events (
   roof_job_id TEXT NOT NULL,
   -- The signature time of the contract whose copy was shown, as its binding holds it.
   contract_signed_at TEXT NOT NULL CHECK (length(contract_signed_at) BETWEEN 20 AND 40),
-  -- D1's time when the Worker, having built the signed copy, recorded it as shown and served it,
-  -- in the form `Date.toISOString` writes.
+  -- D1's time when the Worker, having built the signed copy, recorded it as shown: the window's
+  -- start, in the form `Date.toISOString` writes.
   shown_at TEXT NOT NULL CHECK (length(shown_at) = 24),
   window_ends_at TEXT NOT NULL CHECK (length(window_ends_at) = 24),
   -- The business time zone the local clock end was read in.
   time_zone TEXT NOT NULL CHECK (
     length(time_zone) BETWEEN 3 AND 64 AND time_zone NOT GLOB '*[^A-Za-z0-9_/+-]*'
   ),
-  UNIQUE (tenant_id, acceptance_binding_id),
+  -- More than one per contract only when an earlier one was never confirmed served.
   FOREIGN KEY (acceptance_binding_id, tenant_id)
     REFERENCES commercial_acceptance_bindings(acceptance_binding_id, tenant_id) ON DELETE RESTRICT,
   FOREIGN KEY (roof_job_id, tenant_id)
     REFERENCES operating_roof_jobs(roof_job_id, tenant_id) ON DELETE RESTRICT
+);
+
+-- The Worker's confirmation that it served the copy an event records: written after the event and
+-- before the copy is sent, with D1's clock. One per contract.
+CREATE TABLE IF NOT EXISTS contract_signed_copy_served (
+  event_id TEXT PRIMARY KEY CHECK (
+    length(event_id) = 44
+    AND substr(event_id, 1, 4) = 'scs_'
+    AND substr(event_id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  tenant_id TEXT NOT NULL CHECK (
+    length(tenant_id) BETWEEN 2 AND 64
+    AND tenant_id NOT GLOB '*[^a-z0-9-]*'
+  ),
+  acceptance_binding_id TEXT NOT NULL,
+  roof_job_id TEXT NOT NULL,
+  -- D1's time when the Worker confirmed the copy served, in the form `Date.toISOString` writes.
+  served_at TEXT NOT NULL CHECK (length(served_at) = 24),
+  FOREIGN KEY (event_id) REFERENCES contract_signed_copy_events(event_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS production_cancellation_window_receipts (
@@ -154,14 +180,21 @@ CREATE TABLE IF NOT EXISTS production_cancellation_window_receipts (
 CREATE TRIGGER IF NOT EXISTS contract_signed_copy_events_validate_insert
 BEFORE INSERT ON contract_signed_copy_events
 BEGIN
-  -- REPLACE would delete the event or binding it collides with before inserting.
+  -- REPLACE would delete the event it collides with before inserting.
   SELECT RAISE(ABORT, 'contract_signed_copy_event_append_only')
   WHERE EXISTS (
     SELECT 1
       FROM contract_signed_copy_events existing
      WHERE existing.event_id = NEW.event_id
-        OR (existing.tenant_id = NEW.tenant_id
-            AND existing.acceptance_binding_id = NEW.acceptance_binding_id)
+  );
+
+  -- A contract whose copy is confirmed served gets no further event.
+  SELECT RAISE(ABORT, 'contract_signed_copy_event_already_served')
+  WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_served served
+     WHERE served.tenant_id = NEW.tenant_id
+       AND served.acceptance_binding_id = NEW.acceptance_binding_id
   );
 
   -- The copy is of this tenant's accepted contract on this job, exactly as its binding holds it.
@@ -240,6 +273,79 @@ CREATE TRIGGER IF NOT EXISTS contract_signed_copy_events_append_only_delete
 BEFORE DELETE ON contract_signed_copy_events
 BEGIN
   SELECT RAISE(ABORT, 'contract_signed_copy_event_append_only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_served_validate_insert
+BEFORE INSERT ON contract_signed_copy_served
+BEGIN
+  -- REPLACE would delete the confirmation it collides with; a contract's copy is confirmed once.
+  SELECT RAISE(ABORT, 'contract_signed_copy_served_append_only')
+  WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_served existing
+     WHERE existing.event_id = NEW.event_id
+        OR (existing.tenant_id = NEW.tenant_id
+            AND existing.acceptance_binding_id = NEW.acceptance_binding_id)
+  );
+
+  -- It confirms that event, of this tenant's contract on this job.
+  SELECT RAISE(ABORT, 'contract_signed_copy_served_event_invalid')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.event_id = NEW.event_id
+       AND shown.tenant_id = NEW.tenant_id
+       AND shown.acceptance_binding_id = NEW.acceptance_binding_id
+       AND shown.roof_job_id = NEW.roof_job_id
+  );
+
+  -- D1 stamps it with its own clock, at its event or within a minute after it: an event left
+  -- unconfirmed is never confirmed later, so a copy served later never carries its start.
+  SELECT RAISE(ABORT, 'contract_signed_copy_served_at_invalid')
+  WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.served_at) IS NOT NEW.served_at
+     OR abs(julianday(NEW.served_at) - julianday('now')) * 86400 > 60
+     OR EXISTS (
+       SELECT 1
+         FROM contract_signed_copy_events shown
+        WHERE shown.event_id = NEW.event_id
+          AND (julianday(NEW.served_at) < julianday(shown.shown_at)
+               OR (julianday(NEW.served_at) - julianday(shown.shown_at)) * 86400 > 60)
+     );
+END;
+
+-- One audit row per confirmation, keyed by `run_id = event_id || ':served'`.
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_served_audit
+AFTER INSERT ON contract_signed_copy_served
+BEGIN
+  INSERT INTO audit_log (
+    ts, automation, trigger, envelope_id, source_ids, target_ids, action, result,
+    run_id, approved_by
+  )
+  VALUES (
+    NEW.served_at,
+    'production_cancellation_window',
+    'customer_portal',
+    NULL,
+    'job:' || NEW.roof_job_id || ',contract:' || NEW.acceptance_binding_id
+      || ',event:' || NEW.event_id || ',served_at:' || NEW.served_at,
+    'contract_signed_copy_served:' || NEW.event_id,
+    'served:signed_copy',
+    'ok',
+    NEW.event_id || ':served',
+    NULL
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_served_append_only_update
+BEFORE UPDATE ON contract_signed_copy_served
+BEGIN
+  SELECT RAISE(ABORT, 'contract_signed_copy_served_append_only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS contract_signed_copy_served_append_only_delete
+BEFORE DELETE ON contract_signed_copy_served
+BEGIN
+  SELECT RAISE(ABORT, 'contract_signed_copy_served_append_only');
 END;
 
 CREATE TRIGGER IF NOT EXISTS production_cancellation_window_receipts_validate_insert

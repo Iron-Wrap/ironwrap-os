@@ -708,11 +708,20 @@ Materials waiver lifts none of its holds (migration `0160`).
 - It starts from the copy the portal served at signing, which counts as received. Only after the
   acceptance has committed and the Worker has built the copy, for a client that renders it on that
   screen (`signed_copy: true`), does the confirm route append a `contract_signed_copy_events` row,
-  in its own statement conditional on the committed binding and with D1's time; then it serves the
-  copy. A copy that cannot be built, or an event that cannot be written, starts no window and the
-  answer claims none: the window stays unknown until ops records the receipt. An exact replay
-  serves the recorded copy, or builds and records it then, starting the window at that later time.
-  Nothing else writes or moves that event.
+  in its own statement conditional on the committed binding. **The window starts at that event's D1
+  write time** (`shown_at`). The Worker then appends its confirmation that it served the copy
+  (`contract_signed_copy_served`, append-only, D1's clock, within a minute of the event) and only
+  then sends it. Each write returns its row (`RETURNING`), and a failed or unanswered step starts
+  the attempt again, up to three times, never reusing an event left unconfirmed. A copy that cannot
+  be built starts no window, and the answer claims none: the window stays unknown until ops records
+  the receipt. An event left unconfirmed (the Worker stopped, or D1 failed past the retries) has
+  started the window though the customer may not have the copy; the answer claims no copy, and the
+  job is on the work queue below until a copy of that contract is confirmed served or a person
+  records the receipt. An exact replay serves the confirmed copy as it stands, or records a new
+  event then and confirms it, so a copy sent later never carries a back-dated start. Once a copy of
+  a contract is confirmed served, no further event is appended for it. Nothing else writes or moves
+  these rows. A response lost between the Worker and the browser after the confirmation cannot be
+  seen; the exact replay returns the same copy.
 - Otherwise an owner or ops person records when the customer received the copy
   (`POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy`), from their own cookie
   session, with a reason and an evidence reference. The time is not before the job's latest contract
@@ -743,8 +752,10 @@ Materials waiver lifts none of its holds (migration `0160`).
   path before supplier send opens. A Shop Order's `scheduled_start` on the typed work-object
   assignment is not held either; that hold comes with the shop-run contract rule.
 - `GET /api/v1/production/cancellation-window/signed-copy-missing` lists, for owner and ops, the open
-  signed jobs whose window is unknown, and their count: signed means a contract in D1, or a Deposit
-  gate that has cleared for a contract signed outside D1.
+  signed jobs in two categories, with a count for each: `window_unknown`, and
+  `window_started_copy_unconfirmed` (the window started from a copy recorded as shown that the
+  Worker never confirmed served, with `window_started_at`). Signed means a contract in D1, or a
+  Deposit gate that has cleared for a contract signed outside D1.
 
 ## Stop taxonomy
 

@@ -1187,8 +1187,10 @@ interface SignedCopy {
   accepted_at: string;
   /** The SHA-256 of the immutable acceptance receipt kept in R2. */
   receipt_sha256: string;
-  /** When the copy was recorded as shown, by D1's clock: the start of the OD-01 cancellation window. */
+  /** D1's write time of the event recording the copy as shown: the start of the OD-01 window. */
   shown_at: string;
+  /** D1's time when the Worker confirmed this copy served, just before sending it. */
+  served_at: string;
   /**
    * When that window ends, as stored (0160, interim pending counsel): the first instant after the
    * 10th local day, the day it was shown being day 0. "You can cancel until" reads the day before it.
@@ -1204,7 +1206,10 @@ interface SignedCopy {
 async function signedCopyContent(
   env: AppEnv,
   intent: AcceptanceIntent,
-): Promise<{ acceptanceBindingId: string; copy: Omit<SignedCopy, "shown_at" | "window_ends_at"> } | null> {
+): Promise<{
+  acceptanceBindingId: string;
+  copy: Omit<SignedCopy, "shown_at" | "served_at" | "window_ends_at">;
+} | null> {
   const row = await env.DB.prepare(
     `SELECT binding.acceptance_binding_id, binding.terms_hash, binding.receipt_hash,
             binding.accepted_at,
@@ -1262,11 +1267,13 @@ async function signedCopyContent(
 
 /**
  * An accepted answer with the signed copy added, for a client that asked for it (0160). The copy is
- * built first; only then is it recorded as shown, which starts the OD-01 cancellation window, and
- * served with that record's times. A copy that cannot be built is never recorded as shown, and an
- * event that cannot be written or read back is never claimed: either way the answer is the plain
- * accepted one, no window starts, every hold stays, and an owner or ops person records the receipt
- * later. Only a 200 for an accepted acceptance carries a copy; a 409 or a 202 writes nothing.
+ * built first; only then is it recorded as shown, which starts the OD-01 cancellation window at
+ * that event's D1 write time, then confirmed served, and served with the event's times. A copy that
+ * cannot be built is never recorded as shown: the answer is the plain accepted one, no window
+ * starts, and every hold stays. A copy recorded as shown but never confirmed served (D1 failing past
+ * the retries) is not claimed either: the window has started, and the job is on the owner and ops
+ * work queue until a copy is confirmed served or a person records the receipt. Only a 200 for an
+ * accepted acceptance carries a copy; a 409 or a 202 writes nothing.
  */
 async function withSignedCopy(
   env: AppEnv,
@@ -1284,7 +1291,12 @@ async function withSignedCopy(
   if (!shown) return response;
   return acceptanceJson({
     ...body,
-    signed_copy: { ...built.copy, shown_at: shown.shown_at, window_ends_at: shown.window_ends_at },
+    signed_copy: {
+      ...built.copy,
+      shown_at: shown.shown_at,
+      served_at: shown.served_at,
+      window_ends_at: shown.window_ends_at,
+    },
   }, 200);
 }
 

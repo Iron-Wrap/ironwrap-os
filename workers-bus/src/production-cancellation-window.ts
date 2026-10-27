@@ -21,9 +21,13 @@
 //     counts as received). Only after the acceptance has committed and the copy has been built, for
 //     a client that renders it on the confirm screen, does the confirm route record the copy as
 //     shown (`recordSignedCopyShown` below): one `contract_signed_copy_events` row in its own D1
-//     statement, conditional on the committed binding, with D1's time. Then it serves the copy. A
-//     copy that cannot be built, or an event that cannot be written, starts no window, and the
-//     answer claims none (customer-contract-acceptance.ts);
+//     statement, conditional on the committed binding. The window starts at that event's D1 write
+//     time. Then the Worker confirms the copy served (`contract_signed_copy_served`, D1's clock)
+//     and only then sends it. A copy that cannot be built starts no window. A copy recorded as
+//     shown but never confirmed served is not claimed in the answer; its window has started, and
+//     the job is on the work queue below until a copy is confirmed served or a person records the
+//     receipt. A later attempt appends a new event rather than reuse an unconfirmed one, so a copy
+//     sent later never carries a back-dated start (customer-contract-acceptance.ts);
 //   * otherwise an owner or ops person records when the customer received it (the route below).
 // The window is a read-only System state next to the gates, not a gate: it has no ledger and no
 // waiver, so nothing a person waives lifts it. Its state is read with D1's own clock:
@@ -76,9 +80,11 @@
 //   GET /api/v1/production/jobs/{job}/gates
 //     Carries `cancellation_window` next to the gates.
 //   GET /api/v1/production/cancellation-window/signed-copy-missing
-//     Owner and ops: the tenant's open signed jobs whose window is unknown, and their count. Signed
-//     means a contract in D1, or a Deposit gate that has cleared for a contract signed outside D1.
-//     A job leaves the list once its copy is shown or its time is recorded.
+//     Owner and ops: the tenant's open signed jobs whose window is unknown, and those whose window
+//     started from a copy the Worker never confirmed served, with a count for each. Signed means a
+//     contract in D1, or a Deposit gate that has cleared for a contract signed outside D1. A job
+//     leaves the list once a copy of its latest contract is confirmed served or its time is
+//     recorded.
 
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -137,9 +143,12 @@ export interface SignedCopyShown {
   id: string;
   acceptance_binding_id: string;
   contract_signed_at: string;
+  /** D1's write time of the event: when this record starts the window. */
   shown_at: string;
   window_ends_at: string;
   time_zone: string;
+  /** When the Worker confirmed this copy served, or null when it never did. */
+  served_at: string | null;
 }
 
 export interface SignedCopyReceipt {
@@ -272,6 +281,37 @@ const LATEST_CONTRACT_SQL = `NOT EXISTS (
               OR (later.accepted_at = contract.accepted_at
                   AND later.acceptance_binding_id > contract.acceptance_binding_id))
     )`;
+/**
+ * A window started from a copy recorded as shown that the Worker never confirmed served: an event
+ * for the job's latest contract, no copy of that contract confirmed served, and no person's record
+ * at or after the event. The window runs, but the customer may not have the copy.
+ */
+const UNCONFIRMED_SQL = `EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+     WHERE shown.tenant_id = job.tenant_id
+       AND shown.roof_job_id = job.roof_job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+       )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM contract_signed_copy_served served
+          WHERE served.tenant_id = shown.tenant_id
+            AND served.acceptance_binding_id = shown.acceptance_binding_id
+       )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM production_cancellation_window_receipts receipt
+          WHERE receipt.tenant_id = shown.tenant_id
+            AND receipt.roof_job_id = shown.roof_job_id
+            AND julianday(receipt.received_at) >= julianday(shown.shown_at)
+       )
+  )`;
 /** A signed job: a contract in D1, or a Deposit gate cleared for a contract signed outside D1. */
 const SIGNED_SQL = `(EXISTS (
       SELECT 1 FROM commercial_acceptance_bindings contract
@@ -296,6 +336,7 @@ interface WindowFacts {
   shown_at: string | null;
   shown_ends_at: string | null;
   shown_time_zone: string | null;
+  shown_served_at: string | null;
   receipt_id: string | null;
   received_at: string | null;
   received_ends_at: string | null;
@@ -332,6 +373,7 @@ async function windowFacts(
             shown.event_id AS shown_id, shown.acceptance_binding_id AS shown_binding_id,
             shown.contract_signed_at AS shown_contract_signed_at, shown.shown_at,
             shown.window_ends_at AS shown_ends_at, shown.time_zone AS shown_time_zone,
+            served.served_at AS shown_served_at,
             latest.receipt_id, latest.received_at, latest.window_ends_at AS received_ends_at,
             latest.time_zone AS receipt_time_zone,
             latest.acceptance_binding_id AS receipt_binding_id,
@@ -354,6 +396,8 @@ async function windowFacts(
              AND (newer.shown_at > shown.shown_at
                   OR (newer.shown_at = shown.shown_at AND newer.event_id > shown.event_id))
         )
+       LEFT JOIN contract_signed_copy_served served
+         ON served.event_id = shown.event_id
        LEFT JOIN production_cancellation_window_receipts latest
          ON latest.tenant_id = job.tenant_id
         AND latest.roof_job_id = job.roof_job_id
@@ -380,6 +424,7 @@ function shownOf(facts: WindowFacts): SignedCopyShown | null {
     shown_at: facts.shown_at!,
     window_ends_at: facts.shown_ends_at!,
     time_zone: facts.shown_time_zone!,
+    served_at: facts.shown_served_at,
   };
 }
 
@@ -707,86 +752,117 @@ export function windowEndSql(start: string): string {
     )`;
 }
 
-/** The copy recorded as shown for one contract: when, and when the window it started ends. */
+/** The copy confirmed served for one contract: when it was recorded as shown and served, and its end. */
 export interface SignedCopyShownEvent {
   event_id: string;
+  /** D1's write time of the event: the window's start. */
   shown_at: string;
   window_ends_at: string;
+  /** D1's time when the Worker confirmed the copy served, at most a minute after `shown_at`. */
+  served_at: string;
 }
 
-async function signedCopyShownEvent(
+/** How many times the Worker tries to record a copy as shown and confirm it served. */
+const SIGNED_COPY_ATTEMPTS = 3;
+
+async function servedSignedCopy(
   env: AppEnv,
   input: { tenantId: string; acceptanceBindingId: string },
 ): Promise<SignedCopyShownEvent | null> {
   return await env.DB.prepare(
-    `SELECT event_id, shown_at, window_ends_at FROM contract_signed_copy_events
-      WHERE tenant_id = ? AND acceptance_binding_id = ?`,
+    `SELECT shown.event_id, shown.shown_at, shown.window_ends_at, served.served_at
+       FROM contract_signed_copy_served served
+       JOIN contract_signed_copy_events shown ON shown.event_id = served.event_id
+      WHERE served.tenant_id = ? AND served.acceptance_binding_id = ?
+      LIMIT 1`,
   ).bind(input.tenantId, input.acceptanceBindingId).first<SignedCopyShownEvent>();
+}
+
+function randomEventId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  return `scs_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /**
  * Record that the portal is serving the customer the signed copy of the contract
- * `acceptanceBindingId` binds, and return the event that starts the window. The caller has already
- * built the copy and serves it with this event's times; it calls this only for a client that renders
- * the copy on the confirm screen.
+ * `acceptanceBindingId` binds, confirm it served, and return the event that starts the window. The
+ * caller has already built the copy, serves it with this event's times, and calls this only for a
+ * client that renders the copy on the confirm screen.
  *
- * An event already recorded for the contract is returned as it stands: nothing is written, nothing
- * moves. Otherwise one row is appended in its own statement: only for a binding D1 has committed
- * whose acceptance is accepted, with `shown_at` from D1's clock and its end read from D1's clock too
- * (`windowEndSql`), never before the job's previous end; the audit row is written in the same
- * statement. So a replay whose first attempt served no copy starts the window when the replay
- * serves it, never earlier. Null when no event stands for the contract afterwards: the caller then
- * serves no copy and claims no window. A write whose answer was lost is read back.
+ * A copy already confirmed served for the contract is returned as it stands: nothing is written,
+ * nothing moves. Otherwise, in its own statement and `RETURNING` the row, one event is appended:
+ * only for a binding D1 has committed whose acceptance is accepted, with `shown_at` from D1's clock,
+ * the window's start, and its end read from D1's clock too (`windowEndSql`), never before the job's
+ * previous end; the audit row lands in the same statement. Then the confirmation is appended the same
+ * way, with D1's clock. A failure at any step (a refusal, an unavailable D1, a lost answer) starts
+ * the attempt again, up to three times, and never reuses an event left unconfirmed: a later attempt
+ * appends a new one with D1's time then. Null when no copy is confirmed served: the caller then
+ * serves no copy and claims no window, and an event left unconfirmed puts the job on the owner and
+ * ops work queue.
  */
 export async function recordSignedCopyShown(
   env: AppEnv,
   input: { tenantId: string; acceptanceBindingId: string },
 ): Promise<SignedCopyShownEvent | null> {
-  const recorded = await signedCopyShownEvent(env, input);
-  if (recorded) return recorded;
   const zone = await businessTimeZone(env, input.tenantId);
-  const eventId = `scs_${(await sha256Hex(`${input.tenantId}:${input.acceptanceBindingId}`)).slice(0, 40)}`;
-  try {
-    await env.DB.prepare(
-      `INSERT INTO contract_signed_copy_events (
-         event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at,
-         shown_at, window_ends_at, time_zone
-       )
-       SELECT ?, binding.tenant_id, binding.acceptance_binding_id, binding.roof_job_id,
-              binding.accepted_at, clock.now,
-              max(
-                ${windowEndSql("clock.now")},
-                COALESCE((SELECT MAX(shown.window_ends_at) FROM contract_signed_copy_events shown
-                           WHERE shown.tenant_id = binding.tenant_id
-                             AND shown.roof_job_id = binding.roof_job_id), ''),
-                COALESCE((SELECT MAX(receipt.window_ends_at) FROM production_cancellation_window_receipts receipt
-                           WHERE receipt.tenant_id = binding.tenant_id
-                             AND receipt.roof_job_id = binding.roof_job_id), '')
-              ),
-              ?
-         FROM (SELECT ${D1_NOW} AS now) clock
-         JOIN commercial_acceptance_bindings binding
-           ON binding.tenant_id = ? AND binding.acceptance_binding_id = ?
-         JOIN customer_portal_acceptance_intents acceptance
-           ON acceptance.tenant_id = binding.tenant_id
-          AND acceptance.acceptance_id = binding.acceptance_id
-          AND acceptance.state = 'accepted'
-        WHERE NOT EXISTS (
-          SELECT 1 FROM contract_signed_copy_events shown
-           WHERE shown.tenant_id = binding.tenant_id
-             AND shown.acceptance_binding_id = binding.acceptance_binding_id
-        )`,
-    ).bind(
-      eventId,
-      JSON.stringify(businessDayTable(zone.timeZone, Date.now())),
-      zone.timeZone,
-      input.tenantId,
-      input.acceptanceBindingId,
-    ).run();
-  } catch {
-    // D1 refused it (nothing was written), or committed it and the answer was lost: read it back.
+  for (let attempt = 0; attempt < SIGNED_COPY_ATTEMPTS; attempt += 1) {
+    try {
+      const served = await servedSignedCopy(env, input);
+      if (served) return served;
+      const shown = await env.DB.prepare(
+        `INSERT INTO contract_signed_copy_events (
+           event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at,
+           shown_at, window_ends_at, time_zone
+         )
+         SELECT ?, binding.tenant_id, binding.acceptance_binding_id, binding.roof_job_id,
+                binding.accepted_at, clock.now,
+                max(
+                  ${windowEndSql("clock.now")},
+                  COALESCE((SELECT MAX(shown.window_ends_at) FROM contract_signed_copy_events shown
+                             WHERE shown.tenant_id = binding.tenant_id
+                               AND shown.roof_job_id = binding.roof_job_id), ''),
+                  COALESCE((SELECT MAX(receipt.window_ends_at) FROM production_cancellation_window_receipts receipt
+                             WHERE receipt.tenant_id = binding.tenant_id
+                               AND receipt.roof_job_id = binding.roof_job_id), '')
+                ),
+                ?
+           FROM (SELECT ${D1_NOW} AS now) clock
+           JOIN commercial_acceptance_bindings binding
+             ON binding.tenant_id = ? AND binding.acceptance_binding_id = ?
+           JOIN customer_portal_acceptance_intents acceptance
+             ON acceptance.tenant_id = binding.tenant_id
+            AND acceptance.acceptance_id = binding.acceptance_id
+            AND acceptance.state = 'accepted'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM contract_signed_copy_served served
+             WHERE served.tenant_id = binding.tenant_id
+               AND served.acceptance_binding_id = binding.acceptance_binding_id
+          )
+         RETURNING event_id, shown_at, window_ends_at`,
+      ).bind(
+        randomEventId(),
+        JSON.stringify(businessDayTable(zone.timeZone, Date.now())),
+        zone.timeZone,
+        input.tenantId,
+        input.acceptanceBindingId,
+      ).first<Omit<SignedCopyShownEvent, "served_at">>();
+      // No committed, accepted binding, or a copy confirmed served meanwhile: read again.
+      if (!shown) continue;
+      const confirmed = await env.DB.prepare(
+        `INSERT INTO contract_signed_copy_served (
+           event_id, tenant_id, acceptance_binding_id, roof_job_id, served_at
+         )
+         SELECT event_id, tenant_id, acceptance_binding_id, roof_job_id, ${D1_NOW}
+           FROM contract_signed_copy_events
+          WHERE tenant_id = ? AND event_id = ?
+         RETURNING served_at`,
+      ).bind(input.tenantId, shown.event_id).first<{ served_at: string }>();
+      if (confirmed) return { ...shown, served_at: confirmed.served_at };
+    } catch {
+      // A refusal, an unavailable D1 or a lost answer: start the attempt again.
+    }
   }
-  return await signedCopyShownEvent(env, input);
+  return null;
 }
 
 // ------------------------------------------------------------------------------- the record step
@@ -1014,13 +1090,25 @@ interface MissingRow {
   address_line1: string | null;
   contract_signed_at: string | null;
   has_record: number;
+  window_unknown: number;
+  window_started_at: string | null;
 }
+
+/** The two kinds of job the work queue lists. */
+export const SIGNED_COPY_QUEUE_CATEGORIES = ["window_unknown", "window_started_copy_unconfirmed"] as const;
 
 /**
  * `GET /api/v1/production/cancellation-window/signed-copy-missing`: owner and ops. The tenant's
- * open signed jobs whose window is unknown, oldest first, and how many there are. Signed means a
- * contract in D1, or a Deposit gate that has cleared for a contract signed outside D1. Each row says
- * why the window is unknown, and whether D1 holds a contract for the job.
+ * open signed jobs that need a person to say when the customer received the signed copy, oldest
+ * first, with their count and a count per category:
+ *   * `window_unknown`: no copy shown for the job's latest contract and no record at or after it.
+ *     The row says why (`unknown_reason`);
+ *   * `window_started_copy_unconfirmed`: the window started from a copy recorded as shown that the
+ *     Worker never confirmed served (it stopped, or D1's answers were lost past its retries). The
+ *     window runs from `window_started_at`, but the customer may not have the copy. A copy of that
+ *     contract confirmed served later, or a person's record, takes the job off the list.
+ * Signed means a contract in D1, or a Deposit gate that has cleared for a contract signed outside
+ * D1. Each row says whether D1 holds a contract for the job.
  */
 export async function handleCancellationWindowSignedCopyMissing(
   env: AppEnv,
@@ -1032,13 +1120,21 @@ export async function handleCancellationWindowSignedCopyMissing(
   try {
     const tenantId = auth.session.tenant_id;
     const missing = `job.tenant_id = ? AND job.job_status IN ('qualified', 'in_progress')
-        AND ${SIGNED_SQL} AND ${UNKNOWN_SQL}`;
+        AND ${SIGNED_SQL} AND (${UNKNOWN_SQL} OR ${UNCONFIRMED_SQL})`;
     const [count, rows] = await Promise.all([
-      env.DB.prepare(`SELECT COUNT(*) AS n FROM operating_roof_jobs job WHERE ${missing}`)
-        .bind(tenantId).first<{ n: number }>(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(${UNKNOWN_SQL}), 0) AS unknown
+           FROM operating_roof_jobs job WHERE ${missing}`,
+      ).bind(tenantId).first<{ n: number; unknown: number }>(),
       env.DB.prepare(
         `SELECT job.roof_job_id, job.job_number, customer.display_name AS customer_display_name,
                 property.address_line1, contract.accepted_at AS contract_signed_at,
+                ${UNKNOWN_SQL} AS window_unknown,
+                (SELECT MIN(shown.shown_at)
+                   FROM contract_signed_copy_events shown
+                  WHERE shown.tenant_id = job.tenant_id
+                    AND shown.roof_job_id = job.roof_job_id
+                    AND shown.acceptance_binding_id = contract.acceptance_binding_id) AS window_started_at,
                 (EXISTS (
                   SELECT 1 FROM production_cancellation_window_receipts receipt
                    WHERE receipt.tenant_id = job.tenant_id AND receipt.roof_job_id = job.roof_job_id
@@ -1061,20 +1157,30 @@ export async function handleCancellationWindowSignedCopyMissing(
       ).bind(tenantId, MISSING_LIST_LIMIT + 1).all<MissingRow>(),
     ]);
     const jobs = rows.results ?? [];
+    const total = Number(count?.n ?? 0);
+    const unknown = Number(count?.unknown ?? 0);
     return json({
-      count: Number(count?.n ?? 0),
+      count: total,
+      counts: { window_unknown: unknown, window_started_copy_unconfirmed: total - unknown },
       complete: jobs.length <= MISSING_LIST_LIMIT,
-      jobs: jobs.slice(0, MISSING_LIST_LIMIT).map((row) => ({
-        roof_job_id: row.roof_job_id,
-        job_number: row.job_number,
-        customer_display_name: row.customer_display_name,
-        address_line1: row.address_line1,
-        unknown_reason: Number(row.has_record) === 1
-          ? "signed_copy_before_contract"
-          : "signed_copy_time_missing",
-        contract_on_record: row.contract_signed_at !== null,
-        contract_signed_at: row.contract_signed_at,
-      })),
+      jobs: jobs.slice(0, MISSING_LIST_LIMIT).map((row) => {
+        const windowUnknown = Number(row.window_unknown) === 1;
+        return {
+          roof_job_id: row.roof_job_id,
+          job_number: row.job_number,
+          customer_display_name: row.customer_display_name,
+          address_line1: row.address_line1,
+          category: windowUnknown ? "window_unknown" : "window_started_copy_unconfirmed",
+          unknown_reason: !windowUnknown
+            ? null
+            : Number(row.has_record) === 1
+            ? "signed_copy_before_contract"
+            : "signed_copy_time_missing",
+          window_started_at: windowUnknown ? null : row.window_started_at,
+          contract_on_record: row.contract_signed_at !== null,
+          contract_signed_at: row.contract_signed_at,
+        };
+      }),
     });
   } catch {
     return json({ error: "cancellation_window_unavailable" }, 502);

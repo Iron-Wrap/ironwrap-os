@@ -2444,14 +2444,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // effect binding guard under its name. 0158 re-creates the gate ledger's validate and replace
     // guards under their names, so counts are unchanged. 0159 adds the schedule's gate evidence
     // guard and re-creates the gate ledger's validate and replace guards and 0098's assignment
-    // validate trigger under their names: one trigger more. 0160 adds the signed-copy event and
-    // cancellation-window record tables with four guards each (validate, audit, two append-only),
-    // the window's holds on schedules, Materials clears and purchase order lines (four triggers)
-    // and the lines' job link column; it re-creates 0098's assignment validate trigger and 0153's
-    // replace guard under their names: two tables and twelve triggers more, no named index.
+    // validate trigger under their names: one trigger more. 0160 adds the signed-copy event, served
+    // confirmation and cancellation-window record tables with four guards each (validate, audit,
+    // two append-only), the window's holds on schedules, Materials clears and purchase order lines
+    // (four triggers) and the lines' job link column; it re-creates 0098's assignment validate
+    // trigger and 0153's replace guard under their names: three tables and sixteen triggers more,
+    // no named index.
     assert.deepEqual(
       { ...counts },
-      { tables: 279, indexes: 379, triggers: 773 },
+      { tables: 280, indexes: 379, triggers: 777 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

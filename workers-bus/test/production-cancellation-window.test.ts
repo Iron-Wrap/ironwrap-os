@@ -1353,13 +1353,16 @@ test("the work queue lists the open signed jobs whose window is unknown, for own
     status: 200,
     body: {
       count: 1,
+      counts: { window_unknown: 1, window_started_copy_unconfirmed: 0 },
       complete: true,
       jobs: [{
         roof_job_id: JOB,
         job_number: "IW-WINDOW-0001",
         customer_display_name: "Window Customer 0001",
         address_line1: null,
+        category: "window_unknown",
         unknown_reason: "signed_copy_time_missing",
+        window_started_at: null,
         contract_on_record: false,
         contract_signed_at: null,
       }],
@@ -1369,7 +1372,10 @@ test("the work queue lists the open signed jobs whose window is unknown, for own
 
   // Once its time is recorded, the job leaves the list.
   await recordReceipt(h, ops, JOB, { received_at: d1At(h, -HOUR), reason: REASON, evidence_ref: EVIDENCE });
-  assert.deepEqual(await call(h, owner, MISSING), { status: 200, body: { count: 0, complete: true, jobs: [] } });
+  assert.deepEqual(await call(h, owner, MISSING), {
+    status: 200,
+    body: { count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [] },
+  });
 });
 
 test("the four holds read the window with the same two predicates, and 0160 keeps 0098 and 0153 firing first", () => {

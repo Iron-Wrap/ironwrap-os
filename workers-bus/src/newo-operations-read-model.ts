@@ -210,20 +210,12 @@ export async function buildNewoOperationsReadModel(
       : "not_ready";
   const normalizedFiveMinute = normalizeReconciliation(fiveMinute);
   const normalizedDaily = normalizeReconciliation(daily);
-  const hasExceptions =
-    counts.failed_sync > 0 ||
-    counts.failed_events > 0 ||
-    counts.missing_reports > 0 ||
-    counts.failed_handoffs > 0 ||
-    counts.open_callbacks > 0 ||
-    counts.pending_bookings > 0 ||
-    counts.control_failures > 0 ||
-    deadLetterCount > 0 ||
-    unresolvedIncidents === null ||
-    unresolvedIncidents > 0 ||
-    normalizedDaily?.status === "degraded" ||
-    normalizedDaily?.status === "failed" ||
-    normalizedDaily?.usage_status === "threshold_exceeded";
+  const hasExceptions = newoOperationsNeedAttention({
+    counts,
+    dlqItems: deadLetterCount,
+    unresolvedIncidents,
+    daily: normalizedDaily,
+  });
 
   return {
     version: 1,
@@ -266,6 +258,42 @@ export async function buildNewoOperationsReadModel(
       checked_at: normalizedDaily?.ran_at ?? null,
     },
   };
+}
+
+/**
+ * Whether the owned record holds anything a person must still act on. Any one keeps the model in
+ * `attention`, however ready the integration is: an open requested callback or an unresolved
+ * failed handoff stays there until a person closes it.
+ */
+export function newoOperationsNeedAttention(input: {
+  counts: Pick<
+    NewoOperationsReadModel["counts"],
+    | "failed_sync"
+    | "failed_events"
+    | "missing_reports"
+    | "failed_handoffs"
+    | "open_callbacks"
+    | "pending_bookings"
+    | "control_failures"
+  >;
+  dlqItems: number;
+  unresolvedIncidents: number | null;
+  daily: NewoOperationsReconciliation | null;
+}): boolean {
+  const { counts, daily } = input;
+  return counts.failed_sync > 0 ||
+    counts.failed_events > 0 ||
+    counts.missing_reports > 0 ||
+    counts.failed_handoffs > 0 ||
+    counts.open_callbacks > 0 ||
+    counts.pending_bookings > 0 ||
+    counts.control_failures > 0 ||
+    input.dlqItems > 0 ||
+    input.unresolvedIncidents === null ||
+    input.unresolvedIncidents > 0 ||
+    daily?.status === "degraded" ||
+    daily?.status === "failed" ||
+    daily?.usage_status === "threshold_exceeded";
 }
 
 function readinessChecks(

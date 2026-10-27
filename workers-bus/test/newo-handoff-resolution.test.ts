@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
-import { buildNewoOperationsReadModel } from "../src/newo-operations-read-model.ts";
+import { buildNewoOperationsReadModel, newoOperationsNeedAttention } from "../src/newo-operations-read-model.ts";
 import { newoOperationalCounts } from "../src/newo-store.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times.
@@ -464,4 +464,31 @@ test("0168 re-creates the 0151 guards with only the callback, note and clock cha
   const added = "SELECT RAISE(ABORT, 'newo_handoff_resolution_note_required') WHERE NEW.note IS NULL; SELECT RAISE(ABORT, 'newo_handoff_resolution_clock_invalid') WHERE NEW.resolved_at IS NOT strftime('%Y-%m-%dT%H:%M:%fZ', 'now'); END";
   assert.ok(before.includes(failedOnly), before);
   assert.equal(installed("newo_handoff_resolutions_validate_insert"), before.replace(failedOnly, open).replace(/ END$/, ` ${added}`));
+});
+
+test("an open callback alone keeps the operations model in attention", () => {
+  const clear = {
+    failed_sync: 0, failed_events: 0, missing_reports: 0, failed_handoffs: 0, open_callbacks: 0,
+    pending_bookings: 0, control_failures: 0,
+  };
+  const attention = (counts: typeof clear) =>
+    newoOperationsNeedAttention({ counts, dlqItems: 0, unresolvedIncidents: 0, daily: null });
+  assert.equal(attention(clear), false);
+  assert.equal(attention({ ...clear, open_callbacks: 1 }), true);
+  assert.equal(attention({ ...clear, failed_handoffs: 1 }), true);
+});
+
+test("a requested callback from before the record existed can still be closed", async () => {
+  // A session the Worker marked requested before 0168: no callback record, still a callback owed.
+  const env = testEnv();
+  env.DB.sqlite.prepare(
+    `INSERT INTO newo_sessions
+      (session_id, status, handoff_status, structured_json, raw_key, payload_hash, created_at, updated_at)
+     VALUES ('newo-session-legacy', 'handoff_requested', 'requested', '{}', 'raw/newo/legacy', ?, ?, ?)`,
+  ).run("f".repeat(64), at(-90), at(-90));
+  const owner = await personAuth(env, USERS.owner.id);
+  const read = await call(env, owner, "newo-session-legacy");
+  assert.equal(read.body.callback, null);
+  const closed = await call(env, owner, "newo-session-legacy", { outcome: "called_back", note: "Called back." });
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
 });

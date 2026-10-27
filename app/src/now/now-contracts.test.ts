@@ -29,7 +29,7 @@ function validPayload() {
       sync_label: "Owned records are current for this view.",
       primary_action: {
         id: "open-job",
-        label: "Open job",
+        label: "See job",
         kind: "navigate",
         href: "/jobs/IW-1042%20A",
         reason: "A recorded production gate is blocked.",

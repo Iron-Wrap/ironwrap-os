@@ -182,7 +182,7 @@ describe("ProductionRunwayPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Production plan" })).toBeVisible();
     expect(loadProductionRunway).toHaveBeenCalledOnce();
-    expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "See job IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );
@@ -225,7 +225,7 @@ describe("ProductionRunwayPage", () => {
     expect(
       screen.getAllByText(/Final work is checked when the job is done/i).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "See job IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );

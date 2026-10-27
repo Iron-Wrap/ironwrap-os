@@ -157,9 +157,9 @@ test.describe("Owner now acceptance", () => {
     const skipBoxAfter = await skipLink.boundingBox();
     expect((skipBoxAfter?.y ?? 0) + (skipBoxAfter?.height ?? 0)).toBeLessThanOrEqual(0);
 
-    const jobLink = page.getByRole("link", { name: "Open job IW-2042" });
+    const jobLink = page.getByRole("link", { name: "See job IW-2042" });
     await expect(jobLink).toHaveAttribute("href", "/jobs/IW-2042");
-    await expectTouchTarget(jobLink, { name: "Open job IW-2042", axis: "height" });
+    await expectTouchTarget(jobLink, { name: "See job IW-2042", axis: "height" });
 
     const geometry = await page.evaluate(() => ({
       viewport: document.documentElement.clientWidth,

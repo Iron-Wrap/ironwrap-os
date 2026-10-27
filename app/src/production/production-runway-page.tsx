@@ -409,9 +409,9 @@ function RunwayJobCard({
               <Link
                 to="/jobs/$jobId"
                 params={{ jobId: job.id }}
-                aria-label={`Open ${job.job_number ?? job.id}`}
+                aria-label={`See job ${job.job_number ?? job.id}`}
               >
-                Open job
+                See job
                 <ChevronRight aria-hidden="true" />
               </Link>
             </Button>

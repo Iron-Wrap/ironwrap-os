@@ -44,6 +44,9 @@ const verifiedResponseSchema = z.object({
   status: z.literal("verified"),
   server_ref: z.string().min(1).optional(),
   cursor: z.string().min(1).optional(),
+  // A safety stop whose job or Work Package did not resolve is still recorded, and holds every job
+  // until the office fixes it (Track C route-gaps slice).
+  scope_unresolved: z.boolean().optional(),
 });
 
 /**
@@ -172,6 +175,7 @@ async function executeFlush(
           verifiedAt: now(),
           ...(outcome.serverRef ? { serverRef: outcome.serverRef } : {}),
           ...(outcome.cursor ? { cursor: outcome.cursor } : {}),
+          ...(outcome.scopeUnresolved ? { scopeUnresolved: true } : {}),
         },
         now(),
         action.uploadLeaseId,
@@ -313,7 +317,8 @@ async function uploadAction(
   leaseId?: string,
   evidenceTimeoutMs?: number,
 ): Promise<
-  { ok: true; serverRef?: string; cursor?: string } | { ok: false; failure: UploadFailure }
+  | { ok: true; serverRef?: string; cursor?: string; scopeUnresolved?: boolean }
+  | { ok: false; failure: UploadFailure }
 > {
   const headers = new Headers({
     Accept: "application/json",
@@ -516,6 +521,7 @@ async function uploadAction(
       ok: true,
       ...(parsed.data.server_ref ? { serverRef: parsed.data.server_ref } : {}),
       ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
+      ...(parsed.data.scope_unresolved ? { scopeUnresolved: true } : {}),
     };
   }
 

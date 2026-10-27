@@ -100,7 +100,7 @@ describe("Receipt", () => {
     expect(within(card).getByText("Done for you")).toBeVisible();
     expect(within(card).getByText("Today 06:42")).toBeVisible();
     // The people see the delegation words, never the class.
-    expect(within(card).getByText("Asks first")).toBeVisible();
+    expect(within(card).getByText("Act with approval")).toBeVisible();
     expect(within(card).getByText("A3")).not.toBeVisible();
     expect(within(card).getByText("Did")).toBeVisible();
     expect(within(card).getByRole("list", { name: "Where this came from" })).toBeVisible();
@@ -453,6 +453,99 @@ describe("Receipt", () => {
   });
 });
 
+describe("who allowed a step, in words beside the dial", () => {
+  it("says a step done within your limits had no one approve it, beside the screen's check", () => {
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, kind: "within_limits", approved_by: null },
+        })}
+        display={{ ...display, delegation: "within_limits", checked: "IronWrap shows it." }}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("Auto with undo")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "It did this on its own; nobody approved it first. IronWrap shows it.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("never says it acted on its own when a person approved it, or when it did not act", () => {
+    const within_limits = { ...receipt().permit, kind: "within_limits" as const };
+    const steps: Partial<ContractReceipt>[] = [
+      {},
+      { permit: { ...within_limits, approved_by: "person_dana" } },
+      { permit: { ...receipt().permit, kind: "shadow" } },
+      { permit: within_limits, outcome: "unknown" },
+      {
+        permit: within_limits,
+        outcome: "failed",
+        policy: { ...receipt().policy, reason_codes: ["declined"] },
+      },
+      {
+        permit: within_limits,
+        outcome: "abstained",
+        policy: { ...receipt().policy, reason_codes: ["fact_missing"] },
+      },
+    ];
+    for (const step of steps) {
+      const { unmount } = render(<Receipt receipt={receipt(step)} display={display} />);
+      expect(screen.getByRole("article").textContent).not.toMatch(/on its own/);
+      unmount();
+    }
+  });
+
+  it("puts the line ahead of the default check when the screen gives none", () => {
+    render(
+      <Receipt
+        receipt={receipt({
+          permit: { ...receipt().permit, kind: "within_limits", approved_by: null },
+        })}
+        display={{ ...display, where: "QuickBooks" }}
+      />,
+    );
+    expect(
+      screen.getByText(/^It did this on its own; nobody approved it first\. Checked in QuickBooks/),
+    ).toBeVisible();
+  });
+
+  it("says an action the owner can never raise can never act on its own", () => {
+    const { unmount } = render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "always_asks_first", why: "A person reads it first." }}
+        viewerMayDecide
+      />,
+    );
+    expect(
+      screen.getByText("A person reads it first. It can never be set to do this on its own."),
+    ).toBeVisible();
+    unmount();
+    // A screen's line without its full stop still reads as two sentences.
+    const second = render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "always_asks_first", why: "A person reads it first" }}
+        viewerMayDecide
+      />,
+    );
+    expect(
+      screen.getByText("A person reads it first. It can never be set to do this on its own."),
+    ).toBeVisible();
+    second.unmount();
+    render(
+      <Receipt
+        receipt={needsYou}
+        display={{ ...display, delegation: "asks_first", why: "A person reads it first." }}
+        viewerMayDecide
+      />,
+    );
+    expect(screen.getByRole("article").textContent).not.toMatch(/never be set/);
+  });
+});
+
 describe("ReceiptRow", () => {
   it("is one target named by the summary and the state, with one outlined action", async () => {
     const open = vi.fn();
@@ -757,24 +850,6 @@ describe("a people-only draft that left Needs you", () => {
     expect(within(card).queryAllByRole("button")).toEqual([]);
   });
 
-  it("says the value is what the draft proposed when the applied record says so", () => {
-    const changed = {
-      ...draft("applied_by_person"),
-      do_it_myself: {
-        surface: null,
-        context: {
-          applied: { field: "role", value: "sales", by: "person_dana", as_proposed: true },
-        },
-      },
-    };
-    render(<Receipt receipt={changed} display={closed} />);
-    expect(
-      within(screen.getByRole("article")).getByText(
-        "Dana Whitford changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Sales. That is what this draft proposed.",
-      ),
-    ).toBeVisible();
-  });
-
   it("says You when the person who changed it is the one reading", () => {
     const changed = {
       ...draft("applied_by_person"),
@@ -862,6 +937,24 @@ describe("a people-only draft that left Needs you", () => {
     const time = screen.getByText("Mon 14:05");
     expect(time.tagName).toBe("TIME");
     expect(time.parentElement?.textContent).toBe("Changed by hand · Mon 14:05");
+  });
+
+  it("says the value is what the draft proposed when the applied record says so", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      do_it_myself: {
+        surface: null,
+        context: {
+          applied: { field: "role", value: "sales", by: "person_dana", as_proposed: true },
+        },
+      },
+    };
+    render(<Receipt receipt={changed} display={closed} />);
+    expect(
+      within(screen.getByRole("article")).getByText(
+        "Dana Whitford changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Sales. That is what this draft proposed.",
+      ),
+    ).toBeVisible();
   });
 
   it("never prints the id of a person in the applied record it cannot name", () => {

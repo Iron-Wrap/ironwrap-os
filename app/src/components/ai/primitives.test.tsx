@@ -85,6 +85,24 @@ describe("delegation words", () => {
     }
     expect(container).not.toHaveTextContent(/\bA[0-3]\b/);
   });
+
+  it("draws the Locked lock on an action the owner can never raise", () => {
+    const { container } = render(
+      <>
+        <DelegationPill setting="people_only" />
+        <DelegationPill setting="always_asks_first" />
+        <DelegationPill setting="asks_first" />
+      </>,
+    );
+    const glyph = (setting: DelegationSetting) =>
+      container.querySelector(`[data-delegation="${setting}"] svg`)?.getAttribute("class");
+    expect(glyph("people_only")).toMatch(/lucide-lock\b/);
+    expect(glyph("always_asks_first")).toBe(glyph("people_only"));
+    expect(glyph("asks_first")).not.toMatch(/lucide-lock\b/);
+    expect(container.querySelector('[data-delegation="always_asks_first"]')).toHaveTextContent(
+      "Act with approval · always",
+    );
+  });
 });
 
 describe("proposed, not accepted yet", () => {

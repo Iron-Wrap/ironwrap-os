@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 137,
+      "count": 139,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -250,9 +250,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   not built yet. A prepared people-only act (`access.prepare_change`,
   `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
   too, and never under Done for you. It closes once: `applied_by_person` when the person's role
-  change or the owner's delegation or practice setting for its record lands, `superseded` when a
-  newer draft for the same record replaces it; migration 0206 lets only that close past the
-  decided-step guard. A "Not now" for it is not built yet.
+  change or the owner's delegation or practice setting for its record lands, naming what is set
+  and whether it is what the draft proposed (`as_proposed`: the same role, or the same setting and,
+  within limits, the same ceiling), `superseded` when a newer draft for the same record replaces
+  it; migration 0206 lets only that close past the decided-step guard. A "Not now" for it is not
+  built yet.
   `authority.record` answers only a press on compliance's view for that action, and
   `access.prepare_change` an owner's or staff member's ask or any press.
   Every signal carries the actor the Worker writes: owner, staff and worker actors for a person's
@@ -340,9 +342,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
     a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
     no undo flow, no non-protective action has a proven machine path (a within-limits step asks
-    first), and the Worker accepts within limits whatever an action's undo; no screen shows the dial
-    words (the app shows the contract words, `app/src/components/ai/words.ts`); "Facts only, live"
-    has no live conversation runtime.
+    first), and the Worker accepts within limits whatever an action's undo, so the app's "Auto with
+    undo" pill (`app/src/components/ai/words.ts`, owner ruling) runs ahead of any undo flow; no
+    autonomy screen shows the dial; "Facts only, live" has no live conversation runtime.
   - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
     message purpose covers a visit reminder, and `customer_message.send` is not registered; it
     always asks first, so no reminder can run automatically.
@@ -712,6 +714,30 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.
 
+Customer portal first open of a proposal (B1, migration 0163):
+
+- `customer_portal_proposal_views` keeps one row per portal link and proposal publication, never
+  updated and deleted only once it is older than 3 years: the first time someone holding the
+  customer's link opened that published proposal. It stores ids and one timestamp, never an IP
+  address, user agent, location or later visit. D1 checks the link, job, customer and `published`
+  publication, and holds the time to within 60 seconds of its own clock. The data class, its
+  retention (at most 3 years) and its notice are recorded in
+  [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
+- Fail-closed by default. `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in production,
+  local and qa, and can go on once the owner approves the portal privacy notice text that says the
+  first open is recorded and kept for at most 3 years.
+- Staff: the app sends `staff_preview: true` while an office sign-in is live in that browser, and
+  the Worker never records such a request; nor one from the device that issued the link. A staff
+  member on another device or browser without a sign-in counts as the customer.
+- The record is written after the response (`waitUntil`), so a slow or failed write never changes
+  the customer's page.
+- Retention: D1 refuses to delete a row younger than 3 years by its own clock, and the daily cron
+  deletes older rows before it prunes portal links. That link prune now keeps every link that a
+  RESTRICT key names (acceptance challenges and intents, material decisions, first opens), instead
+  of failing as a whole once one such link is a year past its end.
+- No staff read model shows the first open yet; the delivery read model behind frame 8(b) is not
+  built.
+
 ELEC-133 legible authority refusals and a clean first boot (2026-08-21):
 
 - **A refusal a crew's certification triggers now reaches the approver as a reason.** The gate
@@ -796,6 +822,14 @@ stale from before that merge):
   notification, independent verification, and stop release each require the exact current role, and
   the occurrence reporter, corrective-action owner, and evidence capturer are all refused
   verification of that closure.
+- Lifting a safety-occurrence stop enforces owner rule L06 the way a Work Package stop release
+  does. The person who raised the stop never lifts it, under any identity they carry, and there is
+  no exception for working alone. Only a person's own cookie session lifts a stop, never an agent
+  or service credential. Migration `0165` records who lifted the stop. In D1 it refuses a lift by
+  the raiser, a lift that names nobody or an unknown user, and a lift without that person's own
+  `released` event. The occurrence and its event now commit in one batch. The release by another
+  Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
+  Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

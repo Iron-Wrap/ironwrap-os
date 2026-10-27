@@ -47,6 +47,7 @@ import {
   recordOperatingJobAssignment,
 } from "../src/operating-job-assignment-store.ts";
 import {
+  calendarReading,
   cancellationWindowEndsAt,
   cancellationWindowHold,
   readCancellationWindow,
@@ -3455,11 +3456,15 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
         window_starts_at: event.shown_at,
         shown_at: event.shown_at,
         served_at: served.served_at,
-        // The stored end, the first instant after the 10th local day.
+        // The deadline shown: the 10th local day after the day the copy was received.
+        last_day: calendarReading(event.shown_at, ZONE).lastDay,
+        // The hold that keeps it: the end of that day read across the zone's offsets.
         window_ends_at: event.window_ends_at,
+        ends_on_calendar_day: true,
         time_zone: ZONE,
       },
     });
+    assert.equal(event.window_ends_at, calendarReading(event.shown_at, ZONE).endsAt);
     // The copy is the contract the binding holds: the same terms hash.
     assert.equal(body.signed_copy.terms_hash, binding.terms_hash);
     assert.equal(body.signed_copy.terms_hash, OD01_TERMS_HASH);
@@ -3513,8 +3518,11 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
     assert.equal(gates.status, 200);
     const office = (await gates.json() as Record<string, any>).cancellation_window;
     assert.deepEqual(
-      [office.started_from, office.starts_at, office.ends_at, office.time_zone],
-      ["signed_copy_shown", body.signed_copy.window_starts_at, body.signed_copy.window_ends_at, body.signed_copy.time_zone],
+      [office.started_from, office.starts_at, office.last_day, office.ends_at, office.ends_on_calendar_day, office.time_zone],
+      [
+        "signed_copy_shown", body.signed_copy.window_starts_at, body.signed_copy.last_day,
+        body.signed_copy.window_ends_at, true, body.signed_copy.time_zone,
+      ],
     );
     assert.deepEqual(await signedCopyQueue(h), {
       count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
@@ -3862,10 +3870,15 @@ test("a copy served after an unconfirmed event never ends before that event's en
     const [served] = servedCopies(h);
     assert.ok(served && served.event_id !== unconfirmed!.event_id);
     const event = shownEvents(h).find((row) => row.event_id === served.event_id)!;
-    // Its own end would come sooner, so it keeps the earlier event's end, and serves it.
+    // Its own end would come sooner, so it keeps the earlier event's end, and serves it: that end
+    // is not its last day's, so the copy says so, and the exact end is the one to show.
     assert.ok(cancellationWindowEndsAt(event.shown_at, ZONE) < unconfirmed!.window_ends_at);
     assert.equal(event.window_ends_at, unconfirmed!.window_ends_at);
     assert.equal(body.signed_copy.window_ends_at, unconfirmed!.window_ends_at);
+    assert.deepEqual(
+      [body.signed_copy.last_day, body.signed_copy.ends_on_calendar_day],
+      [calendarReading(event.shown_at, ZONE).lastDay, false],
+    );
     assert.equal((await signedCopyQueue(h)).count, 0);
   } finally {
     h.restore();

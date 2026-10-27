@@ -62,6 +62,15 @@
 // 264 hours after a start at local midnight plus the span of the zone's offsets (one hour for
 // Edmonton), and D1 allows a span of two.
 //
+// The promise and the hold are separate fields (`calendarReading`). A deadline is shown from
+// `last_day`, "until the end of {last_day}": the 10th local day after the start's day, as a date in
+// the business zone. The hold, `ends_at`, is never before the end of that day and releases at most
+// the span of the zone's offsets (two hours at most) after the local midnight that follows it, the
+// fail-safe direction: for Edmonton, at midnight UTC-7, which a release keeping UTC-6 all year reads
+// as 01:00. `ends_on_calendar_day` is true when `ends_at` is exactly that end; it is false only when
+// a later end on the job was kept (or a row was written straight at D1), and then the exact
+// `ends_at` is the one to show.
+//
 //   POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy
 //     `{received_at, reason, evidence_ref}`: when the customer received their copy of the signed
 //     contract. Owner or ops, people only: the CSRF token, then the person's own cookie session.
@@ -125,7 +134,19 @@ export interface CancellationWindowState {
   /** The latest start on record, and which record it is. */
   starts_at: string | null;
   started_from: "signed_copy_shown" | "manual_record" | null;
+  /**
+   * The last local day the customer may cancel on, `YYYY-MM-DD` in the zone the start was read in
+   * (`calendarReading`): what a deadline shows, "until the end of {last_day}". Null while unknown.
+   */
+  last_day: string | null;
+  /** The hold's end: the job's latest end, an exclusive bound, never before the end of `last_day`. */
   ends_at: string | null;
+  /**
+   * True when `ends_at` is exactly the end of `last_day` read across the zone's offsets, so the
+   * deadline is shown as `last_day`; false when a later end on the job was kept (or a row was
+   * written straight at D1), and the exact `ends_at` is the one to show. Null while unknown.
+   */
+  ends_on_calendar_day: boolean | null;
   /** The job's latest contract, when D1 holds one. */
   contract: { acceptance_binding_id: string; signed_at: string } | null;
   /** The latest copy the portal showed at signing. */
@@ -465,7 +486,9 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
       unknown_reason: "signed_copy_time_missing",
       starts_at: null,
       started_from: null,
+      last_day: null,
       ends_at: null,
+      ends_on_calendar_day: null,
       contract: null,
       signed_copy_shown: null,
       signed_copy_received: null,
@@ -476,6 +499,13 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
   }
   const start = latestStart(facts);
   const state = Number(facts.unknown) === 1 ? "unknown" : Number(facts.open) === 1 ? "open" : "ended";
+  // The deadline, read in the zone the latest start was read in.
+  const reading = start && state !== "unknown"
+    ? calendarReading(
+      start.at,
+      (start.from === "manual_record" ? facts.receipt_time_zone : facts.shown_time_zone) ?? timeZone,
+    )
+    : null;
   return {
     kind: "system_state",
     state,
@@ -485,7 +515,9 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
       : start ? "signed_copy_before_contract" : "signed_copy_time_missing",
     starts_at: start?.at ?? null,
     started_from: start?.from ?? null,
+    last_day: reading?.lastDay ?? null,
     ends_at: state === "unknown" ? null : facts.ends_at,
+    ends_on_calendar_day: reading ? facts.ends_at === reading.endsAt : null,
     contract: facts.binding_id
       ? { acceptance_binding_id: facts.binding_id, signed_at: facts.contract_signed_at! }
       : null,
@@ -675,9 +707,45 @@ export function zoneOffsets(instant: number, timeZone: string): number[] {
 function endOfTenthLocalDay(start: number, timeZone: string, offsets: readonly number[]): number {
   const end = localMidnight(start, CANCELLATION_WINDOW_DAYS + 1, timeZone);
   if (offsets.length === 0) return end;
-  const latestDay = Math.max(...offsets.map((offset) => Math.floor((start + offset) / DAY_MS)));
   const westernmost = Math.min(...offsets);
-  return Math.max(end, (latestDay + CANCELLATION_WINDOW_DAYS + 1) * DAY_MS - westernmost);
+  return Math.max(
+    end,
+    (latestLocalDay(start, timeZone, offsets) + CANCELLATION_WINDOW_DAYS + 1) * DAY_MS - westernmost,
+  );
+}
+
+/**
+ * The latest local day `start` falls on, by the runtime's rules for `timeZone` or at any of
+ * `offsets`, as a count of days since the epoch.
+ */
+function latestLocalDay(start: number, timeZone: string, offsets: readonly number[]): number {
+  return Math.max(
+    Math.floor(wallClock(start, timeZone) / DAY_MS),
+    ...offsets.map((offset) => Math.floor((start + offset) / DAY_MS)),
+  );
+}
+
+/**
+ * The calendar reading of a window that starts at `startsAt` (INTERIM, pending counsel), the one a
+ * deadline is shown in. `lastDay` is the 10th local day after the day the start falls on, the
+ * start's own day being day 0, as `YYYY-MM-DD` in `timeZone`: the customer may cancel until the end
+ * of it. The start's day is the latest it falls on by the runtime's rules or at any of the zone's
+ * offsets, so no time zone data release shows a day short; with the current data for Edmonton it
+ * is simply the start's local date. `endsAt` is the hold that keeps that promise: the end of
+ * `lastDay` read across the zone's offsets, which is never before the first instant of the day
+ * after `lastDay` at the westernmost offset, and at most the span of the offsets (two hours at
+ * most) after the local midnight that follows it. A window's stored end is `endsAt` unless a later
+ * end on the job was kept, or a row was written straight at D1 (`ends_on_calendar_day` is then
+ * false, and the exact end is the one to show).
+ */
+export function calendarReading(startsAt: string, timeZone: string): { lastDay: string; endsAt: string } {
+  const start = Date.parse(startsAt);
+  const offsets = zoneOffsets(start, timeZone);
+  const lastDay = (latestLocalDay(start, timeZone, offsets) + CANCELLATION_WINDOW_DAYS) * DAY_MS;
+  return {
+    lastDay: new Date(lastDay).toISOString().slice(0, 10),
+    endsAt: new Date(endOfTenthLocalDay(start, timeZone, offsets)).toISOString(),
+  };
 }
 
 /**

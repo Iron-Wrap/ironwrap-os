@@ -25,6 +25,7 @@ import {
 import {
   businessDayTable,
   calendarEndOfTenthDay,
+  calendarReading,
   cancellationWindowEndsAt,
   receivedAtInstant,
   windowEndSql,
@@ -467,6 +468,12 @@ function moveOrderLine(h: Harness, id: string, status: string): void {
   ).run(status, at(0), id);
 }
 
+/** An instant's local date in `timeZone`, as "YYYY-MM-DD". */
+function localDate(instant: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(instant));
+}
+
 /** An instant on the business clock, as "Tue 2026-11-03 18:26:00.000". */
 function localDateTime(instant: string): string {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
@@ -491,7 +498,9 @@ test("the window is a System state next to the gates, unknown until recorded, th
     unknown_reason: "signed_copy_time_missing",
     starts_at: null,
     started_from: null,
+    last_day: null,
     ends_at: null,
+    ends_on_calendar_day: null,
     contract: null,
     signed_copy_shown: null,
     signed_copy_received: null,
@@ -512,6 +521,9 @@ test("the window is a System state next to the gates, unknown until recorded, th
   assert.equal(open.ends_at, cancellationWindowEndsAt(receivedAt, ZONE));
   assert.equal(open.starts_at, receivedAt);
   assert.equal(open.started_from, "manual_record");
+  // The deadline shown is the last day; the hold is its end read across the zone's offsets.
+  assert.equal(open.last_day, calendarReading(receivedAt, ZONE).lastDay);
+  assert.equal(open.ends_on_calendar_day, true);
   assert.equal(open.unknown_reason, null);
   assert.deepEqual(open.holds, ["firm_start", "materials_attestation", "supplier_order"]);
   assert.deepEqual(
@@ -535,8 +547,8 @@ test("the window is a System state next to the gates, unknown until recorded, th
   const office = (await call(h, owner, gatesPath(JOB))).body.cancellation_window;
   assert.equal(office.signed_copy_received.id, recorded.body.receipt_id);
   assert.deepEqual(
-    [office.started_from, office.starts_at, office.ends_at, office.time_zone],
-    ["manual_record", receivedAt, open.ends_at, ZONE],
+    [office.started_from, office.starts_at, office.last_day, office.ends_at, office.ends_on_calendar_day, office.time_zone],
+    ["manual_record", receivedAt, open.last_day, open.ends_at, true, ZONE],
   );
 
   // Twelve days ago: the window has ended and holds nothing.
@@ -1011,6 +1023,19 @@ test("the window ends at the end of the 10th local day after its start, at the l
   assert.equal(cancellationWindowEndsAt(tuesday, ZONE), "2025-11-15T07:00:00.000Z");
   assert.equal(localDateTime("2025-11-15T06:59:59.999Z"), "Fri 2025-11-14 23:59:59.999");
   assert.equal(localDateTime("2025-11-15T07:00:00.000Z"), "Sat 2025-11-15 00:00:00.000");
+  // The deadline shown is that Friday, the 10th day after the Tuesday (day 0); the hold is its end.
+  assert.deepEqual(calendarReading(tuesday, ZONE), { lastDay: "2025-11-14", endsAt: "2025-11-15T07:00:00.000Z" });
+  // The same receipt after the next autumn change, under both Edmonton readings: a release that
+  // falls back to UTC-7 (Denver's rule) and one that keeps UTC-6 all year. Both show Friday, and
+  // both hold to the first instant of Saturday at UTC-7, which is Sat 01:00 at UTC-6.
+  for (const reading of ["America/Edmonton", "America/Denver"]) {
+    assert.deepEqual(
+      calendarReading("2026-11-04T01:26:00.000Z", reading),
+      { lastDay: "2026-11-13", endsAt: "2026-11-14T07:00:00.000Z" },
+      reading,
+    );
+  }
+  assert.equal(new Date("2026-11-13T12:00:00.000Z").getUTCDay(), 5);
   // Across the November change (Edmonton falls back on 2 November 2025): received Sun 26 Oct 18:26
   // MDT, the window holds through Wed 5 Nov and ends at its midnight MST.
   const fall = "2025-10-27T00:26:00.000Z";
@@ -1037,7 +1062,9 @@ test("the window ends at the end of the 10th local day after its start, at the l
   assert.equal(Date.parse(cancellationWindowEndsAt(midnightBeforeFall, ZONE)) - Date.parse(midnightBeforeFall), 265 * HOUR);
   assert.equal(cancellationWindowEndsAt("2026-06-01T06:00:00.000Z", ZONE), "2026-06-12T07:00:00.000Z");
   // Until 23:00 MST the receipt's day is Tuesday at both offsets. From 23:00 MST it is already
-  // Wednesday at UTC-6, so the window holds a day longer, through the end of Saturday.
+  // Wednesday at UTC-6, so the window shows and holds a day longer, through the end of Saturday.
+  assert.equal(calendarReading("2025-11-05T05:59:59.999Z", ZONE).lastDay, "2025-11-14");
+  assert.equal(calendarReading("2025-11-05T06:00:00.000Z", ZONE).lastDay, "2025-11-15");
   assert.equal(cancellationWindowEndsAt("2025-11-05T05:59:59.999Z", ZONE), "2025-11-15T07:00:00.000Z");
   assert.equal(cancellationWindowEndsAt("2025-11-05T06:00:00.000Z", ZONE), "2025-11-16T07:00:00.000Z");
   assert.equal(cancellationWindowEndsAt("2025-11-05T07:00:00.000Z", ZONE), "2025-11-16T07:00:00.000Z");
@@ -1084,6 +1111,12 @@ test("the window ends at the end of the 10th local day after its start, at the l
     received_at: "2026-06-01T17:00:00+09:00", reason: REASON, evidence_ref: EVIDENCE,
   });
   assert.equal(later.status, 201, JSON.stringify(later.body));
+  // The deadline is read from the latest start, in its zone; the hold kept the earlier, later end,
+  // so the end is not that day's, and the exact end is the one to show.
+  assert.deepEqual(
+    [later.body.cancellation_window.last_day, later.body.cancellation_window.ends_on_calendar_day],
+    [calendarReading("2026-06-01T08:00:00.000Z", "Asia/Tokyo").lastDay, false],
+  );
   assert.deepEqual(
     receipts(h, ENDED_JOB).map((row) => [row.window_ends_at, row.time_zone]),
     [["2026-06-12T07:00:00.000Z", ZONE], ["2026-06-12T07:00:00.000Z", "Asia/Tokyo"]],
@@ -1154,8 +1187,24 @@ test("the end is never earlier than the calendar reading under either time zone 
       for (const runtime of releases) {
         const end = Date.parse(cancellationWindowEndsAt(startsAt, runtime));
         assert.ok(end - start <= 265 * HOUR, `${runtime} ${startsAt}`);
+        // The deadline shown and the hold that keeps it: the hold is exactly the end of the last day
+        // read across the offsets, never before the first instant of the day after it at the
+        // latest (westernmost) offset, and at most two hours after the local midnight that follows it.
+        const reading = calendarReading(startsAt, runtime);
+        assert.equal(reading.endsAt, new Date(end).toISOString(), `${runtime} ${startsAt}`);
+        const dayAfter = Date.parse(`${reading.lastDay}T00:00:00.000Z`) + DAY;
+        assert.ok(end >= dayAfter - Math.min(...zoneOffsets(start, runtime)), `${runtime} ${startsAt}`);
+        // The runtime's own local midnight that opens the day after the last day: the end of the
+        // 10th day read from noon UTC eleven days earlier, a morning there.
+        const localMidnightAfter = Date.parse(calendarEndOfTenthDay(
+          new Date(dayAfter - 11 * DAY + 12 * HOUR).toISOString(), runtime,
+        ));
+        assert.ok(end - localMidnightAfter >= 0 && end - localMidnightAfter <= 2 * HOUR, `${runtime} ${startsAt}`);
         for (const real of releases) {
           assert.ok(end >= Date.parse(calendarEndOfTenthDay(startsAt, real)), `${runtime} read for ${real} ${startsAt}`);
+          // The day shown is never a day short of the real calendar reading.
+          const realLastDay = new Date(Date.parse(calendarEndOfTenthDay(startsAt, real)) - 1);
+          assert.ok(reading.lastDay >= localDate(realLastDay.toISOString(), real), `${runtime} shows ${reading.lastDay} for ${real} ${startsAt}`);
           probes += 1;
         }
       }
@@ -1171,7 +1220,7 @@ test("the end is never earlier than the calendar reading under either time zone 
   assert.equal(cancellationWindowEndsAt(wednesday, "America/Edmonton"), "2026-11-15T07:00:00.000Z");
 });
 
-test("D1 holds every end to [start + 240 hours, start + 266 hours] and never before the job's previous end", () => {
+test("D1 holds every end to [start + 240 hours, start + 266 hours] and never before the job's previous end", async () => {
   // D1 has no time zone database: a reading of the 10th local day's end is at most 264 hours after
   // a start at local midnight plus the span of the zone's offsets, which D1 allows up to two hours,
   // and never before 240 hours.
@@ -1202,6 +1251,13 @@ test("D1 holds every end to [start + 240 hours, start + 266 hours] and never bef
   assert.deepEqual(
     receipts(h, BOUNDS_JOB).map((row) => row.window_ends_at),
     [end(base, 266), end(base, 266), end(base + 30 * HOUR, 240)],
+  );
+  // A row written at D1's floor, 240 hours, is not the end of its last day (the Worker never writes
+  // one): the read says so, and the exact end is the one to show.
+  const window = (await call(h, await person(h, USERS.owner), gatesPath(BOUNDS_JOB))).body.cancellation_window;
+  assert.deepEqual(
+    [window.starts_at, window.ends_at, window.last_day, window.ends_on_calendar_day],
+    [received(30), end(base + 30 * HOUR, 240), calendarReading(received(30), ZONE).lastDay, false],
   );
 });
 

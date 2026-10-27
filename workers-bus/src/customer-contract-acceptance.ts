@@ -25,7 +25,7 @@ import {
   recordContractDepositGate,
   type DepositTermsRefusal,
 } from "./deposit-policy.ts";
-import { recordSignedCopyShown } from "./production-cancellation-window.ts";
+import { calendarReading, recordSignedCopyShown } from "./production-cancellation-window.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -1196,6 +1196,18 @@ interface SignedCopy {
   window_starts_at: string;
   /** The same instant as `window_starts_at`, under the event's own name. */
   shown_at: string;
+  /**
+   * The last local day the customer may cancel on, `YYYY-MM-DD` in `time_zone`: the 10th day after
+   * the day the copy was received, that day being day 0. The deadline shows it: "until the end of
+   * {last_day}". The hold (`window_ends_at`) is never earlier, and releases at most two hours after
+   * the local midnight that follows it.
+   */
+  last_day: string;
+  /**
+   * True when `window_ends_at` is exactly the end of `last_day` read across the zone's offsets;
+   * false when a later end on the job was kept, and the exact `window_ends_at` is the one to show.
+   */
+  ends_on_calendar_day: boolean;
   /** D1's time when the Worker confirmed this copy served, just before sending it. */
   served_at: string;
   /** The business time zone the window's start and end are read in. */
@@ -1217,7 +1229,10 @@ async function signedCopyContent(
   intent: AcceptanceIntent,
 ): Promise<{
   acceptanceBindingId: string;
-  copy: Omit<SignedCopy, "window_starts_at" | "shown_at" | "served_at" | "time_zone" | "window_ends_at">;
+  copy: Omit<
+    SignedCopy,
+    "window_starts_at" | "shown_at" | "served_at" | "time_zone" | "window_ends_at" | "last_day" | "ends_on_calendar_day"
+  >;
 } | null> {
   const row = await env.DB.prepare(
     `SELECT binding.acceptance_binding_id, binding.terms_hash, binding.receipt_hash,
@@ -1298,6 +1313,7 @@ async function withSignedCopy(
     acceptanceBindingId: built.acceptanceBindingId,
   }).catch(() => null);
   if (!shown) return response;
+  const reading = calendarReading(shown.shown_at, shown.time_zone);
   return acceptanceJson({
     ...body,
     signed_copy: {
@@ -1305,7 +1321,9 @@ async function withSignedCopy(
       window_starts_at: shown.shown_at,
       shown_at: shown.shown_at,
       served_at: shown.served_at,
+      last_day: reading.lastDay,
       window_ends_at: shown.window_ends_at,
+      ends_on_calendar_day: shown.window_ends_at === reading.endsAt,
       time_zone: shown.time_zone,
     },
   }, 200);

@@ -863,6 +863,13 @@ async function handleSafetyActionRoute(request) {
     status: "verified",
     server_ref: serverRef,
     cursor: `${serverRef}:1`,
+    // ACCEPTANCE_SCOPE_UNRESOLVED=1: answer a job raise the way the safety rail does when the job
+    // it names is not found (#39), so the crew phone's S21 can be exercised and captured.
+    ...(process.env.ACCEPTANCE_SCOPE_UNRESOLVED === "1" &&
+    kind === "report_occurrence" &&
+    scopeType === "roof_job"
+      ? { scope_unresolved: true }
+      : {}),
   };
   fieldMutableState.safetyActions.set(deviceActionId, { payloadHash, response });
   return jsonFixtureResponse(200, response);

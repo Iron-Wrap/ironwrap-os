@@ -831,7 +831,9 @@ async function handleSafetyActionRoute(request) {
       stop_active:
         kind === "rescue_request" ||
         severity === "critical" ||
-        (process.env.ACCEPTANCE_SCOPE_UNRESOLVED === "1" && kind === "report_occurrence"),
+        (process.env.ACCEPTANCE_SCOPE_UNRESOLVED === "1" &&
+          kind === "report_occurrence" &&
+          scopeType === "roof_job"),
       scope_type: scopeType,
       scope_id: payload.scope_id,
       summary: payload.detail,

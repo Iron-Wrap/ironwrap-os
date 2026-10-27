@@ -767,6 +767,19 @@ normalization function. This lets the owner see exactly which saved contact cust
 `null` means no public contact, while a null phone beside a valid email means the phone will not
 be shown. Defaults never become a public contact.
 
+### Customer portal first open
+
+When `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED=true`, a resolve that shows a published proposal
+keeps the first open of that publication through that link in `customer_portal_proposal_views`
+(0163): ids and one timestamp, nothing about the device. The write runs after the response
+(`waitUntil`) and a failure is only logged. Staff are skipped when the app sends
+`staff_preview: true` (it does while an office sign-in is live in that browser; the request itself
+omits credentials) or when the request comes from the device that issued the link; a staff member
+on another device without a sign-in counts as the customer. D1 refuses to delete a row younger than
+3 years; the daily cron deletes older rows before it prunes portal links. The flag is `false` in
+every checked-in environment until the owner approves the portal privacy notice that says the first
+open is recorded and kept for at most 3 years.
+
 ### Crew office contact
 
 Authenticated `GET /api/v1/jobs/{job}` and the universal work-object read include
@@ -959,7 +972,8 @@ never logged or returned.
     "brand": "IronWrap",
     "locale": "en-CA",
     "time_zone": "America/Edmonton",
-    "currency": "CAD"
+    "currency": "CAD",
+    "office_phone": "780-555-0142"
   },
   "permissions": ["session:read", "jobs:read:assigned"],
   "allowed_actions": ["session.logout", "today.read", "job.read.assigned"],
@@ -970,6 +984,14 @@ never logged or returned.
   "stale_fields": []
 }
 ```
+
+`tenant.office_phone` is the line a crew phone offers under "Call the office" on its emergency
+line. It is the phone on the owner-saved company profile, trimmed and otherwise exactly as stored;
+the app builds the `tel:` link. It is `null` on a signed-out session, while no owner has saved the
+profile, when the saved phone is blank, or when it fails the profile's own save-time check. The
+same value rides in the field bootstrap's `session` and in the magic-link and device-pairing
+consume responses. A failed profile read never fails the session: the phone is `null` and
+`stale_fields` carries `office_phone.unavailable`.
 
 The three operational read endpoints use the same top-level metadata envelope. Their exact v1
 shapes are:

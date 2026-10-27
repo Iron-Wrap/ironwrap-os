@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "independent_auditor",
-  "catalog_sha256": "b3b109e5b81625cf721123d0140e51984c2c44f992b6a35fad03c19b5a908f34",
+  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
   "actions": [
     { "action_id": "run.verify", "autonomy": "A0", "purpose": "Verify a run: citations, policy results, permits, readbacks, receipts, and versions against the release in force" },
     { "action_id": "finding.raise", "autonomy": "A2", "purpose": "Protective: open an audit finding with severity, failed control, both exact values, evidence, fix owner, and recommended containment" },

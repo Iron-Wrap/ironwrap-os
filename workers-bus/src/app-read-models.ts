@@ -1426,8 +1426,7 @@ export async function buildTodayReadModel(
           ...scope,
           scheduled_start: assignment.scheduled_start,
           scheduled_end: assignment.scheduled_end,
-          next_action:
-            assignment.blocker_reason ?? "Open the typed physical work package",
+          next_action: assignment.blocker_reason ?? "See job plan",
           assignment,
         },
       ];
@@ -4190,7 +4189,7 @@ function nativeWorkPackageEvidenceRow(
   return {
     name: row.eventId,
     evidence_id: row.evidenceItem,
-    evidence_type: "Work Package Evidence",
+    evidence_type: "Job plan evidence",
     proof_slot: row.slotId,
     captured_at: row.capturedAt,
     summary: row.requirement,

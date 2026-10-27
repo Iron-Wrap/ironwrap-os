@@ -49,6 +49,7 @@ import {
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
+  closeRoleDrafts,
   createUserInvite,
   listAppUsersForOffice,
   listUserInvitesForOffice,
@@ -259,9 +260,11 @@ import {
   type CommercialProposalRecord,
   ProposalDeliveryConfirmationError,
   recordProposalDeliveryConfirmation,
+  recordProposalDeliveryFinding,
   outstandingProposalPublishPermit,
   unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
+import { checkProposalDelivery, readProposalDeliveryState } from "./proposal-delivery-checks.ts";
 import {
   beginCommercialDepositDerivationRequest,
   ensureCommercialDepositDerivation,
@@ -460,6 +463,9 @@ export async function handleAdminAppUserProvision(
     expectedTarget: target,
   });
   if (!user) return appJson({ error: "app_user_state_changed" }, 409);
+  // An existing person's new role answers the AI team's open role-change drafts for them.
+  if (target && target.role !== user.role)
+    await closeRoleDrafts(appEnv, req, user.tenant_id, user.user_id, user.role, auth.session.user_id);
   return appJson({
     user: {
       user_id: user.user_id,
@@ -755,7 +761,7 @@ export async function handleAuthenticatedRoute(
   const recipientResponse = await handleAutomationRecipientRoute(req, env, auth);
   if (recipientResponse) return recipientResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
-    const response = appJson(sessionPayload(auth, env));
+    const response = appJson(await sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");
     return response;
   }
@@ -773,7 +779,7 @@ export async function handleAuthenticatedRoute(
     try {
       return privateAppJson({
         version: APP_API_VERSION,
-        session: sessionPayload(auth, env),
+        session: await sessionPayload(auth, env),
         // A field device gets one call before it goes offline, so the capability signal rides
         // with it rather than costing a second round trip on a bad connection. It stays a hint:
         // the server re-derives and re-enforces on every write, and a cached state never admits
@@ -1168,6 +1174,24 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/commercial/proposal-publications/delivery-confirmations"
   ) {
     return await confirmProposalDeliveryByHand(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-findings"
+  ) {
+    return await recordProposalDeliveryFindingByHand(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-checks"
+  ) {
+    return await checkProposalDeliveryByHand(req, env, auth);
+  }
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery"
+  ) {
+    return await readProposalDelivery(env, auth, url);
   }
   if (
     req.method === "POST" &&
@@ -4655,13 +4679,18 @@ async function confirmProposalDeliveryByHand(
   const body = parsed.value;
   const keys = isRecord(body) ? Object.keys(body) : [];
   const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  // The delivery check a "not delivered" cites as provider evidence (0167); optional.
+  const deliveryCheckId = isRecord(body) ? body.delivery_check_id ?? null : null;
   if (
     !isRecord(body) ||
-    keys.length !== 3 ||
-    !keys.every((name) => ["external_effect_id", "outcome", "note"].includes(name)) ||
+    keys.length !== ("delivery_check_id" in body ? 4 : 3) ||
+    !keys.every((name) => ["external_effect_id", "outcome", "note", "delivery_check_id"].includes(name)) ||
     typeof body.external_effect_id !== "string" ||
     !idText(body.external_effect_id, 16, 160) ||
     (body.outcome !== "delivered" && body.outcome !== "not_delivered") ||
+    (deliveryCheckId !== null &&
+      (typeof deliveryCheckId !== "string" || !idText(deliveryCheckId, 16, 200) ||
+        body.outcome !== "not_delivered")) ||
     // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
     [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
   ) {
@@ -4676,6 +4705,7 @@ async function confirmProposalDeliveryByHand(
       actorUserId: person.userId,
       actorRole: person.role,
       idempotencyKey: key,
+      deliveryCheckId: deliveryCheckId as string | null,
     });
     return privateAppJson({
       confirmation: result.confirmation,
@@ -4687,6 +4717,149 @@ async function confirmProposalDeliveryByHand(
       return privateAppJson({ error: error.code, ...error.detail }, error.status);
     }
     return privateAppJson({ error: "proposal_delivery_confirmation_failed" }, 503);
+  }
+}
+
+/**
+ * A person records what they found about a settled proposal send, or corrects it (0161): an
+ * append-only finding that never changes the send. People only, as for the first confirmation: the
+ * commercial set in their own session, so no agent, connector or service token records one.
+ */
+async function recordProposalDeliveryFindingByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  const keys = isRecord(body) ? Object.keys(body) : [];
+  const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  if (
+    !isRecord(body) ||
+    keys.length !== 4 ||
+    !keys.every((name) => ["external_effect_id", "supersedes_finding_id", "finding", "note"].includes(name)) ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160) ||
+    (body.supersedes_finding_id !== null &&
+      (typeof body.supersedes_finding_id !== "string" || !idText(body.supersedes_finding_id, 16, 200))) ||
+    // A person finds "delivered" or "not received"; "not executed" is provider proof only.
+    (body.finding !== "delivered" && body.finding !== "not_received") ||
+    // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
+    [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_finding" }, 400);
+  }
+  try {
+    const result = await recordProposalDeliveryFinding(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      supersedesFindingId: body.supersedes_finding_id as string | null,
+      finding: body.finding,
+      note,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      finding: result.finding,
+      effect: { external_effect_id: result.finding.effect_id, state: result.effectState },
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_finding_failed" }, 503);
+  }
+}
+
+/**
+ * A person checks a proposal send's delivery with its email service (#15b-1b, 0167): the bus reads
+ * back what the provider knows inside this request and keeps the answer as one check row. A check
+ * never changes the send and never sends anything. People only, as for the confirmation: the
+ * commercial set in their own session, so no agent, connector or service token runs one.
+ */
+async function checkProposalDeliveryByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  if (
+    !isRecord(body) ||
+    Object.keys(body).length !== 1 ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_check" }, 400);
+  }
+  try {
+    const result = await checkProposalDelivery(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      check: result.check,
+      delivery_state: result.deliveryState,
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_check_failed" }, 503);
+  }
+}
+
+/** One proposal revision's delivery state, derived as Track B's frames render it (DESIGN.md §6). */
+async function readProposalDelivery(env: AppEnv, auth: AuthContext, url: URL): Promise<Response> {
+  if (!hasPermission(auth, "sales:read"))
+    return privateAppJson({ error: "sales_read_required" }, 403);
+  const proposalPackId = idText(url.searchParams.get("proposal_pack_id"), 1, 160);
+  const proposalRevisionId = idText(url.searchParams.get("proposal_revision_id"), 1, 160);
+  if (!proposalPackId || !proposalRevisionId) {
+    return privateAppJson({ error: "invalid_proposal_delivery_read" }, 400);
+  }
+  try {
+    const revision = await env.DB.prepare(
+      `SELECT 1 AS found FROM commercial_proposal_revisions
+        WHERE tenant_id = ? AND proposal_revision_id = ? AND proposal_pack_id = ?`,
+    ).bind(auth.session.tenant_id, proposalRevisionId, proposalPackId).first<{ found: number }>();
+    if (!revision) return privateAppJson({ error: "not_found" }, 404);
+    return privateAppJson({
+      delivery_state: await readProposalDeliveryState(
+        env,
+        auth.session.tenant_id,
+        proposalPackId,
+        proposalRevisionId,
+      ),
+    });
+  } catch {
+    return privateAppJson({ error: "proposal_delivery_read_failed" }, 503);
   }
 }
 

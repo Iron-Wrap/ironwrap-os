@@ -257,9 +257,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // measurement history. 0153 adds the production gate clearance ledger and 0155 the tenant
   // deposit policy.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 277],
-    ["REQUIRED_INDEX_COUNT", 392],
-    ["REQUIRED_TRIGGER_COUNT", 760],
+    ["REQUIRED_TABLE_COUNT", 282],
+    ["REQUIRED_INDEX_COUNT", 395],
+    ["REQUIRED_TRIGGER_COUNT", 785],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -351,7 +351,11 @@ test("the full schema matches the recovery frontier through 0201", () => {
     // append-only and no-replace guards. 0153 adds the production gate clearance ledger: one
     // table, one index, and seven guards (validate, apply, three append-only on the ledger, and
     // the two state guards on the gate row). 0155 adds the tenant deposit policy table and four
-    // guards.
+    // guards. 0164 adds three outside-send guards on external_effects and
+    // one readback-conflict guard on proposal_delivery_confirmations. 0165 adds one safety stop release
+    // guard.
+    // 0167 adds the delivery check table, one index and four guards, and re-creates two 0164 guards
+    // under their names.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -359,7 +363,7 @@ test("the full schema matches the recovery frontier through 0201", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 277, indexes: 392, triggers: 760 },
+      { tables: 282, indexes: 395, triggers: 785 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

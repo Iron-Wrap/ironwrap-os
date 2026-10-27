@@ -54,7 +54,7 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
 4. **Start state, not ceiling.** "AI proposes only" (OD-28) is where delegation starts: every action
    with an outside effect starts as asks first, or off until the owner turns it on where asking
    first per step is impossible (decision 15). The owner delegates more, per action and per
-   specialist, until the owner says otherwise.
+   specialist, until the owner says otherwise; what Delegation item 8 caps always asks first.
 5. **The face.** The conversational coordinator (UF-20 withdrawn) is the face. It appears on every
    role screen, the crew phone included, behind an "Ask IronWrap" entry, and carries the tenant's
    brand name.
@@ -72,7 +72,10 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     sign-offs. Anyone on a crew can stop work. Every person works with zero training. Facts are
     exact, never rounded or silently corrected.
 12. **Kept board decisions.** No self-approval (OD-23). Owner approval below 25% gross margin
-    (OD-32).
+    (OD-32), which no operation set hands to anyone else. When only one person holds an operation
+    set, that person approves their own item with a recorded reason (owner ruling D-08), but a
+    safety stop is never released by the person who raised it (owner ruling Q7). Neither the sets
+    nor the recorded reason is built yet (see "Owner rulings" below).
 13. **Models.** One provider-agnostic gateway. Each tenant sets its providers, models and billing
     by configuration. Production runs on commercial terms only: an API account or a commercial
     subscription. A consumer sign-in serves synthetic runs only, or `eval_history` runs under a
@@ -95,10 +98,16 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     needs an owner decision recorded in this contract.
 15. **Live answering.** Answering a live call or chat (`conversation.answer_live`) is off until the
     owner turns it on in setup; nothing answers live before that. Once on, it acts within the
-    owner's limits (hours and channels), quotes no price, commits no date or coverage, says it is AI
-    and offers a person, goes silent once a person takes over, and writes one receipt per
-    conversation. Booking an inspection time, any follow-up and every other outside effect still ask
-    first.
+    owner's limits (hours and channels), states only facts from the record (no price, no date and
+    no promise; anything else goes to a named person), says it is AI and offers a person, goes
+    silent once a person takes over, and writes one receipt per conversation. It is its own row on
+    the owner's autonomy screen, "Facts only, live" (owner ruling D-07). During a call the voice
+    provider may hold an inspection slot and tell the caller it is held (`visit.hold_slot`); no
+    confirmation goes out until Staff press Keep booking (`visit.confirm`, which asks first), and
+    Undo releases the slot (owner ruling D-02, which replaces request-only voice reception). Every
+    follow-up and every other outside effect still asks first. Both are targets and not built yet:
+    today a call only records a request, and the slot hold stays YELLOW until the voice provider's
+    mid-call webhook is verified (Newo assumption A-05).
 16. **Owner interrupt.** An item on the owner's immediate-only list interrupts the owner at once
     (`owner.interrupt`). It is an internal notification with no outside effect and never waits for
     an approval.
@@ -108,7 +117,41 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     evidence (the `claims` check). AI disclosure stays mandatory in every conversation or message
     to a customer (decision 10): a campaign email or SMS (`campaign.send`) and a reply to a
     specific customer's review (`review_response.publish`) are such messages, and both keep their
-    `disclosure` check.
+    `disclosure` check. In this release no new public post uses a customer's photos or story
+    (owner ruling Q3): the `portfolio_candidate` watch is parked, and the default permission for
+    photos and stories stays No. The AI receptionist may link existing company pages that tenant
+    policy lists, never a page built from a customer's photos or story without that customer's
+    recorded permission; tenant policy lists no such pages yet.
+
+### Owner rulings
+
+The owner's rulings on the rework brief (D-01 to D-10) and on the requirements review (Q1 to Q10)
+refine the decisions above. Each applies where the table says. A ruling the code does not carry
+out yet says "not built yet", and [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) holds the same
+status.
+
+| Ruling | What it says | Where it applies |
+|---|---|---|
+| D-01 | AI-native and manual-complete: the AI does the work first, and the default is reviewing and approving; every manual screen stays, and "Do it myself" stays every action's manual path | Decisions 2 and 3, "Degraded operation" |
+| D-02 | During a call the voice provider may hold an inspection slot; Staff press Keep booking before any confirmation goes out, and Undo releases the slot. Not built yet, and YELLOW until the mid-call webhook is verified (Newo assumption A-05) | Decision 15, "The owner's launch rule" |
+| D-03 | A hand-off to a person is a callback or a review, never a live transfer, and a person can take over the record at any step. Not built yet: the reception script and configuration in `config/newo` still transfer a caller to the owner's line first | `conversation.assign_person` |
+| D-04 | A person's own words run the same action as a button, through the same decision and receipt; generated views stay ad hoc. Not built yet | "Requests through the face" |
+| D-05 | Superseded by Q4 as the owner revised it: a reminder stays at Act with approval, with no cancel window | Q4 |
+| D-06 | A booking offer has two lanes, the phone offer and a written offer the AI drafts and a person approves, and both end at the same booking | Appendix rows A08 and A09 |
+| D-07 | Live answering states only facts from the record, says it is AI and is its own row; the owner's settings for it are the record `reception_settings:<tenant>`. Not built yet | Decision 15, "Dial levels" |
+| D-08 | When only one person holds an operation set, that person approves their own item with a recorded reason (basis `only_holder`). Not built yet | Decision 12 |
+| D-09 | The owner's autonomy screen shows the dial levels, and the price is capped at Act with approval; with D-05, Q4 and L04, every send outside IronWrap and every price commitment asks first and none is delegable. The caps are built (twenty-four actions); the app shows the dial words on its delegation pills (owner ruling), and the autonomy screen is not built yet | "Dial levels", Delegation item 8 |
+| D-10 | A design-process ruling (finish the edits in flight, then pause new design items until Phase 1 is approved). No contract change | — |
+| Q1 | Four operation sets, all held by the owner until handed over: sees money and margins; approves money, with a limit; sends purchase orders; checks site safety (clears the Safety gate and releases a stop). A price below the margin floor stays the owner's, with no set (OD-32). Not built yet: today each person has one app role | "Rules for every specialist", decision 12 |
+| Q2 | A complaint is a service request with a Complaint label | `service_case.open` |
+| Q3 | No new public post uses a customer's photos or story in this release, and the `portfolio_candidate` watch is parked | Decision 17 |
+| Q4 | As the owner revised it: booking reminders and payment reminders are sent only by approval (Act with approval), never automatically, and the dial has no "Auto with cancel window"; every message to a customer always asks first (`customer_message.send`). The internal callback rows (appendix rows A28 to A30) send nothing and run with undo. Reminders are not built yet | "Dial levels", Delegation item 8, appendix |
+| Q5 | For the 10-day cancellation window after signing (OD-01), a read-only system state holds material orders and a firm start; it is never waivable. Not built yet | `purchase_order.place`, `crew_date.commit`, `shop_order.release` |
+| Q6 | While MD-13 waits, Deposit is the system state "No deposit under this contract", and no deposit invoice is proposed at acceptance. Not built yet | `invoice.commit_intent`, the `deposit_due` watch |
+| Q7 | A stop is never released by the person who raised it, with no exception for working alone; if nobody else can, another Staff member or a named outside person releases it. Completed work is never accepted by the person who did it; a solo owner accepts with a recorded reason (D-08). The outside person and the recorded reason are not built yet | `safety_stop.release`, `completion.accept` |
+| Q8 | As the owner revised it: shop fabrication, coil purchasing, supply-only and customer-material orders stay in this release, and a person passes the first piece before each shop run. No scope change | Appendix row L10 |
+| Q9 | QuickBooks hosts the card page and holds supplier bills; IronWrap prepares, validates, submits and reconciles through its adapters and only observes card payments. No contract change | Appendix rows A32 and A33 |
+| Q10 | One permit line (needed and held, not needed, or unknown, which blocks), two default hold points (the deck before it is covered, and the final check) and a daily one-tap hazard acknowledgement on the crew phone. Not built yet | `work_package.draft`, `hold_point.release` |
 
 ## The team
 
@@ -139,6 +182,10 @@ decision to the owner when they say so. Nobody approves what they authored (OD-2
 safety decisions go to production, and a stop is released by a person in the owner, ops or
 production role who did not raise or report it; privacy goes to the owner, while the AI compliance
 checker works the requests; money items go to accounting; dead letters go to operations (`ops`).
+Under owner ruling Q1, who may approve money (with a limit), send purchase orders, see money and
+margins, or check site safety is to come from four operation sets the owner holds until handing
+one over, not from a role. They are not built yet: today each person has one app role, and the
+reviewer is a role.
 
 ### Roster
 
@@ -414,11 +461,11 @@ An action's class is fixed by its consequence. It never changes at runtime.
 
 | Class | Shown as | Meaning | Effect |
 |---|---|---|---|
-| `A0` | Reads and watches | Observe, evaluate and explain, with citations | None |
-| `A1` | Prepares | Draft or propose; the output is stored as proposed | None |
-| `A2` | Acts within your limits | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
-| `A3` | Asks first | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
-| `H` | People only | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
+| `A0` | Suggest | Observe, evaluate and explain, with citations | None |
+| `A1` | Suggest | Draft or propose; the output is stored as proposed | None |
+| `A2` | The current setting on the dial (Auto with undo, Act with approval, Off or Suggest; see item 14) | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
+| `A3` | The current setting on the dial (Act with approval, Auto with undo, Off or Suggest; see item 14) | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
+| `H` | Locked | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
 `payee.unfreeze_prepare`, `safety_stop.release_prepare` and `access.prepare_change` do at class
@@ -426,12 +473,31 @@ For an `H` act an agent may explain the facts (`fact.explain`) and prepare what 
 its specialist is on hold, and waits in that person's Needs you, never under Done for you: the
 owner for `access.prepare_change`, `delegation.propose_change` and `payee.unfreeze_prepare`, and
 production for `safety_stop.release_prepare` (the last two have no registered arguments yet). Its
-receipt asks the person to check it and apply it in their own screen. The draft is to leave Needs
-you when the matching act lands or a newer draft replaces it, its receipt naming which happened,
-and Needs you is to offer "Not now", which names what it removes. Neither is built yet (see
-`CAPABILITY-MATRIX.md`): today a prepared draft stays in Needs you. A run gets the names of the
-people-only acts its specialist owns as `people_only` (each `{action_id, name}`), so a receipt can
-name them; they are never its tools.
+receipt asks the person to check it and apply it in their own screen. The draft leaves Needs you
+when the matching act lands or a newer draft for the same record replaces it: its receipt closes,
+still `succeeded`, with exactly one reason code that names what happened. `applied_by_person` means
+a person acted on the same record by hand, whether or not they set what the draft proposed: a role
+change on the Access screen closes that person's role-change drafts, and the owner's delegation
+setting, or turning practice on or off, closes that pair's `delegation.propose_change` drafts.
+`readback.reference` names the changed record (`person:<user_id>` or
+`delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by,
+as_proposed}`) says what is set now, by whom, and whether that is what this draft proposed:
+`as_proposed` is true when the role or setting set is the one the draft proposed, and for
+`within_limits` the ceiling is the same too, false otherwise. Recipients compare as a set: the
+same ones in another order are the same, and no limit (`null`) is not an empty list. Turning
+practice off sets the setting in force, with its ceiling. A draft closed before
+`as_proposed` existed has none, which reads as not known, never as true. `superseded` means only
+that a newer draft for the same record (the same pair, or the same person, change and device)
+replaced it; `readback.reference` names that draft's step (`step/<step_id>`), and it carries no
+`applied`. `permit.approved_by` stays null, and a draft closes once. A role
+change, on the Access screen or by provisioning, closes the drafts after it commits, and a close
+that closed any writes an `agent_draft_close` auth audit row naming the role and who set it; if
+that close fails, repeating the same role on the Access screen closes them (a repeated
+provisioning does not). Once a person's access is versioned, only
+drafts prepared against an older access version close. Needs you is to offer "Not now",
+which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
+`safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns
+as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.
 
 ### Delegation
 
@@ -440,10 +506,11 @@ actions only.
 
 | Setting | Shown as | What happens |
 |---|---|---|
-| `asks_first` | Asks first | The reviewer approves the exact revision; then policy issues the permit |
-| `within_limits` | Acts within your limits | Policy issues the permit without a person while the step stays inside the setting's ceiling; a step above the ceiling asks first |
-| `off_until_enabled` | Off until you turn it on | The action does nothing until the owner turns it on in setup; once on, it acts within the owner's limits. Used only where asking first per step is impossible, such as a live conversation |
-| `shadow` | Practice only | The specialist does the step as a practice run: the full proposal, its checks and a receipt marked as practice, but the tool is never called, so nothing reaches anyone outside the company and no business record changes. A person still does the real work, or approves it on the path in use today |
+| `asks_first` | Act with approval | The reviewer approves the exact revision; then policy issues the permit |
+| `within_limits` | Auto with undo | Policy issues the permit without a person while the step stays inside the setting's ceiling; a step above the ceiling asks first |
+| `off_until_enabled` | Off | The action does nothing until the owner turns it on in setup; once on, it acts within the owner's limits. Used only where asking first per step is impossible, such as a live conversation |
+| `off` | Off | The owner turned the action off: a step proposed under it fails (`policy_denied`), and people do the work by hand. The owner may set it on any delegable `A2` or `A3` action, and on an action that starts off |
+| `shadow` | Suggest | The specialist does the step as a practice run: the full proposal, its checks and a receipt marked as practice, but the tool is never called, so nothing reaches anyone outside the company and no business record changes. A person still does the real work, or approves it on the path in use today |
 
 1. **Start state.** Every `A3` action, and every `A2` action with an outside effect, starts as asks
    first, except an `A2` action that cannot ask first per step, which starts off until the owner
@@ -502,9 +569,43 @@ actions only.
    only the owner ever gives an action more autonomy.
 8. **Never delegable.** `H` actions have no setting. No setting switches off a hard boundary or a
    check in this contract. These `A3` actions always ask first, because each releases a protection,
-   approves a control the agents themselves work under, or is an owner-only right: `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`, `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`, `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`, `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`, `cancellation.release_hold`, `ncr.verify_close`.
-   The JSON `delegable` is false for them, for every `H`, `A0` and `A1` action, and for protective
-   actions.
+   approves a control the agents themselves work under, or is an owner-only right:
+   `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`,
+   `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`,
+   `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`,
+   `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`,
+   `cancellation.release_hold`, `ncr.verify_close`.
+
+   Every send outside IronWrap and every price commitment asks first. None is delegable. Every AI
+   action is reversible or approved first (the rework brief), a sent message cannot be undone
+   (owner rulings D-05 and Q4; appendix row L04), and the owner capped the price at Act with
+   approval (D-09). Every commitment of money to an outside party asks first too. These
+   twenty-four actions carry the rule:
+   - the price: committing a quote revision (`quote.commit_revision`), applying a discount
+     (`quote.apply_discount`) and committing a change order (`change_order.commit`);
+   - money committed to an outside party: a paid campaign budget (`ad_spend.commit`) and a supplier
+     bill approved for payment (`supplier_bill.approve`);
+   - sends to a customer: a message for any purpose (`customer_message.send`), a visit confirmation
+     (`visit.confirm`), a portal link (`portal_link.send`), a proposal (`proposal.publish`), a
+     change order for the customer's decision (`change_order.send_for_decision`), a remedy offer
+     (`remedy.offer`), a campaign (`campaign.send`) and an invoice created in QuickBooks
+     (`invoice.commit_intent`; the catalog has no separate invoice send);
+   - sends to suppliers and subcontractors: a price request (`rfq.send`), a purchase order and its
+     change (`purchase_order.place`, `purchase_order.change`), a status request
+     (`purchase_order.expedite`), a message (`supplier_message.send`), a return request
+     (`supplier_return.request`), a document request (`document.request`) and a cost-recovery
+     claim (`cost_recovery.claim`);
+   - the public and an insurer: published content (`content.publish`), a public reply to a review
+     (`review_response.publish`) and a supplement to an insurer (`insurance_supplement.send`).
+
+   Three of them are class `A2` (`rfq.send`, `purchase_order.expedite` and `document.request`):
+   they commit nothing, but they leave the company, so they ask first too. Live answering is the
+   owner's exception: once the owner turns it on, it answers within the owner's limits and states
+   only facts from the record (decision 15). Four actions with an outside effect stay delegable,
+   because none of them sends anything or commits a price: `dead_letter.replay` replays internal
+   work, and `privacy_incident.contain`, `content.stop` and `proposal.withdraw` contain or stop
+   something. The JSON `delegable` is false for the seventeen protections and the twenty-four caps
+   above, for every `H`, `A0` and `A1` action, and for protective actions.
 9. **Protective actions never wait.** Actions marked protective only stop, hold, block, freeze,
    quarantine, suppress, alert or escalate, inside the company. They always act within limits and
    cannot be set to asks first. They add coverage on top of deterministic protections (unsubscribe
@@ -546,21 +647,56 @@ actions only.
     qualification on the exact route the specialist's latest run used, and a run on an unqualified
     route makes a within-limits setting fall back to asks first (item 7). A close the Worker
     refused (no qualified route, or an audit off independence) counts toward the bar only against
-    the specialist, never for it: the run's matches leave the window, while its divergences, a
-    person's declined proposal included, still count. The face proposes the change
-    (`delegation.propose_change`, with the preview), the Worker refuses a proposal to act within
-    limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action and no
-    action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
+    the specialist, never for it: only the run's matches leave the window, while its partial and
+    diverging comparisons, a person's declined proposal included, still count. The face proposes the
+    change (`delegation.propose_change`, with the preview), the Worker refuses a proposal to act
+    within limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action
+    and no action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
     lowering one needs an owner decision recorded in this contract.
-14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
-    your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
-    actions the words shown are the current setting's.
+14. **Words, not codes.** Screens show the owner's dial words (owner ruling; see "Dial levels"):
+    Off, Suggest, Act with approval, Auto with undo, and Locked for people-only acts. For `A2` and
+    `A3` actions the words shown are the current setting's. Two words stand apart: an action that
+    always asks first reads "Act with approval · always" with the lock a Locked row carries, and a
+    protective action reads "Always on: protects you", off the dial.
 
 "Per specialist" means the owner can change several actions of one specialist at once (each still
 stored per action) or pause the specialist. Pausing sets every non-protective action of the
 specialist to asks first and stops its drafting, practice runs included; a practice-only action
 keeps its `shadow` setting and never turns into a live asks-first one, because only the owner gives
 an action more autonomy.
+
+### Dial levels
+
+The owner's autonomy screen sets each action on a dial (owner ruling D-09). The dial's words map
+onto the classes and settings above; internal codes and catalog fields keep their names.
+
+| Dial level | Means | Contract words and codes | Today |
+|---|---|---|---|
+| Off | The specialist does not act on this action; people use the manual screen | The setting `off` on a delegable `A2` or `A3` action, `off_until_enabled` before the owner turns a live action on, and a paused specialist's own control | A step under `off` fails with `policy_denied`. Not built yet for a Prepares action or for an action whose `delegable` is false: neither takes a setting (pausing the whole specialist stops its drafting) |
+| Suggest | The AI watches, drafts or proposes; each value shows "Proposed" until a person accepts or edits it | Reads and watches (`A0`), Prepares (`A1`) and Practice only (`shadow`) | A Prepares step stores a draft and has no effect |
+| Act with approval | The AI prepares the step, and a person approves it before anything happens | Asks first (`asks_first`) | The reviewer approves the exact revision |
+| Auto with undo | The AI acts, records it and offers Undo on the record | Acts within your limits (`within_limits`), offered only for an action whose receipt offers an undo (catalog `undo` `automatic`) | Not built yet: no undo flow exists; no non-protective action's machine path is proven, so a within-limits step asks first (item 10); and the Worker accepts within limits for any delegable action, whatever its undo |
+| Locked | The owner cannot change the row, and the screen gives the reason in one line | People only (`H`) | It takes no setting |
+
+An action that always asks first (item 8) shows "Act with approval · always" with the lock a Locked
+row carries, and no higher level; every send outside IronWrap and every price commitment are among
+them. The dial also offers Off for those, but the Worker accepts no setting for an action whose
+`delegable` is false, so Off for them is not built yet. Practice only (`shadow`) shows as Suggest;
+it stays the owner's own trial setting (item 11). Protective actions are not on the dial: they show
+"Always on: protects you" and keep running while a specialist is paused.
+
+The dial has one named variant. "Facts only, live" is `conversation.answer_live` once the owner
+turns it on (decision 15): it states only facts from the record, says it is AI and hands anything
+else to a named person. It is not built yet. There is no "Auto with cancel window": a reminder to
+a customer, for a booking or a payment, is sent only by approval and never automatically (owner
+ruling Q4 as revised). `customer_message.send` always asks first (item 8), so no message to a
+customer, a reminder included, ever runs automatically. Reminders are not built yet: no customer
+message purpose covers a visit reminder (`payment_reminder` is the only reminder purpose), and
+`customer_message.send` is not registered.
+
+The app's delegation pills show the dial words (`app/src/components/ai/words.ts`); the owner's
+autonomy screen, which sets them, is not built yet. The appendix ("Appendix: autonomy screen
+mapping") maps each row of that screen to its catalog actions.
 
 ### The owner's launch rule
 
@@ -603,12 +739,26 @@ answer a customer-initiated call or chat while it is live (`conversation.answer_
 through the managed voice provider ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md)) with the
 published reception script, or by text. It is off until the owner turns it on in setup, and nothing
 answers live before that. Once on, it acts within the owner's limits: the owner-set hours and
-channels. It quotes no price at all, commits no date, scope or coverage, always says it is AI and
-offers a person, goes silent once a person takes over, and writes one receipt per conversation. The
-approved script carries a fixed safety line ("if anyone is in danger, call 911"). A
-call may record a request ("Appointment request received."), but booking an inspection time
-(`visit.confirm`), any follow-up (`customer_message.send`) and every other outside effect still ask
-first. Publishing a reception script version always asks first (`reception_script.publish`).
+channels. It states only facts from the record: it quotes no price at all, commits no date, scope
+or coverage, makes no promise, and hands anything else to a named person (owner ruling D-07). It
+always says it is AI and offers a person, goes silent once a person takes over, and writes one
+receipt per conversation. The approved script carries a fixed safety line ("if anyone is in danger,
+call 911"). During a call the voice provider may ask IronWrap to hold an inspection slot
+(`visit.hold_slot`) and tell the caller it is held; nothing is confirmed until Staff press Keep
+booking (`visit.confirm`, which asks first), and Undo releases the slot (owner ruling D-02). Any
+follow-up (`customer_message.send`) and every other outside effect still ask first. Publishing a
+reception script version always asks first (`reception_script.publish`).
+
+The owner's live-answering settings are one record, `reception_settings:<tenant>`: whether live
+answering is on, and the hours and channels in which it answers. `conversation.answer_live` cites
+it, and the owner sets it in setup. Not built yet: the Worker keeps no such record, and the AI
+receptionist's playbook reads it as a placeholder fact.
+
+Voice reception today is request-only: the reception configuration books in `request_only` mode
+(`config/newo/production.expected.json`), its tools check availability and record a request, and the
+caller hears "Appointment request received." No tool holds a slot, so the D-02 hold is a target,
+not built yet, and it stays YELLOW until the voice provider's mid-call webhook is verified (Newo
+assumption A-05).
 
 ### Policy checks
 
@@ -717,8 +867,19 @@ them and follows these conventions:
   the same four keys as the `fields` of `lead_fact.confirm`: every key present, `null` where nothing
   is proposed, and at least one set. It takes no id: a proposal's id is the propose step's own
   `step_id`, which `lead_fact.confirm` names as `proposal_id`. Its sources are the step's own
-  citations, never an argument. Only a run started by the inbound event itself may propose it, and
-  every citation is that event (`signal/<id>`); anything else stops (`out_of_scope`).
+  citations, never an argument. Only a run started by the inbound event itself may propose it, an
+  event whose source is one of the inbound channels ("The inbound signal"), only for the lead that
+  event is about (its subject), and every citation is that event (`signal/<id>`); anything else
+  stops (`out_of_scope`). A lead's
+  proposals stay open by one rule: a newer proposal for the same lead that sets every key an older
+  open one set supersedes it, while one that sets only some of those keys leaves the older one
+  open. A proposal closes for good once any `lead_fact.confirm` that policy admitted names it,
+  whether the reviewer approved it, declined it or did it by hand.
+- `lead_fact.confirm` names an open proposal of the same lead and tenant in `proposal_id`
+  (`lead_proposal/<step_id>`) and may only repeat its values: a `null` leaves a field unconfirmed,
+  and a value that differs from the proposal's stops it (`fact_conflict`, check `proposal`), as does
+  a proposal that does not exist or is another lead's (`fact_missing`) or that is no longer open
+  (`fact_stale`). A person who wants another value edits the lead by hand.
 
 These actions take a `reason_code` from their own closed vocabulary, which the JSON carries as
 `reason_codes` on each of them:
@@ -798,11 +959,11 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `inbound.quarantine` | A2 | Acts within your limits | Protective. Hold suspected spam, scam or injected inbound content in which nothing valid remains: no reply, and no tool acts on it. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Raw inbound receipt hash; reason codes | — | Never asks first | Inbound held → hold read back | new |
 | `inbound.release` | A3 | Asks first | Always asks first. Release quarantined content into normal handling. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Quarantine record and its reason codes | — | The proposing specialist's reviewer | Hold released → read back | new |
 | `customer_message.draft` | A1 | — | Draft a message to a prospect or customer for a registered purpose. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Commercial context hash or conversation facts; consent state | `no_commitment`, `claims`, `purpose` | — | Draft (proposed) | `desktop:hermes_submit_draft` for lead follow-up drafts; new for the other purposes |
-| `customer_message.send` | A3 | Asks first | Send the approved message by email or SMS. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Approved draft hash; commercial context hash read again before sending; consent version | `consent`, `quiet_hours`, `recipient`, `disclosure`, `no_commitment`, `claims`, `frequency`, `purpose` | The proposing specialist's reviewer | Send through the effect runtime → provider message id and delivery status | new (communication effect); predecessor `erp:request_record_communication_event` records only |
+| `customer_message.send` | A3 | Asks first | Always asks first. Send the approved message by email or SMS. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Approved draft hash; commercial context hash read again before sending; consent version | `consent`, `quiet_hours`, `recipient`, `disclosure`, `no_commitment`, `claims`, `frequency`, `purpose` | The proposing specialist's reviewer | Send through the effect runtime → provider message id and delivery status | new (communication effect); predecessor `erp:request_record_communication_event` records only |
 | `followup.pause` | A2 | Acts within your limits | Pause a case's follow-up schedule because the customer asked for time, a dispute is open, or a person took over. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The fact behind the pause | — | The proposing specialist's reviewer | Follow-up schedule paused → read back | new |
 | `followup.resume` | A2 | Acts within your limits | Resume a paused follow-up schedule from where it stopped. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The pause and the fact that lifts it | `frequency` | The proposing specialist's reviewer | Follow-up schedule resumed → read back | new |
-| `visit.hold_slot` | A2 | Acts within your limits | Hold a site-visit slot on a staff calendar; the customer does not see it. | Staff availability; property area | `bounded` | Sales | Tentative hold with expiry → read back | new |
-| `visit.confirm` | A3 | Asks first | Book the site visit and confirm it to the customer. | Held slot; the customer's request; access facts | `consent`, `quiet_hours`, `recipient`, `disclosure` | Sales | Appointment and confirmation → appointment read back; delivery status | new; voice reception stays request-only |
+| `visit.hold_slot` | A2 | Acts within your limits | Hold a site-visit slot on a staff calendar. The hold confirms nothing to the customer. Not built yet: on a live call the caller hears that a slot is held (decision 15), and Undo releases it. | Staff availability; property area | `bounded` | Sales | Tentative hold with expiry → read back | new |
+| `visit.confirm` | A3 | Asks first | Always asks first. Book the site visit and confirm it to the customer. | Held slot; the customer's request; access facts | `consent`, `quiet_hours`, `recipient`, `disclosure` | Sales | Appointment and confirmation → appointment read back; delivery status | new; not built yet: a call may hold a slot, and Staff press Keep booking to confirm it (decision 15) |
 | `consent.record` | A3 | Asks first | Always asks first. Record a consent the customer gave, with its capture evidence. Owners: `lead_concierge`, `customer_care_warranty`, `marketing_reputation`. | Capture evidence (form bytes, recording pointer or message) with hash | `consent_capture` | The proposing specialist's reviewer | Consent record → consent version read back | new; predecessor `erp:request_record_communication_consent` |
 | `suppression.apply` | A2 | Acts within your limits | Protective. Apply a stop, unsubscribe or do-not-contact request at once and cancel pending sends. Owners: `lead_concierge`, `customer_care_warranty`, `marketing_reputation`. | The person's message or the provider opt-out event | — | Never asks first | Suppression; pending sends cancelled → suppression read back | new |
 | `conversation.assign_person` | A2 | Acts within your limits | Protective. Hand a conversation to a named person when the customer asks for one or policy requires it. Owners: `lead_concierge`, `customer_care_warranty`. | The request or the policy trigger | `named_person` | Never asks first | Thread owner set; person notified → read back; delivery status | new |
@@ -815,14 +976,14 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 |---|---|---|---|---|---|---|---|---|
 | `takeoff.draft` | A1 | — | Draft a material takeoff. | Accepted measurement version; design-basis revision; waste rules | `measurement_basis`, `design_basis` | — | Takeoff draft | new; predecessor `erp:request_create_material_takeoff` |
 | `quote.draft_revision` | A1 | — | Draft a quote revision: cost build-up, price and options. | Takeoff; price book version; catalog snapshots; labour model; tax rule | `price_basis`, `measurement_basis`, `design_basis` | — | Quote draft (proposed) | new |
-| `quote.commit_revision` | A3 | Asks first | Commit a quote revision. | The draft with every line's inputs; margin | `price_basis`, `measurement_basis`, `design_basis`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor or above the ceiling | Quote revision → revision version and hash read back | `POST /api/v1/commercial/quote-revisions`; predecessor `erp:request_create_quote_revision` behind the quote-revision approval broker |
-| `quote.apply_discount` | A3 | Asks first | Apply a discount as a new quote revision. | Reason; margin before and after | `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor or above the discount ceiling | Quote revision → read back | `POST /api/v1/commercial/quote-revisions` |
+| `quote.commit_revision` | A3 | Asks first | Always asks first. Commit a quote revision. | The draft with every line's inputs; margin | `price_basis`, `measurement_basis`, `design_basis`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor or above the ceiling | Quote revision → revision version and hash read back | `POST /api/v1/commercial/quote-revisions`; predecessor `erp:request_create_quote_revision` behind the quote-revision approval broker |
+| `quote.apply_discount` | A3 | Asks first | Always asks first. Apply a discount as a new quote revision. | Reason; margin before and after | `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor or above the discount ceiling | Quote revision → read back | `POST /api/v1/commercial/quote-revisions` |
 | `quote.flag_reprice` | A1 | — | Flag open quotes whose consumed costs changed, with the exact margin effect. | Old and new snapshot or quote versions; affected revisions | — | — | Alert (proposed) | new |
 | `price_book.propose_change` | A3 | Asks first | Always asks first. Propose a price-book change (rates, markups or material prices); it takes effect only when the owner approves, and open quotes keep the version they consumed. Owners: `estimator`, `purchasing_inventory`. | The cost facts behind it (snapshots, supplier quotes, estimated against actual); the price-book version it changes | `price_basis`, `margin_floor`, `segregation` | Owner | Price-book version → read back | new |
 | `change_order.draft` | A1 | — | Draft a change order: scope, price, schedule, safety and warranty effect. | Confirmed field record; evidence; price basis | `price_basis` | — | Change-order draft | new |
-| `change_order.commit` | A3 | Asks first | Commit a change-order revision; the customer decides next. | The draft and its evidence | `price_basis`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor or above the ceiling | Change-order revision → read back | new; predecessor `erp:request_create_change_order` |
+| `change_order.commit` | A3 | Asks first | Always asks first. Commit a change-order revision; the customer decides next. | The draft and its evidence | `price_basis`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor or above the ceiling | Change-order revision → read back | new; predecessor `erp:request_create_change_order` |
 | `insurance_supplement.draft` | A1 | — | Draft a contractor estimate for the customer's insurer. | Quote revision; evidence | `no_adjusting` | — | Supplement draft | new; predecessor `erp:request_create_insurance_supplement` |
-| `insurance_supplement.send` | A3 | Asks first | Send the supplement to the insurer with the customer's authorization. | Approved supplement; the customer's authorization to share | `consent`, `recipient`, `privacy`, `no_adjusting` | Sales | Message → delivery status | new |
+| `insurance_supplement.send` | A3 | Asks first | Always asks first. Send the supplement to the insurer with the customer's authorization. | Approved supplement; the customer's authorization to share | `consent`, `recipient`, `privacy`, `no_adjusting` | Sales | Message → delivery status | new |
 
 #### Catalog: AI measurer (`measurement_design`)
 
@@ -841,12 +1002,12 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
 | `proposal.draft_revision` | A1 | — | Draft a proposal from the committed quote, design basis and terms. | Quote revision; design basis; terms template version; disclosures | `terms` | — | Proposal draft (proposed) | new |
-| `proposal.publish` | A3 | Asks first | Create the proposal revision and publish exactly the approved draft to the customer. | Approved draft hash; quote revision; terms version; customer identity and decision authority | `terms`, `consent`, `recipient`, `disclosure`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor, above the ceiling, or for non-standard terms | Proposal revision and publication effect → provider delivery readback and publication settlement | `POST /api/v1/commercial/proposal-revisions`, `POST /api/v1/commercial/proposal-publications/prepare`, `POST /api/v1/proposal-publication-approvals/{approval}/approve`, `POST /api/v1/commercial/proposal-publications` |
+| `proposal.publish` | A3 | Asks first | Always asks first. Create the proposal revision and publish exactly the approved draft to the customer. | Approved draft hash; quote revision; terms version; customer identity and decision authority | `terms`, `consent`, `recipient`, `disclosure`, `margin_floor`, `amount_ceiling`, `segregation` | Sales; owner below the margin floor, above the ceiling, or for non-standard terms | Proposal revision and publication effect → provider delivery readback and publication settlement | `POST /api/v1/commercial/proposal-revisions`, `POST /api/v1/commercial/proposal-publications/prepare`, `POST /api/v1/proposal-publication-approvals/{approval}/approve`, `POST /api/v1/commercial/proposal-publications` |
 | `proposal.withdraw` | A3 | Asks first | Withdraw a published proposal. | Publication; reason | — | Sales | Publication withdrawn → read back | new |
-| `portal_link.send` | A3 | Asks first | Send the customer a portal link. Owners: `proposal_contract`, `customer_care_warranty`. | Verified customer identity; current publication or case | `identity`, `consent`, `recipient`, `disclosure` | The proposing specialist's reviewer | Link and delivery → link read back; delivery status | `POST /api/v1/customer-portal/links` |
+| `portal_link.send` | A3 | Asks first | Always asks first. Send the customer a portal link. Owners: `proposal_contract`, `customer_care_warranty`. | Verified customer identity; current publication or case | `identity`, `consent`, `recipient`, `disclosure` | The proposing specialist's reviewer | Link and delivery → link read back; delivery status | `POST /api/v1/customer-portal/links` |
 | `portal_link.revoke` | A2 | Acts within your limits | Protective. Revoke a portal link (wrong recipient, superseded or suspected misuse) in the company's own system; nothing is sent to anyone. Owners: `proposal_contract`, `customer_care_warranty`. | Link id; reason | — | Never asks first | Link revoked → read back | `POST /api/v1/customer-portal/links/{link}/revoke` |
 | `acceptance.customer_decision` | H | — | The customer accepts or declines a proposal, a change order, a remedy, or responsibility for a drawing they supplied. Owners: `proposal_contract`, `customer_care_warranty`. | — | — | People only: the customer | Acceptance bound to the exact publication → read back | `POST /api/v1/customer-portal/acceptance/challenge`, `POST /api/v1/customer-portal/acceptance/confirm`, customer only |
-| `change_order.send_for_decision` | A3 | Asks first | Send a committed change order for the customer's decision. | Committed change-order revision | `consent`, `recipient`, `disclosure` | Sales | Change-order publication → delivery and publication read back | new |
+| `change_order.send_for_decision` | A3 | Asks first | Always asks first. Send a committed change order for the customer's decision. | Committed change-order revision | `consent`, `recipient`, `disclosure` | Sales | Change-order publication → delivery and publication read back | new |
 | `terms.legal_signoff` | H | — | Sign off a terms template or non-standard terms. | — | — | People only: owner | Terms version → read back | new |
 | `cancellation.record` | A3 | Asks first | Record a customer's cancellation and hold the affected work. | Authenticated customer request; cancellation terms | `identity` | Sales | Cancellation and holds → read back | new |
 
@@ -854,15 +1015,15 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
-| `rfq.send` | A2 | Asks first | Ask verified suppliers for prices on takeoff lines. | Takeoff lines; supplier records | `counterparty`, `privacy` | Production | Request message → delivery status | new |
+| `rfq.send` | A2 | Asks first | Always asks first. Ask verified suppliers for prices on takeoff lines. | Takeoff lines; supplier records | `counterparty`, `privacy` | Production | Request message → delivery status | new |
 | `supplier_quote.extract` | A1 | — | Extract a supplier quote and a landed-cost comparison (price, freight, minimums, lead time) from a received document. | Document bytes hash; other quotes and snapshots | — | — | Extraction (proposed) | new |
 | `supplier_quote.confirm` | A3 | Asks first | Confirm extracted supplier quote values into a supplier quote record. | Extraction and its source document | `counterparty` | Production | Supplier quote → read back | new; predecessor `erp:request_create_supplier_quote` |
 | `catalog.record_snapshot` | A2 | Acts within your limits | Record an immutable catalog snapshot from an authenticated supplier feed; documents go through `supplier_quote.extract`. | Feed readback hash | `counterparty` | Production | Snapshot → read back | new |
-| `purchase_order.place` | A3 | Asks first | Place a purchase order. | Design or takeoff revision; job; budget; selected quote with its landed-cost comparison; snapshot | `counterparty`, `price_basis`, `design_basis`, `amount_ceiling` | Production; owner above the ceiling and for a first order with a supplier | Order record and supplier send → supplier acknowledgement | new; predecessor `erp:request_create_supplier_order` |
-| `purchase_order.expedite` | A2 | Asks first | Ask a supplier for the status of an open order. | Order; promised date | `counterparty` | Production | Status request → delivery status; reply recorded | new |
+| `purchase_order.place` | A3 | Asks first | Always asks first. Place a purchase order. | Design or takeoff revision; job; budget; selected quote with its landed-cost comparison; snapshot | `counterparty`, `price_basis`, `design_basis`, `amount_ceiling` | Production; owner above the ceiling and for a first order with a supplier | Order record and supplier send → supplier acknowledgement | new; predecessor `erp:request_create_supplier_order` |
+| `purchase_order.expedite` | A2 | Asks first | Always asks first. Ask a supplier for the status of an open order. | Order; promised date | `counterparty` | Production | Status request → delivery status; reply recorded | new |
 | `purchase_order.record_acknowledgement` | A2 | Acts within your limits | Record a supplier's order acknowledgement (lines, quantities, prices and promised date) when it matches the order exactly; any difference becomes an exception, never an agreed change. | The acknowledgement from the supplier's verified contact; the order revision | `counterparty`, `exact_match` | Production | Acknowledgement on the order → read back | new |
-| `purchase_order.change` | A3 | Asks first | Change or cancel a purchase order. | Order; reason; cost effect | `counterparty`, `amount_ceiling` | Production; owner above the ceiling | Order revision and supplier send → supplier acknowledgement | new; predecessor `erp:request_transition_supplier_order` |
-| `supplier_return.request` | A3 | Asks first | Ask a supplier to take back damaged, wrong, defective or surplus material for a credit or a replacement, naming the order, lots and quantities. Owners: `purchasing_inventory`, `billing_reconciliation`. | The order and its terms; the receipt, NCR or count behind it; lot identity and quantities; the credit or replacement asked for | `counterparty`, `stock`, `amount_ceiling`, `privacy` | The proposing specialist's reviewer | Return request → supplier acknowledgement (return authorization) | new |
+| `purchase_order.change` | A3 | Asks first | Always asks first. Change or cancel a purchase order. | Order; reason; cost effect | `counterparty`, `amount_ceiling` | Production; owner above the ceiling | Order revision and supplier send → supplier acknowledgement | new; predecessor `erp:request_transition_supplier_order` |
+| `supplier_return.request` | A3 | Asks first | Always asks first. Ask a supplier to take back damaged, wrong, defective or surplus material for a credit or a replacement, naming the order, lots and quantities. Owners: `purchasing_inventory`, `billing_reconciliation`. | The order and its terms; the receipt, NCR or count behind it; lot identity and quantities; the credit or replacement asked for | `counterparty`, `stock`, `amount_ceiling`, `privacy` | The proposing specialist's reviewer | Return request → supplier acknowledgement (return authorization) | new |
 | `receipt.match` | A2 | Acts within your limits | Match a receipt a person recorded to order lines; mismatches become exceptions. | Receipt record; packing slip; order lines | `stock` | Production | Match → read back | new; people record receipts through `POST /api/v1/inventory/commands` (`receive`) |
 | `stock.reserve` | A2 | Acts within your limits | Reserve or release exact stock (lot or coil) for a job or shop order. | Position, lot identity and quantity | `stock` | Production | Reservation → position read back | `POST /api/v1/inventory/commands` (`reserve`, `release_reservation`) |
 | `stock.quarantine` | A2 | Acts within your limits | Protective. Quarantine a suspect lot with its reason code. Owners: `purchasing_inventory`, `quality_inspector`. | Damage or NCR evidence | — | Never asks first | Quarantine → position read back | `POST /api/v1/inventory/commands` (`quarantine`) |
@@ -930,12 +1091,12 @@ safety occurrence. The Worker registry and the human release route must preserve
 
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
-| `invoice.commit_intent` | A3 | Asks first | Commit an invoice intent (deposit, progress or final) with its tax. | Accepted commercial facts; completion; prior invoices; tax rule; provider mapping | `tax_basis`, `amount_ceiling` | Accounting; owner above the ceiling | Intent, then QuickBooks invoice → QuickBooks readback (id, amount, tax, customer) | `POST /api/v1/accounting/intents`, `POST /api/v1/accounting/intents/{intent}/approve`; final invoices `POST /api/v1/quickbooks/final-invoices/{intent}/approve` |
+| `invoice.commit_intent` | A3 | Asks first | Always asks first. Commit an invoice intent (deposit, progress or final) with its tax. | Accepted commercial facts; completion; prior invoices; tax rule; provider mapping | `tax_basis`, `amount_ceiling` | Accounting; owner above the ceiling | Intent, then QuickBooks invoice → QuickBooks readback (id, amount, tax, customer) | `POST /api/v1/accounting/intents`, `POST /api/v1/accounting/intents/{intent}/approve`; final invoices `POST /api/v1/quickbooks/final-invoices/{intent}/approve` |
 | `reconciliation.resolve` | A3 | Asks first | Resolve a reconciliation exception: a payment match or an explained mismatch. | Provider readbacks; ledger facts; exact amounts | `exact_match` | Accounting | Resolution → read back | `POST /api/v1/accounting/exceptions/{exception}/resolve`; predecessor `erp:request_resolve_reconciliation` |
 | `supplier_bill.match` | A1 | — | Extract a supplier bill and match it to the order and the receipt (three-way). | Bill bytes hash; order; receipt | `payee_protected` | — | Match (proposed) | new |
-| `supplier_bill.approve` | A3 | Asks first | Approve a matched supplier bill for payment. | Three-way match | `payee_protected`, `counterparty`, `amount_ceiling`, `segregation` | Accounting; owner above the ceiling | Bill posted to QuickBooks → QuickBooks readback | new |
+| `supplier_bill.approve` | A3 | Asks first | Always asks first. Approve a matched supplier bill for payment. | Three-way match | `payee_protected`, `counterparty`, `amount_ceiling`, `segregation` | Accounting; owner above the ceiling | Bill posted to QuickBooks → QuickBooks readback | new |
 | `supplier_message.draft` | A1 | — | Draft a message to a supplier or subcontractor: a question, a confirmation, a payment status or a document request; it never confirms, asks for or changes bank details. Owners: `billing_reconciliation`, `purchasing_inventory`. | Order, bill or payment facts; the verified contact | `counterparty`, `no_commitment` | — | Draft (proposed) | new |
-| `supplier_message.send` | A3 | Asks first | Send the approved message to a supplier or subcontractor. Owners: `billing_reconciliation`, `purchasing_inventory`. | Approved draft hash; the verified contact | `counterparty`, `no_commitment`, `privacy` | The proposing specialist's reviewer | Message → delivery status | new |
+| `supplier_message.send` | A3 | Asks first | Always asks first. Send the approved message to a supplier or subcontractor. Owners: `billing_reconciliation`, `purchasing_inventory`. | Approved draft hash; the verified contact | `counterparty`, `no_commitment`, `privacy` | The proposing specialist's reviewer | Message → delivery status | new |
 | `payment_run.draft` | A1 | — | Draft the list of approved bills due for payment; a person pays them in the bank. | Approved bills | `payee_protected` | — | Payment list draft | new |
 | `payee.freeze` | A2 | Acts within your limits | Protective. Freeze payments to a counterparty whose bank or remittance details someone asked to change. Owners: `billing_reconciliation`, `purchasing_inventory`. | The inbound request | — | Never asks first | Payee frozen → read back | new |
 | `payee.change_details` | H | — | Change a counterparty's bank or remittance details. | — | — | People only: accounting verifies by calling the number on file; the owner approves | Payee details version → read back | new |
@@ -958,7 +1119,7 @@ safety occurrence. The Worker registry and the human release route must preserve
 | `gate.block` | A2 | Acts within your limits | Protective. Block a gate whose authority fact is missing, expired or contradicted. | Authority record versions | — | Never asks first | Gate blocked → read back | new; predecessor `erp:request_update_gate` |
 | `gate.clear` | A3 | Asks first | Always asks first. Clear a gate with its evidence. | Evidence and issuer readback | `gates`, `segregation` | Production | Gate cleared → read back | `POST /api/v1/production/jobs/{job}/gates/{gate}/clearance` |
 | `gate.waive` | H | — | Waive a gate. | — | — | People only: owner | Waiver → read back | new |
-| `document.request` | A2 | Asks first | Ask a subcontractor or supplier for a certificate, clearance or insurance document. | The authority gap; verified contact | `counterparty`, `privacy` | Production | Request → delivery status | new |
+| `document.request` | A2 | Asks first | Always asks first. Ask a subcontractor or supplier for a certificate, clearance or insurance document. | The authority gap; verified contact | `counterparty`, `privacy` | Production | Request → delivery status | new |
 | `authority.record` | A3 | Asks first | Always asks first. Record an internal Worker Competency from a completed Internal Competency Assessment. Record, verify and revoke each write a new version, never an edit. External kinds (a licence, clearance, permit, inspection or certificate from an issuer) are refused: they are evaluated with `authority.evaluate` and never recorded by this action. The trigger is a person's press on compliance's view for this action: an `owner_request` with source `request` whose expected action is `authority.record`, from an authenticated owner or staff member, which the step cites. | The assessment fact, plus `evidence_refs`, each with its SHA-256; the press | `requester`, `segregation` | Production holding `authority:approve`, or the owner; never the worker the record is about | New Worker Competency version → read back from the D1 owned store | `POST /api/v1/authority-records/commands` plus the step decision: an approval runs the same internal competency command natively in D1, inside the decision's own transaction |
 | `privacy_request.answer` | A3 | Asks first | Always asks first. Answer a request to see or correct personal data. | Verified identity; records in scope | `identity`, `privacy`, `disclosure` | Owner | Response → delivery status | new |
 | `privacy_incident.contain` | A2 | Asks first | Contain suspected exposure: revoke portal links and device pairings. | The exposure signal | — | Owner | Revocations → read back | `POST /api/v1/customer-portal/links/{link}/revoke`, `POST /api/v1/device-pairings/{pairing}/revoke` |
@@ -972,8 +1133,8 @@ safety occurrence. The Worker registry and the human release route must preserve
 | `service_case.open` | A2 | Acts within your limits | Open a service, complaint or warranty case from an inbound request. | Inbound receipt; verified customer and property | `identity` | Ops | Case → read back | `POST /api/v1/service-cases` |
 | `emergency.page` | A2 | Acts within your limits | Protective. Page the on-call person for an active leak or a safety risk. Owners: `customer_care_warranty`, `lead_concierge`, `field_safety`. | Inbound content; emergency classification | `named_person` | Never asks first | Page repeated until acknowledged → acknowledgement | new |
 | `service_case.triage` | A1 | — | Triage cause and responsibility hypotheses without prejudging. | Design, materials and lots, evidence, weather, maintenance | — | — | Triage (proposed) | new |
-| `remedy.offer` | A3 | Asks first | Offer a remedy or a warranty position; the customer decides. | Triage; warranty terms; cost | `amount_ceiling`, `consent`, `recipient`, `disclosure` | Owner | Remedy and offer → remedy read back; delivery status | Remedy routes under `/api/v1/service-cases/{case}` |
-| `cost_recovery.claim` | A3 | Asks first | Claim cost back from a supplier, manufacturer or subcontractor. | Root-cause evidence; cost | `counterparty`, `amount_ceiling` | Accounting; owner above the ceiling | Claim → counterparty acknowledgement | Cost-recovery routes under `/api/v1/service-cases/{case}/cost-recovery-claims/{claim}` |
+| `remedy.offer` | A3 | Asks first | Always asks first. Offer a remedy or a warranty position; the customer decides. | Triage; warranty terms; cost | `amount_ceiling`, `consent`, `recipient`, `disclosure` | Owner | Remedy and offer → remedy read back; delivery status | Remedy routes under `/api/v1/service-cases/{case}` |
+| `cost_recovery.claim` | A3 | Asks first | Always asks first. Claim cost back from a supplier, manufacturer or subcontractor. | Root-cause evidence; cost | `counterparty`, `amount_ceiling` | Accounting; owner above the ceiling | Claim → counterparty acknowledgement | Cost-recovery routes under `/api/v1/service-cases/{case}/cost-recovery-claims/{claim}` |
 | `service_case.close` | A3 | Asks first | Close a case after the remedy is verified and the customer is told. | Verification; message receipts | — | Ops | Case closed → read back | Routes under `/api/v1/service-cases/{case}` |
 | `cancellation.hold` | A2 | Acts within your limits | Protective. Hold a job as soon as the customer asks to cancel, while the request is verified and decided: nothing new is committed or released and no package starts; it cancels nothing and sends nothing, and the hold ends when `cancellation.record` records the cancellation or `cancellation.release_hold` releases it. Owners: `customer_care_warranty`, `scheduler_dispatcher`. | The cancellation request and its channel | — | Never asks first | Job on cancellation hold; production notified → hold read back | new |
 | `cancellation.release_hold` | A3 | Asks first | Always asks first. Release a cancellation hold when the customer withdraws the request, or the request proves not to be the customer's. Owners: `customer_care_warranty`, `scheduler_dispatcher`. | The hold; the customer's verified withdrawal, or the verification showing the request was not the customer's | `identity` | The proposing specialist's reviewer | Hold released → read back | new |
@@ -984,11 +1145,11 @@ safety occurrence. The Worker registry and the human release route must preserve
 |---|---|---|---|---|---|---|---|---|
 | `content.draft` | A1 | — | Draft content: posts, pages, listings, emails, ads and review responses. | Claims records; authorized assets | `claims` | — | Content draft | new |
 | `claim.approve` | A3 | Asks first | Always asks first. Approve a claims record: wording, scope, evidence, limits and expiry. | Evidence and its issuer | — | Owner | Claims record → read back | new |
-| `content.publish` | A3 | Asks first | Publish approved content to a channel. | Approved content hash | `claims`, `privacy` | Owner | Publication → provider publication readback | `POST /api/v1/postiz/intents/{intent}/approve`, `POST /api/v1/postiz/intents/{intent}/reconcile` |
+| `content.publish` | A3 | Asks first | Always asks first. Publish approved content to a channel. | Approved content hash | `claims`, `privacy` | Owner | Publication → provider publication readback | `POST /api/v1/postiz/intents/{intent}/approve`, `POST /api/v1/postiz/intents/{intent}/reconcile` |
 | `content.stop` | A2 | Asks first | Stop scheduled or live content whose claim was withdrawn or misstated; suppression on claim expiry stays deterministic. | Claims record state | — | Owner | Stop → provider readback | `POST /api/v1/postiz/intents/{intent}/stop` |
-| `campaign.send` | A3 | Asks first | Send an email or SMS campaign. | Consent per recipient; suppression list version | `consent`, `quiet_hours`, `frequency`, `claims`, `disclosure` | Owner | Sends → delivery per recipient | new |
-| `review_response.publish` | A3 | Asks first | Publish a response to a public review. | The review; facts | `claims`, `privacy`, `disclosure` | Owner | Response → platform readback | new |
-| `ad_spend.commit` | A3 | Asks first | Set or change a paid campaign budget. | Performance facts | `amount_ceiling` | Owner | Budget → platform readback | new |
+| `campaign.send` | A3 | Asks first | Always asks first. Send an email or SMS campaign. | Consent per recipient; suppression list version | `consent`, `quiet_hours`, `frequency`, `claims`, `disclosure` | Owner | Sends → delivery per recipient | new |
+| `review_response.publish` | A3 | Asks first | Always asks first. Publish a response to a public review. | The review; facts | `claims`, `privacy`, `disclosure` | Owner | Response → platform readback | new |
+| `ad_spend.commit` | A3 | Asks first | Always asks first. Set or change a paid campaign budget. | Performance facts | `amount_ceiling` | Owner | Budget → platform readback | new |
 
 #### Catalog: AI auditor (`independent_auditor`)
 
@@ -1025,7 +1186,7 @@ A receipt has exactly these fields:
 | `needs_from_you` | `null`, or `{reviewer_role, person_id, ask}` | "Needs you", with the ask and its buttons |
 | `sources` | A list of `{fact_id, version, hash}` | "Sources" |
 | `policy` | `{policy_id, version, result, checks, reason_codes}`; `result` is `allow`, `needs_approval` or `deny` | "Checked", each check in words |
-| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "within your limits", or "Practice run" |
+| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "Auto with undo", or "Practice run" |
 | `tool` | `{name, binding, idempotency_key, request_hash}`, or `null` for `A0` and `A1` | "Used" |
 | `readback` | `{source, reference, response_hash, matched}`, or `null` | "Confirmed by" |
 | `outcome` | `null` while the step is open, then `succeeded`, `failed`, `unknown` or `abstained` | The state, in words |
@@ -1054,10 +1215,14 @@ matches a cited fact.
 | `abstained` | The specialist stopped before acting, recorded an abstention code, and escalated to a named person. |
 
 `policy.reason_codes` carries the reason. The machine-readable contract lists the codes of
-`failed`, `unknown` and `abstained` steps, and the one code a `succeeded` step may carry:
+`failed`, `unknown` and `abstained` steps, and the three codes a `succeeded` step may carry:
 `view_spec_invalid`, which the face's answer receipt carries when it refused a view (see "Requests
-through the face"). An `unknown` outcome becomes `succeeded` or `failed` only through
-reconciliation, recorded as a new receipt version.
+through the face"), and `applied_by_person` and `superseded`, which close a prepared people-only
+draft when a person made the change or a newer draft replaced it (see "Action classes"). The app's
+words for each of the three carry a note for the person (`app/src/components/ai/words.ts`): a
+closed draft's receipt shows its note as what happened since, and an answer whose view was refused
+shows it under the answer in the conversation, never on a receipt. An `unknown` outcome becomes
+`succeeded` or `failed` only through reconciliation, recorded as a new receipt version.
 
 ### Undo
 
@@ -1135,11 +1300,12 @@ Worker takes the `close_model` 3 block, the routed block of a gateway config v2 
 tests in `workers-bus/test/agents-control.test.ts` pin this: "a host on gateway config v2 closes
 with its route, review and mode; unknown model fields are still refused" and "a v3 close is held
 to its strict block, and legacy and routed blocks still close". Deploy the Worker first, then the
-host. A host sends the newest close model it knows that is no newer than the Worker's: today's
-host sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still
-gets the block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on
-a later close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block records the effort, run class, qualification, release and
-data class, so only its live or shadow output is held to a qualification (see "Qualification").
+host. A host sends the newest close model it knows that is no newer than the Worker's: today's host
+sends the `close_model` 3 block to a Worker that names 3 or later, so a Worker on 4 still gets the
+block it accepts as the one before its own (`agent-host/test/host.test.ts`, "a Worker on a later
+close model still gets the v3 block, the newest this host knows"). Only a `close_model` 3 block
+records the effort, run class, qualification, release and data class, so only its live or shadow
+output is held to a qualification (see "Qualification").
 
 ## Shared memory
 
@@ -1186,6 +1352,16 @@ evidence.
   fell back, practice and whether it stopped, the counted window and the bar (see "Delegation"),
   the qualification it relies on, the decision history, failed readbacks, and the most proposals in
   any hour, day or week. Its version moves with every proposal of the pair.
+- An open lead proposal is the fact `lead_proposal/<step_id>`, readable at `sales:read` (the owner,
+  ops and sales) and owned: the `lead_id`, the proposed `fields`, `proposed_at`, and the `source` it
+  was cited to (`signal/<id>`). Its fields carry customer details, so only runs and screens with
+  that view read them; they never reach the snapshot of a run that writes an owner report, nor a
+  watch digest. A lead links its five newest open proposals, so a later run about the lead holds
+  them. A proposal stays open until a `lead_fact.confirm` that policy admitted names it, whether a
+  person then approves it, declines it or does it by hand, or until a newer proposal for the same
+  lead (by time, then by the order they were recorded) sets every key it set; a newer one that sets
+  only some of them leaves it open. A closed proposal reads as no fact, and of two confirms of one
+  proposal only the first to land is admitted.
 - `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
   changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
   is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.
@@ -1371,6 +1547,65 @@ work.
 | `independent_auditor` | `injection_flagged` | On `injection.flagged` | Inbound content tried to instruct an agent | `finding.raise`, `specialist.hold` |
 | `independent_auditor` | `closure_submitted` | On `finding.closure_submitted` | Closure evidence for a finding arrives | `finding.close` |
 
+### The inbound signal
+
+`inbound.received`, the trigger of `new_inbound`, is the insert of an inbound envelope. Each one
+gives one `event` signal for `lead_concierge` with watch id `new_inbound`. Its `source` is the
+channel the envelope came by, its subject is the lead the envelope becomes (whether or not that
+lead exists yet), and its dedupe key is `inbound:<envelope_id>`, so it counts once: the envelope's
+insert appends it, best effort (intake waits on it at most two seconds), and a five-minute sweep
+appends any from the last two days that is still missing. An
+envelope a CRM import wrote is never inbound, and a release-smoke envelope, or one with neither a
+phone nor an email (intake refuses it after the insert), gives no signal.
+
+The channel follows the envelope's source: `web_form`, or `instant_estimate` for an instant
+estimate, from the website; `phone`, or `newo_call` for a Newo call; `walk_in` for an office
+capture of a walk-in, otherwise `office`, from manual entry; and `gbp`, `ad` and `referral` as
+they are. The content holds exactly these keys:
+
+- `envelope_id` and `channel`;
+- `brand`: `ironwrap`, `iroof` or `null`;
+- `received_via`: which of the tenant's addresses or numbers the inbound reached; `null` until
+  intake records that;
+- `sender`: `customer_id`, `matched_on` (`email`, `phone`, `email_and_phone` or `null`) and
+  `conflict`. It names the tenant's customer whose email or phone equals the sender's, both read
+  by one normaliser (a stored `5875550150` is the sender's `+15875550150`), and never the
+  customer this envelope itself created. The match is recorded only and
+  links nothing. An email and a phone that belong to two different customers are a conflict, which
+  names neither;
+- `has_phone` and `has_email`;
+- `service`, as the sender gave it, at most 200 characters;
+- `excerpt`: the sender's message, or a call's hand-off summary, trimmed, at most 1000 characters;
+- `form_fields`: `address` (the address parts the sender gave, joined), `scope` and `timing`, at
+  most 600, 2000 and 600 characters, so that `lead_fact.propose` can take each of its four values
+  from the signal it cites.
+
+The content has no field for the sender's name, phone number or email address. The excerpt and the
+form fields hold what the sender wrote, so they may hold a name, a number or an address
+(`form_fields.address` is the address the sender gave): the receptionist needs that text. Inside the
+run they are `untrusted_text`, as every signal's content is, and they never reach a watch digest or
+an owner report's snapshot: no watch condition reads an inbound signal, and a report run reads only
+its own watch signal and the objects that signal names.
+
+`AGENT_INBOUND_FROM` switches the producer: envelopes are inbound from that instant on, and while
+it is unset or blank nothing is produced. Production stays off until agent signals have a
+retention and erasure path aligned with envelope retention (`agent_signals` is append-only and
+would hold the excerpt and the form fields; `COMPLIANCE-REGISTER.md` requires minimisation and
+destruction), and then until the owner decides to go live; a test pins it blank. QA and local hold
+synthetic data only and are on from their recorded instant.
+
+Not built yet (see `CAPABILITY-MATRIX.md`):
+
+- Email, SMS, WhatsApp and social messages: the Worker takes none of them in yet, so they give no
+  signal. WhatsApp is a first-class channel for the owner and a named gap.
+- `newo_call` is mapped, but no Newo call makes an envelope while `NEWO_ENABLED` is false.
+- A repeat from the same contact inside the 72-hour dedupe window makes no envelope, so it gives no
+  signal.
+- An inbound from a customer with an accepted job still goes to `lead_concierge`; routing it to
+  `customer_care_warranty` (its `customer_message` watch) is not built.
+- `received_via` stays `null` until intake records which address or number was reached.
+- An inbound event's `actor` is `null`: the Worker writes no `external` actor yet.
+
 ### Owner reports
 
 | Report | Watch | Composed by | Contents | Delivery |
@@ -1494,6 +1729,16 @@ catalog action gets a plain answer and the screen where the person can do it the
 that arrives inside a message, document or email is never a person's request, whoever it claims to
 come from.
 
+A person's own words run the same action as a button (owner ruling D-04). "Move Jordan's
+inspection to Friday" typed to the face is the same request as the press on that action: the
+owning specialist proposes it, and the same policy, decision and receipt apply; the face never
+executes it. Views the face draws stay ad hoc: each answers one question and is never kept as a
+screen. Not built yet (see `CAPABILITY-MATRIX.md`): the ask route runs nothing itself, and the
+face's run may propose only its own actions or hand the work to its owner (`handoff.create`); an
+ask shows its answer, its view and that view's actions, never a decision, so a decision does not
+appear in the same conversation yet; `authority.record` answers only a press; and the app has no
+Ask IronWrap screen yet.
+
 ## Model routing
 
 Which provider, model and billing serve each runtime tier is per-tenant configuration. Routes are
@@ -1612,8 +1857,9 @@ is not held to one (see "Coordination run"). Changing a specialist's model, a de
 included, needs that pair qualified first. Without a qualified route the specialist abstains with
 `no_qualified_route`. A specialist is a delegation candidate (see "Delegation") only when the
 latest qualification for the provider, model, effort and release of its most recent closed run
-passed; a close on an older close model records no release, so a specialist whose most recent
-closed run is one is no candidate. The delegation window counts decisions by release, not by
+passed. A close on an older close model records no release, and a synthetic v3 close, which needs
+no qualification, may record none either; a specialist whose most recent closed run records no
+release is no candidate. The delegation window counts decisions by release, not by
 route; the route is held to its qualification instead (see "Delegation", item 13).
 
 ### Independence
@@ -1716,10 +1962,11 @@ model family that proposed the work under review (see "Coordination run").
   portal session; `external` is an inbound sender the OS has not authenticated (`authenticated`
   false, `ref` `channel:<email|sms|web|voice>`). A message that claims to come from staff or the
   owner without that authentication is `external`, and its claim is untrusted text. Watch firings
-  and handoffs carry `null`. No inbound channel feeds the team yet, so the Worker writes only
-  `owner`, `staff` and `worker` actors so far, each with `ref` `person:<user_id>`. A person's ask
-  or press is an `owner_request` with source `ask` (to the face) or `request` (to the owning
-  specialist), and it gets the owner's trust only when `actor.type` is `owner`.
+  and handoffs carry `null`. So far an inbound event ("The inbound signal") carries `null` too: the
+  Worker writes only `owner`, `staff` and `worker` actors, each with `ref` `person:<user_id>`, and
+  no `external` actor yet. A person's ask or press is an `owner_request` with source `ask` (to the
+  face) or `request` (to the owning specialist), and it gets the owner's trust only when
+  `actor.type` is `owner`.
 - An access change (a crew phone pairing, a role change or a device change) is prepared
   (`access.prepare_change`) only on the request of an owner or staff member, either as the run's
   own ask or request or as the root of its handoff chain; the step sets that request as
@@ -1969,11 +2216,11 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "inbound.quarantine", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"], "name": "setting aside a suspicious message"},
     {"action_id": "inbound.release", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"], "name": "releasing a set-aside message"},
     {"action_id": "customer_message.draft", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a customer message"},
-    {"action_id": "customer_message.send", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer message"},
+    {"action_id": "customer_message.send", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer message"},
     {"action_id": "followup.pause", "owners": ["lead_concierge", "billing_reconciliation", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "pausing follow-ups"},
     {"action_id": "followup.resume", "owners": ["lead_concierge", "billing_reconciliation", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "resuming follow-ups"},
     {"action_id": "visit.hold_slot", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "holding a site visit time"},
-    {"action_id": "visit.confirm", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming the visit time with the customer"},
+    {"action_id": "visit.confirm", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming the visit time with the customer"},
     {"action_id": "consent.record", "owners": ["lead_concierge", "customer_care_warranty", "marketing_reputation"], "aggregate": "consent", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording the customer's consent"},
     {"action_id": "suppression.apply", "owners": ["lead_concierge", "customer_care_warranty", "marketing_reputation"], "aggregate": "consent", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "stopping messages to someone who asked"},
     {"action_id": "conversation.assign_person", "owners": ["lead_concierge", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "handing a conversation to a person"},
@@ -1981,14 +2228,14 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "reception_script.publish", "owners": ["lead_concierge"], "aggregate": "reception_script", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "publishing the phone answering script"},
     {"action_id": "takeoff.draft", "owners": ["estimator"], "aggregate": "takeoff", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a material takeoff"},
     {"action_id": "quote.draft_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a quote"},
-    {"action_id": "quote.commit_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in a quote revision"},
-    {"action_id": "quote.apply_discount", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "applying a discount"},
+    {"action_id": "quote.commit_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in a quote revision"},
+    {"action_id": "quote.apply_discount", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "applying a discount"},
     {"action_id": "quote.flag_reprice", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "flagging quotes to re-price"},
     {"action_id": "price_book.propose_change", "owners": ["estimator", "purchasing_inventory"], "aggregate": "price_book", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "suggesting a price book change"},
     {"action_id": "change_order.draft", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a change order"},
-    {"action_id": "change_order.commit", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in a change order"},
+    {"action_id": "change_order.commit", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in a change order"},
     {"action_id": "insurance_supplement.draft", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting an insurance supplement"},
-    {"action_id": "insurance_supplement.send", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the supplement to the insurer"},
+    {"action_id": "insurance_supplement.send", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the supplement to the insurer"},
     {"action_id": "measurement.extract", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reading measurements from a report or photos"},
     {"action_id": "measurement.match_report", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching a measurement report to its job"},
     {"action_id": "measurement.accept_version", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "accepting measurements for pricing"},
@@ -1997,23 +2244,23 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "design_basis.commit", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in the design"},
     {"action_id": "design_basis.substitute", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "substituting a product in the design"},
     {"action_id": "proposal.draft_revision", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a proposal"},
-    {"action_id": "proposal.publish", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the proposal to the customer"},
+    {"action_id": "proposal.publish", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the proposal to the customer"},
     {"action_id": "proposal.withdraw", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "withdrawing a proposal"},
-    {"action_id": "portal_link.send", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer portal link"},
+    {"action_id": "portal_link.send", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer portal link"},
     {"action_id": "portal_link.revoke", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "turning off a customer portal link"},
     {"action_id": "acceptance.customer_decision", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "acceptance", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "accepting or declining an offer"},
-    {"action_id": "change_order.send_for_decision", "owners": ["proposal_contract"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a change order for a decision"},
+    {"action_id": "change_order.send_for_decision", "owners": ["proposal_contract"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a change order for a decision"},
     {"action_id": "terms.legal_signoff", "owners": ["proposal_contract"], "aggregate": "terms", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "signing off contract terms"},
     {"action_id": "cancellation.record", "owners": ["proposal_contract"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a cancellation"},
-    {"action_id": "rfq.send", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking suppliers for prices"},
+    {"action_id": "rfq.send", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking suppliers for prices"},
     {"action_id": "supplier_quote.extract", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reading a supplier quote"},
     {"action_id": "supplier_quote.confirm", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming a supplier quote"},
     {"action_id": "catalog.record_snapshot", "owners": ["purchasing_inventory"], "aggregate": "catalog_snapshot", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "saving a supplier price list"},
-    {"action_id": "purchase_order.place", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "placing a purchase order"},
-    {"action_id": "purchase_order.expedite", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking on an open order with a supplier"},
+    {"action_id": "purchase_order.place", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "placing a purchase order"},
+    {"action_id": "purchase_order.expedite", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking on an open order with a supplier"},
     {"action_id": "purchase_order.record_acknowledgement", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a supplier's order confirmation"},
-    {"action_id": "purchase_order.change", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "changing a purchase order"},
-    {"action_id": "supplier_return.request", "owners": ["purchasing_inventory", "billing_reconciliation"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking a supplier to take material back"},
+    {"action_id": "purchase_order.change", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "changing a purchase order"},
+    {"action_id": "supplier_return.request", "owners": ["purchasing_inventory", "billing_reconciliation"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking a supplier to take material back"},
     {"action_id": "receipt.match", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching delivered material to the order"},
     {"action_id": "stock.reserve", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reserving stock for a job or shop order"},
     {"action_id": "stock.quarantine", "owners": ["purchasing_inventory", "quality_inspector"], "aggregate": "inventory_position", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["damage_in_transit", "moisture_or_white_rust", "finish_defect", "colour_lot_mismatch", "out_of_tolerance", "wrong_lot", "certificate_missing", "certificate_mismatch", "failed_first_piece", "nonconformance_open", "recall_or_bulletin", "unknown_identity", "count_variance", "suspected_fraud"], "name": "setting aside suspect stock"},
@@ -2052,12 +2299,12 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "ncr.verify_close", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing a defect report after checking the fix"},
     {"action_id": "completion.draft_packet", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting the completion packet"},
     {"action_id": "completion.accept", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "accepting the completed work"},
-    {"action_id": "invoice.commit_intent", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "creating a deposit, progress or final invoice"},
+    {"action_id": "invoice.commit_intent", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "creating a deposit, progress or final invoice"},
     {"action_id": "reconciliation.resolve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "resolving a payment matching problem"},
     {"action_id": "supplier_bill.match", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching a supplier bill to its order and delivery"},
-    {"action_id": "supplier_bill.approve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "approving a supplier bill for payment"},
+    {"action_id": "supplier_bill.approve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "approving a supplier bill for payment"},
     {"action_id": "supplier_message.draft", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a supplier message"},
-    {"action_id": "supplier_message.send", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a supplier message"},
+    {"action_id": "supplier_message.send", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a supplier message"},
     {"action_id": "payment_run.draft", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "listing bills due for payment"},
     {"action_id": "payee.freeze", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "payee", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "freezing payments to a payee"},
     {"action_id": "payee.change_details", "owners": ["billing_reconciliation"], "aggregate": "payee", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "changing a payee's bank details"},
@@ -2076,7 +2323,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "gate.block", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "blocking a job gate"},
     {"action_id": "gate.clear", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "clearing a job gate"},
     {"action_id": "gate.waive", "owners": ["compliance"], "aggregate": "gate", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "waiving a job gate"},
-    {"action_id": "document.request", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking for a certificate or insurance document"},
+    {"action_id": "document.request", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking for a certificate or insurance document"},
     {"action_id": "authority.record", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording an internal worker competency"},
     {"action_id": "privacy_request.answer", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "answering a personal data request"},
     {"action_id": "privacy_incident.contain", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "stopping a possible data leak"},
@@ -2085,18 +2332,18 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "service_case.open", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "opening a service case"},
     {"action_id": "emergency.page", "owners": ["customer_care_warranty", "lead_concierge", "field_safety"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "paging the on-call person"},
     {"action_id": "service_case.triage", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "looking into the cause of a service case"},
-    {"action_id": "remedy.offer", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "offering a fix or warranty position"},
-    {"action_id": "cost_recovery.claim", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting", "name": "claiming costs back from another company"},
+    {"action_id": "remedy.offer", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "offering a fix or warranty position"},
+    {"action_id": "cost_recovery.claim", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting", "name": "claiming costs back from another company"},
     {"action_id": "service_case.close", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing a service case"},
     {"action_id": "cancellation.hold", "owners": ["customer_care_warranty", "scheduler_dispatcher"], "aggregate": "job", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "holding a job after a cancel request"},
     {"action_id": "cancellation.release_hold", "owners": ["customer_care_warranty", "scheduler_dispatcher"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "lifting a cancellation hold"},
     {"action_id": "content.draft", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting marketing content"},
     {"action_id": "claim.approve", "owners": ["marketing_reputation"], "aggregate": "claim", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "approving a marketing claim"},
-    {"action_id": "content.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "publishing marketing content"},
+    {"action_id": "content.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "publishing marketing content"},
     {"action_id": "content.stop", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "taking down marketing content"},
-    {"action_id": "campaign.send", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending an email or text campaign"},
-    {"action_id": "review_response.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "replying to a public review"},
-    {"action_id": "ad_spend.commit", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "setting an ad budget"},
+    {"action_id": "campaign.send", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending an email or text campaign"},
+    {"action_id": "review_response.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "replying to a public review"},
+    {"action_id": "ad_spend.commit", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "setting an ad budget"},
     {"action_id": "run.verify", "owners": ["independent_auditor"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking the team's completed work"},
     {"action_id": "finding.raise", "owners": ["independent_auditor"], "aggregate": "finding", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "raising an audit finding"},
     {"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "specialist_hold", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "never_targets": ["independent_auditor"], "name": "putting a team member on hold"},
@@ -2236,7 +2483,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     "policy_results": ["allow", "needs_approval", "deny"],
     "permit_kinds": ["none", "draft", "within_limits", "asks_first", "shadow"],
     "reason_codes": {
-      "succeeded": ["view_spec_invalid"],
+      "succeeded": ["view_spec_invalid", "applied_by_person", "superseded"],
       "failed": ["policy_denied", "declined", "approval_expired", "superseded", "done_by_person", "tool_refused", "provider_rejected", "readback_mismatch"],
       "unknown": ["no_readback_yet"],
       "abstained": ["fact_missing", "fact_stale", "fact_conflict", "citation_unverifiable", "action_unregistered", "policy_missing", "ceiling_reached", "no_progress", "provider_unavailable", "no_qualified_route", "injection_suspected", "out_of_scope", "person_requested", "safety_event", "emergency"]
@@ -2246,3 +2493,72 @@ class, start state, owners, the protective and always-asks-first markers, and re
 ```
 
 <!-- ai-team-contract:end -->
+
+## Appendix: autonomy screen mapping
+
+This appendix maps each row of the owner's autonomy screen (see "Dial levels") to the catalog. The
+rows are the rework design's action catalog (A01 to A35) and its Locked rows (L01 to L10), with the
+owner's rulings applied (see "Owner rulings"). Default and "Owner may set" are the screen's dial
+levels. Where a row offers less than the catalog allows, the row is what the screen offers; the
+Worker enforces only the catalog, its caps included. A row whose work no catalog action
+covers says so: it is a voice provider (Newo) step, a System step, or work the catalog does not
+hold. No action is invented for it here.
+
+"Not registered" means the Worker's action registry does not register the action yet, so a step
+that proposes it abstains with `policy_missing`. Only 14 actions are registered today:
+`fact.explain`, `handoff.create`, `exception.escalate`, `note.add`, `delegation.propose_change`,
+`settings.propose_change`, `import.retry_failed`, `lead_fact.propose`, `lead_fact.confirm`,
+`authority.evaluate`, `authority.record`, `access.prepare_change`, `emergency.page` and
+`specialist.hold`. Event-triggered watches do not fire yet. Status here matches
+[`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md).
+
+| Row | On the screen | Catalog actions | Default | Owner may set | Manual twin | Notes and status |
+|---|---|---|---|---|---|---|
+| A01 | Capture the call and propose the lead's details (Newo) | The capture is a Newo step, outside the AI-team catalog; `lead_fact.propose` proposes the details and `lead_fact.confirm` accepts them | Suggest | Off · Suggest · Auto with undo | P03 manual lane: play the recording, type the details | `lead_fact.propose` is registered, on the receptionist's allowlist and cites only the inbound event, but no inbound channel feeds the team yet. `lead_fact.confirm` asks first, has no executor and has a manual undo, so Auto with undo is not available |
+| A02 | Archive spam calls and spam web forms (Newo) | Newo's own spam step, outside the catalog; `inquiry.classify` (spam likelihood); `inbound.quarantine` holds content in which nothing valid remains | Auto with undo | Off · Suggest · Auto with undo | Calls › Close as spam | `inbound.quarantine` is protective (Locked), so Off and Suggest reach only Newo's step and the classification; its release is `inbound.release`, which always asks first. Not registered |
+| A03 | Mark a call urgent from what the caller said | `inquiry.classify` (urgency and emergency); danger also pages (`emergency.page`) | Suggest | Off · Suggest | Urgent? field on the call | `inquiry.classify` is not registered; `emergency.page` is registered. Off for a Prepares action is not built yet |
+| A04 | Link a call to a record when every field matches | `inquiry.link_duplicate` | Auto with undo | Off · Suggest · Auto with undo | Search the customer list and link | Starts within limits, with an automatic undo. Not registered. Its `exact_match` check takes one exact key, so "every field, never the phone number alone" is not built yet |
+| A05 | Create a callback when the caller asks for a person or Newo cannot help (Newo) | The callback request is a Newo step, outside the catalog; `conversation.assign_person` names the person | Auto with undo | Off · Auto with undo | Callbacks › Add callback | `conversation.assign_person` is protective (Locked) and not registered. No callback record exists yet. The reception script in `config/newo` still transfers a caller live (D-03) |
+| A06 | Hold an inspection slot during a call (Newo) | `visit.hold_slot` holds it; Keep booking is `visit.confirm` | Act with approval | Off · Act with approval | P11 Book an inspection | The hold starts within limits, and Keep booking always asks first. Not built yet: neither is registered, voice reception is request-only, and the mid-call webhook is YELLOW (A-05) |
+| A07 | Offer to move or cancel a booking during a call (Newo) | None: no catalog action moves or cancels a booked visit | Act with approval | Off · Act with approval | P10 Change a booking | A Newo step with Staff's Keep change or Undo change, outside the catalog. Not built yet (YELLOW A-05, RED A-16) |
+| A08 | Draft the booking offer (up to three 2-hour slots) and read the lead's reply | `customer_message.draft` drafts the offer; a reply that picks a slot proposes `visit.confirm` (A09) | Act with approval | Off · Suggest · Act with approval | Pick slots in the calendar | No customer message purpose covers a booking offer. Offered slots are not held; they are checked again on the reply. Not registered |
+| A09 | Send booking offers, confirmations and changes | `customer_message.send` (offers and changes); `visit.confirm` (book and confirm) | Act with approval | Off · Act with approval | Send confirmation: text, WhatsApp draft, email or call | Both always ask first. No customer message purpose covers an offer or a change. Not registered |
+| A10 | Send booking reminders | `customer_message.send` | Act with approval | Off · Act with approval | Staff call or text the day before | Never automatic (Q4): `customer_message.send` always asks first. Not built yet: no customer message purpose covers a visit reminder (`schedule_notice` covers crew dates) |
+| A11 | Summarise the callback's context and propose its outcome | `fact.explain` summarises; no catalog action proposes a callback outcome | Suggest | Off · Suggest | Outcome field on the callback | `fact.explain` is registered; no callback record exists yet |
+| A12 | Draft replies to callers, leads and customers | `customer_message.draft`, then `customer_message.send` | Suggest | Off · Suggest · Act with approval | Write the message | `customer_message.send` always asks first and keeps its `disclosure` check. Not registered |
+| A13 | Fill a lead from a pasted email or note | `lead_fact.propose` | Suggest | Off · Suggest | Type the lead | Not built yet: `lead_fact.propose` cites only the inbound event that started its run, so a pasted email or note cannot be its source |
+| A14 | Propose a lead's qualification answers and next step | `inquiry.classify`; recording the triage is `inquiry.record_triage` | Suggest | Off · Suggest | Choose the next step | `inquiry.record_triage` starts within limits, above this row's levels. Not registered |
+| A15 | Read a measurement report into roof areas | `measurement.extract` | Suggest | Off · Suggest | Enter each slope's area | Not registered as a team action; the intake's measurement interpreter, outside the team, proposes values for review |
+| A16 | Draft the quote from the measurements and the catalog | `takeoff.draft`, `quote.draft_revision` | Suggest | Off · Suggest | Quote editor | Drafts only. Committing the quote (`quote.commit_revision`) and any discount (`quote.apply_discount`) always ask first (D-09). Not registered |
+| A17 | Send the proposal | `proposal.publish` | Act with approval | Off · Act with approval | Share proposal | Capped by D-09: always asks first, and the Worker refuses every setting for it. Not registered as a team action; a person's publish is refused while the last delivery is unconfirmed (L04) |
+| A18 | Create follow-up callbacks on days 3, 10 and 21 (System) | None: a System step, outside the catalog | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Not built yet. The receptionist's `follow_up_due` watch drafts follow-up messages and creates no callback |
+| A19 | Draft follow-up texts | `customer_message.draft` and `customer_message.send` (`follow_up`) | Act with approval | Off · Suggest · Act with approval | Write the message | `customer_message.send` always asks first. Not registered |
+| A20 | Fill the contract from the accepted proposal | None: no catalog action drafts a contract from an accepted proposal | Suggest | Off · Suggest | Contract form | Outside the catalog; the template fills the contract by rule on the main lane |
+| A21 | Prepare the production handoff | None for the handoff form; the `acceptance_recorded` watch hands the job on (`handoff.create`) | Suggest | Off · Suggest | Handoff form | `handoff.create` is registered; the watch does not fire yet |
+| A22 | Answer customer questions live | `conversation.answer_live` ("Facts only, live"); `customer_message.draft` for Suggest | Off | Off · Suggest · Facts only, live | A named person replies by a stated time | Not built yet: no live conversation runtime and no `reception_settings` record (decision 15) |
+| A23 | Propose urgency and who pays for a service request | `service_case.triage` | Suggest | Off · Suggest | Urgent? and Who pays fields | A complaint is a service request with a Complaint label (Q2). Not registered |
+| A24 | Draft replies to complaints | `customer_message.draft` (AI customer care) | Suggest | Off · Suggest | Write the reply | Not registered |
+| A25 | Draft a change order | `change_order.draft`; committing it is `change_order.commit`, and sending it `change_order.send_for_decision` | Suggest | Off · Suggest | Change order form | Committing and sending it always ask first. Not registered |
+| A26 | Draft an invoice | None separate: the AI bookkeeper's proposal of `invoice.commit_intent` is the draft | Suggest | Off · Suggest | Invoice form | Not registered; the final invoice is derived natively, outside the team |
+| A27 | Send an invoice | `invoice.commit_intent` (the invoice in QuickBooks) and `customer_message.send` (`invoice_cover_note`) | Act with approval | Off · Act with approval | Send invoice | Both always ask first: `invoice.commit_intent` (D-09) and `customer_message.send`. One row holds two outside actions. Not registered |
+| A28 | Create a callback when a booking offer gets no answer (System) | None: a System step, outside the catalog | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Sends nothing (Q4, under MD-15). Not built yet |
+| A29 | Create a callback when a held slot is not kept (System) | None: a System step, outside the catalog; the freed slot is the expiry of `visit.hold_slot` | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Sends nothing (Q4, under MD-15). Not built yet |
+| A30 | Create a callback when a change proposal gets no answer (System) | None: a System step, outside the catalog | Auto with undo | Off · Auto with undo | Callbacks › Add callback | Sends nothing (Q4, under MD-15). Not built yet |
+| A31 | Draft a cut list from the drawings and measurements | `cut_list.draft` | Suggest | Off · Suggest | Write the cut list | A person passes the first piece before the run (L10). Not registered |
+| A32 | Prepare a supplier bill: match it to the order and the receipt | `supplier_bill.match`, then `supplier_bill.approve` | Act with approval | Off · Act with approval | Enter the bill in QuickBooks | QuickBooks holds the bill (Q9). `supplier_bill.approve` always asks first. Supplier facts have no D1 tables yet. Not registered |
+| A33 | Draft a payment run for approved supplier bills | `payment_run.draft` | Act with approval | Off · Act with approval | Pay the bills in QuickBooks | A Prepares action: the catalog has no approval step for a payment run, and its row says a person pays in the bank where this row says QuickBooks; IronWrap never moves money. Not registered |
+| A34 | Send payment reminders for unpaid invoices | `customer_message.send` (`payment_reminder`), drafted by `customer_message.draft` | Act with approval | Off · Act with approval | Call or email about the unpaid invoice | Never automatic (Q4): `customer_message.send` always asks first. The `invoice_overdue` watch does not fire yet. Not registered |
+| A35 | Draft a purchase order for job materials or coil stock | `purchase_order.place`: the proposal is the draft, and approving it places the order | Act with approval | Off · Act with approval | Write the purchase order | A first order with a new supplier goes to the owner. Sending needs the "sends purchase orders" set (Q1), not built yet. `purchase_order.place` always asks first. Supplier facts have no D1 tables yet. Not registered |
+
+| Row | On the screen | Rule | Catalog actions | Notes and status |
+|---|---|---|---|---|
+| L01 | Stop contact when permission is withdrawn | Always on: protects you (off the dial) | `suppression.apply` (protective) | Takes no setting. Not registered |
+| L02 | Contact without permission or outside calling hours | Never | The `consent` and `quiet_hours` checks on every customer send (`customer_message.send`, `visit.confirm`, `campaign.send` and the other sends) | The calling hours are tenant policy. No customer send is registered yet |
+| L03 | Give a price on a call | Never | The `live_session` and `no_commitment` checks on `conversation.answer_live`; the AI receptionist's hard boundary | Nothing answers live yet |
+| L04 | Resend an outside message (a proposal, a confirmation, an invoice or an order) while the last result is unknown | Never | Every outside send; no step retries a dispatched effect whose outcome is unknown ("Ceilings") | Built for proposal publication only: preparing a publish is refused while the last delivery is unconfirmed (migration 0156). Not built yet for every other send |
+| L05 | Approve a price below the margin floor | Owner only | The `margin_floor` check moves the decision to the owner (OD-32); no operation set covers it | Not built yet: no Worker code checks the margin floor, and the owner's recorded reason on her own item (D-08) is not built |
+| L06 | Release a safety stop | A person only | `safety_stop.release` (people only) | For a crew's stop on a work package and for a stop on a safety occurrence (migration 0165), an owner, ops or production person who did not raise or report it releases it, with no exception for working alone. Not built yet: the "checks site safety" set and release by a named outside person (Q7) |
+| L07 | Refunds, write-offs, waiving a gate, access and settings changes, legal sign-off | People only | `refund.issue`, `write_off.record`, `gate.waive`, `access.change`, `settings.apply`, `terms.legal_signoff` | People only: no agent performs, requests or is delegated them |
+| L08 | Accept completed work | People only | `completion.accept` (people only) | Not built yet: no route records a person's acceptance of completed work (the crew's own Work Completed step is not that acceptance), so neither "never the person who did the work" nor a solo owner's recorded reason (D-08, Q7) is enforced |
+| L09 | Change a supplier's bank details | People only | `payee.change_details` (people only), after a call to the number on file; `payee.freeze` (protective) holds payments meanwhile; `payee.unfreeze` (people only) | QuickBooks holds the account. Not built yet: D1 has no payee record and no guard |
+| L10 | Pass the first piece before a shop run | People only | None: no catalog action covers it; the AI shop planner's hard boundary keeps first-piece release with people | Any person may pass it, the operator who made it included: a person, never the AI, checks it against the drawing with a photo. Not built yet: no shop-run screen exists |

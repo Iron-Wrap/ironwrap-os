@@ -93,6 +93,8 @@ const fixtureSession = {
     locale: "en-CA",
     time_zone: "America/Edmonton",
     currency: "CAD",
+    // A fictional 555-01xx number: the company profile's office phone for the emergency line.
+    office_phone: "780-555-0142",
   },
   csrf_token: "acceptance-csrf",
   session_expires_at: "2030-07-10T12:00:00.000Z",
@@ -394,7 +396,8 @@ const fixtureJob = {
       effective_date: "2026-07-10",
       hazard_summary: "Steep-slope fall exposure",
       controls: "Use roof anchors and harnesses",
-      emergency_plan: "Call dispatch and emergency services",
+      emergency_plan:
+        "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
       ppe_requirements: "Harness and eye protection",
       weather_limits: "Stop above plan wind limit",
     },

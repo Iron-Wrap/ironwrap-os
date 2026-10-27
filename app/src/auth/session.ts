@@ -26,7 +26,9 @@ const tenantSchema = z.object({
     .string()
     .trim()
     .transform((value) => value || null)
-    .nullish(),
+    .nullish()
+    // A malformed value reads as none rather than failing sign-in.
+    .catch(null),
 });
 
 const sessionBaseSchema = z.object({

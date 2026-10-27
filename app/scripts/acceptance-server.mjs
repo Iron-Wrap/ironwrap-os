@@ -3287,7 +3287,7 @@ const requestListener = async (request, response) => {
     return sendJson(response, method, 200, {
       version: 1,
       session: fixtureSession,
-      today: fixtureToday,
+      today: todayWithActiveStops(fixtureToday),
     });
   }
   if (ACCEPTANCE_MODE === "field" && requestUrl.pathname === "/api/v1/fleet/panel") {

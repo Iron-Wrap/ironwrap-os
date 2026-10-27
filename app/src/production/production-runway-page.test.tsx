@@ -278,25 +278,34 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByText(/Do not send a crew until you check the job/i)).toBeVisible();
   });
 
-  it("only offers to clear a lock when the read model says this session may", async () => {
-    const readOnly = renderRunway();
-
-    await screen.findByRole("heading", { name: "Production plan" });
-    // The default model does not grant `production_gate.clear`, so a blocked job
-    // shows its locks and no way to touch them.
-    expect(screen.getByLabelText("Materials: Blocked")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Clear Materials" })).not.toBeInTheDocument();
-
-    readOnly.unmount();
-    vi.mocked(loadProductionRunway).mockResolvedValue(
-      model({
-        allowed_actions: ["job.read", "production.read", "production_gate.clear"],
-      }),
-    );
+  it("sends every gate decision to the job's gate page instead of clearing it on the card", async () => {
     renderRunway();
 
-    await userEvent.setup().click(await screen.findByText("1 lock still blocks this schedule"));
-    expect(await screen.findByRole("button", { name: "Clear Materials" })).toBeVisible();
+    await screen.findByRole("heading", { name: "Production plan" });
+    // The card shows the gates and one way to them; clearing, waiving and reversing happen on
+    // the gate page, where the cancellation window and each gate's proof are in view.
+    expect(screen.getByLabelText("Materials: Blocked")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Clear Materials" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See gates for IW-1001" })).toHaveAttribute(
+      "href",
+      "/production/jobs/JOB-A/gates",
+    );
+  });
+
+  it("offers the signed-copy work queue only to an owner or ops", async () => {
+    const owner = renderRunway();
+    await screen.findByRole("heading", { name: "Production plan" });
+    expect(screen.getByRole("link", { name: "Jobs missing a signed-copy time" })).toHaveAttribute(
+      "href",
+      "/production/signed-copy-missing",
+    );
+    owner.unmount();
+
+    renderRunway(productionSession);
+    await screen.findByRole("heading", { name: "Production plan" });
+    expect(
+      screen.queryByRole("link", { name: "Jobs missing a signed-copy time" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps a returned requested-delivery date visible without shifting the calendar day", async () => {

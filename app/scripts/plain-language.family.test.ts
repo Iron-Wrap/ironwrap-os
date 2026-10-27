@@ -528,6 +528,8 @@ const COPY_MODULES = [
   "src/people/authority-contracts.ts",
   "src/pipeline/pipeline-board-model.ts",
   "src/production/production-gate-clearance-contracts.ts",
+  "src/production/gates/gate-copy.ts",
+  "src/production/gates/gate-time.ts",
   "src/public-estimate/public-estimate-request.ts",
   "src/schema-forms/schema-card-presentation.ts",
   "src/service/service-presentation.ts",

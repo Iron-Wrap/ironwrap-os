@@ -254,11 +254,11 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // Package stop release record; 0200 adds the AI
   // team coordination run, its steps, signals, event ledger and host heartbeats) includes the
   // automation recipient catalog, per-cron heartbeat, durable office intake receipts, and manual
-  // measurement history.
+  // measurement history. 0153 adds the production gate clearance ledger.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 280],
-    ["REQUIRED_INDEX_COUNT", 394],
-    ["REQUIRED_TRIGGER_COUNT", 774],
+    ["REQUIRED_TABLE_COUNT", 281],
+    ["REQUIRED_INDEX_COUNT", 395],
+    ["REQUIRED_TRIGGER_COUNT", 781],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -347,7 +347,9 @@ test("the full schema matches the recovery frontier through 0201", () => {
     // the service batch assertion table and its abort trigger; 0143 adds both crew-stop guards.
     // 0145 adds the stop release record, one index, and five guards, and re-creates three guards.
     // 0150 adds the field item resolution ledger: one table, three indexes, and four person,
-    // append-only and no-replace guards. 0164 adds three outside-send guards on external_effects and
+    // append-only and no-replace guards. 0153 adds the production gate clearance ledger: one
+    // table, one index, and seven guards (validate, apply, three append-only on the ledger, and
+    // the two state guards on the gate row). 0164 adds three outside-send guards on external_effects and
     // one readback-conflict guard on proposal_delivery_confirmations. 0165 adds one safety stop release
     // guard.
     // 0167 adds the delivery check table, one index and four guards, and re-creates two 0164 guards
@@ -359,7 +361,7 @@ test("the full schema matches the recovery frontier through 0201", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 280, indexes: 394, triggers: 774 },
+      { tables: 281, indexes: 395, triggers: 781 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

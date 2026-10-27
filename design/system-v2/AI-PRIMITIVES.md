@@ -213,17 +213,19 @@ Outcome and policy result to words:
 | outcome abstained: safety_event | Held: a work stop or safety report stopped it; a person takes over |
 | outcome abstained: emergency | Held: an emergency; it paged a person and does nothing else |
 
-Delegation in the contract: `default_delegation` asks_first → "Asks first"; within_limits → "Acts within your
-limits"; off_until_enabled → "Off until you turn it on". The owner's `shadow` setting, never a start state → "Practice
-only"; its receipts read "Practice run" and never show under Done for you or in Decisions. `human_only` (16 actions:
+Delegation on the owner's dial (owner ruling; the contract settings stay internal): `default_delegation`
+asks_first → "Act with approval"; within_limits → "Auto with undo"; off_until_enabled and off → "Off"; A0 reads
+and A1 prepares → "Suggest"; a paused specialist's control → "Off". The owner's `shadow` setting, never a start
+state → "Suggest"; its receipts read "Practice run" and never show under Done for you or in Decisions. `human_only` (16 actions:
 delegation.set, policy.activate, settings.apply, onboarding.go_live, acceptance.customer_decision,
 terms.legal_signoff, safety_stop.release, hold_point.release, completion.accept, payee.change_details,
-payee.unfreeze, refund.issue, write_off.record, filing.submit, gate.waive, access.change) → "People only" with no
+payee.unfreeze, refund.issue, write_off.record, filing.submit, gate.waive, access.change) → "Locked" with no
 control.
 `protective` (17 actions: stop, hold, block, freeze, escalate, quarantine, page, revoke a portal link, raise a finding,
-hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
-whole team is paused. `delegable: false` with asks_first (41 actions, for example storm_mode.propose,
-inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
+hold a specialist) → "Always on: protects you", off the dial: never "Act with approval", and they keep running while a
+specialist or the whole team is paused. `delegable: false` with asks_first (41 actions, for example storm_mode.propose,
+inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Act with approval · always" with the
+Locked lock and no control.
 Contract version: catalog sha `59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6` (16 specialists,
 163 actions, 116 watches; every action has a plain `name`). Builders read
 [`docs/AI-TEAM-CONTRACT.md`](../../docs/AI-TEAM-CONTRACT.md) itself; a local copy, such as one under the git-ignored

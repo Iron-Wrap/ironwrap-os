@@ -100,7 +100,7 @@ describe("Receipt", () => {
     expect(within(card).getByText("Done for you")).toBeVisible();
     expect(within(card).getByText("Today 06:42")).toBeVisible();
     // The people see the delegation words, never the class.
-    expect(within(card).getByText("Asks first")).toBeVisible();
+    expect(within(card).getByText("Act with approval")).toBeVisible();
     expect(within(card).getByText("A3")).not.toBeVisible();
     expect(within(card).getByText("Did")).toBeVisible();
     expect(within(card).getByRole("list", { name: "Where this came from" })).toBeVisible();

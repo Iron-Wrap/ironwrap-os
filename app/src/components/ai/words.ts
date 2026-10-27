@@ -74,7 +74,28 @@ export function specialistName(id: SpecialistId): string {
 /** The action class, fixed by consequence. Shown only inside System details. */
 export type ActionClass = "A0" | "A1" | "A2" | "A3" | "H";
 
-/** What a specialist may do with one action, in the words people see (AI-PRIMITIVES). */
+/**
+ * The owner's dial, the words screens show for a delegation setting (owner ruling); the contract
+ * settings stay internal.
+ */
+export const DIAL = {
+  off: "Off",
+  suggest: "Suggest",
+  approval: "Act with approval",
+  auto: "Auto with undo",
+  locked: "Locked",
+} as const;
+
+/** The contract's delegation settings a person can set, on the dial (owner ruling). */
+export const DIAL_OF = {
+  off: DIAL.off,
+  off_until_enabled: DIAL.off,
+  shadow: DIAL.suggest,
+  asks_first: DIAL.approval,
+  within_limits: DIAL.auto,
+} as const satisfies Record<string, (typeof DIAL)[keyof typeof DIAL]>;
+
+/** What a specialist may do with one action, as a screen says it. */
 export type DelegationSetting =
   | "reads"
   | "prepares"
@@ -86,16 +107,22 @@ export type DelegationSetting =
   | "always_on"
   | "always_asks_first";
 
+/**
+ * Each setting on the owner's dial (owner ruling): reading, preparing and practice suggest; a
+ * paused specialist is off; people-only acts are Locked. An action the owner can never raise reads
+ * "Act with approval · always" with the lock Locked rows carry, so it never reads as a step to turn
+ * up. Protective actions are not on the dial and keep "Always on: protects you".
+ */
 export const DELEGATION: Record<DelegationSetting, { words: string; glyph: LucideIcon }> = {
-  reads: { words: "Reads and watches", glyph: Eye },
-  prepares: { words: "Prepares", glyph: Pencil },
-  within_limits: { words: "Acts within your limits", glyph: CircleGauge },
-  asks_first: { words: "Asks first", glyph: UserCheck },
-  people_only: { words: "People only", glyph: Lock },
-  paused: { words: "Paused", glyph: Pause },
-  off_until_enabled: { words: "Off until you turn it on", glyph: CircleOff },
+  reads: { words: DIAL.suggest, glyph: Eye },
+  prepares: { words: DIAL.suggest, glyph: Pencil },
+  within_limits: { words: DIAL.auto, glyph: CircleGauge },
+  asks_first: { words: DIAL.approval, glyph: UserCheck },
+  people_only: { words: DIAL.locked, glyph: Lock },
+  paused: { words: DIAL.off, glyph: Pause },
+  off_until_enabled: { words: DIAL.off, glyph: CircleOff },
   always_on: { words: "Always on: protects you", glyph: ShieldCheck },
-  always_asks_first: { words: "Always asks first", glyph: Lock },
+  always_asks_first: { words: `${DIAL.approval} · always`, glyph: Lock },
 };
 
 /** The catalog fields of one action that decide its delegation words. */
@@ -131,8 +158,9 @@ export function delegationOf(
 }
 
 /**
- * The specialist-level control's words: "Paused" while the owner has paused the specialist, and
- * nothing otherwise. Each action then shows its own words through `delegationOf`, never "Paused".
+ * The specialist-level control's words: Off on the dial (owner ruling: Paused reads Off) while the
+ * owner has paused the specialist, and nothing otherwise. Each action then shows its own words
+ * through `delegationOf`, never the paused control's.
  */
 export function specialistDelegation({
   paused,
@@ -402,26 +430,14 @@ const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
 };
 
 /**
- * The owner's dial, the words screens show for a delegation setting (owner ruling); the contract
- * settings stay internal.
- */
-export const DIAL = {
-  off: "Off",
-  suggest: "Suggest",
-  approval: "Act with approval",
-  auto: "Auto with undo",
-  locked: "Locked",
-} as const;
-
-/**
  * The delegation settings a person can set by hand, in the dial's words, each with what it means
  * once (gate c2: the setting's name alone was terse).
  */
 const APPLIED_SETTING: Record<string, string> = {
-  asks_first: `${DIAL.approval}: it asks a person each time before it acts`,
-  within_limits: `${DIAL.auto}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
-  off: `${DIAL.off}: it does not do this at all, and people do it by hand`,
-  shadow: `${DIAL.suggest}: it runs practice rounds that change nothing, and people still do the real work`,
+  asks_first: `${DIAL_OF.asks_first}: it asks a person each time before it acts`,
+  within_limits: `${DIAL_OF.within_limits}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
+  off: `${DIAL_OF.off}: it does not do this at all, and people do it by hand`,
+  shadow: `${DIAL_OF.shadow}: it runs practice rounds that change nothing, and people still do the real work`,
 };
 
 /** What is set now, in the words its screen shows (a role, or a delegation setting on the dial). */

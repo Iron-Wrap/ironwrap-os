@@ -401,6 +401,16 @@ export async function recordProposalDeliveryConfirmation(
       delivery_state: effect.state,
     });
   }
+  // A check of the send that found the message contradicts every "not found" of it, whichever came
+  // first (a lagging mailbox may show it only later). D1 holds the same rule (0167).
+  if (cited && await env.DB.prepare(
+    `SELECT 1 AS found FROM proposal_delivery_checks
+      WHERE tenant_id = ? AND effect_id = ? AND outcome IN ('sent', 'bounced') LIMIT 1`,
+  ).bind(input.tenantId, effect.effect_id).first<{ found: number }>()) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_check_contradicted", 409, {
+      delivery_state: effect.state,
+    });
+  }
   // A send whose provider answered (its readback conflicted, or it refused the send yet a later
   // check says it ran or cannot tell) did something: "not delivered" would make it "not executed"
   // and open the way to a second send. That needs provider evidence, never a person's word: a cited

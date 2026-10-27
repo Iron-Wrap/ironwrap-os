@@ -18,12 +18,7 @@ import {
   ProposalDeliveryConfirmationError,
   proposalDeliveryLateAnswerWindowMs,
 } from "./commercial-store.ts";
-import {
-  EffectRuntimeError,
-  getExternalEffect,
-  recoverExpiredExternalEffect,
-  type ExternalEffectRecord,
-} from "./effect-runtime.ts";
+import { getExternalEffect, type ExternalEffectRecord } from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 /** One check reads back within about 25 s; each provider call has its own, shorter bound. */
@@ -34,8 +29,12 @@ export const PROPOSAL_DELIVERY_CHECK_TIMEOUT_MS = 25_000;
  */
 export const PROPOSAL_DELIVERY_ESCALATION_MS = 4 * 60 * 60_000;
 export const PROPOSAL_DELIVERY_STALE_REASON = "proposal_delivery_unconfirmed_stale";
-/** D1 keeps at most this many checks per send (0167). */
-const MAX_CHECKS_PER_SEND = 20;
+/**
+ * D1 keeps at most this many checks of each kind per send (0167): citable ones (a complete-scan
+ * `not_found`) and every other answer each have their own room, so answers that prove nothing can
+ * never use up the room the proof needs.
+ */
+export const PROPOSAL_DELIVERY_CHECK_LIMIT = 20;
 const QA_SYNTHETIC_PROVIDER = /^qa-synthetic-[a-z0-9-]+$/;
 const CHECKABLE_STATES = ["unknown", "succeeded", "manual_exception"];
 /**
@@ -108,11 +107,13 @@ export class ProposalDeliveryTransportError extends Error {
 /**
  * Reads back one send from its provider. It throws `ProposalDeliveryTransportError` when the
  * provider gave no answer; any other error is the Worker's own, and the check writes nothing.
+ * `scansCompletely` says the readback can scan completely, so its "not found" can be kept and cited;
+ * no adapter can before Proof P1.
  */
-export type ProposalDeliveryReadbackAdapter = (
+export type ProposalDeliveryReadbackAdapter = ((
   effect: ExternalEffectRecord,
   signal: AbortSignal,
-) => Promise<ProposalDeliveryReadback>;
+) => Promise<ProposalDeliveryReadback>) & { readonly scansCompletely?: boolean };
 
 /** The QA seed's stand-in reaches no one: it answers from the send's own provider id. */
 const qaSyntheticReadback: ProposalDeliveryReadbackAdapter = async (effect) =>
@@ -145,7 +146,6 @@ interface CheckAnswer {
   providerExternalId: string | null;
   evidence: unknown;
   detailCode: string | null;
-  failedAt: string | null;
 }
 
 /**
@@ -181,17 +181,15 @@ async function readBack(
       providerExternalId: readback.providerExternalId ?? null,
       evidence: readback.evidence,
       detailCode: readback.outcome === outcome ? readback.detailCode ?? null : "scan_incomplete",
-      failedAt: null,
     };
   } catch (error) {
     if (!(error instanceof ProposalDeliveryTransportError)) throw error;
-    const failedAt = new Date().toISOString();
     const status = error.status;
     if (error.kind === "http" && (status === 401 || status === 403)) {
-      return { outcome: "unknown", scanComplete: false, providerExternalId: null, evidence: undefined, detailCode: "provider_auth", failedAt: null };
+      return { outcome: "unknown", scanComplete: false, providerExternalId: null, evidence: undefined, detailCode: "provider_auth" };
     }
     if (error.kind === "http" && status !== null && status < 500) {
-      return { outcome: "unknown", scanComplete: false, providerExternalId: null, evidence: undefined, detailCode: `provider_http_${status}`, failedAt: null };
+      return { outcome: "unknown", scanComplete: false, providerExternalId: null, evidence: undefined, detailCode: `provider_http_${status}` };
     }
     return {
       outcome: "provider_unavailable",
@@ -199,7 +197,6 @@ async function readBack(
       providerExternalId: null,
       evidence: undefined,
       detailCode: error.kind === "http" ? `provider_http_${status ?? "error"}` : `provider_${error.kind}`,
-      failedAt,
     };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -212,8 +209,9 @@ const CHECK_COLUMNS = `check_id, tenant_id, effect_id, proposal_pack_id, proposa
 
 /**
  * A person checks delivery of one proposal send (0167): the provider readback runs in this request
- * and one check row keeps its answer. A send whose lease ran out is first recovered to `unknown`,
- * as the `*\/5` sweep would. The same key with the same request replays; anything else conflicts.
+ * and one check row keeps its answer, dated when the readback started. A check never moves the send:
+ * a send whose lease ran out stays as it is until the `*\/5` lease sweep records it as unknown. The
+ * same key with the same request replays; anything else conflicts.
  */
 export async function checkProposalDelivery(
   env: AppEnv,
@@ -226,6 +224,8 @@ export async function checkProposalDelivery(
     /** Replaces the provider's readback; tests and later adapters only. */
     adapter?: ProposalDeliveryReadbackAdapter;
     timeoutMs?: number;
+    /** The Worker's clock, read once as the readback starts; tests only. */
+    clock?: () => number;
   },
 ): Promise<{ check: ProposalDeliveryCheckRecord; replayed: boolean; deliveryState: ProposalDeliveryState }> {
   const keyHash = await sha256Hex(`proposal-delivery-check\n${input.tenantId}\n${input.idempotencyKey}`);
@@ -254,28 +254,17 @@ export async function checkProposalDelivery(
   const earlier = await replay();
   if (earlier) return earlier;
 
-  let effect = await getExternalEffect(env, input.effectId);
+  const effect = await getExternalEffect(env, input.effectId);
   if (
     !effect || effect.tenant_id !== input.tenantId || effect.action !== "proposal.publish" ||
     effect.aggregate_type !== "proposal_publication"
   ) {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
   }
-  if (leaseLapsed(effect, Date.now())) {
-    try {
-      await recoverExpiredExternalEffect(env, effect.effect_id);
-    } catch (error) {
-      // The sweep may have recovered it first; anything else is the Worker's own failure.
-      const code = error instanceof EffectRuntimeError ? error.code : "";
-      if (code !== "effect_lease_not_active" && code !== "effect_lease_not_expired" && code !== "effect_transition_conflict") {
-        throw error;
-      }
-    }
-    effect = (await getExternalEffect(env, effect.effect_id)) ?? effect;
-  }
   const answeredException = effect.state === "manual_exception" &&
     PROVIDER_ANSWERED_ORIGINS.includes((await exceptionEntry(env, effect.effect_id))?.from_state ?? "");
-  // Still sending, never sent, or already settled: there is nothing to read back. A manual exception
+  // Still sending (a lapsed lease included, until the lease sweep records it), never sent, or already
+  // settled: there is nothing to read back. A manual exception
   // is checked only when its provider answered (a readback conflict of either kind); one that came
   // from a provider that never answered goes to a person after 0161's wait, with no check to cite.
   if (!CHECKABLE_STATES.includes(effect.state) || (effect.state === "manual_exception" && !answeredException)) {
@@ -288,12 +277,14 @@ export async function checkProposalDelivery(
   const adapter = input.adapter ?? providerReadback;
   const recent = await recentChecks(env, input.tenantId, effect.effect_id);
   // D1 holds the limit too; refusing here first spares a provider call nobody can keep.
-  if (recent.length >= MAX_CHECKS_PER_SEND) {
+  if (!checkRoom(recent, adapter)) {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_check_limit", 409);
   }
 
+  // Dated as the readback starts: a "not found" counts only if the whole scan ran after the
+  // provider's own late answer could still arrive (D1's too-early rule reads this date).
+  const createdAt = new Date((input.clock ?? Date.now)()).toISOString();
   const answer = await readBack(adapter, effect, input.timeoutMs ?? PROPOSAL_DELIVERY_CHECK_TIMEOUT_MS);
-  const createdAt = new Date().toISOString();
   const needsEvidence = answer.outcome === "sent" || answer.outcome === "bounced" || answer.outcome === "not_found";
   const evidenceSha = answer.evidence !== undefined || needsEvidence
     ? await sha256Hex(canonicalJson(answer.evidence ?? {
@@ -303,10 +294,10 @@ export async function checkProposalDelivery(
     }))
     : null;
   // The email service has not answered since the start of this send's unbroken run of
-  // unavailable checks, or since this check's own failed call.
-  const unavailableSince = answer.failedAt === null
-    ? null
-    : earliestUnavailableSince(recent) ?? answer.failedAt;
+  // unavailable checks, or since this check began.
+  const unavailableSince = answer.outcome === "provider_unavailable"
+    ? earliestUnavailableSince(recent) ?? createdAt
+    : null;
   const checkId = `delivery-check:${keyHash.slice(0, 40)}`;
   try {
     await env.DB.prepare(
@@ -350,14 +341,34 @@ interface RecentCheck {
   created_at: string;
 }
 
-/** A send's checks, newest first (at most 20 exist). */
+/** All of a send's checks, newest first (D1 keeps at most twice the per-kind limit). */
 async function recentChecks(env: AppEnv, tenantId: string, effectId: string): Promise<RecentCheck[]> {
   const rows = await env.DB.prepare(
     `SELECT check_id, outcome, scan_complete, detail_code, unavailable_since, created_at
        FROM proposal_delivery_checks WHERE tenant_id = ? AND effect_id = ?
-      ORDER BY julianday(created_at) DESC, rowid DESC LIMIT ?`,
-  ).bind(tenantId, effectId, MAX_CHECKS_PER_SEND).all<RecentCheck>();
+      ORDER BY julianday(created_at) DESC, rowid DESC`,
+  ).bind(tenantId, effectId).all<RecentCheck>();
   return rows.results ?? [];
+}
+
+/**
+ * Whether one more check of this send can be kept: there is room for any answer, or the readback
+ * scans completely and there is room for its citable "not found". No adapter scans completely
+ * before Proof P1, so until then twenty answers that prove nothing close the checks.
+ */
+function checkRoom(checks: readonly RecentCheck[], adapter: ProposalDeliveryReadbackAdapter | null): boolean {
+  if (!adapter) return false;
+  const citable = checks.filter((row) => row.outcome === "not_found").length;
+  return checks.length - citable < PROPOSAL_DELIVERY_CHECK_LIMIT ||
+    (adapter.scansCompletely === true && citable < PROPOSAL_DELIVERY_CHECK_LIMIT);
+}
+
+/**
+ * Whether a check of this send found the message (`sent` or `bounced`). The provider then did
+ * something, so no "not found" of the send proves it went nowhere, whichever came first (0167).
+ */
+function foundByCheck(checks: readonly RecentCheck[]): boolean {
+  return checks.some((row) => row.outcome === "sent" || row.outcome === "bounced");
 }
 
 /** The earliest `unavailable_since` of the newest unbroken run of unavailable checks, or null. */
@@ -510,9 +521,11 @@ export async function readProposalDeliveryState(
   }
   if (send.state === "succeeded" && !fromProvider) return result("Q", endedAt);
 
-  // 6.3: a lapsed lease is unknown with no check yet; the check recovers it first.
-  if (lapsed) return result("7", endedAt, { check_allowed: true });
+  // 6.3: a lapsed lease reads as unknown with no check yet; it is checkable once the lease sweep
+  // has recorded it as unknown.
+  if (lapsed) return result("7", endedAt);
   const checks = await recentChecks(env, tenantId, send.effect_id);
+  const room = checkRoom(checks, readbackAdapter(env, send.provider));
   const latest = checks[0] ?? null;
   const check = latest && {
     check_id: latest.check_id,
@@ -527,7 +540,8 @@ export async function readProposalDeliveryState(
     // otherwise). "Didn't get it" needs a complete-scan "not found" made after that move (0167);
     // until P1 no check can scan completely.
     const conflict = PROVIDER_ANSWERED_ORIGINS.includes(entered?.from_state ?? "");
-    const cited = conflict
+    // A check that found the message (`sent`, `bounced`) contradicts every "not found" of the send.
+    const cited = conflict && !foundByCheck(checks)
       ? checks.find((row) =>
         row.outcome === "not_found" && row.scan_complete === 1 &&
         Date.parse(row.created_at) > Date.parse(entered!.occurred_at))
@@ -536,7 +550,7 @@ export async function readProposalDeliveryState(
     const notBefore = entered?.from_state === "unknown" ? await lateAnswerNotBefore(env, send, endedAt, at) : null;
     return result("1", entered?.occurred_at ?? send.updated_at, {
       check,
-      check_allowed: conflict,
+      check_allowed: conflict && room,
       record_allowed: true,
       record_not_before: notBefore,
       not_delivered_allowed: !conflict || cited !== undefined,
@@ -556,24 +570,24 @@ export async function readProposalDeliveryState(
         WHERE effect_id = ? AND reason_code = ? AND status = 'open' LIMIT 1`,
     ).bind(send.effect_id, PROPOSAL_DELIVERY_STALE_REASON).first<{ created_at: string }>();
     if (escalation) {
-      return result("7e", endedAt, { ...recordable, check_allowed: true, escalated_at: escalation.created_at });
+      return result("7e", endedAt, { ...recordable, check_allowed: room, escalated_at: escalation.created_at });
     }
     if (latest?.outcome === "provider_unavailable") {
-      return result("7c", earliestUnavailableSince(checks), { ...recordable, check_allowed: true });
+      return result("7c", earliestUnavailableSince(checks), { ...recordable, check_allowed: room });
     }
     if (latest?.outcome === "bounced") return result("1·b", latest.created_at, recordable);
-    if (latest?.outcome === "sent") return result("8(a)", endedAt, { ...recordable, check_allowed: true });
+    if (latest?.outcome === "sent") return result("8(a)", endedAt, { ...recordable, check_allowed: room });
     // `unknown`, and a complete-scan `not_found`: no adapter scans completely before P1, and from
     // B2 such a check settles the send instead. The person still records what they found.
-    if (latest) return result("7·u", endedAt, { ...recordable, check_allowed: true });
-    return result("7", endedAt, { check_allowed: true });
+    if (latest) return result("7·u", endedAt, { ...recordable, check_allowed: room });
+    return result("7", endedAt, { check_allowed: room });
   }
 
   // Sent by a real provider and on the customer's page; a person records it as a 0161 finding.
   const open = await findingOpen(env, tenantId, proposalPackId, send);
   const findable = { check, record_allowed: open, not_delivered_allowed: open };
   if (latest?.outcome === "bounced") return result("1·b", latest.created_at, findable);
-  return result("8(a)", endedAt, { ...findable, check_allowed: true });
+  return result("8(a)", endedAt, { ...findable, check_allowed: room });
 }
 
 /** When "didn't get it" opens on an unknown send: its attempt's end plus the window (0161). */

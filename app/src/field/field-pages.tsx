@@ -653,22 +653,39 @@ type TypedWorkObjectScope = {
 
 /**
  * The job plan card's badge: never a version number (versions live in System details and the
- * record). A plan the crew has not acted on yet shows when it was released, as a label stamp
- * ("Released · Today 14:05"); otherwise it says what the crew did with it. The read model sends
- * only the current plan, so a Completed, Expired or Superseded plan never reaches this card (it
- * reads back as no plan at all).
+ * record). Each status carries the moment it began, as a label stamp ("Released · Today 14:05"),
+ * when the read carries that moment; when it does not, the badge leaves the stamp off rather than
+ * guess. The read sends only the current plan, so a Completed, Expired or Superseded plan never
+ * reaches this card (it reads back as no plan at all).
  */
 function jobPlanBadge(workPackage: FieldWorkPackage, dateOptions: FieldDateOptions): string {
+  const stamped = (words: string, at: string | null) =>
+    at ? `${words} · ${formatFieldStamp(at, dateOptions)}` : words;
   switch (workPackage.status) {
     case "Released":
-      return `Released · ${formatFieldStamp(workPackage.released_at, dateOptions)}`;
+      return stamped("Released", workPackage.released_at);
     case "Acknowledged":
-      return "Reviewed by the crew";
+      // The plan turned Acknowledged when the first crew phone sent I reviewed this plan.
+      return stamped("Reviewed by the crew", firstCrewReview(workPackage));
     case "In Progress":
+      // The read carries no start time, so this badge has no stamp.
       return "Work started";
     case "Blocked":
+      // Only a crew's Stop Work sets a plan to Blocked (the D1 package triggers), so this is
+      // always a work stop. The read carries no stop time, so this badge has no stamp.
       return "Work stopped";
   }
+}
+
+/** The earliest crew review the read carries, or null when it carries none. */
+function firstCrewReview(workPackage: FieldWorkPackage): string | null {
+  const times = [
+    ...workPackage.acknowledgement.workers.map((worker) => worker.acknowledged_at),
+    workPackage.acknowledgement.acknowledged_at,
+  ]
+    .filter((value): value is string => Boolean(value) && Number.isFinite(Date.parse(value!)))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  return times[0] ?? null;
 }
 
 function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObjectScope | null {

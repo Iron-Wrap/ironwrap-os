@@ -41,7 +41,8 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await page.getByRole("checkbox").check();
     await page.getByRole("button", { name: "I reviewed this plan" }).click();
     await expect(page.getByText(/You reviewed this job plan/i)).toBeVisible();
-    await expect(page.getByText("Reviewed by the crew", { exact: true })).toBeVisible();
+    // Stamped with the review this phone just sent, in the company's zone.
+    await expect(page.getByText(/^Reviewed by the crew · Today \d\d:\d\d$/)).toBeVisible();
 
     // 2. Start -- online-only direct command, not the offline outbox.
     await page.getByRole("button", { name: "Start work" }).click();

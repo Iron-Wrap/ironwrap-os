@@ -892,6 +892,9 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Issue job plan" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "No job plan is ready" })).toBeVisible();
+    expect(
+      screen.getByText("Issuing doesn't wait for the gates. The gates hold the firm start."),
+    ).toBeVisible();
   });
 
   it("keeps saying the first job plan went out after the plan replaces the empty state", async () => {
@@ -954,6 +957,60 @@ describe("JobPage", () => {
       ),
     ).toBeVisible();
     expect(screen.getByText("Reviewed by the crew")).toBeVisible();
+  });
+
+  it("stamps the plan badge with the moment each status began, when the read carries it", async () => {
+    const reviewed = workPackageModel();
+    const plan = reviewed.packet.work_package!;
+    reviewed.packet.work_package = {
+      ...plan,
+      status: "Acknowledged",
+      acknowledgement: {
+        ...plan.acknowledgement,
+        workers: plan.acknowledgement.workers.map((worker) => ({
+          ...worker,
+          acknowledged: true,
+          acknowledged_at: "2026-07-10T15:40:00.000Z",
+        })),
+      },
+    };
+    renderJob(reviewed);
+    expect(await screen.findByText("Reviewed by the crew · Fri 10 Jul 09:40")).toBeVisible();
+    // The plan card names no version (the safety plan and change order lines are Track E's).
+    const card = screen
+      .getByRole("heading", { name: "North slope replacement" })
+      .closest("header")!;
+    expect(within(card).queryByText(/Version \d|\bv\d/)).not.toBeInTheDocument();
+  });
+
+  it("leaves the stamp off when the read does not carry the moment", async () => {
+    const started = workPackageModel();
+    started.packet.work_package = { ...started.packet.work_package!, status: "In Progress" };
+    renderJob(started);
+    expect(await screen.findByText("Work started")).toBeVisible();
+  });
+
+  it("names the corrected issue button in the reload line once a plan exists", async () => {
+    const office = {
+      permissions: ["jobs:read:any", "production:read"],
+      allowed_actions: ["job.read", "work_package.issue"],
+    };
+    const unloaded = workPackageModel(office);
+    unloaded.assignment = { ...unloaded.assignment!, modified: null };
+    renderJob(unloaded, ownerSession);
+
+    const heading = await screen.findByRole("heading", { name: "Issue the corrected job plan" });
+    expect(
+      screen.getByText("Issuing doesn't wait for the gates. The gates hold the firm start."),
+    ).toBeVisible();
+    fireEvent.submit(heading.closest("section")!.querySelector("form")!);
+    expect(
+      await screen.findByText(
+        "Nothing was issued. Reload the job while online so it has the latest crew assignment, then tap Issue the corrected job plan.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reload job" })).toBeEnabled();
+    expect(apiCommand).not.toHaveBeenCalled();
   });
 
   it("offers Reload job beside the reload refusal, and only while online", async () => {

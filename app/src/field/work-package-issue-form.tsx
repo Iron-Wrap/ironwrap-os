@@ -18,9 +18,13 @@ import { messageFor } from "../lib/plain-error";
 
 type WorkPackage = JobResponse["packet"]["work_package"];
 
-/** A1: the one refusal a reload of the job fixes, so it is the one that carries Reload job. */
-const RELOAD_TO_ISSUE =
-  "Nothing was issued. Reload the job while online so it has the latest crew assignment, then tap Issue job plan.";
+/**
+ * A1: the one refusal a reload of the job fixes, so it is the one that carries Reload job. It names
+ * the issue button by the words that button shows right then.
+ */
+function reloadToIssue(issueLabel: string): string {
+  return `Nothing was issued. Reload the job while online so it has the latest crew assignment, then tap ${issueLabel}.`;
+}
 
 interface StepDraft {
   key: string;
@@ -98,6 +102,8 @@ export function WorkPackageIssueForm({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A1 is showing: the line is written at render, so it names the button as it reads now. */
+  const [reloadOffered, setReloadOffered] = useState(false);
   const [reloading, setReloading] = useState(false);
 
   const connected = useOnlineStatus();
@@ -116,12 +122,20 @@ export function WorkPackageIssueForm({
   // so only then, and only for the plan this person issued, may the line say the crew has it.
   const crewHasIt =
     issued && workPackage?.version === issuedVersion && workPackage.status === "Acknowledged";
+  /** The issue button's words. Every line that tells a person to tap it uses these. */
+  const issueLabel = issued
+    ? "Issue a corrected plan"
+    : workPackage
+      ? "Issue the corrected job plan"
+      : "Issue job plan";
+  const errorText = error ?? (reloadOffered ? reloadToIssue(issueLabel) : null);
 
   async function reload() {
     setReloading(true);
     try {
       await onReload();
       setError(null);
+      setReloadOffered(false);
     } catch (caught) {
       setError(messageFor(caught));
     } finally {
@@ -132,9 +146,12 @@ export function WorkPackageIssueForm({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setReloadOffered(false);
     onIssuedVersionChange(null);
+    // Clearing the issued state turns the button back into this one, so the lines below name it.
+    const retryLabel = workPackage ? "Issue the corrected job plan" : "Issue job plan";
     if (!assignment || !assignmentModified || !canSend) {
-      setError(RELOAD_TO_ISSUE);
+      setReloadOffered(true);
       return;
     }
     if (workPackage && !correctionReason.trim()) {
@@ -187,8 +204,7 @@ export function WorkPackageIssueForm({
     } catch (caught) {
       setError(
         messageFor(caught, {
-          refused:
-            "This job plan was not accepted, and nothing was issued. Check every step and hold point, then tap Issue job plan again.",
+          refused: `This job plan was not accepted, and nothing was issued. Check every step and hold point, then tap ${retryLabel} again.`,
           fallback:
             "We could not confirm the job plan was issued. Reload the job and check it before you issue it again.",
         }),
@@ -216,6 +232,9 @@ export function WorkPackageIssueForm({
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
         When you issue, the job's crew, assignment and scope lock in. This form adds the steps, hold
         points and the proof the crew must add.
+      </p>
+      <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+        Issuing doesn't wait for the gates. The gates hold the firm start.
       </p>
 
       {!assignmentModified ? (
@@ -420,12 +439,12 @@ export function WorkPackageIssueForm({
           </Button>
         </fieldset>
 
-        {error ? (
+        {errorText ? (
           <div className="flex flex-wrap items-center gap-3">
             <p className="font-semibold text-danger" role="alert">
-              {error}
+              {errorText}
             </p>
-            {error === RELOAD_TO_ISSUE ? (
+            {reloadOffered ? (
               // Offline, a reload cannot reach the office: the control stays off, as the app's
               // other online-only controls do, and the line beside it already says "while online".
               <Button
@@ -455,12 +474,11 @@ export function WorkPackageIssueForm({
         ) : null}
         {issued ? (
           <Button type="submit" variant="secondary" busy={saving} disabled={!canSend}>
-            <Send aria-hidden="true" /> Issue a corrected plan
+            <Send aria-hidden="true" /> {issueLabel}
           </Button>
         ) : (
           <Button type="submit" variant="accent" busy={saving} disabled={!canSend}>
-            <Send aria-hidden="true" />{" "}
-            {workPackage ? "Issue the corrected job plan" : "Issue job plan"}
+            <Send aria-hidden="true" /> {issueLabel}
           </Button>
         )}
       </form>

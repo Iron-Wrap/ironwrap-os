@@ -23,8 +23,10 @@ import {
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
+import { z } from "zod";
 
 import { dateTimeFormatter } from "../../lib/intl-cache";
+import { appRoles, roleLabel, type AppRole } from "../../lib/roles";
 import type { StatusKind } from "../ui/status";
 
 /*
@@ -235,6 +237,8 @@ export interface Person {
   name: string;
   /** Two letters for the circle; taken from the name when absent. */
   initials?: string;
+  /** The signed-in person: their own step reads "you", never their name (gate c2, C2-D4). */
+  isViewer?: boolean;
 }
 
 export function initialsOf({ name, initials }: Person): string {
@@ -369,13 +373,103 @@ const notItsJob = { why: "This is not something it may do.", next: "A person dec
 export const VIEW_REFUSED =
   "IronWrap couldn't draw the layout you asked for, so the answer is in the text above. To try once more, type your request in other words in the box below.";
 
+/** What a person set by hand on the record a closed draft prepared (`do_it_myself.context.applied`). */
+export interface AppliedByPerson {
+  field: "role" | "delegation_setting";
+  value: string;
+  /** The person's user id; without it the note says "A person". */
+  by?: string;
+}
+
+const appliedSchema = z.object({
+  applied: z.object({
+    field: z.enum(["role", "delegation_setting"]),
+    value: z.string().min(1),
+    by: z.string().min(1).optional(),
+  }),
+});
+
+/** The `applied` record of a closed draft's `do_it_myself.context`; anything else reads as absent. */
+export function appliedOf(context: unknown): AppliedByPerson | undefined {
+  const parsed = appliedSchema.safeParse(context);
+  return parsed.success ? parsed.data.applied : undefined;
+}
+
+/** What a person changed, when the screen names no record. */
+const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
+  role: "the role",
+  delegation_setting: "the AI team setting",
+};
+
 /**
- * A people-only draft a person made by hand (`applied_by_person`): who made it, to which record,
- * that the draft is closed (gate f5: "closing this draft" read as a button to find), that the
- * change stays in place (gate f5: "does not undo the change" left readers only fairly sure it
- * still held), and that nothing is left.
+ * The owner's dial, the words screens show for a delegation setting (owner ruling); the contract
+ * settings stay internal.
  */
-export function appliedByPersonNote(by = "A person", record?: string): string {
+export const DIAL = {
+  off: "Off",
+  suggest: "Suggest",
+  approval: "Act with approval",
+  auto: "Auto with undo",
+  locked: "Locked",
+} as const;
+
+/**
+ * The delegation settings a person can set by hand, in the dial's words, each with what it means
+ * once (gate c2: the setting's name alone was terse).
+ */
+const APPLIED_SETTING: Record<string, string> = {
+  asks_first: `${DIAL.approval}: it asks a person each time before it acts`,
+  within_limits: `${DIAL.auto}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
+  off: `${DIAL.off}: it does not do this at all, and people do it by hand`,
+  shadow: `${DIAL.suggest}: it runs practice rounds that change nothing, and people still do the real work`,
+};
+
+/** What is set now, in the words its screen shows (a role, or a delegation setting on the dial). */
+function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "value">) {
+  if (field === "role")
+    return (appRoles as readonly string[]).includes(value)
+      ? roleLabel(value as AppRole)
+      : undefined;
+  return Object.hasOwn(APPLIED_SETTING, value) ? APPLIED_SETTING[value] : undefined;
+}
+
+/**
+ * A card time ("Today 09:30", "Mon 19 Oct 14:05") as it reads inside a sentence: "today at 09:30",
+ * "on Mon 19 Oct at 14:05". A time it cannot place ("Not known yet") reads as nothing.
+ */
+export function timeInSentence(when: string): string | undefined {
+  // Intl may space "p.m." with a no-break space; \s takes it.
+  const match = /^(.+?),?\s(\d{1,2}:\d{2}(?:\s[ap]\.m\.)?)$/.exec(when.trim());
+  if (!match) return undefined;
+  const [, day, time] = match as unknown as [string, string, string];
+  if (/^(Today|Yesterday|Tomorrow|In \d+ days|\d+ days ago)$/.test(day))
+    return `${day.charAt(0).toLowerCase()}${day.slice(1)} at ${time}`;
+  // A weekday, with or without its date; anything else it does not guess at.
+  return /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/.test(day) ? `on ${day} at ${time}` : undefined;
+}
+
+/**
+ * A people-only draft whose record a person changed by hand (`applied_by_person`). With what is
+ * set now (`applied`): who changed which record, that the draft is closed, and what the record
+ * is now, whatever the draft proposed, so it never claims the person made "this change". Without
+ * it, or with a value it has no words for: who made the change, to which record, that the draft is
+ * closed (gate f5: "closing this draft" read as a button to find), that the change stays in place
+ * (gate f5: "does not undo the change" left readers only fairly sure it still held), and that
+ * nothing is left. `when` is the card's time, said in the line too (gate c2: the header time alone
+ * left readers unsure which moment it was).
+ */
+export function appliedByPersonNote(
+  by = "A person",
+  record?: string,
+  applied?: Pick<AppliedByPerson, "field" | "value">,
+  when?: string,
+): string {
+  const value = applied && appliedValueWords(applied);
+  if (applied && value) {
+    const subject = record ?? APPLIED_SUBJECT[applied.field];
+    const at = when ? timeInSentence(when) : undefined;
+    return `${by} changed ${subject} by hand${at ? ` ${at}` : ""}, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.`;
+  }
   return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. The change stays in place, and nothing is left to do.`;
 }
 
@@ -388,7 +482,8 @@ export function supersededNote(record?: string): string {
  * The state words of one receipt. `by` names the person who declined, undid or did the step;
  * `where` is the outside system in plain words ("QuickBooks"); `waitingFor` is where a person's
  * answer still has to arrive ("the phone"); `record` is what a people-only draft changes ("Grace
- * Obi's access").
+ * Obi's role"); `applied` is what a person set on it by hand (`appliedOf`); `byViewer` says the
+ * person who acted is the one reading, so the words say "you"; `when` is the card's time.
  */
 export function receiptWords(
   receipt: Pick<ContractReceipt, "outcome" | "policy" | "needs_from_you">,
@@ -397,9 +492,23 @@ export function receiptWords(
     where = "the other system",
     waitingFor,
     record,
-  }: { by?: string; where?: string; waitingFor?: string; record?: string } = {},
+    applied,
+    byViewer = false,
+    when,
+  }: {
+    by?: string;
+    where?: string;
+    waitingFor?: string;
+    record?: string;
+    applied?: AppliedByPerson;
+    byViewer?: boolean;
+    when?: string;
+  } = {},
 ): ReceiptWords {
   const [reason] = receipt.policy.reason_codes;
+  // The person who acted, as a chip says it and as a sentence starts with it.
+  const who = byViewer ? "you" : by;
+  const Who = byViewer ? "You" : by;
   const as = (state: ReceiptState, words?: string): ReceiptWords => ({
     state,
     ...RECEIPT_STATE[state],
@@ -421,21 +530,21 @@ export function receiptWords(
       // or a newer draft replaced it.
       if (reason === "applied_by_person")
         return {
-          ...(by
-            ? { state: "done_by_person" as const, ...personDoneWords(by) }
+          ...(who
+            ? { state: "done_by_person" as const, ...personDoneWords(who) }
             : as("done_by_person")),
-          note: appliedByPersonNote(by, record),
+          note: appliedByPersonNote(Who, record, applied, when),
         };
       if (reason === "superseded") return { ...as("replaced"), note: supersededNote(record) };
       return as("done");
     case "unknown":
       return { ...as("working"), waiting: `Waiting for ${where} to confirm.` };
     case "failed":
-      if (reason === "declined") return as("undone", by && `Undone by ${by}`);
+      if (reason === "declined") return as("undone", who && `Undone by ${who}`);
       if (reason === "superseded") return as("replaced");
       if (reason === "done_by_person")
-        return by
-          ? { state: "done_by_person", ...personDoneWords(by, waitingFor) }
+        return who
+          ? { state: "done_by_person", ...personDoneWords(who, waitingFor) }
           : as("done_by_person");
       return held(reason);
     case "abstained":

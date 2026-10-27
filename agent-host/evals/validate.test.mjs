@@ -11,6 +11,7 @@ import {
   CONSENT_KEYS,
   CONSENT_VALUES,
   INBOUND_CHANNELS,
+  INBOUND_ONLY_ACTIONS,
   LEAD_KEYS,
   LEAD_SOURCE_BY_CHANNEL,
   LEAD_SOURCES,
@@ -789,6 +790,55 @@ test("the lead and consent shapes match the Worker's read model, intake paths, a
   }
 });
 
+test("an inbound-only action is expected or allowed only on an inbound event about its lead", () => {
+  const content = {
+    envelope_id: "ENV-1", channel: "web_form", brand: "ironwrap", received_via: null,
+    sender: { customer_id: null, matched_on: null, conflict: false }, has_phone: true, has_email: false,
+    service: "gutters", excerpt: "Gutters pulling away.", form_fields: { address: null, scope: null, timing: null },
+  };
+  const inbound = { kind: "event", source: "web_form", watch_id: "new_inbound", at: "PT0M", subject: { aggregate: "lead", id: "L-1" }, content };
+  const propose = (leadId) => ({ action_id: "lead_fact.propose", ...(leadId ? { args_must_include: { lead_id: leadId } } : {}) });
+  const allowlist = {
+    schema_version: "ironwrap.specialist-allowlist.v1",
+    specialist_id: ID,
+    catalog_sha256: CATALOG_SHA,
+    actions: [{ action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" }, { action_id: "lead_fact.propose", autonomy: "A1", purpose: "Propose" }],
+  };
+  const external = { type: "external", role: null, ref: "channel:web", authenticated: false };
+  const outOfScope = /lead_fact\.propose comes only from an inbound event about its lead/;
+  const rows = [
+    [(item) => item.expected.actions.push(propose()), outOfScope],
+    [(item) => (item.expected.optional_actions = ["lead_fact.propose"]), outOfScope],
+    [(item) => { item.signal = { ...inbound, source: "email", content: { text: "Hi" }, subject: undefined }; item.tags = ["pending_inbound_channel"]; item.expected.actions.push(propose()); }, outOfScope],
+    [(item) => { item.signal = inbound; item.expected.actions.push(propose("L-2")); }, /lead_fact\.propose names the signal's lead \(L-1\), not L-2/],
+    // Each of these misses exactly one part of an inbound event: its channel, its lead subject, its
+    // kind, or the absence of an actor.
+    [(item) => { item.signal = { ...inbound, source: "email", content: { text: "Hi" } }; item.tags = ["pending_inbound_channel"]; item.expected.actions.push(propose("L-1")); }, outOfScope],
+    [(item) => { item.signal = { ...inbound, subject: undefined }; item.expected.actions.push(propose()); }, outOfScope],
+    [(item) => { item.signal = { ...inbound, kind: "watch", content: { text: "Gutters pulling away." } }; item.expected.actions.push(propose("L-1")); }, outOfScope],
+    [(item) => { item.signal = { ...inbound, content: { text: "Gutters pulling away." }, actor: external }; item.expected.actions.push(propose("L-1")); }, outOfScope],
+  ];
+  const passing = [
+    (item) => { item.signal = inbound; item.expected.actions.push(propose("L-1")); },
+    (item) => { item.signal = inbound; item.expected.optional_actions = ["lead_fact.propose"]; },
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    [...rows.map(([mutate]) => mutate), ...passing].forEach((mutate, index) => mutate(cases[index]));
+    return cases;
+  });
+  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures;
+  const of = (n) => failures.filter((failure) => failure.includes(`.${String(n).padStart(3, "0")}: `));
+  rows.forEach(([, pattern], index) => assert.ok(of(index + 1).some((failure) => pattern.test(failure)), `case ${index + 1} fails ${pattern}`));
+  passing.forEach((_, index) => assert.deepEqual(of(rows.length + index + 1), [], `case ${rows.length + index + 1} passes`));
+});
+
+test("the inbound-only actions match the Worker's policy", () => {
+  const policy = readFileSync(join(here, "../../workers-bus/src/agents/policy.ts"), "utf8");
+  const list = policy.match(/INBOUND_ONLY[^=]*=\s*new Set\(\[([^\]]*)\]/)?.[1];
+  assert.ok(list, "policy.ts declares INBOUND_ONLY");
+  assert.deepEqual([...INBOUND_ONLY_ACTIONS].sort(), [...list.matchAll(/"([a-z_.]+)"/g)].map((match) => match[1]).sort());
+});
+
 test("every pack the lead check skips still holds an unaligned lead or consent fact", () => {
   for (const pack of UNALIGNED_RECORD_PACKS) {
     const facts = ["golden", "redteam"].flatMap((suite) => {
@@ -950,7 +1000,7 @@ test("expected receipt outcome follows the decision and the expected action clas
   assert.match(failures, /golden\.002: expected\.receipt\.outcome must be "abstained"/);
 });
 
-test("escalate with an own required action is propose unless it is an emergency", () => {
+test("escalate routes and holds no own required action unless it is an emergency", () => {
   const allowlist = {
     schema_version: "ironwrap.specialist-allowlist.v1",
     specialist_id: ID,
@@ -958,17 +1008,27 @@ test("escalate with an own required action is propose unless it is an emergency"
     actions: [
       { action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" },
       { action_id: "exception.escalate", autonomy: "A2", purpose: "Escalate" },
+      { action_id: "note.add", autonomy: "A2", purpose: "Note" },
     ],
   };
   const golden = suiteFile("golden", 20, (cases) => {
-    cases[0].expected.decision = "escalate";
-    cases[0].expected.escalate_to = "owner";
-    cases[0].expected.receipt.outcome = "abstained";
-    cases[0].expected.actions = [{ action_id: "lead.qualify" }, { action_id: "exception.escalate" }];
+    for (const [index, actions] of [
+      [0, [{ action_id: "lead.qualify" }, { action_id: "exception.escalate" }]],
+      [1, [{ action_id: "note.add", args_must_include: { object: { id: "L-1" } } }]],
+      [2, [{ action_id: "note.add", args_must_include: { object: { id: "L-1" } } }, { action_id: "exception.escalate" }]],
+    ]) {
+      cases[index].expected.decision = "escalate";
+      cases[index].expected.escalate_to = "owner";
+      cases[index].expected.receipt.outcome = "abstained";
+      cases[index].expected.actions = actions;
+    }
     return cases;
   });
-  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures.join("\n");
-  assert.match(failures, /golden\.001: escalate with own required action\(s\) lead\.qualify is propose/);
+  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures;
+  const text = failures.join("\n");
+  assert.match(text, /golden\.001: escalate with own required action\(s\) lead\.qualify is propose/);
+  assert.match(text, /golden\.002: escalate requires a routing action .*; a run that only keeps books is propose/);
+  assert.deepEqual(failures.filter((failure) => failure.includes(".003: ")), []);
 });
 
 function withQualification(root, overrides = {}, { gateway = true } = {}) {

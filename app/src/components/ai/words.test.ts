@@ -4,6 +4,9 @@ import {
   DEFAULT_TIME_ZONE,
   DELEGATION,
   RECEIPT_FIELDS,
+  appliedByPersonNote,
+  appliedOf,
+  timeInSentence,
   dayTime,
   deciderWords,
   delegationOf,
@@ -131,6 +134,163 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
       words: "Done by a person",
       note: "A person already made this change, so this draft is closed. The change stays in place, and nothing is left to do.",
     });
+  });
+
+  it("says what a person set by hand on the draft's record, never that they made this change", () => {
+    const role = { field: "role", value: "production", by: "person_dana" } as const;
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        record: "Grace Obi's role",
+        applied: role,
+      }),
+    ).toEqual({
+      state: "done_by_person",
+      words: "Done by Dana Whitford",
+      kind: "done",
+      note: "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Production.",
+    });
+    expect(appliedByPersonNote(undefined, undefined, { field: "role", value: "field" })).toBe(
+      "A person changed the role by hand, so this draft is closed. The role is now Crew.",
+    );
+    expect(
+      appliedByPersonNote("Dana Whitford", "the AI estimator's quote sending", {
+        field: "delegation_setting",
+        value: "within_limits",
+      }),
+    ).toBe(
+      "Dana Whitford changed the AI estimator's quote sending by hand, so this draft is closed. The AI estimator's quote sending is now Auto with undo: it acts without asking up to the limit set, and asks a person for anything over the limit.",
+    );
+    expect(
+      ["asks_first", "within_limits", "off", "shadow"].map((value) =>
+        appliedByPersonNote("Dana Whitford", undefined, { field: "delegation_setting", value }),
+      ),
+    ).toEqual(
+      [
+        "Act with approval: it asks a person each time before it acts",
+        "Auto with undo: it acts without asking up to the limit set, and asks a person for anything over the limit",
+        "Off: it does not do this at all, and people do it by hand",
+        "Suggest: it runs practice rounds that change nothing, and people still do the real work",
+      ].map(
+        (words) =>
+          `Dana Whitford changed the AI team setting by hand, so this draft is closed. The AI team setting is now ${words}.`,
+      ),
+    );
+    // A value it has no words for keeps the note that names no value, never the raw value.
+    for (const applied of [
+      { field: "role", value: "foreman" },
+      { field: "delegation_setting", value: "constructor" },
+    ] as const)
+      expect(appliedByPersonNote("Dana Whitford", "Grace Obi's role", applied)).toBe(
+        appliedByPersonNote("Dana Whitford", "Grace Obi's role"),
+      );
+  });
+
+  it("says the card's time in the line, and you when the person who acted reads it", () => {
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        record: "Grace Obi's role",
+        applied: { field: "role", value: "production", by: "person_dana" },
+        when: "Mon 19 Oct 14:05",
+        byViewer: true,
+      }),
+    ).toEqual({
+      state: "done_by_person",
+      words: "Done by you",
+      kind: "done",
+      note: "You changed Grace Obi's role by hand on Mon 19 Oct at 14:05, so this draft is closed. Grace Obi's role is now Production.",
+    });
+    expect(
+      receiptWords(closed("failed", "declined"), { by: "Dana Whitford", byViewer: true }).words,
+    ).toBe("Undone by you");
+    expect(
+      receiptWords(closed("failed", "done_by_person"), { by: "Dana Whitford", byViewer: true })
+        .words,
+    ).toBe("Done by you");
+    expect(
+      receiptWords(closed("failed", "done_by_person"), {
+        by: "Dana Whitford",
+        byViewer: true,
+        waitingFor: "the phone",
+      }).words,
+    ).toBe("Answered by you · waiting for the phone");
+    // With no value to name, the earlier line still says "You".
+    expect(
+      receiptWords(closed("succeeded", "applied_by_person"), {
+        by: "Dana Whitford",
+        byViewer: true,
+        record: "Grace Obi's role",
+      }).note,
+    ).toBe(
+      "You already made this change to Grace Obi's role, so this draft is closed. The change stays in place, and nothing is left to do.",
+    );
+    // A time it cannot place leaves the line without one.
+    expect(
+      appliedByPersonNote(
+        "Dana Whitford",
+        "Grace Obi's role",
+        { field: "role", value: "sales" },
+        "Not known yet",
+      ),
+    ).toBe(
+      "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales.",
+    );
+  });
+
+  it("says a card time inside a sentence", () => {
+    expect(
+      [
+        "Today 09:30",
+        "Today 6:26 p.m.",
+        "Mon 19 Oct 14:05",
+        "Mon 19 Oct 2025 14:05",
+        "Fri 18 Sep, 6:26 p.m.",
+        "Yesterday 15:40",
+        "Thu 07:00",
+        "9 days ago 14:00",
+      ].map(timeInSentence),
+    ).toEqual([
+      "today at 09:30",
+      "today at 6:26 p.m.",
+      "on Mon 19 Oct at 14:05",
+      "on Mon 19 Oct 2025 at 14:05",
+      "on Fri 18 Sep at 6:26 p.m.",
+      "yesterday at 15:40",
+      "on Thu at 07:00",
+      "9 days ago at 14:00",
+    ]);
+    expect(
+      ["Tomorrow 07:00", "In 9 days 07:00", "Today\u202f6:26\u00a0p.m."].map(timeInSentence),
+    ).toEqual(["tomorrow at 07:00", "in 9 days at 07:00", "today at 6:26\u00a0p.m."]);
+    // A time it cannot place, or a day it does not know, it leaves out rather than guess.
+    expect(timeInSentence("Not known yet")).toBeUndefined();
+    expect(timeInSentence("")).toBeUndefined();
+    expect(timeInSentence("Around 14:05")).toBeUndefined();
+  });
+
+  it("reads only a well-formed applied record from a closed draft's context", () => {
+    const applied = { field: "delegation_setting", value: "off", by: "person_dana" };
+    expect(appliedOf({ applied })).toEqual(applied);
+    expect(appliedOf({ applied, prior: "kept" })).toEqual(applied);
+    // Without who, the value still reads; the note then says "A person".
+    expect(appliedOf({ applied: { field: "role", value: "sales" } })).toEqual({
+      field: "role",
+      value: "sales",
+    });
+    for (const context of [
+      null,
+      undefined,
+      "applied",
+      {},
+      { applied: null },
+      { applied: { ...applied, field: "email" } },
+      { applied: { ...applied, value: "" } },
+      { applied: { ...applied, value: 3 } },
+      { applied: { ...applied, by: "" } },
+      { applied: { field: "role", by: "person_dana" } },
+    ])
+      expect(appliedOf(context)).toBeUndefined();
   });
 
   it("closes a people-only draft a newer one replaced, and says where the newer one is", () => {

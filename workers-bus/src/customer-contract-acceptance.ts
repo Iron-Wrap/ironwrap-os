@@ -1187,10 +1187,19 @@ interface SignedCopy {
   accepted_at: string;
   /** The SHA-256 of the immutable acceptance receipt kept in R2. */
   receipt_sha256: string;
-  /** D1's write time of the event recording the copy as shown: the start of the OD-01 window. */
+  /**
+   * When the OD-01 window this copy states starts: D1's write time of the event that records the
+   * copy as shown, never earlier than the attempt that served it. A deadline is stated with it:
+   * "Signed copy received {window_starts_at}. You can cancel until the end of {the day before
+   * window_ends_at} (10 days)", both read in `time_zone`.
+   */
+  window_starts_at: string;
+  /** The same instant as `window_starts_at`, under the event's own name. */
   shown_at: string;
   /** D1's time when the Worker confirmed this copy served, just before sending it. */
   served_at: string;
+  /** The business time zone the window's start and end are read in. */
+  time_zone: string;
   /**
    * When that window ends, as stored (0160, interim pending counsel): the first instant after the
    * 10th local day, the day it was shown being day 0. "You can cancel until" reads the day before it.
@@ -1208,7 +1217,7 @@ async function signedCopyContent(
   intent: AcceptanceIntent,
 ): Promise<{
   acceptanceBindingId: string;
-  copy: Omit<SignedCopy, "shown_at" | "served_at" | "window_ends_at">;
+  copy: Omit<SignedCopy, "window_starts_at" | "shown_at" | "served_at" | "time_zone" | "window_ends_at">;
 } | null> {
   const row = await env.DB.prepare(
     `SELECT binding.acceptance_binding_id, binding.terms_hash, binding.receipt_hash,
@@ -1293,9 +1302,11 @@ async function withSignedCopy(
     ...body,
     signed_copy: {
       ...built.copy,
+      window_starts_at: shown.shown_at,
       shown_at: shown.shown_at,
       served_at: shown.served_at,
       window_ends_at: shown.window_ends_at,
+      time_zone: shown.time_zone,
     },
   }, 200);
 }

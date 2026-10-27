@@ -531,7 +531,13 @@ test("the window is a System state next to the gates, unknown until recorded, th
       recorded_by: { display_name: "Synthetic owner", role: "owner" },
     },
   );
-  assert.deepEqual((await call(h, owner, gatesPath(JOB))).body.cancellation_window.signed_copy_received.id, recorded.body.receipt_id);
+  // The office's gates read states the window's start, where it came from, and the zone to read it in.
+  const office = (await call(h, owner, gatesPath(JOB))).body.cancellation_window;
+  assert.equal(office.signed_copy_received.id, recorded.body.receipt_id);
+  assert.deepEqual(
+    [office.started_from, office.starts_at, office.ends_at, office.time_zone],
+    ["manual_record", receivedAt, open.ends_at, ZONE],
+  );
 
   // Twelve days ago: the window has ended and holds nothing.
   const ended = await recordReceipt(h, owner, ENDED_JOB, {
@@ -997,6 +1003,9 @@ test("the window ends at the end of the 10th local day after its start, at the l
   // is read by the runtime's rules and across the offsets Edmonton keeps (UTC-7 and UTC-6): the
   // latest day the receipt falls on, and the 11th day's midnight at UTC-7. The latest reading wins.
   assert.deepEqual(zoneOffsets(Date.parse("2025-11-05T01:26:00.000Z"), ZONE), [-7 * HOUR, -6 * HOUR]);
+  // Five years back: Edmonton still reads at UTC-7 and UTC-6 years after a release keeps UTC-6 all
+  // year, whichever release the runtime holds.
+  assert.deepEqual(zoneOffsets(Date.parse("2030-11-05T00:00:00.000Z"), ZONE), [-7 * HOUR, -6 * HOUR]);
   const tuesday = "2025-11-05T01:26:00.000Z";
   assert.equal(localDateTime(tuesday), "Tue 2025-11-04 18:26:00.000");
   assert.equal(cancellationWindowEndsAt(tuesday, ZONE), "2025-11-15T07:00:00.000Z");
@@ -1117,6 +1126,11 @@ test("D1 ends a copy's window on its own clock exactly as the Worker does, which
   const tuesdayLate = Date.parse("2025-11-05T06:00:00.000Z");
   assert.equal(d1End(ZONE, tuesdayLate - 1, tuesdayLate + 501), "2025-11-15T07:00:00.000Z");
   assert.equal(d1End(ZONE, tuesdayLate, tuesdayLate - 1_000), "2025-11-16T07:00:00.000Z");
+  // The table covers D1's clock from two days behind the Worker's day to three days after it.
+  for (let hours = -47; hours <= 71; hours += 1) {
+    const d1 = tuesdayLate + hours * HOUR + 17 * MINUTE;
+    assert.equal(d1End(ZONE, d1, tuesdayLate), cancellationWindowEndsAt(new Date(d1).toISOString(), ZONE), `${hours}`);
+  }
   // A D1 clock outside the days the Worker read gives no end, so no copy is recorded as shown.
   assert.equal(d1End(ZONE, tuesdayLate - 4 * DAY, tuesdayLate), null);
   assert.equal(d1End(ZONE, tuesdayLate + 4 * DAY, tuesdayLate), null);

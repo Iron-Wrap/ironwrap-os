@@ -760,6 +760,8 @@ export interface SignedCopyShownEvent {
   window_ends_at: string;
   /** D1's time when the Worker confirmed the copy served, at most a minute after `shown_at`. */
   served_at: string;
+  /** The business time zone the end was read in. */
+  time_zone: string;
 }
 
 /** How many times the Worker tries to record a copy as shown and confirm it served. */
@@ -770,7 +772,7 @@ async function servedSignedCopy(
   input: { tenantId: string; acceptanceBindingId: string },
 ): Promise<SignedCopyShownEvent | null> {
   return await env.DB.prepare(
-    `SELECT shown.event_id, shown.shown_at, shown.window_ends_at, served.served_at
+    `SELECT shown.event_id, shown.shown_at, shown.window_ends_at, shown.time_zone, served.served_at
        FROM contract_signed_copy_served served
        JOIN contract_signed_copy_events shown ON shown.event_id = served.event_id
       WHERE served.tenant_id = ? AND served.acceptance_binding_id = ?
@@ -838,7 +840,7 @@ export async function recordSignedCopyShown(
              WHERE served.tenant_id = binding.tenant_id
                AND served.acceptance_binding_id = binding.acceptance_binding_id
           )
-         RETURNING event_id, shown_at, window_ends_at`,
+         RETURNING event_id, shown_at, window_ends_at, time_zone`,
       ).bind(
         randomEventId(),
         JSON.stringify(businessDayTable(zone.timeZone, Date.now())),

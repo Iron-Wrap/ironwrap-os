@@ -1146,10 +1146,10 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     );
     // Pinned through 0200, including privacy, crew-stop guards, the stop release record, durable
     // writer claims and the AI team tables,
-    // durable office intake receipts, and manual measurement history.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=278/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=392/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=765/);
+    // durable office intake receipts, manual measurement history, and the safety stop release guard.
+    assert.match(contract, /REQUIRED_TABLE_COUNT=279/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=393/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=766/);
   }
 });
 

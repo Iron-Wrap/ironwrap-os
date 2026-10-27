@@ -3,6 +3,7 @@ import { LayoutGrid, Menu, Search, ShieldAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useSession } from "../auth/session-context";
+import { jobIdFromPath } from "../field/job-stop";
 import { SafetyActionPanel } from "../field/safety-action-panel";
 import { cn } from "../lib/cn";
 import {
@@ -58,6 +59,8 @@ function OfficeShell() {
   const [shopReading, setShopReading] = useState(false);
   const groups = groupNavigation(items);
   const place = shellPlace(items, pathname === "/now" && showDecisions ? "/approvals" : pathname);
+  // A safety report from an open job holds that job, not every Work Package in the company.
+  const officeStopJob = jobIdFromPath(pathname);
   const trail = breadcrumbTrail(place);
   const tabs = phoneTabs(items);
   const tabsInMore = tabs.hasMore && !tabs.primary.some((item) => item.to === place.item.to);
@@ -297,7 +300,10 @@ function OfficeShell() {
         side="end"
         className="[&>div:nth-child(2)]:p-0"
       >
-        <SafetyActionPanel session={session} />
+        <SafetyActionPanel
+          session={session}
+          scope={officeStopJob ? { type: "roof_job", id: officeStopJob } : undefined}
+        />
       </Dialog>
     </div>
   );

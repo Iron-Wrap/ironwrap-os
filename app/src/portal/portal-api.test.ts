@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   confirmCustomerContractAcceptance,
   loadCustomerPortal,
+  portalStaffPreview,
   recordCustomerPortalDecision,
   requestCustomerContractAcceptanceChallenge,
 } from "./portal-api";
@@ -39,6 +40,19 @@ describe("customer portal API", () => {
         body: JSON.stringify({ token: "a".repeat(43) }),
       }),
     );
+  });
+
+  it("adds staff_preview: true only when an office sign-in is live, and still omits credentials", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(portal));
+
+    await loadCustomerPortal("a".repeat(43), fetcher, true);
+    await loadCustomerPortal("a".repeat(43), fetcher, false);
+
+    expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { token: "a".repeat(43), staff_preview: true },
+      { token: "a".repeat(43) },
+    ]);
+    for (const [, init] of fetcher.mock.calls) expect(init?.credentials).toBe("omit");
   });
 
   it("keeps both acceptance steps on fixed public paths with omitted credentials", async () => {
@@ -114,5 +128,37 @@ describe("customer portal API", () => {
         body: JSON.stringify({ token: "d".repeat(43), option_package_id: "OPT-BETTER" }),
       }),
     );
+  });
+});
+
+describe("portalStaffPreview", () => {
+  it("answers false after 1 s when the check never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const answer = portalStaffPreview(() => new Promise<boolean>(() => {})).then((value) => {
+        settled = true;
+        return value;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(answer).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers false when the check throws or rejects, and true only for a live sign-in", async () => {
+    await expect(
+      portalStaffPreview(() => {
+        throw new Error("storage disabled");
+      }),
+    ).resolves.toBe(false);
+    await expect(portalStaffPreview(() => Promise.reject(new Error("broken")))).resolves.toBe(
+      false,
+    );
+    await expect(portalStaffPreview(() => false)).resolves.toBe(false);
+    await expect(portalStaffPreview(() => true)).resolves.toBe(true);
   });
 });

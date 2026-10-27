@@ -193,6 +193,11 @@ describe("JobStopSheet", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
+    // A stop waiting on this phone still names its job, so it still takes photos.
+    expect(screen.getByRole("link", { name: "Take photo" })).toHaveAttribute(
+      "href",
+      "/check-in/JOB-ELENA",
+    );
   });
 
   it("S23: a stop the office has lifted is over, and the job offers a new stop", async () => {

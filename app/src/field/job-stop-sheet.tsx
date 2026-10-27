@@ -271,22 +271,24 @@ export function JobStopSheet({
           </label>
         )}
         <p className="text-sm">This doesn't restart work. The office releases the stop.</p>
-        <div className="flex flex-wrap gap-2">
-          {/* A stop whose job wasn't found takes no job photos: the job it would file to is unknown. */}
-          {delivery === "unresolved" ? null : (
-            <Button asChild variant="secondary" size="field">
-              <a href={`/check-in/${encodeURIComponent(job.id)}`}>
-                <Camera aria-hidden="true" />
-                Take photo
-              </a>
-            </Button>
-          )}
-          {raised.madeSafeAt ? null : (
-            <Button type="button" size="field" busy={busy} onClick={() => void madeSafe()}>
-              I've made the area safe
-            </Button>
-          )}
-        </div>
+        {/* A stop whose job wasn't found takes no job photos: the job it would file to is unknown. */}
+        {delivery === "unresolved" && raised.madeSafeAt ? null : (
+          <div className="flex flex-wrap gap-2">
+            {delivery === "unresolved" ? null : (
+              <Button asChild variant="secondary" size="field">
+                <a href={`/check-in/${encodeURIComponent(job.id)}`}>
+                  <Camera aria-hidden="true" />
+                  Take photo
+                </a>
+              </Button>
+            )}
+            {raised.madeSafeAt ? null : (
+              <Button type="button" size="field" busy={busy} onClick={() => void madeSafe()}>
+                I've made the area safe
+              </Button>
+            )}
+          </div>
+        )}
         {status ? (
           <p className="text-sm font-semibold text-ok" role="status">
             {status}

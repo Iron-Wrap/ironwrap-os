@@ -44,7 +44,7 @@ import {
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
-import { jobLabelParts } from "../lib/job-label";
+import { jobLabel } from "../lib/job-label";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -59,6 +59,7 @@ import { CustomerJobHistorySection } from "../customers/customer-history-section
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
 import { GateChip } from "./gate-chip";
+import { JobLabelText } from "./job-label-text";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
 
@@ -684,19 +685,12 @@ function planScopeFacts(
     workPackage.physical_context_type === "Roof Site" &&
     thisJob(areaId)
   ) {
-    const { lead, code } = jobLabelParts({ customer, address: job.address, code: job.job_number });
-    // The code stays whole: "IW-" and "ACCEPTANCE" on two lines read as two things.
-    const value =
-      lead || code ? (
-        <>
-          {lead}
-          {lead && code ? " · " : null}
-          {/* plain-language-allow: unlabelled-code - D5 job label; "Applies to the job" names it */}
-          {code ? <span className="whitespace-nowrap">{code}</span> : null}
-        </>
-      ) : (
-        "This job"
-      );
+    const named = jobLabel({ customer, address: job.address, code: job.job_number });
+    const value = named ? (
+      <JobLabelText customer={customer} address={job.address} code={job.job_number} />
+    ) : (
+      "This job"
+    );
     return [{ label: "Applies to the job", value }];
   }
   return [

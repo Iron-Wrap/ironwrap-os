@@ -88,8 +88,11 @@ vi.mock("@tanstack/react-query", async () => {
 });
 
 vi.mock("../field/safety-action-panel", () => ({
-  SafetyActionPanel: () => (
-    <div data-testid="safety-action-panel">
+  SafetyActionPanel: ({ scope }: { scope?: { type: string; id: string } }) => (
+    <div
+      data-testid="safety-action-panel"
+      data-scope={scope ? `${scope.type}:${scope.id}` : "company"}
+    >
       <input aria-label="Synthetic safety draft" />
     </div>
   ),
@@ -220,6 +223,21 @@ describe("AppShell", () => {
         ).toBeNull();
       }
     }
+  });
+
+  it("scopes a safety report from an open job to that job, and to the company elsewhere", () => {
+    mocks.pathname = "/jobs/JOB-1";
+    const view = renderShell(ownerSession);
+    expect(screen.getByTestId("safety-action-panel")).toHaveAttribute(
+      "data-scope",
+      "roof_job:JOB-1",
+    );
+    mocks.pathname = "/jobs/JOB-1/history";
+    view.rerenderShell();
+    expect(screen.getByTestId("safety-action-panel")).toHaveAttribute("data-scope", "company");
+    mocks.pathname = "/sales";
+    view.rerenderShell();
+    expect(screen.getByTestId("safety-action-panel")).toHaveAttribute("data-scope", "company");
   });
 
   it("names the destination and the record in the breadcrumb", () => {

@@ -38,6 +38,14 @@ const LIVE_HANDOFF = /transfer|owner[\s_-]*line|forward(?:ing)?[\s_-]*(?:the[\s_
 // Owner decision MD-08: Newo never texts a caller.
 const TEXT_THE_CALLER = /\b(?:text|sms)(?:ing)?[\s_-]+the[\s_-]+caller\b/i;
 const liveHandoff = (text) => text.match(LIVE_HANDOFF)?.[0] ?? null;
+// Nothing opens an incident for a callback: "callback incident" however it is joined, or any
+// "opens/creates/raises/files/logs an ... incident". The failure cases' "incident evidence" and
+// "a retry or incident is visible" describe the Worker's own failure records and stay allowed.
+const INCIDENT_PROMISE = new RegExp(
+  String.raw`callback[\s_-]*incidents?\b|\b(?:opens?|opened|opening|creates?|created|creating|raises?|raised|raising|` +
+    String.raw`files?|filed|filing|logs?|logged|logging)\s+(?:an?|the)\s+(?:[\w-]+\s+){0,2}incidents?\b`,
+  "i",
+);
 
 assert.equal(expected.schema_version, "newo.expected-config.v1");
 assert.equal(expected.config_version, "newo.production.v1");
@@ -102,7 +110,8 @@ assert.deepEqual(
   [],
   "Worker config must not set up a live handoff",
 );
-// Newo stays off until a D1 callback record exists; the marker is in tools/newo-enablement.mjs.
+// Newo stays off unless the D1 callback record exists (migration 0168); tools/newo-enablement.mjs
+// applies the migrations and reads the schema they build.
 const callbackRecordPresent = newoCallbackRecordPresent(root);
 const enablementRefusal = newoEnablementRefusal({
   enabledIn: [
@@ -211,11 +220,13 @@ for (const item of evaluation.cases) {
   const text = `${item.persona} ${item.expected_outcome}`;
   assert.equal(liveHandoff(text), null, `${item.id} expects a live handoff`);
   assert.equal(TEXT_THE_CALLER.test(text), false, `${item.id} expects Newo to text the caller`);
-  // A callback is a D1 session row and an owner email; no incident is opened for it.
+  // A callback is a D1 callback record a person closes, plus an owner email; no incident is opened.
+  const incidentPromise = text.match(INCIDENT_PROMISE)?.[0] ?? null;
   assert.equal(
-    /callback incident/i.test(text),
-    false,
-    `${item.id} promises a callback incident; a callback is recorded on its D1 session and emailed to the owner`,
+    incidentPromise,
+    null,
+    `${item.id} promises a callback incident ("${incidentPromise}"); a callback is a D1 callback record ` +
+      "a person closes, and an owner email",
   );
   if (item.group !== "required_failure") {
     for (const behaviour of ["attempts_live_transfer", "claims_callback_time"]) {

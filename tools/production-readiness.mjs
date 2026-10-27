@@ -993,9 +993,9 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     ));
   }
 
-  // Newo stays off until IronWrap owns a D1 callback record a person works and closes. Recording
-  // the newo capability as on is not enough: only the marker migration in
-  // tools/newo-enablement.mjs flips this check.
+  // Newo stays off unless IronWrap owns a D1 callback record a person works and closes. Recording
+  // the newo capability as on is not enough: tools/newo-enablement.mjs applies the migrations and
+  // passes this check only when the schema they build holds newo_callback_records (0168).
   let newoEnabledIn = null;
   try {
     newoEnabledIn = newoEnabledEnvironments(wranglerSource ?? "");

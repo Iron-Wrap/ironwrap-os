@@ -672,7 +672,14 @@ function planScopeFacts(
 ): Array<{ label: string; value: string }> {
   const known = (id: string) => (id && id !== MISSING_SCOPE_ID ? id : null);
   const objectId = known(workPackage.work_object_id);
-  if (workPackage.work_object_type === "Roof Job" && (!objectId || objectId === job.id)) {
+  const areaId = known(workPackage.physical_context_id);
+  const thisJob = (id: string | null) => !id || id === job.id;
+  if (
+    workPackage.work_object_type === "Roof Job" &&
+    thisJob(objectId) &&
+    workPackage.physical_context_type === "Roof Site" &&
+    thisJob(areaId)
+  ) {
     const where = [job.job_number ?? "This job", job.address].filter(Boolean).join(", ");
     return [{ label: "Applies to", value: where }];
   }
@@ -684,8 +691,7 @@ function planScopeFacts(
     {
       label: "Work area",
       value:
-        joinKnown([workPackage.physical_context_type, known(workPackage.physical_context_id)]) ??
-        workPackage.physical_context_type,
+        joinKnown([workPackage.physical_context_type, areaId]) ?? workPackage.physical_context_type,
     },
   ];
 }

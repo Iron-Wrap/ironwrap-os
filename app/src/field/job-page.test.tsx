@@ -946,6 +946,47 @@ describe("JobPage", () => {
     expect(screen.queryByText(/unknown/)).toBeNull();
   });
 
+  it("keeps the record's own scope when a plan is not for this job's roof", async () => {
+    const withPackage = (
+      overrides: Partial<NonNullable<JobResponse["packet"]["work_package"]>>,
+    ): JobResponse => {
+      const model = workPackageModel();
+      return {
+        ...model,
+        packet: { ...model.packet, work_package: { ...releasedWorkPackage(), ...overrides } },
+      };
+    };
+    // A roof job plan that names another job never claims this one.
+    const other = renderJob(
+      withPackage({ work_object_id: "OTHER-JOB", physical_context_id: "OTHER-JOB" }),
+    );
+    expect(await screen.findByText("Roof Job · OTHER-JOB")).toBeVisible();
+    expect(screen.getByText("Roof Site · OTHER-JOB")).toBeVisible();
+    expect(screen.queryByText("Applies to")).toBeNull();
+    other.unmount();
+
+    // Another scope leaves out an id the read did not get, and never shows "unknown".
+    renderJob(
+      withPackage({
+        work_object_type: "Shop Order",
+        work_object_id: "unknown",
+        physical_context_type: "Shop Floor",
+        physical_context_id: "unknown",
+      }),
+    );
+    expect(await screen.findByText("Work object")).toBeVisible();
+    expect(screen.getByText("Shop Order")).toBeVisible();
+    expect(screen.getByText("Shop Floor")).toBeVisible();
+    expect(screen.queryByText(/unknown/)).toBeNull();
+  });
+
+  it("says This job when the job has no number, and leaves out an address it does not have", async () => {
+    const model = workPackageModel();
+    renderJob({ ...model, job: { ...model.job, job_number: null, address: null } });
+    expect(await screen.findByText("Applies to")).toBeVisible();
+    expect(screen.getByText("This job")).toBeVisible();
+  });
+
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 

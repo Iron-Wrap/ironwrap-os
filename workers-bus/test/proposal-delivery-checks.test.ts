@@ -515,6 +515,8 @@ test("the Worker refuses a check nobody could keep before it calls the provider,
     calls += 1;
     return { outcome: "unknown" as const, detailCode: "readback_not_supported" };
   }, { findsMessages: false });
+  // Found messages sit in their own room: they never count against the other answers.
+  for (let n = 0; n < 5; n += 1) insertCheck(db, effectId, { outcome: "sent" });
   for (let n = 0; n < 19; n += 1) insertCheck(db, effectId);
   assert.equal((await read()).check_allowed, true);
   await check(env, effectId, "quota:worker:20", blind);
@@ -540,12 +542,14 @@ test("the Worker refuses a check nobody could keep before it calls the provider,
     { code: "proposal_delivery_check_limit", status: 409 },
   );
   assert.equal(rows(), before);
-  // A readback that scans completely keeps the proof's room: its "not found" is kept.
+  // With the found room full as well, a readback that scans completely still has the proof's room:
+  // its "not found" is kept.
+  for (let n = 0; n < 14; n += 1) insertCheck(db, effectId, { outcome: "sent" });
+  assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ? AND outcome = 'sent'", effectId), 20);
   const kept = await check(env, effectId, "quota:worker:scan", scanning(async () => ({ outcome: "not_found", scanComplete: true, evidence: { matched: 0 } })));
   assert.equal(kept.check.outcome, "not_found");
   // Once every room is full, even a readback that finds and scans is refused before the call.
   for (let n = 0; n < 19; n += 1) insertCheck(db, effectId, { outcome: "not_found" });
-  for (let n = 0; n < 19; n += 1) insertCheck(db, effectId, { outcome: "sent" });
   let scans = 0;
   await assert.rejects(
     check(env, effectId, "quota:worker:all-full", scanning(async () => { scans += 1; return { outcome: "not_found", scanComplete: true }; })),

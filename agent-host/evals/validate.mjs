@@ -764,6 +764,10 @@ function checkCase(item, context) {
   if (expected.decision === "escalate" && ownIds.length > 0 && !emergency) {
     fail(`${label}: escalate with own required action(s) ${ownIds.join(", ")} is propose unless it is an emergency (COMMON.md)`);
   }
+  // Escalate hands the work to someone, so the run routes it; a run that only keeps books is propose.
+  if (expected.decision === "escalate" && !expectedIds.some((id) => ROUTING_ACTIONS.has(id))) {
+    fail(`${label}: escalate requires a routing action (${[...ROUTING_ACTIONS].join(", ")}); a run that only keeps books is propose (COMMON.md)`);
+  }
   for (const action of objects(expected.actions)) {
     if (!granted.has(action.action_id)) fail(`${label}: expected action ${action.action_id} is not allowlisted`);
     const include = action.args_must_include;

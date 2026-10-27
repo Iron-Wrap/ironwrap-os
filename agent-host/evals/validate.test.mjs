@@ -1000,7 +1000,7 @@ test("expected receipt outcome follows the decision and the expected action clas
   assert.match(failures, /golden\.002: expected\.receipt\.outcome must be "abstained"/);
 });
 
-test("escalate with an own required action is propose unless it is an emergency", () => {
+test("escalate routes and holds no own required action unless it is an emergency", () => {
   const allowlist = {
     schema_version: "ironwrap.specialist-allowlist.v1",
     specialist_id: ID,
@@ -1008,17 +1008,27 @@ test("escalate with an own required action is propose unless it is an emergency"
     actions: [
       { action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" },
       { action_id: "exception.escalate", autonomy: "A2", purpose: "Escalate" },
+      { action_id: "note.add", autonomy: "A2", purpose: "Note" },
     ],
   };
   const golden = suiteFile("golden", 20, (cases) => {
-    cases[0].expected.decision = "escalate";
-    cases[0].expected.escalate_to = "owner";
-    cases[0].expected.receipt.outcome = "abstained";
-    cases[0].expected.actions = [{ action_id: "lead.qualify" }, { action_id: "exception.escalate" }];
+    for (const [index, actions] of [
+      [0, [{ action_id: "lead.qualify" }, { action_id: "exception.escalate" }]],
+      [1, [{ action_id: "note.add", args_must_include: { object: { id: "L-1" } } }]],
+      [2, [{ action_id: "note.add", args_must_include: { object: { id: "L-1" } } }, { action_id: "exception.escalate" }]],
+    ]) {
+      cases[index].expected.decision = "escalate";
+      cases[index].expected.escalate_to = "owner";
+      cases[index].expected.receipt.outcome = "abstained";
+      cases[index].expected.actions = actions;
+    }
     return cases;
   });
-  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures.join("\n");
-  assert.match(failures, /golden\.001: escalate with own required action\(s\) lead\.qualify is propose/);
+  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures;
+  const text = failures.join("\n");
+  assert.match(text, /golden\.001: escalate with own required action\(s\) lead\.qualify is propose/);
+  assert.match(text, /golden\.002: escalate requires a routing action .*; a run that only keeps books is propose/);
+  assert.deepEqual(failures.filter((failure) => failure.includes(".003: ")), []);
 });
 
 function withQualification(root, overrides = {}, { gateway = true } = {}) {

@@ -4,6 +4,34 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
+  test("keeps a job card's facts apart in the crew shell on a desktop and on a phone", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    // The crew shell centres a phone-wide column on a desktop; the card follows that column, so
+    // window breakpoints never squeeze three columns and two facts into it (Track C, #55 capture).
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/today");
+      const facts = page.locator("li article dl").first();
+      await expect(facts).toBeVisible();
+      const labels = await facts.locator("dt").all();
+      expect(labels.length).toBe(2);
+      const [assignment, next] = await Promise.all(labels.map((label) => label.boundingBox()));
+      const apart =
+        assignment!.x + assignment!.width <= next!.x ||
+        assignment!.y + assignment!.height <= next!.y;
+      expect(apart, `labels overlap at ${viewport.width}px`).toBe(true);
+      for (const label of labels)
+        expect(await label.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+    }
+  });
+
   test("keeps the full crew name, the sun and night switch, and thumb actions usable on narrow phones", async ({
     page,
   }) => {

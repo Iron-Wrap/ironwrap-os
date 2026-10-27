@@ -949,7 +949,6 @@ function NowEvidenceSummary({ model, locale }: { model: NowResponse; locale: str
                   {item.title}
                 </a>
                 <Status kind={decisionStatus(item).kind}>{decisionStatus(item).label}</Status>
-                <p className="text-xs text-muted">Current request v{item.version}</p>
               </li>
             ))}
           </ul>

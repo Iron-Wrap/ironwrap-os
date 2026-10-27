@@ -1,6 +1,7 @@
 import { Timeline, type TimelineEntry } from "../components/ui/timeline";
 import { RefTag } from "../components/ui/ref-tag";
 import { Status } from "../components/ui/status";
+import { SystemDetails } from "../components/ui/system-details";
 import type { QuoteRevisionApprovalRequest } from "../estimator/quote-revision-approval-contracts";
 import type { ProposalPublicationApprovalRequest } from "../proposal/proposal-publication-contracts";
 import type { ApprovalRequest } from "./approval-contracts";
@@ -43,7 +44,7 @@ export function ApprovalReceipt({
         approval.kind === "lead_triage"
           ? "lead note updated; audit receipt finalized"
           : approval.kind === "quote_revision"
-            ? `empty quote draft v${approval.target.quote_version} created; audit receipt finalized`
+            ? "empty quote draft created; audit receipt finalized"
             : "proposal publication recorded; audit receipt finalized",
       ...(approval.completed_at ? { at: approval.completed_at } : {}),
       when: formatOwnerDate(approval.completed_at, locale),
@@ -71,21 +72,13 @@ export function ApprovalReceipt({
         <Timeline entries={events} label="Recorded approval events" />
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
-        <div>
-          <dt className="font-semibold text-muted">Request now</dt>
-          <dd>v{approval.version}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold text-muted">Approved snapshot version</dt>
-          <dd>Not provided by the saved receipt</dd>
-        </div>
         {approval.kind === "quote_revision" ? (
           <div className="sm:col-span-2">
             <dt className="font-semibold text-muted">Exact observed quote</dt>
             <dd className="mt-1 flex flex-wrap items-center gap-2">
               <RefTag kind="record" id={approval.source.customer_quote_id} />
               <span>
-                v{approval.source.quote_version} · {approval.source.status} · observed{" "}
+                {approval.source.status} · observed{" "}
                 {formatOwnerDate(approval.source.modified, locale)}
               </span>
             </dd>
@@ -118,6 +111,25 @@ export function ApprovalReceipt({
           </div>
         ) : null}
       </dl>
+      {/* Version numbers stay out of a person's lines; the audit keeps them here. */}
+      <SystemDetails className="text-sm text-muted">
+        <dl className="grid gap-2">
+          <div>
+            <dt className="font-semibold">Request version</dt>
+            <dd>{approval.version}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Approved snapshot version</dt>
+            <dd>Not provided by the saved receipt</dd>
+          </div>
+          {approval.kind === "quote_revision" ? (
+            <div>
+              <dt className="font-semibold">Observed quote version</dt>
+              <dd>{approval.source.quote_version}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </SystemDetails>
       <p className="text-sm leading-6 text-muted">
         {approval.kind === "lead_triage"
           ? "This approval covers the lead note. It does not release material, shop work, or a crew."

@@ -343,10 +343,6 @@ function CommercialSnapshot({
           value={formatMoney(quote.quote_total, locale, currency) ?? "Not recorded"}
           prominent
         />
-        <CommercialFact
-          label="Version"
-          value={quote.version === null ? "Not recorded" : `Version ${quote.version}`}
-        />
         <CommercialFact label="Payment" value={quote.payment_status ?? "Not recorded"} />
         <CommercialFact
           label="Proposal"
@@ -1555,11 +1551,7 @@ function QuoteLedger({
   const currency = quote.currency ?? tenantCurrency;
   return (
     <div className="mt-5">
-      <div className="flex flex-wrap items-center gap-2">
-        {quote.version !== null ? (
-          <p className="text-sm font-bold text-muted">Version {quote.version}</p>
-        ) : null}
-      </div>
+      <div className="flex flex-wrap items-center gap-2"></div>
       <p className="mt-3 text-3xl font-bold tracking-[-0.035em] tabular-nums">
         {formatMoney(quote.quote_total, locale, currency) ?? "Total not recorded"}
       </p>
@@ -1686,10 +1678,7 @@ function QuoteRevisionEntry({
             : "Facet could not be opened. IronWrap did not change the quote; try again."}
         </p>
       ) : null}
-      <p className="mt-3 break-all text-xs font-semibold text-muted">
-        Source: {quote.id}
-        {quote.version === null ? " · Version not recorded" : ` · Version ${quote.version}`}
-      </p>
+      <p className="mt-3 break-all text-xs font-semibold text-muted">Source: {quote.id}</p>
     </section>
   );
 }
@@ -1734,12 +1723,6 @@ function PricingSnapshot({
         <StatusChip label={label} tone={tone} />
       </div>
       <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
-        <RecordLine
-          label="Quote version"
-          value={
-            snapshot.quote_version === null ? "Not recorded" : `Version ${snapshot.quote_version}`
-          }
-        />
         <RecordLine label="Price book" value={snapshot.price_book_version ?? "Not recorded"} />
         <RecordLine
           label="Price date"
@@ -1939,9 +1922,7 @@ function ScopeChangeLedger({
                   <div>
                     <p className="font-bold text-foreground">{change.title ?? "Untitled change"}</p>
                     <p className="mt-1 text-xs font-semibold text-muted">
-                      {[change.number, change.version === null ? null : `v${change.version}`]
-                        .filter(Boolean)
-                        .join(" · ") || "Change identity unavailable"}
+                      {change.number ?? "Change identity unavailable"}
                     </p>
                   </div>
                   <StatusChip

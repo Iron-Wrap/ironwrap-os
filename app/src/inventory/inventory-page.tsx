@@ -702,9 +702,6 @@ function InventoryDesk({
                   <Button type="submit" variant="accent" busy={commandState.phase === "pending"}>
                     {commandState.phase === "uncertain" ? "Retry same action" : "Record action"}
                   </Button>
-                  <span className="text-sm text-muted">
-                    Inventory command rules, version {overview.policy_version}
-                  </span>
                 </div>
               </form>
             ) : (
@@ -745,11 +742,7 @@ const InventoryReadBack = memo(function InventoryReadBack({
           value={overview.authority_ref ?? "None read back"}
           detail={inventoryStatusLabel(overview.authority.verification_state)}
         />
-        <IdentityTile
-          label="Command policy"
-          value="Inventory command rules"
-          detail={`Version ${overview.policy_version}`}
-        />
+        <IdentityTile label="Command policy" value="Inventory command rules" detail="In force" />
       </section>
       {overview.authority.verification_state !== "verified" ? (
         <Notice tone="danger" title="Inventory commands are fail-closed">
@@ -1409,7 +1402,7 @@ const InventoryCatalog = memo(function InventoryCatalog({
                 {overview.uom_conversions.slice(0, 8).map((conversion) => (
                   <li key={conversion.conversion_id}>
                     1 {conversion.from_uom_code} = {conversion.numerator}/{conversion.denominator}{" "}
-                    {conversion.to_uom_code} · version {conversion.version}
+                    {conversion.to_uom_code}
                   </li>
                 ))}
               </ul>

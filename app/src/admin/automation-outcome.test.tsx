@@ -229,7 +229,7 @@ describe("choosing what an automation sends", () => {
       [...(screen.getByLabelText("Template") as HTMLSelectElement).options].map(
         (option) => option.textContent,
       ),
-    ).toEqual(["Materials list · v2"]);
+    ).toEqual(["Materials list"]);
 
     await user.click(screen.getByRole("button", { name: "Save automation" }));
     await waitFor(() => expect(createAutomationRule).toHaveBeenCalledOnce());
@@ -245,7 +245,7 @@ describe("choosing what an automation sends", () => {
     renderWithSession(<AutomationConfigurationPage />, sessionFor("owner"));
 
     expect(
-      await screen.findByText(/Generate a document and send it · Materials list · v2 · shop/),
+      await screen.findByText(/Generate a document and send it · Materials list · shop/),
     ).toBeVisible();
     // `template_key` holds a template_id for a document rule. An administrator never chose that
     // string and cannot act on it, so it does not appear.
@@ -272,7 +272,7 @@ describe("choosing what an automation sends", () => {
         template_key: MATERIALS_TEMPLATE_ID,
         template_version: 2,
       }),
-    ).toBe("A document that is no longer offered · v2");
+    ).toBe("A document that is no longer offered");
   });
 });
 

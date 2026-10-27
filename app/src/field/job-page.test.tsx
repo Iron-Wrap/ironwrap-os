@@ -842,7 +842,7 @@ describe("JobPage", () => {
       await screen.findByLabelText("What changed?"),
       "Deck damage changed the scope.",
     );
-    await user.click(screen.getByRole("button", { name: "Issue Work Package v4" }));
+    await user.click(screen.getByRole("button", { name: "Issue Work Package" }));
 
     await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
     const options = vi.mocked(apiCommand).mock.calls[0]?.[0];
@@ -906,7 +906,7 @@ describe("JobPage", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "Issue corrected Work Package v4" }),
+      await screen.findByRole("heading", { name: "Issue a corrected Work Package" }),
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
   });

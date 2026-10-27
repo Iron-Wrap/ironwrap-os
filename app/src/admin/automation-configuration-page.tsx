@@ -81,9 +81,11 @@ export function automationTemplateDisplay(
   rule: Pick<AutomationRule, "template_key" | "template_version">,
 ): string {
   const entry = catalog.templates.find((candidate) => candidate.template_key === rule.template_key);
-  return entry
-    ? `${entry.label} · v${rule.template_version}`
-    : `A document that is no longer offered · v${rule.template_version}`;
+  // A version number never stands in a person's line: say in words when the rule keeps an older one.
+  if (!entry) return "A document that is no longer offered";
+  return entry.version === rule.template_version
+    ? entry.label
+    : `${entry.label} · an earlier version`;
 }
 
 /**
@@ -476,7 +478,7 @@ function AutomationCreateForm({
               value={selectedTemplate?.template_key ?? ""}
               options={templateOptions.map((entry) => ({
                 value: entry.template_key,
-                label: `${entry.label} · v${entry.version}`,
+                label: entry.label,
               }))}
               onChange={setTemplate}
             />
@@ -784,7 +786,7 @@ function AutomationRuleForm({
         value={template}
         options={templateOptions.map((entry) => ({
           value: entry.template_key,
-          label: `${entry.label} · v${entry.version}`,
+          label: entry.label,
         }))}
         onChange={setTemplate}
       />

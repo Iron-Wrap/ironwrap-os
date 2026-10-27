@@ -168,7 +168,7 @@ export function WorkPackageIssueForm({
     >
       <p className="text-sm font-semibold text-info">Production authority</p>
       <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-        {workPackage ? `Issue corrected Work Package v${nextVersion}` : "Issue Work Package"}
+        {workPackage ? "Issue a corrected Work Package" : "Issue Work Package"}
       </h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
         The server freezes the current assignment, crew, authority, scope, and release identity.
@@ -384,7 +384,7 @@ export function WorkPackageIssueForm({
         ) : null}
         {savedVersion ? (
           <p className="font-semibold text-ok" role="status">
-            Work Package v{savedVersion} was verified by the server.
+            The Work Package was verified by the server.
           </p>
         ) : null}
         {!canSend ? (
@@ -393,7 +393,7 @@ export function WorkPackageIssueForm({
           </p>
         ) : null}
         <Button type="submit" variant="accent" busy={saving} disabled={!canSend}>
-          <Send aria-hidden="true" /> Issue Work Package v{nextVersion}
+          <Send aria-hidden="true" /> Issue Work Package
         </Button>
       </form>
     </section>

@@ -15,7 +15,6 @@
     "machine-name": 1
   },
   "src/admin/automation-configuration-page.tsx": {
-    "banned-term": 4,
     "unlabelled-code": 4
   },
   "src/admin/automation-recipients-configuration-page.tsx": {
@@ -25,7 +24,7 @@
     "unlabelled-code": 2
   },
   "src/admin/pipeline-configuration-page.tsx": {
-    "banned-term": 4
+    "banned-term": 3
   },
   "src/admin/schema-fields-configuration-page.tsx": {
     "banned-term": 2,
@@ -39,7 +38,7 @@
     "unlabelled-code": 1
   },
   "src/estimator/estimator-workbench-page.tsx": {
-    "banned-term": 5,
+    "banned-term": 3,
     "unlabelled-code": 4,
     "machine-name": 1
   },
@@ -74,18 +73,18 @@
     "banned-term": 5
   },
   "src/integrations/integration-readiness-page.tsx": {
-    "banned-term": 17
+    "banned-term": 15
   },
   "src/inventory/inventory-contracts.ts": {
     "machine-name": 1
   },
   "src/inventory/inventory-lot-lineage.tsx": {
-    "banned-term": 2,
+    "banned-term": 1,
     "unlabelled-code": 11,
     "machine-name": 3
   },
   "src/inventory/inventory-page.tsx": {
-    "banned-term": 26,
+    "banned-term": 23,
     "unlabelled-code": 17,
     "machine-name": 2
   },
@@ -93,7 +92,7 @@
     "machine-name": 1
   },
   "src/jobs/job-spine-panel.tsx": {
-    "banned-term": 9,
+    "banned-term": 7,
     "machine-name": 2
   },
   "src/newo/newo-operations-page.tsx": {
@@ -105,7 +104,6 @@
     "machine-name": 1
   },
   "src/now/now-page.tsx": {
-    "banned-term": 1,
     "unlabelled-code": 2,
     "machine-name": 1,
     "agent-name": 1
@@ -114,7 +112,7 @@
     "banned-term": 1
   },
   "src/owner/approval-receipt.tsx": {
-    "banned-term": 9,
+    "banned-term": 6,
     "machine-name": 1
   },
   "src/owner/owner-now-page.tsx": {
@@ -156,7 +154,6 @@
     "unlabelled-code": 2
   },
   "src/sales/sales-desk-page.tsx": {
-    "banned-term": 1,
     "machine-name": 1
   },
   "src/service/service-case-page.tsx": {

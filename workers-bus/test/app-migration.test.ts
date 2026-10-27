@@ -2300,8 +2300,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // and keeps a conflicting readback from being recorded as not delivered.
     // 0165 names who lifted a safety-occurrence stop and refuses a lift by the person who raised it
     // (L06) or one without its own `released` event.
+    // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
+    // readback be recorded as not delivered only by citing a complete-scan "not found" check.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 140);
+    assert.equal(migrations.length, 141);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2454,10 +2456,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // portal first-open table, one named index and four validation, update, age-gated delete and
     // no-replace guards. 0164 adds three outside-send guards (retry limit, no retry, settle
     // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
-    // 0165 adds one column and one safety stop release guard.
+    // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
+    // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
+    // evidence and readback-conflict guards under their names.
     assert.deepEqual(
       { ...counts },
-      { tables: 279, indexes: 380, triggers: 770 },
+      { tables: 280, indexes: 381, triggers: 774 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

@@ -533,7 +533,8 @@ test.describe("Field Companion PWA acceptance", () => {
           "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",
         )
         .all();
-      expect(cells.length).toBe(18);
+      // The plan's scope is one fact ("Applies to the job"), not "Work object" and "Work area".
+      expect(cells.length).toBe(16);
       for (const cell of cells)
         expect(
           await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),

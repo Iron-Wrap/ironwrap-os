@@ -260,7 +260,7 @@ describe("TodayPage", () => {
       }),
     );
     const banner = await screen.findByText(
-      "Work is stopped on the job: 123 Example Avenue · IW-1042",
+      "Work is stopped on the job: 123 Example Avenue · Ref IW-1042",
     );
     const notice = banner.closest("section")!;
     expect(notice).toHaveTextContent(
@@ -306,7 +306,7 @@ describe("TodayPage", () => {
       { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
     );
     const banner = (
-      await screen.findByText("Work is stopped on the job: 123 Example Avenue · IW-1042")
+      await screen.findByText("Work is stopped on the job: 123 Example Avenue · Ref IW-1042")
     ).closest("section")!;
     expect(within(banner).getByRole("link", { name: "Call the office" })).toHaveAttribute(
       "href",

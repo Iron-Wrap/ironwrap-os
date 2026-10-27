@@ -694,6 +694,71 @@ written, read with D1's own clock, and each refusal is named on the route and re
 - no member of the crew shares a login (user id, email or Frappe user) with the person whose
   attestation Materials, Safety, Access or Weather stands on.
 
+### OD-01 cancellation window
+
+The customer may cancel until 10 days after they receive their copy of the signed contract
+(owner's register OD-01; counsel confirms the wording through the owner). The register says that
+inside that window nothing is ordered from a supplier, no shop work starts and no start is
+confirmed; what is held today is listed below, with what is not. The register scopes it to private
+dwellings; D1 cannot tell a private dwelling from a commercial job, so the window applies to every
+contract. It is a System state next to the gates (`cancellation_window` on
+`GET /api/v1/production/jobs/{job}/gates`), not a gate: it has no ledger and no waiver, and a
+Materials waiver lifts none of its holds (migration `0160`).
+
+- It starts from the copy the portal served at signing, which counts as received. Only after the
+  acceptance has committed and the Worker has built the copy, for a client that renders it on that
+  screen (`signed_copy: true`), does the confirm route append a `contract_signed_copy_events` row,
+  in its own statement conditional on the committed binding. The Worker then appends its
+  confirmation that it served the copy (`contract_signed_copy_served`, append-only, D1's clock,
+  within a minute of the event) and only then sends it. **Only a confirmed event counts**, in every
+  hold, every guard that reads a previous start or end, and every read: the window starts at that
+  event's D1 write time (`shown_at`). Each write returns its row (`RETURNING`), and a failed or
+  unanswered step starts the attempt again, up to three times, never reusing an event left
+  unconfirmed. A copy that cannot be built starts no window, and the answer claims none: the window
+  stays unknown until ops records the receipt. An event left unconfirmed (the Worker stopped, or D1
+  failed past the retries) starts and ends nothing either: the answer claims no copy, the window
+  reads unknown (`signed_copy_unconfirmed`) and every hold holds past that event's would-be end,
+  and the job is on the work queue below until a copy of that contract is confirmed served or a
+  person records the receipt. An exact replay serves the confirmed copy as it stands, or records a new
+  event then and confirms it, so a copy sent later never carries a back-dated start. Once a copy of
+  a contract is confirmed served, no further event is appended for it. Nothing else writes or moves
+  these rows. A response lost between the Worker and the browser after the confirmation cannot be
+  seen; the exact replay returns the same copy.
+- Otherwise an owner or ops person records when the customer received the copy
+  (`POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy`), from their own cookie
+  session, with a reason and an evidence reference. The time is not before the job's latest contract
+  signature (equal is allowed), not after D1's now, and never earlier than one already recorded or
+  shown: a record only moves the window later, and the same time is a no-op. A job with no contract
+  in D1 records with no floor, and its record says so. D1 stamps the record with its own clock and
+  writes its audit row in the same statement; each refusal has its own code.
+- Interim, pending counsel: it ends at the end of the 10th local calendar day after the day it
+  starts on, in the business time zone, the start's own day being day 0 (a copy received Tuesday
+  18:26 holds through the end of Friday the following week). `ends_at` is the first instant of the
+  11th local day, an exclusive bound. The day is read by the runtime's time zone rules and across
+  every UTC offset the zone has kept in the last five years, and the latest reading wins: for
+  Edmonton, the day the start falls on at UTC-6 and the 11th day's midnight at UTC-7. So the end
+  does not rest on the runtime's time zone data matching the real rule: a release that falls back to
+  UTC-7 each autumn and one that keeps UTC-6 all year both end the window no earlier than the real
+  calendar reading. It is never before the start + 240 hours nor before the job's previous end, so
+  it is never earlier than either reading of "10 days", across DST too. D1 holds every end to
+  [start + 240 hours, start + 266 hours]: with no time zone database, a reading is at most 264 hours
+  after a start at local midnight plus the span of the zone's offsets (one hour for Edmonton), and
+  D1 allows a span of two.
+- It is unknown until the job's latest contract has a copy shown or a record at or after its
+  signature, open until it ends, then ended. While it is unknown or open, D1 and the routes refuse,
+  each by name: a schedule (the firm start), the Materials attestation, and a D1 purchase order line
+  for the job or one moving back to `ordered`. A line with no job (stock) is never held.
+- Not held (gaps): the Frappe Supplier Order path (the ERPNext MCP's
+  `request_create_supplier_order`, and `request_transition_supplier_order` moving a Supplier Order
+  to Ordered) writes Frappe directly, outside D1 and the Worker; the window hold is required on that
+  path before supplier send opens. A Shop Order's `scheduled_start` on the typed work-object
+  assignment is not held either; that hold comes with the shop-run contract rule.
+- `GET /api/v1/production/cancellation-window/signed-copy-missing` lists, for owner and ops, the open
+  signed jobs whose window is unknown, in two categories with a count for each: `window_unknown`,
+  and `signed_copy_unconfirmed` (a copy of the latest contract recorded as shown at `copy_shown_at`
+  that the Worker never confirmed served). Signed means a contract in D1, or a Deposit gate that has
+  cleared for a contract signed outside D1.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

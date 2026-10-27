@@ -32,7 +32,12 @@ import {
   selectPhaseWorkPackage,
 } from "../src/commercial-job-phase.ts";
 import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
-import { attestGateInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
+import {
+  attestGateInLedger,
+  d1Now,
+  endCancellationWindow,
+  fixtureSchedule,
+} from "./production-gate-ledger-fixture.ts";
 import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
@@ -1120,7 +1125,9 @@ async function runFrequentCron(h: Harness, scheduledTime: number): Promise<void>
 }
 
 test("IRO-208B closes the no-seed commercial path through reconciled deposit and production admission", async (t) => {
-  const clockStart = Date.now();
+  // The commercial path runs eleven days before D1's clock: the customer signed then, so by the
+  // time the crew is scheduled the OD-01 cancellation window (0160) can have ended.
+  const clockStart = Date.now() - 11 * 24 * 60 * 60_000;
   t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
   const h = setup();
   try {
@@ -1450,8 +1457,9 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
     const job = h.db.raw.prepare(
       "SELECT version FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?",
     ).get(TENANT, journey.ids.jobId) as { version: number };
-    const day = fixtureSchedule(1);
-    await recordOperatingJobAssignment(h.env, {
+    // The crew day is read on D1's clock, which the Weather window was attested against.
+    const day = fixtureSchedule(1, d1Now(h.db.raw));
+    const assignment = {
       tenantId: TENANT,
       roofJobId: journey.ids.jobId,
       expectedRoofJobVersion: Number(job.version),
@@ -1459,11 +1467,11 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       expectedCrewVersion: 1,
       authorityRequirements: [{
         authority_record_id: "authority:iro208:worker",
-        subject_type: "Person",
-        subject_role: "Worker",
+        subject_type: "Person" as const,
+        subject_role: "Worker" as const,
         subject_ref: "appu_field_iro208",
-        authority_kind: "Worker Competency",
-        scope_type: "Roof Job",
+        authority_kind: "Worker Competency" as const,
+        scope_type: "Roof Job" as const,
         scope_ref: journey.ids.jobId,
         version: 1,
         state_digest_sha256: "c".repeat(64),
@@ -1472,7 +1480,17 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       scheduledEnd: day.end,
       actorUserId: OWNER_ID,
       idempotencyKey: "iro208b-schedule-0001",
-    });
+    };
+    // The portal did not show this customer a signed copy, so the cancellation window is unknown
+    // and holds the firm start until a person records when the copy was received (0160). Received
+    // eleven days ago, the window has ended.
+    await assert.rejects(
+      recordOperatingJobAssignment(h.env, assignment),
+      (error: unknown) =>
+        (error as { code?: string }).code === "operating_job_assignment_cancellation_window_unknown",
+    );
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: journey.ids.jobId });
+    await recordOperatingJobAssignment(h.env, assignment);
     const ready = await jobPhase(h, journey.ids.jobId);
     assert.equal(ready.phase, "scheduled");
     assert.equal(ready.facts.accounting.deposit_reconciled, true);

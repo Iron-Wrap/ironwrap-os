@@ -2,7 +2,10 @@
 // is written, and the Crew gate entries it appends (migration 0159).
 //
 // `recordOperatingJobAssignment` is the only writer of `operating_job_assignments`, and it calls
-// `firmStartGateEvidence` before every write. Each rule D1 holds in 0159's
+// `firmStartGateEvidence` before every write. After 0098's own rules, the OD-01 cancellation
+// window (0160, `operating_job_assignments_cancellation_window_hold`) holds the firm start while it
+// is unknown or open: `operating_job_assignment_cancellation_window_unknown` with the reason, or
+// `..._open` with the end. Then each rule D1 holds in 0159's
 // `operating_job_assignments_gate_evidence_guard` is read here first, so the route answers each
 // refusal by name:
 //   * the QA seed owner never schedules, because a schedule clears Crew;
@@ -25,11 +28,10 @@
 //   * Crew bound to that crew at that version already: nothing;
 //   * Crew standing on another crew, another version or a pre-ledger entry: a `reverse` /
 //     `crew_superseded` of that entry, then the `clear`.
-// A later hold on firm starts (A5's cancellation window) is one more check in
-// `firmStartGateEvidence` and one more BEFORE INSERT trigger on `operating_job_assignments`.
 
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { cancellationWindowHold } from "./production-cancellation-window.ts";
 import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 
 export const CREW_GATE_POLICY_VERSION = "ironwrap.crew-gate.v1";
@@ -359,6 +361,11 @@ export async function firmStartGateEvidence(
   if (!roster || Number(roster.members) === 0 || Number(roster.field_users) !== Number(roster.members)) {
     return refused("operating_job_assignment_roster_invalid");
   }
+
+  // 0160: no firm start while the cancellation window is unknown or open. Its trigger fires after
+  // 0098's and before 0159's.
+  const window = await cancellationWindowHold(env, input.tenantId, input.roofJobId);
+  if (window) return refused(`operating_job_assignment_cancellation_window_${window.state}`, window.detail);
 
   // 0159's rules, in its order.
   if (actor?.created_by === QA_SEED_OWNER_CREATED_BY) {

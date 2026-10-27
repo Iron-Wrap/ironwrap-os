@@ -924,7 +924,7 @@ describe("JobPage", () => {
     const first = renderJob(workPackageModel());
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
     expect(screen.getByText("Applies to")).toBeVisible();
-    expect(screen.getByText("IW-1042, 123 Example Avenue, Calgary, AB")).toBeVisible();
+    expect(screen.getByText("Job IW-1042 · 123 Example Avenue, Calgary, AB")).toBeVisible();
     expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
     expect(screen.queryByText("Work object")).toBeNull();
     first.unmount();
@@ -942,7 +942,7 @@ describe("JobPage", () => {
         },
       },
     });
-    expect(await screen.findByText("IW-1042, 123 Example Avenue, Calgary, AB")).toBeVisible();
+    expect(await screen.findByText("Job IW-1042 · 123 Example Avenue, Calgary, AB")).toBeVisible();
     expect(screen.queryByText(/unknown/)).toBeNull();
   });
 

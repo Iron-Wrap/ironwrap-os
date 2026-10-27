@@ -662,9 +662,10 @@ function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObje
 const MISSING_SCOPE_ID = "unknown";
 
 /**
- * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by its
- * number and address, never by record ids or a placeholder (gate e-crew-version-copy: "Roof Job ·
- * unknown"). Any other scope keeps its type and id, and leaves out an id the read did not get.
+ * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job as
+ * "Job {number} · {address}", never by record ids or a placeholder (gate e-crew-version-copy:
+ * "Roof Job · unknown"). Any other scope keeps its type and id, and leaves out an id the read did
+ * not get.
  */
 function planScopeFacts(
   workPackage: FieldWorkPackage,
@@ -680,7 +681,10 @@ function planScopeFacts(
     workPackage.physical_context_type === "Roof Site" &&
     thisJob(areaId)
   ) {
-    const where = [job.job_number ?? "This job", job.address].filter(Boolean).join(", ");
+    // The number says it is a job ("Job IW-1042"); bare, it read as a site id (gate e-plan-scope).
+    const where = [job.job_number ? `Job ${job.job_number}` : "This job", job.address]
+      .filter(Boolean)
+      .join(" · ");
     return [{ label: "Applies to", value: where }];
   }
   return [

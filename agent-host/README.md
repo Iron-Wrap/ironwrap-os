@@ -452,8 +452,10 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
 ```
 
 - A case becomes a production-shaped run: its signal and facts form the Signal and the context
-  snapshot (case times resolved against the case clock, the signal first as untrusted text), the
-  specialist loads as in production, and the production `buildRunInput` assembles the input. The
+  snapshot (case times resolved against the case clock, the signal first as untrusted text), a
+  case signal's `subject` (`{aggregate, id}`, as the inbound producer sets it) reaches the run's
+  signal and goal as in production, the specialist loads as in production, and the production
+  `buildRunInput` assembles the input. The
   replay offers the specialist's full allowlist, worded and ordered as the Worker words its tools,
   with open arguments: the cases follow the contract's argument conventions, and the Worker registry
   has strict schemas for only a few actions, some under other names. A production run sees only the
@@ -482,7 +484,18 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   the case alone. An A0 read returns the case facts it names. Every other call is captured, never
   executed, and answered with the Worker's deterministic decision: drafted for A1, escalated for a
   protective action, awaiting approval for other A2 and A3 actions, abstained for an unknown,
-  wrong-version or stale citation.
+  wrong-version or stale citation. An inbound-only action (`lead_fact.propose`) stops `out_of_scope`
+  as the Worker's policy stops it, before its citations are checked: unless the case signal is an
+  event from an inbound channel about a lead, no other lead is named in `lead_id`, and it cites only
+  the signal (a missing `lead_id` passes here; the Worker's schema refuses it, and replay arguments
+  are open). An event on any other source, `email` and `sms` included, therefore stops: a case that
+  expects `lead_fact.propose` comes by an inbound channel and carries the lead as `signal.subject`,
+  as the producer sets it. The tool file carries the signal's kind, source and subject for that
+  (`requester`); no other requester rule is mirrored, and a handoff never reads its chain's root
+  here (the Worker's does, and stops it on its citations instead). A test in
+  `workers-bus/test/agents-policy.test.ts` compares this rule with the Worker's on every
+  combination of kind, source, subject, lead id and citations. A stage started before this rule
+  replays its remaining repetitions under it on `--resume`; start a new stage to compare runs.
 - Runs go through an eval gateway (`qualification` option, `scope: "eval"`) whose state directory
   is `<output_dir>/<stage>/gateway` (`<output_dir>/replay/gateway` for a single-case replay, and
   `<output_dir>/gateway` when `ledger.per_stage` is false), so each stage books in its own

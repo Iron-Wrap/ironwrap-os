@@ -332,7 +332,7 @@ async function recordPublicationTransition(
     preconditions: { quote_status: "approved" },
     evidenceRefs: EVIDENCE.map(({ ref }) => ref),
     expectedReadback: { state },
-    retryLimit: 1,
+    retryLimit: 0,
     compensationPlan: {},
     correlationId: input.externalEffectId!,
   }, {

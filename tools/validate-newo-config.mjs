@@ -5,7 +5,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { newoCallbackRecordPresent, newoEnabledEnvironments, newoEnablementRefusal } from "./newo-enablement.mjs";
+import {
+  newoCallbackRecordPresent,
+  newoEnabledEnvironments,
+  newoEnabledValue,
+  newoEnablementRefusal,
+} from "./newo-enablement.mjs";
 
 // `--root <dir>` validates a copy of the tree; the tests use it to show each gate fails.
 const rootFlag = process.argv.indexOf("--root");
@@ -102,7 +107,7 @@ const callbackRecordPresent = newoCallbackRecordPresent(root);
 const enablementRefusal = newoEnablementRefusal({
   enabledIn: [
     ...newoEnabledEnvironments(wrangler),
-    ...(expected.runtime.enabled === true ? ["production.expected.json"] : []),
+    ...(newoEnabledValue(expected.runtime.enabled) ? ["production.expected.json"] : []),
   ],
   callbackRecordPresent,
 });
@@ -206,6 +211,12 @@ for (const item of evaluation.cases) {
   const text = `${item.persona} ${item.expected_outcome}`;
   assert.equal(liveHandoff(text), null, `${item.id} expects a live handoff`);
   assert.equal(TEXT_THE_CALLER.test(text), false, `${item.id} expects Newo to text the caller`);
+  // A callback is a D1 session row and an owner email; no incident is opened for it.
+  assert.equal(
+    /callback incident/i.test(text),
+    false,
+    `${item.id} promises a callback incident; a callback is recorded on its D1 session and emailed to the owner`,
+  );
   if (item.group !== "required_failure") {
     for (const behaviour of ["attempts_live_transfer", "claims_callback_time"]) {
       assert.ok(item.catastrophic_if.includes(behaviour), `${item.id} must treat ${behaviour} as catastrophic`);

@@ -355,8 +355,8 @@ Current source tracing distinguishes implemented modules from reachable producti
     `newo-reconciliation.test.ts`, `newo-handoff-resolution.test.ts`). No transfer setting
     remains, and `tools/validate-newo-config.mjs` refuses one (`tools/validate-newo-config.test.mjs`).
     No D1 callback record that a person works and closes exists yet, so the validator and the
-    readiness contract refuse `NEWO_ENABLED=true` until a migration `NNNN_newo_callback_records.sql`
-    adds one. The Newo console proof (`handoff_callback_only`) is pending, and no person can take
+    readiness contract refuse `NEWO_ENABLED=true` (a JSON boolean too) until a migration
+    `NNNN_newo_callback_records.sql` creates the `newo_callback_records` table. The Newo console proof (`handoff_callback_only`) is pending, and no person can take
     over the record yet (`conversation.assign_person` is not registered).
   - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI
     receptionist's playbook reads it as a placeholder fact.

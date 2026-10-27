@@ -84,6 +84,6 @@
     "sandbox_fixture_index": "config/newo/sandbox-fixtures.json",
     "console_proof_index": "config/newo/console-proof.json",
     "evaluation_path": "config/newo/evaluation-cases.v1.json",
-    "evaluation_sha256": "de52f24a4acab260ed7d3c5944e9de8d5db1d30fc0a826a7d26ad3ce32cad176"
+    "evaluation_sha256": "bb4b1467f75a3f22b6df868b697d916bd42bea9c99b38c1ca4de459c2e4cf27b"
   }
 }

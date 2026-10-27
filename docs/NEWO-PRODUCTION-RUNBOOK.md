@@ -92,7 +92,7 @@ NEWO_CONTROL_WRITE_ENABLED=false
 NEWO_JOBNIMBUS_BOOKING_PROVEN=false
 ```
 
-`NEWO_ENABLED=true` is refused by `node tools/validate-newo-config.mjs` and the readiness contract until a D1 callback record exists: the slice that builds it adds the migration `NNNN_newo_callback_records.sql`.
+`NEWO_ENABLED=true` is refused by `node tools/validate-newo-config.mjs` and the readiness contract until a D1 callback record exists: the slice that builds it adds the migration `NNNN_newo_callback_records.sql`, which must create the `newo_callback_records` table. A file with that name that creates no such table does not count, and a JSON boolean `true` counts as on, as it does in the Worker.
 
 Control writes may be enabled later without enabling customer sends. Outbound customer operations require both governed approval and `NEWO_OUTBOUND_ENABLED=true`.
 

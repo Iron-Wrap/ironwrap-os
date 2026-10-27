@@ -2303,7 +2303,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 140);
+    assert.equal(migrations.length, 141);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2461,7 +2461,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence and readback-conflict guards under their names.
     assert.deepEqual(
       { ...counts },
-      { tables: 279, indexes: 380, triggers: 770 },
+      { tables: 280, indexes: 381, triggers: 774 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

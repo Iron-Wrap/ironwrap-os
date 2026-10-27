@@ -16,19 +16,17 @@ test.describe("Field Companion PWA acceptance", () => {
     ]) {
       await page.setViewportSize(viewport);
       await page.goto("/today");
-      const facts = page.locator("li article dl").first();
+      const card = page.locator("li article").first();
+      const facts = card.locator("dl");
       await expect(facts).toBeVisible();
-      const labels = await facts.locator("dt").all();
-      expect(labels.length).toBe(2);
-      const [assignment, next] = await Promise.all(labels.map((label) => label.boundingBox()));
-      const apart =
-        assignment!.x + assignment!.width <= next!.x ||
-        assignment!.y + assignment!.height <= next!.y;
-      expect(apart, `labels overlap at ${viewport.width}px`).toBe(true);
-      for (const label of labels)
-        expect(await label.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-          true,
-        );
+      // Squeezed, the labels and values spill past their cells ("Assignment" ran into "Next step").
+      const cells = await facts.locator("dt, dd").all();
+      expect(cells.length).toBe(4);
+      for (const cell of [card, ...cells])
+        expect(
+          await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          `${await cell.textContent()} spills at ${viewport.width}px`,
+        ).toBe(true);
     }
   });
 

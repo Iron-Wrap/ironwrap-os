@@ -501,17 +501,28 @@ test.describe("Field Companion PWA acceptance", () => {
           "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",
         )
         .all();
-      expect(cells.length).toBeGreaterThan(6);
+      expect(cells.length).toBe(18);
       for (const cell of cells)
         expect(
           await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),
           `${(await cell.textContent())?.slice(0, 40)} spills at ${viewport.width}px`,
         ).toBe(true);
-      const safety = page.locator("section[aria-labelledby='safety-access-heading'] > div").first();
-      const columns = await safety.evaluate(
-        (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
-      );
-      expect(columns, `safety cards side by side at ${viewport.width}px`).toBe(1);
+      // Squeezed three across, the facts only wrapped, so the column counts are what fail.
+      const grids = {
+        "job facts": page.locator("header dl").first(),
+        "work plan dates": page
+          .locator("section[aria-labelledby='work-package-heading'] header dl")
+          .first(),
+        "safety cards": page
+          .locator("section[aria-labelledby='safety-access-heading'] > div")
+          .first(),
+      };
+      for (const [name, grid] of Object.entries(grids)) {
+        const columns = await grid.evaluate(
+          (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+        );
+        expect(columns, `${name} side by side at ${viewport.width}px`).toBe(1);
+      }
     }
   });
 });

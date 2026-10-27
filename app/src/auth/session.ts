@@ -21,6 +21,8 @@ const tenantSchema = z.object({
   locale: z.string().min(2),
   time_zone: z.string().min(1),
   currency: z.string().length(3),
+  /** The company's office phone from its profile, dialable from a crew phone; absent until set. */
+  office_phone: z.string().trim().min(1).nullish(),
 });
 
 const sessionBaseSchema = z.object({

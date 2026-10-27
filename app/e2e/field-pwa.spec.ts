@@ -514,7 +514,7 @@ test.describe("Field Companion PWA acceptance", () => {
           .locator("section[aria-labelledby='work-package-heading'] header dl")
           .first(),
         "safety cards": page
-          .locator("section[aria-labelledby='safety-access-heading'] > div")
+          .locator("section[aria-labelledby='safety-access-heading'] > div.grid")
           .first(),
       };
       for (const [name, grid] of Object.entries(grids)) {

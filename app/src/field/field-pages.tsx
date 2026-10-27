@@ -44,7 +44,7 @@ import {
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
-import { jobLabel } from "../lib/job-label";
+import { jobLabelParts } from "../lib/job-label";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -673,7 +673,7 @@ function planScopeFacts(
   workPackage: FieldWorkPackage,
   job: WorkPackagePanelModel["job"],
   customer: string | null | undefined,
-): Array<{ label: string; value: string }> {
+): Array<{ label: string; value: ReactNode }> {
   const known = (id: string) => (id && id !== MISSING_SCOPE_ID ? id : null);
   const objectId = known(workPackage.work_object_id);
   const areaId = known(workPackage.physical_context_id);
@@ -684,8 +684,20 @@ function planScopeFacts(
     workPackage.physical_context_type === "Roof Site" &&
     thisJob(areaId)
   ) {
-    const label = jobLabel({ customer, address: job.address, code: job.job_number });
-    return [{ label: "Applies to the job", value: label ?? "This job" }];
+    const { lead, code } = jobLabelParts({ customer, address: job.address, code: job.job_number });
+    // The code stays whole: "IW-" and "ACCEPTANCE" on two lines read as two things.
+    const value =
+      lead || code ? (
+        <>
+          {lead}
+          {lead && code ? " · " : null}
+          {/* plain-language-allow: unlabelled-code - D5 job label; "Applies to the job" names it */}
+          {code ? <span className="whitespace-nowrap">{code}</span> : null}
+        </>
+      ) : (
+        "This job"
+      );
+    return [{ label: "Applies to the job", value }];
   }
   return [
     {
@@ -1980,7 +1992,7 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
   );
 }
 
-function JobFact({ label, value }: { label: string; value: string }) {
+function JobFact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <dt className="text-xs font-bold text-muted">{label}</dt>

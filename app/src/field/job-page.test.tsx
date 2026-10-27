@@ -923,8 +923,11 @@ describe("JobPage", () => {
   it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
     const first = renderJob(workPackageModel());
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("Applies to the job")).toBeVisible();
-    expect(screen.getByText("Jamie Homeowner · 123 Example Avenue · IW-1042")).toBeVisible();
+    expect(screen.getByText("Applies to the job").parentElement).toHaveTextContent(
+      "Applies to the jobJamie Homeowner · 123 Example Avenue · IW-1042",
+    );
+    // The code never breaks across lines.
+    expect(screen.getByText("IW-1042", { selector: "span" })).toHaveClass("whitespace-nowrap");
     expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
     expect(screen.queryByText("Work object")).toBeNull();
     first.unmount();
@@ -942,7 +945,9 @@ describe("JobPage", () => {
         },
       },
     });
-    expect(await screen.findByText("Jamie Homeowner · 123 Example Avenue · IW-1042")).toBeVisible();
+    expect((await screen.findByText("Applies to the job")).parentElement).toHaveTextContent(
+      "Jamie Homeowner · 123 Example Avenue · IW-1042",
+    );
     expect(screen.queryByText(/unknown/)).toBeNull();
   });
 

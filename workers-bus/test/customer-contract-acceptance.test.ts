@@ -4062,6 +4062,55 @@ test("an unconfirmed copy of a superseded contract is no record: the queue and t
   }
 });
 
+test("an older contract's confirmed copy is no start for a newer contract whose copy is unconfirmed: the read states none", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-older-0001");
+    assert.equal(first.status, 200);
+    assert.equal(servedCopies(h).length, 1);
+    // A corrected contract, signed on a screen that shows the copy, whose copy is never confirmed.
+    await publishCorrectedContract(h, OD01_TERMS);
+    h.db.failSignedCopyConfirmations = 3;
+    const second = await acceptShowingCopy(h, portalToken, "acceptance-a5-older-0002");
+    assert.equal(second.status, 200);
+    const binding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    assert.equal(servedCopies(h).length, 1, "only the older contract's copy is confirmed");
+    // Unknown, and nothing from the older contract: no start, no copy, no record, no deadline.
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual(
+      [
+        window.state, window.unknown_reason, window.starts_at, window.started_from, window.signed_copy_shown,
+        window.signed_copy_received, window.last_day, window.ends_at, window.ends_on_calendar_day, window.time_zone,
+      ],
+      ["unknown", "signed_copy_unconfirmed", null, null, null, null, null, null, null, ZONE],
+    );
+    assert.deepEqual(window.contract, { acceptance_binding_id: binding.acceptance_binding_id, signed_at: binding.accepted_at });
+    const gates = await handleAuthenticatedRoute(
+      new Request(`${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/gates`),
+      h.env,
+      await personAuth(h, OWNER_ID),
+    );
+    // The office's gates read says the same, but for the moment it was read.
+    assert.deepEqual(
+      { ...(await gates.json() as Record<string, any>).cancellation_window, as_of: undefined },
+      { ...window, as_of: undefined },
+    );
+    // Every hold holds, and the work queue lists the newer contract's unconfirmed copy.
+    const schedule = readyToSchedule(h, { waiveMaterials: true });
+    backorderedJobLine(h);
+    await assertEveryHoldStands(h, schedule, "unknown");
+    const queue = await signedCopyQueue(h);
+    assert.deepEqual(
+      [queue.count, queue.jobs[0].category, queue.jobs[0].unknown_reason, queue.jobs[0].contract_signed_at],
+      [1, "signed_copy_unconfirmed", "signed_copy_unconfirmed", binding.accepted_at],
+    );
+  } finally {
+    h.restore();
+  }
+});
+
 test("a double submit leaves an orphan unconfirmed event, and every read takes the confirmed one", async () => {
   // D1's clock is the test's: the first request's copy is shown a second before local midnight, and
   // the second request's orphan event a second after it.

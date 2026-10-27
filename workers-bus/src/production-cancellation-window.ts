@@ -135,7 +135,7 @@ export interface CancellationWindowState {
   state: "unknown" | "open" | "ended";
   waivable: false;
   unknown_reason: CancellationWindowUnknownReason | null;
-  /** The latest start on record, and which record it is. */
+  /** The latest start on record, and which record it is. Null while unknown. */
   starts_at: string | null;
   started_from: "signed_copy_shown" | "manual_record" | null;
   /**
@@ -153,9 +153,15 @@ export interface CancellationWindowState {
   ends_on_calendar_day: boolean | null;
   /** The job's latest contract, when D1 holds one. */
   contract: { acceptance_binding_id: string; signed_at: string } | null;
-  /** The latest copy the portal showed at signing. */
+  /**
+   * The latest copy the portal showed at signing and the Worker confirmed served. Null while
+   * unknown: a copy of an earlier contract does not apply.
+   */
   signed_copy_shown: SignedCopyShown | null;
-  /** The latest person's record of when the customer received their signed copy. */
+  /**
+   * The latest person's record of when the customer received their signed copy. Null while unknown:
+   * a record from before the latest contract does not apply.
+   */
   signed_copy_received: SignedCopyReceipt | null;
   holds: readonly string[];
   /**
@@ -501,6 +507,9 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
   }
   const start = latestStart(facts);
   const state = Number(facts.unknown) === 1 ? "unknown" : Number(facts.open) === 1 ? "open" : "ended";
+  // While the window is unknown, any start on record belongs to an earlier contract (or to none):
+  // the read states none of it, so no screen shows a start that does not apply.
+  const known = state !== "unknown";
   // The deadline, read in the zone the latest start was read in.
   const startZone = start
     ? (start.from === "manual_record" ? facts.receipt_time_zone : facts.shown_time_zone) ?? timeZone
@@ -517,16 +526,16 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
       : start
       ? "signed_copy_before_contract"
       : "signed_copy_time_missing",
-    starts_at: start?.at ?? null,
-    started_from: start?.from ?? null,
+    starts_at: known ? start?.at ?? null : null,
+    started_from: known ? start?.from ?? null : null,
     last_day: reading?.lastDay ?? null,
     ends_at: state === "unknown" ? null : facts.ends_at,
     ends_on_calendar_day: reading ? facts.ends_at === reading.endsAt : null,
     contract: facts.binding_id
       ? { acceptance_binding_id: facts.binding_id, signed_at: facts.contract_signed_at! }
       : null,
-    signed_copy_shown: shownOf(facts),
-    signed_copy_received: receiptOf(facts),
+    signed_copy_shown: known ? shownOf(facts) : null,
+    signed_copy_received: known ? receiptOf(facts) : null,
     holds: state === "ended" ? [] : CANCELLATION_WINDOW_HOLDS,
     time_zone: reading ? startZone : timeZone,
     as_of: facts.now,

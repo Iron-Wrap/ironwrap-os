@@ -281,6 +281,7 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
   const panelModel: WorkPackagePanelModel = {
     job: { id: model.work_object.workObjectId },
     read_model_generated_at: model.read_model_generated_at,
+    active_stops: model.active_stops,
     assignment: model.assignment,
     allowed_actions: model.allowed_actions,
     packet: { work_package: workPackage },
@@ -650,6 +651,8 @@ type WorkPackagePanelModel = {
   job: Pick<JobResponse["job"], "id">;
   /** When the server made this read: the clock the issue form judges expiry by. */
   read_model_generated_at: string;
+  /** The stops holding work on this job, first the one the plan badge reads. */
+  active_stops: JobResponse["active_stops"];
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
   packet: Pick<JobResponse["packet"], "work_package">;
@@ -1041,7 +1044,12 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            {jobPlanBadge(workPackage, dateOptions, session.user.role === "field" ? "12h" : "24h")}
+            {jobPlanBadge(
+              workPackage,
+              model.active_stops,
+              dateOptions,
+              session.user.role === "field" ? "12h" : "24h",
+            )}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
@@ -2194,6 +2202,7 @@ function toCheckInJobResponse(model: WorkObjectResponse): JobResponse {
     version: model.version,
     source_updated_at: model.source_updated_at,
     read_model_generated_at: model.read_model_generated_at,
+    active_stops: model.active_stops,
     stale_fields: model.stale_fields,
     permissions: model.permissions,
     allowed_actions: model.allowed_actions,

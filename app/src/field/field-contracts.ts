@@ -3,6 +3,19 @@ import { z } from "zod";
 import { MAX_AREA_LABEL, MAX_FIELD_MEASUREMENT_FEET } from "./field-measurement-input";
 
 const nullableText = z.string().nullable();
+
+/**
+ * One stop holding work, in the shape every crew read shares (job, typed work and Today): a
+ * job-scoped crew stop, or a tenant-wide safety stop. An unknown scope reads as "job", so a stop is
+ * never dropped; the Worker sends null for a summary or raiser it does not know.
+ */
+export const activeStopSchema = z.object({
+  occurrence_id: z.string(),
+  scope: z.enum(["job", "tenant"]).catch("job"),
+  reported_at: z.string(),
+  summary: z.string().nullable(),
+  raiser_display_name: z.string().nullable(),
+});
 // Construct packet validators on first parse so Today bootstrap only initializes its own
 // contract. Parsing remains synchronous, including cached packets and nested work packages.
 const workPackageSchema = z.lazy(() =>
@@ -33,13 +46,6 @@ const workPackageSchema = z.lazy(() =>
         changed_hold_points: z.array(z.number().int().positive()),
       })
       .nullable(),
-    // The crew stop that holds a Blocked plan: when it was reported and the crew's own words.
-    // Absent on reads from before the Worker carried it, and null for any other status.
-    active_stop: z
-      .object({ reported_at: z.string().min(1), summary: nullableText })
-      .nullable()
-      .optional()
-      .default(null),
     acknowledgement: z.object({
       current_user_acknowledged: z.boolean(),
       acknowledged_at: nullableText,
@@ -317,6 +323,8 @@ export const workObjectResponseSchema = z.lazy(() =>
       }),
       assignment: assignmentSchema.nullable(),
       work_package: workPackageSchema.nullish().transform((value) => value ?? null),
+      // Older cached reads have no list: none means no stop.
+      active_stops: z.array(activeStopSchema).default([]),
       field_measurements: z.unknown().optional(),
       field_measurements_more: z.unknown().optional(),
       office_contact: z.unknown().optional(),
@@ -419,6 +427,8 @@ export const jobResponseSchema = z.lazy(() =>
       }),
       proof_stream: z.array(proofStreamItemSchema),
       proof_page: z.object({ next_cursor: nullableText, page_size: z.number().int().positive() }),
+      // Older cached packets have no list: none means no stop.
+      active_stops: z.array(activeStopSchema).default([]),
       required_proof: z.array(
         z.object({
           id: z.string().min(1),

@@ -385,3 +385,34 @@ describe("crew tape readings on a work plan read", () => {
     );
   });
 });
+
+describe("active stops on the crew reads", () => {
+  const stop = {
+    occurrence_id: "wpe_stop_1",
+    scope: "job",
+    reported_at: "2026-09-29T13:40:00.000Z",
+    summary: "Ice on the north slope",
+    raiser_display_name: null,
+  };
+
+  it("reads an older cached read with no list as no stop", () => {
+    const result = contracts.workObjectResponseSchema.safeParse(workObject());
+    expect(result.success && result.data.active_stops).toEqual([]);
+  });
+
+  it("never drops a stop: an unknown scope reads as a job stop", () => {
+    const result = contracts.workObjectResponseSchema.safeParse({
+      ...workObject(),
+      active_stops: [stop, { ...stop, occurrence_id: "occ_2", scope: "site" }],
+    });
+    expect(result.success && result.data.active_stops.map((item) => item.scope)).toEqual([
+      "job",
+      "job",
+    ]);
+  });
+
+  it("keeps an unknown summary and raiser as null", () => {
+    const result = contracts.activeStopSchema.safeParse({ ...stop, summary: null });
+    expect(result.success && result.data).toEqual({ ...stop, summary: null });
+  });
+});

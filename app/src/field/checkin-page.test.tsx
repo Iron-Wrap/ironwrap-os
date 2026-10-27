@@ -73,7 +73,6 @@ const principal = { tenantId: fieldSession.tenant.id, userId: fieldSession.user.
 
 function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"]> {
   return {
-    active_stop: null,
     id: "WP-1042-v3",
     version: 3,
     status: "Released",
@@ -105,6 +104,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
     version: 1,
     source_updated_at: "2026-07-10T12:00:00.000Z",
     read_model_generated_at: "2026-07-10T12:00:00.000Z",
+    active_stops: [],
     stale_fields: [],
     permissions: ["jobs:read:assigned"],
     allowed_actions: ["field.checkin.create"],

@@ -2,6 +2,7 @@ import type { JobResponse } from "./field-contracts";
 import { formatFieldStamp, type FieldDateOptions } from "./field-formatting";
 
 type JobPlan = NonNullable<JobResponse["packet"]["work_package"]>;
+type ActiveStop = JobResponse["active_stops"][number];
 
 /** The clock a reader of this screen uses: the crew phone reads a.m. and p.m., the office 24-hour. */
 export type StampClock = "24h" | "12h";
@@ -14,6 +15,7 @@ export type StampClock = "24h" | "12h";
  */
 export function jobPlanBadge(
   plan: JobPlan,
+  stops: readonly ActiveStop[],
   dateOptions: FieldDateOptions,
   clock: StampClock,
 ): string {
@@ -30,9 +32,9 @@ export function jobPlanBadge(
       return "Work started";
     case "Blocked": {
       // Only a crew's Stop Work sets a plan to Blocked (the D1 package triggers), so this is always a
-      // work stop. Every phone reads the stop's time and the crew's own words from the job read;
-      // when the read carries none, the badge says only that work stopped.
-      const stop = plan.active_stop;
+      // work stop. Every phone reads the first listed stop's time and the crew's own words; when the
+      // read lists none, the badge says only that work stopped.
+      const stop = stops[0];
       if (!stop) return "Work stopped";
       const stopped = stamped("Work stopped", stop.reported_at);
       return stop.summary ? `${stopped} · ${stop.summary}` : stopped;

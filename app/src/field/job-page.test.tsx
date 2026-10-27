@@ -130,6 +130,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
     version: 1,
     source_updated_at: "2026-07-10T12:00:00.000Z",
     read_model_generated_at: "2026-07-10T12:00:00.000Z",
+    active_stops: [],
     stale_fields: [],
     permissions: ["jobs:read:assigned"],
     allowed_actions: ["field.checkin.create"],
@@ -231,7 +232,6 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
 
 function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"]> {
   return {
-    active_stop: null,
     id: "WP-1",
     version: 3,
     status: "Released",
@@ -392,6 +392,7 @@ function workObjectModel(): WorkObjectResponse {
     version: model.version,
     source_updated_at: model.source_updated_at,
     read_model_generated_at: model.read_model_generated_at,
+    active_stops: model.active_stops,
     stale_fields: model.stale_fields,
     permissions: model.permissions,
     allowed_actions: [
@@ -1100,11 +1101,17 @@ describe("JobPage", () => {
 
   it("says when the crew stopped work and why, in the crew's own words", async () => {
     const stopped = workPackageModel();
-    stopped.packet.work_package = {
-      ...stopped.packet.work_package!,
-      status: "Blocked",
-      active_stop: { reported_at: "2026-07-10T13:40:00.000Z", summary: "Ice on the north slope" },
-    };
+    stopped.packet.work_package = { ...stopped.packet.work_package!, status: "Blocked" };
+    // The badge reads the first listed stop: the job-scoped crew stop that blocked this plan.
+    stopped.active_stops = [
+      {
+        occurrence_id: "wpe_stop_job_1",
+        scope: "job",
+        reported_at: "2026-07-10T13:40:00.000Z",
+        summary: "Ice on the north slope",
+        raiser_display_name: null,
+      },
+    ];
     renderJob(stopped);
     expect(
       await screen.findByText("Work stopped · Fri 10 Jul 7:40 a.m. · Ice on the north slope"),

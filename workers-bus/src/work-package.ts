@@ -335,7 +335,7 @@ export async function authorizeFieldEvidence(
   if (!auth.session.tenant_id || configuredTenantId !== auth.session.tenant_id) {
     throw fieldEvidenceAuthorizationError(
       "tenant_mismatch",
-      "The Work Package tenant does not match the field session.",
+      "This sign-in is for a different company than this job plan. Sign in again with your work account.",
       403,
     );
   }
@@ -348,13 +348,13 @@ export async function authorizeFieldEvidence(
   if (!workPackage) {
     throw fieldEvidenceAuthorizationError(
       "work_package_not_available",
-      "No current Work Package is available for this assignment.",
+      "This job has no current job plan. Ask production to issue one.",
     );
   }
   if (!workPackage.releaseAttemptId) {
     throw fieldEvidenceAuthorizationError(
       "work_package_release_attempt_missing",
-      "The current Work Package release attempt is unavailable.",
+      "This job plan is not released to the crew right now, so proof cannot be added. Call production.",
     );
   }
   if (
@@ -363,14 +363,14 @@ export async function authorizeFieldEvidence(
   ) {
     throw fieldEvidenceAuthorizationError(
       "work_package_expired",
-      "An expired Work Package cannot receive field evidence.",
+      "This job plan has expired, so proof cannot be added. Ask production to issue a new one.",
     );
   }
   const scope = workPackageScope(workPackage);
   if (submission.scope && !sameScope(submission.scope, scope)) {
     throw fieldEvidenceAuthorizationError(
       "work_object_scope_mismatch",
-      "The saved evidence scope does not match the current Work Package.",
+      "This proof is for a different part of the job than the current job plan. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (
@@ -380,7 +380,7 @@ export async function authorizeFieldEvidence(
   ) {
     throw fieldEvidenceAuthorizationError(
       "evidence_device_mismatch",
-      "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
+      "This proof was started under an earlier sign-in on this phone. Sign in again, then tap Add proof on the step.",
     );
   }
   const actorCandidates = appUserIdentities(auth.session);
@@ -392,7 +392,7 @@ export async function authorizeFieldEvidence(
   ) {
     throw fieldEvidenceAuthorizationError(
       "work_package_actor_not_assigned",
-      "The field actor is not assigned to this Work Package.",
+      "You are not on the crew for this job plan. Ask the office to add you to it.",
       403,
     );
   }
@@ -400,32 +400,32 @@ export async function authorizeFieldEvidence(
   if (payload.work_package_id !== workPackage.id) {
     throw fieldEvidenceAuthorizationError(
       "work_package_not_available",
-      "The saved evidence targets a different Work Package.",
+      "This proof was taken for a job plan that is no longer current. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (payload.work_package_version !== workPackage.version) {
     throw fieldEvidenceAuthorizationError(
       "work_package_version_conflict",
-      "The saved evidence targets a stale Work Package version.",
+      "The job plan changed after this proof was taken. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   if (payload.work_package_release_attempt_id !== workPackage.releaseAttemptId) {
     throw fieldEvidenceAuthorizationError(
       "work_package_release_attempt_conflict",
-      "The saved evidence targets a stale Work Package release attempt.",
+      "The job plan changed after this proof was taken. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   const slot = declaredEvidenceSlot(workPackage, payload.evidence_slot_id);
   if (!slot) {
     throw fieldEvidenceAuthorizationError(
       "work_package_evidence_slot_not_found",
-      "The saved evidence slot is not declared by the current Work Package.",
+      "The current job plan no longer has this proof step. Pick the job again on Today to see which steps need proof.",
     );
   }
   if (payload.evidence_requirement !== slot.requirement) {
     throw fieldEvidenceAuthorizationError(
       "work_package_evidence_requirement_conflict",
-      "The saved evidence requirement does not match the frozen Work Package slot.",
+      "The proof this step asks for changed in the job plan. Pick the job again on Today, then tap Add proof on the step.",
     );
   }
   const source = "field-companion";
@@ -489,7 +489,7 @@ function workPackageScope(workPackage: FieldWorkPackage): {
   ) {
     throw fieldEvidenceAuthorizationError(
       "work_object_scope_unavailable",
-      "The current Work Package has no complete parent/context envelope.",
+      "This job plan does not say which part of the job it covers, so proof cannot be added. Ask production to issue it again.",
     );
   }
   return {
@@ -529,7 +529,7 @@ function authorizedEvidenceCorrection(
   if (!eventId || !evidenceItem || !workPackage.evidenceLedgerAvailable) {
     throw fieldEvidenceAuthorizationError(
       "work_package_evidence_correction_not_found",
-      "The correction target is not available from the current Work Package evidence ledger.",
+      "The proof you are fixing is not on the current job plan. Pick the job again on Today to see the step's current proof.",
     );
   }
   const target = (workPackage.evidence ?? []).find(
@@ -547,7 +547,7 @@ function authorizedEvidenceCorrection(
   ) {
     throw fieldEvidenceAuthorizationError(
       "work_package_evidence_correction_mismatch",
-      "The correction must target the same current Work Package slot and actor lineage.",
+      "You can fix only your own verified proof, on the same step of the current job plan. Pick the job again on Today, then tap Fix proof next to it.",
     );
   }
   if ((workPackage.evidence ?? []).some((candidate) => candidate.correctionOf === target.eventId)) {

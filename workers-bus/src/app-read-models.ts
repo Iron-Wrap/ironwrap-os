@@ -1405,7 +1405,7 @@ export async function buildTodayReadModel(
           next_action:
             assignment?.blocker_reason ??
             text(blocked[0]?.blocker_reason) ??
-            (assignment ? "Open field check-in" : "Assign field work"),
+            (assignment ? "Add job proof" : "Assign field work"),
           assignment,
         },
       ];

@@ -14,11 +14,13 @@ import {
   claimExternalEffect,
   proposeExternalEffect,
   reconcileExternalEffect,
+  recoverExpiredExternalEffects,
   runExternalEffect,
   type EffectAuthority,
   type ExternalEffectRequest,
 } from "../src/effect-runtime.ts";
 import {
+  PROPOSAL_DELIVERY_CHECK_LIMIT,
   PROPOSAL_DELIVERY_ESCALATION_MS,
   PROPOSAL_DELIVERY_STALE_REASON,
   ProposalDeliveryTransportError,
@@ -326,7 +328,14 @@ async function read(env: AppEnv, auth: AuthContext, query: string) {
 }
 
 /** Run a check in-process with a scripted readback, as later adapters will answer. */
-const check = (env: AppEnv, effectId: string, key: string, adapter?: ProposalDeliveryReadbackAdapter, timeoutMs?: number) =>
+const check = (
+  env: AppEnv,
+  effectId: string,
+  key: string,
+  adapter?: ProposalDeliveryReadbackAdapter,
+  timeoutMs?: number,
+  clock?: () => number,
+) =>
   checkProposalDelivery(env, {
     tenantId: TENANT,
     effectId,
@@ -335,7 +344,13 @@ const check = (env: AppEnv, effectId: string, key: string, adapter?: ProposalDel
     idempotencyKey: key,
     ...(adapter ? { adapter } : {}),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(clock ? { clock } : {}),
   });
+/** A readback that can scan completely, as the Gmail readback will after Proof P1. */
+const scanning = (answer: () => Promise<Awaited<ReturnType<ProposalDeliveryReadbackAdapter>>>): ProposalDeliveryReadbackAdapter =>
+  Object.assign(async () => await answer(), { scansCompletely: true });
+const endedAtOf = (db: D1, effectId: string) =>
+  (db.raw.prepare("SELECT ended_at FROM external_effect_attempts WHERE effect_id = ?").get(effectId) as { ended_at: string }).ended_at;
 const notFoundComplete: ProposalDeliveryReadbackAdapter = async () => ({
   outcome: "not_found",
   scanComplete: true,
@@ -366,6 +381,7 @@ test("a check names a proposal send of its own tenant, pack and revision, in the
   assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks"), 0);
   insertCheck(db, lost);
   assert.equal(effect.state, "unknown");
+  assert.equal(stateOf(db, lost), "unknown");
   assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks"), 1);
 });
 
@@ -427,6 +443,28 @@ test("not found needs a complete scan, an unconfirmed send, evidence, and the pr
   insertCheck(db, contradicted, { outcome: "not_found" });
 });
 
+test("a check is dated as its readback starts, so a scan begun inside the provider's window is too early", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const effectId = await send(env, "dated:start", "lost", { provider: PROMPT });
+  const opensAt = Date.parse(endedAtOf(db, effectId));
+  // The scan starts a millisecond before the window closes and answers well after it: refused, and
+  // nothing is written.
+  const slow = scanning(async () => {
+    await new Promise((done) => setTimeout(done, 30));
+    return { outcome: "not_found", scanComplete: true, evidence: { matched: 0 } };
+  });
+  await assert.rejects(check(env, effectId, "dated:start:early", slow, undefined, () => opensAt - 1), {
+    code: "proposal_delivery_check_too_early",
+    status: 409,
+  });
+  assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", effectId), 0);
+  // Started as the window closes: kept, dated at its start.
+  const kept = await check(env, effectId, "dated:start:on-time", slow, undefined, () => opensAt);
+  assert.equal(kept.check.outcome, "not_found");
+  assert.equal(kept.check.created_at, new Date(opensAt).toISOString());
+});
+
 test("one row per check and per key; a check is never changed, removed or replaced", async () => {
   const db = new D1();
   const env = workerEnv(db);
@@ -444,16 +482,65 @@ test("one row per check and per key; a check is never changed, removed or replac
   assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", lost), 1);
 });
 
-test("at most twenty checks are kept per send", async () => {
+test("at most twenty checks of each kind are kept per send: answers that prove nothing never use up the proof's room", async () => {
   const db = new D1();
   const env = workerEnv(db);
-  const lost = await send(env, "row:limit", "lost");
-  const other = await send(env, "row:limit:other", "lost");
-  for (let n = 0; n < 20; n += 1) insertCheck(db, lost);
+  assert.equal(PROPOSAL_DELIVERY_CHECK_LIMIT, 20);
+  const lost = await send(env, "row:limit", "lost", { provider: PROMPT });
+  const other = await send(env, "row:limit:other", "lost", { provider: PROMPT });
+  for (let n = 0; n < 20; n += 1) insertCheck(db, lost, { outcome: n % 2 ? "unknown" : "provider_unavailable" });
   assert.throws(() => insertCheck(db, lost), /proposal_delivery_check_limit/);
+  assert.throws(() => insertCheck(db, lost, { outcome: "sent" }), /proposal_delivery_check_limit/);
   insertCheck(db, other);
-  // The Worker refuses the twenty-first before it calls the provider.
-  await assert.rejects(check(env, lost, "limit-key"), { code: "proposal_delivery_check_limit", status: 409 });
+  // The citable kind keeps its own room.
+  for (let n = 0; n < 20; n += 1) insertCheck(db, lost, { outcome: "not_found" });
+  assert.throws(() => insertCheck(db, lost, { outcome: "not_found" }), /proposal_delivery_check_limit/);
+  for (let n = 0; n < 19; n += 1) insertCheck(db, other, { outcome: "not_found" });
+  insertCheck(db, other, { outcome: "not_found" });
+  insertCheck(db, other, { outcome: "unknown" });
+});
+
+test("the Worker refuses a check nobody could keep before it calls the provider, and the read says so", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const effectId = await send(env, "quota:worker", "lost", { provider: PROMPT });
+  const read = async () => await readProposalDeliveryState(env, TENANT, "proposal-pack:quota:worker", "proposal-revision:quota:worker");
+  let calls = 0;
+  const counting: ProposalDeliveryReadbackAdapter = async () => {
+    calls += 1;
+    return { outcome: "unknown", detailCode: "readback_not_supported" };
+  };
+  for (let n = 0; n < 19; n += 1) insertCheck(db, effectId);
+  assert.equal((await read()).check_allowed, true);
+  await check(env, effectId, "quota:worker:20", counting);
+  assert.equal(calls, 1);
+  // Twenty answers that prove nothing, and a readback that cannot scan completely: closed.
+  assert.equal((await read()).check_allowed, false);
+  await assert.rejects(check(env, effectId, "quota:worker:21", counting), { code: "proposal_delivery_check_limit", status: 409 });
+  assert.equal(calls, 1);
+  const ops = await person(db, env, "ops");
+  assert.deepEqual(
+    await post(env, ops, CHECK_PATH, { external_effect_id: effectId }, "delivery-check-quota-0001"),
+    { status: 409, body: { error: "proposal_delivery_check_limit" } },
+  );
+  // A readback that scans completely still has the proof's room: its "not found" is kept...
+  const kept = await check(env, effectId, "quota:worker:scan", scanning(async () => ({ outcome: "not_found", scanComplete: true, evidence: { matched: 0 } })));
+  assert.equal(kept.check.outcome, "not_found");
+  // ...and any other answer of it is refused by D1, writing nothing.
+  const rows = count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", effectId);
+  await assert.rejects(
+    check(env, effectId, "quota:worker:scan-unclear", scanning(async () => ({ outcome: "unknown" }))),
+    { code: "proposal_delivery_check_limit", status: 409 },
+  );
+  assert.equal(count(db, "SELECT count(*) AS n FROM proposal_delivery_checks WHERE effect_id = ?", effectId), rows);
+  // Once the proof's room is full too, even a scanning readback is refused before the call.
+  for (let n = 0; n < 19; n += 1) insertCheck(db, effectId, { outcome: "not_found" });
+  let scans = 0;
+  await assert.rejects(
+    check(env, effectId, "quota:worker:scan-full", scanning(async () => { scans += 1; return { outcome: "not_found", scanComplete: true }; })),
+    { code: "proposal_delivery_check_limit", status: 409 },
+  );
+  assert.equal(scans, 0);
 });
 
 test("each check writes one audit row naming the person who asked", async () => {
@@ -544,7 +631,8 @@ test("from B2 on, a complete-scan not-found check dated at the move settles an u
   const effectId = await send(env, "move:not-found", "lost", { provider: PROMPT });
   const at = new Date().toISOString();
   // Only "not found" proves the send went nowhere, however complete the scan behind another answer.
-  for (const outcome of ["unknown", "provider_unavailable", "sent", "bounced"]) {
+  // (A `sent` or `bounced` answer contradicts it outright: see the B2 contradiction test.)
+  for (const outcome of ["unknown", "provider_unavailable"]) {
     insertCheck(db, effectId, { outcome, createdAt: at, scanComplete: 1 });
   }
   assert.throws(() => moveTo(db, effectId, "reconciled", at), /proposal_delivery_settle_evidence_missing/);
@@ -727,6 +815,98 @@ test("a check no newer than the conflict does not settle it", async () => {
   insertConfirmation(db, contradicted, "not_delivered", { checkId: newer });
   assert.equal(stateOf(db, contradicted), "reconciled");
   assert.equal(stateOf(db, atMoment), "manual_exception");
+});
+
+test("a check that found the message voids every not-found of the send, from either kind of conflict", async () => {
+  for (const [origin, make] of Object.entries(conflicts)) {
+    for (const found of ["sent", "bounced"]) {
+      for (const order of ["later", "earlier"]) {
+        const db = new D1();
+        const env = workerEnv(db);
+        const id = `contradicted:${origin}:${found}:${order}`;
+        const effectId = await make(env, id);
+        const after = conflictAt(db, effectId);
+        // The lagging mailbox: the scan found nothing, then (or before) a check found the message.
+        const stamps = order === "later" ? [plus(after, 1), plus(after, 2)] : [plus(after, 2), plus(after, 1)];
+        const notFound = insertCheck(db, effectId, { outcome: "not_found", createdAt: stamps[0] });
+        insertCheck(db, effectId, { outcome: found, createdAt: stamps[1] });
+        const label = `${origin} ${found} ${order}`;
+        // The read no longer offers it.
+        const state = await readProposalDeliveryState(env, TENANT, `proposal-pack:${id}`, `proposal-revision:${id}`);
+        assert.deepEqual([state.not_delivered_allowed, state.not_delivered_check_id], [false, null], label);
+        // D1 refuses it.
+        assert.throws(
+          () => insertConfirmation(db, effectId, "not_delivered", { checkId: notFound }),
+          /proposal_delivery_confirmation_check_contradicted/,
+          label,
+        );
+        // The Worker refuses it, through the person's route as well.
+        await assert.rejects(
+          recordProposalDeliveryConfirmation(env, {
+            tenantId: TENANT, effectId, outcome: "not_delivered", note: "Cited the scan that found nothing.",
+            actorUserId: USERS.ops, actorRole: "ops", idempotencyKey: `${id}:worker`, deliveryCheckId: notFound,
+          }),
+          { code: "proposal_delivery_confirmation_check_contradicted", status: 409, detail: { delivery_state: "manual_exception" } },
+          label,
+        );
+        const answered = await post(env, await person(db, env, "ops"), CONFIRM_PATH, {
+          external_effect_id: effectId, outcome: "not_delivered", note: "Cited the scan that found nothing.",
+          delivery_check_id: notFound,
+        }, `contradicted-${origin}-${found}-${order}`);
+        assert.deepEqual(answered, {
+          status: 409,
+          body: { error: "proposal_delivery_confirmation_check_contradicted", delivery_state: "manual_exception" },
+        }, label);
+        assert.equal(stateOf(db, effectId), "manual_exception", label);
+        // So it keeps blocking a second send of the same revision.
+        const second = envelope(id);
+        second.effect.effectId = `effect:delivery-check:${id}:second`;
+        second.effect.idempotencyKey = `delivery-check:${id}:second`;
+        await assert.rejects(proposeExternalEffect(env, second.effect as ExternalEffectRequest), { code: "effect_proposal_delivery_unconfirmed" });
+        // "Delivered" stays open.
+        insertConfirmation(db, effectId, "delivered");
+        assert.equal(stateOf(db, effectId), "succeeded", label);
+      }
+    }
+  }
+});
+
+test("only a check of the same send and tenant contradicts a citation", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  db.raw.exec("DROP TRIGGER proposal_delivery_checks_validate_insert;");
+  const effectId = await conflicts.reconciling(env, "contradicted:foreign");
+  const neighbour = await conflicts.reconciling(env, "contradicted:foreign:neighbour");
+  const after = conflictAt(db, effectId);
+  const notFound = insertCheck(db, effectId, { outcome: "not_found", createdAt: plus(after, 1) });
+  insertCheck(db, effectId, { outcome: "sent", createdAt: plus(after, 2), tenantId: OTHER_TENANT });
+  insertCheck(db, neighbour, { outcome: "sent", createdAt: plus(after, 2) });
+  const state = await readProposalDeliveryState(env, TENANT, "proposal-pack:contradicted:foreign", "proposal-revision:contradicted:foreign");
+  assert.equal(state.not_delivered_check_id, notFound);
+  insertConfirmation(db, effectId, "not_delivered", { checkId: notFound });
+  assert.equal(stateOf(db, effectId), "reconciled");
+});
+
+test("from B2 on, a not-found never settles a send a check found", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  db.raw.exec("DROP TRIGGER proposal_delivery_checks_validate_insert;");
+  for (const found of ["sent", "bounced"]) {
+    const effectId = await send(env, `move:contradicted:${found}`, "lost", { provider: PROMPT });
+    const at = new Date().toISOString();
+    insertCheck(db, effectId, { outcome: found, createdAt: plus(at, -1) });
+    insertCheck(db, effectId, { outcome: "not_found", createdAt: at });
+    assert.throws(() => moveTo(db, effectId, "reconciled", at), /proposal_delivery_settle_evidence_missing/, found);
+  }
+  // Another tenant's row or another send's does not.
+  const effectId = await send(env, "move:contradicted:foreign", "lost", { provider: PROMPT });
+  const neighbour = await send(env, "move:contradicted:neighbour", "lost", { provider: PROMPT });
+  const at = new Date().toISOString();
+  insertCheck(db, effectId, { outcome: "sent", createdAt: plus(at, -1), tenantId: OTHER_TENANT });
+  insertCheck(db, neighbour, { outcome: "sent", createdAt: plus(at, -1) });
+  insertCheck(db, effectId, { outcome: "not_found", createdAt: at });
+  moveTo(db, effectId, "reconciled", at);
+  assert.equal(stateOf(db, effectId), "reconciled");
 });
 
 test("a cited check must be a complete-scan not-found of the same send and tenant", async () => {
@@ -926,24 +1106,44 @@ test("the readback is chosen by the send's provider, and a stand-in only on a sy
   assert.equal(real.body.check.evidence_sha256, null);
 });
 
-test("a send whose lease ran out is recovered to unknown before it is checked", async () => {
-  const db = new D1();
-  const env = workerEnv(db);
-  const { effect, authority } = envelope("route:lease");
+/** A send claimed long enough ago that its attempt's lease has run out. */
+async function lapsedSend(env: AppEnv, id: string): Promise<string> {
+  const { effect, authority } = envelope(id);
   const past = new Date(Date.now() - EFFECT_ATTEMPT_LEASE_MS - 10_000);
   const proposed = await proposeExternalEffect(env, { ...effect, now: past.toISOString() } as ExternalEffectRequest);
   await authorizeExternalEffect(env, proposed.effect_id, authority as EffectAuthority, past.toISOString());
   await claimExternalEffect(env, proposed.effect_id, past);
-  assert.equal(stateOf(db, proposed.effect_id), "executing");
-  const state = await readProposalDeliveryState(env, TENANT, "proposal-pack:route:lease", "proposal-revision:route:lease");
-  assert.equal(state.state, "7");
-  assert.equal(state.check_allowed, true);
-  const answered = await post(env, await person(db, env, "ops"), CHECK_PATH, { external_effect_id: proposed.effect_id }, "delivery-check-lease-0001");
+  return proposed.effect_id;
+}
+
+test("a check never moves a send whose lease ran out: the lease sweep records it, then it is checked", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  const effectId = await lapsedSend(env, "route:lease");
+  assert.equal(stateOf(db, effectId), "executing");
+  const before = effectRow(db, effectId);
+  const events = count(db, "SELECT count(*) AS n FROM external_effect_events WHERE effect_id = ?", effectId);
+  const read = async () => await readProposalDeliveryState(env, TENANT, "proposal-pack:route:lease", "proposal-revision:route:lease");
+  assert.deepEqual([(await read()).state, (await read()).check_allowed], ["7", false]);
+  const ops = await person(db, env, "ops");
+  assert.deepEqual(
+    await post(env, ops, CHECK_PATH, { external_effect_id: effectId }, "delivery-check-lease-0001"),
+    { status: 409, body: { error: "proposal_delivery_check_effect_invalid", delivery_state: "executing" } },
+  );
+  assert.deepEqual(effectRow(db, effectId), before);
+  assert.equal(count(db, "SELECT count(*) AS n FROM external_effect_events WHERE effect_id = ?", effectId), events);
+  // The */5 lease sweep records it as unknown; then the person's check runs.
+  await recoverExpiredExternalEffects(env);
+  assert.equal(stateOf(db, effectId), "unknown");
+  assert.deepEqual([(await read()).state, (await read()).check_allowed], ["7", true]);
+  const answered = await post(env, ops, CHECK_PATH, { external_effect_id: effectId }, "delivery-check-lease-0002");
   assert.equal(answered.status, 201, JSON.stringify(answered.body));
   assert.equal(answered.body.check.effect_state, "unknown");
-  assert.equal(stateOf(db, proposed.effect_id), "unknown");
-  assert.equal(count(db, `SELECT count(*) AS n FROM external_effect_events
-    WHERE effect_id = ? AND from_state = 'executing' AND to_state = 'unknown'`, proposed.effect_id), 1);
+  // A lapsed lease reads the same while the readback is still being reconciled.
+  const reconciling = await lapsedSend(env, "route:lease:reconciling");
+  db.raw.prepare("UPDATE external_effects SET state = 'reconciling' WHERE effect_id = ?").run(reconciling);
+  const state = await readProposalDeliveryState(env, TENANT, "proposal-pack:route:lease:reconciling", "proposal-revision:route:lease:reconciling");
+  assert.deepEqual([state.state, state.check_allowed], ["7", false]);
 });
 
 test("only an unconfirmed, sent or answered-conflict send is checked; another tenant's is not found", async () => {
@@ -1049,6 +1249,12 @@ test("a send left unknown for T opens one owner-visible exception, which a perso
   await send(env, "sweep:withdraw", "lost", { action: "proposal.withdraw" });
   await send(env, "sweep:other", "lost", { action: "mcp.test_write", aggregateType: "communication" });
   await send(env, "sweep:refused", "refused");
+  // A send a person settled before T: never escalated, by its state alone.
+  const settledFirst = await send(env, "sweep:settled-first", "lost");
+  await recordProposalDeliveryConfirmation(env, {
+    tenantId: TENANT, effectId: settledFirst, outcome: "delivered", note: "The customer confirmed by phone.",
+    actorUserId: USERS.ops, actorRole: "ops", idempotencyKey: "sweep:settled-first",
+  });
   const effectId = await send(env, "sweep:lost", "lost");
   const endedAt = (db.raw.prepare(
     "SELECT ended_at FROM external_effect_attempts WHERE effect_id = ?",
@@ -1077,6 +1283,17 @@ test("a send left unknown for T opens one owner-visible exception, which a perso
   });
   assert.equal(count(db, "SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ? AND status = 'open'", effectId), 0);
   assert.deepEqual(await escalateStaleProposalDeliveries(env, at(PROPOSAL_DELIVERY_ESCALATION_MS * 3)), { opened: 0 });
+  assert.equal(count(db, "SELECT count(*) AS n FROM external_effect_exceptions WHERE effect_id = ?", settledFirst), 0);
+});
+
+test("the sweep opens at most its limit per run and takes the rest next time", async () => {
+  const db = new D1();
+  const env = workerEnv(db);
+  for (const id of ["sweep:batch:1", "sweep:batch:2", "sweep:batch:3"]) await send(env, id, "lost");
+  const later = new Date(Date.now() + PROPOSAL_DELIVERY_ESCALATION_MS);
+  assert.deepEqual(await escalateStaleProposalDeliveries(env, later, 2), { opened: 2 });
+  assert.deepEqual(await escalateStaleProposalDeliveries(env, later, 2), { opened: 1 });
+  assert.deepEqual(await escalateStaleProposalDeliveries(env, later, 2), { opened: 0 });
 });
 
 test("a stuck publish claimed under another aggregate type is escalated all the same", async () => {
@@ -1121,6 +1338,16 @@ test("the delivery read derives each state PR-A can reach", async () => {
     await readProposalDeliveryState(env, TENANT, `proposal-pack:${id}`, `proposal-revision:${id}`, now);
 
   assert.equal((await stateFor("state:none")).state, "S0");
+  // Sending: proposed before its deadline, or claimed with a live lease.
+  const { effect: proposedEffect } = envelope("state:proposed");
+  await proposeExternalEffect(env, proposedEffect as ExternalEffectRequest);
+  assert.equal((await stateFor("state:proposed")).state, "S2");
+  assert.equal((await stateFor("state:proposed", new Date(Date.parse(proposedEffect.deadlineAt) + 1))).state, "S3");
+  const { effect: liveEffect, authority: liveAuthority } = envelope("state:live");
+  const live = await proposeExternalEffect(env, liveEffect as ExternalEffectRequest);
+  await authorizeExternalEffect(env, live.effect_id, liveAuthority as EffectAuthority);
+  await claimExternalEffect(env, live.effect_id);
+  assert.equal((await stateFor("state:live")).state, "S2");
   await send(env, "state:failed", "refused");
   assert.equal((await stateFor("state:failed")).state, "S4");
   await send(env, "state:qa", "accepted", { provider: QA });
@@ -1171,6 +1398,13 @@ test("the delivery read derives each state PR-A can reach", async () => {
     insertConfirmation(db, effectId, "not_delivered", { checkId: cited });
     assert.equal((await stateFor(id)).state, "3/9b");
   }
+  // A not-found at the conflict's moment, or before it, is not offered.
+  const atMoment = await conflicts.reconciling(env, "state:conflict:moment");
+  insertCheck(db, atMoment, { outcome: "not_found", createdAt: conflictAt(db, atMoment) });
+  assert.equal((await stateFor("state:conflict:moment")).not_delivered_allowed, false);
+  const earlier = await failedConflict(env, "state:conflict:earlier", PROMPT, new Date(Date.now() + 30_000).toISOString());
+  insertCheck(db, earlier, { outcome: "not_found" });
+  assert.equal((await stateFor("state:conflict:earlier")).not_delivered_allowed, false);
   // A silent provider's exception: frame 1, not checkable, recordable after the window.
   const silent = await send(env, "state:silent", "lost");
   await reconcileExternalEffect(env, silent, { outcome: "inconclusive", evidence: { provider: "no answer" } });

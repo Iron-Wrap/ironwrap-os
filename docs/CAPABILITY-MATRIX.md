@@ -340,9 +340,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
     a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
     no undo flow, no non-protective action has a proven machine path (a within-limits step asks
-    first), and the Worker accepts within limits whatever an action's undo; no screen shows the dial
-    words (the app shows the contract words, `app/src/components/ai/words.ts`); "Facts only, live"
-    has no live conversation runtime.
+    first), and the Worker accepts within limits whatever an action's undo, so the app's "Auto with
+    undo" pill (`app/src/components/ai/words.ts`, owner ruling) runs ahead of any undo flow; no
+    autonomy screen shows the dial; "Facts only, live" has no live conversation runtime.
   - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
     message purpose covers a visit reminder, and `customer_message.send` is not registered; it
     always asks first, so no reminder can run automatically.

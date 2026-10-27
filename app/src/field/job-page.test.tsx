@@ -1027,10 +1027,10 @@ describe("JobPage", () => {
     const first = renderJob(workPackageModel());
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
     expect(screen.getByText("Applies to the job").parentElement).toHaveTextContent(
-      "Applies to the jobJamie Homeowner · 123 Example Avenue · IW-1042",
+      "Applies to the jobJamie Homeowner · 123 Example Avenue · Ref IW-1042",
     );
     // The code never breaks across lines.
-    expect(screen.getByText("IW-1042", { selector: "span" })).toHaveClass("whitespace-nowrap");
+    expect(screen.getByText("Ref IW-1042", { selector: "span" })).toHaveClass("whitespace-nowrap");
     expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
     expect(screen.queryByText("Work object")).toBeNull();
     first.unmount();
@@ -1049,7 +1049,7 @@ describe("JobPage", () => {
       },
     });
     expect((await screen.findByText("Applies to the job")).parentElement).toHaveTextContent(
-      "Jamie Homeowner · 123 Example Avenue · IW-1042",
+      "Jamie Homeowner · 123 Example Avenue · Ref IW-1042",
     );
     expect(screen.queryByText(/unknown/)).toBeNull();
   });

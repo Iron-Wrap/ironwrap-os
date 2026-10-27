@@ -2853,7 +2853,23 @@ function CheckInHeader({ model }: { model: JobResponse }) {
     <header>
       <h1 className="text-2xl font-bold tracking-[-0.03em] sm:text-3xl">Add job proof</h1>
       <p className="mt-1 text-base font-semibold leading-6 text-muted">
-        {model.job.job_number ?? "Assigned job"} · {model.job.address ?? "Address unavailable"}
+        {/* Where the proof is kept, with the job named the ruled way (D5), never code first. */}
+        {jobLabel({
+          customer: model.packet.contact?.display_name,
+          address: model.job.address,
+          code: model.job.job_number,
+        }) ? (
+          <>
+            Saving to the job:{" "}
+            <JobLabelText
+              customer={model.packet.contact?.display_name}
+              address={model.job.address}
+              code={model.job.job_number}
+            />
+          </>
+        ) : (
+          "Saving to this job"
+        )}
       </p>
     </header>
   );

@@ -1,6 +1,7 @@
 /**
- * The ruled name for a job (D5): "{customer} · {street} · {code}". The customer and street lead,
- * and the code may follow but never leads ("Elena Ruiz · 118 Larkspur Way NW · J-ELENA"). The
+ * The ruled name for a job (D5): "{customer} · {street} · Ref {code}". The customer and street
+ * lead, and the code follows with its label ("Elena Ruiz · 118 Larkspur Way NW · Ref J-ELENA"):
+ * a bare code was read only by its place (gate e-d5-checkin). The
  * street is the address up to its first comma, keeping a unit that comes before it ("Unit 4, 118
  * Larkspur Way NW"); a part the read does not have is left out.
  */
@@ -23,5 +24,5 @@ export function jobLabelParts(job: JobLabelSource): { lead: string | null; code:
 
 export function jobLabel(job: JobLabelSource): string | null {
   const { lead, code } = jobLabelParts(job);
-  return [lead, code].filter(Boolean).join(" · ") || null;
+  return [lead, code ? `Ref ${code}` : null].filter(Boolean).join(" · ") || null;
 }

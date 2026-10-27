@@ -177,6 +177,28 @@ describe("CheckInPage", () => {
     await resetDatabaseForTests();
   });
 
+  it("names the job the ruled way under the heading: customer, street, then the code", async () => {
+    const model = jobModel();
+    renderCheckIn({
+      ...model,
+      packet: {
+        ...model.packet,
+        contact: { display_name: "Jamie Homeowner", phone: null, access_instructions: null },
+      },
+    });
+    const heading = await screen.findByRole("heading", { name: "Add job proof" });
+    expect(heading.nextElementSibling).toHaveTextContent(
+      "Saving to the job: Jamie Homeowner · 123 Example Avenue · Ref IW-1042",
+    );
+  });
+
+  it("says Saving to this job when the read names no customer, street or code", async () => {
+    const model = jobModel();
+    renderCheckIn({ ...model, job: { ...model.job, job_number: null, address: null } });
+    const heading = await screen.findByRole("heading", { name: "Add job proof" });
+    expect(heading.nextElementSibling).toHaveTextContent(/^Saving to this job$/);
+  });
+
   it("puts camera and voice capture ahead of form fields without claiming selected media is saved", async () => {
     const user = userEvent.setup();
     renderCheckIn(jobModelWithWorkPackage());

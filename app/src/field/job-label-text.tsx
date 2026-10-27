@@ -11,11 +11,12 @@ export function JobLabelText(job: {
   code?: string | null;
 }) {
   const { lead, code } = jobLabelParts(job);
+  // A no-break space keeps each dot with the part before it, so no line starts with "·".
   if (!lead && !code) return null;
   return (
     <>
-      {lead}
-      {lead && code ? " · " : null}
+      {lead?.replaceAll(" · ", "\u00a0· ")}
+      {lead && code ? "\u00a0· " : null}
       {/* plain-language-allow: unlabelled-code - D5 puts the code last, after the customer and street */}
       {code ? <span className="whitespace-nowrap">{code}</span> : null}
     </>

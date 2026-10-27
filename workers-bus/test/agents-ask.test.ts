@@ -1501,7 +1501,7 @@ test("a person's role change closes the open role-change drafts for them, whatev
   assert.deepEqual([row(device).needs_ask, row(toProduction).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
   // A different role than proposed is still the person's own change: applied, naming what is set now,
   // not as proposed.
-  await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001");
+  await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001", 2);
   const other = row(toProduction);
   const otherApplied = JSON.parse(other.do_it_myself_json!).context.applied;
   assert.deepEqual([other.reason_code, otherApplied.value, otherApplied.as_proposed], ["applied_by_person", "sales", false]);

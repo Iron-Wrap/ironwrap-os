@@ -858,7 +858,8 @@ async function executePublicationEffect(
     preconditions: { quote_status: "approved" },
     evidenceRefs: EVIDENCE.map(({ ref }) => ref),
     expectedReadback: { state },
-    retryLimit: 1,
+    // A proposal send runs once: D1 refuses any other retry limit for it (0164).
+    retryLimit: 0,
     compensationPlan: { action: "proposal.withdraw" },
     correlationId: `correlation:${effectId}`,
   }, {

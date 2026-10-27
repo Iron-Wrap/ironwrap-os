@@ -35,13 +35,16 @@
 -- Both carry `window_ends_at` (INTERIM, pending counsel): the end of the 10th local calendar day
 -- after the day the window starts on, in the business time zone, the start's own day being day 0.
 -- It is stored as the first instant of the 11th local day, an exclusive bound: the window holds
--- while D1's now is before it. It is never before the start + 240 hours nor before the job's
--- previous end, so whichever way counsel counts "10 days" the hold never ends early, across DST
--- too. The Worker reads local days with Intl; for an event it hands D1 the days around its own now,
--- and D1 picks the one its own clock is on. D1 has no time zone database, so it holds every end to
--- [start + 240 hours, start + 265 hours] (the end of the 10th local day is at most 264 hours after a
--- start at local midnight, plus one DST hour) and to no earlier than the job's previous end: no
--- writer can shorten a window.
+-- while D1's now is before it. The Worker reads the day by the runtime's time zone rules and across
+-- every UTC offset the zone has kept in the last five years (UTC-7 and UTC-6 for Edmonton, in
+-- every time zone data release), and takes the latest reading, so a runtime a release behind or
+-- ahead of the real rule never ends a window early. It is never before the start + 240 hours nor
+-- before the job's previous end, so whichever way counsel counts "10 days" the hold never ends
+-- early, across DST too. For an event the Worker hands D1 the stretches around its own now, each
+-- with its end, and D1 picks the one its own clock is in. D1 has no time zone database, so it holds
+-- every end to [start + 240 hours, start + 266 hours] (a reading is at most 264 hours after a start
+-- at local midnight plus the span of the zone's offsets, one hour for Edmonton; D1 allows two) and
+-- to no earlier than the job's previous end: no writer can shorten a window.
 --
 -- The window is derived and read-only. It is not a gate: it has no ledger and no waiver.
 --   * Unknown while the job has neither a copy event for its latest contract nor a record at or
@@ -182,11 +185,12 @@ BEGIN
      OR abs(julianday(NEW.shown_at) - julianday('now')) * 86400 > 60;
 
   -- Never before the start + 240 hours, never after the latest the end of the 10th local day can
-  -- be (264 hours after a start at local midnight, plus one DST hour), never before a previous end.
+  -- be (264 hours after a start at local midnight, plus a two-hour span of offsets), never before a
+  -- previous end.
   SELECT RAISE(ABORT, 'contract_signed_copy_event_end_invalid')
   WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.window_ends_at) IS NOT NEW.window_ends_at
      OR NEW.window_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+240 hours')
-     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+265 hours')
+     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.shown_at, '+266 hours')
      OR EXISTS (
        SELECT 1
          FROM contract_signed_copy_events shown
@@ -361,11 +365,11 @@ BEGIN
        AND shown.shown_at = NEW.received_at
   );
 
-  -- The same bounds as an event's: [start + 240 hours, start + 265 hours], and no previous end later.
+  -- The same bounds as an event's: [start + 240 hours, start + 266 hours], and no previous end later.
   SELECT RAISE(ABORT, 'cancellation_window_receipt_end_invalid')
   WHERE strftime('%Y-%m-%dT%H:%M:%fZ', NEW.window_ends_at) IS NOT NEW.window_ends_at
      OR NEW.window_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+240 hours')
-     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+265 hours')
+     OR NEW.window_ends_at > strftime('%Y-%m-%dT%H:%M:%fZ', NEW.received_at, '+266 hours')
      OR EXISTS (
        SELECT 1
          FROM production_cancellation_window_receipts recorded

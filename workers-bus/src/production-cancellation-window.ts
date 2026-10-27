@@ -47,11 +47,16 @@
 // day it starts on, in the business time zone. The start's own day is day 0: a copy received Tue
 // 18:26 holds through the end of Friday the following week. `ends_at` is the first instant of the
 // 11th day, an exclusive bound: the window holds while D1's now is before it, and has ended at it.
-// It is never before the start + 240 hours (which wins only for a start in the last hour of a local
-// day with a spring-forward inside the window), nor before the job's previous end. Whichever way
-// counsel counts "10 days", 240 hours or 10 calendar days, this end is never earlier. D1 has no
-// time zone database, so it holds every end to [start + 240 hours, start + 265 hours]: the end of
-// the 10th local day is at most 264 hours after a start at local midnight, plus one DST hour.
+// The day is read by the runtime's time zone rules and across every UTC offset the zone has kept
+// in the last five years, and the latest reading wins: for Edmonton the start's day at UTC-6 and
+// the 11th day's midnight at UTC-7, in every time zone data release. So "never earlier" does not
+// rest on the runtime's data matching the real rule: a release that falls back to UTC-7 and one
+// that keeps UTC-6 all year both end the window no earlier than the real calendar reading. It is
+// never before the start + 240 hours nor before the job's previous end. Whichever way counsel
+// counts "10 days", 240 hours or 10 calendar days, this end is never earlier. D1 has no time zone
+// database, so it holds every end to [start + 240 hours, start + 266 hours]: a reading is at most
+// 264 hours after a start at local midnight plus the span of the zone's offsets (one hour for
+// Edmonton), and D1 allows a span of two.
 //
 //   POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy
 //     `{received_at, reason, evidence_ref}`: when the customer received their copy of the signed
@@ -542,42 +547,114 @@ function wallClock(instant: number, timeZone: string): number {
   );
 }
 
+const midnightCache = new Map<string, number>();
+
 /**
  * The instant whose local clock in `timeZone` reads `wall`. A reading the clock shows twice (the
- * hour a DST change repeats) gives the later instant; one it skips gives the instant just after
- * the gap. Either way never earlier.
+ * hour a DST change repeats) gives the later instant, or with `first` the earlier one; one it skips
+ * gives the instant just after the gap.
  */
-function instantOfWallClock(wall: number, timeZone: string): number {
+function instantOfWallClock(wall: number, timeZone: string, first = false): number {
+  const key = `${timeZone}|${wall}|${first}`;
+  const cached = midnightCache.get(key);
+  if (cached !== undefined) return cached;
   const candidates = [wall - DAY_MS, wall + DAY_MS].map(
     (probe) => wall - (wallClock(probe, timeZone) - probe),
   );
   const exact = candidates.filter((candidate) => wallClock(candidate, timeZone) === wall);
-  return Math.max(...(exact.length > 0 ? exact : candidates));
+  const instant = exact.length > 0
+    ? (first ? Math.min(...exact) : Math.max(...exact))
+    : Math.max(...candidates);
+  if (midnightCache.size > 10_000) midnightCache.clear();
+  midnightCache.set(key, instant);
+  return instant;
 }
 
 /**
- * The midnight that opens the local day `days` days after the one `instant` falls on, in
- * `timeZone`. As an end it is the later instant where that midnight repeats (never earlier); as a
- * day's start (`first`) it is the earlier one, the first instant the clock reads that day. A
- * midnight the clock skips gives the instant just after the gap either way.
+ * The midnight that opens the local day `days` days after the one `instant` falls on, by the
+ * runtime's rules for `timeZone`. As an end it is the later instant where that midnight repeats
+ * (never earlier); as a day's start (`first`) it is the earlier one, the first instant the clock
+ * reads that day. A midnight the clock skips gives the instant just after the gap either way.
  */
 function localMidnight(instant: number, days: number, timeZone: string, first = false): number {
   const day = new Date(wallClock(instant, timeZone));
   const wall = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() + days);
-  if (!first) return instantOfWallClock(wall, timeZone);
-  const candidates = [wall - DAY_MS, wall + DAY_MS].map(
-    (probe) => wall - (wallClock(probe, timeZone) - probe),
-  );
-  const exact = candidates.filter((candidate) => wallClock(candidate, timeZone) === wall);
-  return exact.length > 0 ? Math.min(...exact) : Math.max(...candidates);
+  return instantOfWallClock(wall, timeZone, first);
+}
+
+/** The midnight that opens the day `days` days after the one `instant` falls on, at a fixed UTC offset. */
+function fixedMidnight(instant: number, days: number, offsetMs: number): number {
+  return (Math.floor((instant + offsetMs) / DAY_MS) + days) * DAY_MS - offsetMs;
+}
+
+const OFFSET_LOOKBACK_DAYS = 5 * 365;
+const OFFSET_LOOKAHEAD_DAYS = 365;
+const OFFSET_PROBE_DAYS = 15;
+const offsetCache = new Map<string, number[]>();
+
+/**
+ * Every UTC offset `timeZone` keeps by the runtime's own time zone data from five years before the
+ * UTC day of `instant` to a year after it, read every 15 days: its standard and daylight offsets,
+ * and any it kept before its latest change of rule. For America/Edmonton that is UTC-7 and UTC-6
+ * in every data release, whether or not the release keeps UTC-6 all year.
+ */
+export function zoneOffsets(instant: number, timeZone: string): number[] {
+  const day = Math.floor(instant / DAY_MS) * DAY_MS;
+  const key = `${timeZone}|${day}`;
+  let offsets = offsetCache.get(key);
+  if (!offsets) {
+    const seen = new Set<number>();
+    for (
+      let probe = day - OFFSET_LOOKBACK_DAYS * DAY_MS;
+      probe <= day + OFFSET_LOOKAHEAD_DAYS * DAY_MS;
+      probe += OFFSET_PROBE_DAYS * DAY_MS
+    ) {
+      seen.add(wallClock(probe, timeZone) - probe);
+    }
+    offsets = [...seen].sort((a, b) => a - b);
+    if (offsetCache.size > 1_000) offsetCache.clear();
+    offsetCache.set(key, offsets);
+  }
+  return offsets;
+}
+
+/**
+ * The end of the 10th local day after the day `start` falls on (the first instant of the 11th
+ * day), read by the runtime's rules for `timeZone`, and read across `offsets`: the latest day the
+ * start falls on at any of them, and the latest instant the 11th day's midnight comes at any of
+ * them (the westernmost). The later reading wins, so a runtime whose time zone data is a release
+ * behind or ahead of the real rule, including one that disagrees on a DST change inside the window,
+ * never ends the window before the real calendar reading. The cross reading is at most 264 hours
+ * after the start plus the span of `offsets`.
+ */
+function endOfTenthLocalDay(start: number, timeZone: string, offsets: readonly number[]): number {
+  const end = localMidnight(start, CANCELLATION_WINDOW_DAYS + 1, timeZone);
+  if (offsets.length === 0) return end;
+  const latestDay = Math.max(...offsets.map((offset) => Math.floor((start + offset) / DAY_MS)));
+  const westernmost = Math.min(...offsets);
+  return Math.max(end, (latestDay + CANCELLATION_WINDOW_DAYS + 1) * DAY_MS - westernmost);
+}
+
+/**
+ * The end of the 10th local day after the day `startsAt` falls on, by the runtime's rules for
+ * `timeZone` alone: the calendar reading one time zone data release gives, before any other offset
+ * or floor. `cancellationWindowEndsAt` is never earlier than this under any release it may meet.
+ */
+export function calendarEndOfTenthDay(startsAt: string, timeZone: string): string {
+  return new Date(localMidnight(Date.parse(startsAt), CANCELLATION_WINDOW_DAYS + 1, timeZone)).toISOString();
 }
 
 /**
  * When a window that starts at `startsAt` ends (INTERIM, pending counsel): at the end of the 10th
  * local calendar day after the day it starts on in `timeZone`, the start's own day being day 0. The
- * answer is the first instant of the 11th day, an exclusive bound. It is never before the start +
- * 240 hours, nor before the job's previous end. D1 holds the result to
- * [start + 240 hours, start + 265 hours].
+ * answer is the first instant of the 11th day, an exclusive bound. The day is read by the runtime's
+ * rules and across every UTC offset the zone keeps around the start (`zoneOffsets`), and the latest
+ * reading wins: a start late in the evening at one offset is already the next day at another, and
+ * that window ends a day later; the 11th day's midnight is taken at the westernmost offset. For
+ * Edmonton the end is midnight at UTC-7. It is never before the start + 240 hours, nor before the
+ * job's previous end. D1 holds the result to [start + 240 hours, start + 266 hours]: a reading is
+ * at most 264 hours after a start at local midnight plus the span of the zone's offsets (one hour
+ * for Edmonton), and D1 allows a span of two.
  */
 export function cancellationWindowEndsAt(
   startsAt: string,
@@ -585,31 +662,39 @@ export function cancellationWindowEndsAt(
   previousEndsAt: string | null = null,
 ): string {
   const start = Date.parse(startsAt);
-  const endOfTenthDay = localMidnight(start, CANCELLATION_WINDOW_DAYS + 1, timeZone);
+  const endOfTenthDay = endOfTenthLocalDay(start, timeZone, zoneOffsets(start, timeZone));
   const previous = previousEndsAt ? Date.parse(previousEndsAt) : Number.NEGATIVE_INFINITY;
   return new Date(Math.max(endOfTenthDay, start + WINDOW_MS, previous)).toISOString();
 }
 
 /**
- * The business days around `nowMs`, for D1 to end a window that starts on its own clock: for the day
- * before, the day of and the day after `nowMs`, when that local day starts and when the 10th local
- * day after it ends, each read with Intl; then when the day after that starts, with no end. D1 picks
- * the last day that starts at or before its own now. A D1 clock outside those days finds no end, and
- * nothing is stored.
+ * The stretches of time around `nowMs` over which a window's end stays the same, for D1 to end a
+ * window that starts on its own clock: each row is when a stretch begins (a local midnight by the
+ * runtime's rules, or at one of the zone's offsets) and the end, read as `cancellationWindowEndsAt`
+ * reads it, for a start inside it. They run from two days before `nowMs` to three days after; the
+ * last row has no end. D1 picks the last row that begins at or before its own now, so a D1 clock
+ * outside the table finds no end, and nothing is stored.
  */
 export function businessDayTable(timeZone: string, nowMs: number): Array<[string, string | null]> {
   const iso = (instant: number) => new Date(instant).toISOString();
-  return [-1, 0, 1, 2].map((day) => [
-    iso(localMidnight(nowMs, day, timeZone, true)),
-    day < 2 ? iso(localMidnight(nowMs, day + CANCELLATION_WINDOW_DAYS + 1, timeZone)) : null,
+  const offsets = zoneOffsets(nowMs, timeZone);
+  const begins = new Set<number>();
+  for (let day = -2; day <= 3; day += 1) {
+    begins.add(localMidnight(nowMs, day, timeZone, true));
+    for (const offset of offsets) begins.add(fixedMidnight(nowMs, day, offset));
+  }
+  const sorted = [...begins].sort((a, b) => a - b);
+  return sorted.map((begin, index) => [
+    iso(begin),
+    index < sorted.length - 1 ? iso(endOfTenthLocalDay(begin, timeZone, offsets)) : null,
   ]);
 }
 
 /**
  * D1's end of a window that starts at the SQL instant `start`, as `cancellationWindowEndsAt` reads
- * it: the end of the 10th local day after the day `start` falls on, from the day table bound to its
- * one `?` (`businessDayTable`), and never before `start` + 240 hours. A `start` the table does not
- * cover gives NULL, which no event stores.
+ * it: from the table bound to its one `?` (`businessDayTable`), the end for the stretch `start` is
+ * in, and never before `start` + 240 hours. A `start` the table does not cover gives NULL, which no
+ * event stores.
  */
 export function windowEndSql(start: string): string {
   return `max(

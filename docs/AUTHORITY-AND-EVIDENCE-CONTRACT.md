@@ -723,10 +723,16 @@ Materials waiver lifts none of its holds (migration `0160`).
 - Interim, pending counsel: it ends at the end of the 10th local calendar day after the day it
   starts on, in the business time zone, the start's own day being day 0 (a copy received Tuesday
   18:26 holds through the end of Friday the following week). `ends_at` is the first instant of the
-  11th local day, an exclusive bound. It is never before the start + 240 hours nor before the job's
-  previous end, so it is never earlier than either reading of "10 days", across DST too. D1 holds
-  every end to [start + 240 hours, start + 265 hours]: with no time zone database, 265 hours is the
-  latest the end of the 10th local day can be (a start at local midnight, plus one DST hour).
+  11th local day, an exclusive bound. The day is read by the runtime's time zone rules and across
+  every UTC offset the zone has kept in the last five years, and the latest reading wins: for
+  Edmonton, the day the start falls on at UTC-6 and the 11th day's midnight at UTC-7. So the end
+  does not rest on the runtime's time zone data matching the real rule: a release that falls back to
+  UTC-7 each autumn and one that keeps UTC-6 all year both end the window no earlier than the real
+  calendar reading. It is never before the start + 240 hours nor before the job's previous end, so
+  it is never earlier than either reading of "10 days", across DST too. D1 holds every end to
+  [start + 240 hours, start + 266 hours]: with no time zone database, a reading is at most 264 hours
+  after a start at local midnight plus the span of the zone's offsets (one hour for Edmonton), and
+  D1 allows a span of two.
 - It is unknown until the job's latest contract has a copy shown or a record at or after its
   signature, open until it ends, then ended. While it is unknown or open, D1 and the routes refuse,
   each by name: a schedule (the firm start), the Materials attestation, and a D1 purchase order line

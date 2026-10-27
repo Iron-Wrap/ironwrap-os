@@ -3603,9 +3603,9 @@ test("a copy recorded as shown after a person's record never ends before that re
     assert.equal(first.status, 200);
     const binding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
     assert.deepEqual(shownEvents(h), []);
-    // A person's record at the signature, ending at its 265th hour, which D1 allows: later than the
+    // A person's record at the signature, ending at its 266th hour, which D1 allows: later than the
     // copy's own end will be, as for a record read in a business time zone hours behind this one.
-    const recordEnd = new Date(Date.parse(binding.accepted_at) + 265 * 60 * MINUTE_MS).toISOString();
+    const recordEnd = new Date(Date.parse(binding.accepted_at) + 266 * 60 * MINUTE_MS).toISOString();
     h.db.raw.prepare(
       `INSERT INTO production_cancellation_window_receipts (
          receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone,
@@ -3917,25 +3917,25 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
       () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 240)) - 1).toISOString() }),
       /contract_signed_copy_event_end_invalid/,
     );
-    // The end of the 10th local day is at most 264 hours after a start at local midnight, plus one
-    // DST hour: D1 refuses anything later.
+    // A reading of the 10th local day's end is at most 264 hours after a start at local midnight,
+    // plus a span of offsets D1 allows up to two hours: D1 refuses anything later.
     assert.throws(
-      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 265)) + 1).toISOString() }),
+      () => insertEvent({ shown_at: shownAt, window_ends_at: new Date(Date.parse(plusHours(shownAt, 266)) + 1).toISOString() }),
       /contract_signed_copy_event_end_invalid/,
     );
     assert.equal(count(h, "contract_signed_copy_events"), 0);
 
     // A person's record half an hour ago, ending at its 241st hour: an event ending before that
-    // end is refused, and one at its own 265th hour, D1's upper bound, is written.
+    // end is refused, and one at its own 266th hour, D1's upper bound, is written.
     const receivedAt = plusHours(now(), -0.5);
     insertReceipt(receivedAt, plusHours(receivedAt, 241));
     assert.throws(() => insertEvent(), /contract_signed_copy_event_end_invalid/);
     const firstShown = now();
-    insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 265) });
+    insertEvent({ shown_at: firstShown, window_ends_at: plusHours(firstShown, 266) });
     const [event] = shownEvents(h);
     assert.ok(event);
     // One event per contract; it is never updated or deleted.
-    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 265) }), /contract_signed_copy_event_append_only/);
+    assert.throws(() => insertEvent({ window_ends_at: plusHours(firstShown, 266) }), /contract_signed_copy_event_append_only/);
     assert.throws(
       () => h.db.raw.prepare("UPDATE contract_signed_copy_events SET time_zone = 'UTC' WHERE event_id = ?").run(event.event_id),
       /contract_signed_copy_event_append_only/,

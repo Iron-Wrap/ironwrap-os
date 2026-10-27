@@ -3,8 +3,15 @@ import type { ActiveStop } from "./field-contracts";
 
 /** The crew's words for a work stop that holds a job (one module, so ruled copy swaps in here). */
 export const STOP_WORDS = {
-  /** A stop whose job wasn't found holds every job (orchestrator ruling). */
-  tenant: "Work is stopped on every job: a stop's job wasn't found. The office is told.",
+  /** A stop nobody could match to a job holds every job (orchestrator ruling: one meaning everywhere). */
+  tenant: "Work is stopped on every job.",
+  /** What happened, said the same way wherever such a stop shows; "You" when the viewer raised it. */
+  unmatched: (raiser: string | null) =>
+    raiser
+      ? `${raiser} reported a stop, and we couldn't tell which job it's for. The office is told.`
+      : "A stop was reported, and we couldn't tell which job it's for. The office is told.",
+  /** The short job line where one is needed (S21). */
+  unmatchedJob: "Job: couldn't tell which one",
   /** A stop on this job; the job is named the D5 way after the lead-in. */
   jobLeadIn: "Work is stopped on the job:",
   jobUnnamed: "Work is stopped on this job.",
@@ -67,18 +74,21 @@ export function crewStopStamp(
 }
 
 /**
- * "Stopped today at 10:24 a.m. by Tom Lachance · Ice on the north slope": the stop's own time, so it
+ * "Stopped today at 10:24 a.m. by Tom Lachance · Reason: Ice on the north slope": the stop's own time, so it
  * never reads as old beside the run sheet's stamp. Parts the read lacks are left out.
  */
 export function stopDetail(
   stop: ActiveStop,
   options: { locale?: string; timeZone?: string },
   now?: Date,
+  { withRaiser = true }: { withRaiser?: boolean } = {},
 ): string {
   const when = crewStopWhen(stop.reported_at, options, now);
-  const raiser = stop.raiser_display_name?.trim();
+  const raiser = withRaiser ? stop.raiser_display_name?.trim() : undefined;
   const stopped = ["Stopped", when, raiser ? `by ${raiser}` : null].filter(Boolean).join(" ");
-  return [stopped, stop.summary?.trim() || null].filter(Boolean).join(" · ");
+  // The crew's words carry their label, or they read as one more fact (gate e-stop-banner).
+  const reason = stop.summary?.trim();
+  return [stopped, reason ? `Reason: ${reason}` : null].filter(Boolean).join(" · ");
 }
 
 /** Every stop that holds any of these jobs, once each, oldest first. */

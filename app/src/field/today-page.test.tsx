@@ -264,7 +264,7 @@ describe("TodayPage", () => {
     );
     const notice = banner.closest("section")!;
     expect(notice).toHaveTextContent(
-      /Stopped on \w{3} 10 Jul at 10:24\sa\.m\. by Tom Lachance · Ice on the north slope/,
+      /Stopped on \w{3} 10 Jul at 10:24\sa\.m\. by Tom Lachance · Reason: Ice on the north slope/,
     );
     expect(notice).toHaveTextContent("The office releases the stop.");
     // The card waits on the office; its work check is separate and its button is no longer primary.
@@ -359,15 +359,18 @@ describe("TodayPage", () => {
       undefined,
       { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
     );
-    const banner = (
-      await screen.findByText(
-        "Work is stopped on every job: a stop's job wasn't found. The office is told.",
-      )
-    ).closest("section")!;
+    const banner = (await screen.findByText("Work is stopped on every job.")).closest("section")!;
     expect(within(banner).getByRole("link", { name: "Call the office" })).toHaveAttribute(
       "href",
       "tel:7805550142",
     );
+    // The stop names who reported it once, in the sentence that says what happened.
+    expect(
+      within(banner).getByText(
+        "Priya Nand reported a stop, and we couldn't tell which job it's for. The office is told.",
+      ),
+    ).toBeVisible();
+    expect(within(banner).getByText(/^Stopped on \w{3} 10 Jul at 9:50\sa\.m\.$/)).toBeVisible();
   });
 
   it("shows a stop whose job wasn't found once, above every job", async () => {
@@ -383,11 +386,14 @@ describe("TodayPage", () => {
         jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
       }),
     );
+    expect(await screen.findAllByText("Work is stopped on every job.")).toHaveLength(1);
+    // With no raiser the read can name, the banner still says what happened.
     expect(
-      await screen.findAllByText(
-        "Work is stopped on every job: a stop's job wasn't found. The office is told.",
+      screen.getByText(
+        "A stop was reported, and we couldn't tell which job it's for. The office is told.",
       ),
-    ).toHaveLength(1);
+    ).toBeVisible();
+    expect(screen.queryByText(/wasn't found|not found/)).toBeNull();
     // Every card it holds waits on the office, with its work check separate and its button demoted.
     for (const card of screen.getAllByRole("article")) {
       expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();

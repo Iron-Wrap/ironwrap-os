@@ -14,17 +14,27 @@ function StopLines({
   stops,
   dateOptions,
   now,
+  unmatched = false,
 }: {
   stops: ActiveStop[];
   dateOptions: StopDateOptions;
   now?: Date;
+  /** A stop nobody could match to a job first says so, naming who reported it. */
+  unmatched?: boolean;
 }) {
   return (
     <>
       {stops.map((stop) => (
-        <p key={stop.occurrence_id} className="leading-6 break-words">
-          {stopDetail(stop, dateOptions, now)}
-        </p>
+        <div key={stop.occurrence_id}>
+          {unmatched ? (
+            <p className="leading-6">
+              {STOP_WORDS.unmatched(stop.raiser_display_name?.trim() || null)}
+            </p>
+          ) : null}
+          <p className="leading-6 break-words">
+            {stopDetail(stop, dateOptions, now, { withRaiser: !unmatched })}
+          </p>
+        </div>
       ))}
       <p className="leading-6">{STOP_WORDS.waits}</p>
     </>
@@ -45,7 +55,7 @@ function officeCall(officePhone: string | null | undefined) {
   );
 }
 
-/** A stop whose job wasn't found holds every job: shown once, above the crew's jobs. */
+/** A stop nobody could match to a job holds every job: shown once, above the crew's jobs. */
 export function TenantStopBanner({
   stops,
   dateOptions,
@@ -61,7 +71,7 @@ export function TenantStopBanner({
   if (tenant.length === 0) return null;
   return (
     <Notice tone="danger" title={STOP_WORDS.tenant} actions={officeCall(officePhone)}>
-      <StopLines stops={tenant} dateOptions={dateOptions} now={now} />
+      <StopLines stops={tenant} dateOptions={dateOptions} now={now} unmatched />
     </Notice>
   );
 }

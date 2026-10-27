@@ -30,7 +30,7 @@ describe("stop words", () => {
       raiser_display_name: "Tom Lachance",
     };
     expect(stopDetail(stop, zone, now)).toMatch(
-      /^Stopped today at 10:24\sa\.m\. by Tom Lachance · Ice on the north slope$/,
+      /^Stopped today at 10:24\sa\.m\. by Tom Lachance · Reason: Ice on the north slope$/,
     );
     expect(stopDetail({ ...stop, summary: null, raiser_display_name: " " }, zone, now)).toMatch(
       /^Stopped today at 10:24\sa\.m\.$/,

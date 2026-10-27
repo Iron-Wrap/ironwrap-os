@@ -1,25 +1,43 @@
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
-import { newoTenantId } from "./newo-store.ts";
+import { getNewoCallbackRecord, newoTenantId, type NewoCallbackRecord } from "./newo-store.ts";
 
 /**
- * A person's resolution of one failed Newo handoff.
+ * A person's resolution of a Newo caller's callback: a requested callback, or a failed handoff.
  *
- * A failed handoff is a caller's request for a person that did not arrive or could not be
- * processed (`newo_sessions.handoff_status = 'failed'`). A callback the receptionist requested is
- * `requested`, not failed (newo.ts, newoHandoffStatus). The Newo reconcile and the operations read model
- * count it, and keep the model in `attention`, until a person records how it ended. There is no
- * lookback window: a window would retire a failure that nobody decided. These routes are the only
- * write path for that record:
+ * The receptionist is callback only. A callback it requests is `requested`
+ * (`newo_sessions.handoff_status`, newo.ts, newoHandoffStatus) and has a D1 callback record
+ * (migration 0168); a failed handoff is a request for a person that did not arrive or could not be
+ * processed (`failed`). The operations read model keeps the model in `attention` while either is
+ * open (`open_callbacks`, `failed_handoffs`), and the Newo reconcile counts failed handoffs, until
+ * a person records how it ended. There is no lookback window: a window would retire a callback
+ * that nobody made. These routes are the only write path for that record:
  *
  *   POST /api/v1/newo/operations/handoffs/{session_id}/resolution  record it (CSRF + Idempotency-Key)
- *   GET  /api/v1/newo/operations/handoffs/{session_id}/resolution  the handoff and its resolution
+ *   GET  /api/v1/newo/operations/handoffs/{session_id}/resolution  the handoff, its callback record
+ *                                                                  and its resolution
  *
  * Resolving is people-only: never an agent, automation, connector, service token, effect runtime
  * or MCP actor. The resolving roles are owner and ops, the roles that already read Newo operations
- * (`GET /api/v1/newo/operations`). Migration 0151 stores the record append-only, at most one per
- * failed handoff, and re-checks the resolver and the failed status.
+ * (`GET /api/v1/newo/operations`). A resolution needs an outcome and a note. It is stored
+ * append-only (migration 0151, guard re-created in 0168), at most one per session, stamped with
+ * D1's clock, together with one audit_log row in the same batch. D1 re-checks the resolver, the
+ * note and that the session holds a callback to close. Every refusal has its own code:
+ *
+ *   403 newo_handoff_resolution_person_required  not a person's own cookie session
+ *   403 newo_handoff_resolution_role_required    not owner or ops (the live role, for a write)
+ *   403 csrf_failed                              no valid CSRF token
+ *   400 idempotency_key_required                 no usable Idempotency-Key
+ *   413 payload_too_large · 400 invalid_json
+ *   400 invalid_newo_handoff_resolution          not an object, an unknown field, or a non-text note
+ *   400 newo_handoff_resolution_outcome_required no known outcome
+ *   400 newo_handoff_resolution_note_required    no note, or only spaces
+ *   400 newo_handoff_resolution_note_too_long    a note over 1000 characters
+ *   404 newo_handoff_not_found                   no such session
+ *   409 newo_handoff_not_open                    neither a requested callback nor a failed handoff
+ *   409 newo_handoff_already_resolved            a person already closed it
+ *   409 newo_handoff_resolution_replay_conflict  the key was used for a different resolution
  */
 
 const ROUTE = /^\/api\/v1\/newo\/operations\/handoffs\/([^/]+)\/resolution$/;
@@ -32,13 +50,15 @@ const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,140}$/;
 const RESOLUTION_COLUMNS = `resolution_id, tenant_id, idempotency_key, request_sha256, session_id,
        outcome, note, resolved_by, resolved_by_role, resolved_at`;
+// The 0168 guard admits these handoff states; a session with a callback record counts as well.
+const OPEN_HANDOFF_STATUSES = new Set(["requested", "failed"]);
 
 type HandoffOutcome = (typeof OUTCOMES)[number];
 type ResolvingRole = "owner" | "ops";
 
 interface ResolutionRequest {
   outcome: HandoffOutcome;
-  note: string | null;
+  note: string;
 }
 
 interface ResolutionRow {
@@ -48,7 +68,7 @@ interface ResolutionRow {
   request_sha256: string;
   session_id: string;
   outcome: HandoffOutcome;
-  note: string | null;
+  note: string;
   resolved_by: string;
   resolved_by_role: ResolvingRole;
   resolved_at: string;
@@ -97,13 +117,18 @@ async function readResolution(env: AppEnv, auth: AuthContext, sessionId: string)
     throw new ResolutionRefusal("newo_handoff_resolution_role_required", 403);
   const handoff = await handoffRow(env, sessionId);
   if (!handoff) throw new ResolutionRefusal("newo_handoff_not_found", 404);
-  const resolution = await resolutionBySession(env, auth.session.tenant_id, sessionId);
+  const [callback, resolution] = await Promise.all([
+    getNewoCallbackRecord(env, sessionId),
+    resolutionBySession(env, auth.session.tenant_id, sessionId),
+  ]);
   return json({
     handoff: {
       session_id: handoff.session_id,
       handoff_status: handoff.handoff_status,
       updated_at: handoff.updated_at,
     },
+    // The details a person needs to call back; the operations overview never carries them.
+    callback: callback ? callbackProjection(callback) : null,
     resolution: resolution ? resolutionProjection(resolution) : null,
   });
 }
@@ -144,40 +169,45 @@ async function recordResolution(
   if (!handoff) throw new ResolutionRefusal("newo_handoff_not_found", 404);
   if (await resolutionBySession(env, tenantId, sessionId))
     throw new ResolutionRefusal("newo_handoff_already_resolved", 409);
-  if (handoff.handoff_status !== "failed") throw new ResolutionRefusal("newo_handoff_not_failed", 409);
+  if (!OPEN_HANDOFF_STATUSES.has(handoff.handoff_status ?? "") && !(await getNewoCallbackRecord(env, sessionId)))
+    throw new ResolutionRefusal("newo_handoff_not_open", 409);
 
-  const row: ResolutionRow = {
-    resolution_id: `nhr_${(await sha256Hex(`${tenantId}:${idempotencyKey}:newo-handoff-resolution`)).slice(0, 32)}`,
-    tenant_id: tenantId,
-    idempotency_key: idempotencyKey,
-    request_sha256: requestSha256,
-    session_id: sessionId,
-    outcome: input.outcome,
-    note: input.note,
-    resolved_by: person.userId,
-    resolved_by_role: role,
-    resolved_at: new Date().toISOString(),
-  };
+  const resolutionId = `nhr_${(await sha256Hex(`${tenantId}:${idempotencyKey}:newo-handoff-resolution`)).slice(0, 32)}`;
+  // D1 stamps the resolution and its audit row from its own clock; the 0168 guard refuses any
+  // other time. The audit row commits with the resolution or not at all.
+  const insert = env.DB.prepare(
+    `INSERT INTO newo_handoff_resolutions (${RESOLUTION_COLUMNS})
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+  ).bind(
+    resolutionId,
+    tenantId,
+    idempotencyKey,
+    requestSha256,
+    sessionId,
+    input.outcome,
+    input.note,
+    person.userId,
+    role,
+  );
+  const audit = env.DB.prepare(
+    `INSERT INTO audit_log
+       (ts, automation, trigger, source_ids, target_ids, action, result, approved_by, reason)
+     SELECT resolution.resolved_at, 'newo_callback_resolution', 'person', ?, ?, ?, 'ok', ?, ?
+       FROM newo_handoff_resolutions resolution
+      WHERE resolution.tenant_id = ? AND resolution.resolution_id = ?`,
+  ).bind(
+    `newo_session:${sessionId}`,
+    `newo_handoff_resolution:${resolutionId}`,
+    `resolve_${input.outcome}`,
+    person.userId,
+    `${role}:${handoff.handoff_status ?? "callback_record"}`,
+    tenantId,
+    resolutionId,
+  );
   try {
-    // The 0151 insert trigger re-checks the resolver's tenant, role and activity and the failed
-    // status, and refuses a second resolution of the same handoff.
-    await env.DB.prepare(
-      `INSERT INTO newo_handoff_resolutions (${RESOLUTION_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-      .bind(
-        row.resolution_id,
-        row.tenant_id,
-        row.idempotency_key,
-        row.request_sha256,
-        row.session_id,
-        row.outcome,
-        row.note,
-        row.resolved_by,
-        row.resolved_by_role,
-        row.resolved_at,
-      )
-      .run();
+    // The 0168 insert guard re-checks the resolver's tenant, role and activity, the note, the
+    // clock and that the session holds a callback to close, and refuses a second resolution.
+    await env.DB.batch([insert, audit]);
   } catch (error) {
     const winner = await resolutionByKey(env, tenantId, idempotencyKey);
     if (winner) return replayed(winner, requestSha256);
@@ -199,10 +229,12 @@ function parseResolutionRequest(value: unknown): ResolutionRequest {
   if (!outcome) throw new ResolutionRefusal("newo_handoff_resolution_outcome_required", 400);
   const note = value.note;
   if (note !== undefined && note !== null && typeof note !== "string") throw invalid;
-  // A blank note is no note; a note never silently loses words, so an overlong one is refused.
+  // How it ended, in the person's words: a blank note is no note, and a note never silently loses
+  // words, so an overlong one is refused.
   const trimmed = typeof note === "string" ? note.trim() : "";
-  if (trimmed.length > MAX_NOTE_LENGTH) throw invalid;
-  return { outcome, note: trimmed || null };
+  if (!trimmed) throw new ResolutionRefusal("newo_handoff_resolution_note_required", 400);
+  if (trimmed.length > MAX_NOTE_LENGTH) throw new ResolutionRefusal("newo_handoff_resolution_note_too_long", 400);
+  return { outcome, note: trimmed };
 }
 
 async function readBody(req: Request): Promise<unknown> {
@@ -260,10 +292,12 @@ function writeRefusal(error: unknown): unknown {
     return new ResolutionRefusal("newo_handoff_already_resolved", 409);
   if (message.includes("newo_handoff_resolution_append_only"))
     return new ResolutionRefusal("newo_handoff_resolution_replay_conflict", 409);
-  if (message.includes("newo_handoff_resolution_not_failed"))
-    return new ResolutionRefusal("newo_handoff_not_failed", 409);
+  if (message.includes("newo_handoff_resolution_not_open"))
+    return new ResolutionRefusal("newo_handoff_not_open", 409);
   if (message.includes("newo_handoff_resolution_actor_invalid"))
     return new ResolutionRefusal("newo_handoff_resolution_role_required", 403);
+  if (message.includes("newo_handoff_resolution_note_required"))
+    return new ResolutionRefusal("newo_handoff_resolution_note_required", 400);
   return error;
 }
 
@@ -282,6 +316,28 @@ function resolutionProjection(row: ResolutionRow): Record<string, unknown> {
     resolved_by: row.resolved_by,
     resolved_by_role: row.resolved_by_role,
     resolved_at: row.resolved_at,
+  };
+}
+
+function callbackProjection(row: NewoCallbackRecord): Record<string, unknown> {
+  return {
+    callback_id: row.callback_id,
+    session_id: row.session_id,
+    handoff_status: row.handoff_status,
+    urgency: row.urgency,
+    reason: row.reason,
+    contact: {
+      name: row.contact_name,
+      phone: row.contact_phone,
+      email: row.contact_email,
+      address: {
+        line1: row.address_line1,
+        city: row.city,
+        province: row.province,
+        postal_code: row.postal_code,
+      },
+    },
+    recorded_at: row.recorded_at,
   };
 }
 

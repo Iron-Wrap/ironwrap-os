@@ -4,6 +4,7 @@ import {
   getLatestNewoReconciliationRun,
   newoOperationalCounts,
   newoTenantId,
+  OPEN_CALLBACK,
   UNRESOLVED_FAILED_HANDOFF,
   type NewoReconciliationRun,
 } from "./newo-store.ts";
@@ -59,6 +60,19 @@ export interface NewoOperationsEventFailure {
   last_seen_at: string;
 }
 
+/**
+ * A requested callback no person has closed (migration 0168). Like every list here it carries no
+ * caller identity or content: the person who calls back reads the record on the resolution route.
+ */
+export interface NewoOperationsOpenCallback {
+  callback_id: string;
+  session_id: string;
+  /** The higher of the urgency recorded with the callback and the session's urgency now. */
+  urgency: "routine" | "urgent" | "emergency";
+  /** When D1 recorded the callback. */
+  requested_at: string;
+}
+
 export interface NewoOperationsDeadLetter {
   id: number;
   stage: string;
@@ -111,6 +125,8 @@ export interface NewoOperationsReadModel {
     missing_reports: number;
     /** Failed handoffs no person has resolved; each one keeps the model in `attention`. */
     failed_handoffs: number;
+    /** Requested callbacks no person has closed; each one keeps the model in `attention`. */
+    open_callbacks: number;
     pending_bookings: number;
     control_failures: number;
     dlq_items: number;
@@ -121,6 +137,7 @@ export interface NewoOperationsReadModel {
   exceptions: {
     missing_reports: NewoOperationsSession[];
     failed_handoffs: NewoOperationsSession[];
+    open_callbacks: NewoOperationsOpenCallback[];
     pending_bookings: NewoOperationsSession[];
     sync_failures: NewoOperationsSession[];
     failed_events: NewoOperationsEventFailure[];
@@ -158,6 +175,7 @@ export async function buildNewoOperationsReadModel(
     recentSessions,
     missingReports,
     failedHandoffs,
+    openCallbacks,
     pendingBookings,
     syncFailures,
     failedEvents,
@@ -173,6 +191,7 @@ export async function buildNewoOperationsReadModel(
     listSessions(env, "recent", OPERATIONS_LIMIT),
     listSessions(env, "missing_report", OPERATIONS_LIMIT),
     listSessions(env, "failed_handoff", OPERATIONS_LIMIT),
+    listOpenCallbacks(env, OPERATIONS_LIMIT),
     listSessions(env, "pending_booking", OPERATIONS_LIMIT),
     listSessions(env, "sync_failure", OPERATIONS_LIMIT),
     listFailedEvents(env, OPERATIONS_LIMIT),
@@ -196,6 +215,7 @@ export async function buildNewoOperationsReadModel(
     counts.failed_events > 0 ||
     counts.missing_reports > 0 ||
     counts.failed_handoffs > 0 ||
+    counts.open_callbacks > 0 ||
     counts.pending_bookings > 0 ||
     counts.control_failures > 0 ||
     deadLetterCount > 0 ||
@@ -227,6 +247,7 @@ export async function buildNewoOperationsReadModel(
     exceptions: {
       missing_reports: missingReports,
       failed_handoffs: failedHandoffs,
+      open_callbacks: openCallbacks,
       pending_bookings: pendingBookings,
       sync_failures: syncFailures,
       failed_events: failedEvents,
@@ -298,6 +319,31 @@ function normalizeSession(row: NewoOperationsSession): NewoOperationsSession {
     duration_seconds: row.duration_seconds === null ? null : Number(row.duration_seconds),
     sync_attempts: Number(row.sync_attempts),
   };
+}
+
+/**
+ * The open requested callbacks, most urgent first and then the longest waiting. A resolution,
+ * never age, takes one off the list; a callback whose session failed is listed as a failed handoff.
+ */
+async function listOpenCallbacks(env: Env, limit: number): Promise<NewoOperationsOpenCallback[]> {
+  const urgency = `CASE
+         WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
+         WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'
+         ELSE 'routine'
+       END`;
+  const result = await env.DB.prepare(
+    `SELECT callback.callback_id, callback.session_id, ${urgency} AS urgency,
+            callback.recorded_at AS requested_at
+       FROM newo_callback_records callback
+       LEFT JOIN newo_sessions session ON session.session_id = callback.session_id
+      WHERE ${OPEN_CALLBACK}
+      ORDER BY CASE ${urgency} WHEN 'emergency' THEN 0 WHEN 'urgent' THEN 1 ELSE 2 END,
+               callback.recorded_at ASC, callback.callback_id ASC
+      LIMIT ?`,
+  )
+    .bind(newoTenantId(env), limit)
+    .all<NewoOperationsOpenCallback>();
+  return result.results ?? [];
 }
 
 async function listFailedEvents(env: Env, limit: number): Promise<NewoOperationsEventFailure[]> {

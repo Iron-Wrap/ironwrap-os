@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 138,
+      "count": 139,
       "latest": "0206_agent_draft_closing.sql"
     }
   },

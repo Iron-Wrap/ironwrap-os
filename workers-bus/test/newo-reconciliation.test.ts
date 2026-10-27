@@ -23,6 +23,8 @@ class SqliteD1 {
       "0026_newo_reconciliation.sql",
       // 0151: the reconcile counts only failed handoffs no person has resolved.
       "0151_newo_handoff_resolutions.sql",
+      // 0168: the operational counts include the requested callbacks no person has closed.
+      "0168_newo_callback_records.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }

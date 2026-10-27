@@ -3236,6 +3236,12 @@ function servedCopies(h: Harness): Array<Record<string, string>> {
     .all().map((row) => ({ ...row }) as Record<string, string>);
 }
 
+/** An instant's local date in the business zone, as "YYYY-MM-DD". */
+function localDate(instant: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(instant));
+}
+
 /** The owner and ops work queue, as an owner reads it. */
 async function signedCopyQueue(h: Harness): Promise<Record<string, any>> {
   const response = await handleAuthenticatedRoute(
@@ -3342,18 +3348,116 @@ function backorderedJobLine(h: Harness): void {
   placeJobOrderLine(h, "po_line_acceptance_backordered", "backordered", true);
 }
 
+/** The schedule route, as an owner posts it for the crew `readyToSchedule` forms. */
+async function scheduleJobOnRoute(h: Harness, owner: AuthContext, key: string): Promise<{ status: number; body: Record<string, any> }> {
+  const day = fixtureSchedule(1, Date.now());
+  const job = h.db.raw.prepare("SELECT version FROM operating_roof_jobs WHERE roof_job_id = ?").get(JOB_ID) as { version: number };
+  const response = await handleAuthenticatedRoute(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/jobs/${encodeURIComponent(JOB_ID)}/schedule`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": key, "x-csrf-token": owner.csrfToken },
+      body: JSON.stringify({
+        expected_roof_job_version: Number(job.version),
+        crew_id: "crew:acceptance:0001",
+        expected_crew_version: 1,
+        authority_requirements: [{
+          authority_record_id: "authority:acceptance:worker",
+          subject_type: "Person",
+          subject_role: "Worker",
+          subject_ref: "appu_field_acceptance",
+          authority_kind: "Worker Competency",
+          scope_type: "Roof Job",
+          scope_ref: JOB_ID,
+          version: 1,
+          state_digest_sha256: "c".repeat(64),
+        }],
+        scheduled_start: day.start,
+        scheduled_end: day.end,
+        supersedes_assignment_id: null,
+        correction_reason: null,
+      }),
+    }),
+    h.env,
+    owner,
+  );
+  return { status: response.status, body: await response.json() as Record<string, any> };
+}
+
+/** The Materials attestation route, as an owner posts it on the gate's current version. */
+async function attestMaterialsOnRoute(h: Harness, owner: AuthContext, key: string): Promise<{ status: number; body: Record<string, any> }> {
+  const gate = h.db.raw.prepare(
+    "SELECT version FROM operating_production_gates WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Materials'",
+  ).get(TENANT, JOB_ID) as { version: number };
+  const response = await handleAuthenticatedRoute(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/gates/Materials/clearance`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": key, "x-csrf-token": owner.csrfToken },
+      body: JSON.stringify({
+        basis: "person_attestation",
+        expected_gate_version: Number(gate.version),
+        attestation: { source: "supplier_delivery", reference: "DELIVERY-ACCEPTANCE-0003" },
+      }),
+    }),
+    h.env,
+    owner,
+  );
+  return { status: response.status, body: await response.json() as Record<string, any> };
+}
+
+/** An assignment written straight at D1 after the Crew entry that names it, as a defective writer would. */
+function insertAssignmentInD1(h: Harness): void {
+  const assignmentId = "assignment:acceptance:held";
+  const crew = h.db.raw.prepare(
+    "SELECT state FROM operating_production_gates WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Crew'",
+  ).get(TENANT, JOB_ID) as { state: string };
+  if (crew.state === "blocked") {
+    bindCrewInLedger(h.db.raw, {
+      tenantId: TENANT, roofJobId: JOB_ID, crewId: "crew:acceptance:0001", assignmentId, keepCancellationWindow: true,
+    });
+  }
+  const day = fixtureSchedule(1, d1Now(h.db.raw));
+  const job = h.db.raw.prepare("SELECT version FROM operating_roof_jobs WHERE roof_job_id = ?").get(JOB_ID) as { version: number };
+  h.db.raw.prepare(
+    `INSERT INTO operating_job_assignments
+       (assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version, crew_id,
+        crew_version, assigned_users_json, scheduled_start, scheduled_end, supersedes_assignment_id,
+        correction_reason, actor_user_id, command_fingerprint, idempotency_key_hash, created_at)
+     VALUES (?, ?, ?, 1, ?, 'crew:acceptance:0001', 1, '["appu_field_acceptance"]', ?, ?, NULL, NULL,
+             ?, ?, ?, ?)`,
+  ).run(assignmentId, TENANT, JOB_ID, Number(job.version), day.start, day.end, OWNER_ID,
+    "e".repeat(64), "f".repeat(64), new Date().toISOString());
+}
+
+let heldProbe = 0;
+
 /**
  * Every hold of the job's cancellation window stands, by its code (`unknown` or `open`): the firm
- * start on the store, the Materials attestation in D1, a supplier order (a job's purchase order line)
- * and a backordered line moving back to ordered in D1. Nothing is written.
+ * start on the store, the route and in D1; the Materials attestation on the route and in D1; a
+ * supplier order (a job's purchase order line) and a backordered line moving back to ordered in D1.
+ * Nothing is written.
  */
 async function assertEveryHoldStands(
   h: Harness,
   schedule: (key: string) => Promise<unknown>,
   state: "unknown" | "open",
 ): Promise<void> {
-  const before = [count(h, "operating_job_assignments"), count(h, "production_gate_clearances"), count(h, "inventory_po_lines")];
-  await refusedSchedule(schedule(`schedule-a5-held-${state}`), `operating_job_assignment_cancellation_window_${state}`);
+  heldProbe += 1;
+  // The Crew entry a direct writer appends before its assignment is not a hold's write.
+  const written = () => [
+    count(h, "operating_job_assignments"),
+    (h.db.raw.prepare("SELECT COUNT(*) AS n FROM production_gate_clearances WHERE gate = 'Materials' AND entry_kind = 'clear'")
+      .get() as { n: number }).n,
+    count(h, "inventory_po_lines"),
+    (h.db.raw.prepare("SELECT COUNT(*) AS n FROM inventory_po_lines WHERE status = 'ordered'").get() as { n: number }).n,
+  ];
+  const before = written();
+  const owner = await personAuth(h, OWNER_ID);
+  await refusedSchedule(schedule(`schedule-a5-held-${state}-${heldProbe}`), `operating_job_assignment_cancellation_window_${state}`);
+  const routed = await scheduleJobOnRoute(h, owner, `schedule-a5-route-held-${state}-${heldProbe}`);
+  assert.deepEqual([routed.status, routed.body.error], [409, `operating_job_assignment_cancellation_window_${state}`]);
+  refusedWith(() => insertAssignmentInD1(h), `operating_job_assignment_cancellation_window_${state}`);
+  const materials = await attestMaterialsOnRoute(h, owner, `materials-a5-held-${state}-${heldProbe}`);
+  assert.deepEqual([materials.status, materials.body.error], [409, `production_gate_cancellation_window_${state}`]);
   refusedWith(() => clearMaterialsInD1(h), `production_gate_cancellation_window_${state}`);
   refusedWith(() => placeJobOrderLine(h), `inventory_po_line_cancellation_window_${state}`);
   refusedWith(
@@ -3362,10 +3466,7 @@ async function assertEveryHoldStands(
     ).run(),
     `inventory_po_line_cancellation_window_${state}`,
   );
-  assert.deepEqual(
-    [count(h, "operating_job_assignments"), count(h, "production_gate_clearances"), count(h, "inventory_po_lines")],
-    before,
-  );
+  assert.deepEqual(written(), before);
 }
 
 test("without signed_copy the confirm answer is unchanged and no copy is recorded as shown: the window is unknown", async () => {
@@ -3525,7 +3626,7 @@ test("with signed_copy the answer carries the signed copy, recorded as shown onc
       ],
     );
     assert.deepEqual(await signedCopyQueue(h), {
-      count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
+      count: 0, counts: { window_unknown: 0, signed_copy_unconfirmed: 0 }, complete: true, jobs: [],
     });
     // The window it starts holds ordering in D1 at once.
     assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_open/);
@@ -3668,7 +3769,7 @@ test("a copy whose event D1 never writes claims no window: it stays unknown, and
     assert.deepEqual(shownEvents(h), []);
     assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "unknown");
     assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_unknown/);
-    assert.deepEqual((await signedCopyQueue(h)).counts, { window_unknown: 1, window_started_copy_unconfirmed: 0 });
+    assert.deepEqual((await signedCopyQueue(h)).counts, { window_unknown: 1, signed_copy_unconfirmed: 0 });
 
     const replay = await worker.fetch(
       confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unwritten-0001"),
@@ -3729,7 +3830,7 @@ test("an answer D1 loses is never trusted: the retry records the copy as shown a
     assert.ok(shown.window_ends_at >= lost.window_ends_at);
     // A copy of the contract is confirmed served, so the job is not on the work queue.
     assert.deepEqual(await signedCopyQueue(h), {
-      count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
+      count: 0, counts: { window_unknown: 0, signed_copy_unconfirmed: 0 }, complete: true, jobs: [],
     });
     // The exact replay answers with the same copy and writes nothing.
     const replay = await worker.fetch(
@@ -3745,13 +3846,52 @@ test("an answer D1 loses is never trusted: the retry records the copy as shown a
   }
 });
 
-test("a window started with no copy confirmed served is on the work queue, and the replay serves a copy that starts then", async () => {
-  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+/**
+ * The work queue's row for this job, while its latest contract's copy was recorded as shown at
+ * `copyShownAt` and never confirmed served.
+ */
+function unconfirmedQueue(h: Harness, binding: Record<string, string>, copyShownAt: string): Record<string, unknown> {
+  return {
+    count: 1,
+    counts: { window_unknown: 0, signed_copy_unconfirmed: 1 },
+    complete: true,
+    jobs: [{
+      roof_job_id: JOB_ID,
+      job_number: (h.db.raw.prepare("SELECT job_number FROM operating_roof_jobs WHERE roof_job_id = ?")
+        .get(JOB_ID) as { job_number: string | null }).job_number,
+      customer_display_name: (h.db.raw.prepare("SELECT display_name FROM operating_customers WHERE customer_id = ?")
+        .get(CUSTOMER_ID) as { display_name: string }).display_name,
+      address_line1: null,
+      category: "signed_copy_unconfirmed",
+      unknown_reason: "signed_copy_unconfirmed",
+      copy_shown_at: copyShownAt,
+      contract_on_record: true,
+      contract_signed_at: binding.accepted_at,
+    }],
+  };
+}
+
+/** The window an unconfirmed copy leaves: unknown, every hold in place, no start and no end. */
+async function assertUnconfirmedWindow(h: Harness): Promise<void> {
+  const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+  assert.deepEqual(
+    [window.state, window.unknown_reason, window.starts_at, window.ends_at, window.last_day, window.signed_copy_shown, window.holds.length],
+    ["unknown", "signed_copy_unconfirmed", null, null, null, null, 3],
+  );
+  assert.deepEqual(await cancellationWindowHold(h.env, TENANT, JOB_ID), {
+    state: "unknown",
+    detail: { unknown_reason: "signed_copy_unconfirmed" },
+  });
+}
+
+test("a copy never confirmed served starts nothing: past its own end every hold still holds, until a person records the receipt", async () => {
+  // D1's clock is the test's, to stand it a millisecond past the unconfirmed copies' ends.
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
   try {
     seedGates(h);
     const portalToken = await seedPortalLink(h.db);
-    // Each attempt writes its event, and D1 refuses every confirmation: the window has started, but
-    // no copy is confirmed served, so none is sent.
+    // Each attempt writes its event, and D1 refuses every confirmation: no copy is confirmed served,
+    // so none is sent, and none starts the window.
     h.db.failSignedCopyConfirmations = 3;
     const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-unconfirmed-0001");
     assert.equal(first.status, 200);
@@ -3763,84 +3903,68 @@ test("a window started with no copy confirmed served is on the work queue, and t
     assert.equal(unconfirmed.length, 3);
     assert.deepEqual(servedCopies(h), []);
     const binding = bindingFor(h, acceptanceId);
-    // The window started at the first event's D1 write time, and holds.
-    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
-    assert.equal(window.state, "open");
-    assert.equal(window.started_from, "signed_copy_shown");
-    assert.equal(window.signed_copy_shown?.served_at, null);
-    assert.throws(() => placeJobOrderLine(h), /inventory_po_line_cancellation_window_open/);
-    // The work queue lists it, in its own category with its own count.
-    const queue = await signedCopyQueue(h);
-    assert.deepEqual(queue, {
-      count: 1,
-      counts: { window_unknown: 0, window_started_copy_unconfirmed: 1 },
-      complete: true,
-      jobs: [{
-        roof_job_id: JOB_ID,
-        job_number: (h.db.raw.prepare("SELECT job_number FROM operating_roof_jobs WHERE roof_job_id = ?")
-          .get(JOB_ID) as { job_number: string | null }).job_number,
-        customer_display_name: (h.db.raw.prepare("SELECT display_name FROM operating_customers WHERE customer_id = ?")
-          .get(CUSTOMER_ID) as { display_name: string }).display_name,
-        address_line1: null,
-        category: "window_started_copy_unconfirmed",
-        unknown_reason: null,
-        window_started_at: unconfirmed[0]!.shown_at,
-        contract_on_record: true,
-        contract_signed_at: binding.accepted_at,
-      }],
-    });
+    await assertUnconfirmedWindow(h);
+    assert.deepEqual(await signedCopyQueue(h), unconfirmedQueue(h, binding, unconfirmed[0]!.shown_at));
+    const schedule = readyToSchedule(h, { waiveMaterials: true });
+    backorderedJobLine(h);
+    await assertEveryHoldStands(h, schedule, "unknown");
 
-    // Ops records when the customer received the copy: the job leaves the work queue.
-    while (d1Now(h.db.raw) <= Date.parse(unconfirmed[2]!.shown_at)) {
-      // Wait out the millisecond of the last event.
-    }
-    const recorded = await recordReceivedCopy(
-      h, await personAuth(h, OWNER_ID), new Date(d1Now(h.db.raw)).toISOString(), "receipt-a5-unconfirmed-0001",
-    );
+    // A millisecond after the last of those copies would have ended the window, it is still unknown:
+    // every hold holds, on every surface, and the job is still on the work queue.
+    const lastEnd = Math.max(...unconfirmed.map((row) => Date.parse(row.window_ends_at)));
+    mock.timers.enable({ apis: ["Date"], now: lastEnd + 1 });
+    await assertUnconfirmedWindow(h);
+    await assertEveryHoldStands(h, schedule, "unknown");
+    assert.deepEqual(await signedCopyQueue(h), unconfirmedQueue(h, binding, unconfirmed[0]!.shown_at));
+
+    // Ops records when the customer received the copy: the window opens from that time, and the job
+    // leaves the work queue.
+    const receivedAt = new Date(d1Now(h.db.raw) - 60 * MINUTE_MS).toISOString();
+    const recorded = await recordReceivedCopy(h, await personAuth(h, OWNER_ID), receivedAt, "receipt-a5-unconfirmed-0001");
     assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
-    assert.equal((await signedCopyQueue(h)).count, 0);
-
-    // The replay never reuses an unconfirmed event: it appends one with D1's time now, confirms it,
-    // and serves the copy with it. The copy's start is the replay's, not the first attempt's.
-    const afterFirst = new Date(d1Now(h.db.raw)).toISOString();
-    const replay = await worker.fetch(
-      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unconfirmed-0001"),
-      h.env as never,
-      {} as never,
-    );
-    assert.equal(replay.status, 200);
-    const body = await replay.json() as Record<string, any>;
-    const [served] = servedCopies(h);
-    assert.ok(served);
-    const event = shownEvents(h).find((row) => row.event_id === served.event_id)!;
-    assert.ok(!unconfirmed.some((row) => row.event_id === event.event_id), "a new event");
-    assert.ok(event.shown_at >= afterFirst, `${event.shown_at} is before ${afterFirst}`);
-    assert.deepEqual(
-      [body.signed_copy.shown_at, body.signed_copy.served_at, body.signed_copy.window_ends_at],
-      [event.shown_at, served.served_at, event.window_ends_at],
-    );
-    // The start the copy states is that new event's D1 write time, never the first attempt's.
-    assert.deepEqual([body.signed_copy.window_starts_at, body.signed_copy.time_zone], [event.shown_at, ZONE]);
-    assert.ok(body.signed_copy.window_starts_at >= afterFirst, `${body.signed_copy.window_starts_at} ${afterFirst}`);
-    assert.ok(event.window_ends_at >= unconfirmed[2]!.window_ends_at);
     const opened = await readCancellationWindow(h.env, TENANT, JOB_ID);
-    assert.deepEqual([opened.signed_copy_shown?.id, opened.signed_copy_shown?.served_at], [event.event_id, served.served_at]);
+    assert.deepEqual([opened.state, opened.started_from, opened.starts_at], ["open", "manual_record", receivedAt]);
+    await assertEveryHoldStands(h, schedule, "open");
     assert.equal((await signedCopyQueue(h)).count, 0);
-    // Replayed again: the same copy, and nothing more is written.
-    const again = await worker.fetch(
-      confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-unconfirmed-0001"),
-      h.env as never,
-      {} as never,
-    );
-    assert.deepEqual(await again.json(), body);
-    assert.equal(shownEvents(h).length, 4);
-    assert.equal(servedCopies(h).length, 1);
   } finally {
+    mock.timers.reset();
     h.restore();
   }
 });
 
-test("a copy served after an unconfirmed event never ends before that event's end", async () => {
+test("a copy whose Worker stopped after its event starts nothing: past that event's end every hold still holds", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    h.db.failNextSignedCopyBuild = true;
+    const accepted = await acceptShowingCopy(h, portalToken, "acceptance-a5-stopped-0001");
+    assert.equal(accepted.status, 200);
+    const binding = bindingFor(h, (await accepted.json() as { acceptance_id: string }).acceptance_id);
+    // The event a Worker leaves when it stops right after writing it: no confirmation follows.
+    h.db.raw.prepare(
+      `INSERT INTO contract_signed_copy_events (
+         event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
+         window_ends_at, time_zone
+       ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+250 hours'), ?)`,
+    ).run(`scs_${"8".repeat(40)}`, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at, ZONE);
+    const [stopped] = shownEvents(h);
+    await assertUnconfirmedWindow(h);
+    assert.deepEqual(await signedCopyQueue(h), unconfirmedQueue(h, binding, stopped!.shown_at));
+    const schedule = readyToSchedule(h, { waiveMaterials: true });
+    backorderedJobLine(h);
+    mock.timers.enable({ apis: ["Date"], now: Date.parse(stopped!.window_ends_at) + 1 });
+    await assertUnconfirmedWindow(h);
+    await assertEveryHoldStands(h, schedule, "unknown");
+    assert.equal((await signedCopyQueue(h)).count, 1);
+  } finally {
+    mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("the replay after a stopped Worker serves a copy that starts then, and the unconfirmed event counts for nothing", async () => {
   const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
   try {
     seedGates(h);
@@ -3849,8 +3973,7 @@ test("a copy served after an unconfirmed event never ends before that event's en
     const first = await acceptShowingCopy(h, portalToken, "acceptance-a5-event-end-0001");
     assert.equal(first.status, 200);
     const binding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
-    // An event left unconfirmed, ending at its 266th hour, which D1 allows: later than a copy's own
-    // end will be, as for one read at an offset hours behind this one.
+    // The stopped Worker's event ends at its 266th hour, later than a copy's own end would.
     h.db.raw.prepare(
       `INSERT INTO contract_signed_copy_events (
          event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
@@ -3859,7 +3982,8 @@ test("a copy served after an unconfirmed event never ends before that event's en
                  strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+266 hours'), 'Pacific/Honolulu')`,
     ).run(`scs_${"7".repeat(40)}`, TENANT, binding.acceptance_binding_id, JOB_ID, binding.accepted_at);
     const [unconfirmed] = shownEvents(h);
-    assert.equal((await signedCopyQueue(h)).counts.window_started_copy_unconfirmed, 1);
+    await assertUnconfirmedWindow(h);
+    const afterFirst = new Date(d1Now(h.db.raw)).toISOString();
     const replay = await worker.fetch(
       confirmShowingCopyRequest(emailChallengeToken(h.sentEmails), "acceptance-a5-event-end-0001"),
       h.env as never,
@@ -3870,17 +3994,92 @@ test("a copy served after an unconfirmed event never ends before that event's en
     const [served] = servedCopies(h);
     assert.ok(served && served.event_id !== unconfirmed!.event_id);
     const event = shownEvents(h).find((row) => row.event_id === served.event_id)!;
-    // Its own end would come sooner, so it keeps the earlier event's end, and serves it: that end
-    // is not its last day's, so the copy says so, and the exact end is the one to show.
-    assert.ok(cancellationWindowEndsAt(event.shown_at, ZONE) < unconfirmed!.window_ends_at);
-    assert.equal(event.window_ends_at, unconfirmed!.window_ends_at);
-    assert.equal(body.signed_copy.window_ends_at, unconfirmed!.window_ends_at);
+    // A new event with D1's time then, and its own end: the unconfirmed event's later end is not kept.
+    assert.ok(event.shown_at >= afterFirst);
+    assert.equal(event.window_ends_at, cancellationWindowEndsAt(event.shown_at, ZONE));
+    assert.ok(event.window_ends_at < unconfirmed!.window_ends_at);
     assert.deepEqual(
-      [body.signed_copy.last_day, body.signed_copy.ends_on_calendar_day],
-      [calendarReading(event.shown_at, ZONE).lastDay, false],
+      [body.signed_copy.window_starts_at, body.signed_copy.window_ends_at, body.signed_copy.ends_on_calendar_day],
+      [event.shown_at, event.window_ends_at, true],
+    );
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual(
+      [window.state, window.starts_at, window.ends_at, window.ends_on_calendar_day, window.signed_copy_shown?.id],
+      ["open", event.shown_at, event.window_ends_at, true, event.event_id],
     );
     assert.equal((await signedCopyQueue(h)).count, 0);
   } finally {
+    h.restore();
+  }
+});
+
+test("a double submit leaves an orphan unconfirmed event, and every read takes the confirmed one", async () => {
+  // D1's clock is the test's: the first request's copy is shown a second before local midnight, and
+  // the second request's orphan event a second after it.
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    // The first local midnight more than an hour from now, to the millisecond.
+    const from = Date.now() + 60 * MINUTE_MS;
+    let midnight = from;
+    while (localDate(new Date(midnight).toISOString()) === localDate(new Date(from).toISOString())) {
+      midnight += MINUTE_MS;
+    }
+    midnight -= MINUTE_MS;
+    while (localDate(new Date(midnight).toISOString()) === localDate(new Date(midnight - 1).toISOString())) {
+      midnight += 1;
+    }
+    mock.timers.enable({ apis: ["Date"], now: midnight - 1_000 });
+    // The second submit writes its event between the first's event and the first's confirmation.
+    const orphanId = `scs_${"6".repeat(40)}`;
+    let written = false;
+    h.db.beforeConfirmation = () => {
+      if (written) return;
+      written = true;
+      mock.timers.tick(2_000);
+      h.db.raw.prepare(
+        `INSERT INTO contract_signed_copy_events (
+           event_id, tenant_id, acceptance_binding_id, roof_job_id, contract_signed_at, shown_at,
+           window_ends_at, time_zone
+         )
+         SELECT ?, tenant_id, acceptance_binding_id, roof_job_id, accepted_at,
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+250 hours'), ?
+           FROM commercial_acceptance_bindings WHERE roof_job_id = ?`,
+      ).run(orphanId, ZONE, JOB_ID);
+    };
+    const response = await acceptShowingCopy(h, portalToken, "acceptance-a5-double-0001");
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    const [served] = servedCopies(h);
+    const events = shownEvents(h);
+    assert.equal(events.length, 2);
+    const confirmed = events.find((row) => row.event_id === served!.event_id)!;
+    const orphan = events.find((row) => row.event_id === orphanId)!;
+    assert.ok(orphan.shown_at > confirmed.shown_at, "the orphan is the later event");
+    assert.notEqual(localDate(orphan.shown_at), localDate(confirmed.shown_at), "the orphan falls after local midnight");
+    // The copy and both reads state the confirmed event's start and last day, never the orphan's.
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    const reading = calendarReading(confirmed.shown_at, ZONE);
+    assert.deepEqual(
+      [window.starts_at, window.signed_copy_shown?.id, window.last_day, window.ends_at, window.ends_on_calendar_day],
+      [confirmed.shown_at, confirmed.event_id, reading.lastDay, confirmed.window_ends_at, true],
+    );
+    assert.deepEqual(
+      [body.signed_copy.window_starts_at, body.signed_copy.last_day],
+      [confirmed.shown_at, reading.lastDay],
+    );
+    const gates = await handleAuthenticatedRoute(
+      new Request(`${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/gates`),
+      h.env,
+      await personAuth(h, OWNER_ID),
+    );
+    const office = (await gates.json() as Record<string, any>).cancellation_window;
+    assert.deepEqual([office.starts_at, office.last_day], [confirmed.shown_at, reading.lastDay]);
+    // A copy is confirmed served, so the job is not on the work queue.
+    assert.equal((await signedCopyQueue(h)).count, 0);
+  } finally {
+    mock.timers.reset();
     h.restore();
   }
 });
@@ -4317,7 +4516,7 @@ test("a later contract needs its own copy: the window is unknown again until it 
     assert.equal(missing.status, 200);
     assert.deepEqual(await missing.json(), {
       count: 1,
-      counts: { window_unknown: 1, window_started_copy_unconfirmed: 0 },
+      counts: { window_unknown: 1, signed_copy_unconfirmed: 0 },
       complete: true,
       jobs: [{
         roof_job_id: JOB_ID,
@@ -4328,7 +4527,7 @@ test("a later contract needs its own copy: the window is unknown again until it 
         address_line1: null,
         category: "window_unknown",
         unknown_reason: "signed_copy_before_contract",
-        window_started_at: null,
+        copy_shown_at: null,
         contract_on_record: true,
         contract_signed_at: binding.accepted_at,
       }],
@@ -4343,7 +4542,7 @@ test("a later contract needs its own copy: the window is unknown again until it 
       owner,
     );
     assert.deepEqual(await after.json(), {
-      count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [],
+      count: 0, counts: { window_unknown: 0, signed_copy_unconfirmed: 0 }, complete: true, jobs: [],
     });
   } finally {
     h.restore();
@@ -4444,6 +4643,26 @@ test("D1 holds a signed-copy event to its contract, its clock and its bounds, an
       /contract_signed_copy_event_append_only/,
     );
 
+    // Unconfirmed, the event counts for nothing: D1 takes a record earlier than it, or at its own
+    // time, against the person's record alone (each tried, then undone).
+    const probe = (receivedAt: string, windowEndsAt: string) => {
+      h.db.raw.exec("SAVEPOINT unconfirmed_probe");
+      try {
+        insertReceipt(receivedAt, windowEndsAt);
+      } finally {
+        h.db.raw.exec("ROLLBACK TO unconfirmed_probe");
+        h.db.raw.exec("RELEASE unconfirmed_probe");
+      }
+    };
+    const between = new Date(Math.floor((Date.parse(receivedAt) + Date.parse(event.shown_at)) / 2)).toISOString();
+    probe(between, plusHours(between, 241));
+    probe(event.shown_at, plusHours(event.shown_at, 241));
+    // Confirmed served, it counts: both are refused.
+    h.db.raw.prepare(
+      `INSERT INTO contract_signed_copy_served (event_id, tenant_id, acceptance_binding_id, roof_job_id, served_at)
+       VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    ).run(event.event_id, TENANT, binding.acceptance_binding_id, JOB_ID);
+    assert.throws(() => insertReceipt(between, plusHours(between, 241)), /cancellation_window_receipt_(earlier_than_recorded|end_invalid)/);
     // A record at the copy's own time changes nothing, and one after it never ends sooner.
     assert.throws(() => insertReceipt(event.shown_at, plusHours(event.shown_at, 240)), /cancellation_window_receipt_unchanged/);
     while (d1Now(h.db.raw) <= Date.parse(event.shown_at)) {

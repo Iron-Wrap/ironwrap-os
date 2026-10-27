@@ -1105,7 +1105,17 @@ test("the window ends at the end of the 10th local day after its start, at the l
     received_at: "2026-06-01T01:00:00-06:00", reason: REASON, evidence_ref: EVIDENCE,
   });
   assert.equal(first.body.cancellation_window.ends_at, "2026-06-12T07:00:00.000Z");
+  assert.deepEqual(
+    [first.body.cancellation_window.time_zone, first.body.cancellation_window.last_day],
+    [ZONE, calendarReading("2026-06-01T07:00:00.000Z", ZONE).lastDay],
+  );
+  // The tenant's zone changes. The read keeps the zone its start, last day and end were computed in.
   h.env.APP_TIME_ZONE = "Asia/Tokyo";
+  const unchanged = (await call(h, owner, gatesPath(ENDED_JOB))).body.cancellation_window;
+  assert.deepEqual(
+    [unchanged.time_zone, unchanged.starts_at, unchanged.last_day, unchanged.ends_at],
+    [ZONE, "2026-06-01T07:00:00.000Z", first.body.cancellation_window.last_day, "2026-06-12T07:00:00.000Z"],
+  );
   assert.equal(cancellationWindowEndsAt("2026-06-01T08:00:00.000Z", "Asia/Tokyo"), "2026-06-11T15:00:00.000Z");
   const later = await recordReceipt(h, owner, ENDED_JOB, {
     received_at: "2026-06-01T17:00:00+09:00", reason: REASON, evidence_ref: EVIDENCE,
@@ -1114,8 +1124,11 @@ test("the window ends at the end of the 10th local day after its start, at the l
   // The deadline is read from the latest start, in its zone; the hold kept the earlier, later end,
   // so the end is not that day's, and the exact end is the one to show.
   assert.deepEqual(
-    [later.body.cancellation_window.last_day, later.body.cancellation_window.ends_on_calendar_day],
-    [calendarReading("2026-06-01T08:00:00.000Z", "Asia/Tokyo").lastDay, false],
+    [
+      later.body.cancellation_window.time_zone, later.body.cancellation_window.starts_at,
+      later.body.cancellation_window.last_day, later.body.cancellation_window.ends_on_calendar_day,
+    ],
+    ["Asia/Tokyo", "2026-06-01T08:00:00.000Z", calendarReading("2026-06-01T08:00:00.000Z", "Asia/Tokyo").lastDay, false],
   );
   assert.deepEqual(
     receipts(h, ENDED_JOB).map((row) => [row.window_ends_at, row.time_zone]),
@@ -1423,7 +1436,7 @@ test("the work queue lists the open signed jobs whose window is unknown, for own
     status: 200,
     body: {
       count: 1,
-      counts: { window_unknown: 1, window_started_copy_unconfirmed: 0 },
+      counts: { window_unknown: 1, signed_copy_unconfirmed: 0 },
       complete: true,
       jobs: [{
         roof_job_id: JOB,
@@ -1432,7 +1445,7 @@ test("the work queue lists the open signed jobs whose window is unknown, for own
         address_line1: null,
         category: "window_unknown",
         unknown_reason: "signed_copy_time_missing",
-        window_started_at: null,
+        copy_shown_at: null,
         contract_on_record: false,
         contract_signed_at: null,
       }],
@@ -1444,7 +1457,7 @@ test("the work queue lists the open signed jobs whose window is unknown, for own
   await recordReceipt(h, ops, JOB, { received_at: d1At(h, -HOUR), reason: REASON, evidence_ref: EVIDENCE });
   assert.deepEqual(await call(h, owner, MISSING), {
     status: 200,
-    body: { count: 0, counts: { window_unknown: 0, window_started_copy_unconfirmed: 0 }, complete: true, jobs: [] },
+    body: { count: 0, counts: { window_unknown: 0, signed_copy_unconfirmed: 0 }, complete: true, jobs: [] },
   });
 });
 

@@ -473,7 +473,7 @@ describe("JobPage", () => {
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
     expect(screen.getByText("Shop Order · SHOP-001")).toBeVisible();
-    expect(screen.queryByText("Applies to")).toBeNull();
+    expect(screen.queryByText("Applies to the job")).toBeNull();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: /Add proof/ })[0]).toHaveAttribute(
@@ -923,8 +923,8 @@ describe("JobPage", () => {
   it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
     const first = renderJob(workPackageModel());
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("Applies to")).toBeVisible();
-    expect(screen.getByText("Job IW-1042 · 123 Example Avenue, Calgary, AB")).toBeVisible();
+    expect(screen.getByText("Applies to the job")).toBeVisible();
+    expect(screen.getByText("Jamie Homeowner · 123 Example Avenue · IW-1042")).toBeVisible();
     expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
     expect(screen.queryByText("Work object")).toBeNull();
     first.unmount();
@@ -942,7 +942,7 @@ describe("JobPage", () => {
         },
       },
     });
-    expect(await screen.findByText("Job IW-1042 · 123 Example Avenue, Calgary, AB")).toBeVisible();
+    expect(await screen.findByText("Jamie Homeowner · 123 Example Avenue · IW-1042")).toBeVisible();
     expect(screen.queryByText(/unknown/)).toBeNull();
   });
 
@@ -962,7 +962,7 @@ describe("JobPage", () => {
     );
     expect(await screen.findByText("Roof Job · OTHER-JOB")).toBeVisible();
     expect(screen.getByText("Roof Site · OTHER-JOB")).toBeVisible();
-    expect(screen.queryByText("Applies to")).toBeNull();
+    expect(screen.queryByText("Applies to the job")).toBeNull();
     other.unmount();
 
     // Another scope leaves out an id the read did not get, and never shows "unknown".
@@ -980,10 +980,19 @@ describe("JobPage", () => {
     expect(screen.queryByText(/unknown/)).toBeNull();
   });
 
-  it("says This job when the job has no number, and leaves out an address it does not have", async () => {
+  it("leaves out a part of the job's name the read does not have", async () => {
     const model = workPackageModel();
-    renderJob({ ...model, job: { ...model.job, job_number: null, address: null } });
-    expect(await screen.findByText("Applies to")).toBeVisible();
+    const first = renderJob({ ...model, job: { ...model.job, job_number: null, address: null } });
+    const named = (await screen.findByText("Applies to the job")).parentElement!;
+    expect(within(named).getByText("Jamie Homeowner")).toBeVisible();
+    first.unmount();
+
+    renderJob({
+      ...model,
+      job: { ...model.job, job_number: null, address: null },
+      packet: { ...model.packet, contact: null },
+    });
+    expect(await screen.findByText("Applies to the job")).toBeVisible();
     expect(screen.getByText("This job")).toBeVisible();
   });
 

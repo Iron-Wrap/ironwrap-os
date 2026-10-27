@@ -44,6 +44,7 @@ import {
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { jobLabel } from "../lib/job-label";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -628,7 +629,8 @@ type WorkPackagePanelModel = {
   job: Pick<JobResponse["job"], "id"> & Partial<Pick<JobResponse["job"], "job_number" | "address">>;
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
-  packet: Pick<JobResponse["packet"], "work_package">;
+  packet: Pick<JobResponse["packet"], "work_package"> &
+    Partial<Pick<JobResponse["packet"], "contact">>;
   scope?: TypedWorkObjectScope | null;
 };
 
@@ -662,14 +664,15 @@ function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObje
 const MISSING_SCOPE_ID = "unknown";
 
 /**
- * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job as
- * "Job {number} · {address}", never by record ids or a placeholder (gate e-crew-version-copy:
- * "Roof Job · unknown"). Any other scope keeps its type and id, and leaves out an id the read did
- * not get.
+ * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by
+ * its ruled label, "{customer} · {street} · {code}" (D5), never by record ids or a placeholder
+ * (gate e-crew-version-copy: "Roof Job · unknown"); a bare code read as a site id (e-plan-scope).
+ * Any other scope keeps its type and id, and leaves out an id the read did not get.
  */
 function planScopeFacts(
   workPackage: FieldWorkPackage,
   job: WorkPackagePanelModel["job"],
+  customer: string | null | undefined,
 ): Array<{ label: string; value: string }> {
   const known = (id: string) => (id && id !== MISSING_SCOPE_ID ? id : null);
   const objectId = known(workPackage.work_object_id);
@@ -681,11 +684,8 @@ function planScopeFacts(
     workPackage.physical_context_type === "Roof Site" &&
     thisJob(areaId)
   ) {
-    // The number says it is a job ("Job IW-1042"); bare, it read as a site id (gate e-plan-scope).
-    const where = [job.job_number ? `Job ${job.job_number}` : "This job", job.address]
-      .filter(Boolean)
-      .join(" · ");
-    return [{ label: "Applies to", value: where }];
+    const label = jobLabel({ customer, address: job.address, code: job.job_number });
+    return [{ label: "Applies to the job", value: label ?? "This job" }];
   }
   return [
     {
@@ -873,7 +873,7 @@ function WorkPackagePanel({
     model.allowed_actions.includes("work_package.start");
   const completionAllowed = model.allowed_actions.includes("work_package.complete");
   const canComplete = completionAllowed && !offline && canAttemptSync;
-  const scopeFacts = planScopeFacts(workPackage, model.job);
+  const scopeFacts = planScopeFacts(workPackage, model.job, model.packet.contact?.display_name);
 
   function showActionFailure(error: unknown, copy?: PlainErrorCopy) {
     setActionError({ text: messageFor(error, copy), error });

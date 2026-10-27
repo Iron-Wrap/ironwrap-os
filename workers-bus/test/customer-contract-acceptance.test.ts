@@ -53,6 +53,7 @@ import {
 } from "../src/production-cancellation-window.ts";
 import {
   attestGateInLedger,
+  bindCrewInLedger,
   d1Now,
   fixtureSchedule,
   waiveGateInLedger,
@@ -101,8 +102,27 @@ interface NativeChain {
   publicationVersion: number;
 }
 
+/**
+ * A database whose clock is the test's: every `'now'` the migrations' triggers and each statement
+ * read is the `Date` the test may mock, so a case can stand D1 a millisecond either side of an end.
+ */
+class ClockedDatabase extends DatabaseSync {
+  constructor() {
+    super(":memory:");
+    this.function("fixture_now", () => new Date().toISOString().replace("T", " ").replace("Z", ""));
+  }
+
+  prepare(sql: string) {
+    return super.prepare(sql.replaceAll("'now'", "fixture_now()"));
+  }
+
+  exec(sql: string) {
+    return super.exec(sql.replaceAll("'now'", "fixture_now()"));
+  }
+}
+
 class SqliteD1 {
-  readonly raw = new DatabaseSync(":memory:");
+  readonly raw: DatabaseSync;
   throwNextBatchAfterCommit = false;
   /** Runs right before the next batch, as a writer that committed just ahead of it. */
   beforeNextBatch: (() => void) | null = null;
@@ -123,7 +143,9 @@ class SqliteD1 {
   /** Every error a batch raised, so a case can tell which writer refused. */
   readonly batchErrors: string[] = [];
 
-  constructor() {
+  /** With `clocked`, D1's clock is the (mockable) `Date` rather than the real one. */
+  constructor(clocked = false) {
+    this.raw = clocked ? new ClockedDatabase() : new DatabaseSync(":memory:");
     this.raw.exec("PRAGMA foreign_keys = ON");
     const directory = new URL("../migrations/", import.meta.url);
     for (const file of readdirSync(directory)
@@ -335,9 +357,11 @@ async function setup(
     terms?: Record<string, unknown>;
     /** The owner's deposit-policy revision, or null for none: OD-01, the 0155 default. */
     depositPolicy?: "md13_deposit" | "od01_payment_on_completion" | null;
+    /** D1's clock is the test's `Date` (`ClockedDatabase`). */
+    clocked?: boolean;
   } = {},
 ) {
-  const db = new SqliteD1();
+  const db = new SqliteD1(options.clocked ?? false);
   // These contracts carry a 25% deposit, so the tenant takes deposits (MD-13) unless a case says
   // otherwise: since 0155 a tenant with no revision is OD-01 and refuses a deposit contract.
   const depositPolicy = options.depositPolicy === undefined ? "md13_deposit" : options.depositPolicy;
@@ -3899,6 +3923,205 @@ test("an uncertain (202) attempt with signed_copy records no copy as shown", asy
     assert.deepEqual(shownEvents(h), []);
     assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "unknown");
   } finally {
+    h.restore();
+  }
+});
+
+/**
+ * A contract accepted on a screen that shows the copy, on a D1 whose clock the test then sets: the
+ * window comes from the copy's event alone, and `end` is that event's end.
+ */
+async function eventSourcedWindow(key: string): Promise<{ h: Harness; end: string; endMs: number }> {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
+  seedGates(h);
+  const portalToken = await seedPortalLink(h.db);
+  const accepted = await acceptShowingCopy(h, portalToken, key);
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  const body = await accepted.json() as Record<string, any>;
+  const [event, ...more] = shownEvents(h);
+  assert.ok(event);
+  assert.deepEqual(more, []);
+  assert.equal(count(h, "production_cancellation_window_receipts"), 0, "no person's record: the event alone");
+  assert.equal(body.signed_copy.window_ends_at, event.window_ends_at);
+  return { h, end: event.window_ends_at, endMs: Date.parse(event.window_ends_at) };
+}
+
+test("a window started by the signed copy holds the firm start to its last millisecond, on the store, the route and in D1, and lifts it the millisecond after", async () => {
+  const { h, end, endMs } = await eventSourcedWindow("acceptance-a5-event-firm-0001");
+  try {
+    // An hour before the end, every gate a schedule rests on is cleared inside the window.
+    mock.timers.enable({ apis: ["Date"], now: endMs - 60 * MINUTE_MS });
+    const schedule = readyToSchedule(h, { waiveMaterials: true });
+    const routeBody = (supersedes: string | null = null) => {
+      const day = fixtureSchedule(1, Date.now());
+      const job = h.db.raw.prepare("SELECT version FROM operating_roof_jobs WHERE roof_job_id = ?").get(JOB_ID) as { version: number };
+      return {
+        expected_roof_job_version: Number(job.version),
+        crew_id: "crew:acceptance:0001",
+        expected_crew_version: 1,
+        authority_requirements: [{
+          authority_record_id: "authority:acceptance:worker",
+          subject_type: "Person",
+          subject_role: "Worker",
+          subject_ref: "appu_field_acceptance",
+          authority_kind: "Worker Competency",
+          scope_type: "Roof Job",
+          scope_ref: JOB_ID,
+          version: 1,
+          state_digest_sha256: "c".repeat(64),
+        }],
+        scheduled_start: day.start,
+        scheduled_end: day.end,
+        supersedes_assignment_id: supersedes,
+        correction_reason: supersedes ? "Synthetic revision once the window has ended." : null,
+      };
+    };
+    const scheduleOnRoute = async (owner: AuthContext, key: string, supersedes: string | null = null) => {
+      const response = await handleAuthenticatedRoute(
+        new Request(`${PUBLIC_ORIGIN}/api/v1/jobs/${encodeURIComponent(JOB_ID)}/schedule`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "idempotency-key": key, "x-csrf-token": owner.csrfToken },
+          body: JSON.stringify(routeBody(supersedes)),
+        }),
+        h.env,
+        owner,
+      );
+      return { status: response.status, body: await response.json() as Record<string, any> };
+    };
+    const insertAssignment = () => {
+      const assignmentId = "assignment:acceptance:event-window";
+      const crew = h.db.raw.prepare(
+        "SELECT state FROM operating_production_gates WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Crew'",
+      ).get(TENANT, JOB_ID) as { state: string };
+      if (crew.state === "blocked") {
+        bindCrewInLedger(h.db.raw, {
+          tenantId: TENANT, roofJobId: JOB_ID, crewId: "crew:acceptance:0001", assignmentId,
+          keepCancellationWindow: true,
+        });
+      }
+      const day = fixtureSchedule(1, d1Now(h.db.raw));
+      const job = h.db.raw.prepare("SELECT version FROM operating_roof_jobs WHERE roof_job_id = ?").get(JOB_ID) as { version: number };
+      h.db.raw.prepare(
+        `INSERT INTO operating_job_assignments
+           (assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version, crew_id,
+            crew_version, assigned_users_json, scheduled_start, scheduled_end, supersedes_assignment_id,
+            correction_reason, actor_user_id, command_fingerprint, idempotency_key_hash, created_at)
+         VALUES (?, ?, ?, 1, ?, 'crew:acceptance:0001', 1, '["appu_field_acceptance"]', ?, ?, NULL, NULL,
+                 ?, ?, ?, ?)`,
+      ).run(assignmentId, TENANT, JOB_ID, Number(job.version), day.start, day.end, OWNER_ID,
+        "e".repeat(64), "f".repeat(64), new Date().toISOString());
+    };
+
+    // The last millisecond: held on the store, the route and in D1, each by name with the end.
+    mock.timers.setTime(endMs - 1);
+    const owner = await personAuth(h, OWNER_ID);
+    const open = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.deepEqual([open.state, open.ends_at, open.started_from], ["open", end, "signed_copy_shown"]);
+    await assert.rejects(schedule("schedule-a5-event-held"), (error: unknown) => {
+      assert.ok(error instanceof OperatingJobAssignmentError, String(error));
+      assert.equal(error.code, "operating_job_assignment_cancellation_window_open");
+      assert.deepEqual(error.detail, { window_ends_at: end });
+      return true;
+    });
+    assert.deepEqual(await scheduleOnRoute(owner, "schedule-a5-event-route-held"), {
+      status: 409,
+      body: { window_ends_at: end, error: "operating_job_assignment_cancellation_window_open" },
+    });
+    refusedWith(insertAssignment, "operating_job_assignment_cancellation_window_open");
+    assert.equal(count(h, "operating_job_assignments"), 0);
+
+    // At the end itself the window has ended: the bound is exclusive.
+    mock.timers.setTime(endMs);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "ended");
+
+    // The millisecond after: D1 takes the assignment written straight at it, the route writes the
+    // next revision and the store the one after. Each insert passes D1's hold too.
+    mock.timers.setTime(endMs + 1);
+    insertAssignment();
+    const routed = await scheduleOnRoute(owner, "schedule-a5-event-route-0001", "assignment:acceptance:event-window");
+    assert.equal(routed.status, 201, JSON.stringify(routed.body));
+    const job = h.db.raw.prepare("SELECT version FROM operating_roof_jobs WHERE roof_job_id = ?").get(JOB_ID) as { version: number };
+    const day = fixtureSchedule(2, Date.now());
+    const revised = await recordOperatingJobAssignment(h.env, {
+      tenantId: TENANT,
+      roofJobId: JOB_ID,
+      expectedRoofJobVersion: Number(job.version),
+      crewId: "crew:acceptance:0001",
+      expectedCrewVersion: 1,
+      authorityRequirements: routeBody().authority_requirements as never,
+      scheduledStart: day.start,
+      scheduledEnd: day.end,
+      supersedesAssignmentId: routed.body.assignment.id,
+      correctionReason: "Synthetic revision once the window has ended.",
+      actorUserId: OWNER_ID,
+      idempotencyKey: "schedule-a5-event-store-0001",
+    });
+    assert.equal(revised.kind, "created");
+    assert.equal(count(h, "operating_job_assignments"), 3);
+  } finally {
+    mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("a window started by the signed copy holds Materials and ordering to its last millisecond, on the route and in D1, and lifts them the millisecond after", async () => {
+  const { h, end, endMs } = await eventSourcedWindow("acceptance-a5-event-order-0001");
+  try {
+    backorderedJobLine(h);
+    const attestMaterials = async (owner: AuthContext) => {
+      const response = await handleAuthenticatedRoute(
+        new Request(`${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/gates/Materials/clearance`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": `materials-a5-event-${Date.now()}`,
+            "x-csrf-token": owner.csrfToken,
+          },
+          body: JSON.stringify({
+            basis: "person_attestation",
+            expected_gate_version: 1,
+            attestation: { source: "supplier_delivery", reference: "DELIVERY-ACCEPTANCE-0002" },
+          }),
+        }),
+        h.env,
+        owner,
+      );
+      return { status: response.status, body: await response.json() as Record<string, any> };
+    };
+    const reorder = () => h.db.raw.prepare(
+      "UPDATE inventory_po_lines SET status = 'ordered', version = version + 1 WHERE po_line_id = 'po_line_acceptance_backordered'",
+    ).run();
+    const ordered = () => (h.db.raw.prepare(
+      "SELECT COUNT(*) AS n FROM inventory_po_lines WHERE roof_job_id = ? AND status = 'ordered'",
+    ).get(JOB_ID) as { n: number }).n;
+
+    // The last millisecond: Materials on the route and in D1, a supplier order and a line moving back
+    // to ordered in D1, each held by name with the end.
+    mock.timers.enable({ apis: ["Date"], now: endMs - 1 });
+    const owner = await personAuth(h, OWNER_ID);
+    assert.deepEqual(await attestMaterials(owner), {
+      status: 409,
+      body: { window_ends_at: end, error: "production_gate_cancellation_window_open" },
+    });
+    refusedWith(() => clearMaterialsInD1(h), "production_gate_cancellation_window_open");
+    refusedWith(() => placeJobOrderLine(h), "inventory_po_line_cancellation_window_open");
+    refusedWith(reorder, "inventory_po_line_cancellation_window_open");
+    assert.equal(ordered(), 0);
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM production_gate_clearances WHERE gate = 'Materials'").get() as { n: number }).n,
+      0,
+    );
+
+    // The millisecond after: each is written, the Materials attestation through D1's hold as well.
+    mock.timers.setTime(endMs + 1);
+    const materials = await attestMaterials(owner);
+    assert.equal(materials.status, 200, JSON.stringify(materials.body));
+    assert.equal(materials.body.gate.state, "ready");
+    placeJobOrderLine(h);
+    reorder();
+    assert.equal(ordered(), 2);
+  } finally {
+    mock.timers.reset();
     h.restore();
   }
 });

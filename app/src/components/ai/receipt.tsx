@@ -247,11 +247,12 @@ export function Receipt({
     ? `${decider.charAt(0).toUpperCase()}${decider.slice(1)} still decides.`
     : undefined;
   // An action the owner can never raise says so in words, beside the lock (gate e-dial).
-  const never =
-    display.delegation === "always_asks_first" ? " It can never be set to do this on its own." : "";
+  const asks = display.why ?? "A person approves this kind of step before it runs.";
   const why =
     state === "needs_you"
-      ? `${display.why ?? "A person approves this kind of step before it runs."}${never}`
+      ? display.delegation === "always_asks_first"
+        ? `${asks.replace(/[.!?]?$/, ".")} It can never be set to do this on its own.`
+        : asks
       : state === "held"
         ? (display.why ?? words.why)
         : undefined;

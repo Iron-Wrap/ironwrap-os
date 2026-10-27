@@ -243,7 +243,7 @@ export interface ContractReceipt {
     reason_codes: ReasonCode[];
   };
   permit: {
-    kind: "none" | "draft" | "within_limits" | "asks_first";
+    kind: "none" | "draft" | "within_limits" | "asks_first" | "shadow";
     permit_id: string | null;
     approval_id: string | null;
     approved_by: string | null;

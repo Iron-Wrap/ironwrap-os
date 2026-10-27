@@ -121,10 +121,10 @@ describe("SavedWorkRecoveryPanel", () => {
 
     expect(
       await screen.findByText(
-        "Production has not issued a work plan for this job, so files cannot be filed to it.",
+        "Production has not issued a job plan for this job, so files cannot be filed to it.",
       ),
     ).toBeVisible();
-    expect(screen.getByText(/Ask production to issue the work plan/i)).toBeVisible();
+    expect(screen.getByText(/Ask production to issue the job plan/i)).toBeVisible();
     expect(screen.getByText(/note-only blocker report/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });

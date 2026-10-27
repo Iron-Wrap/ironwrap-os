@@ -140,7 +140,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
         scheduled_start: "2026-07-10T18:30:00.000Z",
         scheduled_end: null,
         blocked_gate_count: 0,
-        next_action: "Open field check-in",
+        next_action: "Add job proof",
         assignment: {
           id: "ASSIGN-2",
           assignment_id: "assignment_2",
@@ -224,7 +224,7 @@ describe("TodayPage", () => {
       }),
     );
 
-    const link = await screen.findByRole("link", { name: "Open work plan" });
+    const link = await screen.findByRole("link", { name: "See job plan" });
     expect(link).toHaveAttribute(
       "href",
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
@@ -249,10 +249,7 @@ describe("TodayPage", () => {
       "href",
       "/jobs/JOB-BLOCKED",
     );
-    expect(screen.getByRole("link", { name: "Open job" })).toHaveAttribute(
-      "href",
-      "/jobs/JOB-NEXT",
-    );
+    expect(screen.getByRole("link", { name: "See job" })).toHaveAttribute("href", "/jobs/JOB-NEXT");
     expect(screen.getAllByText(/10:00/).length).toBeGreaterThan(0);
 
     expect(screen.queryByText("Needs download")).not.toBeInTheDocument();

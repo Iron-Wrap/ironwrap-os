@@ -72,9 +72,9 @@ describe("crew guidance for a stopped item", () => {
     );
 
     expect(guidance).toEqual({
-      reason: "Production has not issued a work plan for this job, so files cannot be filed to it.",
+      reason: "Production has not issued a job plan for this job, so files cannot be filed to it.",
       nextStep:
-        "Your files stay on this phone. Ask production to issue the work plan, then add them again. You can send a note-only blocker report now.",
+        "Your files stay on this phone. Ask production to issue the job plan, then add them again. You can send a note-only blocker report now.",
       retryable: false,
       notSent: true,
       officeConfirmed: false,

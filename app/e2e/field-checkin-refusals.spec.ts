@@ -113,10 +113,10 @@ test.describe("Check-in refusals on the crew phone", () => {
     await expect(page.getByText("Waiting", { exact: true })).toHaveCount(0);
     await expect(
       page.getByText(
-        "Production has not issued a work plan for this job, so files cannot be filed to it.",
+        "Production has not issued a job plan for this job, so files cannot be filed to it.",
       ),
     ).toBeVisible();
-    await expect(page.getByText(/Ask production to issue the work plan/)).toBeVisible();
+    await expect(page.getByText(/Ask production to issue the job plan/)).toBeVisible();
 
     await testInfo.attach("checkin-needs-attention-390px.png", {
       body: await page.screenshot({
@@ -139,7 +139,7 @@ test.describe("Check-in refusals on the crew phone", () => {
     await expect(
       savedWork.getByRole("heading", { name: "One saved item needs review" }),
     ).toBeVisible();
-    await expect(savedWork.getByText(/Ask production to issue the work plan/)).toBeVisible();
+    await expect(savedWork.getByText(/Ask production to issue the job plan/)).toBeVisible();
     await expect(savedWork.getByRole("button", { name: "Try again" })).toHaveCount(0);
 
     await testInfo.attach("saved-work-needs-attention-390px.png", {

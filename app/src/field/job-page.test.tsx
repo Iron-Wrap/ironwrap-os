@@ -511,7 +511,7 @@ describe("JobPage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Finish this work plan" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Finish this job plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Finish work" })).toBeVisible();
 
     const user = userEvent.setup();
@@ -571,7 +571,7 @@ describe("JobPage", () => {
         }),
       ).toBeVisible();
       expect(
-        screen.queryByRole("heading", { name: "Finish this work plan" }),
+        screen.queryByRole("heading", { name: "Finish this job plan" }),
       ).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Finish work" })).not.toBeInTheDocument();
       rendered.unmount();
@@ -842,7 +842,7 @@ describe("JobPage", () => {
       await screen.findByLabelText("What changed?"),
       "Deck damage changed the scope.",
     );
-    await user.click(screen.getByRole("button", { name: "Issue Work Package v4" }));
+    await user.click(screen.getByRole("button", { name: "Issue job plan version 4" }));
 
     await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
     const options = vi.mocked(apiCommand).mock.calls[0]?.[0];
@@ -886,8 +886,8 @@ describe("JobPage", () => {
       ownerSession,
     );
 
-    expect(await screen.findByRole("heading", { name: "Issue Work Package" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "No work plan is ready" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Issue job plan" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "No job plan is ready" })).toBeVisible();
   });
 
   it("lets production open typed work authoring without receiving field capture", async () => {
@@ -906,7 +906,7 @@ describe("JobPage", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "Issue corrected Work Package v4" }),
+      await screen.findByRole("heading", { name: "Issue corrected job plan, version 4" }),
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
   });
@@ -1143,7 +1143,7 @@ describe("JobPage", () => {
       new ApiError({
         status: 403,
         code: "work_package_actor_not_assigned",
-        message: "The field actor is not assigned to this Work Package.",
+        message: "You are not on the crew for this job plan. Ask the office to add you to it.",
       }),
     );
     renderJob(startableWorkPackageModel());
@@ -1152,7 +1152,7 @@ describe("JobPage", () => {
 
     const refusal = (
       await screen.findByText(
-        "You are not on the crew for this work plan. Ask the office to add you to it.",
+        "You are not on the crew for this job plan. Ask the office to add you to it.",
       )
     ).closest<HTMLElement>('[role="alert"]')!;
     expect(refusal).toBeVisible();
@@ -1283,7 +1283,7 @@ describe("Start work after a lost answer", () => {
     await user.click(await screen.findByRole("button", { name: "Start work" }));
     expect(
       await screen.findByText(
-        "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+        "The job plan changed after this phone opened it. Open the job again to see the new plan.",
       ),
     ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Start work" }));
@@ -1505,7 +1505,7 @@ describe("packet slots this system does not carry", () => {
     // The server looked and found none. That IS a fact about the job, and saying so is correct.
     renderJob(emptyPacket(jobModel({ stale_fields: [] })));
 
-    const empties = await screen.findAllByText("No items are in this work plan.");
+    const empties = await screen.findAllByText("No items are in this job plan.");
     expect(empties.length).toBeGreaterThan(0);
     expect(screen.queryByText(/does not carry/)).not.toBeInTheDocument();
   });

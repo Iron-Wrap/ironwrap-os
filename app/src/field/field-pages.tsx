@@ -145,11 +145,11 @@ const workPlanRefusals: PlainErrorCopy = {
     not_found: jobNotOnList,
     work_package_not_available: jobNotOnList,
     work_package_actor_not_assigned:
-      "You are not on the crew for this work plan. Ask the office to add you to it.",
+      "You are not on the crew for this job plan. Ask the office to add you to it.",
     work_package_version_conflict:
-      "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+      "The job plan changed after this phone opened it. Open the job again to see the new plan.",
     work_package_release_attempt_conflict:
-      "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+      "The job plan changed after this phone opened it. Open the job again to see the new plan.",
     idempotency_conflict:
       "The office already holds a different request from this phone for this plan. Check the plan, then press the button again.",
   },
@@ -255,7 +255,7 @@ export function WorkObjectPage() {
     queryFn: () => loadWorkObject(session, scope!),
   });
   if (!scope) return <ErrorState message="This work link is incomplete." />;
-  if (query.isPending) return <LoadingState label="Loading work plan…" />;
+  if (query.isPending) return <LoadingState label="Loading job plan…" />;
   if (query.isError)
     return (
       <ErrorState
@@ -345,7 +345,7 @@ function WorkObjectPacketHeader({
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
         <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
         <JobFact
-          label="Work plan"
+          label="Job plan"
           value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
         />
       </dl>
@@ -790,9 +790,9 @@ function WorkPackagePanel({
           className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
           aria-labelledby="work-package-heading"
         >
-          <p className="text-sm font-semibold text-warning">Work plan</p>
+          <p className="text-sm font-semibold text-warning">Job plan</p>
           <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-            No work plan is ready
+            No job plan is ready
           </h2>
           <p className="mt-2 leading-6 text-muted">
             Do not start, resume, release a hold point, or change scope. Go online for the latest
@@ -891,7 +891,7 @@ function WorkPackagePanel({
 
   function saveAcknowledgement() {
     if (!acknowledgementConfirmed) {
-      setActionError({ text: "Check the box to show that you read this work plan." });
+      setActionError({ text: "Check the box to show that you read this job plan." });
       return;
     }
     void saveWorkPackageAction("work_package_acknowledgement");
@@ -999,7 +999,7 @@ function WorkPackagePanel({
       <header className="border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-muted">Work plan</p>
+            <p className="text-sm font-semibold text-muted">Job plan</p>
             <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
               {workPackage.title}
             </h2>
@@ -1328,7 +1328,7 @@ function WorkPackagePanel({
           </h3>
           {workPackage.acknowledgement.current_user_acknowledged ? (
             <p className="mt-2 text-sm leading-6 text-ok">
-              You reviewed this work plan
+              You reviewed this job plan
               {workPackage.acknowledgement.acknowledged_at
                 ? ` at ${formatFieldTimestamp(workPackage.acknowledgement.acknowledged_at, dateOptions)}`
                 : ""}
@@ -1400,7 +1400,7 @@ function WorkPackagePanel({
             aria-labelledby="work-package-completion-heading"
           >
             <h3 id="work-package-completion-heading" className="font-bold text-ok">
-              Finish this work plan
+              Finish this job plan
             </h3>
             {canComplete ? (
               <>
@@ -1486,7 +1486,7 @@ function WorkPackagePanel({
         {savedAction ? <WorkPackageActionState action={savedAction} /> : null}
         {!offline && !canAttemptSync ? (
           <p className="text-sm leading-6 text-warning" role="status">
-            Sign in online before this phone can send the saved work plan update.
+            Sign in online before this phone can send the saved job plan update.
           </p>
         ) : null}
       </div>
@@ -1924,7 +1924,7 @@ function PacketDetail({
             office before you rely on it.
           </p>
         ) : (
-          <p className="text-sm leading-6 text-muted">No items are in this work plan.</p>
+          <p className="text-sm leading-6 text-muted">No items are in this job plan.</p>
         )}
       </div>
     </details>
@@ -2049,10 +2049,10 @@ export function CheckInPage() {
       <RoleGuard surface="field">
         <EmptyState
           title="Choose an assigned job"
-          message="Open Today, then open a job. Each check-in is tied to that job."
+          message="Pick a job on Today. Each check-in is tied to that job."
           action={
             <Button asChild size="field" variant="accent">
-              <Link to="/today">Open Today</Link>
+              <Link to="/today">Back to Today</Link>
             </Button>
           }
         />

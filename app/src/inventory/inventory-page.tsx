@@ -1109,11 +1109,11 @@ function TransitionFields({
           />
           <TextField
             id="inventory-work-package"
-            label="Work package (optional)"
+            label="Job plan (optional)"
             value={form.workPackageId}
             field="workPackageId"
             onChange={onChange}
-            placeholder="Work package reference"
+            placeholder="Job plan reference"
           />
         </div>
       ) : null}

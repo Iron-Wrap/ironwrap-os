@@ -350,10 +350,10 @@ describe("CheckInPage", () => {
     expect(screen.queryByText("Waiting")).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Production has not issued a work plan for this job, so files cannot be filed to it.",
+        "Production has not issued a job plan for this job, so files cannot be filed to it.",
       ),
     ).toBeVisible();
-    expect(screen.getByText(/Ask production to issue the work plan/i)).toBeVisible();
+    expect(screen.getByText(/Ask production to issue the job plan/i)).toBeVisible();
     const stopped = await getOutboxActionsNeedingAttention(principal);
     expect(stopped).toHaveLength(1);
     expect(stopped[0]?.lastError).toMatchObject({

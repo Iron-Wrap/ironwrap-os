@@ -40,7 +40,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // 1. Review -- requires the review checkbox first, matching the real UI gate.
     await page.getByRole("checkbox").check();
     await page.getByRole("button", { name: "I reviewed this plan" }).click();
-    await expect(page.getByText(/You reviewed this work plan/i)).toBeVisible();
+    await expect(page.getByText(/You reviewed this job plan/i)).toBeVisible();
     await expect(page.getByText("v3 · Reviewed")).toBeVisible();
 
     // 2. Start -- online-only direct command, not the offline outbox.
@@ -76,7 +76,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // In Progress, so a completed package reads back as no current package at all --
     // that is the state read-back that proves completion actually landed server-side.
     await page.getByRole("button", { name: "Finish work" }).click();
-    await expect(page.getByRole("heading", { name: "No work plan is ready" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No job plan is ready" })).toBeVisible();
   });
 
   test("safety: open the panel, submit a rescue call, see it reflected after reconnect", async ({

@@ -97,11 +97,13 @@ export function WorkPackageIssueForm({
     setError(null);
     setSavedVersion(null);
     if (!assignment || !assignmentModified || !canSend) {
-      setError("Refresh this assignment online before issuing a Work Package.");
+      setError(
+        "Nothing was issued. Reload the job while online so it has the latest crew assignment, then tap Issue job plan.",
+      );
       return;
     }
     if (workPackage && !correctionReason.trim()) {
-      setError("Explain the changed condition before superseding the current package.");
+      setError("Say what changed before you replace the current job plan.");
       return;
     }
     const expires = new Date(expiresAt);
@@ -151,9 +153,9 @@ export function WorkPackageIssueForm({
       setError(
         messageFor(caught, {
           refused:
-            "This work plan was not accepted as written, and nothing was issued. Check every step and hold point, then issue it again.",
+            "This job plan was not accepted, and nothing was issued. Check every step and hold point, then tap Issue job plan again.",
           fallback:
-            "We could not confirm the work plan was issued. Open the job again to check it before you issue it again.",
+            "We could not confirm the job plan was issued. Reload the job and check it before you issue it again.",
         }),
       );
     } finally {
@@ -168,11 +170,11 @@ export function WorkPackageIssueForm({
     >
       <p className="text-sm font-semibold text-info">Production authority</p>
       <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-        {workPackage ? `Issue corrected Work Package v${nextVersion}` : "Issue Work Package"}
+        {workPackage ? `Issue corrected job plan, version ${nextVersion}` : "Issue job plan"}
       </h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
-        The server freezes the current assignment, crew, authority, scope, and release identity.
-        This form supplies only the package instructions and evidence contract.
+        When you issue, the job's crew, assignment and scope lock in. This form adds the steps, hold
+        points and the proof the crew must add.
       </p>
 
       {!assignmentModified ? (
@@ -180,8 +182,8 @@ export function WorkPackageIssueForm({
           className="mt-4 border border-warning/45 bg-warning-soft p-3 font-semibold text-warning"
           role="status"
         >
-          The current assignment revision is unavailable. Refresh before issuing; stale packets are
-          never accepted as release authority.
+          The job's latest crew assignment did not load, so a job plan cannot be issued. Reload the
+          job while online.
         </p>
       ) : null}
 
@@ -384,16 +386,16 @@ export function WorkPackageIssueForm({
         ) : null}
         {savedVersion ? (
           <p className="font-semibold text-ok" role="status">
-            Work Package v{savedVersion} was verified by the server.
+            Job plan version {savedVersion} is issued and verified.
           </p>
         ) : null}
         {!canSend ? (
           <p className="text-sm leading-6 text-warning" role="status">
-            A current online session and assignment revision are required to issue.
+            You need to be online, with the job's latest crew assignment loaded, to issue.
           </p>
         ) : null}
         <Button type="submit" variant="accent" busy={saving} disabled={!canSend}>
-          <Send aria-hidden="true" /> Issue Work Package v{nextVersion}
+          <Send aria-hidden="true" /> Issue job plan version {nextVersion}
         </Button>
       </form>
     </section>

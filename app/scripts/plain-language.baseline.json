@@ -71,7 +71,7 @@
     "unlabelled-code": 3
   },
   "src/field/work-package-issue-form.tsx": {
-    "banned-term": 5
+    "banned-term": 3
   },
   "src/integrations/integration-readiness-page.tsx": {
     "banned-term": 17
@@ -85,7 +85,7 @@
     "machine-name": 3
   },
   "src/inventory/inventory-page.tsx": {
-    "banned-term": 26,
+    "banned-term": 24,
     "unlabelled-code": 17,
     "machine-name": 2
   },

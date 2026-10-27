@@ -191,7 +191,8 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
         effective_date: "2026-07-10",
         hazard_summary: "Steep-slope fall exposure",
         controls: "Use roof anchors and harnesses",
-        emergency_plan: "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
+        emergency_plan:
+          "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
         ppe_requirements: "Harness and eye protection",
         weather_limits: "Stop above plan wind limit",
       },

@@ -10,7 +10,26 @@ export const STOP_WORDS = {
   jobUnnamed: "Work is stopped on this job.",
   /** Nobody restarts work from the phone. */
   waits: "The office releases the stop.",
+  /** The card's next step while a stop holds its job. */
+  nextStep: "Wait for the office to release the stop",
+  /** A work check on a stopped job is its own thing: clearing it never restarts work. */
+  separateCheck: (check: string) =>
+    `Separate work check: ${check}. Clearing it doesn't restart work.`,
+  callOffice: "Call the office",
 } as const;
+
+/** "today at 10:24 a.m.", or "on Thu 9 Jul at 4:05 p.m." on another day; null for an unreadable time. */
+export function crewStopWhen(
+  iso: string,
+  options: { locale?: string; timeZone?: string },
+  now?: Date,
+): string | null {
+  const stamp = crewStopStamp(iso, options, now);
+  if (!stamp) return null;
+  if (stamp.startsWith("Today ")) return `today at ${stamp.slice("Today ".length)}`;
+  const [weekday, day, month, ...time] = stamp.split(" ");
+  return `on ${weekday} ${day} ${month} at ${time.join(" ")}`;
+}
 
 /** "Today 10:24 a.m.", or "Mon 14 Sep 10:24 a.m." on another day, in the company's time zone. */
 export function crewStopStamp(
@@ -45,19 +64,19 @@ export function crewStopStamp(
   }
 }
 
-/** "Tom Lachance stopped it · Today 10:24 a.m. · Ice on the north slope"; parts it lacks are left out. */
+/**
+ * "Stopped today at 10:24 a.m. by Tom Lachance · Ice on the north slope": the stop's own time, so it
+ * never reads as old beside the run sheet's stamp. Parts the read lacks are left out.
+ */
 export function stopDetail(
   stop: ActiveStop,
   options: { locale?: string; timeZone?: string },
   now?: Date,
 ): string {
-  return [
-    stop.raiser_display_name?.trim() ? `${stop.raiser_display_name.trim()} stopped it` : null,
-    crewStopStamp(stop.reported_at, options, now),
-    stop.summary?.trim() || null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const when = crewStopWhen(stop.reported_at, options, now);
+  const raiser = stop.raiser_display_name?.trim();
+  const stopped = ["Stopped", when, raiser ? `by ${raiser}` : null].filter(Boolean).join(" ");
+  return [stopped, stop.summary?.trim() || null].filter(Boolean).join(" · ");
 }
 
 /** Every stop that holds any of these jobs, once each, oldest first. */

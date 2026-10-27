@@ -18,7 +18,7 @@ import {
 import { messageForLoad } from "../lib/plain-error";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 import { JobStopBanner, TenantStopBanner } from "./stop-banner";
-import { uniqueStops } from "./stop-words";
+import { STOP_WORDS, uniqueStops } from "./stop-words";
 import { OfflineReadiness } from "./offline-readiness";
 
 // Office roles only (see the note where it renders). A static import made the crew phone fetch
@@ -214,6 +214,7 @@ export function TodayPage() {
             <TenantStopBanner
               stops={uniqueStops(today.jobs.map((job) => job.active_stops ?? []))}
               dateOptions={dateOptions}
+              officePhone={session.tenant.office_phone}
             />
           </div>
           <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
@@ -373,6 +374,10 @@ function TodayJobRow({
   onRetryPacket: () => void;
 }) {
   const blocked = job.blocked_gate_count > 0;
+  // A work stop holds this job (its own, or one that holds every job): the card waits on the
+  // office, and a work check on it never reads as the way to restart work.
+  const held = (job.active_stops ?? []).length > 0;
+  const officePhone = useSession().tenant.office_phone;
   const actionLabel = blocked
     ? "Check what blocks work"
     : fieldCaptureAllowed
@@ -410,9 +415,14 @@ function TodayJobRow({
               stops={job.active_stops ?? []}
               job={{ address: job.address, code: job.job_number }}
               dateOptions={dateOptions}
+              officePhone={officePhone}
             />
           </div>
-          {blocked ? (
+          {blocked && held ? (
+            <p className="mt-3 text-sm leading-6 text-muted">
+              {STOP_WORDS.separateCheck(job.next_action)}
+            </p>
+          ) : blocked ? (
             <div className="mt-3 flex items-start gap-2 text-danger">
               <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
               <p className="font-bold leading-6">
@@ -426,12 +436,17 @@ function TodayJobRow({
               label="Assignment"
               value={assignment || "Assignment detail unavailable"}
             />
-            <DispatchFact label="Next step" value={job.next_action} />
+            <DispatchFact label="Next step" value={held ? STOP_WORDS.nextStep : job.next_action} />
           </dl>
           <PacketAvailabilityBadge availability={availability} />
         </div>
         <div className="space-y-2 border-t border-border p-4 @3xl:flex @3xl:flex-col @3xl:justify-center @3xl:border-l @3xl:border-t-0">
-          <Button asChild size="field" fullWidth variant={blocked ? "default" : "accent"}>
+          <Button
+            asChild
+            size="field"
+            fullWidth
+            variant={held ? "outline" : blocked ? "default" : "accent"}
+          >
             <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
               {actionLabel}
               <ChevronRight aria-hidden="true" />

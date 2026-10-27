@@ -1,5 +1,9 @@
+import { Phone } from "lucide-react";
+
+import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { jobLabel } from "../lib/job-label";
+import { dialableNumber } from "./dialable-number";
 import type { ActiveStop } from "./field-contracts";
 import { STOP_WORDS, stopDetail } from "./stop-words";
 
@@ -27,20 +31,36 @@ function StopLines({
   );
 }
 
+/** The banner's action: call the office that releases the stop; none when the profile has no dialable number. */
+function officeCall(officePhone: string | null | undefined) {
+  const dialable = dialableNumber(officePhone);
+  if (!dialable) return undefined;
+  return (
+    <Button asChild size="field">
+      <a href={`tel:${dialable}`}>
+        <Phone aria-hidden="true" />
+        {STOP_WORDS.callOffice}
+      </a>
+    </Button>
+  );
+}
+
 /** A stop whose job wasn't found holds every job: shown once, above the crew's jobs. */
 export function TenantStopBanner({
   stops,
   dateOptions,
+  officePhone,
   now,
 }: {
   stops: ActiveStop[];
   dateOptions: StopDateOptions;
+  officePhone?: string | null;
   now?: Date;
 }) {
   const tenant = stops.filter((stop) => stop.scope === "tenant");
   if (tenant.length === 0) return null;
   return (
-    <Notice tone="danger" title={STOP_WORDS.tenant}>
+    <Notice tone="danger" title={STOP_WORDS.tenant} actions={officeCall(officePhone)}>
       <StopLines stops={tenant} dateOptions={dateOptions} now={now} />
     </Notice>
   );
@@ -51,11 +71,13 @@ export function JobStopBanner({
   stops,
   job,
   dateOptions,
+  officePhone,
   now,
 }: {
   stops: ActiveStop[];
   job: { customer?: string | null; address?: string | null; code?: string | null };
   dateOptions: StopDateOptions;
+  officePhone?: string | null;
   now?: Date;
 }) {
   const onJob = stops.filter((stop) => stop.scope === "job");
@@ -65,6 +87,7 @@ export function JobStopBanner({
     <Notice
       tone="danger"
       title={named ? `${STOP_WORDS.jobLeadIn} ${named}` : STOP_WORDS.jobUnnamed}
+      actions={officeCall(officePhone)}
     >
       <StopLines stops={onJob} dateOptions={dateOptions} now={now} />
     </Notice>

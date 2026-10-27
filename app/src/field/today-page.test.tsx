@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -264,12 +264,54 @@ describe("TodayPage", () => {
     );
     const notice = banner.closest("section")!;
     expect(notice).toHaveTextContent(
-      /Tom Lachance stopped it · \w{3} 10 Jul 10:24 a\.m\. · Ice on the north slope/,
+      /Stopped on \w{3} 10 Jul at 10:24\sa\.m\. by Tom Lachance · Ice on the north slope/,
     );
     expect(notice).toHaveTextContent("The office releases the stop.");
+    // The card waits on the office; its work check is separate and its button is no longer primary.
+    const card = notice.closest("article")!;
+    expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "Separate work check: Delivery confirmation is missing. Clearing it doesn't restart work.",
+      ),
+    ).toBeVisible();
+    expect(within(card).queryByText("1 check blocks work")).toBeNull();
+    // With no office number in the profile, the banner offers no call and invents none.
+    expect(within(notice).queryByRole("link", { name: "Call the office" })).toBeNull();
     // Only the stopped job's card says so; no stop holds every job.
     expect(screen.getAllByText(/^Work is stopped/)).toHaveLength(1);
     expect(screen.queryByText(/every job/)).toBeNull();
+  });
+
+  it("offers a call to the office that releases the stop when the profile has its number", async () => {
+    const [blocked] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        jobs: [
+          {
+            ...blocked!,
+            active_stops: [
+              {
+                occurrence_id: "so_3",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: null,
+                raiser_display_name: "Tom Lachance",
+              },
+            ],
+          },
+        ],
+      }),
+      undefined,
+      { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
+    );
+    const banner = (
+      await screen.findByText("Work is stopped on the job: 123 Example Avenue · IW-1042")
+    ).closest("section")!;
+    expect(within(banner).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
   });
 
   it("shows a stop whose job wasn't found once, above every job", async () => {
@@ -291,7 +333,7 @@ describe("TodayPage", () => {
       ),
     ).toHaveLength(1);
     // A stop whose raiser and words the read lacks still says when.
-    expect(screen.getByText(/^\w{3} 10 Jul 9:50 a\.m\.$/)).toBeVisible();
+    expect(screen.getByText(/^Stopped on \w{3} 10 Jul at 9:50\sa\.m\.$/)).toBeVisible();
     expect(screen.queryByText(/^Work is stopped on the job/)).toBeNull();
   });
 

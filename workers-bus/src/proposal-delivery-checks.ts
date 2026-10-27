@@ -108,12 +108,16 @@ export class ProposalDeliveryTransportError extends Error {
  * Reads back one send from its provider. It throws `ProposalDeliveryTransportError` when the
  * provider gave no answer; any other error is the Worker's own, and the check writes nothing.
  * `scansCompletely` says the readback can scan completely, so its "not found" can be kept and cited;
- * no adapter can before Proof P1.
+ * no adapter can before Proof P1. `findsMessages: false` says it can never find the message (it
+ * answers "unknown" whatever the provider holds).
  */
 export type ProposalDeliveryReadbackAdapter = ((
   effect: ExternalEffectRecord,
   signal: AbortSignal,
-) => Promise<ProposalDeliveryReadback>) & { readonly scansCompletely?: boolean };
+) => Promise<ProposalDeliveryReadback>) & {
+  readonly scansCompletely?: boolean;
+  readonly findsMessages?: boolean;
+};
 
 /** The QA seed's stand-in reaches no one: it answers from the send's own provider id. */
 const qaSyntheticReadback: ProposalDeliveryReadbackAdapter = async (effect) =>
@@ -126,10 +130,10 @@ const qaSyntheticReadback: ProposalDeliveryReadbackAdapter = async (effect) =>
     : { outcome: "unknown", detailCode: "provider_external_id_missing" };
 
 /** Every other provider until its readback is built (Gmail in B4). */
-const unsupportedReadback: ProposalDeliveryReadbackAdapter = async () => ({
-  outcome: "unknown",
-  detailCode: "readback_not_supported",
-});
+const unsupportedReadback: ProposalDeliveryReadbackAdapter = Object.assign(
+  async (): Promise<ProposalDeliveryReadback> => ({ outcome: "unknown", detailCode: "readback_not_supported" }),
+  { findsMessages: false },
+);
 
 /** The readback for a send's provider, or null when this Worker may not touch that provider. */
 function readbackAdapter(env: AppEnv, provider: string): ProposalDeliveryReadbackAdapter | null {
@@ -352,23 +356,26 @@ async function recentChecks(env: AppEnv, tenantId: string, effectId: string): Pr
 }
 
 /**
- * Whether one more check of this send can be kept: there is room for any answer, or the readback
- * scans completely and there is room for its citable "not found". No adapter scans completely
- * before Proof P1, so until then twenty answers that prove nothing close the checks.
+ * Whether one more check of this send can be kept. Each kind has its own room (0167): any answer
+ * fits while the other answers have room; a found message (`sent`) fits while the found ones have
+ * room, if the readback can find one at all; a citable "not found" fits while the citable ones have
+ * room, if the readback scans completely (none does before Proof P1).
  */
 function checkRoom(checks: readonly RecentCheck[], adapter: ProposalDeliveryReadbackAdapter | null): boolean {
   if (!adapter) return false;
   const citable = checks.filter((row) => row.outcome === "not_found").length;
-  return checks.length - citable < PROPOSAL_DELIVERY_CHECK_LIMIT ||
+  const found = checks.filter((row) => row.outcome === "sent").length;
+  return checks.length - citable - found < PROPOSAL_DELIVERY_CHECK_LIMIT ||
+    (adapter.findsMessages !== false && found < PROPOSAL_DELIVERY_CHECK_LIMIT) ||
     (adapter.scansCompletely === true && citable < PROPOSAL_DELIVERY_CHECK_LIMIT);
 }
 
 /**
- * Whether a check of this send found the message (`sent` or `bounced`). The provider then did
- * something, so no "not found" of the send proves it went nowhere, whichever came first (0167).
+ * Whether a check of this send found the message sent. The send was then executed, so nobody records
+ * it as not delivered, cited or not, whichever came first (0167). A bounce is not such a check.
  */
 function foundByCheck(checks: readonly RecentCheck[]): boolean {
-  return checks.some((row) => row.outcome === "sent" || row.outcome === "bounced");
+  return checks.some((row) => row.outcome === "sent");
 }
 
 /** The earliest `unavailable_since` of the newest unbroken run of unavailable checks, or null. */
@@ -526,6 +533,8 @@ export async function readProposalDeliveryState(
   if (lapsed) return result("7", endedAt);
   const checks = await recentChecks(env, tenantId, send.effect_id);
   const room = checkRoom(checks, readbackAdapter(env, send.provider));
+  // A check that found the message sent closes "didn't get it" on an unsettled send (0167).
+  const found = foundByCheck(checks);
   const latest = checks[0] ?? null;
   const check = latest && {
     check_id: latest.check_id,
@@ -540,8 +549,7 @@ export async function readProposalDeliveryState(
     // otherwise). "Didn't get it" needs a complete-scan "not found" made after that move (0167);
     // until P1 no check can scan completely.
     const conflict = PROVIDER_ANSWERED_ORIGINS.includes(entered?.from_state ?? "");
-    // A check that found the message (`sent`, `bounced`) contradicts every "not found" of the send.
-    const cited = conflict && !foundByCheck(checks)
+    const cited = conflict && !found
       ? checks.find((row) =>
         row.outcome === "not_found" && row.scan_complete === 1 &&
         Date.parse(row.created_at) > Date.parse(entered!.occurred_at))
@@ -553,7 +561,7 @@ export async function readProposalDeliveryState(
       check_allowed: conflict && room,
       record_allowed: true,
       record_not_before: notBefore,
-      not_delivered_allowed: !conflict || cited !== undefined,
+      not_delivered_allowed: !found && (!conflict || cited !== undefined),
       not_delivered_check_id: cited?.check_id ?? null,
     });
   }
@@ -563,7 +571,7 @@ export async function readProposalDeliveryState(
       check,
       record_allowed: true,
       record_not_before: await lateAnswerNotBefore(env, send, endedAt, at),
-      not_delivered_allowed: true,
+      not_delivered_allowed: !found,
     };
     const escalation = await env.DB.prepare(
       `SELECT created_at FROM external_effect_exceptions

@@ -11,17 +11,17 @@
 -- adapter can scan completely before Proof P1, so no `not_found` row is written until then. There is
 -- no executor, claim, lease or expiry: a check that cannot finish writes nothing. A check never
 -- creates an effect, a permit or a send, and nothing here moves a send. Each check writes one
--- audit_log row, at most 20 checks of each kind (citable or not) are kept per send, and the row is
--- dated by the Worker's clock as the readback starts, which D1 compares with its own. The person who
--- asked is named on the row and must be an active account holder in that role.
+-- audit_log row, at most 20 checks of each kind (citable, found, other) are kept per send, and the
+-- row is dated by the Worker's clock as the readback starts, which D1 compares with its own. The
+-- person who asked is named on the row and must be an active account holder in that role.
 --
 -- PR-S's evidence guard (0164) is re-created under its name. It carries 0164's text unchanged
 -- (keyed on the action alone, publish and withdraw, a confirmation of the same tenant with the
 -- matching outcome) and adds the check rows that will justify a move from B2 on: a `sent` or
 -- `bounced` row for unknown -> succeeded, a complete-scan `not_found` row for unknown -> reconciled,
 -- each bound to the move by `created_at = NEW.updated_at`, as 0161 binds a correction to its move.
--- A "not found" never justifies the move once a check of the send found the message. No Worker path
--- makes either move from a check yet.
+-- A "not found" never justifies the move once a check of the send found the message sent. No Worker
+-- path makes either move from a check yet.
 --
 -- The recorder. A send that a check moves to succeeded is then recorded as the publication (B2), and
 -- that record names the send's permit holder (0161, `permit_holder_user_id`, read from the permit).
@@ -35,13 +35,19 @@
 -- says it ran or cannot tell). 0164 never lets a person record it as not delivered, and nothing else
 -- settled it. A person's "not delivered" on such a send now passes when it cites a check of that same
 -- send, newer than that move, that scanned completely without finding the send (`not_found`,
--- `scan_complete = 1`), and when no check of the send found the message (`sent` or `bounced`, before
--- or after it: a lagging mailbox may show the message only later). Until a check can scan completely
--- (Proof P1), such a send stays an exception: it fails safe. The confirmation names the check it cites in a new nullable column; only "not
+-- `scan_complete = 1`). Until a check can scan completely (Proof P1), such a send stays an exception:
+-- it fails safe. The confirmation names the check it cites in a new nullable column; only "not
 -- delivered" cites one, and a cited check is always a complete-scan `not_found` of the same send.
--- 0164's conflict guard is re-created under its name with that exit; its own text is carried
--- unchanged, so "delivered" and the silent-provider path (a manual exception that came from unknown,
--- after 0161's wait) are unchanged.
+--
+-- A found message. A check that found the message sent (`sent`, before or after any other check: a
+-- lagging mailbox may show it only later) proves the send was executed. So no person records such a
+-- send as not delivered, cited or not, through 0156's path or out of a conflict; "delivered" stays
+-- open. A bounce is not such a check: the customer did not get the message, and "not delivered" stays
+-- the way to send again (frame 1·b).
+--
+-- 0164's conflict guard is re-created under its name with these rules; its own text is carried
+-- unchanged, so "delivered" and a silent provider's path with no found message (a manual exception
+-- that came from unknown, after 0161's wait) are unchanged.
 --
 -- Numbered 0167, above 0164 (PR-S), 0165 (L06) and the reserved 0166, so its DROP and CREATE of
 -- 0164's two guards run after 0164 both on a fresh database and in production; 0164 is never edited.
@@ -131,13 +137,15 @@ BEFORE INSERT ON proposal_delivery_checks BEGIN
            120000
          ) / 86400000.0
     );
-  -- At most 20 checks of each kind per send. A citable check (a complete-scan "not found") has its
-  -- own room, so answers that prove nothing can never use up the room the proof needs.
+  -- At most 20 checks of each kind per send: a citable check (a complete-scan "not found"), a check
+  -- that found the message (`sent`), and every other answer each have their own room, so answers that
+  -- prove nothing can never use up the room the proof needs, or the room a found message needs.
   SELECT RAISE(ABORT, 'proposal_delivery_check_limit')
     WHERE (
       SELECT count(*) FROM proposal_delivery_checks prior
        WHERE prior.tenant_id = NEW.tenant_id AND prior.effect_id = NEW.effect_id
-         AND (prior.outcome = 'not_found') = (NEW.outcome = 'not_found')
+         AND (CASE prior.outcome WHEN 'not_found' THEN 1 WHEN 'sent' THEN 2 ELSE 0 END)
+           = (CASE NEW.outcome WHEN 'not_found' THEN 1 WHEN 'sent' THEN 2 ELSE 0 END)
     ) >= 20;
   SELECT RAISE(ABORT, 'proposal_delivery_check_actor_invalid')
     WHERE NOT EXISTS (
@@ -214,7 +222,7 @@ BEGIN
                  SELECT 1 FROM proposal_delivery_checks found
                   WHERE found.effect_id = OLD.effect_id
                     AND found.tenant_id = OLD.tenant_id
-                    AND found.outcome IN ('sent', 'bounced')
+                    AND found.outcome = 'sent'
                ))
          )
     );
@@ -234,9 +242,10 @@ BEGIN
 END;
 
 -- 0164's conflict guard, under its name, its own text carried unchanged. A cited check is a
--- complete-scan `not_found` of the same send. A "not delivered" on a send whose provider answered
--- (its latest move into manual_exception came from reconciling or failed) passes only by citing such
--- a check made after that move.
+-- complete-scan `not_found` of the same send. No "not delivered" passes once a check of the send
+-- found the message sent. A "not delivered" on a send whose provider answered (its latest move into
+-- manual_exception came from reconciling or failed) passes only by citing such a check made after
+-- that move.
 DROP TRIGGER IF EXISTS proposal_delivery_confirmations_conflict_guard;
 CREATE TRIGGER proposal_delivery_confirmations_conflict_guard
 BEFORE INSERT ON proposal_delivery_confirmations
@@ -251,14 +260,15 @@ BEGIN
          AND delivery_check.outcome = 'not_found'
          AND delivery_check.scan_complete = 1
     );
-  -- A check of the send that found the message contradicts every "not found" of it, whichever came
-  -- first: the provider did something, so the citation proves nothing.
+  -- A check of the send that found the message sent contradicts every "not delivered" of it, cited
+  -- or not, whichever came first: the provider sent it, so it was executed. A bounce does not: the
+  -- customer did not get it, and "not delivered" stays the way to send again (frame 1·b).
   SELECT RAISE(ABORT, 'proposal_delivery_confirmation_check_contradicted')
-    WHERE NEW.delivery_check_id IS NOT NULL AND EXISTS (
+    WHERE EXISTS (
       SELECT 1 FROM proposal_delivery_checks found
        WHERE found.effect_id = NEW.effect_id
          AND found.tenant_id = NEW.tenant_id
-         AND found.outcome IN ('sent', 'bounced')
+         AND found.outcome = 'sent'
     );
   SELECT RAISE(ABORT, 'proposal_delivery_confirmation_conflict_needs_provider_evidence')
     WHERE (

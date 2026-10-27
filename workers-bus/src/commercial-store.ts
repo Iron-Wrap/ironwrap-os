@@ -401,11 +401,12 @@ export async function recordProposalDeliveryConfirmation(
       delivery_state: effect.state,
     });
   }
-  // A check of the send that found the message contradicts every "not found" of it, whichever came
-  // first (a lagging mailbox may show it only later). D1 holds the same rule (0167).
-  if (cited && await env.DB.prepare(
+  // A check of the send that found the message sent proves it was executed: no "not delivered" of
+  // it, cited or not, whichever came first (a lagging mailbox may show it only later). A bounce does
+  // not: the customer did not get it. D1 holds the same rule (0167).
+  if (input.outcome === "not_delivered" && await env.DB.prepare(
     `SELECT 1 AS found FROM proposal_delivery_checks
-      WHERE tenant_id = ? AND effect_id = ? AND outcome IN ('sent', 'bounced') LIMIT 1`,
+      WHERE tenant_id = ? AND effect_id = ? AND outcome = 'sent' LIMIT 1`,
   ).bind(input.tenantId, effect.effect_id).first<{ found: number }>()) {
     throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_check_contradicted", 409, {
       delivery_state: effect.state,

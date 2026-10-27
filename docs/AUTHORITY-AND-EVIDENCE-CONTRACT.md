@@ -628,6 +628,28 @@ Governed automation does not eliminate separation:
 Separation protects against compromised credentials, malicious inputs, defective external systems,
 and institutional error.
 
+## Production gate clearances
+
+A scheduling gate (Deposit, Materials, Safety, Access, Weather, Crew) changes only by an entry
+appended to `production_gate_clearances` (migration `0153`). The entry's apply trigger sets the
+gate's state and version and writes one `audit_log` row in the same statement. D1 refuses any other
+insert or update of a gate row, and any update or delete of an entry except a redaction of its
+free-text reason. Gates cleared before the ledger existed are recorded as `legacy` entries, and no
+new one can be added.
+
+- Deposit clears on settlement only from the money lane's reconciled deposit invoice for the same
+  job, stored as an immutable receipt that the entry names.
+- A waiver is the owner's decision. A person holding `production.gates.clear` (owner, production)
+  requests one on Deposit, Materials or Access
+  (`POST /api/v1/production/jobs/{job}/gates/{gate}/clearance`), holding at most one open request
+  per gate. A holder of the matching set decides it (`.../waiver-decisions`, for a job on their own
+  production runway): `money.approve` for Deposit, `production.gates.waive` for
+  Materials and Access, both carried by the owner today. The decider is never the requester, except
+  that the only active holder may approve their own item with a reason, recorded as a
+  self-approval (`only_holder`). Safety and Weather are never waivable, and Crew has no waiver.
+- Every entry is a person's, made from their own cookie session. The QA seed owner identity is
+  refused and never counts as a holder.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

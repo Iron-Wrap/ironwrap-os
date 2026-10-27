@@ -2290,9 +2290,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0145 adds the person-owned stop release record that alone lifts a crew stop.
     // 0150 adds the append-only field item resolution ledger. 0151 adds the person-owned
     // resolution of a failed Newo handoff. 0152 requires the evidence that releases a crew stop
-    // to be captured after the stop. 0154 adds four tenant-scoped lookup indexes for a lead's jobs,
-    // a job's deposit derivation and the current quote and proposal revision checks. 0156 lets a
-    // person record whether an unconfirmed proposal send reached the customer. 0161 records what
+    // to be captured after the stop. 0153 moves production gate clearance onto an append-only
+    // ledger whose apply trigger is the only writer of a gate row. 0154 adds four tenant-scoped
+    // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
+    // proposal revision checks. 0156 lets a person record whether an unconfirmed proposal send
+    // reached the customer. 0161 records what
     // people found about a send, and their corrections, without changing it; holds the late-answer
     // wait in D1 with a window per provider; and names the permit holder of each new publication.
     // 0163 keeps the first time a customer's portal link opened a published proposal.
@@ -2303,8 +2305,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
     // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
+    // 0153 lands after 0154-0206 on deployed databases; it touches no object a later-numbered
+    // migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 142);
+    assert.equal(migrations.length, 143);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2450,7 +2454,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
     // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
-    // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
+    // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
+    // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
+    // 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
     // name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
     // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
@@ -2463,7 +2469,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 280, indexes: 381, triggers: 774 },
+      { tables: 281, indexes: 382, triggers: 781 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

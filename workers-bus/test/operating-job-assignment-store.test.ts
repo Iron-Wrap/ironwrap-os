@@ -23,6 +23,7 @@ import {
   recordOperatingWorkObjectAssignment,
   type RecordOperatingWorkObjectAssignmentInput,
 } from "../src/operating-work-object-assignment-store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const NOW = new Date("2026-08-21T08:00:00.000Z");
@@ -371,11 +372,12 @@ test("native scheduling rejects unsafe gates, stale identities, partial rosters,
       /operating_job_assignment_crew_invalid/,
     );
 
-    db.raw
-      .prepare(
-        "UPDATE operating_production_gates SET state = 'blocked', version = version + 1 WHERE roof_job_id = ? AND gate = 'Weather'",
-      )
-      .run(JOB_ID);
+    recordLegacyGateStates(db.raw, {
+      tenantId: TENANT,
+      roofJobId: JOB_ID,
+      gates: ["Weather"],
+      state: "blocked",
+    });
     await assert.rejects(
       recordOperatingJobAssignment(
         appEnv,
@@ -388,11 +390,7 @@ test("native scheduling rejects unsafe gates, stale identities, partial rosters,
       ),
       /operating_job_assignment_gates_blocked/,
     );
-    db.raw
-      .prepare(
-        "UPDATE operating_production_gates SET state = 'ready', version = version + 1 WHERE roof_job_id = ? AND gate = 'Weather'",
-      )
-      .run(JOB_ID);
+    recordLegacyGateStates(db.raw, { tenantId: TENANT, roofJobId: JOB_ID, gates: ["Weather"] });
 
     const second = await recordOperatingJobAssignment(
       appEnv,
@@ -905,7 +903,7 @@ function seed(db: DatabaseSync): void {
       `INSERT INTO operating_production_gates
        (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key, gate,
         state, owner_user, assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-       VALUES (?, ?, ?, 'ow_schedule_0001', 'raw/schedule/0001.json', ?, 'ready', ?, ?, ?,
+       VALUES (?, ?, ?, 'ow_schedule_0001', 'raw/schedule/0001.json', ?, 'blocked', ?, ?, ?,
                'No active blocker', 1, ?, ?)`,
     ).run(
       `gate:schedule:${gate.toLowerCase()}`,
@@ -919,6 +917,7 @@ function seed(db: DatabaseSync): void {
       now,
     );
   }
+  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB_ID, at: now });
   db.prepare(
     `INSERT INTO fleet_crews
      (crew_id, tenant_id, display_name, status, version, created_at, updated_at)

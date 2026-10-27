@@ -208,7 +208,7 @@ describe("TodayPage", () => {
             physical_context_id: "SHOP-FLOOR-1",
             scheduled_start: "2026-07-10T16:00:00.000Z",
             scheduled_end: null,
-            next_action: "Open the typed physical work package",
+            next_action: "See job plan",
             assignment: {
               id: "ASSIGN-SHOP-1",
               assignment_id: "assignment_shop_1",
@@ -229,6 +229,7 @@ describe("TodayPage", () => {
       "href",
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
     );
+    expect(screen.getByText("See job plan")).toBeVisible();
     await user.click(link);
     expect(window.location.pathname).toBe(
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",

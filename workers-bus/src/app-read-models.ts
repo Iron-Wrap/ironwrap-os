@@ -89,6 +89,7 @@ import {
   type OperatingWorkObjectAssignmentRecord,
 } from "./operating-work-object-assignment-store.ts";
 import { safetyReadinessForScope } from "./safety-release-gate.ts";
+import { holdingSafetyStops, type SafetyHoldingStop } from "./safety-lifecycle.ts";
 import { facetLaunchConfigured } from "./facet-launch.ts";
 import { commercialActionConfigured } from "./commercial-authority.ts";
 import {
@@ -401,6 +402,13 @@ export interface TodayReadModel extends ReadModelEnvelope {
     scheduled_start: string | null;
     scheduled_end: string | null;
     blocked_gate_count: number;
+    /**
+     * The active safety stops that hold this job, oldest first: the stops on the job or any of its
+     * Work Packages (`scope: "job"`) and every stop that holds the whole tenant (`scope: "tenant"`).
+     * Null when they could not be read (`jobs.active_stops_unavailable` is stale then), never an
+     * empty list that would look like no stop.
+     */
+    active_stops: SafetyHoldingStop[] | null;
     next_action: string;
     assignment: AssignmentReadModel | null;
   }>;
@@ -412,6 +420,8 @@ export interface TodayReadModel extends ReadModelEnvelope {
     physical_context_id: string;
     scheduled_start: string | null;
     scheduled_end: string | null;
+    /** As on `jobs`, for the job this work object is (its `work_object_id`). */
+    active_stops: SafetyHoldingStop[] | null;
     next_action: string;
     assignment: AssignmentReadModel | null;
   }>;
@@ -501,6 +511,8 @@ export interface JobReadModel extends ReadModelEnvelope {
     status: string | null;
     address: string | null;
     current_gate_state: string | null;
+    /** As on Today: the active stops holding this job, oldest first, or null when unread. */
+    active_stops: SafetyHoldingStop[] | null;
   };
   assignment: AssignmentReadModel | null;
   gates: Array<{
@@ -1326,6 +1338,7 @@ export async function buildUniversalWorkPackageReadModel(
     scope,
   });
   const officeContact = await officeContactForRead(env, auth.session.tenant_id);
+  const stopsByJob = await holdingStopsForRead(env, auth.session.tenant_id, [scope.workObjectId]);
   return {
     ...envelope(
       auth,
@@ -1333,6 +1346,7 @@ export async function buildUniversalWorkPackageReadModel(
       [
         ...(fieldMeasurements === null ? ["field_measurements.native_unavailable"] : []),
         ...(officeContact.unavailable ? ["office_contact.unavailable"] : []),
+        ...(stopsByJob ? [] : ["work_object.active_stops_unavailable"]),
       ],
     ),
     field_measurements: fieldMeasurementReadItems(
@@ -1344,10 +1358,25 @@ export async function buildUniversalWorkPackageReadModel(
     field_measurements_more: fieldMeasurements?.more ?? false,
     office_contact: officeContact.contact,
     work_object: scope,
+    /** The active safety stops holding this work object's job, oldest first, or null when unread. */
+    active_stops: stopsByJob ? (stopsByJob.get(scope.workObjectId) ?? []) : null,
     assignment: assignmentModel(assignment),
     work_package: projection.work_package,
     allowed_actions: [...new Set(allowedActions)],
   };
+}
+
+/** The stops holding each job, or null when they cannot be read: the read still serves. */
+async function holdingStopsForRead(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: string[],
+): Promise<Map<string, SafetyHoldingStop[]> | null> {
+  try {
+    return await holdingSafetyStops(env, tenantId, [...new Set(jobIds)]);
+  } catch {
+    return null;
+  }
 }
 
 export async function buildTodayReadModel(
@@ -1375,9 +1404,16 @@ export async function buildTodayReadModel(
   const propertyIds = jobs
     .map((row) => text(row.roofing_property))
     .filter(notNull);
-  const [gateSource, propertySource] = await Promise.all([
+  const [gateSource, propertySource, stopsByJob] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, jobIds, "blocked"),
     nativeProperties(env, auth.session.tenant_id, propertyIds),
+    holdingStopsForRead(env, auth.session.tenant_id, [
+      ...jobIds,
+      ...typedAssignments.flatMap((row) => {
+        const scope = assignmentWorkObjectScope(row);
+        return scope ? [scope.work_object_id] : [];
+      }),
+    ]),
   ]);
   const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const properties = propertySource.rows
@@ -1402,6 +1438,7 @@ export async function buildTodayReadModel(
           scheduled_start: assignment?.scheduled_start ?? null,
           scheduled_end: assignment?.scheduled_end ?? null,
           blocked_gate_count: blocked.length,
+          active_stops: stopsByJob ? (stopsByJob.get(id) ?? []) : null,
           next_action:
             assignment?.blocker_reason ??
             text(blocked[0]?.blocker_reason) ??
@@ -1423,6 +1460,7 @@ export async function buildTodayReadModel(
           ...scope,
           scheduled_start: assignment.scheduled_start,
           scheduled_end: assignment.scheduled_end,
+          active_stops: stopsByJob ? (stopsByJob.get(scope.work_object_id) ?? []) : null,
           next_action: assignment.blocker_reason ?? "See job plan",
           assignment,
         },
@@ -1440,6 +1478,7 @@ export async function buildTodayReadModel(
   if (gateSource.partial) stale.push("jobs.blocked_gates_partial");
   if (propertySource.partial) stale.push("jobs.address_partial");
   if (properties.length < new Set(propertyIds).size) stale.push("jobs.address");
+  if (!stopsByJob) stale.push("jobs.active_stops_unavailable");
   return {
     ...envelope(
       auth,
@@ -1723,7 +1762,7 @@ export async function buildJobReadModel(
   if (!ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
 
   const propertyId = text(job.roofing_property);
-  const [gateSource, workPackage, measurementRows, fieldMeasurements, officeContact] =
+  const [gateSource, workPackage, measurementRows, fieldMeasurements, officeContact, stopsByJob] =
     await Promise.all([
       nativeProductionGates(env, auth.session.tenant_id, [jobName]),
       assignmentRow
@@ -1747,6 +1786,7 @@ export async function buildJobReadModel(
         jobId: jobName,
       }),
       officeContactForRead(env, auth.session.tenant_id),
+      holdingStopsForRead(env, auth.session.tenant_id, [jobName]),
     ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
@@ -1829,6 +1869,7 @@ export async function buildJobReadModel(
   if (!assignmentRow || !workPackage)
     stale.push("proof_stream.native_scope_unavailable");
   if (officeContact.unavailable) stale.push("office_contact.unavailable");
+  if (!stopsByJob) stale.push("job.active_stops_unavailable");
   const readEnvelope = envelope(
     auth,
     [
@@ -1880,6 +1921,7 @@ export async function buildJobReadModel(
       status: text(job.job_status),
       address: address(property ?? undefined),
       current_gate_state: text(job.current_gate_state),
+      active_stops: stopsByJob ? (stopsByJob.get(jobName) ?? []) : null,
     },
     assignment: assignmentRow ? assignmentModel(assignmentRow) : null,
     gates: gates.flatMap((row) => gateModel(row, readMode === "assigned")),

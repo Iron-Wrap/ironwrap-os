@@ -12,7 +12,6 @@ import {
   evaluateSafetyReadiness,
   safetyCorrectiveActionProjection,
   getSafetyEquipment,
-  getSafetyOccurrence,
   issueSafetyEquipment,
   listSafetyOccurrenceEvents,
   recordEquipmentInspection,
@@ -21,6 +20,7 @@ import {
   recordSafetyResponse,
   replaceSafetyEquipment,
   safetyDeskProjection,
+  safetyOccurrenceDetail,
   safetyPanelProjection,
   SafetyError,
   submitCorrectiveActionEvidence,
@@ -157,6 +157,19 @@ function scopeChain(
   return chain;
 }
 
+/**
+ * Whether a read comes from a person's own signed-in session, which only this layer can see; a
+ * stop's `can_release` needs it. A session lookup that fails answers no, so the read still serves
+ * (the panel is the crew's offline seed) and never offers a release the Worker would refuse.
+ */
+async function readerIsPerson(env: AppEnv, auth: AuthContext): Promise<boolean> {
+  try {
+    return (await personCookieSession(env, auth)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleSafetyRoute(
   req: Request,
   env: AppEnv,
@@ -172,7 +185,8 @@ export async function handleSafetyRoute(
     try {
       return json({
         version: 1,
-        panel: await safetyPanelProjection(env, tenantId, userId),
+        panel: await safetyPanelProjection(env, tenantId, userId,
+          await readerIsPerson(env, auth)),
       });
     } catch (error) {
       return safetyFailure(error);
@@ -218,10 +232,9 @@ export async function handleSafetyRoute(
     const occurrenceId = pathPart(occurrenceDetail[1] ?? "");
     if (!occurrenceId) return json({ error: "not_found" }, 404);
     try {
-      const occurrence = await getSafetyOccurrence(env, tenantId, occurrenceId);
-      return occurrence
-        ? json({ version: 1, occurrence })
-        : json({ error: "not_found" }, 404);
+      const detail = await safetyOccurrenceDetail(env, tenantId, userId, occurrenceId,
+        await readerIsPerson(env, auth));
+      return detail ? json(detail) : json({ error: "not_found" }, 404);
     } catch (error) {
       return safetyFailure(error);
     }

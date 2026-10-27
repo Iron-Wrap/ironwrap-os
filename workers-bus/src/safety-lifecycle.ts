@@ -211,6 +211,26 @@ export interface SafetyBlocker {
     "occurrence" | "equipment" | "notification" | "corrective_action";
   subject_id: string;
   detail: string;
+  /** On a `safety_stop_active` blocker for a stop that holds a job: the facts a screen shows. */
+  stop?: SafetyHoldingStop;
+}
+
+/**
+ * An active stop that holds a job, as every crew read and refusal shows it.
+ *
+ * - `scope: "job"`: the stop names this job, or a Work Package of this job (any version,
+ *   Superseded included).
+ * - `scope: "tenant"`: the stop holds every job of the tenant: it is tenant-wide, or it names a job
+ *   or Work Package this tenant does not have, which may be a typo for any of its jobs.
+ */
+export interface SafetyHoldingStop {
+  occurrence_id: string;
+  scope: "job" | "tenant";
+  /** When the stop was raised (the occurrence's `reported_at`). */
+  reported_at: string;
+  /** The raiser's own words, as recorded. */
+  summary: string;
+  raiser_display_name: string | null;
 }
 
 export interface SafetyReadiness {
@@ -1739,6 +1759,11 @@ export async function evaluateSafetyReadiness(
       .map(() => "(scope_type = ? AND scope_id = ?)")
       .join(" OR ");
     const scopeBindings = scopes.flatMap((scope) => [scope.type, scope.id]);
+    // The jobs this chain stands on: its job level, and the job of its Work Package level.
+    const jobIds = await chainJobIds(env, input.tenantId, scopes);
+    const holding = new Map(
+      (await holdingStopRows(env, input.tenantId, jobIds)).map((row) => [row.occurrence_id, row]),
+    );
     const occurrences = await env.DB.prepare(
       `SELECT occurrence_id, occurrence_kind, state, stop_active, severity
          FROM safety_occurrences
@@ -1755,13 +1780,23 @@ export async function evaluateSafetyReadiness(
         stop_active: number;
         severity: SafetySeverity;
       }>();
-    for (const row of occurrences.results) {
+    // A stop holds more than its exact scope: a tenant-wide or unresolved-scope stop holds every
+    // job, and a Work Package stop holds its whole job. Those come first, then exact matches the
+    // hold rule does not cover (a shop or vehicle stop asked about directly, or a lifted event that
+    // is not controlled yet).
+    const rows = [
+      ...[...holding.values()].map((row) => ({ ...row, stop_active: 1 })),
+      ...occurrences.results.filter((row) => !holding.has(row.occurrence_id)),
+    ];
+    for (const row of rows) {
+      const hold = holding.get(row.occurrence_id);
       if (row.stop_active === 1) {
         blockers.push({
           code: "safety_stop_active",
           subject_type: "occurrence",
           subject_id: row.occurrence_id,
           detail: `An active ${row.occurrence_kind} stop is in force (${row.state}).`,
+          ...(hold ? { stop: holdingStop(hold) } : {}),
         });
       } else {
         blockers.push({
@@ -1863,6 +1898,144 @@ export async function evaluateSafetyReadiness(
   };
 }
 
+interface ActiveStopRow {
+  occurrence_id: string;
+  occurrence_kind: SafetyOccurrenceKind;
+  state: SafetyOccurrenceState;
+  severity: SafetySeverity;
+  reported_at: string;
+  summary: string;
+  raiser_display_name: string | null;
+  /** JSON array of the jobs this stop holds, or NULL when it holds every job of the tenant. */
+  held_job_ids: string | null;
+}
+
+interface HoldingStopRow extends ActiveStopRow {
+  hold: "job" | "tenant";
+  held: string[];
+}
+
+/** More active stops than this in one tenant fails closed: the read throws, the gate blocks. */
+const MAX_ACTIVE_STOPS = 500;
+
+/**
+ * Every active stop of the tenant that can hold a job, with the jobs it holds. The rule is A3's
+ * Safety-gate predicate, read from the same tables:
+ *
+ * - a `tenant` stop holds every job, whatever its `scope_id`;
+ * - a `roof_job` stop holds its job, or every job when `operating_roof_jobs` has no such job;
+ * - a `work_package` stop holds the job of every version of that package, Superseded included,
+ *   or every job when `work_packages` has no such package.
+ *
+ * Shop and vehicle stops hold no job. A lifted stop holds nothing.
+ */
+async function activeStopRows(env: AppEnv, tenantId: string): Promise<ActiveStopRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT occurrence.occurrence_id, occurrence.occurrence_kind, occurrence.state,
+            occurrence.severity, occurrence.reported_at, occurrence.summary,
+            raiser.display_name AS raiser_display_name,
+            CASE
+              WHEN occurrence.scope_type = 'roof_job' THEN (
+                SELECT json_array(job.roof_job_id)
+                  FROM operating_roof_jobs job
+                 WHERE job.tenant_id = occurrence.tenant_id
+                   AND job.roof_job_id = occurrence.scope_id
+              )
+              WHEN occurrence.scope_type = 'work_package' THEN (
+                SELECT CASE WHEN COUNT(*) = 0 THEN NULL
+                            ELSE json_group_array(DISTINCT package.job_id) END
+                  FROM work_packages package
+                 WHERE package.tenant_id = occurrence.tenant_id
+                   AND package.work_package_id = occurrence.scope_id
+              )
+              ELSE NULL
+            END AS held_job_ids
+       FROM safety_occurrences occurrence
+       LEFT JOIN app_users raiser
+         ON raiser.tenant_id = occurrence.tenant_id
+        AND raiser.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ? AND occurrence.stop_active = 1
+        AND occurrence.scope_type IN ('tenant', 'roof_job', 'work_package')
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC
+      LIMIT ?`,
+  )
+    .bind(tenantId, MAX_ACTIVE_STOPS + 1)
+    .all<ActiveStopRow>();
+  if (rows.results.length > MAX_ACTIVE_STOPS) {
+    throw new Error("safety_active_stops_unbounded");
+  }
+  return rows.results;
+}
+
+/** The active stops that hold any of `jobIds`, and every stop that holds the whole tenant. */
+async function holdingStopRows(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+): Promise<HoldingStopRow[]> {
+  const wanted = new Set(jobIds);
+  return (await activeStopRows(env, tenantId)).flatMap((row): HoldingStopRow[] => {
+    if (row.held_job_ids === null) return [{ ...row, hold: "tenant", held: [] }];
+    const held = (JSON.parse(row.held_job_ids) as unknown[])
+      .filter((id): id is string => typeof id === "string" && wanted.has(id));
+    return held.length > 0 ? [{ ...row, hold: "job", held }] : [];
+  });
+}
+
+function holdingStop(row: HoldingStopRow): SafetyHoldingStop {
+  return {
+    occurrence_id: row.occurrence_id,
+    scope: row.hold,
+    reported_at: row.reported_at,
+    summary: row.summary,
+    raiser_display_name: row.raiser_display_name,
+  };
+}
+
+/** The jobs a readiness chain stands on: its `roof_job` level and the job of its package level. */
+async function chainJobIds(
+  env: AppEnv,
+  tenantId: string,
+  scopes: readonly SafetyScopeRef[],
+): Promise<string[]> {
+  const jobIds = new Set(
+    scopes.filter((scope) => scope.type === "roof_job").map((scope) => scope.id),
+  );
+  const packageIds = scopes
+    .filter((scope) => scope.type === "work_package")
+    .map((scope) => scope.id);
+  if (packageIds.length > 0) {
+    const packages = await env.DB.prepare(
+      `SELECT DISTINCT job_id FROM work_packages
+        WHERE tenant_id = ? AND work_package_id IN (${packageIds.map(() => "?").join(", ")})`,
+    )
+      .bind(tenantId, ...packageIds)
+      .all<{ job_id: string }>();
+    for (const row of packages.results) jobIds.add(row.job_id);
+  }
+  return [...jobIds];
+}
+
+/**
+ * For each job, the active stops that hold it, oldest first (by `reported_at`): the stops that name the job or one
+ * of its Work Packages (`scope: "job"`), and the stops that hold every job of the tenant
+ * (`scope: "tenant"`). Only this tenant's stops are read. Crew Today and job reads carry this, so
+ * every phone on a held job sees the stop, not only the raiser's.
+ */
+export async function holdingSafetyStops(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+): Promise<Map<string, SafetyHoldingStop[]>> {
+  const byJob = new Map<string, SafetyHoldingStop[]>(jobIds.map((id) => [id, []]));
+  if (jobIds.length === 0) return byJob;
+  for (const row of await holdingStopRows(env, tenantId, jobIds)) {
+    const targets = row.hold === "tenant" ? jobIds : row.held;
+    for (const jobId of targets) byJob.get(jobId)?.push(holdingStop(row));
+  }
+  return byJob;
+}
+
 export interface RecordReadinessSnapshotInput {
   tenantId: string;
   snapshotId: string;
@@ -1953,6 +2126,13 @@ export interface SafetyPanelProjection {
     scope_type: SafetyScopeType;
     scope_id: string;
     summary: string;
+    /** The raiser's name on their account, or null when the account cannot be read. */
+    raised_by_display_name: string | null;
+    /** When the stop was marked controlled, or null while it is not yet. */
+    controlled_at: string | null;
+    /** Whether this viewer may release this stop now (L06-aware; see `releaseUnavailableReason`). */
+    can_release: boolean;
+    release_unavailable_reason: SafetyReleaseUnavailableReason | null;
   }>;
   my_corrective_actions: Array<{
     corrective_action_id: string;
@@ -1978,8 +2158,14 @@ export async function safetyPanelProjection(
   env: AppEnv,
   tenantId: string,
   userId: string,
+  personSession = false,
 ): Promise<SafetyPanelProjection> {
   const actor = await safetyActor(env, tenantId, userId);
+  const viewer: SafetyStopViewer = {
+    role: actor.role,
+    identities: await userIdentities(env, tenantId, actor.userId),
+    personSession,
+  };
   const equipment = await env.DB.prepare(
     `SELECT equipment_id, equipment_kind, serial_number, status, inspection_due_at
        FROM safety_equipment
@@ -1995,11 +2181,28 @@ export async function safetyPanelProjection(
       status: SafetyEquipmentStatus;
       inspection_due_at: string | null;
     }>();
+  // The raiser's account rides along, so the name and the L06 comparison need no second read.
   const occurrences = await env.DB.prepare(
-    `SELECT occurrence_id, occurrence_kind, severity, state, stop_active, scope_type, scope_id, summary
-       FROM safety_occurrences
-      WHERE tenant_id = ? AND state != 'closed'
-      ORDER BY reported_at DESC
+    `SELECT occurrence.occurrence_id, occurrence.occurrence_kind, occurrence.severity,
+            occurrence.state, occurrence.stop_active, occurrence.rescue_required,
+            occurrence.rescue_completed_at, occurrence.scope_type, occurrence.scope_id,
+            occurrence.summary, occurrence.reported_by_user_id,
+            raiser.display_name AS raiser_display_name,
+            raiser.email_normalized AS raiser_email_normalized,
+            raiser.frappe_user_id AS raiser_frappe_user_id,
+            (SELECT controlled.occurred_at
+               FROM safety_occurrence_events controlled
+              WHERE controlled.tenant_id = occurrence.tenant_id
+                AND controlled.occurrence_id = occurrence.occurrence_id
+                AND controlled.event_kind = 'controlled'
+              ORDER BY controlled.occurrence_version DESC
+              LIMIT 1) AS controlled_at
+       FROM safety_occurrences occurrence
+       LEFT JOIN app_users raiser
+         ON raiser.tenant_id = occurrence.tenant_id
+        AND raiser.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ? AND occurrence.state != 'closed'
+      ORDER BY occurrence.reported_at DESC
       LIMIT 50`,
   )
     .bind(tenantId)
@@ -2009,9 +2212,16 @@ export async function safetyPanelProjection(
       severity: SafetySeverity;
       state: SafetyOccurrenceState;
       stop_active: number;
+      rescue_required: number;
+      rescue_completed_at: string | null;
       scope_type: SafetyScopeType;
       scope_id: string;
       summary: string;
+      reported_by_user_id: string;
+      raiser_display_name: string | null;
+      raiser_email_normalized: string | null;
+      raiser_frappe_user_id: string | null;
+      controlled_at: string | null;
     }>();
   const actions = await env.DB.prepare(
     `SELECT corrective_action_id, state, risk_level, due_at, description
@@ -2032,10 +2242,30 @@ export async function safetyPanelProjection(
     version: 1,
     actor_role: actor.role,
     assigned_equipment: equipment.results,
-    open_occurrences: occurrences.results.map((row) => ({
-      ...row,
-      stop_active: row.stop_active === 1,
-    })),
+    open_occurrences: occurrences.results.map((row) => {
+      const reason = releaseUnavailableReason(
+        row,
+        raiserIdentities(row.reported_by_user_id, {
+          email_normalized: row.raiser_email_normalized,
+          frappe_user_id: row.raiser_frappe_user_id,
+        }),
+        viewer,
+      );
+      return {
+        occurrence_id: row.occurrence_id,
+        occurrence_kind: row.occurrence_kind,
+        severity: row.severity,
+        state: row.state,
+        stop_active: row.stop_active === 1,
+        scope_type: row.scope_type,
+        scope_id: row.scope_id,
+        summary: row.summary,
+        raised_by_display_name: row.raiser_display_name,
+        controlled_at: row.controlled_at,
+        can_release: reason === null,
+        release_unavailable_reason: reason,
+      };
+    }),
     my_corrective_actions: actions.results,
     allowed_actions: [
       "safety.report_occurrence",
@@ -2111,6 +2341,191 @@ export async function getSafetyOccurrence(
 ): Promise<SafetyOccurrenceRecord | null> {
   if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(occurrenceId)) return null;
   return await occurrenceById(env, tenantId, occurrenceId);
+}
+
+/**
+ * Why this viewer cannot release this stop right now, in the order the release checks run, or
+ * null when they can. Only the release itself decides; this is the same rule read ahead of time so
+ * a screen never offers a release the Worker will refuse, and never offers it to the raiser.
+ *
+ * - `stop_released`: the stop is no longer active.
+ * - `person_session_required`: the viewer is not a person in their own signed-in session.
+ * - `release_authority_required`: the viewer's role is not owner, ops or production.
+ * - `raised_by_viewer`: the viewer raised the stop, under any identity either carries (L06).
+ * - `not_controlled`: the stop has not been marked controlled yet.
+ * - `rescue_not_completed`: a required rescue is not recorded as completed.
+ */
+export type SafetyReleaseUnavailableReason =
+  | "stop_released"
+  | "person_session_required"
+  | "release_authority_required"
+  | "raised_by_viewer"
+  | "not_controlled"
+  | "rescue_not_completed";
+
+export interface SafetyStopViewer {
+  role: string;
+  identities: Set<string>;
+  personSession: boolean;
+}
+
+export function releaseUnavailableReason(
+  occurrence: Pick<
+    SafetyOccurrenceRecord,
+    "stop_active" | "state" | "rescue_required" | "rescue_completed_at"
+  >,
+  raiser: Set<string>,
+  viewer: SafetyStopViewer,
+): SafetyReleaseUnavailableReason | null {
+  if (occurrence.stop_active !== 1) return "stop_released";
+  if (!viewer.personSession) return "person_session_required";
+  if (!RESPONSE_AUTHORITY_ROLES.has(viewer.role)) return "release_authority_required";
+  if ([...viewer.identities].some((identity) => raiser.has(identity))) return "raised_by_viewer";
+  if (occurrence.state !== "controlled") return "not_controlled";
+  if (occurrence.rescue_required === 1 && !occurrence.rescue_completed_at) {
+    return "rescue_not_completed";
+  }
+  return null;
+}
+
+/** The raiser's identities from an already-read account row, folded as `userIdentities` folds them. */
+function raiserIdentities(
+  userId: string,
+  account: { email_normalized: string | null; frappe_user_id: string | null },
+): Set<string> {
+  const identities = new Set([userId.trim().toLowerCase()]);
+  if (account.email_normalized !== null) {
+    for (const identity of appUserIdentities({
+      user_id: userId,
+      email_normalized: account.email_normalized,
+      frappe_user_id: account.frappe_user_id,
+    })) {
+      identities.add(identity);
+    }
+  }
+  return identities;
+}
+
+/** One step a stop has taken: when it happened, who recorded it, and what they wrote. */
+export interface SafetyLifecycleStep {
+  at: string;
+  by_user_id: string;
+  by_display_name: string | null;
+  detail: string;
+}
+
+/**
+ * The visible steps of a stop, each null until it happens: raised, made safe, investigation opened,
+ * controlled (the fix is in place and checked; the stop stays on), released (the stop is lifted)
+ * and closed. Each step is the event that moved the occurrence there, so a stop lifted before 0165
+ * still shows who released it.
+ */
+export interface SafetyStopLifecycle {
+  reported: SafetyLifecycleStep | null;
+  made_safe: SafetyLifecycleStep | null;
+  investigating: SafetyLifecycleStep | null;
+  controlled: SafetyLifecycleStep | null;
+  released: SafetyLifecycleStep | null;
+  closed: SafetyLifecycleStep | null;
+}
+
+const LIFECYCLE_STEP_BY_EVENT: Record<string, keyof SafetyStopLifecycle> = {
+  reported: "reported",
+  make_safe: "made_safe",
+  investigation_opened: "investigating",
+  controlled: "controlled",
+  released: "released",
+  closed: "closed",
+};
+
+export interface SafetyOccurrenceDetail {
+  version: 1;
+  occurrence: SafetyOccurrenceRecord;
+  raised_by_display_name: string | null;
+  lifecycle: SafetyStopLifecycle;
+  can_release: boolean;
+  release_unavailable_reason: SafetyReleaseUnavailableReason | null;
+}
+
+/**
+ * The stop detail read: the raw occurrence, the raiser's name, every lifecycle step, and whether
+ * this viewer may release it now. Any authenticated role may read any occurrence of the tenant.
+ */
+export async function safetyOccurrenceDetail(
+  env: AppEnv,
+  tenantId: string,
+  viewerUserId: string,
+  occurrenceId: string,
+  personSession: boolean,
+): Promise<SafetyOccurrenceDetail | null> {
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(occurrenceId)) return null;
+  const actor = await safetyActor(env, tenantId, viewerUserId);
+  const occurrence = await occurrenceById(env, tenantId, occurrenceId);
+  if (!occurrence) return null;
+  const raiser = await env.DB.prepare(
+    `SELECT display_name, email_normalized, frappe_user_id
+       FROM app_users WHERE tenant_id = ? AND user_id = ?`,
+  )
+    .bind(tenantId, occurrence.reported_by_user_id)
+    .first<{ display_name: string; email_normalized: string; frappe_user_id: string | null }>();
+  const steps = await env.DB.prepare(
+    `SELECT event.event_kind, event.occurred_at, event.actor_user_id, event.detail,
+            actor.display_name AS actor_display_name
+       FROM safety_occurrence_events event
+       LEFT JOIN app_users actor
+         ON actor.tenant_id = event.tenant_id AND actor.user_id = event.actor_user_id
+      WHERE event.tenant_id = ? AND event.occurrence_id = ?
+        AND event.event_kind IN ('reported', 'make_safe', 'investigation_opened', 'controlled',
+          'released', 'closed')
+      ORDER BY event.occurrence_version ASC, event.recorded_at ASC`,
+  )
+    .bind(tenantId, occurrenceId)
+    .all<{
+      event_kind: string;
+      occurred_at: string;
+      actor_user_id: string;
+      detail: string;
+      actor_display_name: string | null;
+    }>();
+  const lifecycle: SafetyStopLifecycle = {
+    reported: null,
+    made_safe: null,
+    investigating: null,
+    controlled: null,
+    released: null,
+    closed: null,
+  };
+  for (const row of steps.results) {
+    const step = LIFECYCLE_STEP_BY_EVENT[row.event_kind];
+    // Every transition is one-way, so each step happens once; the first record is the step.
+    if (!step || lifecycle[step]) continue;
+    lifecycle[step] = {
+      at: row.occurred_at,
+      by_user_id: row.actor_user_id,
+      by_display_name: row.actor_display_name,
+      detail: row.detail,
+    };
+  }
+  const reason = releaseUnavailableReason(
+    occurrence,
+    raiserIdentities(occurrence.reported_by_user_id, {
+      email_normalized: raiser?.email_normalized ?? null,
+      frappe_user_id: raiser?.frappe_user_id ?? null,
+    }),
+    {
+      role: actor.role,
+      identities: await userIdentities(env, tenantId, actor.userId),
+      personSession,
+    },
+  );
+  return {
+    version: 1,
+    occurrence,
+    raised_by_display_name: raiser?.display_name ?? null,
+    lifecycle,
+    can_release: reason === null,
+    release_unavailable_reason: reason,
+  };
 }
 
 export async function getSafetyEquipment(

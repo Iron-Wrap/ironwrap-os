@@ -140,7 +140,7 @@ status.
 | D-06 | A booking offer has two lanes, the phone offer and a written offer the AI drafts and a person approves, and both end at the same booking | Appendix rows A08 and A09 |
 | D-07 | Live answering states only facts from the record, says it is AI and is its own row; the owner's settings for it are the record `reception_settings:<tenant>`. Not built yet | Decision 15, "Dial levels" |
 | D-08 | When only one person holds an operation set, that person approves their own item with a recorded reason (basis `only_holder`). Not built yet | Decision 12 |
-| D-09 | The owner's autonomy screen shows the dial levels, and the price is capped at Act with approval; with D-05, Q4 and L04, every send outside IronWrap and every price commitment asks first and none is delegable. The caps are built (twenty-four actions); the dial words are not built yet | "Dial levels", Delegation item 8 |
+| D-09 | The owner's autonomy screen shows the dial levels, and the price is capped at Act with approval; with D-05, Q4 and L04, every send outside IronWrap and every price commitment asks first and none is delegable. The caps are built (twenty-four actions); the app shows the dial words on its delegation pills (owner ruling), and the autonomy screen is not built yet | "Dial levels", Delegation item 8 |
 | D-10 | A design-process ruling (finish the edits in flight, then pause new design items until Phase 1 is approved). No contract change | — |
 | Q1 | Four operation sets, all held by the owner until handed over: sees money and margins; approves money, with a limit; sends purchase orders; checks site safety (clears the Safety gate and releases a stop). A price below the margin floor stays the owner's, with no set (OD-32). Not built yet: today each person has one app role | "Rules for every specialist", decision 12 |
 | Q2 | A complaint is a service request with a Complaint label | `service_case.open` |
@@ -461,11 +461,11 @@ An action's class is fixed by its consequence. It never changes at runtime.
 
 | Class | Shown as | Meaning | Effect |
 |---|---|---|---|
-| `A0` | Reads and watches | Observe, evaluate and explain, with citations | None |
-| `A1` | Prepares | Draft or propose; the output is stored as proposed | None |
-| `A2` | Acts within your limits | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
-| `A3` | Asks first | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
-| `H` | People only | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
+| `A0` | Suggest | Observe, evaluate and explain, with citations | None |
+| `A1` | Suggest | Draft or propose; the output is stored as proposed | None |
+| `A2` | The current setting on the dial (Auto with undo, Act with approval, Off or Suggest; see item 14) | Bounded routine work that is reversible or carries no commitment | Inside the company, or outside without a commitment |
+| `A3` | The current setting on the dial (Act with approval, Auto with undo, Off or Suggest; see item 14) | Consequential work: customer sends, publications, crew dates, purchase orders, shop and field release, and any price, discount, legal, tax or money commitment | Consequential |
+| `H` | Locked | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
 `payee.unfreeze_prepare`, `safety_stop.release_prepare` and `access.prepare_change` do at class
@@ -480,18 +480,24 @@ a person acted on the same record by hand, whether or not they set what the draf
 change on the Access screen closes that person's role-change drafts, and the owner's delegation
 setting, or turning practice on or off, closes that pair's `delegation.propose_change` drafts.
 `readback.reference` names the changed record (`person:<user_id>` or
-`delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by}`) says
-what is set now and by whom. `superseded` means only that a newer draft for the same record (the
-same pair, or the same person, change and device) replaced it; `readback.reference` names that
-draft's step (`step/<step_id>`). `permit.approved_by` stays null, and a draft closes once. A role
-change, on the Access screen or by provisioning, closes the drafts after it commits, naming the role
-it wrote and who wrote it, and a close that closed any writes an `agent_draft_close` auth audit row
-naming the same; if that close fails, repeating the same role on the Access screen closes them (a
-repeated provisioning does not), whether the repeat names the person's access version now or is
-refused because the same viewer's own change set the role now. Only drafts prepared against an
-older access version than the one that role change produced close, and a repeat names that change
-and who made it: a removal or give-back moves the version but sets no role, so it answers no draft.
-Any other refusal closes none. Needs you is to offer "Not now",
+`delegation/<specialist>:<action>`) and `do_it_myself.context.applied` (`{field, value, by,
+as_proposed}`) says what is set now, by whom, and whether that is what this draft proposed:
+`as_proposed` is true when the role or setting set is the one the draft proposed, and for
+`within_limits` the ceiling is the same too, false otherwise. Recipients compare as a set: the
+same ones in another order are the same, and no limit (`null`) is not an empty list. Turning
+practice off sets the setting in force, with its ceiling. A draft closed before
+`as_proposed` existed has none, which reads as not known, never as true. `superseded` means only
+that a newer draft for the same record (the same pair, or the same person, change and device)
+replaced it; `readback.reference` names that draft's step (`step/<step_id>`), and it carries no
+`applied`. `permit.approved_by` stays null, and a draft closes once. A role change, on the Access
+screen or by provisioning, closes the drafts after it commits, naming the role it wrote and who
+wrote it, and a close that closed any writes an `agent_draft_close` auth audit row naming the
+same; if that close fails, repeating the same role on the Access screen closes them (a repeated
+provisioning does not), whether the repeat names the person's access version now or is refused
+because the same viewer's own change set the role now. Only drafts prepared against an older
+access version than the one that role change produced close, and a repeat names that change and
+who made it, its `as_proposed` comparing the role that change set: a removal or give-back moves
+the version but sets no role, so it answers no draft. Any other refusal closes none. Needs you is to offer "Not now",
 which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
 `safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns
 as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.
@@ -503,11 +509,11 @@ actions only.
 
 | Setting | Shown as | What happens |
 |---|---|---|
-| `asks_first` | Asks first | The reviewer approves the exact revision; then policy issues the permit |
-| `within_limits` | Acts within your limits | Policy issues the permit without a person while the step stays inside the setting's ceiling; a step above the ceiling asks first |
-| `off_until_enabled` | Off until you turn it on | The action does nothing until the owner turns it on in setup; once on, it acts within the owner's limits. Used only where asking first per step is impossible, such as a live conversation |
+| `asks_first` | Act with approval | The reviewer approves the exact revision; then policy issues the permit |
+| `within_limits` | Auto with undo | Policy issues the permit without a person while the step stays inside the setting's ceiling; a step above the ceiling asks first |
+| `off_until_enabled` | Off | The action does nothing until the owner turns it on in setup; once on, it acts within the owner's limits. Used only where asking first per step is impossible, such as a live conversation |
 | `off` | Off | The owner turned the action off: a step proposed under it fails (`policy_denied`), and people do the work by hand. The owner may set it on any delegable `A2` or `A3` action, and on an action that starts off |
-| `shadow` | Practice only | The specialist does the step as a practice run: the full proposal, its checks and a receipt marked as practice, but the tool is never called, so nothing reaches anyone outside the company and no business record changes. A person still does the real work, or approves it on the path in use today |
+| `shadow` | Suggest | The specialist does the step as a practice run: the full proposal, its checks and a receipt marked as practice, but the tool is never called, so nothing reaches anyone outside the company and no business record changes. A person still does the real work, or approves it on the path in use today |
 
 1. **Start state.** Every `A3` action, and every `A2` action with an outside effect, starts as asks
    first, except an `A2` action that cannot ask first per step, which starts off until the owner
@@ -650,10 +656,11 @@ actions only.
     within limits for a pair below the bar, and the owner decides (`delegation.set`). No `H` action
     and no action whose `delegable` is false is ever proposed. These numbers are floors. Raising or
     lowering one needs an owner decision recorded in this contract.
-14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
-    your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
-    actions the words shown are the current setting's. The owner's autonomy screen shows the dial
-    levels instead (see "Dial levels").
+14. **Words, not codes.** Screens show the owner's dial words (owner ruling; see "Dial levels"):
+    Off, Suggest, Act with approval, Auto with undo, and Locked for people-only acts. For `A2` and
+    `A3` actions the words shown are the current setting's. Two words stand apart: an action that
+    always asks first reads "Act with approval · always" with the lock a Locked row carries, and a
+    protective action reads "Always on: protects you", off the dial.
 
 "Per specialist" means the owner can change several actions of one specialist at once (each still
 stored per action) or pause the specialist. Pausing sets every non-protective action of the
@@ -668,17 +675,18 @@ onto the classes and settings above; internal codes and catalog fields keep thei
 
 | Dial level | Means | Contract words and codes | Today |
 |---|---|---|---|
-| Off | The specialist does not act on this action; people use the manual screen | The setting `off` on a delegable `A2` or `A3` action, and `off_until_enabled` before the owner turns a live action on | A step under `off` fails with `policy_denied`. Not built yet for a Prepares action or for an action whose `delegable` is false: neither takes a setting (pausing the whole specialist stops its drafting) |
-| Suggest | The AI drafts or proposes; each value shows "Proposed" until a person accepts or edits it | Prepares (`A1`) | A Prepares step stores a draft and has no effect |
+| Off | The specialist does not act on this action; people use the manual screen | The setting `off` on a delegable `A2` or `A3` action, `off_until_enabled` before the owner turns a live action on, and a paused specialist's own control | A step under `off` fails with `policy_denied`. Not built yet for a Prepares action or for an action whose `delegable` is false: neither takes a setting (pausing the whole specialist stops its drafting) |
+| Suggest | The AI watches, drafts or proposes; each value shows "Proposed" until a person accepts or edits it | Reads and watches (`A0`), Prepares (`A1`) and Practice only (`shadow`) | A Prepares step stores a draft and has no effect |
 | Act with approval | The AI prepares the step, and a person approves it before anything happens | Asks first (`asks_first`) | The reviewer approves the exact revision |
 | Auto with undo | The AI acts, records it and offers Undo on the record | Acts within your limits (`within_limits`), offered only for an action whose receipt offers an undo (catalog `undo` `automatic`) | Not built yet: no undo flow exists; no non-protective action's machine path is proven, so a within-limits step asks first (item 10); and the Worker accepts within limits for any delegable action, whatever its undo |
-| Locked | The owner cannot change the row, and the screen gives the reason in one line | Always on (protective actions) or People only (`H`) | Neither takes a setting |
+| Locked | The owner cannot change the row, and the screen gives the reason in one line | People only (`H`) | It takes no setting |
 
-An action that always asks first (item 8) shows Act with approval and no higher level, every send
-outside IronWrap and every price commitment among them. The dial also offers Off
-for those, but the Worker accepts no setting for an action whose `delegable` is false, so Off for
-them is not built yet. Practice only (`shadow`) is not a dial level; it stays the owner's own trial
-setting (item 11).
+An action that always asks first (item 8) shows "Act with approval · always" with the lock a Locked
+row carries, and no higher level; every send outside IronWrap and every price commitment are among
+them. The dial also offers Off for those, but the Worker accepts no setting for an action whose
+`delegable` is false, so Off for them is not built yet. Practice only (`shadow`) shows as Suggest;
+it stays the owner's own trial setting (item 11). Protective actions are not on the dial: they show
+"Always on: protects you" and keep running while a specialist is paused.
 
 The dial has one named variant. "Facts only, live" is `conversation.answer_live` once the owner
 turns it on (decision 15): it states only facts from the record, says it is AI and hands anything
@@ -689,9 +697,9 @@ customer, a reminder included, ever runs automatically. Reminders are not built 
 message purpose covers a visit reminder (`payment_reminder` is the only reminder purpose), and
 `customer_message.send` is not registered.
 
-Screens show the dial words only on the owner's autonomy screen, which is not built yet; today the
-app shows the words of item 14 (`app/src/components/ai/words.ts`). The appendix ("Appendix:
-autonomy screen mapping") maps each row of that screen to its catalog actions.
+The app's delegation pills show the dial words (`app/src/components/ai/words.ts`); the owner's
+autonomy screen, which sets them, is not built yet. The appendix ("Appendix: autonomy screen
+mapping") maps each row of that screen to its catalog actions.
 
 ### The owner's launch rule
 
@@ -1181,7 +1189,7 @@ A receipt has exactly these fields:
 | `needs_from_you` | `null`, or `{reviewer_role, person_id, ask}` | "Needs you", with the ask and its buttons |
 | `sources` | A list of `{fact_id, version, hash}` | "Sources" |
 | `policy` | `{policy_id, version, result, checks, reason_codes}`; `result` is `allow`, `needs_approval` or `deny` | "Checked", each check in words |
-| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "within your limits", or "Practice run" |
+| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "Auto with undo", or "Practice run" |
 | `tool` | `{name, binding, idempotency_key, request_hash}`, or `null` for `A0` and `A1` | "Used" |
 | `readback` | `{source, reference, response_hash, matched}`, or `null` | "Confirmed by" |
 | `outcome` | `null` while the step is open, then `succeeded`, `failed`, `unknown` or `abstained` | The state, in words |
@@ -2547,12 +2555,12 @@ that proposes it abstains with `policy_missing`. Only 14 actions are registered 
 
 | Row | On the screen | Rule | Catalog actions | Notes and status |
 |---|---|---|---|---|
-| L01 | Stop contact when permission is withdrawn | Always on | `suppression.apply` (protective) | Takes no setting. Not registered |
+| L01 | Stop contact when permission is withdrawn | Always on: protects you (off the dial) | `suppression.apply` (protective) | Takes no setting. Not registered |
 | L02 | Contact without permission or outside calling hours | Never | The `consent` and `quiet_hours` checks on every customer send (`customer_message.send`, `visit.confirm`, `campaign.send` and the other sends) | The calling hours are tenant policy. No customer send is registered yet |
 | L03 | Give a price on a call | Never | The `live_session` and `no_commitment` checks on `conversation.answer_live`; the AI receptionist's hard boundary | Nothing answers live yet |
 | L04 | Resend an outside message (a proposal, a confirmation, an invoice or an order) while the last result is unknown | Never | Every outside send; no step retries a dispatched effect whose outcome is unknown ("Ceilings") | Built for proposal publication only: preparing a publish is refused while the last delivery is unconfirmed (migration 0156). Not built yet for every other send |
 | L05 | Approve a price below the margin floor | Owner only | The `margin_floor` check moves the decision to the owner (OD-32); no operation set covers it | Not built yet: no Worker code checks the margin floor, and the owner's recorded reason on her own item (D-08) is not built |
-| L06 | Release a safety stop | A person only | `safety_stop.release` (people only) | For a crew's stop on a work package, an owner, ops or production person who did not raise or report it releases it, with no exception for working alone. Not built yet: the "checks site safety" set and release by a named outside person (Q7) |
+| L06 | Release a safety stop | A person only | `safety_stop.release` (people only) | For a crew's stop on a work package and for a stop on a safety occurrence (migration 0165), an owner, ops or production person who did not raise or report it releases it, with no exception for working alone. Not built yet: the "checks site safety" set and release by a named outside person (Q7) |
 | L07 | Refunds, write-offs, waiving a gate, access and settings changes, legal sign-off | People only | `refund.issue`, `write_off.record`, `gate.waive`, `access.change`, `settings.apply`, `terms.legal_signoff` | People only: no agent performs, requests or is delegated them |
 | L08 | Accept completed work | People only | `completion.accept` (people only) | Not built yet: no route records a person's acceptance of completed work (the crew's own Work Completed step is not that acceptance), so neither "never the person who did the work" nor a solo owner's recorded reason (D-08, Q7) is enforced |
 | L09 | Change a supplier's bank details | People only | `payee.change_details` (people only), after a call to the number on file; `payee.freeze` (protective) holds payments meanwhile; `payee.unfreeze` (people only) | QuickBooks holds the account. Not built yet: D1 has no payee record and no guard |

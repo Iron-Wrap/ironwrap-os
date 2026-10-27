@@ -516,6 +516,143 @@ function checkInboundSignal(signal, label, fail) {
   if (signal.subject?.aggregate !== "lead") fail(`${label}: an inbound signal's subject is the lead it becomes ({ aggregate: "lead", id })`);
 }
 
+// Actions the Worker takes only from the inbound event a lead came from (policy.ts INBOUND_ONLY):
+// an event on a channel it takes in, for the lead that event is about. A case that expects or
+// allows one is such an event, and names that lead. The event has no actor: the Worker reads a
+// signal with an actor as a person's ask or request (store.ts runRequest), never as inbound.
+export const INBOUND_ONLY_ACTIONS = new Set(["lead_fact.propose"]);
+function checkInboundOnly(item, expected, fail, label) {
+  const signal = item.signal ?? {};
+  const inbound = signal.kind === "event" && INBOUND_CHANNELS.has(signal.source) && signal.subject?.aggregate === "lead" && (signal.actor ?? null) === null;
+  const listed = [...objects(expected.actions).map((action) => action.action_id), ...(expected.optional_actions ?? [])];
+  for (const actionId of new Set(listed.filter((id) => INBOUND_ONLY_ACTIONS.has(id)))) {
+    if (!inbound) fail(`${label}: ${actionId} comes only from an inbound event about its lead (an event on ${[...INBOUND_CHANNELS].join(", ")} with a lead subject and no actor); the Worker stops it here (out_of_scope)`);
+  }
+  for (const action of objects(expected.actions).filter((entry) => INBOUND_ONLY_ACTIONS.has(entry.action_id))) {
+    const leadId = action.args_must_include?.lead_id;
+    if (inbound && leadId !== undefined && leadId !== signal.subject.id) fail(`${label}: ${action.action_id} names the signal's lead (${signal.subject.id}), not ${leadId}`);
+  }
+}
+
+// A lead, as the Worker's lead read model shows it (workers-bus/src/agents/read-models.ts `lead`,
+// over operating_leads and operating_consents in migration 0090): exactly these keys, read whole
+// as an owned fact with no freshness bound. Contact values, form fields, language, brand and
+// address are not on it. Its consents are the only consent records the Worker has; they live on
+// the lead, one per channel, each for one of the lead's jobs.
+export const LEAD_KEYS = ["lead_id", "source", "contact_name", "job_ref", "lifecycle_status", "record_version", "created_at", "updated_at", "has_phone", "has_email", "consents", "jobs"];
+export const LEAD_SOURCES = new Set(["website", "phone", "gbp", "ad", "referral", "manual"]);
+export const LEAD_STATUSES = new Set(["untriaged", "triaged", "qualified", "disqualified", "converted"]);
+export const CONSENT_KEYS = ["consent_id", "roof_job_id", "channel", "purpose", "status", "jurisdiction", "consent_basis", "recorded_at"];
+export const CONSENT_VALUES = { channel: ["email", "phone"], purpose: ["estimate_follow_up"], status: ["granted", "denied", "revoked"], consent_basis: ["express"] };
+// The lead source each inbound channel's envelope materializes (workers-bus/src/agents/inbound.ts
+// channelOf, read backwards), and the consents its intake can record (operating-core.ts
+// consentFacts): the public estimator, one of the instant estimate's two paths, records one for
+// every contact given; staff intake of a walk-in, call or referral (office-lead-intake-store.ts)
+// may record email; no other intake records any.
+export const LEAD_SOURCE_BY_CHANNEL = { web_form: "website", instant_estimate: "website", phone: "phone", newo_call: "phone", walk_in: "manual", office: "manual", gbp: "gbp", ad: "ad", referral: "referral" };
+export const CONSENT_CHANNELS_BY_CHANNEL = { instant_estimate: ["email", "phone"], walk_in: ["email"], phone: ["email"], referral: ["email"] };
+// The same rule for a lead read later, by its source alone: a website lead came by the web form
+// (none) or the instant estimate, and a manual, phone or referral lead may have been entered by staff.
+const CONSENT_CHANNELS_BY_SOURCE = { website: ["email", "phone"], manual: ["email"], phone: ["email"], referral: ["email"] };
+// What an intake with these consent channels records for this lead: none, or, where it records
+// both, one for every contact the lead has.
+function consentsRecordable(channels, lead) {
+  const recorded = new Set(lead.consents.map((consent) => consent.channel));
+  if (recorded.size === 0) return true;
+  if ([...recorded].some((channel) => !channels.includes(channel))) return false;
+  if (channels.length < 2) return true;
+  return (recorded.has("email") === lead.has_email) && (recorded.has("phone") === lead.has_phone);
+}
+const article = (word) => (/^[aeiou]/.test(word) ? "an" : "a");
+const recordableText = (channels) =>
+  !channels ? "no consent" : channels.length > 1 ? "no consent, or one for every contact given" : `no consent, or ${channels.join(" and ")} consent`;
+// Packs whose lead and consent facts predate the Worker's read models; they are aligned in a later
+// slice and skip this check until then.
+export const UNALIGNED_RECORD_PACKS = new Set(["customer_care_warranty", "estimator", "independent_auditor", "measurement_design", "orchestrator", "proposal_contract", "scheduler_dispatcher"]);
+const isCaseTime = (value) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 1 && typeof value.$case_time === "string";
+const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const nameUpTo = (value, max) => value === null || (typeof value === "string" && value.trim() !== "" && value.length <= max);
+
+function checkLeadFacts(item, id, fail, label) {
+  if (UNALIGNED_RECORD_PACKS.has(id)) return;
+  const signal = item.signal ?? {};
+  const tags = item.tags ?? [];
+  if (tags.includes("pending_inquiry_record") && !objects(item.facts).some((fact) => fact.kind === "triage")) {
+    fail(`${label}: a case tagged pending_inquiry_record holds the inquiry record (a triage fact) it reads`);
+  }
+  const inbound = signal.kind === "event" && signal.content && Object.hasOwn(signal.content, "envelope_id") && INBOUND_CHANNELS.has(signal.source);
+  const subjectId = signal.subject?.aggregate === "lead" ? signal.subject.id : null;
+  for (const fact of objects(item.facts)) {
+    if (fact.kind === "consent" || /^consent[:/]/.test(fact.fact_id ?? "")) {
+      fail(`${label}: ${fact.fact_id} is a consent fact; the Worker has no consent object, so a consent lives in its lead's consents`);
+    }
+    if (fact.kind === "triage" && !tags.includes("pending_inquiry_record")) {
+      fail(`${label}: ${fact.fact_id} is an inquiry record, which nothing writes yet (inquiry.classify and inquiry.record_triage are not registered); tag the case pending_inquiry_record`);
+    }
+    if (fact.kind !== "lead") continue;
+    const lead = fact.data;
+    const at = `${label}: ${fact.fact_id}`;
+    if (!exactKeys(lead, LEAD_KEYS)) {
+      fail(`${at}: a lead's data is exactly the Worker's lead read model (${LEAD_KEYS.join(", ")})`);
+      continue;
+    }
+    if (fact.fact_id !== `lead:${lead.lead_id}`) fail(`${at}: a lead fact is lead:<lead_id>`);
+    if (fact.trust !== "owned" || fact.observed_at !== "PT0M" || fact.fresh_until !== undefined) {
+      fail(`${at}: the Worker reads a lead when the run opens: an owned fact observed at PT0M with no fresh_until`);
+    }
+    // A lead from a channel the Worker does not take in yet names that channel as its source. Its
+    // contacts and consents are that future intake's, so the contact requirement and the intake
+    // consent rule skip it.
+    const pendingSource = tags.includes("pending_inbound_channel") && lead.source === signal.source;
+    if (!LEAD_SOURCES.has(lead.source) && !pendingSource) fail(`${at}: a lead's source is one of ${[...LEAD_SOURCES].join(", ")}`);
+    if (!nameUpTo(lead.contact_name, 160) || !nameUpTo(lead.job_ref, 160)) fail(`${at}: a lead's contact_name and job_ref are text of at most 160 characters, or null`);
+    if (!LEAD_STATUSES.has(lead.lifecycle_status)) fail(`${at}: a lead's lifecycle_status is one of ${[...LEAD_STATUSES].join(", ")}`);
+    if (!Number.isInteger(lead.record_version) || lead.record_version < 1) fail(`${at}: a lead's record_version is a positive integer`);
+    if (!isCaseTime(lead.created_at) || !isCaseTime(lead.updated_at)) fail(`${at}: a lead's created_at and updated_at are { "$case_time": <duration> } markers`);
+    if (typeof lead.has_phone !== "boolean" || typeof lead.has_email !== "boolean" || !(lead.has_phone || lead.has_email || pendingSource)) {
+      fail(`${at}: a lead's has_phone and has_email are booleans, and at least one is true (the Worker materializes no lead without a contact)`);
+    }
+    const jobs = Array.isArray(lead.jobs) ? lead.jobs : null;
+    if (!jobs || jobs.length < 1 || jobs.length > 8 || new Set(jobs).size !== jobs.length || !jobs.every((job) => typeof job === "string" && job !== "")) {
+      fail(`${at}: a lead's jobs are one to eight distinct job ids (every lead materializes with its job)`);
+    }
+    if (!Array.isArray(lead.consents)) {
+      fail(`${at}: a lead's consents are a list`);
+      continue;
+    }
+    const channels = new Set();
+    for (const consent of lead.consents) {
+      const valid = exactKeys(consent, CONSENT_KEYS) && typeof consent.consent_id === "string" && consent.consent_id !== "" &&
+        Object.entries(CONSENT_VALUES).every(([key, values]) => values.includes(consent[key])) &&
+        typeof consent.jurisdiction === "string" && consent.jurisdiction.trim().length >= 2 && consent.jurisdiction.length <= 120 && isCaseTime(consent.recorded_at);
+      if (!valid) {
+        fail(`${at}: a consent is exactly { ${CONSENT_KEYS.join(", ")} }: channel email or phone, purpose estimate_follow_up, status granted, denied or revoked, basis express, recorded_at a $case_time marker`);
+        continue;
+      }
+      if (!jobs?.includes(consent.roof_job_id)) fail(`${at}: consent ${consent.consent_id} is for one of the lead's jobs`);
+      if (channels.has(consent.channel)) fail(`${at}: a lead holds one consent per channel`);
+      channels.add(consent.channel);
+      if (!(consent.channel === "email" ? lead.has_email : lead.has_phone)) fail(`${at}: consent ${consent.consent_id} is on a channel the lead has (has_${consent.channel})`);
+    }
+    // The lead an inbound envelope becomes carries what the same envelope gave the signal; a lead
+    // read later is held to what its source's intakes can record.
+    if (inbound && lead.lead_id === subjectId) {
+      if (lead.source !== LEAD_SOURCE_BY_CHANNEL[signal.source]) fail(`${at}: the lead a ${signal.source} envelope becomes has source ${LEAD_SOURCE_BY_CHANNEL[signal.source]}`);
+      if (lead.has_phone !== signal.content.has_phone || lead.has_email !== signal.content.has_email) fail(`${at}: the lead an envelope becomes has the signal's has_phone and has_email`);
+      if (!consentsRecordable(CONSENT_CHANNELS_BY_CHANNEL[signal.source] ?? [], lead)) {
+        fail(`${at}: ${article(signal.source)} ${signal.source} intake records ${recordableText(CONSENT_CHANNELS_BY_CHANNEL[signal.source])}`);
+      }
+      continue;
+    }
+    if (inbound && !tags.includes("pending_record_access")) {
+      fail(`${at}: a new inquiry's run sees only the lead it becomes; tag a case that holds another lead pending_record_access`);
+    }
+    if (!pendingSource && LEAD_SOURCES.has(lead.source) && !consentsRecordable(CONSENT_CHANNELS_BY_SOURCE[lead.source] ?? [], lead)) {
+      fail(`${at}: ${article(lead.source)} ${lead.source} lead's intake records ${recordableText(CONSENT_CHANNELS_BY_SOURCE[lead.source])}`);
+    }
+  }
+}
+
 function checkCase(item, context) {
   const { suite, id, granted, catalog, registry, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
@@ -627,6 +764,10 @@ function checkCase(item, context) {
   if (expected.decision === "escalate" && ownIds.length > 0 && !emergency) {
     fail(`${label}: escalate with own required action(s) ${ownIds.join(", ")} is propose unless it is an emergency (COMMON.md)`);
   }
+  // Escalate hands the work to someone, so the run routes it; a run that only keeps books is propose.
+  if (expected.decision === "escalate" && !expectedIds.some((id) => ROUTING_ACTIONS.has(id))) {
+    fail(`${label}: escalate requires a routing action (${[...ROUTING_ACTIONS].join(", ")}); a run that only keeps books is propose (COMMON.md)`);
+  }
   for (const action of objects(expected.actions)) {
     if (!granted.has(action.action_id)) fail(`${label}: expected action ${action.action_id} is not allowlisted`);
     const include = action.args_must_include;
@@ -696,6 +837,8 @@ function checkCase(item, context) {
     if (!catastropheIds.has(catastrophe)) fail(`${label}: unknown catastrophe ${catastrophe}`);
   }
   checkProducerExclusion(item, expected, fail, label);
+  checkLeadFacts(item, id, fail, label);
+  checkInboundOnly(item, expected, fail, label);
   if (catalog) checkDelegable(item, expected, catalog, fail, label);
 }
 

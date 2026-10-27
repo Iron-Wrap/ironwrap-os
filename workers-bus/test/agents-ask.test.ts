@@ -1495,14 +1495,16 @@ test("a person's role change closes the open role-change drafts for them, whatev
   const applied = row(toSales);
   assert.deepEqual(
     [applied.reason_code, applied.needs_ask, JSON.parse(applied.readback_json!).reference, JSON.parse(applied.do_it_myself_json!).context.applied],
-    ["applied_by_person", null, `person:${person}`, { field: "role", value: "sales", by: "appu_owner_0001" }],
+    ["applied_by_person", null, `person:${person}`, { field: "role", value: "sales", by: "appu_owner_0001", as_proposed: true }],
   );
   // The device draft for the same person, and another person's role draft, stay open.
   assert.deepEqual([row(device).needs_ask, row(toProduction).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
-  // A different role than proposed is still the person's own change: applied, naming what is set now.
+  // A different role than proposed is still the person's own change: applied, naming what is set now,
+  // not as proposed.
   await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001", 2);
   const other = row(toProduction);
-  assert.deepEqual([other.reason_code, JSON.parse(other.do_it_myself_json!).context.applied.value], ["applied_by_person", "sales"]);
+  const otherApplied = JSON.parse(other.do_it_myself_json!).context.applied;
+  assert.deepEqual([other.reason_code, otherApplied.value, otherApplied.as_proposed], ["applied_by_person", "sales", false]);
   // A newer draft replaces only a draft of the same person, change and device: revoking the tablet
   // leaves the phone's revoke open, and a second revoke of the phone replaces the first.
   const revoke = (key: string, device: string) => {
@@ -1514,7 +1516,7 @@ test("a person's role change closes the open role-change drafts for them, whatev
   assert.deepEqual([row(phone).needs_ask, row(tablet).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
   const phoneAgain = await revoke("ask-revoke-phone-again", "device:synthetic_phone");
   assert.deepEqual(
-    [row(phone).reason_code, JSON.parse(row(phone).readback_json!).reference, row(tablet).needs_ask, row(device).needs_ask],
-    ["superseded", `step/${phoneAgain}`, "apply_in_own_screen", "apply_in_own_screen"],
+    [row(phone).reason_code, JSON.parse(row(phone).readback_json!).reference, JSON.parse(row(phone).do_it_myself_json!).context.applied, row(tablet).needs_ask, row(device).needs_ask],
+    ["superseded", `step/${phoneAgain}`, undefined, "apply_in_own_screen", "apply_in_own_screen"],
   );
 });

@@ -861,19 +861,20 @@ test("a role change closes the AI team's open role-change drafts for that person
   assert.equal(version, 2);
   assert.deepEqual(
     [closed("step_role").reason_code, JSON.parse(closed("step_role").do_it_myself_json).context.applied],
-    ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }],
+    ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id, as_proposed: false }],
   );
   assert.equal(closed("step_device").reason_code, null, "a device draft stays open");
   // Each close that closed a draft is audited, naming the role and who set it.
   assert.deepEqual(audits(), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
 
   // Drafts on the old version left open after the change (a close that failed) close on a repeat of
-  // the same role at the version now; a draft written after the change stays.
-  draft("step_left", "change_role", "field", null, 1);
+  // the same role at the version now; a draft written after the change stays. step_left proposed the
+  // role the repeat sets: as proposed.
+  draft("step_left", "change_role", "production", null, 1);
   draft("step_after", "change_role", "field", null, version);
   const repeat = await role({ role: "production", expected_access_version: version });
   assert.equal(repeat.status, 200);
-  assert.equal(closed("step_left").reason_code, "applied_by_person");
+  assert.deepEqual([closed("step_left").reason_code, JSON.parse(closed("step_left").do_it_myself_json).context.applied.as_proposed], ["applied_by_person", true]);
   assert.equal(closed("step_after").reason_code, null, "a draft decided on the version now stays open");
   assert.equal(audits().length, 2);
 
@@ -971,7 +972,7 @@ test("a role change that loses its write to a concurrent change closes no draft"
 });
 
 /** A synthetic prepared role-change draft, as access.prepare_change leaves it in the owner's Needs you. */
-function roleDraft(h: Harness, userId: string, stepId: string, version: number): void {
+function roleDraft(h: Harness, userId: string, stepId: string, version: number, targetRole = "field"): void {
   h.db.raw.exec("PRAGMA foreign_keys = OFF");
   h.db.raw
     .prepare(
@@ -984,18 +985,26 @@ function roleDraft(h: Harness, userId: string, stepId: string, version: number):
       stepId,
       TENANT,
       `run_${stepId}`,
-      JSON.stringify({ person_ref: `person:${userId}`, change: "change_role", target_role: "field", device_ref: null, expected_access_version: version }),
+      JSON.stringify({ person_ref: `person:${userId}`, change: "change_role", target_role: targetRole, device_ref: null, expected_access_version: version }),
     );
   h.db.raw.exec("PRAGMA foreign_keys = ON");
 }
 
-/** How one draft closed, if it did: its reason code and what `do_it_myself.context.applied` says. */
+/** What `do_it_myself.context.applied` says on one draft, or null while it is open. */
+function appliedOf(h: Harness, stepId: string): Record<string, unknown> | null {
+  const row = h.db.raw.prepare("SELECT do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(stepId) as { do_it_myself_json: string };
+  return JSON.parse(row.do_it_myself_json).context.applied ?? null;
+}
+
+/**
+ * How one draft closed, if it did: its reason code and which role change it is attributed to
+ * (the role set and by whom). Whether that is what the draft proposed (`as_proposed`) is asserted
+ * on its own.
+ */
 function draftClose(h: Harness, stepId: string): [string | null, unknown] {
-  const row = h.db.raw.prepare("SELECT reason_code, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(stepId) as {
-    reason_code: string | null;
-    do_it_myself_json: string;
-  };
-  return [row.reason_code, JSON.parse(row.do_it_myself_json).context.applied ?? null];
+  const row = h.db.raw.prepare("SELECT reason_code FROM agent_run_steps WHERE step_id = ?").get(stepId) as { reason_code: string | null };
+  const applied = appliedOf(h, stepId);
+  return [row.reason_code, applied && { field: applied.field, value: applied.value, by: applied.by }];
 }
 
 function draftCloseAudits(h: Harness): Array<Record<string, string>> {
@@ -1095,6 +1104,50 @@ test("a role change's close names what it wrote, not what a concurrent writer se
   assert.deepEqual(draftClose(h, "step_old"), ["applied_by_person", { field: "role", value: "production", by: ownerUser.user_id }]);
   assert.deepEqual(draftClose(h, "step_v2"), [null, null], "this change produced version 2, so it did not answer a draft on it");
   assert.deepEqual(draftCloseAudits(h), [{ user_id: mate.user_id, outcome: "closed", detail_code: `production:${ownerUser.user_id}` }]);
+});
+
+test("a close by the 409 repeat and by provisioning each says whether the role set is the one the draft proposed", async () => {
+  const h = harness();
+  const { user: ownerUser, session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+  // The owner sets the role (version 2). Two drafts on version 1 are left open, as when the close
+  // after it fails: one proposed that role, one another.
+  assert.equal((await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production", expected_access_version: 1 },
+  })).status, 200);
+  roleDraft(h, mate.user_id, "step_same", 1, "production");
+  roleDraft(h, mate.user_id, "step_other", 1, "field");
+  // A stale tab repeats the change: refused, and the repeat closes both in the owner's change.
+  const replay = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production", expected_access_version: 1 },
+  });
+  assert.equal(replay.status, 409);
+  assert.deepEqual(
+    [appliedOf(h, "step_same"), appliedOf(h, "step_other")],
+    [
+      { field: "role", value: "production", by: ownerUser.user_id, as_proposed: true },
+      { field: "role", value: "production", by: ownerUser.user_id, as_proposed: false },
+    ],
+  );
+
+  // Provisioning re-grades the person (version 3): the drafts on version 2 close, as proposed only
+  // for the one that proposed the role it set.
+  roleDraft(h, mate.user_id, "step_provision_same", 2, "accounting");
+  roleDraft(h, mate.user_id, "step_provision_other", 2, "production");
+  const provisioned = await call(h, "POST", APP_USERS, {
+    session,
+    body: { tenant_id: TENANT, email: "mate@example.invalid", display_name: "Mate", role: "accounting", frappe_user_id: "mate@example.invalid", active: true, expected_access_version: 2 },
+  });
+  assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+  assert.deepEqual(
+    [appliedOf(h, "step_provision_same"), appliedOf(h, "step_provision_other")],
+    [
+      { field: "role", value: "accounting", by: ownerUser.user_id, as_proposed: true },
+      { field: "role", value: "accounting", by: ownerUser.user_id, as_proposed: false },
+    ],
+  );
 });
 
 test("a no-op role repeat after a removal and a give-back closes no draft: no role was set", async () => {

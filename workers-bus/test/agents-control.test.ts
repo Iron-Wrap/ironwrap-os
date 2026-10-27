@@ -2405,7 +2405,7 @@ test("a delegation proposal closes when the owner sets the pair, or when a newer
   const applied = step(second);
   assert.deepEqual(
     [applied.reason_codes, applied.needs_ask, applied.readback.reference, applied.readback.matched, applied.applied, applied.approved_by],
-    [["applied_by_person"], null, "delegation/lead_concierge:note.add", true, { field: "delegation_setting", value: "shadow", by: "appu_test_owner" }, null],
+    [["applied_by_person"], null, "delegation/lead_concierge:note.add", true, { field: "delegation_setting", value: "shadow", by: "appu_test_owner", as_proposed: true }, null],
   );
   // The owner sets something else than a proposal asked for: still the owner's own change, so
   // applied, naming what is set now.
@@ -2416,14 +2416,14 @@ test("a delegation proposal closes when the owner sets the pair, or when a newer
   const other = step(third);
   assert.deepEqual(
     [other.reason_codes, other.readback.reference, other.applied],
-    [["applied_by_person"], "delegation/lead_concierge:note.add", { field: "delegation_setting", value: "asks_first", by: "appu_test_owner" }],
+    [["applied_by_person"], "delegation/lead_concierge:note.add", { field: "delegation_setting", value: "asks_first", by: "appu_test_owner", as_proposed: false }],
   );
   // Turning practice off closes it too, naming the setting back in force.
   const fourth = await propose("shadow", "Synthetic: practise once more.");
   s.tick(1_000);
   const off = await s.app("/specialists/lead_concierge/shadow", shadowBody({ shadow: false, expected_revision: s.scalar("SELECT MAX(revision) r FROM agent_shadow_settings WHERE action_id = 'note.add'").r }), "owner", "close-shadow-off");
   assert.equal(off.status, 200, JSON.stringify(off.body));
-  assert.deepEqual([step(fourth).reason_codes, step(fourth).applied?.value], [["applied_by_person"], "asks_first"]);
+  assert.deepEqual([step(fourth).reason_codes, step(fourth).applied?.value, step(fourth).applied?.as_proposed], [["applied_by_person"], "asks_first", false]);
   // Another pair's proposal is untouched.
   const elsewhere = (await s.propose(await face(), "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "lead.qualify", proposed: "shadow", ceiling: null, reason: "Synthetic: another action." })).body;
   if (elsewhere.decision === "drafted") assert.equal(step(elsewhere.step_id).needs_ask, "apply_in_own_screen");
@@ -2433,6 +2433,80 @@ test("a delegation proposal closes when the owner sets the pair, or when a newer
   const once = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
   const again = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
   assert.deepEqual([again, step(once).needs_ask], [once, "apply_in_own_screen"]);
+});
+
+test("a closed delegation draft says whether the owner set what it proposed, its ceiling included", async () => {
+  const s = setup(true);
+  const propose = async (proposed: string, proposedCeiling: unknown) => {
+    const face = await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+    const body = (await s.propose(face, "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "note.add", proposed, ceiling: proposedCeiling, reason: "Synthetic: as proposed." })).body;
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return body.step_id as string;
+  };
+  const applied = (id: string) => {
+    const row = s.scalar("SELECT reason_code, do_it_myself_json FROM agent_run_steps WHERE step_id = ?", id);
+    const set = JSON.parse(row.do_it_myself_json).context?.applied;
+    return [row.reason_code, set?.value, set?.as_proposed];
+  };
+  const revision = (table: string) => s.scalar(`SELECT COALESCE(MAX(revision), 0) r FROM ${table} WHERE action_id = 'note.add'`).r as number;
+  const delegate = async (key: string, overrides: Record<string, unknown>) =>
+    assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: revision("agent_delegation_settings"), ...overrides }), "owner", key)).status, 200);
+  const practice = async (key: string, on: boolean) =>
+    assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody({ shadow: on, expected_revision: revision("agent_shadow_settings") }), "owner", key)).status, 200);
+
+  // The face proposes acting within limits only once the action meets the earned-autonomy bar.
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-as-proposed");
+  await seedCompared(s, qualified.body.qualification_id, 50, "match");
+  // Within limits at the ceiling it proposed: as proposed.
+  const same = await propose("within_limits", ceiling);
+  s.tick(1_000);
+  await delegate("as-proposed-same", {});
+  assert.deepEqual(applied(same), ["applied_by_person", "within_limits", true]);
+  // Within limits at another ceiling than it proposed: the person's own change, not as proposed.
+  const tighter = await propose("within_limits", { ...ceiling, count: { max: 1, per: "hour" } });
+  s.tick(1_000);
+  await delegate("as-proposed-tighter", {});
+  assert.deepEqual(applied(tighter), ["applied_by_person", "within_limits", false]);
+  // Recipients are a set: the same ones in another order are as proposed; another set is not, and
+  // no limit (null) is not an empty list.
+  const recipients = (list: string[] | null) => ({ ...ceiling, recipients: list });
+  const reordered = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-reordered", { ceiling: recipients(["office@example.invalid", "crew@example.invalid"]) });
+  assert.deepEqual(applied(reordered), ["applied_by_person", "within_limits", true]);
+  const otherSet = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-other-set", { ceiling: recipients(["crew@example.invalid", "yard@example.invalid"]) });
+  assert.deepEqual(applied(otherSet), ["applied_by_person", "within_limits", false]);
+  const subset = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-subset", { ceiling: recipients(["crew@example.invalid"]) });
+  assert.deepEqual(applied(subset), ["applied_by_person", "within_limits", false]);
+  const unlimited = await propose("within_limits", recipients(null));
+  s.tick(1_000);
+  await delegate("as-proposed-empty", { ceiling: recipients([]) });
+  assert.deepEqual(applied(unlimited), ["applied_by_person", "within_limits", false]);
+  // Another setting than it proposed: not as proposed.
+  const asks = await propose("asks_first", null);
+  s.tick(1_000);
+  await delegate("as-proposed-other", {});
+  assert.deepEqual(applied(asks), ["applied_by_person", "within_limits", false]);
+  // Practice on answers a within-limits proposal with practice: not as proposed. Practice off puts
+  // back the setting in force with its ceiling, which is what the next proposal asked for.
+  const before = await propose("within_limits", ceiling);
+  s.tick(1_000);
+  await practice("as-proposed-practice-on", true);
+  assert.deepEqual(applied(before), ["applied_by_person", "shadow", false]);
+  const back = await propose("within_limits", ceiling);
+  s.tick(1_000);
+  await practice("as-proposed-practice-off", false);
+  assert.deepEqual(applied(back), ["applied_by_person", "within_limits", true]);
+  // A superseded draft names the newer draft and says nothing was set.
+  const older = await propose("asks_first", null);
+  s.tick(1_000);
+  const newer = await propose("shadow", null);
+  assert.deepEqual(applied(older), ["superseded", undefined, undefined]);
+  assert.equal(JSON.parse(s.scalar("SELECT readback_json FROM agent_run_steps WHERE step_id = ?", older).readback_json).reference, `step/${newer}`);
 });
 
 test("migration 0206: the decided-step guard is 0200's plus one exception that only closes an open draft, once", async () => {
@@ -2499,7 +2573,7 @@ test("migration 0206: the decided-step guard is 0200's plus one exception that o
   const { closeAccessDrafts, closeDelegationDrafts, supersedeDrafts } = await import("../src/agents/drafts.ts");
   const args = { specialist_id: "lead_concierge", action_id: "note.add", proposed: "asks_first", ceiling: null, reason: "Synthetic." };
   await (await supersedeDrafts(s.db, TENANT, { step_id: "step_never_recorded", action_id: "delegation.propose_change", args, args_sha256: "synthetic" }))!.run();
-  await (await closeDelegationDrafts(s.db, "tenant_synthetic", args, "asks_first", "appu_test_owner")).run();
+  await (await closeDelegationDrafts(s.db, "tenant_synthetic", args, "asks_first", "appu_test_owner", null)).run();
   const stale = await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 7 }), "owner", "close-stale");
   assert.equal(stale.status, 409);
   assert.equal(s.scalar("SELECT needs_ask FROM agent_run_steps WHERE step_id = ?", draft.step_id).needs_ask, "apply_in_own_screen");
@@ -2507,7 +2581,7 @@ test("migration 0206: the decided-step guard is 0200's plus one exception that o
   const closes: string[] = [];
   const spy = { prepare: (sql: string) => (closes.push(sql), s.db.prepare(sql)) } as unknown as typeof s.db;
   await supersedeDrafts(spy, TENANT, { step_id: "step_x", action_id: "access.prepare_change", args: { person_ref: "person:x", change: "change_role", device_ref: null }, args_sha256: "x" });
-  await closeDelegationDrafts(spy, TENANT, args, "asks_first", "appu_test_owner");
+  await closeDelegationDrafts(spy, TENANT, args, "asks_first", "appu_test_owner", null);
   await closeAccessDrafts(spy, TENANT, "appu_x", "sales", "appu_test_owner", 2);
   assert.equal(closes.length, 3);
   for (const sql of closes) {

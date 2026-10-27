@@ -126,6 +126,19 @@ test("document generation stays disabled in production and local, and is on in q
   assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
 });
 
+test("the proposal first-open record stays off until the owner approves its privacy notice", async () => {
+  // 3 years is the maximum retention of a first-open row (0163). Deletion exists: D1 lets a row go
+  // only once it is older than 3 years, and the daily cron deletes those rows. The flag still stays
+  // off in every environment until the owner approves the portal privacy notice that says so.
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
+  for (const environment of [config, config.env.local, config.env.qa]) {
+    assert.equal(environment.vars.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED, "false");
+  }
+});
+
 test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
   const source = await readFile(
     new URL("../wrangler.jsonc", import.meta.url),
@@ -2284,8 +2297,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // decided on. 0161 records what people found about a send, and their corrections, without
     // changing it; holds the late-answer wait in D1 with a window per provider; and names the
     // permit holder of each new publication.
+    // 0163 keeps the first time a customer's portal link opened a published proposal.
+    // 0164 holds a proposal send to one attempt, settles an unknown one only from a person's record,
+    // and keeps a conflicting readback from being recorded as not delivered.
+    // 0165 names who lifted a safety-occurrence stop and refuses a lift by the person who raised it
+    // (L06) or one without its own `released` event.
+    // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
+    // readback be recorded as not delivered only by citing a complete-scan "not found" check.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 138);
+    assert.equal(migrations.length, 142);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2434,10 +2454,16 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // unchanged. 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
     // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
     // name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
-    // holders), one named index and twelve guards, and re-creates nothing.
+    // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
+    // portal first-open table, one named index and four validation, update, age-gated delete and
+    // no-replace guards. 0164 adds three outside-send guards (retry limit, no retry, settle
+    // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
+    // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
+    // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
+    // evidence and readback-conflict guards under their names.
     assert.deepEqual(
       { ...counts },
-      { tables: 278, indexes: 379, triggers: 761 },
+      { tables: 280, indexes: 381, triggers: 774 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

@@ -93,6 +93,8 @@ const fixtureSession = {
     locale: "en-CA",
     time_zone: "America/Edmonton",
     currency: "CAD",
+    // A fictional 555-01xx number: the company profile's office phone for the emergency line.
+    office_phone: "780-555-0142",
   },
   csrf_token: "acceptance-csrf",
   session_expires_at: "2030-07-10T12:00:00.000Z",

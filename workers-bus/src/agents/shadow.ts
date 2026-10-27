@@ -210,14 +210,16 @@ export async function setShadow(
   }
   const settingId = `shd_${crypto.randomUUID()}`;
   // Turning practice on or off answers the face's open proposals for the pair (contract f5); off,
-  // the pair is back on the setting in force.
+  // the pair is back on the setting in force, with its ceiling.
+  const delegation = input.shadow ? null : await currentDelegation(db, tenantId, input.specialist_id, input.action_id);
   const inForce = input.shadow
     ? "shadow"
     : effectiveDelegation(catalogAction(input.action_id)!, {
-        delegation: await currentDelegation(db, tenantId, input.specialist_id, input.action_id),
+        delegation,
         specialistState: specialistState(await specialistControl(db, tenantId, input.specialist_id)),
       });
-  const answered = await closeDelegationDrafts(db, tenantId, input, inForce, actor.user_id);
+  const ceiling = inForce === "within_limits" ? (delegation?.ceiling ?? null) : null;
+  const answered = await closeDelegationDrafts(db, tenantId, input, inForce, actor.user_id, ceiling);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),

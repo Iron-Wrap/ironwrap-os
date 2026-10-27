@@ -119,7 +119,10 @@ import {
   handleCustomerPortalDecision,
   reconcileCustomerPortalDecisionAttempts,
 } from "./customer-portal-decision.ts";
-import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
+import {
+  pruneCustomerPortalProposalViews,
+  pruneCustomerPortalRecords,
+} from "./customer-portal-store.ts";
 import {
   listMeasurementIntakeExceptions,
   pruneMeasurementIntakeReceipts,
@@ -138,6 +141,7 @@ import {
   handleExternalEffectSettlement,
 } from "./effect-runtime-admin.ts";
 import { recoverExpiredExternalEffects } from "./effect-runtime.ts";
+import { escalateStaleProposalDeliveries } from "./proposal-delivery-checks.ts";
 import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
@@ -363,9 +367,11 @@ export default {
           pruneAuthRecords(env).catch((error) =>
             log({ at: "auth_prune", error: String(error) }),
           ),
-          pruneCustomerPortalRecords(env).catch((error) =>
-            log({ at: "customer_portal_prune", error: String(error) }),
-          ),
+          // First opens older than 3 years go first, so a link they held is pruned in the same run.
+          pruneCustomerPortalProposalViews(env)
+            .catch((error) => log({ at: "customer_portal_proposal_view_prune", error: String(error) }))
+            .then(() => pruneCustomerPortalRecords(env))
+            .catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
           pruneMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_receipt_prune", error: String(error) }),
           ),
@@ -631,6 +637,12 @@ export default {
           }).catch((error) =>
             log({ at: "external_effect_lease_sweep", error: String(error) }),
           ),
+          // A proposal send left unknown past T opens one owner-visible effect exception (#15b-1b).
+          escalateStaleProposalDeliveries(env as import("./app-types.ts").AppEnv).then((result) => {
+            if (result.opened > 0) log({ at: "proposal_delivery_escalation", ...result });
+          }).catch((error) =>
+            log({ at: "proposal_delivery_escalation", error: String(error) }),
+          ),
           drainPipelineStageAutomation(env as import("./app-types.ts").AppEnv).then((result) => {
             log({
               at: "pipeline_stage_automation_drain",
@@ -742,6 +754,7 @@ async function routeRequest(
     return await handleCustomerPortalResolve(
       req,
       env as import("./app-types.ts").AppEnv,
+      ctx,
     );
   }
   if (url.pathname === "/api/v1/customer-portal/acceptance/challenge") {

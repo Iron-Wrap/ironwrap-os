@@ -247,8 +247,14 @@ export function JobStopSheet({
         ) : delivery === "saved" ? (
           <Notice tone="local" title={SAVED_ON_DEVICE} />
         ) : null}
+        {/* A stop whose job wasn't found holds every job; the line never names that job again. */}
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          {["Stop", stopTime(raised.raisedAt, timeZone), raised.unsafe, jobLine]
+          {[
+            "Stop",
+            stopTime(raised.raisedAt, timeZone),
+            raised.unsafe,
+            delivery === "unresolved" ? "Every job" : jobLine,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </p>

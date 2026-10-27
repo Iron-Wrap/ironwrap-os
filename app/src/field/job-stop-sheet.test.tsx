@@ -288,6 +288,9 @@ describe("JobStopSheet", () => {
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
     expect(screen.getByRole("button", { name: "I've made the area safe" })).toBeVisible();
+    // The stop still holds every job, so its line never names the job that wasn't found.
+    expect(screen.getByText(/^Stop · .* · Every job$/)).toBeVisible();
+    expect(screen.queryByText(new RegExp(`Job ${job.code}`))).toBeNull();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Send stop report" })).toBeNull();
     expect(onStage).toHaveBeenLastCalledWith("stopped");

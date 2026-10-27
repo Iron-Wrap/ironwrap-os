@@ -26,6 +26,7 @@ import { getNewoCallbackRecord, newoTenantId, type NewoCallbackRecord } from "./
  * D1's clock, together with one audit_log row in the same batch. D1 re-checks the resolver, the
  * note and that the session holds a callback to close. Every refusal has its own code:
  *
+ *   404 newo_handoff_resolution_tenant_mismatch  the person's tenant is not this deployment's
  *   403 newo_handoff_resolution_person_required  not a person's own cookie session
  *   403 newo_handoff_resolution_role_required    not owner or ops (the live role, for a write)
  *   403 csrf_failed                              no valid CSRF token
@@ -35,7 +36,7 @@ import { getNewoCallbackRecord, newoTenantId, type NewoCallbackRecord } from "./
  *   400 newo_handoff_resolution_outcome_required no known outcome
  *   400 newo_handoff_resolution_note_required    no note, or only spaces
  *   400 newo_handoff_resolution_note_too_long    a note over 1000 characters
- *   404 newo_handoff_not_found                   no such session
+ *   404 newo_handoff_not_found                   no such session, or not a session id
  *   409 newo_handoff_not_open                    no callback owed: no requested or failed handoff and no record
  *   409 newo_handoff_already_resolved            a person already closed it
  *   409 newo_handoff_resolution_replay_conflict  the key was used for a different resolution
@@ -99,10 +100,13 @@ export async function handleNewoHandoffResolutionRoute(
 ): Promise<Response | null> {
   const match = new URL(req.url).pathname.match(ROUTE);
   if (!match) return null;
-  const sessionId = decodedSegment(match[1]!);
-  if (newoTenantId(env) !== auth.session.tenant_id || !sessionId || !SESSION_ID.test(sessionId)) {
-    return json({ error: "not_found" }, 404);
+  // A person of another tenant reaches nothing here: refused before any lookup, for any session id,
+  // so the answer says nothing about this tenant's sessions.
+  if (newoTenantId(env) !== auth.session.tenant_id) {
+    return json({ error: "newo_handoff_resolution_tenant_mismatch" }, 404);
   }
+  const sessionId = decodedSegment(match[1]!);
+  if (!sessionId || !SESSION_ID.test(sessionId)) return json({ error: "newo_handoff_not_found" }, 404);
   try {
     if (req.method === "GET") return await readResolution(env, auth, sessionId);
     if (req.method === "POST") return await recordResolution(req, env, auth, sessionId);

@@ -67,7 +67,8 @@ class TestD1 {
 
 type TestEnv = AppEnv & { DB: TestD1 };
 
-function testEnv(): TestEnv {
+/** Every migration, the synthetic people, and (unless `seedSessions` is false) three Newo sessions. */
+function testEnv(options: { seedSessions?: boolean } = {}): TestEnv {
   const DB = new TestD1();
   DB.sqlite.exec("PRAGMA foreign_keys = ON");
   for (const name of readdirSync(new URL("../migrations/", import.meta.url))
@@ -88,13 +89,15 @@ function testEnv(): TestEnv {
       (session_id, status, handoff_status, structured_json, raw_key, payload_hash, created_at, updated_at)
      VALUES (?, 'completed', ?, '{}', ?, ?, ?, ?)`,
   );
-  session.run("newo-session-failed-1", "failed", "raw/newo/1", "a".repeat(64), at(-30), at(-30));
-  session.run("newo-session-failed-2", "failed", "raw/newo/2", "b".repeat(64), at(-20), at(-20));
-  session.run("newo-session-connected", "connected", "raw/newo/3", "c".repeat(64), at(-10), at(-10));
+  if (options.seedSessions !== false) {
+    session.run("newo-session-failed-1", "failed", "raw/newo/1", "a".repeat(64), at(-30), at(-30));
+    session.run("newo-session-failed-2", "failed", "raw/newo/2", "b".repeat(64), at(-20), at(-20));
+    session.run("newo-session-connected", "connected", "raw/newo/3", "c".repeat(64), at(-10), at(-10));
+  }
   return { APP_TENANT_ID: TENANT, APP_AUTH_PEPPER: PEPPER, DB } as unknown as TestEnv;
 }
 
-async function personAuth(env: TestEnv, userId: string): Promise<AuthContext> {
+async function personAuth(env: TestEnv, userId: string, tenant = TENANT): Promise<AuthContext> {
   const token = randomToken();
   env.DB.sqlite
     .prepare(
@@ -103,7 +106,7 @@ async function personAuth(env: TestEnv, userId: string): Promise<AuthContext> {
          created_ip_hash, created_user_agent_hash, device_id)
        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
     )
-    .run(await sessionHashFor(env, token), userId, TENANT, at(-1), at(60), at(-1), "d".repeat(64), "e".repeat(64));
+    .run(await sessionHashFor(env, token), userId, tenant, at(-1), at(60), at(-1), "d".repeat(64), "e".repeat(64));
   const outcome = await authenticateAppRequest(
     new Request("https://app.example.invalid/api/v1/session", { headers: { cookie: `__Host-ironwrap_session=${token}` } }),
     env,
@@ -278,7 +281,8 @@ test("a requested callback is not a failed handoff: it is an open callback a per
     ["newo-session-requested", "urgent"],
   ]);
   assert.equal(model.counts.open_callbacks, 1);
-  assert.equal(model.status, "attention");
+  // That an open callback alone keeps the model in attention is shown on a ready integration with
+  // nothing else open ("an open callback alone moves a ready integration to attention").
   // The overview carries no caller identity or content; the resolution read carries what a
   // person needs to call back.
   assert.deepEqual(Object.keys(model.exceptions.open_callbacks[0]!).sort(), [
@@ -312,6 +316,16 @@ function requestCallback(
 ) {
   const raw = env.DB.sqlite;
   const minutes = options.minutesAgo ?? 5;
+  // recorded_at is D1's clock, not the session's times. Each record waits until that clock has
+  // passed every earlier record, so the order of these calls is the order the callbacks waited.
+  const latest = (raw.prepare("SELECT MAX(recorded_at) AS latest FROM newo_callback_records").get() as {
+    latest: string | null;
+  }).latest;
+  while (latest !== null && String((raw.prepare(
+    "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now",
+  ).get() as { now: string }).now) <= latest) {
+    // Spin for at most a millisecond; SQLite's clock has millisecond precision.
+  }
   raw.prepare(
     `INSERT INTO newo_sessions
       (session_id, status, handoff_status, urgency, structured_json, raw_key, payload_hash, created_at, updated_at)
@@ -405,22 +419,29 @@ test("a callback recorded from a late event is open and can be closed though the
 
 test("open callbacks list the most urgent first, then the longest waiting, for this tenant only", async () => {
   const env = testEnv();
-  requestCallback(env, "newo-session-routine-old", { urgency: "routine", minutesAgo: 50 });
-  requestCallback(env, "newo-session-urgent-new", { urgency: "urgent", minutesAgo: 5 });
-  requestCallback(env, "newo-session-urgent-old", { urgency: "urgent", minutesAgo: 40 });
+  // The order of these calls is the order D1 recorded them (requestCallback advances its clock).
+  // The two urgent callbacks' ids sort the other way round (urgent-b's before urgent-a's), so only
+  // the wait order puts urgent-a first.
+  requestCallback(env, "newo-session-routine-old", { urgency: "routine" });
+  requestCallback(env, "newo-session-urgent-a", { urgency: "urgent" });
   // The session's urgency rose after the callback was recorded: the higher one counts.
-  requestCallback(env, "newo-session-rose", { urgency: "routine", minutesAgo: 30 });
+  requestCallback(env, "newo-session-rose", { urgency: "routine" });
+  requestCallback(env, "newo-session-urgent-b", { urgency: "urgent" });
   env.DB.sqlite.prepare("UPDATE newo_sessions SET urgency = 'emergency' WHERE session_id = 'newo-session-rose'").run();
+  const recorded = (env.DB.sqlite.prepare(
+    "SELECT recorded_at FROM newo_callback_records ORDER BY rowid",
+  ).all() as Array<{ recorded_at: string }>).map((row) => row.recorded_at);
+  assert.deepEqual(recorded, [...new Set(recorded)].sort(), "D1 recorded the callbacks in call order, each later");
   // Another tenant's record never shows here.
   env.DB.sqlite.prepare(
     `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency)
-     VALUES (?, 'other-tenant', 'newo-session-urgent-new', 'newo-session-urgent-new-event', 'callback_requested', 'emergency')`,
+     VALUES (?, 'other-tenant', 'newo-session-urgent-b', 'newo-session-urgent-b-event', 'callback_requested', 'emergency')`,
   ).run(`ncb_${"0".repeat(32)}`);
   const model = await buildNewoOperationsReadModel(env as never);
   assert.deepEqual(model.exceptions.open_callbacks.map(({ session_id, urgency }) => [session_id, urgency]), [
     ["newo-session-rose", "emergency"],
-    ["newo-session-urgent-old", "urgent"],
-    ["newo-session-urgent-new", "urgent"],
+    ["newo-session-urgent-a", "urgent"],
+    ["newo-session-urgent-b", "urgent"],
     ["newo-session-routine-old", "routine"],
   ]);
   assert.equal(model.counts.open_callbacks, 4);
@@ -593,4 +614,74 @@ test("a failed session's callback, written by the Worker, is open until a person
     (env.DB.sqlite.prepare("SELECT reason FROM audit_log WHERE automation = 'newo_callback_resolution'").get() as { reason: string }).reason,
     "ops:session_failed",
   );
+});
+
+/** A Newo integration whose every readiness check passes, so only the owned record moves `status`. */
+function readyIntegration() {
+  return {
+    checks: {
+      d1: true, schema: true, raw_store_binding: true, newo_enabled: true, newo_webhook_credentials: true,
+      newo_api_authentication: true, newo_production_actor: true, newo_report_webhook_match: true,
+      newo_configuration_drift: true, newo_queue_binding: true, newo_dlq_state: true,
+      newo_frappe_readiness: true, newo_jobnimbus_bridge: true, newo_booking_mode: true,
+    },
+    newo: {
+      required: true, enabled: true, booking_mode: "request_only", outbound_enabled: false,
+      control_write_enabled: false, drift_reasons: [],
+    },
+  };
+}
+
+test("an open callback alone moves a ready integration to attention, and closing it returns it to ready", async () => {
+  // No failed handoff, no other exception: nothing but the callback can move the status.
+  const env = testEnv({ seedSessions: false });
+  const sources = { readiness: async () => readyIntegration(), openIncidentCount: async () => 0 };
+  const model = async () => await buildNewoOperationsReadModel(env as never, new Date(), sources as never);
+  assert.equal((await model()).status, "ready");
+
+  requestCallback(env, "newo-session-requested");
+  const open = await model();
+  assert.equal(open.status, "attention");
+  // Of every count the attention rule reads, only the open callback is above zero.
+  const { failed_sync, failed_events, missing_reports, failed_handoffs, open_callbacks, pending_bookings,
+    control_failures, dlq_items, unresolved_incidents } = open.counts;
+  assert.deepEqual(
+    { failed_sync, failed_events, missing_reports, failed_handoffs, open_callbacks, pending_bookings,
+      control_failures, dlq_items, unresolved_incidents },
+    { failed_sync: 0, failed_events: 0, missing_reports: 0, failed_handoffs: 0, open_callbacks: 1,
+      pending_bookings: 0, control_failures: 0, dlq_items: 0, unresolved_incidents: 0 },
+  );
+
+  const owner = await personAuth(env, USERS.owner.id);
+  const closed = await call(env, owner, "newo-session-requested", { outcome: "called_back", note: "Called back." });
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.equal((await model()).status, "ready");
+});
+
+test("a person of another tenant reaches no callback here: a named refusal, and nothing changes", async () => {
+  const env = testEnv();
+  requestCallback(env, "newo-session-requested");
+  // An active owner of another tenant, signed in to that tenant.
+  env.DB.sqlite.prepare(
+    `INSERT INTO app_users
+      (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+       active, created_by, created_at, updated_at)
+     VALUES ('appu_owner_other', 'other-tenant', 'owner-other@example.invalid', 'Other Owner', 'owner', 'owner',
+       NULL, 1, 'owner@example.invalid', ?, ?)`,
+  ).run(at(-60), at(-60));
+  const outsider = await personAuth({ ...env, APP_TENANT_ID: "other-tenant" } as TestEnv, "appu_owner_other", "other-tenant");
+  const counts = async () => {
+    const all = await newoOperationalCounts(env as never);
+    return [all.open_callbacks, all.failed_handoffs];
+  };
+  const before = await counts();
+  for (const sessionId of ["newo-session-requested", "newo-session-failed-1", "newo-session-missing"]) {
+    const write = await call(env, outsider, sessionId, { outcome: "called_back", note: "Called back." });
+    assert.deepEqual([write.status, write.body.error], [404, "newo_handoff_resolution_tenant_mismatch"], sessionId);
+    const read = await call(env, outsider, sessionId);
+    assert.deepEqual([read.status, read.body.error], [404, "newo_handoff_resolution_tenant_mismatch"], sessionId);
+  }
+  assert.equal(env.DB.sqlite.prepare("SELECT count(*) AS n FROM newo_handoff_resolutions").get()?.n, 0);
+  assert.equal(env.DB.sqlite.prepare("SELECT count(*) AS n FROM audit_log").get()?.n, 0);
+  assert.deepEqual(await counts(), before);
 });

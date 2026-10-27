@@ -725,7 +725,8 @@ callback nobody made.
   is `failed` or `requested`, or that it has a callback record; that the resolver is an active
   owner or ops user holding that role; that a note is present; and that `resolved_at` is D1's own
   clock. An exact replay returns the stored record.
-- Each refusal has its own code: `newo_handoff_resolution_person_required`,
+- Each refusal has its own code: `newo_handoff_resolution_tenant_mismatch` (a person of another
+  tenant, refused before any lookup), `newo_handoff_resolution_person_required`,
   `newo_handoff_resolution_role_required`, `csrf_failed`, `idempotency_key_required`,
   `invalid_newo_handoff_resolution`, `newo_handoff_resolution_outcome_required`,
   `newo_handoff_resolution_note_required`, `newo_handoff_resolution_note_too_long`,

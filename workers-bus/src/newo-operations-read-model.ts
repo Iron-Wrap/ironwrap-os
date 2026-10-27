@@ -167,10 +167,27 @@ const SESSION_COLUMNS = `session_id, channel, direction, status, outcome, divisi
 
 const OPERATIONS_LIMIT = 25;
 
+/** Where the model reads the integration's readiness and Frappe's open Newo incidents. */
+export interface NewoOperationsSources {
+  readiness: (env: Env) => ReturnType<typeof getReadiness>;
+  openIncidentCount: (env: Env) => Promise<number | null>;
+}
+
+const DEFAULT_SOURCES: NewoOperationsSources = {
+  readiness: getReadiness,
+  openIncidentCount: getNewoOpenIncidentCount,
+};
+
+/**
+ * The owner and ops view of Newo operations. `sources` replaces the readiness and incident reads,
+ * which call Newo and Frappe; tests use it to reach a ready integration.
+ */
 export async function buildNewoOperationsReadModel(
   env: Env,
   now = new Date(),
+  sources: Partial<NewoOperationsSources> = {},
 ): Promise<NewoOperationsReadModel> {
+  const read = { ...DEFAULT_SOURCES, ...sources };
   const [
     readiness,
     counts,
@@ -188,9 +205,9 @@ export async function buildNewoOperationsReadModel(
     fiveMinute,
     daily,
   ] = await Promise.all([
-    getReadiness(env),
+    read.readiness(env),
     newoOperationalCounts(env),
-    getNewoOpenIncidentCount(env),
+    read.openIncidentCount(env),
     listSessions(env, "recent", OPERATIONS_LIMIT),
     listSessions(env, "missing_report", OPERATIONS_LIMIT),
     listSessions(env, "failed_handoff", OPERATIONS_LIMIT),

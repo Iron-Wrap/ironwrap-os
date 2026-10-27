@@ -568,6 +568,8 @@ export async function consumeDevicePairing(
   env: Env,
   input: {
     tokenHash: string;
+    /** This deployment's configured tenant; a pairing issued for any other is never consumed. */
+    tenantId: string;
     deviceId: string;
     deviceProofHash: string;
     sessionHash: string;
@@ -585,8 +587,9 @@ export async function consumeDevicePairing(
      WHERE p.token_hash = ? AND p.consumed_at IS NULL AND p.revoked_at IS NULL
        AND p.expires_at > ? AND u.active = 1
        AND u.access_role = 'field'
+       AND p.tenant_id = ?
      LIMIT 1`,
-  ).bind(input.tokenHash, input.createdAt).first<AppUserRecord>();
+  ).bind(input.tokenHash, input.createdAt, input.tenantId).first<AppUserRecord>();
   if (!candidate) return null;
 
   // Claim before creating a session. The compare-and-set makes the opaque QR secret
@@ -595,8 +598,8 @@ export async function consumeDevicePairing(
   const claim = await env.DB.prepare(
     `UPDATE app_device_pairings SET consumed_at = ?
      WHERE token_hash = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
-       AND expires_at > ?`,
-  ).bind(input.createdAt, input.tokenHash, candidate.user_id, input.createdAt).run();
+       AND expires_at > ? AND tenant_id = ?`,
+  ).bind(input.createdAt, input.tokenHash, candidate.user_id, input.createdAt, input.tenantId).run();
   if (d1Changes(claim) !== 1) return null;
 
   try {
@@ -713,6 +716,18 @@ export async function findActiveSession(
          OR (s.device_id IS NOT NULL AND d.device_id IS NOT NULL AND d.revoked_at IS NULL))
      LIMIT 1`,
   ).bind(sessionHash, configuredTenantId, now, configuredTenantId).first<AppSessionRecord>();
+}
+
+/**
+ * The phone on the tenant's saved company profile, exactly as stored, or null when no owner has
+ * saved a profile yet (the deployment defaults carry no phone). One primary-key row read only by
+ * the routes that answer with a session envelope; `company-setup-store.ts` owns the profile.
+ */
+export async function findSavedCompanyPhone(env: Env, tenantId: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT phone FROM tenant_company_profiles WHERE tenant_id = ? LIMIT 1",
+  ).bind(tenantId).first<{ phone: string | null }>();
+  return row?.phone ?? null;
 }
 
 export async function touchSession(env: Env, sessionHash: string, now: string): Promise<void> {

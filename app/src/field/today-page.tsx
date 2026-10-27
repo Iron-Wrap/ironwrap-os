@@ -17,6 +17,8 @@ import {
 } from "./field-formatting";
 import { messageForLoad } from "../lib/plain-error";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
+import { JobStopBanner, TenantStopBanner } from "./stop-banner";
+import { uniqueStops } from "./stop-words";
 import { OfflineReadiness } from "./offline-readiness";
 
 // Office roles only (see the note where it renders). A static import made the crew phone fetch
@@ -208,6 +210,12 @@ export function TodayPage() {
         />
       ) : (
         <section aria-labelledby="today-run-sheet-heading">
+          <div className="mb-4 empty:hidden">
+            <TenantStopBanner
+              stops={uniqueStops(today.jobs.map((job) => job.active_stops ?? []))}
+              dateOptions={dateOptions}
+            />
+          </div>
           <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
             <div>
               <h2 id="today-run-sheet-heading" className="text-2xl font-bold tracking-[-0.035em]">
@@ -397,6 +405,13 @@ function TodayJobRow({
           <h3 className="mt-1 text-xl font-bold leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
             {job.address ?? "Address unavailable"}
           </h3>
+          <div className="mt-3 empty:hidden">
+            <JobStopBanner
+              stops={job.active_stops ?? []}
+              job={{ address: job.address, code: job.job_number }}
+              dateOptions={dateOptions}
+            />
+          </div>
           {blocked ? (
             <div className="mt-3 flex items-start gap-2 text-danger">
               <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />

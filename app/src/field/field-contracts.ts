@@ -267,6 +267,21 @@ export const proofStreamItemSchema = z.lazy(() =>
   }),
 );
 
+/**
+ * A work stop that holds a job (Track C's read shape): "job" when it is on this job or one of its
+ * plans, "tenant" when its job wasn't found, so it holds every job. An unknown scope reads as
+ * "job", so a stop is never dropped.
+ */
+export const activeStopSchema = z.object({
+  occurrence_id: z.string(),
+  scope: z.enum(["job", "tenant"]).catch("job"),
+  reported_at: z.string(),
+  summary: z.string().nullable(),
+  raiser_display_name: z.string().nullable(),
+});
+
+export type ActiveStop = z.infer<typeof activeStopSchema>;
+
 export const todayResponseSchema = envelopeSchema.extend({
   date: z.string().min(1),
   jobs: z.array(
@@ -281,6 +296,8 @@ export const todayResponseSchema = envelopeSchema.extend({
       blocked_gate_count: z.number().int().nonnegative(),
       next_action: z.string().min(1),
       assignment: assignmentSchema.nullable(),
+      // Absent on run sheets from before the Worker carried it; empty when no stop holds the job.
+      active_stops: z.array(activeStopSchema).default([]),
     }),
   ),
   work_objects: z

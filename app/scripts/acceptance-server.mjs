@@ -140,6 +140,35 @@ const fixtureToday = {
   ],
 };
 
+// ACCEPTANCE_ACTIVE_STOPS=job|tenant|both: the run sheet's job carries active work stops in Track
+// C's active_stops shape, so the crew phone's stop banners can be exercised and captured.
+const acceptanceActiveStops = {
+  job: {
+    occurrence_id: "so_acceptance_job_stop",
+    scope: "job",
+    reported_at: "2026-07-10T16:24:00.000Z",
+    summary: "Ice on the north slope",
+    raiser_display_name: "Tom Lachance",
+  },
+  tenant: {
+    occurrence_id: "so_acceptance_tenant_stop",
+    scope: "tenant",
+    reported_at: "2026-07-10T15:50:00.000Z",
+    summary: "Loose sheets on the ridge",
+    raiser_display_name: "Priya Nand",
+  },
+};
+
+function todayWithActiveStops(today) {
+  const mode = process.env.ACCEPTANCE_ACTIVE_STOPS;
+  if (!mode) return today;
+  const stops = [
+    ...(mode === "tenant" || mode === "both" ? [acceptanceActiveStops.tenant] : []),
+    ...(mode === "job" || mode === "both" ? [acceptanceActiveStops.job] : []),
+  ];
+  return { ...today, jobs: today.jobs.map((job) => ({ ...job, active_stops: stops })) };
+}
+
 const fixtureOperatingIntake = {
   version: 1,
   operating_authority: "d1",
@@ -3265,7 +3294,7 @@ const requestListener = async (request, response) => {
     return sendJson(response, method, 200, fixtureFleetPanel());
   }
   if (requestUrl.pathname === "/api/v1/today") {
-    return sendJson(response, method, 200, fixtureToday);
+    return sendJson(response, method, 200, todayWithActiveStops(fixtureToday));
   }
   if (requestUrl.pathname === "/api/v1/operating-intake") {
     return sendJson(response, method, 200, fixtureOperatingIntake);

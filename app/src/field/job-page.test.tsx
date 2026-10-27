@@ -472,6 +472,8 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
+    expect(screen.getByText("Shop Order · SHOP-001")).toBeVisible();
+    expect(screen.queryByText("Applies to")).toBeNull();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: /Add proof/ })[0]).toHaveAttribute(
@@ -916,6 +918,32 @@ describe("JobPage", () => {
 
     expect(await screen.findByText(/This is a saved copy from/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
+  });
+
+  it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
+    const first = renderJob(workPackageModel());
+    expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
+    expect(screen.getByText("Applies to")).toBeVisible();
+    expect(screen.getByText("IW-1042, 123 Example Avenue, Calgary, AB")).toBeVisible();
+    expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
+    expect(screen.queryByText("Work object")).toBeNull();
+    first.unmount();
+
+    // A plan whose read had no scope ids (the read fills in "unknown") still names this job.
+    const model = workPackageModel();
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...releasedWorkPackage(),
+          work_object_id: "unknown",
+          physical_context_id: "unknown",
+        },
+      },
+    });
+    expect(await screen.findByText("IW-1042, 123 Example Avenue, Calgary, AB")).toBeVisible();
+    expect(screen.queryByText(/unknown/)).toBeNull();
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {

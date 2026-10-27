@@ -625,7 +625,7 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 }
 
 type WorkPackagePanelModel = {
-  job: Pick<JobResponse["job"], "id">;
+  job: Pick<JobResponse["job"], "id"> & Partial<Pick<JobResponse["job"], "job_number" | "address">>;
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
   packet: Pick<JobResponse["packet"], "work_package">;
@@ -656,6 +656,38 @@ function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObje
     physical_context_type: workPackage.physical_context_type,
     physical_context_id: workPackage.physical_context_id,
   };
+}
+
+/** The read's word for a scope id it did not get (field-contracts.ts); never shown to a crew. */
+const MISSING_SCOPE_ID = "unknown";
+
+/**
+ * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by its
+ * number and address, never by record ids or a placeholder (gate e-crew-version-copy: "Roof Job ·
+ * unknown"). Any other scope keeps its type and id, and leaves out an id the read did not get.
+ */
+function planScopeFacts(
+  workPackage: FieldWorkPackage,
+  job: WorkPackagePanelModel["job"],
+): Array<{ label: string; value: string }> {
+  const known = (id: string) => (id && id !== MISSING_SCOPE_ID ? id : null);
+  const objectId = known(workPackage.work_object_id);
+  if (workPackage.work_object_type === "Roof Job" && (!objectId || objectId === job.id)) {
+    const where = [job.job_number ?? "This job", job.address].filter(Boolean).join(", ");
+    return [{ label: "Applies to", value: where }];
+  }
+  return [
+    {
+      label: "Work object",
+      value: joinKnown([workPackage.work_object_type, objectId]) ?? workPackage.work_object_type,
+    },
+    {
+      label: "Work area",
+      value:
+        joinKnown([workPackage.physical_context_type, known(workPackage.physical_context_id)]) ??
+        workPackage.physical_context_type,
+    },
+  ];
 }
 
 function workPackageActionPayload(
@@ -1024,14 +1056,9 @@ function WorkPackagePanel({
           />
         </dl>
         <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
-          <JobFact
-            label="Work object"
-            value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
-          />
-          <JobFact
-            label="Work area"
-            value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
-          />
+          {planScopeFacts(workPackage, model.job).map((fact) => (
+            <JobFact key={fact.label} label={fact.label} value={fact.value} />
+          ))}
         </dl>
       </header>
 

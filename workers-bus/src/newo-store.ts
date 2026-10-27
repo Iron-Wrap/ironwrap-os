@@ -235,9 +235,15 @@ export async function failNewoReceipt(
 }
 
 /**
+ * Why a caller is owed a callback (migration 0168): the receptionist requested one, the handoff
+ * failed, or the session failed while the session knows how to reach the caller.
+ */
+export type NewoCallbackReason = "callback_requested" | "handoff_failed" | "session_failed";
+
+/**
  * The callback a Newo caller is owed (migration 0168): one append-only row per tenant and session,
- * written in the same D1 batch as the session when an accepted event leaves its handoff
- * `requested` or `failed`. D1 stamps `recorded_at`; the Worker never sends a time.
+ * written in the same D1 batch as the session by the accepted event that leaves a callback owed.
+ * D1 stamps `recorded_at`; the Worker never sends a time.
  */
 export interface NewoCallbackRecordInput {
   callback_id: string;
@@ -245,9 +251,10 @@ export interface NewoCallbackRecordInput {
   session_id: string;
   /** The event whose acceptance wrote the record. */
   event_id: string;
-  handoff_status: "requested" | "failed";
+  reason: NewoCallbackReason;
   urgency: "routine" | "urgent" | "emergency";
-  reason: string | null;
+  /** The receptionist's handoff summary, when the event carried one. */
+  handoff_summary: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   contact_email: string | null;
@@ -261,8 +268,8 @@ export interface NewoCallbackRecord extends NewoCallbackRecordInput {
   recorded_at: string;
 }
 
-const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, handoff_status, urgency,
-       reason, contact_name, contact_phone, contact_email, address_line1, city, province,
+const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, reason, urgency,
+       handoff_summary, contact_name, contact_phone, contact_email, address_line1, city, province,
        postal_code`;
 
 /**
@@ -293,9 +300,9 @@ export async function recordNewoSession(
       callback.tenant_id,
       callback.session_id,
       callback.event_id,
-      callback.handoff_status,
-      callback.urgency,
       callback.reason,
+      callback.urgency,
+      callback.handoff_summary,
       callback.contact_name,
       callback.contact_phone,
       callback.contact_email,
@@ -616,10 +623,11 @@ export const UNRESOLVED_FAILED_HANDOFF = `handoff_status = 'failed'
          )`;
 
 /**
- * A requested callback stays open until a person of this deployment's tenant records how it ended
- * (the same 0151 resolution). A callback whose session failed is counted once, as a failed
- * handoff, so each caller owed a call appears in one list. Alias the callback record `callback`
- * and bind `newoTenantId` to the placeholder.
+ * A callback record stays open until a person of this deployment's tenant records how it ended
+ * (the same 0151 resolution). A callback whose session's handoff failed is counted once, as a
+ * failed handoff, so each caller owed a call appears in one list; a requested callback and a
+ * failed session's callback are open callbacks. Alias the callback record `callback` and bind
+ * `newoTenantId` to the placeholder.
  */
 export const OPEN_CALLBACK = `callback.tenant_id = ?
          AND NOT EXISTS (
@@ -634,7 +642,7 @@ export const OPEN_CALLBACK = `callback.tenant_id = ?
 
 /**
  * `failed_handoffs` counts only the failed handoffs no person has resolved; `open_callbacks` the
- * requested callbacks no person has closed.
+ * other callbacks no person has closed (requested ones and failed sessions').
  */
 export async function newoOperationalCounts(env: Env): Promise<{
   sessions: number;

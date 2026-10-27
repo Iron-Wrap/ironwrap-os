@@ -10,6 +10,7 @@ import {
   canonicalJson,
   handleNewoQueueMessage,
   newoHandoffStatus,
+  newoCallbackRecordInput,
   newoOwnerAlertMarker,
   newoOwnerAlerts,
   newoUrgency,
@@ -276,7 +277,7 @@ function fakeNewoEnv() {
                   if (callbacks.has(key)) return { success: true, meta: { changes: 0 } };
                   callbacks.set(key, {
                     callback_id: args[0], tenant_id: args[1], session_id: args[2], event_id: args[3],
-                    handoff_status: args[4], urgency: args[5], reason: args[6], contact_name: args[7],
+                    reason: args[4], urgency: args[5], handoff_summary: args[6], contact_name: args[7],
                     contact_phone: args[8], contact_email: args[9], address_line1: args[10], city: args[11],
                     province: args[12], postal_code: args[13],
                   });
@@ -1207,7 +1208,7 @@ function alertingNewoState(t: { mock: { method: typeof import("node:test").mock.
     "SELECT handoff_status, urgency FROM newo_sessions WHERE session_id = ?",
   ).get("session-001") as { handoff_status: string | null; urgency: string | null } | undefined;
   const callbackRecords = () => state.db.raw.prepare(
-    "SELECT session_id, event_id, handoff_status, urgency, reason, contact_phone FROM newo_callback_records ORDER BY recorded_at",
+    "SELECT session_id, event_id, reason, urgency, handoff_summary, contact_phone FROM newo_callback_records ORDER BY recorded_at",
   ).all().map((row) => ({ ...row })) as Array<Record<string, unknown>>;
   const markers = () => [...objects.keys()].filter((key) => key.includes("owner-alerts")).sort();
   return { env, objects, queue, gmail, r2, emails, timedOut, deliver, session, callbackRecords, markers };
@@ -1240,8 +1241,8 @@ test("an emergency session that closes without a handoff emails the owner and th
     }
   }
   // The failed handoff has its D1 callback record, written with the session.
-  assert.deepEqual(alerting.callbackRecords().map(({ handoff_status, urgency }) => [handoff_status, urgency]), [
-    ["failed", "emergency"],
+  assert.deepEqual(alerting.callbackRecords().map(({ reason, urgency }) => [reason, urgency]), [
+    ["handoff_failed", "emergency"],
   ]);
 });
 
@@ -1258,9 +1259,9 @@ test("a requested callback emails the owner and the backup, urgently when the ca
   assert.deepEqual(alerting.callbackRecords(), [{
     session_id: "session-001",
     event_id: "event-handoff-001",
-    handoff_status: "requested",
+    reason: "callback_requested",
     urgency: "urgent",
-    reason: "Caller asked for a person.",
+    handoff_summary: "Caller asked for a person.",
     contact_phone: "+15875557788",
   }]);
 });
@@ -1421,4 +1422,80 @@ test("a failure alert whose send fails is not recorded as sent, so the next even
   assert.equal(await alerting.deliver("/webhook/newo/report", later), 200);
   assert.deepEqual(toAlertBoxes(alerting.emails), FAILURE_BOXES);
   assert.equal(alerting.objects.has("raw/newo/owner-alerts/session-001/failure.json"), true);
+});
+
+// A failed session that is not a failed handoff (owner ruling on #58): no caller rests on an email
+// alone, so one the session can reach gets a callback record, `session_failed`.
+function failedSession(overrides: Partial<NewoEventV1> = {}): NewoEventV1 {
+  return newoEvent({
+    event_id: "event-failed-001",
+    event_type: "session_failed",
+    outcome: { ...newoEvent().outcome, status: "failed", ended_at: "2026-07-18T18:04:00.000Z", duration_seconds: 240 },
+    ...overrides,
+  });
+}
+
+const NO_CONTACT: NewoEventV1["contact"] = {
+  name: null,
+  phone: null,
+  email: null,
+  address: { line1: null, city: null, province: null, postal_code: null },
+};
+
+test("a failed session with the caller's contact gets exactly one callback record, idempotent on retry", async (t) => {
+  await t.test("the contact is on the failed-session event", async (subtest) => {
+    const alerting = alertingNewoState(subtest);
+    alerting.queue.failNext = true;
+    // Newo's first delivery writes the session and the record, then fails at the queue; its retry
+    // and a second failed-session event of the same session add nothing.
+    assert.equal(await alerting.deliver("/webhook/newo/report", failedSession()), 500);
+    assert.equal(await alerting.deliver("/webhook/newo/report", failedSession()), 200);
+    assert.equal(await alerting.deliver("/webhook/newo/report", failedSession({ event_id: "event-failed-002" })), 200);
+    assert.deepEqual(alerting.callbackRecords(), [{
+      session_id: "session-001",
+      event_id: "event-failed-001",
+      reason: "session_failed",
+      urgency: "routine",
+      handoff_summary: null,
+      contact_phone: "+15875557788",
+    }]);
+    assert.equal(alerting.session()?.handoff_status, null);
+    // The urgent email still goes out, once.
+    assert.deepEqual(toAlertBoxes(alerting.emails), FAILURE_BOXES);
+  });
+
+  await t.test("the contact came with an earlier event of the session", async (subtest) => {
+    const alerting = alertingNewoState(subtest);
+    assert.equal(await alerting.deliver("/webhook/newo", newoEvent()), 200);
+    assert.equal(await alerting.deliver("/webhook/newo/report", failedSession({ contact: NO_CONTACT })), 200);
+    assert.deepEqual(alerting.callbackRecords().map(({ event_id, reason, contact_phone }) => [event_id, reason, contact_phone]), [
+      ["event-failed-001", "session_failed", "+15875557788"],
+    ]);
+  });
+});
+
+test("a failed session nobody can call back gets no callback record, and D1 refuses one", async (t) => {
+  const alerting = alertingNewoState(t);
+  assert.equal(await alerting.deliver("/webhook/newo/report", failedSession({ contact: NO_CONTACT })), 200);
+  assert.deepEqual(alerting.callbackRecords(), []);
+  // The owner is still told; there is simply no one to call.
+  assert.deepEqual(toAlertBoxes(alerting.emails), FAILURE_BOXES);
+  assert.equal(
+    await newoCallbackRecordInput(alerting.env as never, failedSession({ contact: NO_CONTACT }), null),
+    null,
+  );
+  // A routine session that ended normally owes no callback either.
+  assert.equal(await newoCallbackRecordInput(alerting.env as never, closingReport("routine"), null), null);
+  // D1 refuses a failed session's record that names no phone and no email.
+  const db = alerting.env.DB as unknown as {
+    prepare(sql: string): { bind(...args: unknown[]): { run(): Promise<unknown> } };
+  };
+  await assert.rejects(
+    db.prepare(
+      `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency)
+       VALUES (?, 'ironwrap', 'session-001', 'event-failed-001', 'session_failed', 'routine')`,
+    ).bind(`ncb_${"a".repeat(32)}`).run(),
+    /CHECK constraint failed/,
+  );
+  assert.deepEqual(alerting.callbackRecords(), []);
 });

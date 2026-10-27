@@ -2,26 +2,33 @@
 -- person.
 --
 -- The receptionist is callback only (owner decisions MD-05 and D-03): a caller who wants a person
--- is called back, never put through. So a requested callback is the only way such a caller
--- reaches a person, and it needs an owned record, not only a session row that later events update
--- and an owner email sent on a best-effort basis. The Worker writes one append-only row per Newo
--- session, in the same D1 batch as the session write, when an accepted event leaves the session's
--- handoff `requested` (the receptionist asked for a callback) or `failed` (the request did not
--- arrive or could not be processed, including an emergency call that closed without one). The row
--- names the tenant, the session, the event that opened it, the handoff status and urgency at that
--- moment, the reason the receptionist gave, and the caller's contact details as the session knew
--- them, which are the details the owner email already carries. D1 stamps `recorded_at` from its
--- own clock; a time the caller supplies is refused.
+-- is called back, never put through. So a callback is the only way such a caller reaches a person,
+-- and no caller may rest on an owner email alone: each one needs an owned record, not only a
+-- session row that later events update and an email sent on a best-effort basis. The Worker writes
+-- one append-only row per Newo session, in the same D1 batch as the session write, when an
+-- accepted event leaves a callback owed. `reason` says why:
+--
+--   callback_requested  the session's handoff is `requested`: the receptionist asked for one;
+--   handoff_failed      the handoff is `failed`: the request did not arrive or could not be
+--                       processed, including an emergency call that closed without one;
+--   session_failed      the session failed (`session_failed`) with no failed handoff, and the
+--                       session knows the caller's phone or email. A failed session nobody can
+--                       call back gets no record, and D1 refuses one.
+--
+-- The row names the tenant, the session, the event that opened it, the urgency at that moment,
+-- the receptionist's handoff summary, and the caller's contact details as the session knew them,
+-- which are the details the owner email already carries. D1 stamps `recorded_at` from its own
+-- clock; a time the caller supplies is refused.
 --
 -- A person closes it with the 0151 resolution: one append-only `newo_handoff_resolutions` row per
 -- session, written only from a person's own cookie session in the owner or ops role. 0151's insert
--- trigger admitted only a failed handoff. This file re-creates it under its name so it also admits
--- a requested callback: a session whose handoff is `failed` or `requested` now, or one that has a
--- callback record (an event that arrives after a newer one does not update the session row, but
--- its record is still written). It also requires a note, and it requires `resolved_at` to be D1's
--- own clock. The actor check is 0151's, unchanged. The 0151 no-replace guard is re-created after
--- it, unchanged, so it still fires first and a second resolution of one session is refused as
--- already resolved.
+-- trigger admitted only a failed handoff. This file re-creates it under its name so it admits any
+-- callback owed: a session whose handoff is `failed` or `requested` now, or one that has a
+-- callback record (a failed session's record, or a record from an event that arrived after a
+-- newer one and so left the session row as it was). It also requires a note, and it requires
+-- `resolved_at` to be D1's own clock. The actor check is 0151's, unchanged. The 0151 no-replace
+-- guard is re-created after it, unchanged, so it still fires first and a second resolution of one
+-- session is refused as already resolved.
 --
 -- The two UNIQUE keys serve every lookup, so the table adds no named index. Higher-numbered
 -- migrations (0200-0206) touch only agent_* objects, and no migration after 0151 touches the
@@ -39,9 +46,11 @@ CREATE TABLE IF NOT EXISTS newo_callback_records (
   ),
   session_id TEXT NOT NULL,
   event_id TEXT NOT NULL CHECK (length(event_id) BETWEEN 1 AND 128),
-  handoff_status TEXT NOT NULL CHECK (handoff_status IN ('requested', 'failed')),
+  reason TEXT NOT NULL CHECK (reason IN ('callback_requested', 'handoff_failed', 'session_failed')),
   urgency TEXT NOT NULL CHECK (urgency IN ('routine', 'urgent', 'emergency')),
-  reason TEXT CHECK (reason IS NULL OR length(trim(reason)) BETWEEN 1 AND 1000),
+  handoff_summary TEXT CHECK (
+    handoff_summary IS NULL OR length(trim(handoff_summary)) BETWEEN 1 AND 1000
+  ),
   contact_name TEXT CHECK (contact_name IS NULL OR length(contact_name) BETWEEN 1 AND 160),
   contact_phone TEXT CHECK (contact_phone IS NULL OR length(contact_phone) BETWEEN 1 AND 40),
   contact_email TEXT CHECK (contact_email IS NULL OR length(contact_email) BETWEEN 3 AND 254),
@@ -50,6 +59,8 @@ CREATE TABLE IF NOT EXISTS newo_callback_records (
   province TEXT CHECK (province IS NULL OR length(province) BETWEEN 1 AND 80),
   postal_code TEXT CHECK (postal_code IS NULL OR length(postal_code) BETWEEN 1 AND 24),
   recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  -- A failed session is owed a callback only when someone can be called back.
+  CHECK (reason <> 'session_failed' OR contact_phone IS NOT NULL OR contact_email IS NOT NULL),
   UNIQUE (tenant_id, session_id),
   FOREIGN KEY (session_id) REFERENCES newo_sessions(session_id) ON DELETE RESTRICT
 );

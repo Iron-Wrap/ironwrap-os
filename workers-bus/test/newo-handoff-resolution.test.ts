@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import worker from "../src/index.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildNewoOperationsReadModel, newoOperationsNeedAttention } from "../src/newo-operations-read-model.ts";
@@ -44,6 +45,9 @@ class TestD1 {
       },
       first<T>() {
         return (sqlite.prepare(sql).get() as T | undefined) ?? null;
+      },
+      run() {
+        return { meta: { changes: Number(sqlite.prepare(sql).run().changes) } };
       },
     };
   }
@@ -278,8 +282,9 @@ test("a requested callback is not a failed handoff: it is an open callback a per
   // The overview carries no caller identity or content; the resolution read carries what a
   // person needs to call back.
   assert.deepEqual(Object.keys(model.exceptions.open_callbacks[0]!).sort(), [
-    "callback_id", "requested_at", "session_id", "urgency",
+    "callback_id", "reason", "requested_at", "session_id", "urgency",
   ]);
+  assert.equal(model.exceptions.open_callbacks[0]!.reason, "callback_requested");
   const ops = await personAuth(env, USERS.ops.id);
   const read = await call(env, ops, "newo-session-requested");
   assert.equal(read.status, 200);
@@ -289,7 +294,8 @@ test("a requested callback is not a failed handoff: it is an open callback a per
     email: "caller@example.invalid",
     address: { line1: "1 Example Street", city: "Edmonton", province: "AB", postal_code: "T5J 0N3" },
   });
-  assert.equal(read.body.callback.reason, "Caller asked for a person.");
+  assert.equal(read.body.callback.reason, "callback_requested");
+  assert.equal(read.body.callback.handoff_summary, "Caller asked for a person.");
   assert.equal(read.body.resolution, null);
 
   const closed = await call(env, ops, "newo-session-requested", { outcome: "called_back", note: "Booked a visit." });
@@ -302,7 +308,7 @@ test("a requested callback is not a failed handoff: it is an open callback a per
 function requestCallback(
   env: TestEnv,
   sessionId: string,
-  options: { urgency?: string; sessionStatus?: string | null; minutesAgo?: number } = {},
+  options: { urgency?: string; sessionStatus?: string | null; minutesAgo?: number; reason?: string } = {},
 ) {
   const raw = env.DB.sqlite;
   const minutes = options.minutesAgo ?? 5;
@@ -319,12 +325,12 @@ function requestCallback(
   ).run(`${sessionId}-event`, sessionId, "e".repeat(64), `raw/newo/${sessionId}`, at(-minutes), at(-minutes));
   raw.prepare(
     `INSERT INTO newo_callback_records
-      (callback_id, tenant_id, session_id, event_id, handoff_status, urgency, reason, contact_name,
+      (callback_id, tenant_id, session_id, event_id, reason, urgency, handoff_summary, contact_name,
        contact_phone, contact_email, address_line1, city, province, postal_code)
-     VALUES (?, ?, ?, ?, 'requested', ?, 'Caller asked for a person.', 'Synthetic Caller',
+     VALUES (?, ?, ?, ?, ?, ?, 'Caller asked for a person.', 'Synthetic Caller',
        '+15875550142', 'caller@example.invalid', '1 Example Street', 'Edmonton', 'AB', 'T5J 0N3')`,
   ).run(`ncb_${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`, TENANT, sessionId,
-    `${sessionId}-event`, options.urgency ?? "routine");
+    `${sessionId}-event`, options.reason ?? "callback_requested", options.urgency ?? "routine");
 }
 
 test("a callback closes with an audit row in the same batch, stamped by D1's clock", async () => {
@@ -350,7 +356,7 @@ test("a callback closes with an audit row in the same batch, stamped by D1's clo
     action: "resolve_unreachable",
     result: "ok",
     approved_by: USERS.owner.id,
-    reason: "owner:requested",
+    reason: "owner:callback_requested",
   }]);
   // An exact replay writes nothing more.
   const replay = await call(env, owner, "newo-session-requested", { outcome: "unreachable", note: "Rang twice, no answer." });
@@ -407,8 +413,8 @@ test("open callbacks list the most urgent first, then the longest waiting, for t
   env.DB.sqlite.prepare("UPDATE newo_sessions SET urgency = 'emergency' WHERE session_id = 'newo-session-rose'").run();
   // Another tenant's record never shows here.
   env.DB.sqlite.prepare(
-    `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, handoff_status, urgency)
-     VALUES (?, 'other-tenant', 'newo-session-urgent-new', 'newo-session-urgent-new-event', 'requested', 'emergency')`,
+    `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency)
+     VALUES (?, 'other-tenant', 'newo-session-urgent-new', 'newo-session-urgent-new-event', 'callback_requested', 'emergency')`,
   ).run(`ncb_${"0".repeat(32)}`);
   const model = await buildNewoOperationsReadModel(env as never);
   assert.deepEqual(model.exceptions.open_callbacks.map(({ session_id, urgency }) => [session_id, urgency]), [
@@ -431,15 +437,24 @@ test("D1 keeps the callback record append-only, stamped by its own clock, for a 
   const insert = (id: string, options: { replace?: boolean; recordedAt?: string; eventId?: string; tenant?: string } = {}) =>
     raw.prepare(
       `INSERT ${options.replace ? "OR REPLACE " : ""}INTO newo_callback_records
-        (callback_id, tenant_id, session_id, event_id, handoff_status, urgency${options.recordedAt ? ", recorded_at" : ""})
-       VALUES (?, ?, 'newo-session-requested', ?, 'requested', 'routine'${options.recordedAt ? ", ?" : ""})`,
+        (callback_id, tenant_id, session_id, event_id, reason, urgency${options.recordedAt ? ", recorded_at" : ""})
+       VALUES (?, ?, 'newo-session-requested', ?, 'callback_requested', 'routine'${options.recordedAt ? ", ?" : ""})`,
     ).run(id, options.tenant ?? TENANT, options.eventId ?? "newo-session-requested-event",
       ...(options.recordedAt ? [options.recordedAt] : []));
   assert.throws(() => insert(`ncb_${"1".repeat(32)}`), /newo_callback_record_append_only/);
   assert.throws(() => insert(`ncb_${"1".repeat(32)}`, { replace: true }), /newo_callback_record_append_only/);
   assert.throws(() => insert(`ncb_${"2".repeat(32)}`, { tenant: "other-tenant", recordedAt: at(-1) }), /newo_callback_record_clock_invalid/);
   assert.throws(() => insert(`ncb_${"3".repeat(32)}`, { tenant: "other-tenant", eventId: "unclaimed-event" }), /newo_callback_record_event_invalid/);
+  // The reason is one of three, and a failed session's record must name a phone or an email.
+  const reasoned = (id: string, reason: string, phone: string | null) => raw.prepare(
+    `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency, contact_phone)
+     VALUES (?, 'other-tenant', 'newo-session-requested', 'newo-session-requested-event', ?, 'routine', ?)`,
+  ).run(id, reason, phone);
+  assert.throws(() => reasoned(`ncb_${"4".repeat(32)}`, "caller_hung_up", "+15875550142"), /CHECK constraint failed/);
+  assert.throws(() => reasoned(`ncb_${"5".repeat(32)}`, "session_failed", null), /CHECK constraint failed/);
   assert.equal(raw.prepare("SELECT count(*) AS n FROM newo_callback_records").get()?.n, 1);
+  reasoned(`ncb_${"6".repeat(32)}`, "session_failed", "+15875550142");
+  assert.equal(raw.prepare("SELECT count(*) AS n FROM newo_callback_records").get()?.n, 2);
 });
 
 test("0168 re-creates the 0151 guards with only the callback, note and clock changes", () => {
@@ -491,4 +506,91 @@ test("a requested callback from before the record existed can still be closed", 
   assert.equal(read.body.callback, null);
   const closed = await call(env, owner, "newo-session-legacy", { outcome: "called_back", note: "Called back." });
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
+});
+
+test("a failed session's callback, written by the Worker, is open until a person closes it", async () => {
+  const env = testEnv();
+  const raw = new Map<string, string>();
+  const newoEnv = {
+    ...env,
+    NEWO_ENABLED: "true",
+    NEWO_WEBHOOK_TOKEN: "synthetic-newo-webhook-token",
+    NEWO_BOOKING_MODE: "request_only",
+    OWNER_ALERT_EMAIL: "owner@example.invalid",
+    FROM_EMAIL: "ops@example.invalid",
+    JOBNIMBUS_ENABLED: "false",
+    ERPNEXT_ENABLED: "false",
+    RAW: {
+      put: async (key: string, body: string) => { raw.set(key, body); },
+      head: async (key: string) => (raw.has(key) ? { key } : null),
+    },
+    NEWO_QUEUE: { send: async () => {} },
+    JN_QUEUE: { send: async () => {}, sendBatch: async () => {} },
+  };
+  // A synthetic failed session: the call dropped before any handoff, and the caller gave a phone.
+  const event = {
+    schema_version: "newo.event.v1",
+    event_id: "event-session-failed-1",
+    session_id: "newo-session-dropped",
+    event_type: "session_failed",
+    occurred_at: at(-3),
+    provider: { project_id: null, agent_id: null, user_actor_id: null, conversation_id: null },
+    channel: "phone",
+    direction: "inbound",
+    contact: {
+      name: "Synthetic Caller",
+      phone: "+1 (587) 555-0142",
+      email: null,
+      address: { line1: null, city: null, province: null, postal_code: null },
+    },
+    intent: { service: null, division: null, urgency: "routine", message: null },
+    consent: { ai_disclosed: true, recording_disclosed: false, follow_up_email: false, follow_up_phone: true },
+    appointment: { request_id: null, preferred_windows: [], timezone: "America/Edmonton" },
+    outcome: {
+      status: "failed", summary: null, handoff_status: null, booking_status: null, transcript_ref: null,
+      recording_ref: null, started_at: null, ended_at: null, duration_seconds: null,
+    },
+    handoff_summary: null,
+  };
+  const deliver = async () => (await worker.fetch(
+    new Request("https://bus.example.invalid/webhook/newo/report", {
+      method: "POST",
+      headers: { authorization: "Bearer synthetic-newo-webhook-token", "content-type": "application/json" },
+      body: JSON.stringify(event),
+    }),
+    newoEnv as never,
+    { waitUntil: (promise: Promise<unknown>) => void promise.catch(() => {}) } as never,
+  )).status;
+  assert.equal(await deliver(), 200);
+  assert.equal(await deliver(), 200);
+  const records = env.DB.sqlite.prepare(
+    "SELECT session_id, event_id, reason, contact_phone FROM newo_callback_records",
+  ).all().map((row) => ({ ...row }));
+  assert.deepEqual(records, [{
+    session_id: "newo-session-dropped",
+    event_id: "event-session-failed-1",
+    reason: "session_failed",
+    contact_phone: "+15875550142",
+  }]);
+
+  const before = await buildNewoOperationsReadModel(env as never);
+  assert.deepEqual(before.exceptions.open_callbacks.map(({ session_id, reason }) => [session_id, reason]), [
+    ["newo-session-dropped", "session_failed"],
+  ]);
+  assert.ok(!before.exceptions.failed_handoffs.some((session) => session.session_id === "newo-session-dropped"));
+  assert.equal(before.counts.open_callbacks, 1);
+
+  const ops = await personAuth(env, USERS.ops.id);
+  const read = await call(env, ops, "newo-session-dropped");
+  assert.equal(read.body.callback.reason, "session_failed");
+  assert.equal(read.body.callback.contact.phone, "+15875550142");
+  const closed = await call(env, ops, "newo-session-dropped", { outcome: "called_back", note: "Reached them; booked a visit." });
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  const after = await buildNewoOperationsReadModel(env as never);
+  assert.deepEqual(after.exceptions.open_callbacks, []);
+  assert.equal(after.counts.open_callbacks, 0);
+  assert.equal(
+    (env.DB.sqlite.prepare("SELECT reason FROM audit_log WHERE automation = 'newo_callback_resolution'").get() as { reason: string }).reason,
+    "ops:session_failed",
+  );
 });

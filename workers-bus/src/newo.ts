@@ -21,6 +21,7 @@ import {
   restartFailedNewoReceipt,
   markNewoSessionSync,
   touchNewoReceipt,
+  type NewoCallbackReason,
   type NewoCallbackRecordInput,
   type NewoSessionRecord,
 } from "./newo-store.ts";
@@ -838,7 +839,8 @@ function scheduleOwnerAlerts(
 ): void {
   // Best effort: a send that fails leaves this log line and no sent marker. The failure alert is
   // owed again on the session's next accepted event; a callback request alert only on Newo's
-  // retry of its own handoff event. The D1 callback record holds the callback either way.
+  // retry of its own handoff event. The D1 callback record holds the callback either way (for a
+  // failed session, when the session knows how to reach the caller).
   for (const alert of newoOwnerAlerts(event, existing)) {
     ctx.waitUntil(deliverNewoOwnerAlert(env, event, alert, processingAttempt).catch((error) =>
       console.log(JSON.stringify({ at: `newo_${alert.kind}_alert`, event_id: event.event_id, error: String(error) }))));
@@ -885,30 +887,42 @@ export function newoOwnerAlertAttemptHtml(eventId: string, processingAttempt: nu
 }
 
 /**
- * The callback record an accepted event owes (migration 0168), or null: one per session, once its
- * handoff is `requested` or `failed`. The contact details are the ones the owner email carries,
- * as the session knows them, bounded to the record's columns.
+ * The callback record an accepted event owes (migration 0168), or null: one per session, written
+ * by the first event that leaves a callback owed. A `requested` handoff is a requested callback, a
+ * `failed` one a failed handoff, and a failed session (`session_failed`) with no failed handoff is
+ * owed one too when the session knows the caller's phone or email, so no caller rests on an email
+ * alone. The contact details are the ones the owner email carries, as the session knows them,
+ * bounded to the record's columns.
  */
 export async function newoCallbackRecordInput(
   env: Env,
   event: NewoEventV1,
   existing: NewoSessionRecord | null,
 ): Promise<NewoCallbackRecordInput | null> {
-  const handoffStatus = newoHandoffStatus(event, existing);
-  if (handoffStatus !== "requested" && handoffStatus !== "failed") return null;
-  const tenantId = newoTenantId(env);
   const contact = event.contact;
+  const phone = bounded(contact.phone ?? existing?.contact_phone, 40);
+  const email = bounded(contact.email ?? existing?.contact_email, 254);
+  const handoffStatus = newoHandoffStatus(event, existing);
+  const reason: NewoCallbackReason | null = handoffStatus === "requested"
+    ? "callback_requested"
+    : handoffStatus === "failed"
+      ? "handoff_failed"
+      : event.event_type === "session_failed" && (phone || email)
+        ? "session_failed"
+        : null;
+  if (!reason) return null;
+  const tenantId = newoTenantId(env);
   return {
     callback_id: `ncb_${(await sha256Hex(`${tenantId}:${event.session_id}:newo-callback-record`)).slice(0, 32)}`,
     tenant_id: tenantId,
     session_id: event.session_id,
     event_id: event.event_id,
-    handoff_status: handoffStatus,
+    reason,
     urgency: newoUrgency(event, existing),
-    reason: bounded(event.handoff_summary, 1_000),
+    handoff_summary: bounded(event.handoff_summary, 1_000),
     contact_name: bounded(contact.name ?? existing?.contact_name, 160),
-    contact_phone: bounded(contact.phone ?? existing?.contact_phone, 40),
-    contact_email: bounded(contact.email ?? existing?.contact_email, 254),
+    contact_phone: phone,
+    contact_email: email,
     address_line1: bounded(contact.address.line1 ?? existing?.address_line1, 240),
     city: bounded(contact.address.city ?? existing?.city, 120),
     province: bounded(contact.address.province ?? existing?.province, 80),

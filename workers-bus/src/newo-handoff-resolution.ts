@@ -4,12 +4,13 @@ import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import { getNewoCallbackRecord, newoTenantId, type NewoCallbackRecord } from "./newo-store.ts";
 
 /**
- * A person's resolution of a Newo caller's callback: a requested callback, or a failed handoff.
+ * A person's resolution of a Newo caller's callback: a requested callback, a failed handoff, or a
+ * failed session's callback.
  *
  * The receptionist is callback only. A callback it requests is `requested`
  * (`newo_sessions.handoff_status`, newo.ts, newoHandoffStatus) and has a D1 callback record
  * (migration 0168); a failed handoff is a request for a person that did not arrive or could not be
- * processed (`failed`). The operations read model keeps the model in `attention` while either is
+ * processed (`failed`); a failed session with the caller's phone or email has a record too. The operations read model keeps the model in `attention` while either is
  * open (`open_callbacks`, `failed_handoffs`), and the Newo reconcile counts failed handoffs, until
  * a person records how it ended. There is no lookback window: a window would retire a callback
  * that nobody made. These routes are the only write path for that record:
@@ -35,7 +36,7 @@ import { getNewoCallbackRecord, newoTenantId, type NewoCallbackRecord } from "./
  *   400 newo_handoff_resolution_note_required    no note, or only spaces
  *   400 newo_handoff_resolution_note_too_long    a note over 1000 characters
  *   404 newo_handoff_not_found                   no such session
- *   409 newo_handoff_not_open                    neither a requested callback nor a failed handoff
+ *   409 newo_handoff_not_open                    no callback owed: no requested or failed handoff and no record
  *   409 newo_handoff_already_resolved            a person already closed it
  *   409 newo_handoff_resolution_replay_conflict  the key was used for a different resolution
  */
@@ -169,7 +170,8 @@ async function recordResolution(
   if (!handoff) throw new ResolutionRefusal("newo_handoff_not_found", 404);
   if (await resolutionBySession(env, tenantId, sessionId))
     throw new ResolutionRefusal("newo_handoff_already_resolved", 409);
-  if (!OPEN_HANDOFF_STATUSES.has(handoff.handoff_status ?? "") && !(await getNewoCallbackRecord(env, sessionId)))
+  const callback = await getNewoCallbackRecord(env, sessionId);
+  if (!OPEN_HANDOFF_STATUSES.has(handoff.handoff_status ?? "") && !callback)
     throw new ResolutionRefusal("newo_handoff_not_open", 409);
 
   const resolutionId = `nhr_${(await sha256Hex(`${tenantId}:${idempotencyKey}:newo-handoff-resolution`)).slice(0, 32)}`;
@@ -200,7 +202,8 @@ async function recordResolution(
     `newo_handoff_resolution:${resolutionId}`,
     `resolve_${input.outcome}`,
     person.userId,
-    `${role}:${handoff.handoff_status ?? "callback_record"}`,
+    // Why the callback was owed: the record's reason, or a pre-0168 session's handoff status.
+    `${role}:${callback?.reason ?? `handoff_${handoff.handoff_status}`}`,
     tenantId,
     resolutionId,
   );
@@ -323,9 +326,9 @@ function callbackProjection(row: NewoCallbackRecord): Record<string, unknown> {
   return {
     callback_id: row.callback_id,
     session_id: row.session_id,
-    handoff_status: row.handoff_status,
-    urgency: row.urgency,
     reason: row.reason,
+    urgency: row.urgency,
+    handoff_summary: row.handoff_summary,
     contact: {
       name: row.contact_name,
       phone: row.contact_phone,

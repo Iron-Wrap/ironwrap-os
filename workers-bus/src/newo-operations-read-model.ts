@@ -61,12 +61,15 @@ export interface NewoOperationsEventFailure {
 }
 
 /**
- * A requested callback no person has closed (migration 0168). Like every list here it carries no
- * caller identity or content: the person who calls back reads the record on the resolution route.
+ * A callback no person has closed (migration 0168): a requested callback, or a failed session's.
+ * Like every list here it carries no caller identity or content: the person who calls back reads
+ * the record on the resolution route.
  */
 export interface NewoOperationsOpenCallback {
   callback_id: string;
   session_id: string;
+  /** Why the caller is owed it; a failed handoff's callback is listed under `failed_handoffs`. */
+  reason: "callback_requested" | "session_failed";
   /** The higher of the urgency recorded with the callback and the session's urgency now. */
   urgency: "routine" | "urgent" | "emergency";
   /** When D1 recorded the callback. */
@@ -125,7 +128,7 @@ export interface NewoOperationsReadModel {
     missing_reports: number;
     /** Failed handoffs no person has resolved; each one keeps the model in `attention`. */
     failed_handoffs: number;
-    /** Requested callbacks no person has closed; each one keeps the model in `attention`. */
+    /** Callbacks no person has closed (requested, or a failed session's); each keeps `attention`. */
     open_callbacks: number;
     pending_bookings: number;
     control_failures: number;
@@ -350,8 +353,8 @@ function normalizeSession(row: NewoOperationsSession): NewoOperationsSession {
 }
 
 /**
- * The open requested callbacks, most urgent first and then the longest waiting. A resolution,
- * never age, takes one off the list; a callback whose session failed is listed as a failed handoff.
+ * The open callbacks, most urgent first and then the longest waiting. A resolution, never age,
+ * takes one off the list; a callback whose session's handoff failed is listed as a failed handoff.
  */
 async function listOpenCallbacks(env: Env, limit: number): Promise<NewoOperationsOpenCallback[]> {
   const urgency = `CASE
@@ -360,7 +363,7 @@ async function listOpenCallbacks(env: Env, limit: number): Promise<NewoOperation
          ELSE 'routine'
        END`;
   const result = await env.DB.prepare(
-    `SELECT callback.callback_id, callback.session_id, ${urgency} AS urgency,
+    `SELECT callback.callback_id, callback.session_id, callback.reason, ${urgency} AS urgency,
             callback.recorded_at AS requested_at
        FROM newo_callback_records callback
        LEFT JOIN newo_sessions session ON session.session_id = callback.session_id

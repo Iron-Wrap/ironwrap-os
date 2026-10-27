@@ -1017,6 +1017,9 @@ describe("JobPage", () => {
       await screen.findByRole("heading", { name: "Issue the corrected job plan" }),
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
+    // The header and the plan card name the plan by its release, never by a version number.
+    expect(screen.getAllByText("Released · Fri 10 Jul 09:15")).toHaveLength(2);
+    expect(screen.queryByText(/Version \d|\bv\d/)).not.toBeInTheDocument();
   });
 
   it("labels cached data as an offline packet and suppresses older-proof loading", async () => {
@@ -1030,7 +1033,7 @@ describe("JobPage", () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("In use by the crew")).toBeVisible();
+    expect(screen.getByText("Released · Fri 10 Jul 09:15")).toBeVisible();
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();

@@ -35,7 +35,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await seedPairedFieldDevice(page);
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    await expect(page.getByText("In use by the crew", { exact: true })).toBeVisible();
+    await expect(page.getByText("Released · Fri 10 Jul 09:15", { exact: true })).toBeVisible();
 
     // 1. Review -- requires the review checkbox first, matching the real UI gate.
     await page.getByRole("checkbox").check();

@@ -40,6 +40,7 @@ import {
 } from "./field-contracts";
 import {
   formatFieldSchedule,
+  formatFieldStamp,
   formatFieldTimestamp,
   plainFieldNames,
   type FieldDateOptions,
@@ -290,6 +291,10 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
   };
   const captureAllowed =
     session.user.role === "field" && model.allowed_actions.includes("field.checkin.create");
+  const workObjectDates: FieldDateOptions = {
+    locale: session.tenant.locale,
+    timeZone: session.tenant.time_zone,
+  };
   return (
     <RoleGuard surface="job">
       <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
@@ -299,11 +304,11 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
             Today
           </Link>
         </Button>
-        <WorkObjectPacketHeader model={model} offline={offline} />
+        <WorkObjectPacketHeader model={model} offline={offline} dateOptions={workObjectDates} />
         <WorkPackagePanel
           model={panelModel}
           offline={offline}
-          dateOptions={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
+          dateOptions={workObjectDates}
           captureAllowed={captureAllowed}
         />
         <CaptureProofPanel
@@ -321,9 +326,11 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
 function WorkObjectPacketHeader({
   model,
   offline,
+  dateOptions,
 }: {
   model: WorkObjectResponse;
   offline: boolean;
+  dateOptions: FieldDateOptions;
 }) {
   const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
   return (
@@ -346,7 +353,11 @@ function WorkObjectPacketHeader({
         <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
         <JobFact
           label="Job plan"
-          value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
+          value={
+            model.work_package
+              ? `Released · ${formatFieldStamp(model.work_package.released_at, dateOptions)}`
+              : "Not ready"
+          }
         />
       </dl>
     </header>
@@ -641,14 +652,16 @@ type TypedWorkObjectScope = {
 };
 
 /**
- * The job plan card's badge: what the crew is doing with the current plan, never a version
- * number. The read model sends only the current plan, so a Completed, Expired or Superseded
- * plan never reaches this card (it reads back as no plan at all).
+ * The job plan card's badge: never a version number (versions live in System details and the
+ * record). A plan the crew has not acted on yet shows when it was released, as a label stamp
+ * ("Released · Today 14:05"); otherwise it says what the crew did with it. The read model sends
+ * only the current plan, so a Completed, Expired or Superseded plan never reaches this card (it
+ * reads back as no plan at all).
  */
-function jobPlanStatusLabel(status: FieldWorkPackage["status"]): string {
-  switch (status) {
+function jobPlanBadge(workPackage: FieldWorkPackage, dateOptions: FieldDateOptions): string {
+  switch (workPackage.status) {
     case "Released":
-      return "In use by the crew";
+      return `Released · ${formatFieldStamp(workPackage.released_at, dateOptions)}`;
     case "Acknowledged":
       return "Reviewed by the crew";
     case "In Progress":
@@ -1034,7 +1047,7 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            {jobPlanStatusLabel(workPackage.status)}
+            {jobPlanBadge(workPackage, dateOptions)}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">

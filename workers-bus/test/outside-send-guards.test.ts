@@ -496,6 +496,13 @@ test("the token refuses every non-mcp action on every route, on a business and a
       const answer = await post(env, "claim", envelope(`allowlist:claim:${action}`, { action, provider }));
       assert.deepEqual(answer, { status: 403, body: { error: refusalFor(action) } }, `claim ${action} on ${dataClass}`);
     }
+    // The rule reads the effect's own action, never the authority's list: an envelope whose
+    // authority names an mcp tool does not carry a bus action through.
+    for (const [action, provider] of [["accounting.invoice.submit", "quickbooks"], ["proposal.withdraw", REAL_PROVIDER]] as const) {
+      const disguised = envelope(`allowlist:disguised:${action}`, { action, provider });
+      disguised.authority.allowedActions = ["mcp.test_write", action];
+      assert.deepEqual(await post(env, "claim", disguised), { status: 403, body: { error: refusalFor(action) } }, `disguised ${action} on ${dataClass}`);
+    }
     assert.equal(count(db, "SELECT count(*) AS n FROM external_effects"), 0);
     // The same actions created by the bus itself: the token may not settle, reconcile or retry one.
     for (const [action, provider] of BUS_ACTIONS) {

@@ -640,6 +640,24 @@ type TypedWorkObjectScope = {
   physical_context_id: string;
 };
 
+/**
+ * The job plan card's badge: what the crew is doing with the current plan, never a version
+ * number. The read model sends only the current plan, so a Completed, Expired or Superseded
+ * plan never reaches this card (it reads back as no plan at all).
+ */
+function jobPlanStatusLabel(status: FieldWorkPackage["status"]): string {
+  switch (status) {
+    case "Released":
+      return "In use by the crew";
+    case "Acknowledged":
+      return "Reviewed by the crew";
+    case "In Progress":
+      return "Work started";
+    case "Blocked":
+      return "Work stopped";
+  }
+}
+
 function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObjectScope | null {
   if (
     workPackage.work_object_type === "Roof Job" ||
@@ -719,6 +737,11 @@ function WorkPackagePanel({
   const [stopInstructionActive, setStopInstructionActive] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
   const [completingWork, setCompletingWork] = useState(false);
+  /**
+   * The job plan version this person issued here, kept by the panel: a first issue swaps the
+   * empty state for the plan, which remounts the issue form, and its "issued" line must stay.
+   */
+  const [issuedPlan, setIssuedPlan] = useState<{ packet: string; version: number } | null>(null);
   /** Set before any await, so a second tap in the same moment sends nothing. */
   const commandInFlight = useRef(false);
   /** The automatic resend while the office is still processing the same Start or Finish. */
@@ -766,6 +789,11 @@ function WorkPackagePanel({
   }, [session.tenant.id, session.user.id, startPath, finishPath, plan]);
 
   const issueScope = model.scope ?? (workPackage ? workObjectScopeForPackage(workPackage) : null);
+  const issuePacketKey = fieldPacketQueryKey(session, model.job.id, issueScope);
+  const issuePacket = JSON.stringify(issuePacketKey);
+  const reloadIssuePacket = async () => {
+    await queryClient.invalidateQueries({ queryKey: issuePacketKey });
+  };
   const issueForm = (
     <WorkPackageIssueForm
       session={session}
@@ -774,11 +802,12 @@ function WorkPackagePanel({
       endpoint={workPackageEndpointBase(model.job.id, issueScope)}
       allowed={model.allowed_actions.includes("work_package.issue")}
       offline={offline}
-      onIssued={async () => {
-        await queryClient.invalidateQueries({
-          queryKey: fieldPacketQueryKey(session, model.job.id, issueScope),
-        });
-      }}
+      issuedVersion={issuedPlan?.packet === issuePacket ? issuedPlan.version : null}
+      onIssuedVersionChange={(version) =>
+        setIssuedPlan(version === null ? null : { packet: issuePacket, version })
+      }
+      onIssued={reloadIssuePacket}
+      onReload={reloadIssuePacket}
     />
   );
 
@@ -1005,8 +1034,7 @@ function WorkPackagePanel({
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            Version {workPackage.version} ·{" "}
-            {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
+            {jobPlanStatusLabel(workPackage.status)}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">

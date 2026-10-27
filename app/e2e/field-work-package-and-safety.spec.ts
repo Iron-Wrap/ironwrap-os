@@ -35,17 +35,17 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await seedPairedFieldDevice(page);
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    await expect(page.getByText("Version 3 · Released")).toBeVisible();
+    await expect(page.getByText("In use by the crew", { exact: true })).toBeVisible();
 
     // 1. Review -- requires the review checkbox first, matching the real UI gate.
     await page.getByRole("checkbox").check();
     await page.getByRole("button", { name: "I reviewed this plan" }).click();
     await expect(page.getByText(/You reviewed this job plan/i)).toBeVisible();
-    await expect(page.getByText("Version 3 · Reviewed")).toBeVisible();
+    await expect(page.getByText("Reviewed by the crew", { exact: true })).toBeVisible();
 
     // 2. Start -- online-only direct command, not the offline outbox.
     await page.getByRole("button", { name: "Start work" }).click();
-    await expect(page.getByText("Version 3 · In Progress")).toBeVisible();
+    await expect(page.getByText("Work started", { exact: true })).toBeVisible();
     await expect(page.getByText(/No proof added yet/i).first()).toBeVisible();
 
     // 3. Capture evidence into the step:1 slot via the real check-in flow (multipart upload).

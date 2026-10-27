@@ -1,4 +1,4 @@
-import { Plus, Send, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Send, Trash2 } from "lucide-react";
 import {
   useState,
   type Dispatch,
@@ -11,11 +11,16 @@ import type { AuthenticatedSession } from "../auth/session";
 import { isOfflineSession } from "../auth/session";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { useOnlineStatus } from "../hooks/use-online-status";
 import { apiCommand } from "../lib/api";
 import type { JobResponse } from "./field-contracts";
 import { messageFor } from "../lib/plain-error";
 
 type WorkPackage = JobResponse["packet"]["work_package"];
+
+/** A1: the one refusal a reload of the job fixes, so it is the one that carries Reload job. */
+const RELOAD_TO_ISSUE =
+  "Nothing was issued. Reload the job while online so it has the latest crew assignment, then tap Issue job plan.";
 
 interface StepDraft {
   key: string;
@@ -40,7 +45,10 @@ export function WorkPackageIssueForm({
   endpoint,
   allowed,
   offline,
+  issuedVersion,
+  onIssuedVersionChange,
   onIssued,
+  onReload,
 }: {
   session: AuthenticatedSession;
   assignment: JobResponse["assignment"];
@@ -48,7 +56,16 @@ export function WorkPackageIssueForm({
   endpoint: string;
   allowed: boolean;
   offline: boolean;
+  /**
+   * The version this person issued from this page, held by the page: a first issue swaps the
+   * empty state for the plan, which remounts this form, and the issued line must outlive that.
+   */
+  issuedVersion: number | null;
+  onIssuedVersionChange: (version: number | null) => void;
+  /** Reads the job again after an issue, so the page shows the plan the crew now gets. */
   onIssued: () => Promise<void>;
+  /** Reads the job again: the page's own refetch of this packet. */
+  onReload: () => Promise<void>;
 }) {
   const [title, setTitle] = useState(workPackage?.title ?? "");
   const [objective, setObjective] = useState(workPackage?.objective ?? "");
@@ -81,7 +98,9 @@ export function WorkPackageIssueForm({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savedVersion, setSavedVersion] = useState<number | null>(null);
+  const [reloading, setReloading] = useState(false);
+
+  const connected = useOnlineStatus();
 
   if (!allowed) return null;
   const assignmentModified = assignment?.modified ?? null;
@@ -91,15 +110,31 @@ export function WorkPackageIssueForm({
     navigator.onLine &&
     !isOfflineSession(session);
   const nextVersion = workPackage ? workPackage.version + 1 : 1;
+  const online = connected && !offline && navigator.onLine;
+  const issued = issuedVersion !== null;
+  // "Acknowledged" is the status the Worker records when a crew phone sends I reviewed this plan,
+  // so only then, and only for the plan this person issued, may the line say the crew has it.
+  const crewHasIt =
+    issued && workPackage?.version === issuedVersion && workPackage.status === "Acknowledged";
+
+  async function reload() {
+    setReloading(true);
+    try {
+      await onReload();
+      setError(null);
+    } catch (caught) {
+      setError(messageFor(caught));
+    } finally {
+      setReloading(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    setSavedVersion(null);
+    onIssuedVersionChange(null);
     if (!assignment || !assignmentModified || !canSend) {
-      setError(
-        "Nothing was issued. Reload the job while online so it has the latest crew assignment, then tap Issue job plan.",
-      );
+      setError(RELOAD_TO_ISSUE);
       return;
     }
     if (workPackage && !correctionReason.trim()) {
@@ -147,7 +182,7 @@ export function WorkPackageIssueForm({
           })),
         },
       });
-      setSavedVersion(nextVersion);
+      onIssuedVersionChange(nextVersion);
       await onIssued();
     } catch (caught) {
       setError(
@@ -170,8 +205,14 @@ export function WorkPackageIssueForm({
     >
       <p className="text-sm font-semibold text-info">Production authority</p>
       <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-        {workPackage ? `Issue corrected job plan version ${nextVersion}` : "Issue job plan"}
+        {workPackage ? "Issue the corrected job plan" : "Issue job plan"}
       </h2>
+      {workPackage ? (
+        <p className="mt-2 max-w-3xl font-semibold leading-6">
+          It replaces the plan the crew has now. The crew sees the new one the next time their phone
+          loads the job.
+        </p>
+      ) : null}
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
         When you issue, the job's crew, assignment and scope lock in. This form adds the steps, hold
         points and the proof the crew must add.
@@ -380,13 +421,31 @@ export function WorkPackageIssueForm({
         </fieldset>
 
         {error ? (
-          <p className="font-semibold text-danger" role="alert">
-            {error}
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="font-semibold text-danger" role="alert">
+              {error}
+            </p>
+            {error === RELOAD_TO_ISSUE ? (
+              // Offline, a reload cannot reach the office: the control stays off, as the app's
+              // other online-only controls do, and the line beside it already says "while online".
+              <Button
+                type="button"
+                variant="secondary"
+                size="compact"
+                busy={reloading}
+                disabled={!online}
+                onClick={() => void reload()}
+              >
+                <RefreshCw aria-hidden="true" /> Reload job
+              </Button>
+            ) : null}
+          </div>
         ) : null}
-        {savedVersion ? (
+        {issued ? (
           <p className="font-semibold text-ok" role="status">
-            Job plan version {savedVersion} is issued and verified.
+            {crewHasIt
+              ? "Job plan issued and checked. The crew has it. Nothing more to send."
+              : "Job plan issued and checked. The crew sees it on Today the next time their phone loads the job. Nothing more to send."}
           </p>
         ) : null}
         {!canSend ? (
@@ -394,9 +453,16 @@ export function WorkPackageIssueForm({
             You need to be online, with the job's latest crew assignment loaded, to issue.
           </p>
         ) : null}
-        <Button type="submit" variant="accent" busy={saving} disabled={!canSend}>
-          <Send aria-hidden="true" /> Issue job plan version {nextVersion}
-        </Button>
+        {issued ? (
+          <Button type="submit" variant="secondary" busy={saving} disabled={!canSend}>
+            <Send aria-hidden="true" /> Issue a corrected plan
+          </Button>
+        ) : (
+          <Button type="submit" variant="accent" busy={saving} disabled={!canSend}>
+            <Send aria-hidden="true" />{" "}
+            {workPackage ? "Issue the corrected job plan" : "Issue job plan"}
+          </Button>
+        )}
       </form>
     </section>
   );
@@ -421,6 +487,7 @@ function TextField({
     <div>
       <label htmlFor={id} className="text-sm font-bold">
         {label}
+        <RequiredMark />
       </label>
       <Input
         id={id}
@@ -452,6 +519,7 @@ function TextArea({
     <div>
       <label htmlFor={id} className="text-sm font-bold">
         {label}
+        <RequiredMark />
       </label>
       <textarea
         id={id}
@@ -463,6 +531,11 @@ function TextArea({
       />
     </div>
   );
+}
+
+/** Every text field on this form is required, and its label says so, as "(optional)" does elsewhere. */
+function RequiredMark() {
+  return <span className="font-normal text-muted"> (required)</span>;
 }
 
 function blankStep(): StepDraft {

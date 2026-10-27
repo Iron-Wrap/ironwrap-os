@@ -920,6 +920,42 @@ describe("JobPage", () => {
     expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
   });
 
+  it("never shows a version number or an old plan's record id in a crew line (ruling)", async () => {
+    const model = workPackageModel();
+    const plan = model.packet.work_package!;
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...plan,
+          supersession: {
+            prior_id: "WP-PRIOR-0042",
+            reason: "The north slope needs two more anchors.",
+            changed_steps: [1],
+            changed_hold_points: [],
+          },
+        },
+        change_orders: [
+          {
+            id: "CO-1",
+            number: "CO-1044-1",
+            version: 2,
+            status: "Accepted",
+            title: "Deck repair",
+            scope_delta: "Two more deck sheets",
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByText("This plan replaces an earlier one")).toBeVisible();
+    expect(screen.getByText(/I read this plan\./)).toBeInTheDocument();
+    const page = document.body.textContent ?? "";
+    expect(page).not.toMatch(/\bv\d+\b|\bversion \d/i);
+    expect(page).not.toContain("WP-PRIOR-0042");
+  });
+
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 

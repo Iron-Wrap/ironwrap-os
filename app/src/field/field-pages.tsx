@@ -1069,7 +1069,7 @@ function WorkPackagePanel({
           >
             <p className="text-sm font-semibold text-warning">Plan changed</p>
             <h3 id="work-package-change-heading" className="mt-1 text-lg font-bold">
-              This plan replaces {workPackage.supersession.prior_id}
+              This plan replaces an earlier one
             </h3>
             <p className="mt-2 leading-6">{workPackage.supersession.reason}</p>
             <p className="mt-2 text-sm leading-6 text-muted">
@@ -1347,7 +1347,7 @@ function WorkPackagePanel({
                   checked={acknowledgementConfirmed}
                   onChange={(event) => setAcknowledgementConfirmed(event.target.checked)}
                 />
-                I read this version. I know its limits, steps, stop rules, safety steps, and checks.
+                I read this plan. I know its limits, steps, stop rules, safety steps, and checks.
               </label>
               <Button
                 type="button"

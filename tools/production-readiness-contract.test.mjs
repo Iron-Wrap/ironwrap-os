@@ -134,7 +134,7 @@ test("contract mode refuses NEWO_ENABLED=true unless the migrations build the D1
   };
   // The gate applies the migrations and reads sqlite_master, so no text fakes the table.
   const table = "CREATE TABLE newo_callback_records (\n  callback_id TEXT PRIMARY KEY, tenant_id TEXT, session_id TEXT,\n" +
-    "  handoff_status TEXT, urgency TEXT, contact_phone TEXT, recorded_at TEXT\n);\n";
+    "  reason TEXT, urgency TEXT, contact_phone TEXT, recorded_at TEXT\n);\n";
   const markers = {
     none: null,
     selectOne: "SELECT 1;\n",

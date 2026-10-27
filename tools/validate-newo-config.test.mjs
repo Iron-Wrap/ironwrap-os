@@ -215,7 +215,7 @@ test("a live handoff fails however the config spells it, and so does texting the
 // The gate applies the migrations and reads sqlite_master; these synthetic migrations probe it.
 // Only a real newo_callback_records table with the columns a person needs opens it.
 const CALLBACK_RECORD_TABLE_SQL = `CREATE TABLE newo_callback_records (
-  callback_id TEXT PRIMARY KEY, tenant_id TEXT, session_id TEXT, handoff_status TEXT, urgency TEXT,
+  callback_id TEXT PRIMARY KEY, tenant_id TEXT, session_id TEXT, reason TEXT, urgency TEXT,
   contact_phone TEXT, recorded_at TEXT
 );
 `;

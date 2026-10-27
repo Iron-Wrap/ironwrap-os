@@ -20,7 +20,7 @@ export const NEWO_CALLBACK_RECORD_COLUMNS = Object.freeze([
   "callback_id",
   "tenant_id",
   "session_id",
-  "handoff_status",
+  "reason",
   "urgency",
   "contact_phone",
   "recorded_at",

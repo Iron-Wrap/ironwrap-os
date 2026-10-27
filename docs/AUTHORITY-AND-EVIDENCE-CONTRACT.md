@@ -699,15 +699,19 @@ a caller who asked for a person reaches one. A callback the receptionist request
 `requested` on its session. A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a
 caller's request for a person that did not arrive or could not be processed, including an emergency
 session that closes without one ([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
-Either stays open until a person records how it ended; there is no lookback window, because a
-window would retire a callback nobody made.
+A failed session (`session_failed`) with no failed handoff is owed a callback too when the session
+knows the caller's phone or email: no caller rests on an owner email alone. Each stays open until
+a person records how it ended; there is no lookback window, because a window would retire a
+callback nobody made.
 
 - The callback record (`newo_callback_records`, migration `0168`): the Worker writes one
   append-only row per tenant and session, in the same D1 batch as the session, once an accepted
-  event leaves the handoff `requested` or `failed`. It holds the event that wrote it, the handoff
-  status and urgency then, the reason, and the caller's contact details as the session knows
-  them. D1 stamps `recorded_at` from its own clock and refuses another time, an event the Worker
-  did not claim for that session, an update, a delete and a replace.
+  event leaves a callback owed. Its `reason` is `callback_requested`, `handoff_failed` or
+  `session_failed`; D1 refuses any other reason, and a `session_failed` record with neither a phone
+  nor an email. It holds the event that wrote it, the urgency then, the receptionist's handoff
+  summary, and the caller's contact details as the session knows them. D1 stamps `recorded_at`
+  from its own clock and refuses another time, an event the Worker did not claim for that
+  session, an update, a delete and a replace.
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
   records `outcome` = `called_back`, `unreachable` or `not_needed` and a required note, with
   `resolved_by` (the person's user id) and their role. D1 stamps `resolved_at`, and one `audit_log`
@@ -727,9 +731,9 @@ window would retire a callback nobody made.
   `newo_handoff_resolution_note_required`, `newo_handoff_resolution_note_too_long`,
   `newo_handoff_not_found`, `newo_handoff_not_open`, `newo_handoff_already_resolved` and
   `newo_handoff_resolution_replay_conflict`.
-- The operations read model lists the open requested callbacks (`open_callbacks`) and the
-  unresolved failed handoffs (`failed_handoffs`), each caller in one list, and either keeps the
-  model in `attention`. The Newo reconcile count (`failed_handoffs`) and the operations list share
+- The operations read model lists the open requested and failed-session callbacks
+  (`open_callbacks`, with their reason) and the unresolved failed handoffs (`failed_handoffs`), each
+  caller in one list, and either keeps the model in `attention`. The Newo reconcile count (`failed_handoffs`) and the operations list share
   one predicate per list.
 
 ## Customer-facing behavior

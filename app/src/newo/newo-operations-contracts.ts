@@ -45,12 +45,14 @@ const sessionSchema = z
   })
   .strict();
 
-// A requested callback no person has closed. Like every list here it carries no caller identity or
-// content; the person who calls back reads the callback record on its resolution route.
+// A callback no person has closed: a requested one, or a failed session's. Like every list here it
+// carries no caller identity or content; the person who calls back reads the callback record on its
+// resolution route.
 const openCallbackSchema = z
   .object({
     callback_id: z.string().regex(/^ncb_[0-9a-f]{32}$/),
     session_id: z.string().min(1).max(200),
+    reason: z.enum(["callback_requested", "session_failed"]),
     urgency: z.enum(["routine", "urgent", "emergency"]),
     requested_at: timestamp,
   })

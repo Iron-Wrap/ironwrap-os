@@ -352,8 +352,9 @@ Current source tracing distinguishes implemented modules from reachable producti
     in `config/newo` are callback only (D-03): a hand-off is recorded as `requested` on the D1
     session, which keeps its highest urgency, writes a D1 callback record (`newo_callback_records`,
     0168) in the same batch, and emails the owner the caller's details on a best-effort basis;
-    `failed` keeps the failure path and gets a record too. An owner or ops person closes either
-    with an outcome and a note through the resolution route, and the operations read model keeps
+    `failed` keeps the failure path and gets a record too, as does a failed session with the
+    caller's phone or email (`session_failed`). An owner or ops person closes any of them with an
+    outcome and a note through the resolution route, and the operations read model keeps
     `open_callbacks` and `failed_handoffs` in attention until then (`workers-bus/test/newo.test.ts`,
     `newo-reconciliation.test.ts`, `newo-handoff-resolution.test.ts`). No transfer setting
     remains, and `tools/validate-newo-config.mjs` refuses one (`tools/validate-newo-config.test.mjs`).

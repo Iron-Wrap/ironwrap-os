@@ -72,6 +72,7 @@ export function newoOperationsFixture(
         {
           callback_id: "ncb_0123456789abcdef0123456789abcdef",
           session_id: "session-2",
+          reason: "callback_requested",
           urgency: "urgent",
           requested_at: "2026-07-18T18:05:00.000Z",
         },

@@ -149,6 +149,8 @@ If the contract is absent or any test fails, remain request-only.
 
 ## 8. Cutover gates
 
+Before the change that sets `NEWO_ENABLED=true`, apply the D1 migrations through `0168_newo_callback_records.sql` to the production database (`npm run db:migrate --prefix workers-bus`) and confirm that none is pending. Without 0168 the D1 batch that writes a session and its callback record fails, so every event that owes a callback gets a 500 and nothing holds that caller's callback. Flip `NEWO_ENABLED` only after that.
+
 After-hours forwarding requires the repository gate, production config gate, 31-case evaluation, wrong-credential proof, owned landing proof, callback request proof, usage alert proof, and owner approval.
 
 Selected inbound requires reviewed real-call evidence from after-hours operation, no unresolved catastrophic incident, acceptable capture/routing accuracy, and demonstrated rollback.

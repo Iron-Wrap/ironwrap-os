@@ -3808,8 +3808,8 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155 applied after 0156 and 0200-0205 on a database already through them gives the sorted schema", async () => {
-  // qa and production applied 0156 and 0200-0205 first, so they receive 0155 after them.
+test("0155 applied after 0156-0167 and 0200-0206 on a database already through them gives the sorted schema", async () => {
+  // qa applied 0153, 0156-0167 and 0200-0206 first, so it receives 0155 after them.
   const late = ["0155_od01_deposit_policy.sql"];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));

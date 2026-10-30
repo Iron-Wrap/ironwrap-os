@@ -140,6 +140,35 @@ const fixtureToday = {
   ],
 };
 
+// ACCEPTANCE_ACTIVE_STOPS=job|tenant|both: the run sheet's job carries active work stops in Track
+// C's active_stops shape, so the crew phone's stop banners can be exercised and captured.
+const acceptanceActiveStops = {
+  job: {
+    occurrence_id: "so_acceptance_job_stop",
+    scope: "job",
+    reported_at: "2026-07-10T16:24:00.000Z",
+    summary: "Ice on the north slope",
+    raiser_display_name: "Tom Lachance",
+  },
+  tenant: {
+    occurrence_id: "so_acceptance_tenant_stop",
+    scope: "tenant",
+    reported_at: "2026-07-10T15:50:00.000Z",
+    summary: "Loose sheets on the ridge",
+    raiser_display_name: "Priya Nand",
+  },
+};
+
+function todayWithActiveStops(today) {
+  const mode = process.env.ACCEPTANCE_ACTIVE_STOPS;
+  if (!mode) return today;
+  const stops = [
+    ...(mode === "tenant" || mode === "both" ? [acceptanceActiveStops.tenant] : []),
+    ...(mode === "job" || mode === "both" ? [acceptanceActiveStops.job] : []),
+  ];
+  return { ...today, jobs: today.jobs.map((job) => ({ ...job, active_stops: stops })) };
+}
+
 const fixtureOperatingIntake = {
   version: 1,
   operating_authority: "d1",
@@ -399,7 +428,7 @@ const fixtureJob = {
       emergency_plan:
         "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
       ppe_requirements: "Harness and eye protection",
-      weather_limits: "Stop above plan wind limit",
+      weather_limits: "Stop work above 40 km/h wind or 60 km/h gusts",
     },
     contact: {
       display_name: "Acceptance Homeowner",
@@ -415,7 +444,8 @@ const fixtureJob = {
       boundaries: "North slope only; no fascia scope.",
       prerequisites: "Materials staged and fall protection inspected.",
       expected_result: "Weather-tight completed north slope.",
-      stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
+      stop_conditions:
+        "Stop for wind above 40 km/h, gusts above 60 km/h, or unprotected edge exposure.",
       make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
       issued_at: "2026-07-10T15:00:00.000Z",
       released_at: "2026-07-10T15:15:00.000Z",
@@ -3258,14 +3288,14 @@ const requestListener = async (request, response) => {
     return sendJson(response, method, 200, {
       version: 1,
       session: fixtureSession,
-      today: fixtureToday,
+      today: todayWithActiveStops(fixtureToday),
     });
   }
   if (ACCEPTANCE_MODE === "field" && requestUrl.pathname === "/api/v1/fleet/panel") {
     return sendJson(response, method, 200, fixtureFleetPanel());
   }
   if (requestUrl.pathname === "/api/v1/today") {
-    return sendJson(response, method, 200, fixtureToday);
+    return sendJson(response, method, 200, todayWithActiveStops(fixtureToday));
   }
   if (requestUrl.pathname === "/api/v1/operating-intake") {
     return sendJson(response, method, 200, fixtureOperatingIntake);

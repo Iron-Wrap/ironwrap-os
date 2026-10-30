@@ -16,7 +16,10 @@ import {
   type FieldDateOptions,
 } from "./field-formatting";
 import { messageForLoad } from "../lib/plain-error";
+import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
+import { JobStopBanner, TenantStopBanner } from "./stop-banner";
+import { STOP_WORDS, uniqueStops } from "./stop-words";
 import { OfflineReadiness } from "./offline-readiness";
 
 // Office roles only (see the note where it renders). A static import made the crew phone fetch
@@ -208,6 +211,13 @@ export function TodayPage() {
         />
       ) : (
         <section aria-labelledby="today-run-sheet-heading">
+          <div className="mb-4 empty:hidden">
+            <TenantStopBanner
+              stops={uniqueStops(today.jobs.map((job) => job.active_stops ?? []))}
+              dateOptions={dateOptions}
+              officePhone={session.tenant.office_phone}
+            />
+          </div>
           <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
             <div>
               <h2 id="today-run-sheet-heading" className="text-2xl font-bold tracking-[-0.035em]">
@@ -349,6 +359,9 @@ function TodayDataLimits({ fields }: { fields: string[] }) {
   );
 }
 
+/** The Worker's next step for a job when no work check gives a reason (app-read-models.ts). */
+const GENERIC_NEXT_ACTIONS = new Set(["Open field check-in", "Assign field work"]);
+
 function TodayJobRow({
   job,
   availability,
@@ -365,12 +378,17 @@ function TodayJobRow({
   onRetryPacket: () => void;
 }) {
   const blocked = job.blocked_gate_count > 0;
+  // A work stop holds this job (its own, or one that holds every job): the card waits on the
+  // office, and a work check on it never reads as the way to restart work.
+  const held = (job.active_stops ?? []).length > 0;
+  const officePhone = useSession().tenant.office_phone;
   const actionLabel = blocked
     ? "Check what blocks work"
     : fieldCaptureAllowed
       ? "Open job"
       : "Review job";
-  const assignment = [job.assignment?.type, job.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(job.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   // The card follows its own width, not the window's: the crew shell centres a phone-wide column
   // on a desktop, where window breakpoints squeezed three columns into it.
   return (
@@ -397,7 +415,22 @@ function TodayJobRow({
           <h3 className="mt-1 text-xl font-bold leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
             {job.address ?? "Address unavailable"}
           </h3>
-          {blocked ? (
+          <div className="mt-3 empty:hidden">
+            <JobStopBanner
+              stops={job.active_stops ?? []}
+              job={{ address: job.address, code: job.job_number }}
+              dateOptions={dateOptions}
+              officePhone={officePhone}
+            />
+          </div>
+          {blocked && held ? (
+            <p className="mt-3 text-sm leading-6 text-muted">
+              {STOP_WORDS.separateCheck(
+                // The run sheet's own next steps when a check gives no reason are not a check's name.
+                GENERIC_NEXT_ACTIONS.has(job.next_action) ? null : job.next_action,
+              )}
+            </p>
+          ) : blocked ? (
             <div className="mt-3 flex items-start gap-2 text-danger">
               <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
               <p className="font-bold leading-6">
@@ -407,16 +440,18 @@ function TodayJobRow({
             </div>
           ) : null}
           <dl className="mt-4 grid gap-3 text-sm @sm:grid-cols-2">
-            <DispatchFact
-              label="Assignment"
-              value={assignment || "Assignment detail unavailable"}
-            />
-            <DispatchFact label="Next step" value={job.next_action} />
+            <DispatchFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
+            <DispatchFact label="Next step" value={held ? STOP_WORDS.nextStep : job.next_action} />
           </dl>
           <PacketAvailabilityBadge availability={availability} />
         </div>
         <div className="space-y-2 border-t border-border p-4 @3xl:flex @3xl:flex-col @3xl:justify-center @3xl:border-l @3xl:border-t-0">
-          <Button asChild size="field" fullWidth variant={blocked ? "default" : "accent"}>
+          <Button
+            asChild
+            size="field"
+            fullWidth
+            variant={held ? "outline" : blocked ? "default" : "accent"}
+          >
             <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
               {actionLabel}
               <ChevronRight aria-hidden="true" />
@@ -446,9 +481,8 @@ function TodayWorkObjectRow({
     physicalContextType: workObject.physical_context_type,
     physicalContextId: workObject.physical_context_id,
   };
-  const assignment = [workObject.assignment?.type, workObject.assignment?.status]
-    .filter(Boolean)
-    .join(" · ");
+  const assignment = assignmentRole(workObject.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   return (
     <li className="@container py-5 sm:py-6">
       <article className="grid gap-5 @3xl:grid-cols-[8rem_minmax(0,1fr)_15rem] @3xl:items-start">
@@ -472,10 +506,7 @@ function TodayWorkObjectRow({
             {workObject.physical_context_type} · {workObject.physical_context_id}
           </h3>
           <dl className="mt-4 grid gap-4 text-sm @sm:grid-cols-2">
-            <DispatchFact
-              label="Assignment"
-              value={assignment || "Assignment detail unavailable"}
-            />
+            <DispatchFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
             <DispatchFact label="Next step" value={workObject.next_action} />
           </dl>
         </div>

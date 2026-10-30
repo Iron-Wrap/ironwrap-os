@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,6 +130,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
           scheduled_end: null,
           blocker_reason: null,
         },
+        active_stops: [],
       },
       {
         id: "JOB-NEXT",
@@ -151,6 +152,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
           scheduled_end: null,
           blocker_reason: null,
         },
+        active_stops: [],
       },
     ],
     work_objects: [],
@@ -230,10 +232,179 @@ describe("TodayPage", () => {
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
     );
     expect(screen.getByText("See job plan")).toBeVisible();
+    expect(screen.getByText("Shop crew · Assigned")).toBeVisible();
     await user.click(link);
     expect(window.location.pathname).toBe(
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
     );
+  });
+
+  it("shows a stop on a job on that job's card, naming the job, who stopped it and when", async () => {
+    const [blocked, next] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        jobs: [
+          {
+            ...blocked!,
+            active_stops: [
+              {
+                occurrence_id: "so_1",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: "Ice on the north slope",
+                raiser_display_name: "Tom Lachance",
+              },
+            ],
+          },
+          { ...next!, active_stops: [] },
+        ],
+      }),
+    );
+    const banner = await screen.findByText(
+      "Work is stopped on the job: 123 Example Avenue · Ref IW-1042",
+    );
+    const notice = banner.closest("section")!;
+    expect(notice).toHaveTextContent(
+      /Stopped on \w{3} 10 Jul at 10:24\sa\.m\. by Tom Lachance · Reason: Ice on the north slope/,
+    );
+    expect(notice).toHaveTextContent("The office releases the stop.");
+    // The card waits on the office; its work check is separate and its button is no longer primary.
+    const card = notice.closest("article")!;
+    expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();
+    expect(
+      within(card).getByText(
+        "Separate work check: Delivery confirmation is missing. Clearing it doesn't restart work.",
+      ),
+    ).toBeVisible();
+    expect(within(card).queryByText("1 check blocks work")).toBeNull();
+    expect(within(card).getByRole("link", { name: "Check what blocks work" })).not.toHaveClass(
+      "bg-primary",
+    );
+    // With no office number in the profile, the banner offers no call and invents none.
+    expect(within(notice).queryByRole("link", { name: "Call the office" })).toBeNull();
+    // Only the stopped job's card says so; no stop holds every job.
+    expect(screen.getAllByText(/^Work is stopped/)).toHaveLength(1);
+    expect(screen.queryByText(/every job/)).toBeNull();
+  });
+
+  it("offers a call to the office that releases the stop when the profile has its number", async () => {
+    const [blocked] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        jobs: [
+          {
+            ...blocked!,
+            active_stops: [
+              {
+                occurrence_id: "so_3",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: null,
+                raiser_display_name: "Tom Lachance",
+              },
+            ],
+          },
+        ],
+      }),
+      undefined,
+      { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
+    );
+    const banner = (
+      await screen.findByText("Work is stopped on the job: 123 Example Avenue · Ref IW-1042")
+    ).closest("section")!;
+    expect(within(banner).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+  });
+
+  it("never names the run sheet's generic next step as a stopped job's work check", async () => {
+    const [blocked] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        jobs: [
+          {
+            ...blocked!,
+            next_action: "Open field check-in",
+            active_stops: [
+              {
+                occurrence_id: "so_5",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: null,
+                raiser_display_name: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(
+      await screen.findByText("A separate work check is open. Clearing it doesn't restart work."),
+    ).toBeVisible();
+    expect(screen.queryByText(/Separate work check: Open field check-in/)).toBeNull();
+  });
+
+  it("offers the office call on the every-job banner too", async () => {
+    const tenantStop = {
+      occurrence_id: "so_4",
+      scope: "tenant" as const,
+      reported_at: "2026-07-10T15:50:00.000Z",
+      summary: null,
+      raiser_display_name: "Priya Nand",
+    };
+    renderToday(
+      todayModel({
+        jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
+      }),
+      undefined,
+      { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
+    );
+    const banner = (await screen.findByText("Work is stopped on every job.")).closest("section")!;
+    expect(within(banner).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+    // The stop names who reported it once, in the sentence that says what happened.
+    expect(
+      within(banner).getByText(
+        "Priya Nand reported a stop, and we couldn't tell which job it's for. The office is told.",
+      ),
+    ).toBeVisible();
+    expect(within(banner).getByText(/^Stopped on \w{3} 10 Jul at 9:50\sa\.m\.$/)).toBeVisible();
+  });
+
+  it("shows a stop whose job wasn't found once, above every job", async () => {
+    const tenantStop = {
+      occurrence_id: "so_2",
+      scope: "tenant" as const,
+      reported_at: "2026-07-10T15:50:00.000Z",
+      summary: null,
+      raiser_display_name: null,
+    };
+    renderToday(
+      todayModel({
+        jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
+      }),
+    );
+    expect(await screen.findAllByText("Work is stopped on every job.")).toHaveLength(1);
+    // With no raiser the read can name, the banner still says what happened.
+    expect(
+      screen.getByText(
+        "A stop was reported, and we couldn't tell which job it's for. The office is told.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/wasn't found|not found/)).toBeNull();
+    // Every card it holds waits on the office, with its work check separate and its button demoted.
+    for (const card of screen.getAllByRole("article")) {
+      expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();
+      expect(
+        within(card).getByRole("link", { name: /Check what blocks work|Open job|Review job/ }),
+      ).not.toHaveClass("bg-primary");
+    }
+    // A stop whose raiser and words the read lacks still says when.
+    expect(screen.getByText(/^Stopped on \w{3} 10 Jul at 9:50\sa\.m\.$/)).toBeVisible();
+    expect(screen.queryByText(/^Work is stopped on the job/)).toBeNull();
   });
 
   it("turns assigned work into a truthful run sheet with a distinct blocked-work action", async () => {
@@ -242,6 +413,10 @@ describe("TodayPage", () => {
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(screen.getByText("1 check blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
+    // The crew's part reads as a role, not the bare assignment type.
+    expect(screen.getAllByText("Your role").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Production crew · Assigned").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Production · Assigned")).toBeNull();
     expect(await screen.findByRole("heading", { name: "Ready offline" })).toBeVisible();
     expect(
       screen.getByText(/This run sheet and 2 job plans are saved on this phone/),

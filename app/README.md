@@ -92,7 +92,7 @@ data. The Worker, not the browser, enforces authority. See the canonical boundar
 
 ## Run it
 
-Node 22.12 or newer is required.
+Use the Node version pinned in [.nvmrc](../.nvmrc) for development and validation.
 
 ```bash
 npm ci

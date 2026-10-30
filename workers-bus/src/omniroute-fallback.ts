@@ -65,13 +65,6 @@ export function omnirouteAuthHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-export function omnirouteBearerHeaders(apiKey: string): Record<string, string> {
-  return {
-    authorization: `Bearer ${apiKey}`,
-    "content-type": "application/json",
-  };
-}
-
 /** Paid-provider refusals that mean "no usable balance / key", not generic faults. */
 export function isCreditOrAuthExhausted(status: number, bodyText: string): boolean {
   if (status === 401 || status === 402 || status === 403) return true;

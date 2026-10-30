@@ -824,7 +824,7 @@ describe("owner configuration route and state matrix", () => {
     const template = screen.getByLabelText("Template");
     expect(
       [...(template as HTMLSelectElement).options].map((option) => option.textContent),
-    ).toEqual(["Stage-change summary · v1", "Handoff packet · v2"]);
+    ).toEqual(["Stage-change summary", "Handoff packet"]);
     await user.selectOptions(template, "template:0000000000000000000000000000000000000abc");
     await user.click(screen.getByRole("button", { name: "Save automation" }));
 

@@ -13,7 +13,8 @@ import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { JobResponse, WorkObjectResponse } from "./field-contracts";
 import { loadJob, loadWorkObject } from "./field-cache";
-import { dialableNumber, JobPage, WorkObjectPage } from "./field-pages";
+import { dialableNumber } from "./dialable-number";
+import { JobPage, WorkObjectPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),
@@ -462,6 +463,18 @@ describe("JobPage", () => {
     );
   });
 
+  it("labels the crew's role for an office role on a typed work object", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    renderWorkObject(workObjectModel(), ownerSession);
+    expect(await screen.findByText("Crew role")).toBeVisible();
+    expect(screen.queryByText("Your role")).toBeNull();
+  });
+
   it("renders a typed Shop Order packet as an actionable field surface", async () => {
     routeParams = {
       workObjectType: "Shop Order",
@@ -475,6 +488,8 @@ describe("JobPage", () => {
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
     expect(screen.getByText("Shop Order · SHOP-001")).toBeVisible();
     expect(screen.queryByText("Applies to the job")).toBeNull();
+    expect(screen.getByText("Your role")).toBeVisible();
+    expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: /Add proof/ })[0]).toHaveAttribute(
@@ -825,6 +840,8 @@ describe("JobPage", () => {
     renderJob();
 
     expect(await screen.findByText("Safety plan · v2")).toBeVisible();
+    expect(screen.getByText("Your role")).toBeVisible();
+    expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByText("Steep-slope fall exposure")).toBeVisible();
     expect(screen.getByText("Use roof anchors and harnesses")).toBeVisible();
     expect(screen.getByText(/field_checkin · Team only/i)).toBeVisible();
@@ -847,6 +864,9 @@ describe("JobPage", () => {
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "Production" })).toHaveAttribute("href", "/production");
     expect(screen.getByRole("heading", { name: "View only" })).toBeVisible();
+    // An office role reads the crew's role, never "Your role" about a crew it is not on.
+    expect(screen.getByText("Crew role")).toBeVisible();
+    expect(screen.queryByText("Your role")).toBeNull();
     expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "I reviewed this plan" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();

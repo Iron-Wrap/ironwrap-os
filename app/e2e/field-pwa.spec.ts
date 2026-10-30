@@ -19,7 +19,7 @@ test.describe("Field Companion PWA acceptance", () => {
       const card = page.locator("li article").first();
       const facts = card.locator("dl");
       await expect(facts).toBeVisible();
-      // Squeezed, the labels and values spill past their cells ("Assignment" ran into "Next step").
+      // Squeezed, the labels and values spill past their cells ("Your role" ran into "Next step").
       const cells = await facts.locator("dt, dd").all();
       expect(cells.length).toBe(4);
       for (const cell of [card, ...cells])
@@ -533,7 +533,8 @@ test.describe("Field Companion PWA acceptance", () => {
           "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",
         )
         .all();
-      expect(cells.length).toBe(18);
+      // The plan's scope is one fact ("Applies to the job"), not "Work object" and "Work area".
+      expect(cells.length).toBe(16);
       for (const cell of cells)
         expect(
           await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),

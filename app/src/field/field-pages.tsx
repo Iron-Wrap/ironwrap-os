@@ -58,6 +58,8 @@ import { ErrorSystemDetails } from "../components/ui/system-details";
 import { CustomerJobHistorySection } from "../customers/customer-history-section";
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
+import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
+import { dialableNumber } from "./dialable-number";
 import { GateChip } from "./gate-chip";
 import { JobLabelText } from "./job-label-text";
 import { ProofStream } from "./proof-stream";
@@ -327,7 +329,8 @@ function WorkObjectPacketHeader({
   model: WorkObjectResponse;
   offline: boolean;
 }) {
-  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(model.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -345,7 +348,7 @@ function WorkObjectPacketHeader({
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
-        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        <JobFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
         <JobFact
           label="Work plan"
           value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
@@ -548,7 +551,8 @@ function JobPacketHeader({
   offline: boolean;
   dateOptions: FieldDateOptions;
 }) {
-  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(model.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   // The job's facts follow the header's own width: the crew shell is a phone-wide column even on
   // a desktop, where window breakpoints squeezed three facts into it.
   return (
@@ -568,7 +572,7 @@ function JobPacketHeader({
       </div>
       <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
         <JobFact label="Service" value={model.job.service_type ?? "Service details are missing"} />
-        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        <JobFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
         <JobFact
           label="Scheduled"
           value={formatFieldSchedule(model.assignment?.scheduled_start ?? null, dateOptions)}
@@ -2026,31 +2030,6 @@ function EmergencyLine({ officePhone }: { officePhone: string | null }) {
       </div>
     </div>
   );
-}
-
-/**
- * The number a tel: link may dial, or null when the text is not one plain phone number. A label
- * before it ("Cell:") and anything after an extension mark ("ext", "x", "#", ",") are left out;
- * only digits, spaces, dots, dashes and brackets may stand around the digits, a "+" only first.
- * A local number has 7 or 10 digits, or 11 starting with 1; an international one ("+") 8 to 15
- * digits with no "(0)" trunk group. A shown number that is not dialable gets no Call button,
- * never a wrong one.
- */
-export function dialableNumber(text: string | null | undefined): string | null {
-  const number = (text ?? "")
-    .replace(/[\u2010-\u2015]/g, "-")
-    .replace(/^[^\d+(]*:\s*/, "")
-    .split(/\s*(?:ext\.?|x|#|,)/i)[0]!
-    .trim();
-  if (!/^\+?[\d\s().-]+$/.test(number)) return null;
-  const digits = number.replace(/\D/g, "");
-  if (number.startsWith("+")) {
-    if (/\(\s*0\s*\)/.test(number) || digits.length < 8 || digits.length > 15) return null;
-    return `+${digits}`;
-  }
-  const local =
-    digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
-  return local ? digits : null;
 }
 
 function JobFact({ label, value }: { label: string; value: ReactNode }) {

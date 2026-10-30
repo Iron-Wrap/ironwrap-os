@@ -436,7 +436,7 @@ requirements.
   receipts, policy ledgers, and promotion authority;
 - Ivan owns business approval and GitHub merge authority; Sergey owns provider, Cloudflare, DNS,
   and the Frappe adapter host; the independent reviewer role is now AI review (Sonnet) under Ivan's sign-off, as Andrei has
-  left; Ilya owns permit signing, the policy ledger, and business counter-approval;
+  left; Ilya, the customer, holds permit signing, the policy ledger, and business counter-approval;
 - the people named may participate in the repository and business process, but participation grants no
   protected credential by implication;
 - the issuer runs in a separately controlled Cloudflare account outside the product account, while

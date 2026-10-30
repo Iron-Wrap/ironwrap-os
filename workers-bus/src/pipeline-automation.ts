@@ -60,9 +60,6 @@ export const PIPELINE_AUTOMATION_REGISTRY = [
 
 export type PipelineAutomationAction = (typeof PIPELINE_AUTOMATION_REGISTRY)[number]["action"];
 
-export const PIPELINE_AUTOMATION_ACTIONS: readonly PipelineAutomationAction[] =
-  PIPELINE_AUTOMATION_REGISTRY.map((entry) => entry.action);
-
 /** A document permit lives well past the retry ladder but never indefinitely. */
 const DOCUMENT_PERMIT_TTL_MS = 24 * 60 * 60_000;
 /** The generation effect asks the ledger for this much runway; the permit must still cover it. */

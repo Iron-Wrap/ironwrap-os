@@ -40,7 +40,6 @@ import {
 } from "./accounting-desk.ts";
 import {
   listAccountingIntents,
-  type AccountingIntentRecord,
   type AccountingIntentState,
   type AccountingVerdict,
 } from "./accounting-intents.ts";
@@ -435,6 +434,3 @@ function count(
 export function accountingSweepTenantId(env: AppEnv): string {
   return env.APP_TENANT_ID?.trim() || "ironwrap";
 }
-
-/** Kept for the type-only import that documents what a sweep may touch. */
-export type SweptIntent = AccountingIntentRecord;

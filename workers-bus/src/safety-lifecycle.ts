@@ -589,6 +589,12 @@ export interface SafetyResponseInput {
    * otherwise go through.
    */
   sessionRecent?: boolean;
+  /**
+   * `released` only: one to ten verified field captures taken after the stop that belong to it
+   * (P33). The Worker reads each one's stored checksum and cites it on the `released` event; 0171
+   * repeats the rule in D1.
+   */
+  evidenceIds?: string[];
 }
 
 /**
@@ -646,6 +652,11 @@ export async function recordSafetyResponse(
   if (input.command === "closed") {
     await assertClosureAllowed(env, occurrence);
   }
+  // A release cites at least one verified photo of the stop taken after it was raised.
+  const releaseEvidence =
+    input.command === "released"
+      ? await releaseEvidenceFor(env, occurrence, input.evidenceIds ?? [])
+      : input.evidence;
   if (input.command === "released" && input.sessionRecent === false) {
     throw new SafetyError(
       "recent_session_required",
@@ -682,7 +693,7 @@ export async function recordSafetyResponse(
       actorUserId: actor.userId,
       actorRole: actor.role,
       detail: input.detail,
-      evidence: input.evidence,
+      evidence: releaseEvidence,
       capturedOffline: false,
       occurredAt: input.now,
       recordedAt: input.now,
@@ -690,6 +701,175 @@ export async function recordSafetyResponse(
     },
   );
   return await requireOccurrence(env, input.tenantId, input.occurrenceId);
+}
+
+const EVIDENCE_ID = /^evi_[0-9a-f]{32}$/;
+const MAX_STOP_PHOTOS = 10;
+
+/** A verified field capture that belongs to a stop: its id, stored checksum and capture time. */
+export interface SafetyStopPhoto {
+  evidence_id: string;
+  sha256: string;
+  captured_at: string;
+  job_id: string;
+}
+
+/**
+ * The jobs whose captures belong to a stop: its job, or the job of any version of its Work
+ * Package. Null means any job of the tenant: a stop whose job or package does not exist, a tenant
+ * stop, a shop stop or a vehicle stop, none of which a job capture can be narrowed to. 0171 binds
+ * captures the same way in D1.
+ */
+async function stopPhotoJobs(
+  env: AppEnv,
+  occurrence: Pick<SafetyOccurrenceRecord, "tenant_id" | "scope_type" | "scope_id">,
+): Promise<string[] | null> {
+  if (occurrence.scope_type === "roof_job") {
+    const job = await env.DB.prepare(
+      `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?`,
+    )
+      .bind(occurrence.tenant_id, occurrence.scope_id)
+      .first<{ roof_job_id: string }>();
+    return job ? [job.roof_job_id] : null;
+  }
+  if (occurrence.scope_type === "work_package") {
+    const jobs = await env.DB.prepare(
+      `SELECT DISTINCT job_id FROM work_packages WHERE tenant_id = ? AND work_package_id = ?`,
+    )
+      .bind(occurrence.tenant_id, occurrence.scope_id)
+      .all<{ job_id: string }>();
+    return jobs.results.length > 0 ? jobs.results.map((row) => row.job_id) : null;
+  }
+  return null;
+}
+
+const STOP_CAPTURE_SELECT = `SELECT media.evidence_id, media.checksum_sha256 AS sha256, capture.job_id,
+            COALESCE(capture.capture_completed_at, capture.created_at) AS captured_at
+       FROM field_actions capture
+       JOIN field_action_media media ON media.device_action_id = capture.device_action_id
+      WHERE capture.tenant_id = ?
+        AND capture.work_package_id IS NOT NULL
+        AND capture.status = 'verified'
+        AND capture.manifest_key IS NOT NULL
+        AND capture.evidence_verification = 'Verified'
+        AND media.r2_stored_at IS NOT NULL`;
+
+/**
+ * Each cited id as exactly one verified, manifested, stored Work Package capture of this tenant
+ * that belongs to the stop, with the checksum read from D1, never from the browser. `afterStop`
+ * also requires each to have been taken strictly after the stop was raised.
+ */
+async function citedStopPhotos(
+  env: AppEnv,
+  occurrence: SafetyOccurrenceRecord,
+  evidenceIds: readonly string[],
+  codes: { invalid: string; beforeStop?: string },
+): Promise<SafetyStopPhoto[]> {
+  const invalid = new SafetyError(
+    codes.invalid,
+    409,
+    "Each photo must be a verified photo of this stop's job.",
+  );
+  const jobs = await stopPhotoJobs(env, occurrence);
+  const rows = await env.DB.prepare(
+    `${STOP_CAPTURE_SELECT}
+        AND media.evidence_id IN (${evidenceIds.map(() => "?").join(", ")})`,
+  )
+    .bind(occurrence.tenant_id, ...evidenceIds)
+    .all<SafetyStopPhoto>();
+  const byId = new Map<string, SafetyStopPhoto[]>();
+  for (const row of rows.results) {
+    byId.set(row.evidence_id, [...(byId.get(row.evidence_id) ?? []), { ...row }]);
+  }
+  const photos = evidenceIds.map((id) => {
+    const matches = byId.get(id) ?? [];
+    if (matches.length !== 1) throw invalid;
+    const photo = matches[0]!;
+    if (jobs && !jobs.includes(photo.job_id)) throw invalid;
+    return photo;
+  });
+  if (codes.beforeStop) {
+    // A photo from before the stop shows what the crew stopped on, never the fix. Both times are
+    // compared as instants; a time that does not parse never qualifies.
+    const stoppedAt = Date.parse(occurrence.reported_at);
+    if (photos.some((photo) => !(Date.parse(photo.captured_at) > stoppedAt))) {
+      throw new SafetyError(
+        codes.beforeStop,
+        409,
+        "Only photos taken after the stop count for its release.",
+      );
+    }
+  }
+  return photos;
+}
+
+function photoRefs(photos: readonly SafetyStopPhoto[]): string {
+  return JSON.stringify(
+    photos.map((photo) => ({ ref: `field-evidence://${photo.evidence_id}`, sha256: photo.sha256 })),
+  );
+}
+
+function validEvidenceIds(ids: readonly unknown[]): ids is string[] {
+  return (
+    ids.length <= MAX_STOP_PHOTOS &&
+    ids.every((id) => typeof id === "string" && EVIDENCE_ID.test(id)) &&
+    new Set(ids).size === ids.length
+  );
+}
+
+async function releaseEvidenceFor(
+  env: AppEnv,
+  occurrence: SafetyOccurrenceRecord,
+  evidenceIds: readonly string[],
+): Promise<SafetyEvidence> {
+  if (evidenceIds.length === 0) {
+    throw new SafetyError(
+      "safety_stop_release_evidence_required",
+      400,
+      "Releasing a stop needs at least one verified photo taken after the stop.",
+    );
+  }
+  if (!validEvidenceIds(evidenceIds)) {
+    throw new SafetyError(
+      "safety_command_invalid",
+      400,
+      "A release cites one to ten distinct photo ids.",
+    );
+  }
+  const refsJson = photoRefs(await citedStopPhotos(env, occurrence, evidenceIds, {
+    invalid: "safety_stop_release_evidence_invalid",
+    beforeStop: "safety_stop_release_evidence_before_stop",
+  }));
+  return { refsJson, sha256: await sha256Hex(refsJson) };
+}
+
+/**
+ * The verified photos that could release this stop now: captures that belong to it, taken after it
+ * was raised, newest first. A release form cites from these.
+ */
+export async function stopReleasePhotos(
+  env: AppEnv,
+  occurrence: Pick<SafetyOccurrenceRecord, "tenant_id" | "scope_type" | "scope_id" | "reported_at">,
+  limit = 50,
+): Promise<SafetyStopPhoto[]> {
+  const jobs = await stopPhotoJobs(env, occurrence);
+  const rows = await env.DB.prepare(
+    `${STOP_CAPTURE_SELECT}
+        AND julianday(COALESCE(capture.capture_completed_at, capture.created_at))
+          > julianday(?)
+        ${jobs ? `AND capture.job_id IN (${jobs.map(() => "?").join(", ")})` : ""}
+      ORDER BY captured_at DESC, media.evidence_id ASC
+      LIMIT ?`,
+  )
+    .bind(occurrence.tenant_id, occurrence.reported_at, ...(jobs ?? []), Math.max(1, Math.min(200, limit)) * 2)
+    .all<SafetyStopPhoto>();
+  // An id stored twice is no single capture (0152 and 0171 refuse to cite it), so it is left out.
+  const counts = new Map<string, number>();
+  for (const row of rows.results) counts.set(row.evidence_id, (counts.get(row.evidence_id) ?? 0) + 1);
+  return rows.results
+    .filter((row) => counts.get(row.evidence_id) === 1)
+    .slice(0, limit)
+    .map((row) => ({ ...row }));
 }
 
 /**
@@ -2262,7 +2442,7 @@ export async function safetyPanelProjection(
     `SELECT occurrence.occurrence_id, occurrence.occurrence_kind, occurrence.severity,
             occurrence.state, occurrence.stop_active, occurrence.rescue_required,
             occurrence.rescue_completed_at, occurrence.scope_type, occurrence.scope_id,
-            occurrence.summary, occurrence.reported_by_user_id,
+            occurrence.summary, occurrence.reported_by_user_id, occurrence.reported_at,
             raiser.display_name AS raiser_display_name,
             raiser.email_normalized AS raiser_email_normalized,
             raiser.frappe_user_id AS raiser_frappe_user_id,
@@ -2294,6 +2474,7 @@ export async function safetyPanelProjection(
       scope_id: string;
       summary: string;
       reported_by_user_id: string;
+      reported_at: string;
       raiser_display_name: string | null;
       raiser_email_normalized: string | null;
       raiser_frappe_user_id: string | null;
@@ -2318,14 +2499,20 @@ export async function safetyPanelProjection(
     version: 1,
     actor_role: actor.role,
     assigned_equipment: equipment.results,
-    open_occurrences: occurrences.results.map((row) => {
+    open_occurrences: await Promise.all(occurrences.results.map(async (row) => {
+      const raiser = raiserIdentities(row.reported_by_user_id, {
+        email_normalized: row.raiser_email_normalized,
+        frappe_user_id: row.raiser_frappe_user_id,
+      });
+      // The photo read runs only for a stop this viewer could otherwise release now.
+      const ready = releaseUnavailableReason(row, raiser, viewer) === null;
       const reason = releaseUnavailableReason(
         row,
-        raiserIdentities(row.reported_by_user_id, {
-          email_normalized: row.raiser_email_normalized,
-          frappe_user_id: row.raiser_frappe_user_id,
-        }),
+        raiser,
         viewer,
+        ready
+          ? (await stopReleasePhotos(env, { tenant_id: tenantId, ...row }, 1)).length > 0
+          : undefined,
       );
       return {
         occurrence_id: row.occurrence_id,
@@ -2341,7 +2528,7 @@ export async function safetyPanelProjection(
         can_release: reason === null,
         release_unavailable_reason: reason,
       };
-    }),
+    })),
     my_corrective_actions: actions.results,
     allowed_actions: [
       "safety.report_occurrence",
@@ -2430,6 +2617,7 @@ export async function getSafetyOccurrence(
  * - `raised_by_viewer`: the viewer raised the stop, under any identity either carries (L06).
  * - `not_controlled`: the stop has not been marked controlled yet.
  * - `rescue_not_completed`: a required rescue is not recorded as completed.
+ * - `verified_photo_required`: no verified photo of the stop taken after it exists yet.
  */
 export type SafetyReleaseUnavailableReason =
   | "stop_released"
@@ -2437,7 +2625,8 @@ export type SafetyReleaseUnavailableReason =
   | "release_authority_required"
   | "raised_by_viewer"
   | "not_controlled"
-  | "rescue_not_completed";
+  | "rescue_not_completed"
+  | "verified_photo_required";
 
 export interface SafetyStopViewer {
   role: string;
@@ -2452,6 +2641,8 @@ export function releaseUnavailableReason(
   >,
   raiser: Set<string>,
   viewer: SafetyStopViewer,
+  /** Whether a verified photo taken after the stop exists; undefined when not read yet. */
+  hasReleasePhoto?: boolean,
 ): SafetyReleaseUnavailableReason | null {
   if (occurrence.stop_active !== 1) return "stop_released";
   if (!viewer.personSession) return "person_session_required";
@@ -2461,6 +2652,7 @@ export function releaseUnavailableReason(
   if (occurrence.rescue_required === 1 && !occurrence.rescue_completed_at) {
     return "rescue_not_completed";
   }
+  if (hasReleasePhoto === false) return "verified_photo_required";
   return null;
 }
 
@@ -2539,6 +2731,12 @@ export interface SafetyOccurrenceDetail {
   lifecycle: SafetyStopLifecycle;
   /** Every "Keep the stop" decision on this stop, newest first. */
   keep_decisions: SafetyStopKeepDecision[];
+  /** Every note and photo added to the stop, newest first. */
+  additions: SafetyStopAddition[];
+  /** The verified photos taken after the stop that a release may cite, newest first. */
+  release_photos: SafetyStopPhoto[];
+  /** Every correction that put the stop on its job, newest first. */
+  scope_corrections: SafetyStopScopeCorrection[];
   can_release: boolean;
   release_unavailable_reason: SafetyReleaseUnavailableReason | null;
 }
@@ -2711,6 +2909,452 @@ function keepRefusal(error: unknown): unknown {
   return refusal ? new SafetyError(refusal[0], refusal[1], refusal[2]) : error;
 }
 
+/** Something a person added to an open stop: words, verified photos, or both. */
+export interface SafetyStopAddition {
+  addition_id: string;
+  occurrence_id: string;
+  added_by_user_id: string;
+  added_by_display_name: string | null;
+  added_by_role: string;
+  note: string | null;
+  photos: Array<{ evidence_id: string; sha256: string }>;
+  added_at: string;
+}
+
+interface AdditionRow {
+  addition_id: string;
+  occurrence_id: string;
+  added_by_user_id: string;
+  added_by_display_name: string | null;
+  added_by_role: string;
+  note: string | null;
+  evidence_refs_json: string | null;
+  added_at: string;
+  request_sha256: string;
+}
+
+const ADDITION_COLUMNS = `addition.addition_id, addition.occurrence_id, addition.added_by_user_id,
+  adder.display_name AS added_by_display_name, addition.added_by_role, addition.note,
+  addition.evidence_refs_json, addition.added_at, addition.request_sha256`;
+
+function additionProjection(row: AdditionRow): SafetyStopAddition {
+  const refs = row.evidence_refs_json
+    ? (JSON.parse(row.evidence_refs_json) as Array<{ ref: string; sha256: string }>)
+    : [];
+  return {
+    addition_id: row.addition_id,
+    occurrence_id: row.occurrence_id,
+    added_by_user_id: row.added_by_user_id,
+    added_by_display_name: row.added_by_display_name,
+    added_by_role: row.added_by_role,
+    note: row.note,
+    photos: refs.map((ref) => ({
+      evidence_id: ref.ref.replace(/^field-evidence:\/\//, ""),
+      sha256: ref.sha256,
+    })),
+    added_at: row.added_at,
+  };
+}
+
+async function additionById(
+  env: AppEnv,
+  tenantId: string,
+  additionId: string,
+): Promise<AdditionRow | null> {
+  return await env.DB.prepare(
+    `SELECT ${ADDITION_COLUMNS}
+       FROM safety_occurrence_additions addition
+       LEFT JOIN app_users adder
+         ON adder.tenant_id = addition.tenant_id AND adder.user_id = addition.added_by_user_id
+      WHERE addition.tenant_id = ? AND addition.addition_id = ?`,
+  )
+    .bind(tenantId, additionId)
+    .first<AdditionRow>();
+}
+
+async function stopAdditions(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+): Promise<SafetyStopAddition[]> {
+  const rows = await env.DB.prepare(
+    `SELECT ${ADDITION_COLUMNS}
+       FROM safety_occurrence_additions addition
+       LEFT JOIN app_users adder
+         ON adder.tenant_id = addition.tenant_id AND adder.user_id = addition.added_by_user_id
+      WHERE addition.tenant_id = ? AND addition.occurrence_id = ?
+      ORDER BY addition.added_at DESC, addition.addition_id DESC
+      LIMIT 100`,
+  )
+    .bind(tenantId, occurrenceId)
+    .all<AdditionRow>();
+  return rows.results.map(additionProjection);
+}
+
+export interface AddToSafetyStopInput {
+  tenantId: string;
+  occurrenceId: string;
+  actorUserId: string;
+  note: string | null;
+  evidenceIds: string[];
+  idempotencyKey: string;
+}
+
+/**
+ * Add a note, verified photos, or both to an open stop (P33). Any active person may, the raiser
+ * included: the crew's words and photos join the stop they belong to. The stop stays in force and
+ * nothing on it changes; the addition is append-only and timed by D1's clock. A photo is a verified
+ * field capture that belongs to the stop (`stopPhotoJobs`). A replay of the same idempotency key
+ * with the same request returns the first answer; a different request under it is a conflict.
+ */
+export async function addToSafetyStop(
+  env: AppEnv,
+  input: AddToSafetyStopInput,
+): Promise<{ replayed: boolean; addition: SafetyStopAddition }> {
+  const note = input.note === null ? null : input.note;
+  if (
+    (note === null && input.evidenceIds.length === 0) ||
+    (note !== null && !journalDetail(note)) ||
+    !validEvidenceIds(input.evidenceIds)
+  ) {
+    throw new SafetyError(
+      "safety_stop_addition_invalid",
+      400,
+      "An addition is a note of 3 to 4000 characters, one to ten photos, or both.",
+    );
+  }
+  const requestSha256 = await sha256Hex(
+    JSON.stringify({
+      evidence_ids: input.evidenceIds,
+      note,
+      occurrence_id: input.occurrenceId,
+      user_id: input.actorUserId,
+    }),
+  );
+  const additionId = `soa_${(await sha256Hex(`${input.tenantId}:${input.idempotencyKey}:stop-addition`)).slice(0, 32)}`;
+  const replay = await additionById(env, input.tenantId, additionId);
+  if (replay) return replayedAddition(replay, requestSha256);
+
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  if (occurrence.stop_active !== 1) {
+    throw new SafetyError(
+      "safety_stop_not_open",
+      409,
+      "This stop has been released; nothing more is added to it.",
+    );
+  }
+  const refsJson = input.evidenceIds.length === 0
+    ? null
+    : photoRefs(await citedStopPhotos(env, occurrence, input.evidenceIds, {
+        invalid: "safety_stop_addition_evidence_invalid",
+      }));
+  try {
+    await env.DB.prepare(
+      `INSERT INTO safety_occurrence_additions
+         (addition_id, tenant_id, idempotency_key, request_sha256, occurrence_id, added_by_user_id,
+          added_by_role, note, evidence_refs_json, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    )
+      .bind(additionId, input.tenantId, input.idempotencyKey, requestSha256, input.occurrenceId,
+        actor.userId, actor.role, note, refsJson)
+      .run();
+  } catch (error) {
+    const winner = await additionById(env, input.tenantId, additionId);
+    if (winner) return replayedAddition(winner, requestSha256);
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("safety_stop_not_open")) {
+      throw new SafetyError("safety_stop_not_open", 409, "This stop has been released; nothing more is added to it.");
+    }
+    if (message.includes("safety_actor_unknown")) {
+      throw new SafetyError("safety_actor_unknown", 403, "This safety actor is not recognized.");
+    }
+    throw error;
+  }
+  const stored = await additionById(env, input.tenantId, additionId);
+  if (!stored) throw new Error("safety_stop_addition_readback_missing");
+  return { replayed: false, addition: additionProjection(stored) };
+}
+
+function replayedAddition(
+  row: AdditionRow,
+  requestSha256: string,
+): { replayed: boolean; addition: SafetyStopAddition } {
+  if (row.request_sha256 !== requestSha256) {
+    throw new SafetyError(
+      "idempotency_conflict",
+      409,
+      "This idempotency key was already used for a different addition.",
+    );
+  }
+  return { replayed: true, addition: additionProjection(row) };
+}
+
+/** One correction that put a stop on the job or Work Package it meant. */
+export interface SafetyStopScopeCorrection {
+  rescope_id: string;
+  occurrence_id: string;
+  from_version: number;
+  to_version: number;
+  from_scope_type: "roof_job" | "work_package";
+  from_scope_id: string;
+  to_scope_type: "roof_job" | "work_package";
+  to_scope_id: string;
+  moved_by_user_id: string;
+  moved_by_display_name: string | null;
+  moved_by_role: string;
+  reason: string;
+  moved_at: string;
+}
+
+const RESCOPE_COLUMNS = `rescope.rescope_id, rescope.occurrence_id, rescope.from_version,
+  rescope.to_version, rescope.from_scope_type, rescope.from_scope_id, rescope.to_scope_type,
+  rescope.to_scope_id, rescope.moved_by_user_id, mover.display_name AS moved_by_display_name,
+  rescope.moved_by_role, rescope.reason, rescope.moved_at`;
+
+async function rescopeById(
+  env: AppEnv,
+  tenantId: string,
+  rescopeId: string,
+): Promise<(SafetyStopScopeCorrection & { request_sha256: string }) | null> {
+  const row = await env.DB.prepare(
+    `SELECT ${RESCOPE_COLUMNS}, rescope.request_sha256
+       FROM safety_occurrence_rescopes rescope
+       LEFT JOIN app_users mover
+         ON mover.tenant_id = rescope.tenant_id AND mover.user_id = rescope.moved_by_user_id
+      WHERE rescope.tenant_id = ? AND rescope.rescope_id = ?`,
+  )
+    .bind(tenantId, rescopeId)
+    .first<SafetyStopScopeCorrection & { request_sha256: string }>();
+  return row ? { ...row } : null;
+}
+
+async function stopScopeCorrections(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+): Promise<SafetyStopScopeCorrection[]> {
+  const rows = await env.DB.prepare(
+    `SELECT ${RESCOPE_COLUMNS}
+       FROM safety_occurrence_rescopes rescope
+       LEFT JOIN app_users mover
+         ON mover.tenant_id = rescope.tenant_id AND mover.user_id = rescope.moved_by_user_id
+      WHERE rescope.tenant_id = ? AND rescope.occurrence_id = ?
+      ORDER BY rescope.to_version DESC
+      LIMIT 50`,
+  )
+    .bind(tenantId, occurrenceId)
+    .all<SafetyStopScopeCorrection>();
+  return rows.results.map((row) => ({ ...row }));
+}
+
+/** Roles that may put a stop on its job: owner and ops (the orchestrator's addition to P33). */
+const RESCOPE_AUTHORITY_ROLES = new Set(["owner", "ops"]);
+
+export interface RescopeSafetyStopInput {
+  tenantId: string;
+  occurrenceId: string;
+  actorUserId: string;
+  occurrenceVersion: number;
+  scope: { type: "roof_job" | "work_package"; id: string };
+  reason: string;
+  idempotencyKey: string;
+}
+
+/**
+ * Put a stop that names a job or Work Package this tenant does not have onto the one it meant.
+ * It is a correction, never a release: the occurrence keeps its id, raiser, state, stop and
+ * history, and only its scope and version move, in one batch with the append-only correction
+ * record (who moved it, why, and when by D1's clock). The stop stays in force throughout. L06
+ * holds because nothing about who may lift the stop changes; the raiser may correct it, as an
+ * owner or ops person, because a correction lifts nothing. 0171 re-creates 0047's identity guard
+ * so D1 admits a scope change only on that exact recorded correction.
+ */
+export async function rescopeSafetyStop(
+  env: AppEnv,
+  input: RescopeSafetyStopInput,
+): Promise<{ replayed: boolean; correction: SafetyStopScopeCorrection; occurrence: SafetyOccurrenceRecord }> {
+  if (
+    !journalDetail(input.reason) ||
+    !Number.isInteger(input.occurrenceVersion) ||
+    input.occurrenceVersion < 1 ||
+    input.occurrenceVersion > 999_999 ||
+    (input.scope.type !== "roof_job" && input.scope.type !== "work_package") ||
+    !SCOPE_ID.test(input.scope.id)
+  ) {
+    throw new SafetyError(
+      "safety_stop_rescope_invalid",
+      400,
+      "Putting a stop on its job needs the version you reviewed, a job or job plan, and a reason.",
+    );
+  }
+  const requestSha256 = await sha256Hex(
+    JSON.stringify({
+      occurrence_id: input.occurrenceId,
+      occurrence_version: input.occurrenceVersion,
+      reason: input.reason,
+      scope_id: input.scope.id,
+      scope_type: input.scope.type,
+      user_id: input.actorUserId,
+    }),
+  );
+  const rescopeId = `sor_${(await sha256Hex(`${input.tenantId}:${input.idempotencyKey}:stop-rescope`)).slice(0, 32)}`;
+  const replay = await rescopeById(env, input.tenantId, rescopeId);
+  if (replay) return await replayedRescope(env, input.tenantId, replay, requestSha256);
+
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    RESCOPE_AUTHORITY_ROLES,
+    "safety_rescope_authority_required",
+    "Putting a stop on its job needs the owner or ops role.",
+  );
+  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  if (occurrence.stop_active !== 1) {
+    throw new SafetyError("safety_stop_already_released", 409, "This stop has already been released.");
+  }
+  if (occurrence.version !== input.occurrenceVersion) {
+    throw new SafetyError(
+      "safety_occurrence_version_conflict",
+      409,
+      "This stop changed after you reviewed it. Review it again.",
+    );
+  }
+  if (
+    (occurrence.scope_type !== "roof_job" && occurrence.scope_type !== "work_package") ||
+    (await stopPhotoJobs(env, occurrence)) !== null
+  ) {
+    throw new SafetyError(
+      "safety_stop_scope_resolved",
+      409,
+      "This stop already names a job or job plan this company has.",
+    );
+  }
+  const target =
+    input.scope.type === "roof_job"
+      ? await env.DB.prepare(
+          `SELECT 1 AS found FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?`,
+        ).bind(input.tenantId, input.scope.id).first<{ found: number }>()
+      : await env.DB.prepare(
+          `SELECT 1 AS found FROM work_packages WHERE tenant_id = ? AND work_package_id = ? LIMIT 1`,
+        ).bind(input.tenantId, input.scope.id).first<{ found: number }>();
+  if (!target) {
+    throw new SafetyError(
+      "safety_stop_scope_target_unknown",
+      409,
+      "That job or job plan does not exist in this company.",
+    );
+  }
+  const now = new Date().toISOString();
+  let results: Array<{ meta?: { changes?: number } }>;
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO safety_occurrence_rescopes
+           (rescope_id, tenant_id, idempotency_key, request_sha256, occurrence_id, from_version,
+            to_version, from_scope_type, from_scope_id, to_scope_type, to_scope_id,
+            moved_by_user_id, moved_by_role, reason, moved_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE EXISTS (
+            SELECT 1 FROM safety_occurrences
+             WHERE tenant_id = ? AND occurrence_id = ? AND version = ?
+          )`,
+      ).bind(rescopeId, input.tenantId, input.idempotencyKey, requestSha256, input.occurrenceId,
+        occurrence.version, occurrence.version + 1, occurrence.scope_type, occurrence.scope_id,
+        input.scope.type, input.scope.id, actor.userId, actor.role, input.reason,
+        input.tenantId, input.occurrenceId, occurrence.version),
+      env.DB.prepare(
+        `UPDATE safety_occurrences
+            SET scope_type = ?, scope_id = ?, version = ?, updated_at = ?
+          WHERE tenant_id = ? AND occurrence_id = ? AND version = ?`,
+      ).bind(input.scope.type, input.scope.id, occurrence.version + 1, now, input.tenantId,
+        input.occurrenceId, occurrence.version),
+    ]);
+  } catch (error) {
+    const winner = await rescopeById(env, input.tenantId, rescopeId);
+    if (winner) return await replayedRescope(env, input.tenantId, winner, requestSha256);
+    throw rescopeRefusal(error);
+  }
+  if (d1Changes(results[1] ?? {}) !== 1) {
+    throw new SafetyError(
+      "safety_occurrence_version_conflict",
+      409,
+      "This stop changed after you reviewed it. Review it again.",
+    );
+  }
+  const stored = await rescopeById(env, input.tenantId, rescopeId);
+  if (!stored) throw new Error("safety_stop_rescope_readback_missing");
+  const { request_sha256: _hash, ...correction } = stored;
+  return {
+    replayed: false,
+    correction,
+    occurrence: await requireOccurrence(env, input.tenantId, input.occurrenceId),
+  };
+}
+
+async function replayedRescope(
+  env: AppEnv,
+  tenantId: string,
+  row: SafetyStopScopeCorrection & { request_sha256: string },
+  requestSha256: string,
+): Promise<{ replayed: boolean; correction: SafetyStopScopeCorrection; occurrence: SafetyOccurrenceRecord }> {
+  if (row.request_sha256 !== requestSha256) {
+    throw new SafetyError(
+      "idempotency_conflict",
+      409,
+      "This idempotency key was already used for a different correction.",
+    );
+  }
+  const { request_sha256: _hash, ...correction } = row;
+  return {
+    replayed: true,
+    correction,
+    occurrence: await requireOccurrence(env, tenantId, row.occurrence_id),
+  };
+}
+
+function rescopeRefusal(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  const refusals: Array<[string, number, string]> = [
+    ["safety_actor_unknown", 403, "This safety actor is not recognized."],
+    ["safety_stop_already_released", 409, "This stop has already been released."],
+    ["safety_stop_scope_resolved", 409, "This stop already names a job or job plan this company has."],
+    ["safety_stop_scope_target_unknown", 409, "That job or job plan does not exist in this company."],
+    ["safety_occurrence_version_conflict", 409, "This stop changed after you reviewed it. Review it again."],
+  ];
+  const refusal = refusals.find(([code]) => message.includes(code));
+  return refusal ? new SafetyError(refusal[0], refusal[1], refusal[2]) : error;
+}
+
+/** The active stops that hold a vehicle, oldest first, as a refusal names them. */
+export async function vehicleSafetyStops(
+  env: AppEnv,
+  tenantId: string,
+  fleetAssetId: string,
+): Promise<Array<{
+  occurrence_id: string;
+  scope: "vehicle";
+  reported_at: string;
+  summary: string;
+  raiser_display_name: string | null;
+}>> {
+  const rows = await env.DB.prepare(
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            raiser.display_name AS raiser_display_name
+       FROM safety_occurrences occurrence
+       LEFT JOIN app_users raiser
+         ON raiser.tenant_id = occurrence.tenant_id
+        AND raiser.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ? AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'vehicle' AND occurrence.scope_id = ?
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC
+      LIMIT 50`,
+  )
+    .bind(tenantId, fleetAssetId)
+    .all<{ occurrence_id: string; reported_at: string; summary: string; raiser_display_name: string | null }>();
+  return rows.results.map((row) => ({ ...row, scope: "vehicle" as const }));
+}
+
 /**
  * The stop detail read: the raw occurrence, the raiser's name, every lifecycle step, and whether
  * this viewer may release it now. Any authenticated role may read any occurrence of the tenant.
@@ -2784,6 +3428,7 @@ export async function safetyOccurrenceDetail(
       lifecycle[step] = recorded;
     }
   }
+  const releasePhotos = await stopReleasePhotos(env, occurrence);
   const reason = releaseUnavailableReason(
     occurrence,
     raiserIdentities(occurrence.reported_by_user_id, {
@@ -2795,6 +3440,7 @@ export async function safetyOccurrenceDetail(
       identities: await userIdentities(env, tenantId, actor.userId),
       personSession,
     },
+    releasePhotos.length > 0,
   );
   return {
     version: 1,
@@ -2802,6 +3448,9 @@ export async function safetyOccurrenceDetail(
     raised_by_display_name: raiser?.display_name ?? null,
     lifecycle,
     keep_decisions: await stopKeepDecisions(env, tenantId, occurrenceId),
+    additions: await stopAdditions(env, tenantId, occurrenceId),
+    release_photos: releasePhotos,
+    scope_corrections: await stopScopeCorrections(env, tenantId, occurrenceId),
     can_release: reason === null,
     release_unavailable_reason: reason,
   };

@@ -32,6 +32,7 @@ import {
   recordOperatingJobAssignment,
 } from "../src/operating-job-assignment-store.ts";
 import { recordOperatingWorkObjectAssignment } from "../src/operating-work-object-assignment-store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const OFFICE_ASSIGNMENT_ID = (() => {
   const idempotencyHash = sha256("office-native-assignment-0001");
@@ -353,11 +354,12 @@ async function seedOperatingAssignment(appEnv: ReturnType<typeof env>) {
           gate, state, owner_user, assigned_at, due_at, blocker_reason, version,
           created_at, updated_at)
          VALUES (?, 'ironwrap', 'JOB-NATIVE-OFFICE', 'ow_native_office_0001',
-                 'raw/native-office/0001.json', ?, 'ready', 'appu_owner_native',
+                 'raw/native-office/0001.json', ?, 'blocked', 'appu_owner_native',
                  ?, '2026-08-21T12:00:00.000Z', 'No active blocker', 1, ?, ?)`,
       )
       .run(`gate:native:${gate.toLowerCase()}`, gate, now, now, now);
   }
+  recordLegacyGateStates(sqlite, { tenantId: "ironwrap", roofJobId: "JOB-NATIVE-OFFICE", at: now });
   sqlite
     .prepare(
       `INSERT INTO fleet_crews

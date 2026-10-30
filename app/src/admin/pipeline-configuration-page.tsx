@@ -455,7 +455,7 @@ function PipelineCard({
             </CardTitle>
             <CardDescription className="mt-1">
               <span className="font-semibold text-foreground">{pipeline.key}</span> ·{" "}
-              {pipeline.entity_type} · version {pipeline.version} · {pipeline.card_count}{" "}
+              {pipeline.entity_type} · {pipeline.card_count}{" "}
               {pipeline.card_count === 1 ? "card" : "cards"}
             </CardDescription>
           </div>

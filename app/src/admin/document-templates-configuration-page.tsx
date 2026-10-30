@@ -410,7 +410,7 @@ function DocumentTemplateCard({
             </CardTitle>
             <CardDescription className="mt-1 break-words">
               {template.entity_type} · key {template.template_key} · {template.blocks.length}{" "}
-              {template.blocks.length === 1 ? "block" : "blocks"} · revision {template.version}
+              {template.blocks.length === 1 ? "block" : "blocks"}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">

@@ -203,23 +203,33 @@ export function Receipt({
   // not a check in an outside system; its note says what happened, so it has no Checked line.
   const closedDraft =
     receipt.outcome === "succeeded" && (state === "done_by_person" || state === "replaced");
+  // A step done within the owner's limits says outright that no one approved it (gate e-dial:
+  // readers could not tell from "Auto with undo" alone).
+  const onItsOwn =
+    state === "done" && receipt.permit.kind === "within_limits" && !receipt.permit.approved_by
+      ? "It did this on its own; nobody approved it first."
+      : undefined;
   const checked =
-    display.checked ??
-    ([
-      approver
-        ? `Approved by ${approver}${display.approvedWhen ? ` ${display.approvedWhen}` : ""}.`
-        : null,
-      receipt.readback && !closedDraft
-        ? `Checked in ${where}${display.checkedWhen ? ` ${display.checkedWhen}` : ""}: ${
-            receipt.readback.matched ? "matches" : "does not match"
-          }.`
-        : receipt.tool && state !== "needs_you" && !closedDraft
-          ? "Not checked yet."
-          : null,
+    [
+      onItsOwn,
+      display.checked ??
+        [
+          approver
+            ? `Approved by ${approver}${display.approvedWhen ? ` ${display.approvedWhen}` : ""}.`
+            : null,
+          receipt.readback && !closedDraft
+            ? `Checked in ${where}${display.checkedWhen ? ` ${display.checkedWhen}` : ""}: ${
+                receipt.readback.matched ? "matches" : "does not match"
+              }.`
+            : receipt.tool && state !== "needs_you" && !closedDraft
+              ? "Not checked yet."
+              : null,
+        ]
+          .filter(Boolean)
+          .join(" "),
     ]
       .filter(Boolean)
-      .join(" ") ||
-      undefined);
+      .join(" ") || undefined;
 
   // Needs you waits on one person or role; a viewer who may not decide reads who, in ink.
   const ask = receipt.needs_from_you;
@@ -236,9 +246,13 @@ export function Receipt({
   const stillDecides = decider
     ? `${decider.charAt(0).toUpperCase()}${decider.slice(1)} still decides.`
     : undefined;
+  // An action the owner can never raise says so in words, beside the lock (gate e-dial).
+  const asks = display.why ?? "A person approves this kind of step before it runs.";
   const why =
     state === "needs_you"
-      ? (display.why ?? "A person approves this kind of step before it runs.")
+      ? display.delegation === "always_asks_first"
+        ? `${asks.replace(/[.!?]?$/, ".")} It can never be set to do this on its own.`
+        : asks
       : state === "held"
         ? (display.why ?? words.why)
         : undefined;

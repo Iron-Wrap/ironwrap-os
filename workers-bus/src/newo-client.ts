@@ -1,17 +1,8 @@
 export type NewoJson = null | boolean | number | string | NewoJson[] | { [key: string]: NewoJson };
-export type NewoJsonObject = { [key: string]: NewoJson };
-
 export interface NewoClientConfig {
   baseUrl: string;
   apiKey: string;
   timeoutMs: number;
-}
-
-export interface NewoTokenPair {
-  access_token: string;
-  token_type: string;
-  expires_in: string | number;
-  refresh_token: string;
 }
 
 export interface NewoActorListQuery {

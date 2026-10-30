@@ -222,7 +222,12 @@ export function JobStopSheet({
           title="Work is stopped on every job. You reported a stop, and we couldn't tell which job it's for. The office is told."
         />
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          {["Stop", stopTime(raised.raisedAt, timeZone), session.user.display_name, raised.unsafe]
+          {[
+            "Stop",
+            stopTime(raised.raisedAt, timeZone),
+            session.user.display_name,
+            raised.unsafe ? `Reason: ${raised.unsafe}` : null,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </p>

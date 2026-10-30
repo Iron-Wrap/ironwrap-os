@@ -285,7 +285,7 @@ describe("JobStopSheet", () => {
       ),
     ).toBeVisible();
     expect(screen.getByText(/^Stop · \w{3} \d{1,2}:\d{2}/)).toHaveTextContent(
-      "· Sam Keewatin · Ice on the north slope",
+      "· Sam Keewatin · Reason: Ice on the north slope",
     );
     expect(screen.getByText("Job: couldn't tell which one")).toBeVisible();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
@@ -309,6 +309,7 @@ describe("JobStopSheet", () => {
     const first = render(<JobStopSheet session={session} job={job} />);
     await user.click(await screen.findByRole("button", { name: "Send stop report" }));
     await screen.findByText(/Work is stopped on every job/);
+    expect(screen.getByText(/^Stop · /)).not.toHaveTextContent("Reason:");
     first.unmount();
     render(<JobStopSheet session={session} job={job} fetcher={panelFetcher([])} />);
     expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();

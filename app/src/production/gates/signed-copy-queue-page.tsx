@@ -78,12 +78,22 @@ function SignedCopyQueueContent({ role }: { role: AppRole }) {
   );
 }
 
-function statusLine(job: SignedCopyQueueJob, stamp: (value: string | null) => string | null) {
-  if (job.category === "signed_copy_unconfirmed")
-    return gateCopy.queue.unconfirmed(stamp(job.copy_shown_at));
-  if (!job.contract_on_record) return gateCopy.queue.imported;
-  if (job.unknown_reason === "signed_copy_before_contract") return gateCopy.queue.earlierContract;
-  return gateCopy.queue.notRecorded;
+/** One row per category (Q1): what is missing, and the control that opens the record step. */
+function rowWords(job: SignedCopyQueueJob, stamp: (value: string | null) => string | null) {
+  const name = job.customer_display_name;
+  if (job.unknown_reason === "signed_copy_unconfirmed") {
+    return {
+      status: gateCopy.queue.unconfirmed(stamp(job.copy_shown_at)),
+      action: gateCopy.queue.confirm(name),
+    };
+  }
+  if (job.unknown_reason === "signed_copy_before_contract") {
+    return {
+      status: gateCopy.queue.earlierContract(stamp(job.contract_signed_at)),
+      action: gateCopy.queue.update(name),
+    };
+  }
+  return { status: gateCopy.queue.notRecorded, action: gateCopy.queue.add(name) };
 }
 
 export function SignedCopyQueue({
@@ -125,12 +135,13 @@ export function SignedCopyQueue({
           <InfoBanner>{gateCopy.queue.rule}</InfoBanner>
           <ol className="grid gap-5">
             {model.jobs.map((job, index) => {
+              const words = rowWords(job, stamp);
               const label = [job.customer_display_name, job.address_line1]
                 .filter((part): part is string => Boolean(part))
                 .join(" · ");
               return (
                 <li key={job.roof_job_id} className="grid gap-3">
-                  <GateField label={label} value={statusLine(job, stamp)} />
+                  <GateField label={label} value={words.status} />
                   {canRecordSignedCopy(role) ? (
                     <div>
                       <Button asChild variant={index === 0 ? "primary" : "secondary"}>
@@ -139,7 +150,7 @@ export function SignedCopyQueue({
                           params={{ jobId: job.roof_job_id }}
                           search={{ step: "window" }}
                         >
-                          {gateCopy.queue.add(job.customer_display_name)}
+                          {words.action}
                         </Link>
                       </Button>
                     </div>

@@ -12,7 +12,7 @@ import {
   clearProductionGate,
   newProductionGateClearanceKey,
 } from "../production-gate-clearance-api";
-import { gateCopy, held } from "./gate-copy";
+import { gateCopy } from "./gate-copy";
 import type { JobGate } from "./gate-contracts";
 import {
   canClearGates,
@@ -31,7 +31,6 @@ import { dayLabel, instantFromLocal } from "./gate-time";
 import {
   ActionRow,
   BackToList,
-  ConsequenceLine,
   ErrorBanner,
   GateField,
   HeldButton,
@@ -84,10 +83,6 @@ export function CrewStep({ screen, gate }: { screen: GateScreen; gate: JobGate }
       await screen.refresh();
     },
   });
-
-  const issueHeld = (
-    <HeldButton label={held(gateCopy.crew.issuePlan, gateCopy.crew.afterScheduling)} />
-  );
 
   // Frame 7b.
   if (gate.state !== "blocked") {
@@ -211,16 +206,11 @@ export function CrewStep({ screen, gate }: { screen: GateScreen; gate: JobGate }
             <Button type="submit" busy={mutation.isPending} disabled={!formReady || screen.offline}>
               {gateCopy.schedule.action}
             </Button>
-            {issueHeld}
           </ActionRow>
         </form>
       ) : (
-        <ActionRow>
-          {heldSchedule ? <HeldButton label={heldSchedule} /> : null}
-          {issueHeld}
-        </ActionRow>
+        <ActionRow>{heldSchedule ? <HeldButton label={heldSchedule} /> : null}</ActionRow>
       )}
-      <ConsequenceLine>{gateCopy.crew.issueTurnsOn}</ConsequenceLine>
     </div>
   );
 }
@@ -300,7 +290,7 @@ export function DepositStep({ screen, gate }: { screen: GateScreen; gate: JobGat
         >
           {gateCopy.deposit.clearOnSettlement}
         </Button>
-        {stage.kind === "ask" || stage.kind === "self_approve" ? (
+        {stage.kind === "ask" || stage.kind === "owner_request" ? (
           <StepLink jobId={screen.jobId} step="waive-deposit" variant="secondary">
             {gateCopy.waiver.askToWaive("Deposit")}
           </StepLink>

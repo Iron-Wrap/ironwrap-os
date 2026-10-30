@@ -14,7 +14,7 @@ import { jobHistoryPath, jobHistoryResponseSchema } from "../../jobs/job-history
 import { loadProductionRunway } from "../production-api";
 import { jobGatesQueryKey, loadJobGates } from "./gate-api";
 import { gateCopy } from "./gate-copy";
-import { isAttestableGate, type GateName, type JobGate } from "./gate-contracts";
+import { isAttestableGate, type JobGate } from "./gate-contracts";
 import {
   canReverse,
   canRecordSignedCopy,
@@ -382,7 +382,6 @@ function Overview({ screen }: { screen: GateScreen }) {
                 <GateField
                   label={gate.gate}
                   value={row.text}
-                  required={row.required}
                   to={{ jobId: screen.jobId, step: stepForGate(gate.gate) }}
                 />
               </li>
@@ -453,7 +452,7 @@ function ReversedGate({
         </Button>
         {heldSchedule ? <HeldButton label={heldSchedule} /> : null}
       </ActionRow>
-      <NextLine>{gateCopy.schedule.nextStaysOff(gate.gate as GateName)}</NextLine>
+      <NextLine>{gateCopy.schedule.nextStaysOff(gatesBeforeSchedule(screen.model))}</NextLine>
     </div>
   );
 }

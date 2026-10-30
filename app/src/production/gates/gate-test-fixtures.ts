@@ -274,9 +274,10 @@ export function screen(
   };
 }
 
+/** Q1 as the frame draws it: one job per category, read Mon 2 Nov. */
 export const queue: SignedCopyQueueResponse = {
   count: 3,
-  counts: { window_unknown: 3, signed_copy_unconfirmed: 0 },
+  counts: { window_unknown: 2, signed_copy_unconfirmed: 1 },
   complete: true,
   jobs: [
     {
@@ -296,21 +297,21 @@ export const queue: SignedCopyQueueResponse = {
       customer_display_name: "Owen Pratt",
       address_line1: "27 Coulee Crescent NW",
       category: "window_unknown",
-      unknown_reason: "signed_copy_time_missing",
+      unknown_reason: "signed_copy_before_contract",
       copy_shown_at: null,
-      contract_on_record: false,
-      contract_signed_at: null,
+      contract_on_record: true,
+      contract_signed_at: "2026-10-26T21:30:00.000Z",
     },
     {
       roof_job_id: "roof-job-lena-synthetic",
       job_number: "IW-1990",
       customer_display_name: "Lena Ross",
       address_line1: "9 Aspen Ridge Way",
-      category: "window_unknown",
-      unknown_reason: "signed_copy_time_missing",
-      copy_shown_at: null,
-      contract_on_record: false,
-      contract_signed_at: null,
+      category: "signed_copy_unconfirmed",
+      unknown_reason: "signed_copy_unconfirmed",
+      copy_shown_at: "2026-10-29T17:42:00.000Z",
+      contract_on_record: true,
+      contract_signed_at: "2026-10-29T17:40:00.000Z",
     },
   ],
 };

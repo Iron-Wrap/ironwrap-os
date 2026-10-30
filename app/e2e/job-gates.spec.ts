@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 
 import AxeBuilder from "@axe-core/playwright";
@@ -29,8 +30,9 @@ import {
  * owns its state. Each flow ends with an axe check for WCAG 2 A and AA.
  *
  * With PR_C_SHOTS_DIR set, the last test also writes the built-UI screens for the Z1 gate: one
- * PNG per P30 frame at 1440×1000 in light, at rest at the top (and fully scrolled when the page
- * scrolls), with every visible string next to it.
+ * PNG per P30 frame in light, at rest at the top (and fully scrolled when the page scrolls),
+ * with every visible string next to it. PR_C_SOURCE_SHA binds captures to a frozen source head;
+ * PR_C_SHOT_VIEWPORT=mobile selects the phone viewport instead of the office desktop viewport.
  */
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
@@ -278,9 +280,7 @@ test.describe("Job gates acceptance (PR-C)", () => {
       .fill(
         "The signed copy was emailed to Elena; the email shows it was delivered Tue 20 Oct 18:26.",
       );
-    await page
-      .getByLabel("Evidence (a reference or a file)")
-      .fill("Delivered email · signed copy.pdf");
+    await page.getByLabel("Evidence reference").fill("Delivered email · signed copy.pdf");
     await expectAccessible(page);
     await page.getByRole("button", { name: "Record when Elena Marchetti received it" }).click();
 
@@ -307,7 +307,7 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await page.goto(gatesUrl("window"));
     await expect(
       page.getByText(
-        "Only an owner or ops can record when Elena Marchetti received the signed copy.",
+        "Only the Owner or Operations can record when Elena Marchetti received the signed copy.",
       ),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /Record when/ })).toHaveCount(0);
@@ -347,11 +347,11 @@ test.describe("Job gates acceptance (PR-C)", () => {
   test("ops opens the work queue and each row opens that job's record step", async ({ page }) => {
     await office(page, { role: "ops", gates: model("unknown"), now: OPEN_NOW });
     await page.goto("/production/signed-copy-missing");
-    await expect(page.getByText("Jobs with no signed-copy time: 3")).toBeVisible();
+    await expect(page.getByText("Jobs that need a signed-copy time: 3")).toBeVisible();
     await expectAccessible(page);
     await page.getByRole("link", { name: "Add the signed-copy time for Elena Marchetti" }).click();
     await expect(page.getByRole("heading", { name: "Cancellation window" })).toBeVisible();
-    await expect(page.getByText(/and you’re in operations\./)).toBeVisible();
+    await expect(page.getByText(/and you’re in Operations\./)).toBeVisible();
   });
 
   test("a reversal keeps the clearance in the history and sends Materials back to blocked", async ({
@@ -405,7 +405,13 @@ test.describe("Job gates acceptance (PR-C)", () => {
   test("built-UI screens for the Z1 gate", async ({ page }) => {
     test.skip(!shotsDir, "set PR_C_SHOTS_DIR to write the built-UI screens");
     test.setTimeout(300_000);
-    await page.setViewportSize({ width: 1440, height: 1000 });
+    const sourceHead = process.env.PR_C_SOURCE_SHA;
+    expect(sourceHead).toMatch(/^[a-f0-9]{40}$/);
+    const viewport =
+      process.env.PR_C_SHOT_VIEWPORT === "mobile"
+        ? { width: 390, height: 844 }
+        : { width: 1440, height: 1000 };
+    await page.setViewportSize(viewport);
     await mkdir(shotsDir!, { recursive: true });
     const index: Array<{
       file: string;
@@ -413,6 +419,12 @@ test.describe("Job gates acceptance (PR-C)", () => {
       title: string;
       position: string;
       text: string;
+      values: string[];
+      route: string;
+      state: string;
+      viewport: typeof viewport;
+      source_sha: string;
+      sha256: string;
     }> = [];
 
     const capture = async (name: string, frame: string, title: string) => {
@@ -439,9 +451,25 @@ test.describe("Job gates acceptance (PR-C)", () => {
             return `${label}: ${shown}`;
           }),
       );
+      const url = new URL(page.url());
+      const identity = {
+        route: `${url.pathname}${url.search}`,
+        state: name,
+        viewport,
+        source_sha: sourceHead!,
+      };
       const top = `${name}-top.png`;
-      await page.screenshot({ path: `${shotsDir}/${top}` });
-      index.push({ file: top, frame, title, position: "top", text, values });
+      const topImage = await page.screenshot({ path: `${shotsDir}/${top}` });
+      index.push({
+        ...identity,
+        file: top,
+        frame,
+        title,
+        position: "top",
+        text,
+        values,
+        sha256: createHash("sha256").update(topImage).digest("hex"),
+      });
       const scrolls = await page.evaluate(
         () => document.documentElement.scrollHeight > window.innerHeight + 2,
       );
@@ -449,14 +477,16 @@ test.describe("Job gates acceptance (PR-C)", () => {
         await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
         await page.waitForTimeout(150);
         const bottom = `${name}-bottom.png`;
-        await page.screenshot({ path: `${shotsDir}/${bottom}` });
+        const bottomImage = await page.screenshot({ path: `${shotsDir}/${bottom}` });
         index.push({
+          ...identity,
           file: bottom,
           frame,
           title,
-          position: "fully scrolled",
+          position: "bottom",
           text: "",
           values: [],
+          sha256: createHash("sha256").update(bottomImage).digest("hex"),
         });
       }
     };
@@ -499,9 +529,7 @@ test.describe("Job gates acceptance (PR-C)", () => {
         .fill(
           "The signed copy was emailed to Elena; the email shows it was delivered Tue 20 Oct 18:26.",
         );
-      await page
-        .getByLabel("Evidence (a reference or a file)")
-        .fill("Delivered email · signed copy.pdf");
+      await page.getByLabel("Evidence reference").fill("Delivered email · signed copy.pdf");
     };
     const waived = (name: "Materials" | "Access") =>
       gate(name, {
@@ -675,14 +703,18 @@ test.describe("Job gates acceptance (PR-C)", () => {
         };
       });
       await page
-        .getByLabel("Why are you approving this?")
+        .getByLabel("Why waive Access?")
         .fill(
           "Elena is away on the crew days. The crew works from the driveway and doesn’t need the house.",
         );
-      await capture("10-waiver-own", "1322:5277", "10 · Approve your own item, only holder");
-      await page.getByRole("button", { name: "Approve the Access waiver with reason" }).click();
-      await expect(page.getByText(/^Approved own item/)).toBeVisible();
-      await capture("10b-waiver-own-receipt", "1322:5301", "10b · Approved own item, receipt");
+      await capture("10-waiver-own", "1322:5277", "10 · Owner submits a waiver");
+      await page.getByRole("button", { name: "Submit the Access waiver with reason" }).click();
+      await expect(page.getByText(/^You approved this waiver yourself/)).toBeVisible();
+      await capture(
+        "10b-waiver-own-receipt",
+        "1322:5301",
+        "10b · Server-confirmed own approval receipt",
+      );
     }
     // 11 · The permit is unknown.
     await visit(
@@ -894,7 +926,7 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await office(page, { role: "ops", gates: model("unknown"), now: OPEN_NOW });
     await page.goto("/production/signed-copy-missing");
-    await expect(page.getByText("Jobs with no signed-copy time: 3")).toBeVisible();
+    await expect(page.getByText("Jobs that need a signed-copy time: 3")).toBeVisible();
     await capture("q1-signed-copy-missing", "1446:1900", "Q1 · Jobs missing a signed-copy time");
     // N1 and N1b · the owner's items.
     await page.unrouteAll({ behavior: "ignoreErrors" });

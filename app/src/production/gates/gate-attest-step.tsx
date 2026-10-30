@@ -19,7 +19,7 @@ import {
   type JobGate,
 } from "./gate-contracts";
 import { attestationFrom, emptyForm, type FormState } from "./gate-form";
-import { attestationHold, canClearGates, waiveStepFor } from "./gate-model";
+import { attestationHold, canClearGates, overviewClearable, waiveStepFor } from "./gate-model";
 import { gateRefusal, type GateRefusal } from "./gate-refusals";
 import {
   heldScheduleLabel,
@@ -100,7 +100,9 @@ export function AttestStep({
           />
           <BackToList jobId={screen.jobId} />
         </ActionRow>
-        <NextLine>{gateCopy.materials.nextHeld}</NextLine>
+        <NextLine>
+          {gateCopy.materials.nextHeld(overviewClearable(screen.model, screen.role))}
+        </NextLine>
       </div>
     );
   }
@@ -554,7 +556,6 @@ function RefusalView({
           key="permit"
           label={gateCopy.safety.permitLegend}
           value={gateCopy.safety.permitUnknownValue}
-          required
         />,
       );
       title = gateCopy.safety.permitUnknownTitle;
@@ -624,7 +625,6 @@ function RefusalView({
           key="forecast"
           label={gateCopy.weather.forecast}
           value={`${form.forecast ? `${form.forecast} · ` : ""}${stampOf(screen, read)}`}
-          required
         />,
       );
       title = gateCopy.weather.staleTitle(day);

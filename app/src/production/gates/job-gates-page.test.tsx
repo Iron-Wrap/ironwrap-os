@@ -115,7 +115,7 @@ describe("the gate overview", () => {
     expect(screen.getByText("Blocked: nobody has confirmed site access yet")).toBeVisible();
     expect(screen.getByText("Blocked: no forecast yet; read it near the crew day")).toBeVisible();
     expect(screen.getByText("Waiting: clears when you schedule the crew")).toBeVisible();
-    expect(screen.getAllByText("Required")).toHaveLength(4);
+    expect(screen.queryByText("Required")).not.toBeInTheDocument();
     expect(link("Clear Safety")).toHaveAttribute(
       "href",
       `/production/jobs/${JOB_ID}/gates?step=safety`,
@@ -126,7 +126,7 @@ describe("the gate overview", () => {
     expect(button("Schedule the crew · after the window ends")).toBeDisabled();
     expect(
       screen.getByText(
-        "Next: “Schedule the crew” turns on once the window ends and the 4 blocked gates clear.",
+        "“Schedule the crew” turns on once the window ends and the 4 blocked gates clear.",
       ),
     ).toBeVisible();
   });
@@ -178,7 +178,7 @@ describe("the gate overview", () => {
     expect(link("Clear Weather").dataset.variant).toBe("secondary");
     expect(button("Schedule the crew · after Safety and Weather clear")).toBeDisabled();
     expect(
-      screen.getByText("Next: “Schedule the crew” turns on when Safety and Weather clear."),
+      screen.getByText("“Schedule the crew” turns on when Safety and Weather clear."),
     ).toBeVisible();
   });
 
@@ -195,11 +195,7 @@ describe("the gate overview", () => {
     );
     expect(screen.queryByRole("link", { name: "Clear Safety" })).not.toBeInTheDocument();
     expect(button("Schedule the crew · after the window ends")).toBeDisabled();
-    expect(
-      screen.getByText(
-        "Next: once that time is added, the window shows when it ends. Ordering and “Schedule the crew” turn on when it ends.",
-      ),
-    ).toBeVisible();
+    expect(screen.getByText("Adding that time shows when the window ends.")).toBeVisible();
     unmount();
 
     show(model("unknown"), undefined, { role: "production" });
@@ -208,7 +204,7 @@ describe("the gate overview", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Only an owner or ops can add when Elena Marchetti received the signed copy.",
+        "Only the Owner or Operations can add when Elena Marchetti received the signed copy.",
       ),
     ).toBeVisible();
     expect(link("Clear Safety")).toBeVisible();
@@ -308,7 +304,7 @@ describe("Materials", () => {
     ).toBeDisabled();
     expect(
       screen.getByText(
-        "Next: clear Safety, Access and Weather. Then “Schedule the crew” turns on.",
+        "Once Materials, Safety, Access and Weather are cleared, “Schedule the crew” turns on.",
       ),
     ).toBeVisible();
     const user = userEvent.setup();
@@ -339,9 +335,7 @@ describe("Materials", () => {
     expect(link("See the material problem")).toHaveAttribute("href", "/inventory");
     expect(button("Clear Materials with this proof · after the problem is closed")).toBeDisabled();
     expect(
-      screen.getByText(
-        "Next: when the problem is closed, “Clear Materials with this proof” turns on.",
-      ),
+      screen.getByText("“Clear Materials with this proof” turns on once the problem is closed."),
     ).toBeVisible();
   });
 
@@ -415,7 +409,9 @@ describe("Materials", () => {
     expect(screen.getByText("Today 08:40 · Cleared")).toBeVisible();
     expect(screen.getByText("Production: Prairie Coil Supply · 3140")).toBeVisible();
     expect(
-      screen.getByText("Next: “Schedule the crew” stays off until Materials clears again."),
+      screen.getByText(
+        "“Schedule the crew” stays off until Materials, Safety, Access and Weather clear.",
+      ),
     ).toBeVisible();
     await userEvent.setup().click(button("Clear Materials with the right proof"));
     expect(screen.getByLabelText("Supplier reference")).toBeVisible();
@@ -452,7 +448,7 @@ describe("Safety", () => {
     expect(screen.queryByRole("link", { name: /waive/i })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Next: clear Access. “Schedule the crew” turns on once the window ends and every gate is clear.",
+        "“Schedule the crew” turns on once the window ends and every gate is clear.",
       ),
     ).toBeVisible();
     const user = userEvent.setup();
@@ -487,7 +483,7 @@ describe("Safety", () => {
     ).toBeDisabled();
     expect(
       screen.getByText(
-        "Next: choose “Permit needed and held” with its number, or “Permit not needed”. Then “Clear Safety with this proof” turns on.",
+        "To clear Safety, choose “Permit needed and held” with its number, or “Permit not needed”.",
       ),
     ).toBeVisible();
     await user.click(button("Change the permit answer"));
@@ -573,7 +569,7 @@ describe("Access and Weather", () => {
     show(model("open", { Safety: clearedGate("Safety", {}, null) }), "access");
     expect(
       screen.getByText(
-        "Next: after the window ends, clear Materials and Weather. Then “Schedule the crew” turns on.",
+        "“Schedule the crew” turns on once the window ends and Materials, Access and Weather are cleared.",
       ),
     ).toBeVisible();
     expect(link("Ask to waive Access")).toBeVisible();
@@ -608,9 +604,7 @@ describe("Access and Weather", () => {
         "Weather can’t be waived. It needs a work window of 14 days or less and a forecast from the last 72 hours.",
       ),
     ).toBeVisible();
-    expect(
-      screen.getByText("Next: once Weather clears, “Schedule the crew” turns on."),
-    ).toBeVisible();
+    expect(screen.getByText("Clearing Weather turns on “Schedule the crew”.")).toBeVisible();
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("Work window starts"), "2026-11-03T07:00");
     await user.type(screen.getByLabelText("Work window ends"), "2026-11-04T17:00");
@@ -641,10 +635,8 @@ describe("Crew", () => {
     ).toBeVisible();
     expect(screen.getByText("Not yet: no crew scheduled for this job")).toBeVisible();
     expect(button("Schedule the crew · after the window ends")).toBeDisabled();
-    expect(button("Issue the job plan · after scheduling clears Crew")).toBeDisabled();
-    expect(
-      screen.getByText("“Issue the job plan” turns on once scheduling clears Crew."),
-    ).toBeVisible();
+    // Issuing the job plan isn't gated: the gates hold the firm start, never the plan.
+    expect(screen.queryByRole("button", { name: /Issue/ })).not.toBeInTheDocument();
   });
 
   it("schedules the crew once every gate is clear and the window has ended", async () => {
@@ -718,16 +710,14 @@ describe("Crew", () => {
       </QueryClientProvider>,
     );
     expect(
-      screen.getByText(
-        "All 5 gates are cleared and the cancellation window has ended. The job plan is ready to issue.",
-      ),
+      screen.getByText("All 5 gates are cleared and the cancellation window has ended."),
     ).toBeVisible();
     expect(
       screen.getByText(
         "Cleared Today 10:05: Sam Keewatin’s crew scheduled for Tue 3 Nov 07:00 (the window ended at the end of Fri 30 Oct)",
       ),
     ).toBeVisible();
-    expect(link("Issue the job plan")).toHaveAttribute("href", `/jobs/${JOB_ID}`);
+    expect(link("Issue job plan")).toHaveAttribute("href", `/jobs/${JOB_ID}`);
   });
 });
 
@@ -837,7 +827,7 @@ describe("waivers", () => {
     });
   });
 
-  it("frames 10 and 10b: the only owner approves their own item and gets its receipt", async () => {
+  it("frames 10 and 10b: explains both owner outcomes and claims approval only after confirmation", async () => {
     stubFetch(() => ({
       status: 200,
       body: {
@@ -851,20 +841,47 @@ describe("waivers", () => {
     }));
     show(model("open"), "waive-access", { role: "owner" });
     expect(
-      screen.getByText("Only you can approve this. Add a reason and it’s recorded."),
+      screen.getByText(
+        "If you’re the only person who can approve this waiver, submitting it approves it. Otherwise, another owner decides and the gate stays blocked.",
+      ),
     ).toBeVisible();
+    expect(screen.queryByText(/Only you can approve this\./)).not.toBeInTheDocument();
     const user = userEvent.setup();
     const reason =
       "Elena is away on the crew days. The crew works from the driveway and doesn’t need the house.";
-    await user.type(screen.getByLabelText("Why are you approving this?"), reason);
-    await user.click(button("Approve the Access waiver with reason"));
-    expect(await screen.findByText(`Approved own item: only holder — ${reason}`)).toBeVisible();
-    expect(screen.getByText(/^Waived .* \d\d:\d\d by you$/)).toBeVisible();
+    await user.type(screen.getByLabelText("Why waive Access?"), reason);
+    await user.click(button("Submit the Access waiver with reason"));
     expect(
-      screen.getByText(
-        "Next: use “Back to the gate list” to clear Safety. Materials and Weather wait for the window to end.",
+      await screen.findByText(
+        `You approved this waiver yourself, since only you can. Your reason: “${reason}”`,
       ),
     ).toBeVisible();
+    // This write response confirms approval but carries no authoritative timestamp.
+    expect(screen.getByText("Waived by you")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Safety can be cleared now. Materials and Weather wait for the window to end.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("does not claim an owner's waiver was approved when the server records a request", async () => {
+    const calls = stubFetch(() => ({
+      status: 409,
+      body: { error: "production_gate_waiver_requested" },
+    }));
+    const { refresh } = show(model("open"), "waive-access", { role: "owner" });
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Why waive Access?"), "The crew uses the driveway.");
+    await user.click(button("Submit the Access waiver with reason"));
+    expect(calls[0]?.body).toEqual({
+      basis: "office_waiver",
+      reason: "The crew uses the driveway.",
+    });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/You approved this waiver yourself/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Waived by you")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows the owner's declined answer on the gate, and never offers a Safety waiver", () => {
@@ -900,7 +917,7 @@ describe("the people-only record step", () => {
     expect(screen.queryByRole("button", { name: /Record when/ })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Only an owner or ops can record when Elena Marchetti received the signed copy.",
+        "Only the Owner or Operations can record when Elena Marchetti received the signed copy.",
       ),
     ).toBeVisible();
   });
@@ -920,7 +937,7 @@ describe("the people-only record step", () => {
     expect(screen.getByText("Contract signed Tue 20 Oct 18:20")).toBeVisible();
     expect(
       screen.getByText(
-        "Only an owner or ops can record this, and you’re an owner. The 10 days count from when Elena Marchetti received the signed copy, not from the signing. It can’t be in the future or before Tue 20 Oct 18:20.",
+        "Only the Owner or Operations can record this, and you’re the Owner. The 10 days count from when Elena Marchetti received the signed copy, not from the signing. It can’t be in the future or before Tue 20 Oct 18:20.",
       ),
     ).toBeVisible();
     const user = userEvent.setup();
@@ -930,7 +947,7 @@ describe("the people-only record step", () => {
       "The signed copy was emailed to Elena; the email shows it was delivered Tue 20 Oct 18:26.",
     );
     await user.type(
-      screen.getByLabelText("Evidence (a reference or a file)"),
+      screen.getByLabelText("Evidence reference"),
       "Delivered email · signed copy.pdf",
     );
     await user.click(button("Record when Elena Marchetti received it"));
@@ -953,14 +970,54 @@ describe("the people-only record step", () => {
     expect(button("Schedule the crew · after the window ends")).toBeDisabled();
     expect(
       screen.getByText(
-        "Next: plan now; ordering, purchase orders and a firm start wait until the end of Fri 30 Oct.",
+        "Plan now; ordering, purchase orders and a firm start wait until the end of Fri 30 Oct.",
       ),
     ).toBeVisible();
   });
 
   it("speaks to ops as ops", () => {
     show(model("unknown"), "window", { role: "ops" });
-    expect(screen.getByText(/and you’re in operations\./)).toBeVisible();
+    expect(screen.getByText(/and you’re in Operations\./)).toBeVisible();
+  });
+
+  it("uses the returned window after a save, including a newer person's receipt and an exact end", async () => {
+    const after = windowState("ended", {
+      ends_on_calendar_day: false,
+      ends_at: "2026-11-01T08:00:00.000Z",
+    });
+    after.signed_copy_received = {
+      ...after.signed_copy_received!,
+      id: "pcw_newer_record",
+      received_at: "2026-10-21T00:27:00.000Z",
+    };
+    stubFetch(() => ({
+      status: 201,
+      body: {
+        cancellation_window: after,
+        recorded: true,
+        receipt_id: "pcw_viewer_record",
+        replayed: false,
+      },
+    }));
+    show(model("unknown"), "window", { role: "owner", now: ENDED_NOW });
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Signed copy received"), "2026-10-20T18:26");
+    await user.type(screen.getByLabelText("Why are you recording it?"), "The email was delivered.");
+    await user.type(screen.getByLabelText("Evidence reference"), "Delivered email");
+    await user.click(button("Record when Elena Marchetti received it"));
+    expect(
+      await screen.findByText("Recorded. The cancellation window ended Sun 1 Nov 02:00."),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Tue 20 Oct 18:27 · recorded Wed 21 Oct 08:40 by Dana Whitford · Owner"),
+    ).toBeVisible();
+    expect(screen.queryByText(/recorded .* by you/)).not.toBeInTheDocument();
+    expect(
+      button("Schedule the crew · after Materials, Safety, Access and Weather clear"),
+    ).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "Schedule the crew · after the window ends" }),
+    ).not.toBeInTheDocument();
   });
 
   it.each([
@@ -989,7 +1046,7 @@ describe("the people-only record step", () => {
     await user.type(screen.getByLabelText("Signed copy received"), "2026-10-20T18:26");
     // Long enough locally; the Worker trims and judges again.
     await user.type(screen.getByLabelText("Why are you recording it?"), "Delivered by email.");
-    await user.type(screen.getByLabelText("Evidence (a reference or a file)"), "Delivered email");
+    await user.type(screen.getByLabelText("Evidence reference"), "Delivered email");
     await user.click(button("Record when Elena Marchetti received it"));
     expect(await screen.findByText(title)).toBeVisible();
     expect(button(heldLabel)).toBeDisabled();
@@ -1008,7 +1065,8 @@ describe("the people-only record step", () => {
         "Nothing was recorded: add why you’re recording this time and the evidence, so others can check where it came from.",
       ),
     ).toBeVisible();
-    expect(screen.getAllByText("Not added yet")).toHaveLength(2);
+    expect(screen.getByText("Type how you know when Elena Marchetti received it")).toBeVisible();
+    expect(screen.getByText("Type an evidence reference")).toBeVisible();
     expect(calls).toHaveLength(0);
   });
 
@@ -1029,7 +1087,7 @@ describe("the people-only record step", () => {
       screen.getByLabelText("Why are you recording it?"),
       "The email shows delivery.",
     );
-    await user.type(screen.getByLabelText("Evidence (a reference or a file)"), "Delivered email");
+    await user.type(screen.getByLabelText("Evidence reference"), "Delivered email");
     await user.click(button("Record when Elena Marchetti received it"));
     expect(
       await screen.findByText(
@@ -1037,11 +1095,7 @@ describe("the people-only record step", () => {
       ),
     ).toBeVisible();
     expect(button("Record when Elena Marchetti received it · after you change it")).toBeDisabled();
-    expect(
-      screen.getByText(
-        "Next: tap “Change the time”, then enter a time from Tue 20 Oct 18:20 up to now; “Record when Elena Marchetti received it” turns on after that.",
-      ),
-    ).toBeVisible();
+    expect(screen.getByText("Enter a time from Tue 20 Oct 18:20 up to now.")).toBeVisible();
     await user.click(button("Change the time"));
     expect(screen.getByLabelText("Signed copy received")).toHaveFocus();
   });
@@ -1063,7 +1117,7 @@ describe("the people-only record step", () => {
       screen.getByLabelText("Why are you recording it?"),
       "The email shows delivery.",
     );
-    await user.type(screen.getByLabelText("Evidence (a reference or a file)"), "Delivered email");
+    await user.type(screen.getByLabelText("Evidence reference"), "Delivered email");
     await user.click(button("Record when Elena Marchetti received it"));
     expect(
       await screen.findByText(
@@ -1085,29 +1139,27 @@ describe("the people-only record step", () => {
         time_zone: "America/Edmonton",
       },
     }));
-    show(model("open"), "window", { role: "ops", now: new Date("2026-10-22T16:45:00.000Z") });
+    show(model("open"), "window", { role: "owner", now: new Date("2026-10-22T16:45:00.000Z") });
     expect(screen.getByText("Signed copy received, on record")).toBeVisible();
+    // The read carries a name and role, not an identity match. Another owner can share both.
     expect(
       screen.getByText("Tue 20 Oct 18:26 · recorded Wed 21 Oct 08:40 by Dana Whitford · Owner"),
     ).toBeVisible();
+    expect(screen.queryByText(/recorded .* by you/)).not.toBeInTheDocument();
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("New time"), "2026-10-20T18:21");
     await user.type(
       screen.getByLabelText("Why are you recording it?"),
       "The email shows delivery.",
     );
-    await user.type(screen.getByLabelText("Evidence (a reference or a file)"), "Delivered email");
+    await user.type(screen.getByLabelText("Evidence reference"), "Delivered email");
     await user.click(button("Record when Elena Marchetti received it"));
     expect(
       await screen.findByText(
         "Tue 20 Oct 18:21 is earlier than the time on record. This time can only move later, never earlier, so this isn’t saved.",
       ),
     ).toBeVisible();
-    expect(
-      screen.getByText(
-        "Next: nothing was saved, and the window is still open until the end of Fri 30 Oct.",
-      ),
-    ).toBeVisible();
+    expect(screen.getByText("The window is still open until the end of Fri 30 Oct.")).toBeVisible();
     await user.click(button("Keep Tue 20 Oct 18:26"));
     expect(screen.getByLabelText("New time")).toHaveValue("");
   });
@@ -1129,7 +1181,7 @@ describe("the people-only record step", () => {
       screen.getByLabelText("Why are you recording it?"),
       "The email shows delivery.",
     );
-    await user.type(screen.getByLabelText("Evidence (a reference or a file)"), "Delivered email");
+    await user.type(screen.getByLabelText("Evidence reference"), "Delivered email");
     await user.click(button("Record when Elena Marchetti received it"));
     expect(
       await screen.findByText("That time is already on record, so nothing changed."),

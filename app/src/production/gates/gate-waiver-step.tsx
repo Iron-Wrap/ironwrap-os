@@ -45,7 +45,7 @@ import { GateHistory } from "./gate-history";
 export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate }) {
   const [reason, setReason] = useState("");
   const [failure, setFailure] = useState<{ text: string; error: unknown }>();
-  const [approvedOwn, setApprovedOwn] = useState<{ reason: string; at: string } | null>(null);
+  const [approvedOwn, setApprovedOwn] = useState<{ reason: string } | null>(null);
   const stage = waiverStage(gate, screen.role);
   const trimmed = reason.trim();
   const reasonReady = trimmed.length >= MIN_REASON_LENGTH && trimmed.length <= MAX_REASON_LENGTH;
@@ -60,10 +60,15 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
         { roofJobId: screen.jobId, gate: gate.gate, basis: "office_waiver", reason: input.reason },
         newProductionGateClearanceKey(),
       ),
-    onSuccess: async (_result, input) => {
+    onSuccess: async (result, input) => {
       setFailure(undefined);
-      if (stage.kind === "self_approve") {
-        setApprovedOwn({ reason: input.reason, at: new Date().toISOString() });
+      if (
+        stage.kind === "owner_request" &&
+        result.basis === "office_waiver" &&
+        result.clearance === "waived" &&
+        result.actor_role === "owner"
+      ) {
+        setApprovedOwn({ reason: input.reason });
       }
       setReason("");
       await screen.refresh();
@@ -144,10 +149,7 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
     return (
       <div className="grid gap-4">
         <InfoBanner>{gateCopy.waiver.approvedOwn(approvedOwn.reason)}</InfoBanner>
-        <GateField
-          label={gate.gate}
-          value={gateCopy.waiver.waivedByYou(stampOf(screen, approvedOwn.at))}
-        />
+        <GateField label={gate.gate} value={gateCopy.waiver.waivedByYou} />
         <ActionRow>
           <BackToList jobId={screen.jobId} />
         </ActionRow>
@@ -212,7 +214,11 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
             <BackToList jobId={screen.jobId} />
             {proofInstead}
           </ActionRow>
-          <NextLine>{gateCopy.waiver.nextWaiting}</NextLine>
+          <NextLine>
+            {gateCopy.waiver.nextWaiting(
+              overviewClearable(screen.model, screen.role).filter((name) => name !== gate.gate),
+            )}
+          </NextLine>
         </div>
       );
     }
@@ -264,11 +270,11 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
         </div>
       );
     }
-    case "self_approve":
+    case "owner_request":
       return (
         <div className="grid gap-4">
-          <InfoBanner>{gateCopy.waiver.onlyYou}</InfoBanner>
-          {reasonField(gateCopy.waiver.whyApprove)}
+          <InfoBanner>{gateCopy.waiver.ownerRequest}</InfoBanner>
+          {reasonField(gateCopy.waiver.whyWaive(gate.gate))}
           {failureBanner}
           <ActionRow>
             <Button
@@ -277,7 +283,7 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
               disabled={!reasonReady || screen.offline}
               onClick={() => ask.mutate({ reason: trimmed })}
             >
-              {gateCopy.waiver.approveOwn(gate.gate)}
+              {gateCopy.waiver.submitOwn(gate.gate)}
             </Button>
             {proofInstead}
           </ActionRow>

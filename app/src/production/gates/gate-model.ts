@@ -179,7 +179,7 @@ export type WaiverStage =
   | { kind: "not_waivable" }
   | { kind: "read_only" }
   | { kind: "ask" }
-  | { kind: "self_approve" }
+  | { kind: "owner_request" }
   | { kind: "waiting"; request: OpenWaiverRequest }
   | { kind: "decide"; request: OpenWaiverRequest };
 
@@ -192,9 +192,9 @@ export function waiverStage(gate: JobGate, role: AppRole): WaiverStage {
   if (own) return { kind: "waiting", request: own };
   if (others) return { kind: "waiting", request: others };
   if (gate.state !== "blocked") return { kind: "read_only" };
-  // The read does not say whether another owner is active, so an owner is offered the only
-  // holder's approval (D-08); with another owner active the Worker records a request instead.
-  return decidesWaivers(role) ? { kind: "self_approve" } : { kind: "ask" };
+  // The read does not identify the only holder. Explain both possible outcomes to the owner;
+  // only the write response can confirm a D-08 self-approval or a request for another owner.
+  return decidesWaivers(role) ? { kind: "owner_request" } : { kind: "ask" };
 }
 
 /** The newest decision on a waiver request, for the requester's answer on the gate. */

@@ -105,9 +105,9 @@ describe("what waits for what", () => {
 });
 
 describe("the waiver step for each viewer", () => {
-  it("asks for production, approves alone for the owner, and never waives Safety", () => {
+  it("asks for production, checks the owner's outcome on submit, and never waives Safety", () => {
     expect(waiverStage(gate("Materials"), "production").kind).toBe("ask");
-    expect(waiverStage(gate("Access"), "owner").kind).toBe("self_approve");
+    expect(waiverStage(gate("Access"), "owner").kind).toBe("owner_request");
     expect(waiverStage(gate("Safety"), "owner").kind).toBe("not_waivable");
     expect(waiverStage(gate("Materials"), "ops").kind).toBe("read_only");
   });

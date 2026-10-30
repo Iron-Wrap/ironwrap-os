@@ -295,7 +295,7 @@ describe("ProductionRunwayPage", () => {
   it("offers the signed-copy work queue only to an owner or ops", async () => {
     const owner = renderRunway();
     await screen.findByRole("heading", { name: "Production plan" });
-    expect(screen.getByRole("link", { name: "Jobs missing a signed-copy time" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Jobs that need a signed-copy time" })).toHaveAttribute(
       "href",
       "/production/signed-copy-missing",
     );
@@ -304,7 +304,7 @@ describe("ProductionRunwayPage", () => {
     renderRunway(productionSession);
     await screen.findByRole("heading", { name: "Production plan" });
     expect(
-      screen.queryByRole("link", { name: "Jobs missing a signed-copy time" }),
+      screen.queryByRole("link", { name: "Jobs that need a signed-copy time" }),
     ).not.toBeInTheDocument();
   });
 

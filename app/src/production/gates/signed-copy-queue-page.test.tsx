@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../../auth/session-context";
 import type { AppRole } from "../../lib/roles";
-import { OPEN_NOW, TIME_ZONE, queue, session } from "./gate-test-fixtures";
+import { ENDED_NOW, TIME_ZONE, queue, session } from "./gate-test-fixtures";
 import { SignedCopyQueue, SignedCopyQueuePage } from "./signed-copy-queue-page";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -43,11 +43,11 @@ function page(role: AppRole) {
   );
 }
 
-describe("Q1, jobs missing a signed-copy time", () => {
-  it("lists each job with its count, one primary and the step it opens", () => {
-    render(<SignedCopyQueue model={queue} role="ops" timeZone={TIME_ZONE} now={OPEN_NOW} />);
+describe("Q1, jobs that need a signed-copy time", () => {
+  it("lists one row per category, each opening that job's record step, with one primary", () => {
+    render(<SignedCopyQueue model={queue} role="owner" timeZone={TIME_ZONE} now={ENDED_NOW} />);
     expect(screen.getByRole("heading", { name: "Signed copy time missing" })).toBeVisible();
-    expect(screen.getByText("Jobs with no signed-copy time: 3")).toBeVisible();
+    expect(screen.getByText("Jobs that need a signed-copy time: 3")).toBeVisible();
     expect(
       screen.getByText(
         "Without it, the cancellation window can’t start, so ordering and a firm start stay held.",
@@ -55,71 +55,59 @@ describe("Q1, jobs missing a signed-copy time", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Use when each customer received the signed copy of the contract, not when they signed. Each button opens that job’s step.",
+        "Use when each customer received the signed copy of the contract, not when they signed.",
       ),
     ).toBeVisible();
+
+    // signed_copy_time_missing
     expect(screen.getByText("Elena Marchetti · 118 Larkspur Way NW")).toBeVisible();
     expect(screen.getByText("Not recorded yet")).toBeVisible();
-    expect(screen.getAllByText("Imported from the old system · not recorded yet")).toHaveLength(2);
-    const first = screen.getByRole("link", {
-      name: "Add the signed-copy time for Elena Marchetti",
-    });
-    expect(first).toHaveAttribute(
+    const add = screen.getByRole("link", { name: "Add the signed-copy time for Elena Marchetti" });
+    expect(add).toHaveAttribute(
       "href",
       "/production/jobs/roof-job-elena-synthetic/gates?step=window",
     );
-    expect(first.dataset.variant).toBe("primary");
-    expect(
-      screen.getByRole("link", { name: "Add the signed-copy time for Owen Pratt" }).dataset.variant,
-    ).toBe("secondary");
+    expect(add.dataset.variant).toBe("primary");
+
+    // signed_copy_before_contract: the recorded time predates the latest contract.
     expect(
       screen.getByText(
-        "Next: each job you record leaves this list, and its cancellation window shows when it ends.",
+        "Contract signed again Mon 26 Oct 15:30 · the time on record is for the earlier one",
+      ),
+    ).toBeVisible();
+    const update = screen.getByRole("link", { name: "Update the signed-copy time for Owen Pratt" });
+    expect(update).toHaveAttribute(
+      "href",
+      "/production/jobs/roof-job-owen-synthetic/gates?step=window",
+    );
+    expect(update.dataset.variant).toBe("secondary");
+
+    // signed_copy_unconfirmed
+    expect(screen.getByText("Copy shown Thu 29 Oct 11:42 · receipt not confirmed")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Confirm the signed-copy time for Lena Ross" }),
+    ).toHaveAttribute("href", "/production/jobs/roof-job-lena-synthetic/gates?step=window");
+
+    expect(
+      screen.getByText(
+        "A job leaves this list once its time is recorded; its cancellation window then shows when it ends.",
       ),
     ).toBeVisible();
   });
 
-  it("names a copy that was shown but never confirmed sent, and a record for an earlier contract", () => {
-    render(
+  it("says when the list is cut short, and when nothing is missing", () => {
+    const partial = render(
       <SignedCopyQueue
-        model={{
-          ...queue,
-          count: 2,
-          counts: { window_unknown: 1, signed_copy_unconfirmed: 1 },
-          complete: false,
-          jobs: [
-            {
-              ...queue.jobs[0]!,
-              category: "signed_copy_unconfirmed",
-              unknown_reason: "signed_copy_unconfirmed",
-              copy_shown_at: "2026-10-21T00:26:00.000Z",
-            },
-            {
-              ...queue.jobs[1]!,
-              contract_on_record: true,
-              unknown_reason: "signed_copy_before_contract",
-            },
-          ],
-        }}
-        role="owner"
+        model={{ ...queue, count: 140, complete: false }}
+        role="ops"
         timeZone={TIME_ZONE}
-        now={OPEN_NOW}
+        now={ENDED_NOW}
       />,
     );
     expect(
-      screen.getByText(
-        "Shown at signing Tue 20 Oct 18:26, never confirmed sent · not recorded yet",
-      ),
+      screen.getByText("Showing the oldest 3. Record these and the rest appear."),
     ).toBeVisible();
-    expect(
-      screen.getByText("Recorded for an earlier contract · not recorded yet for this one"),
-    ).toBeVisible();
-    expect(
-      screen.getByText("Showing the oldest 2. Record these and the rest appear."),
-    ).toBeVisible();
-  });
-
-  it("says when nothing is missing", () => {
+    partial.unmount();
     render(
       <SignedCopyQueue
         model={{
@@ -130,7 +118,7 @@ describe("Q1, jobs missing a signed-copy time", () => {
         }}
         role="owner"
         timeZone={TIME_ZONE}
-        now={OPEN_NOW}
+        now={ENDED_NOW}
       />,
     );
     expect(
@@ -142,7 +130,7 @@ describe("Q1, jobs missing a signed-copy time", () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(queue), { status: 200 }));
     vi.stubGlobal("fetch", fetcher);
     const ops = page("ops");
-    expect(await screen.findByText("Jobs with no signed-copy time: 3")).toBeVisible();
+    expect(await screen.findByText("Jobs that need a signed-copy time: 3")).toBeVisible();
     expect(fetcher).toHaveBeenCalledWith(
       "/api/v1/production/cancellation-window/signed-copy-missing",
       expect.anything(),
@@ -150,7 +138,7 @@ describe("Q1, jobs missing a signed-copy time", () => {
     ops.unmount();
     fetcher.mockClear();
     page("production");
-    expect(screen.getByText("Only an owner or ops can see this list.")).toBeVisible();
+    expect(screen.getByText("Only the Owner or Operations can see this list.")).toBeVisible();
     expect(fetcher).not.toHaveBeenCalled();
   });
 });

@@ -103,15 +103,19 @@ export function heldScheduleLabel(model: JobGatesResponse): string | null {
  * when "Schedule the crew" turns on.
  */
 export function nextAfterGate(model: JobGatesResponse, gate: GateName): string {
-  const others = gatesBeforeSchedule(model).filter((name) => name !== gate);
+  const blocked = gatesBeforeSchedule(model);
   if (windowHolds(model.cancellation_window)) {
-    const afterWindow = others.filter((name) => name === "Materials" || name === "Weather");
-    const now = others.filter((name) => name !== "Materials" && name !== "Weather");
-    if (now.length > 0) return gateCopy.schedule.nextWindowAndEvery(now.slice(0, 1));
-    return gateCopy.schedule.nextAfterWindowThen(afterWindow);
+    const everyBlocked = countedGates(model)
+      .filter((candidate) => candidate.gate !== "Crew")
+      .every((candidate) => candidate.state === "blocked");
+    if (everyBlocked) return gateCopy.schedule.nextWindowAndEvery;
+    return gateCopy.schedule.nextAfterWindowThen(blocked);
   }
-  if (others.length > 0) return gateCopy.schedule.nextClearThen(others);
-  return gateCopy.schedule.nextOnceClears(gate);
+  const order = countedGates(model).map((candidate) => candidate.gate);
+  const remaining = blocked.includes(gate) ? blocked : [...blocked, gate];
+  return gateCopy.schedule.nextClearThen(
+    [...remaining].sort((left, right) => order.indexOf(left) - order.indexOf(right)),
+  );
 }
 
 /** Who appended an entry, in the frames' "by …" form. */

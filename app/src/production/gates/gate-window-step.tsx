@@ -83,7 +83,6 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
       () => document.querySelector<HTMLElement>(`[data-focus="${id}"]`)?.focus(),
       0,
     );
-  const heldSchedule = heldScheduleLabel(screen.model);
   const contractStamp = cw.contract ? stampIn(cw.contract.signed_at) : null;
   const typedInstant = instantFromLocal(received, zone);
 
@@ -105,9 +104,12 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
     const after = recorded.cancellation_window;
     const deadline = windowDeadline(after, screen.now);
     const receipt = after.signed_copy_received;
+    const scheduleAfter = heldScheduleLabel({ ...screen.model, cancellation_window: after });
     const banner =
       after.state === "ended"
-        ? gateCopy.record.recordedEnded(deadline.kind === "none" ? "" : deadline.label)
+        ? deadline.kind === "exact"
+          ? gateCopy.record.recordedEndedExact(deadline.label)
+          : gateCopy.record.recordedEnded(deadline.kind === "day" ? deadline.label : "")
         : deadline.kind === "exact"
           ? gateCopy.record.recordedOpenExact(deadline.label)
           : gateCopy.record.recordedOpen(deadline.kind === "day" ? deadline.label : "");
@@ -118,17 +120,28 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
           <>
             <GateField
               label={gateCopy.record.received}
-              value={gateCopy.record.recordedLine(
-                stampIn(receipt.received_at, receipt.time_zone),
-                stampIn(receipt.recorded_at, receipt.time_zone),
-              )}
+              value={
+                receipt.id === recorded.receipt_id
+                  ? gateCopy.record.recordedLine(
+                      stampIn(receipt.received_at, receipt.time_zone),
+                      stampIn(receipt.recorded_at, receipt.time_zone),
+                    )
+                  : gateCopy.record.onRecordManual(
+                      stampIn(receipt.received_at, receipt.time_zone),
+                      stampIn(receipt.recorded_at, receipt.time_zone),
+                      gateCopy.record.whoName(
+                        receipt.recorded_by.display_name,
+                        receipt.recorded_by.role,
+                      ),
+                    )
+              }
             />
             <GateField label={gateCopy.record.evidenceField} value={receipt.evidence_ref} />
           </>
         ) : null}
         <ActionRow>
           <BackToList jobId={screen.jobId} />
-          {heldScheduleLabelFor(after, heldSchedule)}
+          {scheduleAfter ? <HeldButton label={scheduleAfter} /> : null}
         </ActionRow>
         {after.state === "open" && deadline.kind === "day" ? (
           <NextLine>{gateCopy.record.nextRecorded(deadline.label)}</NextLine>
@@ -156,12 +169,12 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
         ) : null}
         <GateField
           label={gateCopy.record.why}
-          value={refusal.reason ? gateCopy.record.notAdded : reason}
+          value={refusal.reason ? gateCopy.record.reasonMissing(name) : reason}
           required={refusal.reason}
         />
         <GateField
           label={gateCopy.record.evidence}
-          value={refusal.evidence ? gateCopy.record.notAdded : evidence}
+          value={refusal.evidence ? gateCopy.record.evidenceMissing : evidence}
           required={refusal.evidence}
         />
         <ErrorBanner>
@@ -185,11 +198,6 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
             label={held(submitLabel, both ? gateCopy.record.afterBoth : gateCopy.record.afterOne)}
           />
         </ActionRow>
-        <NextLine>
-          {both
-            ? gateCopy.record.nextMissingBoth(name)
-            : gateCopy.record.nextMissingOne(name, control)}
-        </NextLine>
       </div>
     );
   }
@@ -210,7 +218,7 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
           );
     return (
       <div className="grid gap-4">
-        <GateField label={gateCopy.record.received} value={typed} required />
+        <GateField label={gateCopy.record.received} value={typed} />
         <GateField label={gateCopy.record.why} value={reason} />
         <GateField label={gateCopy.record.evidence} value={evidence} />
         <ErrorBanner>{title}</ErrorBanner>
@@ -226,7 +234,7 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
           </Button>
           <HeldButton label={held(submitLabel, gateCopy.record.afterChange)} />
         </ActionRow>
-        <NextLine>{gateCopy.record.nextChange(contractStamp, name)}</NextLine>
+        <NextLine>{gateCopy.record.nextChange(contractStamp)}</NextLine>
       </div>
     );
   }
@@ -240,7 +248,6 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
         <GateField
           label={gateCopy.record.newTime}
           value={stampIn(refusal.receivedAt, refusal.timeZone)}
-          required
         />
         <ErrorBanner>
           {gateCopy.record.earlier(capitalized(proseIn(refusal.receivedAt, refusal.timeZone)))}
@@ -349,11 +356,6 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
       <NextLine>{gateCopy.record.next(name)}</NextLine>
     </form>
   );
-}
-
-function heldScheduleLabelFor(after: CancellationWindow, current: string | null) {
-  if (after.state === "ended") return current ? <HeldButton label={current} /> : null;
-  return <HeldButton label={`${gateCopy.schedule.action} · ${gateCopy.window.afterWindow}`} />;
 }
 
 /** "Signed copy received, on record" (frame 23), from a person's record or the portal's copy. */

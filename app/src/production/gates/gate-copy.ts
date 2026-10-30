@@ -62,7 +62,8 @@ export const gateCopy = {
     seeGates: "See gates",
     seeGatesFor: (job: string) => `See gates for ${job}`,
     required: "Required",
-    next: (line: string) => `Next: ${line}`,
+    /** The fix pass dropped the "Next:" lead: each line states its consequence alone. */
+    next: (line: string) => line,
     historyTitle: "What happened on this gate",
     historyIncomplete: "Only the newest changes are shown.",
     offline: "You're offline. A gate changes only online.",
@@ -195,10 +196,9 @@ export const gateCopy = {
       return `No one has recorded when ${name} received the signed copy of the contract, so the cancellation window can’t be worked out; ordering and a firm start stay held.`;
     },
     addReceived: (name: string) => `Add when ${name} received the signed copy`,
-    nextAfterAdd:
-      "once that time is added, the window shows when it ends. Ordering and “Schedule the crew” turn on when it ends.",
+    nextAfterAdd: "Adding that time shows when the window ends.",
     askOwnerOrOps: (name: string) =>
-      `Only an owner or ops can add when ${name} received the signed copy.`,
+      `Only the Owner or Operations can add when ${name} received the signed copy.`,
     afterWindow: "after the window ends",
   },
 
@@ -212,12 +212,17 @@ export const gateCopy = {
     referenceHelp: "The order or quote number, with no spaces, like 3152.",
     referenceInvalid: "Use letters, numbers and - . / : # only, with no spaces.",
     clearWithProof: "Clear Materials with this proof",
-    nextHeld:
-      "after the window ends, order and add the supplier reference; then “Clear Materials with this proof” turns on. Meanwhile, use “Back to the gate list” to clear Safety and Access.",
+    nextHeld: (clearable: readonly GateName[]) =>
+      [
+        "After the window ends, order and add the supplier reference; then “Clear Materials with this proof” turns on.",
+        clearable.length > 0 ? `${listWords(clearable)} can be cleared now.` : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" "),
     problemTitle: "This job has an open material problem, so Materials can’t clear yet.",
     seeProblem: "See the material problem",
     afterProblem: "after the problem is closed",
-    nextProblem: "when the problem is closed, “Clear Materials with this proof” turns on.",
+    nextProblem: "“Clear Materials with this proof” turns on once the problem is closed.",
   },
 
   /** Frames 4, 11, 14, 15 and 16. */
@@ -245,12 +250,12 @@ export const gateCopy = {
     changePermit: "Change the permit answer",
     afterPermit: "after you change the permit answer",
     nextPermit:
-      "choose “Permit needed and held” with its number, or “Permit not needed”. Then “Clear Safety with this proof” turns on.",
+      "To clear Safety, choose “Permit needed and held” with its number, or “Permit not needed”.",
     competencyTitle: "You have no current competency record, so you can’t clear Safety yet.",
     addCompetency: "Add your current competency record",
     askCompetency: "Ask the office to add your current competency record.",
     afterCompetency: "after your record is current",
-    nextCompetency: "once your record is current, “Clear Safety with this proof” turns on.",
+    nextCompetency: "“Clear Safety with this proof” turns on once your record is current.",
     stopTitle: "This job has an active safety stop, so Safety can’t clear until it’s lifted.",
     stopJobUnknownTitle:
       "A work stop names a job that doesn’t exist, so Safety stays held on every job until it’s lifted.",
@@ -259,7 +264,7 @@ export const gateCopy = {
     seeStop: "See the safety stop",
     afterStop: "after the stop is lifted",
     nextStop:
-      "someone other than the person who raised it lifts the stop; then “Clear Safety with this proof” turns on.",
+      "Someone other than the person who raised it lifts the stop; then “Clear Safety with this proof” turns on.",
   },
 
   /** Frame 14, for any gate a crew member tries to clear. */
@@ -267,7 +272,7 @@ export const gateCopy = {
     title: (gate: GateName) => `You’re on the crew for this job, so you can’t clear its ${gate}.`,
     after: "after someone off this crew clears it",
     next: (gate: GateName) =>
-      `someone who isn’t on this crew clears ${gate}; “Clear ${gate} with this proof” stays off for you.`,
+      `Only someone who isn’t on this crew can clear ${gate}; “Clear ${gate} with this proof” stays off for you.`,
   },
 
   /** Frame 5. */
@@ -299,7 +304,8 @@ export const gateCopy = {
       `This forecast is from ${day}, over 72 hours ago, so Weather can’t clear.`,
     addForecast: "Add a forecast from the last 72 hours",
     afterForecast: "after you add a newer forecast",
-    nextForecast: "with a new forecast, “Clear Weather with this proof” turns on.",
+    nextForecast:
+      "“Clear Weather with this proof” turns on with a forecast from the last 72 hours.",
     windowInvalidTitle:
       "This work window can’t clear Weather: it must be 14 days or less, not over yet, and end within 14 days of the forecast.",
     changeWindow: "Change the work window",
@@ -317,18 +323,23 @@ export const gateCopy = {
     action: "Schedule the crew",
     afterGates: (gates: readonly GateName[]) =>
       `after ${listWords(gates)} ${gates.length === 1 ? "clears" : "clear"}`,
+    /** A gate step once the window has ended: the gates still blocked, this one included. */
     nextClearThen: (gates: readonly GateName[]) =>
-      `clear ${listWords(gates)}. Then “Schedule the crew” turns on.`,
+      gates.length === 1
+        ? `Clearing ${gates[0]} turns on “Schedule the crew”.`
+        : `Once ${listWords(gates)} are cleared, “Schedule the crew” turns on.`,
+    /** A gate step inside the window: every gate still blocked, including this form's gate. */
     nextAfterWindowThen: (gates: readonly GateName[]) =>
       gates.length > 0
-        ? `after the window ends, clear ${listWords(gates)}. Then “Schedule the crew” turns on.`
-        : "once the window ends, “Schedule the crew” turns on.",
-    nextOnceClears: (gate: GateName) => `once ${gate} clears, “Schedule the crew” turns on.`,
-    nextWindowAndEvery: (gates: readonly GateName[]) =>
-      gates.length > 0
-        ? `clear ${listWords(gates)}. “Schedule the crew” turns on once the window ends and every gate is clear.`
-        : "“Schedule the crew” turns on once the window ends and every gate is clear.",
-    nextStaysOff: (gate: GateName) => `“Schedule the crew” stays off until ${gate} clears again.`,
+        ? `“Schedule the crew” turns on once the window ends and ${listWords(gates)} ${
+            gates.length === 1 ? "is" : "are"
+          } cleared.`
+        : "“Schedule the crew” turns on once the window ends.",
+    nextOnceClears: (gate: GateName) => `Clearing ${gate} turns on “Schedule the crew”.`,
+    nextWindowAndEvery:
+      "“Schedule the crew” turns on once the window ends and every gate is clear.",
+    nextStaysOff: (gates: readonly GateName[]) =>
+      `“Schedule the crew” stays off until ${listWords(gates)} ${gates.length === 1 ? "clears" : "clear"}.`,
   },
 
   /** Frames 7 and 7b, and the schedule form (no frame yet). */
@@ -343,13 +354,12 @@ export const gateCopy = {
     end: "Crew day ends",
     endHelp: "Leave it empty if the end isn’t known yet.",
     correction: "Why change the schedule?",
-    issuePlan: "Issue the job plan",
-    afterScheduling: "after scheduling clears Crew",
-    issueTurnsOn: "“Issue the job plan” turns on once scheduling clears Crew.",
+    issuePlan: "Issue job plan",
+
     allClear: (count: number, waived: number) =>
       waived > 0
-        ? `All ${count} gates are cleared or waived and the cancellation window has ended. The job plan is ready to issue.`
-        : `All ${count} gates are cleared and the cancellation window has ended. The job plan is ready to issue.`,
+        ? `All ${count} gates are cleared or waived and the cancellation window has ended.`
+        : `All ${count} gates are cleared and the cancellation window has ended.`,
     clearedLine: (stamp: string, crew: string, start: string | null, windowDay: string | null) =>
       `Cleared ${stamp}: ${crew} scheduled${start ? ` for ${start}` : ""}${
         windowDay ? ` (the window ended at the end of ${windowDay})` : ""
@@ -368,7 +378,7 @@ export const gateCopy = {
     askToWaive: (gate: GateName) => `Ask to waive ${gate}`,
     proofInstead: (gate: GateName) => `Clear ${gate} with proof instead`,
     nextAsk: (gate: GateName) =>
-      `the owner sees your request and decides. Their answer shows on the ${gate} gate.`,
+      `Asking sends the owner your reason. Their answer shows on the ${gate} gate.`,
     recorded: (when: string, gate: GateName) =>
       `Your request is recorded, ${when}. An owner decides; ${gate} stays blocked until then.`,
     othersRecorded: (when: string, gate: GateName) =>
@@ -376,8 +386,10 @@ export const gateCopy = {
     yourReason: "Your reason",
     theirReason: "Their reason",
     reasonHidden: "The reason was removed.",
-    nextWaiting:
-      "the owner’s answer shows on this gate. Meanwhile, use “Back to the gate list” to clear the others.",
+    nextWaiting: (clearable: readonly GateName[]) =>
+      clearable.length > 0
+        ? `The owner’s answer shows on this gate. Meanwhile you can clear ${listWords(clearable)}.`
+        : "The owner’s answer shows on this gate.",
     asks: (who: string, gate: GateName, reason: string) =>
       `${who} asks to waive ${gate}: “${reason}”`,
     asksNoReason: (who: string, gate: GateName) => `${who} asks to waive ${gate}.`,
@@ -391,19 +403,18 @@ export const gateCopy = {
     approve: "Approve the waiver with this reason",
     decline: "Decline with this reason",
     nextDecide: (gate: GateName) =>
-      `your answer and reason go on the record, and the person who asked sees them on the ${gate} gate.`,
-    onlyYou: "Only you can approve this. Add a reason and it’s recorded.",
-    whyApprove: "Why are you approving this?",
-    approveOwn: (gate: GateName) => `Approve the ${gate} waiver with reason`,
-    nextOwn: (gate: GateName) => `the receipt shows on the ${gate} gate, and ${gate} reads waived.`,
-    approvedOwn: (reason: string) => `Approved own item: only holder — ${reason}`,
-    waivedByYou: (stamp: string) => `Waived ${stamp} by you`,
+      `Your answer and reason go on the record, and the person who asked sees them on the ${gate} gate.`,
+    ownerRequest:
+      "If you’re the only person who can approve this waiver, submitting it approves it. Otherwise, another owner decides and the gate stays blocked.",
+    submitOwn: (gate: GateName) => `Submit the ${gate} waiver with reason`,
+    nextOwn: (gate: GateName) => `Your reason and the outcome show on the ${gate} gate.`,
+    approvedOwn: (reason: string) =>
+      `You approved this waiver yourself, since only you can. Your reason: “${reason}”`,
+    waivedByYou: "Waived by you",
     waivedBy: (stamp: string, role: string | null) => `Waived ${stamp} ${byWhom(role)}`,
     nextAfterOwn: (clearable: readonly GateName[], windowHolds: boolean) =>
       [
-        clearable.length > 0
-          ? `use “Back to the gate list” to clear ${listWords(clearable)}.`
-          : "use “Back to the gate list” to see every gate.",
+        clearable.length > 0 ? `${listWords(clearable)} can be cleared now.` : null,
         windowHolds ? "Materials and Weather wait for the window to end." : null,
       ]
         .filter((part): part is string => part !== null)
@@ -425,7 +436,7 @@ export const gateCopy = {
     rightProof: (gate: GateName) => `Clear ${gate} with the right proof`,
     afterReverse: "after you reverse this",
     next: (gate: GateName) =>
-      `${gate} goes back to blocked and keeps this clearance in its history; nothing is deleted. Then “Clear ${gate} with the right proof” turns on.`,
+      `Reversing sets ${gate} back to blocked and keeps this clearance in its history; nothing is deleted. Then “Clear ${gate} with the right proof” turns on.`,
     reversed: (when: string, gate: GateName) =>
       `Reversed ${when}. ${gate} is blocked again. Nothing was deleted.`,
   },
@@ -471,8 +482,8 @@ export const gateCopy = {
   /** Frames 19, 20, 20b, 20c, 21, 22 and 23. */
   record: {
     rule: (role: AppRole, name: string, contractStamp: string | null) =>
-      `Only an owner or ops can record this, and you’re ${
-        role === "owner" ? "an owner" : "in operations"
+      `Only the Owner or Operations can record this, and you’re ${
+        role === "owner" ? "the Owner" : "in Operations"
       }. The 10 days count from when ${name} received the signed copy, not from the signing. It can’t be in the future${
         contractStamp ? ` or before ${contractStamp}` : ""
       }.`,
@@ -485,23 +496,26 @@ export const gateCopy = {
     whoName: (name: string | null, role: string) =>
       name ? `${name} · ${roleTitle(role)}` : roleTitle(role),
     why: "Why are you recording it?",
-    evidence: "Evidence (a reference or a file)",
+    evidence: "Evidence reference",
     evidenceHelp: "Say where the time comes from, like “Delivered email · signed copy.pdf”.",
-    notAdded: "Not added yet",
+    /** Frame 20c: what to type in each empty required field. */
+    reasonMissing: (name: string) => `Type how you know when ${name} received it`,
+    evidenceMissing: "Type an evidence reference",
     submit: (name: string) => `Record when ${name} received it`,
     next: (name: string) =>
-      `the cancellation window then runs to the end of the 10th day after ${name} received it. Ordering and a firm start wait until it ends.`,
+      `Recording it starts the window: it runs to the end of the 10th day after ${name} received it. Ordering and a firm start wait until it ends.`,
     recordedOpen: (deadline: string) =>
       `Recorded. The cancellation window is open until the end of ${deadline}.`,
     recordedOpenExact: (stamp: string) =>
       `Recorded. The cancellation window is open until ${stamp}.`,
     recordedEnded: (deadline: string) =>
       `Recorded. The cancellation window ended at the end of ${deadline}.`,
+    recordedEndedExact: (stamp: string) => `Recorded. The cancellation window ended ${stamp}.`,
     recordedLine: (received: string, recorded: string) =>
       `${received} · recorded ${recorded} by you`,
     evidenceField: "Evidence",
     nextRecorded: (deadline: string) =>
-      `plan now; ordering, purchase orders and a firm start wait until the end of ${deadline}.`,
+      `Plan now; ordering, purchase orders and a firm start wait until the end of ${deadline}.`,
     unchanged: "That time is already on record, so nothing changed.",
     missingBoth:
       "Nothing was recorded: add why you’re recording this time and the evidence, so others can check where it came from.",
@@ -514,56 +528,54 @@ export const gateCopy = {
     addEvidence: "Add the evidence",
     afterBoth: "after you add both",
     afterOne: "after you add it",
-    nextMissingBoth: (name: string) =>
-      `tap “Add the reason and evidence” and fill in both; then “Record when ${name} received it” turns on.`,
-    nextMissingOne: (name: string, control: string) =>
-      `tap “${control}” and fill it in; then “Record when ${name} received it” turns on.`,
+
     beforeContract: (received: string, signed: string, name: string) =>
       `${received} is before the contract was signed (${signed}), so ${name} can’t have received the signed copy then. Check the delivered email.`,
     inFuture: (received: string, name: string) =>
       `${received} hasn’t happened yet, so ${name} can’t have received the signed copy then. Check the delivered email.`,
     changeTime: "Change the time",
     afterChange: "after you change it",
-    nextChange: (signed: string | null, name: string) =>
-      signed
-        ? `tap “Change the time”, then enter a time from ${signed} up to now; “Record when ${name} received it” turns on after that.`
-        : `tap “Change the time”, then enter a time up to now; “Record when ${name} received it” turns on after that.`,
+    nextChange: (signed: string | null) =>
+      signed ? `Enter a time from ${signed} up to now.` : "Enter a time up to now.",
     earlier: (received: string) =>
       `${received} is earlier than the time on record. This time can only move later, never earlier, so this isn’t saved.`,
     keep: (recorded: string) => `Keep ${recorded}`,
     nextEarlier: (deadline: string | null) =>
       deadline
-        ? `nothing was saved, and the window is still open until the end of ${deadline}.`
-        : "nothing was saved, and the time on record stays.",
+        ? `The window is still open until the end of ${deadline}.`
+        : "The time on record stays.",
     timeInvalid: "That time can’t be read. Pick a day and time again.",
     timeMissing: "Pick the day and time the signed copy was received.",
     readOnly: (name: string) =>
-      `Only an owner or ops can record when ${name} received the signed copy.`,
+      `Only the Owner or Operations can record when ${name} received the signed copy.`,
   },
 
   /** Q1, Admin · Work queue › Signed copy time missing. */
   queue: {
     breadcrumbRoot: "Work queue",
     title: "Signed copy time missing",
-    count: (count: number) => `Jobs with no signed-copy time: ${count}`,
+    count: (count: number) => `Jobs that need a signed-copy time: ${count}`,
     why: "Without it, the cancellation window can’t start, so ordering and a firm start stay held.",
-    rule: "Use when each customer received the signed copy of the contract, not when they signed. Each button opens that job’s step.",
+    rule: "Use when each customer received the signed copy of the contract, not when they signed.",
     notRecorded: "Not recorded yet",
-    imported: "Imported from the old system · not recorded yet",
-    earlierContract: "Recorded for an earlier contract · not recorded yet for this one",
-    unconfirmed: (stamp: string | null) =>
+
+    earlierContract: (stamp: string | null) =>
       stamp
-        ? `Shown at signing ${stamp}, never confirmed sent · not recorded yet`
-        : "Shown at signing, never confirmed sent · not recorded yet",
+        ? `Contract signed again ${stamp} · the time on record is for the earlier one`
+        : "Contract signed again · the time on record is for the earlier one",
+    unconfirmed: (stamp: string | null) =>
+      stamp ? `Copy shown ${stamp} · receipt not confirmed` : "Copy shown · receipt not confirmed",
     add: (name: string) => `Add the signed-copy time for ${name}`,
-    next: "each job you record leaves this list, and its cancellation window shows when it ends.",
+    update: (name: string) => `Update the signed-copy time for ${name}`,
+    confirm: (name: string) => `Confirm the signed-copy time for ${name}`,
+    next: "A job leaves this list once its time is recorded; its cancellation window then shows when it ends.",
     empty: "Every signed job has its signed-copy time. Nothing to add.",
     partial: (shown: number) => `Showing the oldest ${shown}. Record these and the rest appear.`,
     loadFailed: "The list did not load. Nothing was changed.",
     retry: "Load the list again",
     loading: "Loading the list…",
-    noAccess: "Only an owner or ops can see this list.",
-    linkFromRunway: "Jobs missing a signed-copy time",
+    noAccess: "Only the Owner or Operations can see this list.",
+    linkFromRunway: "Jobs that need a signed-copy time",
   },
 } as const;
 

@@ -41,6 +41,10 @@ export const ownerExceptionSchema = z.object({
   bus_status: nullableText,
   triage_status: nullableText,
   mctb: mctbSchema.nullable(),
+  /** Who raised a work stop naming a job or job plan that doesn't exist (A3, A4); null otherwise. */
+  reported_by_name: nullableText.optional(),
+  /** That stop's own summary, raw as it was written; null on every other kind. */
+  summary: nullableText.optional(),
 });
 
 export const ownerNowResponseSchema = ownerReadModelEnvelopeSchema.extend({

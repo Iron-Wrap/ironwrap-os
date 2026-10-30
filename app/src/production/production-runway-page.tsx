@@ -27,7 +27,7 @@ import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
 import { scopes } from "../lib/theme";
 import { loadProductionRunway } from "./production-api";
-import { GateClearancePanel } from "./production-gate-clearance-panel";
+import { gateCopy } from "./gates/gate-copy";
 import type {
   ProductionRunwayJob,
   ProductionRunwayLane,
@@ -146,10 +146,8 @@ function ProductionRunwayScreen({
   const [shopMode, setShopMode] = useShopReading(() =>
     Boolean(window.matchMedia?.("(max-width: 1023px)").matches),
   );
-  // Server-derived, not role-derived: the read model already knows whether this
-  // session's app user carries the Frappe identity a clearance is attributed to,
-  // so a button that would only ever 403 is never drawn.
-  const canClearGates = model.allowed_actions.includes("production_gate.clear");
+  // The signed-copy work queue (A5) is the owner's and ops' list; the Worker serves no one else.
+  const canSeeSignedCopyQueue = role === "owner" || role === "ops";
 
   return (
     <section {...(shopMode ? scopes.shopReading : {})} className="mx-auto max-w-7xl space-y-6 pb-4">
@@ -170,6 +168,14 @@ function ProductionRunwayScreen({
                 : "List time not found"}
             </p>
             <p className="mt-4 text-sm font-semibold text-foreground">Check stopped work first.</p>
+            {canSeeSignedCopyQueue ? (
+              <Button asChild className="mt-3" variant="quiet">
+                <Link to="/production/signed-copy-missing">
+                  {gateCopy.queue.linkFromRunway}
+                  <ChevronRight aria-hidden="true" />
+                </Link>
+              </Button>
+            ) : null}
             <Button
               className="mt-3"
               variant="secondary"
@@ -198,7 +204,6 @@ function ProductionRunwayScreen({
             timeZone={timeZone}
             canOpenJob={canOpenJob}
             canOpenHistory={canOpenHistory}
-            canClearGates={canClearGates}
           />
         ))}
       </div>
@@ -295,7 +300,6 @@ function RunwayLane({
   timeZone,
   canOpenJob,
   canOpenHistory,
-  canClearGates,
 }: {
   lane: ProductionRunwayLane;
   jobs: readonly ProductionRunwayJob[];
@@ -303,7 +307,6 @@ function RunwayLane({
   timeZone: string;
   canOpenJob: boolean;
   canOpenHistory: boolean;
-  canClearGates: boolean;
 }) {
   const copy = laneCopy[lane];
   const Icon = copy.icon;
@@ -340,7 +343,6 @@ function RunwayLane({
                   timeZone={timeZone}
                   canOpenJob={canOpenJob}
                   canOpenHistory={canOpenHistory}
-                  canClearGates={canClearGates}
                 />
               </li>
             ))}
@@ -373,14 +375,12 @@ function RunwayJobCard({
   timeZone,
   canOpenJob,
   canOpenHistory,
-  canClearGates,
 }: {
   job: ProductionRunwayJob;
   locale: string;
   timeZone: string;
   canOpenJob: boolean;
   canOpenHistory: boolean;
-  canClearGates: boolean;
 }) {
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
   const gateCoverage =
@@ -464,7 +464,17 @@ function RunwayJobCard({
         <p className="mt-2 text-xs leading-5 text-muted">
           Final work is checked when the job is done. It is not a start step.
         </p>
-        {canClearGates ? <GateClearancePanel job={job} /> : null}
+        <Button asChild variant="outline" size="compact" className="mt-3">
+          <Link
+            to="/production/jobs/$jobId/gates"
+            params={{ jobId: job.id }}
+            search={{}}
+            aria-label={gateCopy.page.seeGatesFor(job.job_number ?? job.id)}
+          >
+            {gateCopy.page.seeGates}
+            <ChevronRight aria-hidden="true" />
+          </Link>
+        </Button>
       </div>
 
       {job.material_attention.length > 0 ? (

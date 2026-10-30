@@ -269,7 +269,7 @@ E2E_SUITES := test:pwa test:pwa:board test:pwa:owner-configuration test:pwa:peop
   test:pwa:safety test:pwa:documents test:pwa:job-history test:pwa:placement \
   test:pwa:capabilities test:pwa:capabilities:accounting test:pwa:accounting \
   test:pwa:onboarding test:pwa:quote-revision test:pwa:decisions test:pwa:sales-intake \
-  test:pwa:manual-measurements test:pwa:service-calls
+  test:pwa:manual-measurements test:pwa:service-calls test:pwa:gates
 
 # Every suite runs even after one fails, and the recipe fails if any did: a bare
 # `for` loop exits with its last command's status, which used to pass `make e2e`

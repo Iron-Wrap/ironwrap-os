@@ -134,8 +134,11 @@ Current implementation: office sales/estimator/today/work-package/Facet/QuickBoo
 reads already use D1. Default `/ready` is the owned office plane and does not AND leftover
 Frappe/Newo credentials. Money-intent job lookup, production-gate clearance, and customer material
 decisions persist on D1. The 79 current DocTypes are leftover compatibility evidence, not the
-target architecture. Frappe remains an optional projection (apps tree, Hermes ERPNext MCP, local
-`--profile frappe` compose, optional CI unittest/wheel) and is not a merge or release blocker.
+target architecture. Frappe activation remains optional (apps tree, Hermes ERPNext MCP and local
+`--profile frappe` compose). While the compatibility app ships, its unittest, lint and wheel checks
+remain mandatory in `make check` and the `contracts` CI job. Optional activation does not waive
+the architecture contract's stage/promote/readback/rollback evidence requirements; repository
+checks alone do not establish those release receipts.
 
 The cutover is incomplete until leftover projection consumers are gone and a live issuer/rollback
 has been proven. Projection failure cannot change authoritative D1 state.

@@ -35,6 +35,8 @@ const wranglerConfigPath = join(root, "workers-bus", "wrangler.jsonc");
 const config = loadWranglerConfig(wranglerConfigPath);
 
 test("loads the real wrangler.jsonc and derives production identifiers from it", () => {
+  // qa's public origin is its custom domain; the account's workers.dev subdomain comes from
+  // the workers.dev origin qa still allows.
   const prod = productionIdentifiers(config);
   assert.equal(prod.workerName, "ironwrap-bus");
   assert.equal(prod.databaseId, "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d");
@@ -99,6 +101,7 @@ test("assertProductionIdentifiersComplete accepts the real config and refuses ea
   // IRO-268: the origin lives in the `CFG_APP` group of each environment's vars.
   for (const envConfig of Object.values(noWorkersDevOrigin.env ?? {})) {
     if (envConfig?.vars?.CFG_APP?.APP_PUBLIC_ORIGIN) envConfig.vars.CFG_APP.APP_PUBLIC_ORIGIN = "https://custom.example.invalid";
+    if (envConfig?.vars?.CFG_APP?.APP_ALLOWED_ORIGINS) envConfig.vars.CFG_APP.APP_ALLOWED_ORIGINS = "https://custom.example.invalid";
   }
   assert.throws(
     () => resolveTarget({ config: noWorkersDevOrigin, env: "qa" }),
@@ -115,7 +118,7 @@ test("refuses an --env whose origin resolves to a production hostname", () => {
 test("accepts --env qa and resolves its own origin, tenant id and database name", () => {
   const target = resolveTarget({ config, env: "qa" });
   assert.equal(target.envName, "qa");
-  assert.equal(target.baseUrl, "https://ironwrap-bus-qa.yellow-rain-7498.workers.dev");
+  assert.equal(target.baseUrl, "https://qa.ironwrapexteriors.com");
   assert.equal(target.tenantId, "ironwrap");
   assert.equal(target.databaseName, "ironwrap-bus-qa");
 });

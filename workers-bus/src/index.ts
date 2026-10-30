@@ -13,14 +13,7 @@ import { getCompanyProfile } from "./company-setup-store.ts";
 
 import { expireRuns, type AgentDb } from "./agents/store.ts";
 import {
-  ALLOWED_SOURCES,
-  type Source,
   type EnvelopeRecord,
-  newEnvelopeId,
-  normalizeEnvelope,
-  dedupKey,
-  validateInbound,
-  classifyIntent,
   reconcileDiff,
   parseBody,
   validateSourceCount,
@@ -48,7 +41,7 @@ import { ingestLead } from "./lead-intake.ts";
 import { companyLogoResponse } from "./company-profile.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
 import { materializeOperatingCore } from "./operating-core.ts";
-import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
+import { sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import {
   handleMeasurementDeadLetter,

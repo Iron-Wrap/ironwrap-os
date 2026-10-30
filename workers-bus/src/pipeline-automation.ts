@@ -20,7 +20,6 @@ import {
   getDocumentTemplateRevision,
   listDocumentTemplates,
   type DocumentGenerationServiceAuthority,
-  type DocumentTemplateRevision,
 } from "./document-templates.ts";
 import { generateDocumentToR2 } from "./document-generation-r2.ts";
 import {

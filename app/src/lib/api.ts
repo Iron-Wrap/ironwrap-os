@@ -61,8 +61,6 @@ export interface ApiRequestOptions<T> {
   schema: ZodType<T>;
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
-  /** What this call asks for; JSON unless it is fetching a file. */
-  accept?: string;
   csrfToken?: string;
   idempotencyKey?: string;
   deviceActionId?: string;
@@ -172,28 +170,6 @@ export async function apiCommand(options: ApiCommandOptions): Promise<void> {
   await executeRequest({ ...options, method: "POST" });
 }
 
-export type ApiBlobOptions = Pick<
-  ApiRequestOptions<unknown>,
-  "path" | "deviceProof" | "signal" | "timeoutMs" | "fetcher" | "credentials"
->;
-
-/**
- * A file read through the same authenticated path as every other call, so a paired field device
- * sends its proof header (a plain link would not) and a refusal arrives as the same `ApiError`.
- */
-export async function apiBlob(options: ApiBlobOptions): Promise<Blob> {
-  // The timeout and the caller's abort stay armed until the last byte has arrived: a download that
-  // stalls halfway must end with an answer, not hang for ever.
-  const { response, release, failure } = await executeRequest({ ...options, accept: "*/*" }, true);
-  try {
-    return await response.blob();
-  } catch (error) {
-    throw failure(error);
-  } finally {
-    release();
-  }
-}
-
 interface Exchange {
   response: Response;
   /** Disarms the timeout and the abort forwarding. Called by whoever reads the body last. */
@@ -242,7 +218,7 @@ async function executeRequest(
   };
 
   try {
-    const headers = new Headers({ Accept: options.accept ?? "application/json" });
+    const headers = new Headers({ Accept: "application/json" });
     // A multipart body must keep the boundary the browser writes into its own Content-Type.
     const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
     if (options.body !== undefined && !multipart) headers.set("Content-Type", "application/json");

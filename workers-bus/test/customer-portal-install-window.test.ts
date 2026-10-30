@@ -12,6 +12,7 @@ import {
   type RecordOperatingJobAssignmentInput,
 } from "../src/operating-job-assignment-store.ts";
 import { createProductionScheduleApprovalRequest } from "../src/production-schedule-approval-store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const NOW = "2026-08-21T08:00:00.000Z";
 const SAVED_AT = "2026-08-21T09:00:00.000Z";
@@ -127,7 +128,7 @@ function seedJob(db: DatabaseSync, tenantId: string, suffix: string) {
       `INSERT INTO operating_production_gates
       (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, state,
        owner_user, assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'ready', ?, ?, ?, 'No active synthetic blocker', 1, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, 'blocked', ?, ?, ?, 'No active synthetic blocker', 1, ?, ?)`,
     ).run(
       `gate:portal:${suffix}:${gate}`,
       tenantId,
@@ -141,6 +142,7 @@ function seedJob(db: DatabaseSync, tenantId: string, suffix: string) {
       NOW,
     );
   }
+  recordLegacyGateStates(db, { tenantId, roofJobId, at: NOW });
   db.prepare(
     `INSERT INTO fleet_crews
     (crew_id, tenant_id, display_name, status, version, created_at, updated_at)

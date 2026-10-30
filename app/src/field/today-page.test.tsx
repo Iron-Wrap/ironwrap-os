@@ -230,6 +230,7 @@ describe("TodayPage", () => {
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
     );
     expect(screen.getByText("See job plan")).toBeVisible();
+    expect(screen.getByText("Shop crew · Assigned")).toBeVisible();
     await user.click(link);
     expect(window.location.pathname).toBe(
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
@@ -242,6 +243,10 @@ describe("TodayPage", () => {
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(screen.getByText("1 check blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
+    // The crew's part reads as a role, not the bare assignment type.
+    expect(screen.getAllByText("Your role").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Production crew · Assigned").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Production · Assigned")).toBeNull();
     expect(await screen.findByRole("heading", { name: "Ready offline" })).toBeVisible();
     expect(
       screen.getByText(/This run sheet and 2 job plans are saved on this phone/),
@@ -258,6 +263,18 @@ describe("TodayPage", () => {
 
     expect(screen.queryByText("Needs download")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Start work/i })).not.toBeInTheDocument();
+  });
+
+  it("lays a job card out by its own width, so the crew shell's narrow column never squeezes it", async () => {
+    renderToday();
+    const link = await screen.findByRole("link", { name: "Check what blocks work" });
+    const card = link.closest("article")!;
+    // Three columns only when the card is 48rem wide (the office), the two facts side by side only
+    // when their column is 24rem wide; never by the window's width.
+    expect(card.parentElement).toHaveClass("@container");
+    expect(card.className).toContain("@3xl:grid-cols-[10rem_minmax(0,1fr)_13rem]");
+    expect(card.querySelector("dl")?.className).toContain("@sm:grid-cols-2");
+    expect(card.className).not.toMatch(/(^|\s)(sm|md|lg):grid-cols/);
   });
 
   it("renders the verified bootstrap run sheet without a second initial today request", async () => {

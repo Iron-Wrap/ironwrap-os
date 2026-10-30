@@ -380,27 +380,6 @@ export function convertQuantity(
   return scaled / denominator;
 }
 
-/** Resolve the current active conversion between two units, newest version first. */
-export async function activeUomConversion(
-  env: AppEnv,
-  tenantId: string,
-  fromUomId: string,
-  toUomId: string,
-): Promise<{ numerator: number; denominator: number; version: number } | null> {
-  if (!TENANT_ID.test(tenantId)) return null;
-  return await env.DB.prepare(
-    `SELECT numerator, denominator, version
-       FROM inventory_uom_conversions
-      WHERE tenant_id = ? AND from_uom_id = ? AND to_uom_id = ? AND status = 'active'
-      ORDER BY version DESC
-      LIMIT 1`,
-  ).bind(tenantId, fromUomId, toUomId).first<{
-    numerator: number;
-    denominator: number;
-    version: number;
-  }>();
-}
-
 /**
  * FIFO draw for a commodity item, or the lot's own actual-cost layer for a lot-controlled
  * item. Returns null when the available layers cannot cover the quantity, because an

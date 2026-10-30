@@ -169,7 +169,7 @@ test.describe("Manual roof observations", () => {
     await openPanel(page, page.url());
     await expect(
       panel(page)
-        .getByText(/Synthetic north roof · Revision 1/)
+        .getByText(/Synthetic north roof · recorded /)
         .first(),
     ).toBeVisible();
     expect((await readSaved(page, manual)).history.items).toEqual(saved.history.items);
@@ -404,7 +404,7 @@ test.describe("Manual roof observations", () => {
     await openPanel(page, receiptUrl);
     const receipt = panel(page).getByRole("region", { name: "Saved observation", exact: true });
     await expect(receipt).toContainText("1,200.5 sq ft");
-    await expect(receipt).toContainText("Revision 1");
+    await expect(receipt).not.toContainText(/Revision \d/);
     await expect(receipt).not.toContainText("1,250 sq ft");
     await expect(panel(page).getByText(/current area may have a later correction/)).toBeVisible();
     expect((await readSaved(page, manual)).areas[0].area_sq_ft).toBe(1250);

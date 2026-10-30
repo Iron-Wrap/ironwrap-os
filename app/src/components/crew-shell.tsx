@@ -3,6 +3,8 @@ import { CircleHelp, Moon, Phone, Search, Sun } from "lucide-react";
 import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
+import { JobStopSheet } from "../field/job-stop-sheet";
+import { useStopJob } from "../field/job-stop";
 import { SafetyActionPanel } from "../field/safety-action-panel";
 import { navigationForRole } from "../lib/roles";
 import { scopes } from "../lib/theme";
@@ -30,6 +32,9 @@ export function CrewShell() {
   const search = useSearchPalette();
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpMounted, setHelpMounted] = useState(false);
+  // On a job (open, or the only one today) a stop holds that job, not the whole company.
+  const stopJob = useStopJob(session, pathname, helpOpen);
+  const [stopStage, setStopStage] = useState<"loading" | "stop" | "stopped">("loading");
   // Sun is the default even when the phone is set to dark: a phone left in dark mode would be
   // unreadable on a roof at noon. Night is only ever this explicit choice.
   const [night, setNight] = useState(() => {
@@ -160,19 +165,33 @@ export function CrewShell() {
         side="end"
         className="[&>div:nth-child(2)]:px-0"
       >
-        <div className="px-5">
-          <Button asChild variant="danger" size="field" fullWidth>
-            <a href="tel:911">
-              <Phone aria-hidden="true" />
-              Emergency: call 911
-            </a>
-          </Button>
-          <p className="mt-2 text-sm text-muted">
-            A call uses the phone’s normal service and works without the app.
-          </p>
+        <div className="space-y-4 px-5">
+          {/* 911 never waits for the job lookup. S20 carries its own call; every other view keeps
+              the shell's. */}
+          {!(stopJob && stopStage === "stop") ? (
+            <div>
+              <Button asChild variant="danger" size="field" fullWidth>
+                <a href="tel:911">
+                  <Phone aria-hidden="true" />
+                  Emergency: call 911
+                </a>
+              </Button>
+              <p className="mt-2 text-sm text-muted">
+                A call uses the phone’s normal service and works without the app.
+              </p>
+            </div>
+          ) : null}
+          {stopJob ? (
+            <JobStopSheet key={stopJob.id} session={session} job={stopJob} onStage={setStopStage} />
+          ) : null}
         </div>
         {/* Keep the code available offline; mount on first use and retain unsent drafts on close. */}
-        {helpMounted ? <SafetyActionPanel session={session} /> : null}
+        {helpMounted ? (
+          <SafetyActionPanel
+            session={session}
+            scope={stopJob ? { type: "roof_job", id: stopJob.id } : undefined}
+          />
+        ) : null}
       </Dialog>
     </div>
   );

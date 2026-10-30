@@ -678,10 +678,17 @@ function ManualMeasurementContent({ jobId }: { jobId: string }) {
 }
 
 function Observation({ observation }: { observation: ManualObservation }) {
+  const { tenant } = useSession();
+  // Two readings of one area are told apart by when they were recorded, never by a revision number.
+  const recorded = new Intl.DateTimeFormat(tenant.locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: tenant.time_zone,
+  }).format(new Date(observation.recorded_at));
   return (
     <div className="min-w-0 space-y-2 text-sm leading-6">
       <p className="font-semibold break-words">
-        {observation.area_label} · Revision {observation.revision}
+        {observation.area_label} · recorded {recorded}
       </p>
       <dl className="grid min-w-0 gap-2 sm:grid-cols-2">
         <div>

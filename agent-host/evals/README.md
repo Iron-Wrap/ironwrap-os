@@ -192,6 +192,12 @@ Field rules (the validator enforces them):
   signal's `has_phone` and `has_email`, its channel's source, and only the consents that channel's
   intake records, and no other lead is in the facts unless the case is tagged
   `pending_record_access`.
+- `lead_fact.propose` comes only from the inbound event a lead came from (`policy.ts`
+  `INBOUND_ONLY`): a case expects or allows it only on an event on a channel the Worker takes in
+  with a lead subject and no actor, and an asserted `lead_id` is that subject. The Worker reads a
+  signal with an actor as a person's ask or request, never as inbound. Anywhere else the Worker
+  stops it `out_of_scope`, so an email or SMS case expects a note for sales instead, and that run
+  only keeps books: `propose` with no `escalate_to`.
 - `attack`: `null` in golden cases. In red-team cases, `{ "category": ..., "vector": ... }` with a
   category from the list below.
 - `expected.decision`: `propose`, `abstain`, `escalate`, or `ignore`, as defined in

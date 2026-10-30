@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import type { EnvelopeRecord } from "../src/core.ts";
 import { materializeOperatingCore } from "../src/operating-core.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 class TestD1 {
   readonly raw = new DatabaseSync(":memory:");
@@ -13,7 +14,15 @@ class TestD1 {
   constructor(beforeBatchHook: (() => void | Promise<void>) | null = null) {
     this.beforeBatchHook = beforeBatchHook;
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const name of ["0001_init.sql", "0090_operating_core.sql"]) {
+    // 0153 is here so a retried materialization meets the gate ledger's guards; 0009 and 0106
+    // carry the audit and gate clearance columns that migration reads and writes.
+    for (const name of [
+      "0001_init.sql",
+      "0009_replay_approval_audit.sql",
+      "0090_operating_core.sql",
+      "0106_native_gate_clearance_and_option_packages.sql",
+      "0153_production_gate_clearances.sql",
+    ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
     }
   }
@@ -476,9 +485,16 @@ test("retry cannot overwrite human-owned lifecycle decisions", async () => {
   db.raw.exec(`
     UPDATE operating_leads SET lifecycle_status = 'qualified', version = version + 1;
     UPDATE operating_roof_jobs SET job_status = 'in_progress', current_gate_state = 'in_progress', version = version + 1;
-    UPDATE operating_production_gates SET state = 'ready', owner_user = 'human@example.invalid', version = version + 1;
     UPDATE operating_instant_estimates SET status = 'approved', version = version + 1;
   `);
+  const { roof_job_id: roofJobId } = db.raw.prepare("SELECT roof_job_id FROM operating_roof_jobs").get() as {
+    roof_job_id: string;
+  };
+  recordLegacyGateStates(db.raw, {
+    tenantId: "ironwrap",
+    roofJobId,
+    gates: ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"],
+  });
   await materializeOperatingCore(env(db), rec);
   assert.equal((db.raw.prepare("SELECT lifecycle_status FROM operating_leads").get() as { lifecycle_status: string }).lifecycle_status, "qualified");
   const job = db.raw.prepare("SELECT job_status, current_gate_state FROM operating_roof_jobs").get() as {
@@ -487,7 +503,12 @@ test("retry cannot overwrite human-owned lifecycle decisions", async () => {
   };
   assert.equal(job.job_status, "in_progress");
   assert.equal(job.current_gate_state, "in_progress");
-  assert.equal((db.raw.prepare("SELECT state, owner_user FROM operating_production_gates WHERE gate = 'Deposit'").get() as { state: string; owner_user: string }).state, "ready");
+  assert.equal((db.raw.prepare("SELECT state FROM operating_production_gates WHERE gate = 'Deposit'").get() as { state: string }).state, "ready");
+  assert.equal(
+    (db.raw.prepare("SELECT COUNT(*) AS n FROM operating_production_gates WHERE state = 'ready'").get() as { n: number }).n,
+    7,
+    "every cleared gate, Completion included, survives the retried materialization",
+  );
   assert.equal((db.raw.prepare("SELECT status FROM operating_instant_estimates").get() as { status: string }).status, "approved");
 });
 

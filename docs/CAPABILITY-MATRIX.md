@@ -652,6 +652,11 @@ IRO-38 branch-local side-effect substrate:
   outside the seed's pair, or on any Worker that is not `synthetic`, answers 403
   `effect_provider_not_allowed`. A proposal send claimed with a retry answers 422
   `effect_outside_send_retry_forbidden`. Settle, reconcile and retry run on the server's clock.
+  They bind the stored effect's tenant to `APP_TENANT_ID` (default `ironwrap`) before checking its
+  action: a mismatch answers 403 `effect_tenant_mismatch`, returns no effect data, and preserves
+  its row, attempts, event journal and exceptions. Router tests in
+  `workers-bus/test/outside-send-guards.test.ts` cover all three routes against the full migration
+  chain, including denial of foreign `mcp.*` effects and successful same-tenant transitions.
   The allowlist is enforced in the Worker only: D1 cannot tell a bearer write from a bus write,
   because neither an attempt nor an event records who claimed it (a B2 follow-up). Migration
   `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,

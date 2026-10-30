@@ -72,9 +72,14 @@ function allowsRetry(effect: Record<string, any>, authority: EffectAuthority): b
   return (effect.retryLimit ?? 0) !== 0 || typeof maxAttempts !== "number" || maxAttempts > 1;
 }
 
-/** The same refusal for an effect that exists; a missing one keeps the runtime's `effect_missing`. */
+/** Bind the stored effect to this Worker before its action; a missing one keeps `effect_missing`. */
 async function existingEffectRefusal(env: AppEnv, effectId: string): Promise<Response | null> {
   const existing = await getExternalEffect(env, effectId);
+  // The stored tenant is immutable. Do not trust a tenant supplied beside the effect id, or
+  // normalize a stored tenant into another tenant's identity.
+  if (existing && existing.tenant_id !== (env.APP_TENANT_ID?.trim() || "ironwrap")) {
+    return json({ error: "effect_tenant_mismatch" }, 403);
+  }
   const refusal = existing && tokenRefusal(env, existing.action, existing.provider);
   return refusal ? json({ error: refusal }, effectErrorStatus(refusal)) : null;
 }

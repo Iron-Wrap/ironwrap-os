@@ -21,7 +21,7 @@ import {
   type ExternalEffectRequest,
 } from "../src/effect-runtime.ts";
 import worker from "../src/index.ts";
-import { SqliteD1, TENANT, USERS, type SqliteStatement } from "./company-setup-fixture.ts";
+import { SqliteD1, TENANT, OTHER_TENANT, USERS, type SqliteStatement } from "./company-setup-fixture.ts";
 
 // PR-S (0164): the effect-runtime bearer never claims, settles, reconciles or retries a send to
 // someone outside the business, a QA stand-in provider passes only on a synthetic Worker, a
@@ -275,6 +275,62 @@ test("mcp.* effects keep the token on a business Worker: claim, settle, reconcil
   const standIn = await post(env, "claim", envelope("mcp:qa", { action: "mcp.test_write", provider: QA_PROVIDER }));
   assert.deepEqual(standIn, { status: 403, body: { error: "effect_provider_not_allowed" } });
 });
+
+for (const route of ["settle", "reconcile", "retry"] as const) {
+  test(`${route} binds an existing mcp effect to the configured tenant without leaking or changing foreign state`, async (t) => {
+    for (const dataClass of ["business", "synthetic"]) {
+      const db = new D1();
+      t.after(() => db.raw.close());
+      const ownerEnv = { ...workerEnv(db, dataClass), APP_TENANT_ID: OTHER_TENANT };
+      const body = envelope(`tenant:${dataClass}:${route}`, {
+        action: "mcp.test_write", provider: "frappe", retryLimit: 1, maxAttempts: 2,
+      });
+      body.effect.tenantId = OTHER_TENANT;
+      body.authority.tenantId = OTHER_TENANT;
+      const claimed = await post(ownerEnv, "claim", body);
+      assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+      const effectId = claimed.body.effect.effect_id as string;
+      const settlement = { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" };
+      const reconciliation = { outcome: "not_executed", evidence: { provider: "frappe", found: false } };
+
+      // Each route starts from a state where the tenant that owns the effect may actually use it.
+      if (route !== "settle") {
+        const unknown = await post(ownerEnv, "settle", { effectId, settlement });
+        assert.equal(unknown.status, 200, JSON.stringify(unknown.body));
+        assert.equal(unknown.body.effect.state, "unknown");
+      }
+      if (route === "retry") {
+        const reconciled = await post(ownerEnv, "reconcile", { effectId, ...reconciliation });
+        assert.equal(reconciled.status, 200, JSON.stringify(reconciled.body));
+        assert.equal(reconciled.body.effect.state, "reconciled");
+      }
+
+      // A caller-supplied tenant cannot replace the immutable tenant on the stored effect.
+      const request = {
+        effectId, tenantId: TENANT,
+        ...(route === "settle" ? { settlement } : route === "reconcile" ? reconciliation : {}),
+      };
+      const snapshot = () => Object.fromEntries([
+        "external_effects", "external_effect_attempts", "external_effect_events", "external_effect_exceptions",
+      ].map((table) => [table, db.raw.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()]));
+      const before = snapshot();
+      for (const configuredTenant of [TENANT, ` ${TENANT} `, undefined]) {
+        const callerEnv = { ...workerEnv(db, dataClass), APP_TENANT_ID: configuredTenant };
+        assert.deepEqual(await post(callerEnv, route, request), {
+          status: 403, body: { error: "effect_tenant_mismatch" },
+        }, `${route} on ${dataClass}, configured tenant ${configuredTenant}`);
+        assert.deepEqual(snapshot(), before, "tenant refusal preserves effects, attempts, events and exceptions");
+      }
+
+      // The same body succeeds for the configured owner, including a non-default tenant.
+      const allowed = await post(ownerEnv, route, request);
+      assert.equal(allowed.status, 200, JSON.stringify(allowed.body));
+      assert.equal(allowed.body.effect.tenant_id, OTHER_TENANT);
+      assert.equal(allowed.body.effect.state, { settle: "unknown", reconcile: "reconciled", retry: "retry" }[route]);
+      assert.ok(events(db, effectId) > (before.external_effect_events as unknown[]).length);
+    }
+  });
+}
 
 test("settle, reconcile and retry refuse an existing outside send and leave its row unchanged", async () => {
   const db = new D1();

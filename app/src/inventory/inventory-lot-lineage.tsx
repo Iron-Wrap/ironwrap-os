@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Button } from "../components/ui/button";
 import { RefTag } from "../components/ui/ref-tag";
 import { Status } from "../components/ui/status";
+import { SystemDetails } from "../components/ui/system-details";
 import { roleCanAccess, type AppRole } from "../lib/roles";
 import type { InventoryOverviewPosition, InventoryOverviewResponse } from "./inventory-contracts";
 
@@ -187,15 +188,14 @@ export function InventoryLotLineage({
                         {position.uom_code}
                       </dd>
                     </div>
-                    <div>
-                      <dt className="text-muted">Saved position version</dt>
-                      <dd>v{position.version}</dd>
-                    </div>
                     <div className="min-w-0">
                       <dt className="text-muted">Last movement receipt</dt>
                       <dd className="break-all font-mono">{position.last_event_id}</dd>
                     </div>
                   </dl>
+                  <SystemDetails className="text-sm text-muted">
+                    <p>Saved position version {position.version}</p>
+                  </SystemDetails>
                 </div>
                 <Button variant="secondary" size="field" onClick={() => onChoose(position)}>
                   Choose this stock

@@ -121,24 +121,6 @@ export function isRetryableApiError(error: unknown): boolean {
   );
 }
 
-/**
- * Whether a change may or may not have happened. Callers keep the exact attempt (its identity and
- * idempotency key) and read back before offering anything new; a refusal can start afresh.
- */
-export function isUncertainApiError(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    error.code !== "aborted" &&
-    (error.status === 0 ||
-      error.status === 408 ||
-      error.status >= 500 ||
-      isAnswerLost(error) ||
-      // Readable, but not the agreed answer: a change may still have taken effect. Not retryable
-      // for a read, which must surface the broken contract rather than fall back to a cache.
-      (error.status >= 200 && error.status < 300 && error.code === "invalid_response"))
-  );
-}
-
 export async function apiRequest<T>(options: ApiRequestOptions<T>): Promise<T> {
   // The timeout and the caller's abort stay armed until the whole body has been read: an answer
   // whose headers arrive but whose body stalls must end, not leave the screen waiting for ever.

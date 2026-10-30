@@ -219,7 +219,7 @@ export function JobStopSheet({
       <section className="space-y-3" aria-label="Stop work">
         <Notice
           tone="danger"
-          title="This stop's job wasn't found, so work is stopped on every job. The office is told."
+          title="Work is stopped on every job. You reported a stop, and we couldn't tell which job it's for. The office is told."
         />
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
           {["Stop", stopTime(raised.raisedAt, timeZone), session.user.display_name, raised.unsafe]
@@ -228,7 +228,7 @@ export function JobStopSheet({
         </p>
         {/* The office is told; the app cannot put the stop on its job yet, so neither line promises a fix. */}
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          Job: not found · The office is told
+          Job: couldn't tell which one
         </p>
         <Button type="button" size="field" onClick={() => setAcknowledged(true)}>
           Done

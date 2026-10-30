@@ -281,17 +281,17 @@ describe("JobStopSheet", () => {
     await user.click(screen.getByRole("button", { name: "Send stop report" }));
     expect(
       await screen.findByText(
-        "This stop's job wasn't found, so work is stopped on every job. The office is told.",
+        "Work is stopped on every job. You reported a stop, and we couldn't tell which job it's for. The office is told.",
       ),
     ).toBeVisible();
     expect(screen.getByText(/^Stop · \w{3} \d{1,2}:\d{2}/)).toHaveTextContent(
       "· Sam Keewatin · Ice on the north slope",
     );
-    expect(screen.getByText("Job: not found · The office is told")).toBeVisible();
+    expect(screen.getByText("Job: couldn't tell which one")).toBeVisible();
     expect(screen.queryByText(/Stop sent/)).toBeNull();
     expect(onStage).toHaveBeenLastCalledWith("stopped");
     await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.queryByText(/work is stopped on every job/)).toBeNull();
+    expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
     expect(screen.getByRole("button", { name: "I've made the area safe" })).toBeVisible();
     // The stop still holds every job, so its line never names the job that wasn't found.
     expect(screen.getByText(/^Stop · .* · Every job$/)).toBeVisible();
@@ -308,7 +308,7 @@ describe("JobStopSheet", () => {
     const user = userEvent.setup();
     const first = render(<JobStopSheet session={session} job={job} />);
     await user.click(await screen.findByRole("button", { name: "Send stop report" }));
-    await screen.findByText(/work is stopped on every job/);
+    await screen.findByText(/Work is stopped on every job/);
     first.unmount();
     render(<JobStopSheet session={session} job={job} fetcher={panelFetcher([])} />);
     expect(await screen.findByRole("button", { name: "Send stop report" })).toBeVisible();
@@ -319,7 +319,7 @@ describe("JobStopSheet", () => {
     const user = userEvent.setup();
     const first = render(<JobStopSheet session={session} job={job} />);
     await user.click(await screen.findByRole("button", { name: "Send stop report" }));
-    await screen.findByText(/work is stopped on every job/);
+    await screen.findByText(/Work is stopped on every job/);
     first.unmount();
     // The office's read answers only after the crew has pressed Done: the stop was lifted.
     let answerPanel!: () => void;
@@ -328,12 +328,12 @@ describe("JobStopSheet", () => {
       return panelFetcher([])(...args);
     }) as typeof fetch;
     render(<JobStopSheet session={session} job={job} fetcher={slowPanel} />);
-    await screen.findByText(/work is stopped on every job/);
+    await screen.findByText(/Work is stopped on every job/);
     await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.queryByText(/work is stopped on every job/)).toBeNull();
+    expect(screen.queryByText(/Work is stopped on every job/)).toBeNull();
     answerPanel();
     await user.click(await screen.findByRole("button", { name: "Send stop report" }));
-    expect(await screen.findByText(/work is stopped on every job/)).toBeVisible();
+    expect(await screen.findByText(/Work is stopped on every job/)).toBeVisible();
   });
 
   it("S21: a stop waiting on this phone shows S21 once the office's answer comes in", async () => {
@@ -355,7 +355,7 @@ describe("JobStopSheet", () => {
         verification: { verifiedAt: Date.now(), scopeUnresolved: true },
       });
       vi.advanceTimersByTime(5_000);
-      expect(await screen.findByText(/work is stopped on every job/)).toBeVisible();
+      expect(await screen.findByText(/Work is stopped on every job/)).toBeVisible();
       expect(screen.queryByText(/uploads on its own/)).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -367,14 +367,14 @@ describe("JobStopSheet", () => {
     const user = userEvent.setup();
     const first = render(<JobStopSheet session={session} job={job} />);
     await user.click(await screen.findByRole("button", { name: "Send stop report" }));
-    await screen.findByText(/work is stopped on every job/);
+    await screen.findByText(/Work is stopped on every job/);
     first.unmount();
     const [raise] = await safetyActions();
     const active = [
       { occurrence_id: await occurrenceIdFor(raise!.deviceActionId), stop_active: true },
     ];
     render(<JobStopSheet session={session} job={job} fetcher={panelFetcher(active)} />);
-    expect(await screen.findByText(/work is stopped on every job/)).toBeVisible();
+    expect(await screen.findByText(/Work is stopped on every job/)).toBeVisible();
   });
 });
 

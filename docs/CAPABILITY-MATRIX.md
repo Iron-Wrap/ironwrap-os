@@ -75,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 142,
+      "count": 143,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -882,6 +882,20 @@ stale from before that merge):
   `released` event. The occurrence and its event now commit in one batch. The release by another
   Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
   Proof is repository tests only.
+- An active safety-occurrence stop holds every job it names, for every crew: a job stop holds its
+  job, a Work Package stop holds every package of its job (Superseded included), and a tenant stop
+  or a stop on a job or package that doesn't exist holds every job of the tenant. Unresolved scope
+  is latched in immutable D1 history, including active unresolved stops at migration; adding or
+  restoring its target never narrows that hold. Only the existing person-authorized release lifts
+  it; this slice adds no re-scope route. Work Package
+  acknowledge, start and complete answer `safety_stop_active` with the holding stops, and migration
+  `0170` repeats the rule in D1. Stopping work and captures stay open. The crew Today, job and
+  typed-work reads list the holding stops (`active_stops`); the stop detail and safety panel carry
+  the raiser's name, the controlled step and an L06-aware `can_release`. A raise with no category,
+  severity or words is a high hazard that says "Work stopped on {job}". An office made-safe names an
+  on-site confirmer, in the Worker and in D1, and the journal refuses replacement under either its
+  event ID or occurrence/version/kind key. "Keep the stop" is recorded to history only, and a
+  release asks for a sign-in no older than 5 minutes. Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

@@ -345,6 +345,41 @@ repeats the rule in D1 for any write. A lift must name an active user of the ten
 raiser and whose own `released` event for that version is already written, and the recorded name
 never changes afterwards.
 
+An active safety-occurrence stop holds every job it names, for every crew, not only the raiser's
+phone. A `tenant` stop holds every job of the tenant, whatever its `scope_id`. A `roof_job` stop
+holds its job, and a `work_package` stop holds the job of every version of that package, Superseded
+included. A stop on a job or Work Package the tenant does not have may be a typo for any of its
+jobs, so it holds every job until a person lifts it. Migration `0170` latches that unresolved scope
+in immutable history, including active stops still unresolved when the migration is applied.
+Creating or restoring the missing job or package never narrows the hold. There is no re-scope
+route in this slice; the existing authorized person release remains required. Shop and vehicle stops hold no job. While a
+stop holds a job, Work Package acknowledge, start and complete are refused with
+`safety_stop_active` (409), and the refusal names each holding stop: `{ occurrence_id, scope:
+"job" | "tenant", reported_at, summary, raiser_display_name }`. Migration `0170` repeats the rule
+in D1 for any write to `work_package_events`. Stopping work, field check-ins and captures are never
+refused, because the photos that release a stop are taken while it holds the job. The crew Today,
+job and typed-work reads carry the same list as `active_stops`, oldest first, and `null` with a
+stale marker when it could not be read. The stop detail and the safety panel name the raiser and
+say whether this viewer may release the stop now (`can_release`, with a named
+`release_unavailable_reason`); the raiser never may, under any identity.
+
+A crew raise may say nothing but "stop": a report with no category is a `hazard`, with no severity
+`high`, and with no words "Work stopped on {job}", naming the job by its number. The Worker applies
+these defaults; the stop is never refused for its summary. Anyone may record an area made safe, but
+a person who is not a field worker records it only with a named on-site confirmer, an active person
+of the tenant who is not the recorder under any identity (`safety_make_safe_confirmer_required`,
+`safety_make_safe_confirmer_unknown`, `safety_make_safe_confirmer_is_recorder`, 400). Migration
+`0170` keeps the confirmer on the `make_safe` event, refuses those records in D1, prevents journal
+replacement under either its event ID or occurrence/version/kind identity, and lets an
+occurrence become `made_safe` only with its own `make_safe` event. "Keep the stop" (`POST
+/api/v1/safety/occurrences/{occurrence}/keep`, CSRF and an `Idempotency-Key`) is the release
+decision's other answer: the same person-session, authority and raiser checks, the version the
+person reviewed, and a reason. It is recorded to the stop's history only
+(`safety_stop_keep_decisions`, append-only, timed by D1's clock) and changes nothing on the stop.
+A release also asks the person to sign in again when their session is more than 5 minutes old
+(`recent_session_required`, 403), checked after every other release check and before anything is
+written. That is the existing session-age check; no passkey is claimed.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's

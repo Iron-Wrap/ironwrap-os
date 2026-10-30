@@ -2304,10 +2304,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (L06) or one without its own `released` event.
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
+    // 0170 lets no crew acknowledge, start or complete work on a job an active safety stop holds,
+    // latches unresolved scope, protects made-safe journal history, and keeps each "Keep the stop" decision.
     // 0153 lands after 0154-0206 on deployed databases; it touches no object a later-numbered
     // migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 142);
+    assert.equal(migrations.length, 143);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2464,10 +2466,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
     // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
     // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
-    // evidence and readback-conflict guards under their names.
+    // evidence and readback-conflict guards under their names. 0170 adds the made-safe confirmer
+    // column, the keep-decision and unresolved-scope tables, one named index and fourteen guards
+    // (the Work Package stop hold, made-safe confirmer/event, journal no-replace, keep-decision
+    // guards, and scope-latch validation, immutability and automatic capture).
     assert.deepEqual(
       { ...counts },
-      { tables: 281, indexes: 382, triggers: 781 },
+      { tables: 283, indexes: 383, triggers: 795 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3733,6 +3738,32 @@ test("0145 and 0152 applied after 0202 on a database already through 0146-0202 g
   } finally {
     sorted.close();
     qa.close();
+  }
+});
+
+test("0170 applied after all higher migrations preserves the sorted schema and per-table trigger order", async () => {
+  const late = "0170_safety_stop_route_gaps.sql";
+  const migrations = await d1MigrationNames();
+  assert.ok(migrations.includes(late));
+  assert.ok(migrations.some((name) => name > late));
+  const sorted = new DatabaseSync(":memory:");
+  const deployed = new DatabaseSync(":memory:");
+  try {
+    for (const db of [sorted, deployed]) db.exec("PRAGMA foreign_keys = ON");
+    for (const name of migrations) await applyD1Migration(sorted, name);
+    for (const name of migrations.filter((name) => name !== late)) await applyD1Migration(deployed, name);
+    await applyD1Migration(deployed, late);
+    const schema = (db: DatabaseSync) => db.prepare(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name",
+    ).all().map((row) => ({ ...row }));
+    const triggers = (db: DatabaseSync) => db.prepare(
+      "SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, rowid",
+    ).all().map((row) => ({ ...row }));
+    assert.deepEqual(schema(deployed), schema(sorted));
+    assert.deepEqual(triggers(deployed), triggers(sorted));
+  } finally {
+    sorted.close();
+    deployed.close();
   }
 });
 

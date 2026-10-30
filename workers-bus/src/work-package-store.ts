@@ -919,6 +919,7 @@ export async function nativeWorkPackageAction(env: AppEnv, input: NativeWorkPack
     if (String(error).includes("work_package_authority_precondition_stale")) {
       throw new Error("work_package_authority_precondition_stale");
     }
+    if (String(error).includes("safety_stop_active")) throw new Error("safety_stop_active");
     throw error;
   }
   if (input.deviceActionId) {

@@ -1,4 +1,5 @@
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
+import { sessionIsRecentForApproval } from "./approval-broker-client.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { assertCurrentEvidenceReader, evidenceFilesForDetail, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedEvidenceFilesForRefs, resolveEvidenceUploads } from "./evidence-uploads.ts";
 import {
@@ -12,8 +13,8 @@ import {
   evaluateSafetyReadiness,
   safetyCorrectiveActionProjection,
   getSafetyEquipment,
-  getSafetyOccurrence,
   issueSafetyEquipment,
+  keepSafetyStop,
   listSafetyOccurrenceEvents,
   recordEquipmentInspection,
   recordSafetyNotification,
@@ -21,6 +22,7 @@ import {
   recordSafetyResponse,
   replaceSafetyEquipment,
   safetyDeskProjection,
+  safetyOccurrenceDetail,
   safetyPanelProjection,
   SafetyError,
   submitCorrectiveActionEvidence,
@@ -53,6 +55,9 @@ import {
  */
 
 const MAX_BODY_BYTES = 32 * 1024;
+/** P33 step-up: a release needs a sign-in no older than this (no passkey is claimed). */
+const RELEASE_MAX_SESSION_AGE_SECONDS = 5 * 60;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,139}$/;
 const SAFETY_RESPONSE_COMMANDS = [
   "rescue_dispatched",
   "rescue_completed",
@@ -157,6 +162,19 @@ function scopeChain(
   return chain;
 }
 
+/**
+ * Whether a read comes from a person's own signed-in session, which only this layer can see; a
+ * stop's `can_release` needs it. A session lookup that fails answers no, so the read still serves
+ * (the panel is the crew's offline seed) and never offers a release the Worker would refuse.
+ */
+async function readerIsPerson(env: AppEnv, auth: AuthContext): Promise<boolean> {
+  try {
+    return (await personCookieSession(env, auth)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleSafetyRoute(
   req: Request,
   env: AppEnv,
@@ -172,7 +190,8 @@ export async function handleSafetyRoute(
     try {
       return json({
         version: 1,
-        panel: await safetyPanelProjection(env, tenantId, userId),
+        panel: await safetyPanelProjection(env, tenantId, userId,
+          await readerIsPerson(env, auth)),
       });
     } catch (error) {
       return safetyFailure(error);
@@ -218,10 +237,9 @@ export async function handleSafetyRoute(
     const occurrenceId = pathPart(occurrenceDetail[1] ?? "");
     if (!occurrenceId) return json({ error: "not_found" }, 404);
     try {
-      const occurrence = await getSafetyOccurrence(env, tenantId, occurrenceId);
-      return occurrence
-        ? json({ version: 1, occurrence })
-        : json({ error: "not_found" }, 404);
+      const detail = await safetyOccurrenceDetail(env, tenantId, userId, occurrenceId,
+        await readerIsPerson(env, auth));
+      return detail ? json(detail) : json({ error: "not_found" }, 404);
     } catch (error) {
       return safetyFailure(error);
     }
@@ -423,7 +441,8 @@ export async function handleSafetyRoute(
       return json({ error: "safety_command_invalid" }, 400);
     }
     try {
-      if (requested === "released" && !(await personCookieSession(env, auth))) {
+      const person = requested === "released" ? await personCookieSession(env, auth) : null;
+      if (requested === "released" && !person) {
         throw new SafetyError(
           "safety_stop_release_person_required",
           403,
@@ -438,8 +457,54 @@ export async function handleSafetyRoute(
         detail: stringField(parsed.value.detail) ?? "",
         evidence: evidenceField(parsed.value),
         now,
+        // The existing session-age check, on the live session row's sign-in time.
+        ...(person
+          ? {
+              sessionRecent: sessionIsRecentForApproval(person.sessionCreatedAt, {
+                maxSessionAgeSeconds: RELEASE_MAX_SESSION_AGE_SECONDS,
+              }),
+            }
+          : {}),
       });
       return json({ version: 1, occurrence });
+    } catch (error) {
+      return safetyFailure(error);
+    }
+  }
+
+  // "Keep the stop" (P33): the release decision's other answer, recorded to history only.
+  const keep = url.pathname.match(/^\/api\/v1\/safety\/occurrences\/([^/]+)\/keep$/);
+  if (keep) {
+    const occurrenceId = pathPart(keep[1] ?? "");
+    if (!occurrenceId) return json({ error: "not_found" }, 404);
+    const idempotencyKey = req.headers.get("idempotency-key")?.trim() ?? "";
+    if (!IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      return json({ error: "idempotency_key_required" }, 400);
+    }
+    if (
+      !exactKeys(parsed.value, ["occurrence_version", "reason"]) ||
+      typeof parsed.value.reason !== "string" ||
+      typeof parsed.value.occurrence_version !== "number"
+    ) {
+      return json({ error: "safety_stop_keep_invalid" }, 400);
+    }
+    try {
+      if (!(await personCookieSession(env, auth))) {
+        throw new SafetyError(
+          "safety_stop_release_person_required",
+          403,
+          "Keeping or releasing a safety stop needs a person's own signed-in session.",
+        );
+      }
+      const result = await keepSafetyStop(env, {
+        tenantId,
+        occurrenceId,
+        actorUserId: userId,
+        occurrenceVersion: parsed.value.occurrence_version,
+        reason: parsed.value.reason,
+        idempotencyKey,
+      });
+      return json({ version: 1, keep: result.keep }, result.replayed ? 200 : 201);
     } catch (error) {
       return safetyFailure(error);
     }

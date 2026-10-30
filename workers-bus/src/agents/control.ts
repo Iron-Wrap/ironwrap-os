@@ -14,9 +14,8 @@ import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSett
 import { CEILING_SCHEMA, competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
 import { closeDelegationDrafts } from "./drafts.ts";
 import { afterCatastrophe, decisionAgreement, shadowSetting, unqualifiedSince } from "./shadow.ts";
-import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
+import { canonicalJson, validate } from "./schema.ts";
 import {
-  changesOf,
   getRun,
   namedPerson,
   runContext,

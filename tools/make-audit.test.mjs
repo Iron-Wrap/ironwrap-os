@@ -11,33 +11,33 @@ const mcpPackages = ["mcp/erpnext-roofing-mcp", "mcp/ironwrap-bus-mcp", "mcp/new
 const expectedCalls = [
   "audit --prefix app",
   "audit --prefix workers-bus",
-  ...["app", ...mcpPackages, "agent-host", "workers-bus"].map((prefix) => `audit --omit=dev --prefix ${prefix}`),
+  ...[...mcpPackages, "agent-host"].map((prefix) => `audit --omit=dev --prefix ${prefix}`),
 ];
 
-async function runAudit(t, failPrefix = "") {
+async function runAudit(t, failCommand = "") {
   const bin = await mkdtemp(path.join(os.tmpdir(), "ironwrap-audit-"));
   t.after(() => rm(bin, { recursive: true, force: true }));
   const log = path.join(bin, "calls.log");
   await writeFile(path.join(bin, "npm"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$AUDIT_TEST_LOG"
-if [ "$*" = "audit --omit=dev --prefix $AUDIT_TEST_FAIL_PREFIX" ]; then exit 42; fi
+if [ "$*" = "$AUDIT_TEST_FAIL_COMMAND" ]; then exit 42; fi
 exit 0
 `, { mode: 0o755 });
   // GNU Make 3.81 ignores .SHELLFLAGS; also exercise this without errexit on newer Make.
   const result = spawnSync("make", ["-f", "Makefile", "-o", "deps", ".SHELLFLAGS=-c", "audit"], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, AUDIT_TEST_LOG: log, AUDIT_TEST_FAIL_PREFIX: failPrefix },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, AUDIT_TEST_LOG: log, AUDIT_TEST_FAIL_COMMAND: failCommand },
   });
   assert.ifError(result.error);
   return { ...result, calls: (await readFile(log, "utf8")).trim().split("\n") };
 }
 
-for (const prefix of [...mcpPackages, "agent-host"]) {
-  test(`audit fails and stops after an audit failure in ${prefix}`, async (t) => {
-    const result = await runAudit(t, prefix);
+for (const command of expectedCalls) {
+  test(`audit fails and stops after ${command} fails`, async (t) => {
+    const result = await runAudit(t, command);
     assert.notEqual(result.status, 0, result.stdout + result.stderr);
-    const failureIndex = expectedCalls.indexOf(`audit --omit=dev --prefix ${prefix}`);
+    const failureIndex = expectedCalls.indexOf(command);
     assert.deepEqual(result.calls, expectedCalls.slice(0, failureIndex + 1));
   });
 }

@@ -271,10 +271,53 @@ describe("receipt state words (AI-PRIMITIVES, outcome and policy result to words
     expect(timeInSentence("Around 14:05")).toBeUndefined();
   });
 
+  it("says the value is what the draft proposed only when the Worker says so", () => {
+    const note = (as_proposed?: boolean) =>
+      appliedByPersonNote("Dana Whitford", "Grace Obi's role", {
+        field: "role",
+        value: "sales",
+        as_proposed,
+      });
+    expect(note(true)).toBe(
+      "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales. That is what this draft proposed.",
+    );
+    expect(note(false)).toBe(
+      "Dana Whitford changed Grace Obi's role by hand, so this draft is closed. Grace Obi's role is now Sales.",
+    );
+    expect(note()).toBe(note(false));
+    // A setting's value reads as a long clause; the sentence still closes the note.
+    expect(
+      appliedByPersonNote("Dana Whitford", "the AI estimator's setting for sending quotes", {
+        field: "delegation_setting",
+        value: "shadow",
+        as_proposed: true,
+      }),
+    ).toBe(
+      "Dana Whitford changed the AI estimator's setting for sending quotes by hand, so this draft is closed. The AI estimator's setting for sending quotes is now Suggest: it runs practice rounds that change nothing, and people still do the real work. That is what this draft proposed.",
+    );
+    // A value with no words keeps the note that names no value, flag or not.
+    expect(
+      appliedByPersonNote("Dana Whitford", "Grace Obi's role", {
+        field: "role",
+        value: "foreman",
+        as_proposed: true,
+      }),
+    ).toBe(appliedByPersonNote("Dana Whitford", "Grace Obi's role"));
+  });
+
   it("reads only a well-formed applied record from a closed draft's context", () => {
     const applied = { field: "delegation_setting", value: "off", by: "person_dana" };
     expect(appliedOf({ applied })).toEqual(applied);
     expect(appliedOf({ applied, prior: "kept" })).toEqual(applied);
+    expect(appliedOf({ applied: { ...applied, as_proposed: true } })).toEqual({
+      ...applied,
+      as_proposed: true,
+    });
+    // A malformed flag reads as absent; what was set still reads.
+    expect(appliedOf({ applied: { ...applied, as_proposed: "true" } })).toEqual({
+      ...applied,
+      as_proposed: undefined,
+    });
     // Without who, the value still reads; the note then says "A person".
     expect(appliedOf({ applied: { field: "role", value: "sales" } })).toEqual({
       field: "role",

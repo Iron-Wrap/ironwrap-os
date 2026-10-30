@@ -19,7 +19,7 @@ test("a pull request with no readable diff proves everything", () => {
   }
 });
 
-test("markdown-only pull requests skip every test suite", () => {
+test("prose-only pull requests skip the scoped product suites", () => {
   const scope = ciScope({
     event: "pull_request",
     changedFiles: ["docs/OPERATIONS-RUNBOOK.md", "app/README.md", "AGENTS.md"],
@@ -28,11 +28,17 @@ test("markdown-only pull requests skip every test suite", () => {
   assert.equal(scope.code, false);
 });
 
-test("the capability matrix is read by tests, so it is never markdown-only", () => {
-  assert.equal(isMarkdownOnly("docs/CAPABILITY-MATRIX.md"), false);
-  const scope = ciScope({ event: "pull_request", changedFiles: ["docs/CAPABILITY-MATRIX.md"] });
-  assert.equal(scope.code, true);
-  assert.equal(scope.app, false);
+test("markdown read by product tests runs those suites without rebuilding browser legs", () => {
+  for (const file of [
+    "docs/CAPABILITY-MATRIX.md",
+    "docs/AI-TEAM-CONTRACT.md",
+    "design/system-v2/TEMPLATES.md",
+  ]) {
+    assert.equal(isMarkdownOnly(file), false, file);
+    const scope = ciScope({ event: "pull_request", changedFiles: [file] });
+    assert.equal(scope.code, true, file);
+    assert.equal(scope.app, false, file);
+  }
 });
 
 test("a Worker-only pull request runs the suites but not the PWA bundle legs", () => {

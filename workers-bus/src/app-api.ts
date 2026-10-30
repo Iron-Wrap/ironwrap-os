@@ -202,7 +202,10 @@ import { handleEvidenceContentRead, handleEvidenceUpload } from "./evidence-uplo
 import { handlePrivacyEvidenceAuditRoute } from "./privacy-evidence-audit.ts";
 import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-disposition.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
-import { handleProductionGateClearance } from "./production-gate-clearance.ts";
+import {
+  handleProductionGateClearance,
+  handleProductionGateWaiverDecision,
+} from "./production-gate-clearance.ts";
 import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
@@ -261,6 +264,7 @@ import {
   outstandingProposalPublishPermit,
   unconfirmedProposalDelivery,
 } from "./commercial-store.ts";
+import { checkProposalDelivery, readProposalDeliveryState } from "./proposal-delivery-checks.ts";
 import {
   beginCommercialDepositDerivationRequest,
   ensureCommercialDepositDerivation,
@@ -756,7 +760,7 @@ export async function handleAuthenticatedRoute(
   const recipientResponse = await handleAutomationRecipientRoute(req, env, auth);
   if (recipientResponse) return recipientResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
-    const response = appJson(sessionPayload(auth, env));
+    const response = appJson(await sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");
     return response;
   }
@@ -774,7 +778,7 @@ export async function handleAuthenticatedRoute(
     try {
       return privateAppJson({
         version: APP_API_VERSION,
-        session: sessionPayload(auth, env),
+        session: await sessionPayload(auth, env),
         // A field device gets one call before it goes offline, so the capability signal rides
         // with it rather than costing a second round trip on a bad connection. It stays a hint:
         // the server re-derives and re-enforces on every write, and a cached state never admits
@@ -1175,6 +1179,18 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/commercial/proposal-publications/delivery-findings"
   ) {
     return await recordProposalDeliveryFindingByHand(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery-checks"
+  ) {
+    return await checkProposalDeliveryByHand(req, env, auth);
+  }
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/delivery"
+  ) {
+    return await readProposalDelivery(env, auth, url);
   }
   if (
     req.method === "POST" &&
@@ -1965,17 +1981,19 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "newo_operations_unavailable" }, 502);
     }
   }
-  // The producers the six scheduling gates never had (ELEC-122). Nested under the
-  // job on purpose: a gate has no identity apart from the job it locks, and the
-  // path says which job's schedule is being unlocked.
-  const productionGateClearanceMatch = url.pathname.match(
-    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/clearance$/,
+  // A production gate moves only by an entry in its ledger (migration 0153). Nested
+  // under the job on purpose: a gate has no identity apart from the job it locks, and
+  // the path says which job's schedule is being unlocked.
+  const productionGateLedgerMatch = url.pathname.match(
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions)$/,
   );
-  if (req.method === "POST" && productionGateClearanceMatch) {
-    const roofJobId = decodedPathSegment(productionGateClearanceMatch[1]);
-    const gate = decodedPathSegment(productionGateClearanceMatch[2]);
+  if (req.method === "POST" && productionGateLedgerMatch) {
+    const roofJobId = decodedPathSegment(productionGateLedgerMatch[1]);
+    const gate = decodedPathSegment(productionGateLedgerMatch[2]);
     if (!roofJobId || !gate) return privateAppJson({ error: "not_found" }, 404);
-    return await handleProductionGateClearance(req, env, auth, roofJobId, gate);
+    return productionGateLedgerMatch[3] === "clearance"
+      ? await handleProductionGateClearance(req, env, auth, roofJobId, gate)
+      : await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
     if (!hasPermission(auth, "production:read")) {
@@ -4555,7 +4573,6 @@ async function createCommercialQuoteRevision(
     ) {
       return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
     }
-    const nowIso = now.toISOString();
     const sourceFacts = {
       schema_version: "ironwrap.commercial-job-binding.v1",
       tenant_id: auth.session.tenant_id,
@@ -4650,13 +4667,18 @@ async function confirmProposalDeliveryByHand(
   const body = parsed.value;
   const keys = isRecord(body) ? Object.keys(body) : [];
   const note = isRecord(body) && typeof body.note === "string" ? body.note.trim() : "";
+  // The delivery check a "not delivered" cites as provider evidence (0167); optional.
+  const deliveryCheckId = isRecord(body) ? body.delivery_check_id ?? null : null;
   if (
     !isRecord(body) ||
-    keys.length !== 3 ||
-    !keys.every((name) => ["external_effect_id", "outcome", "note"].includes(name)) ||
+    keys.length !== ("delivery_check_id" in body ? 4 : 3) ||
+    !keys.every((name) => ["external_effect_id", "outcome", "note", "delivery_check_id"].includes(name)) ||
     typeof body.external_effect_id !== "string" ||
     !idText(body.external_effect_id, 16, 160) ||
     (body.outcome !== "delivered" && body.outcome !== "not_delivered") ||
+    (deliveryCheckId !== null &&
+      (typeof deliveryCheckId !== "string" || !idText(deliveryCheckId, 16, 200) ||
+        body.outcome !== "not_delivered")) ||
     // SQLite measures text in characters (code points), not UTF-16 units: count the same way.
     [...note].length < 8 || [...note].length > 500 || /[\u0000\r]/.test(note)
   ) {
@@ -4671,6 +4693,7 @@ async function confirmProposalDeliveryByHand(
       actorUserId: person.userId,
       actorRole: person.role,
       idempotencyKey: key,
+      deliveryCheckId: deliveryCheckId as string | null,
     });
     return privateAppJson({
       confirmation: result.confirmation,
@@ -4745,6 +4768,86 @@ async function recordProposalDeliveryFindingByHand(
       return privateAppJson({ error: error.code, ...error.detail }, error.status);
     }
     return privateAppJson({ error: "proposal_delivery_finding_failed" }, 503);
+  }
+}
+
+/**
+ * A person checks a proposal send's delivery with its email service (#15b-1b, 0167): the bus reads
+ * back what the provider knows inside this request and keeps the answer as one check row. A check
+ * never changes the send and never sends anything. People only, as for the confirmation: the
+ * commercial set in their own session, so no agent, connector or service token runs one.
+ */
+async function checkProposalDeliveryByHand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const person = await personCookieSession(env, auth);
+  if (!person || !["owner", "ops", "sales"].includes(person.role)) {
+    return privateAppJson({ error: "person_session_required" }, 403);
+  }
+  const key = idempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  if (
+    !isRecord(body) ||
+    Object.keys(body).length !== 1 ||
+    typeof body.external_effect_id !== "string" ||
+    !idText(body.external_effect_id, 16, 160)
+  ) {
+    return privateAppJson({ error: "invalid_proposal_delivery_check" }, 400);
+  }
+  try {
+    const result = await checkProposalDelivery(env, {
+      tenantId: auth.session.tenant_id,
+      effectId: body.external_effect_id,
+      actorUserId: person.userId,
+      actorRole: person.role,
+      idempotencyKey: key,
+    });
+    return privateAppJson({
+      check: result.check,
+      delivery_state: result.deliveryState,
+      replayed: result.replayed,
+    }, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof ProposalDeliveryConfirmationError) {
+      return privateAppJson({ error: error.code, ...error.detail }, error.status);
+    }
+    return privateAppJson({ error: "proposal_delivery_check_failed" }, 503);
+  }
+}
+
+/** One proposal revision's delivery state, derived as Track B's frames render it (DESIGN.md §6). */
+async function readProposalDelivery(env: AppEnv, auth: AuthContext, url: URL): Promise<Response> {
+  if (!hasPermission(auth, "sales:read"))
+    return privateAppJson({ error: "sales_read_required" }, 403);
+  const proposalPackId = idText(url.searchParams.get("proposal_pack_id"), 1, 160);
+  const proposalRevisionId = idText(url.searchParams.get("proposal_revision_id"), 1, 160);
+  if (!proposalPackId || !proposalRevisionId) {
+    return privateAppJson({ error: "invalid_proposal_delivery_read" }, 400);
+  }
+  try {
+    const revision = await env.DB.prepare(
+      `SELECT 1 AS found FROM commercial_proposal_revisions
+        WHERE tenant_id = ? AND proposal_revision_id = ? AND proposal_pack_id = ?`,
+    ).bind(auth.session.tenant_id, proposalRevisionId, proposalPackId).first<{ found: number }>();
+    if (!revision) return privateAppJson({ error: "not_found" }, 404);
+    return privateAppJson({
+      delivery_state: await readProposalDeliveryState(
+        env,
+        auth.session.tenant_id,
+        proposalPackId,
+        proposalRevisionId,
+      ),
+    });
+  } catch {
+    return privateAppJson({ error: "proposal_delivery_read_failed" }, 503);
   }
 }
 
@@ -5628,63 +5731,6 @@ function canReadJobs(auth: AuthContext): boolean {
     hasPermission(auth, "jobs:read:assigned");
 }
 
-async function validateProductionSchedulePreparation(
-  env: AppEnv,
-  auth: AuthContext,
-  input: NonNullable<ReturnType<typeof parseProductionScheduleApprovalPreparation>>,
-): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
-  try {
-    const runway = await buildProductionRunwayReadModel(env, auth);
-    const job = runway.jobs.find((candidate) => candidate.id === input.roofJobId);
-    if (
-      !runway.allowed_actions.includes("production_schedule_approval.prepare") ||
-      !job ||
-      !job.scheduling_preparation_allowed
-    ) {
-      return {
-        ok: false,
-        error: "production_schedule_not_eligible",
-        status: 409,
-      };
-    }
-    if (!runway.crews.some((crew) => crew.id === input.crewProfileId)) {
-      return {
-        ok: false,
-        error: "active_crew_profile_required",
-        status: 409,
-      };
-    }
-    if (job.assignment) {
-      if (
-        input.supersedesAssignmentId !== job.assignment.id ||
-        input.correctionReason === null
-      ) {
-        return {
-          ok: false,
-          error: "production_schedule_supersede_required",
-          status: 409,
-        };
-      }
-    } else if (
-      input.supersedesAssignmentId !== null ||
-      input.correctionReason !== null
-    ) {
-      return {
-        ok: false,
-        error: "production_schedule_supersede_invalid",
-        status: 409,
-      };
-    }
-    return { ok: true };
-  } catch {
-    return {
-      ok: false,
-      error: "production_schedule_preparation_unavailable",
-      status: 502,
-    };
-  }
-}
-
 function quoteRevisionApprovalBrokerDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
@@ -6071,64 +6117,6 @@ function proposalPublicationRequestText(proposalEvidencePackId: string): string 
   return `Publish the reviewed Draft Proposal Evidence Pack ${proposalEvidencePackId} to the private customer portal. No customer message, portal link, signature, or quote change.`;
 }
 
-function parseProductionScheduleApprovalPreparation(value: unknown): {
-  roofJobId: string;
-  crewProfileId: string;
-  scheduledStart: string;
-  scheduledEnd: string | null;
-  supersedesAssignmentId: string | null;
-  correctionReason: string | null;
-} | null {
-  const requiredKeys = [
-    "roof_job_id",
-    "crew_profile_id",
-    "scheduled_start",
-    "scheduled_end",
-    "supersedes_assignment_id",
-    "correction_reason",
-  ];
-  if (
-    !isRecord(value) ||
-    !onlyKeys(value, requiredKeys) ||
-    !requiredKeys.every((key) => Object.hasOwn(value, key))
-  ) {
-    return null;
-  }
-  const roofJobId = idText(value.roof_job_id, 1, 140);
-  const crewProfileId = idText(value.crew_profile_id, 1, 140);
-  const scheduledStart = normalizedIso(value.scheduled_start);
-  const scheduledEnd =
-    value.scheduled_end === null ? null : normalizedIso(value.scheduled_end);
-  const supersedesAssignmentId =
-    value.supersedes_assignment_id === null
-      ? null
-      : idText(value.supersedes_assignment_id, 1, 140);
-  const correctionReason =
-    value.correction_reason === null
-      ? null
-      : boundedText(value.correction_reason, 1, 2_000);
-  if (
-    !roofJobId ||
-    !crewProfileId ||
-    !scheduledStart ||
-    (value.scheduled_end !== null && !scheduledEnd) ||
-    (value.supersedes_assignment_id !== null && !supersedesAssignmentId) ||
-    (value.correction_reason !== null && !correctionReason) ||
-    (scheduledEnd !== null && Date.parse(scheduledEnd) <= Date.parse(scheduledStart)) ||
-    (supersedesAssignmentId === null) !== (correctionReason === null)
-  ) {
-    return null;
-  }
-  return {
-    roofJobId,
-    crewProfileId,
-    scheduledStart,
-    scheduledEnd,
-    supersedesAssignmentId,
-    correctionReason,
-  };
-}
-
 function parseOperatingJobAssignment(value: unknown): {
   expectedRoofJobVersion: number;
   crewId: string;
@@ -6281,17 +6269,6 @@ function parseOperatingWorkObjectAssignment(value: unknown): {
     supersedesAssignmentId,
     correctionReason,
   };
-}
-
-function productionScheduleRequestText(
-  input: NonNullable<ReturnType<typeof parseProductionScheduleApprovalPreparation>>,
-): string {
-  const timing = input.scheduledEnd
-    ? `${input.scheduledStart} to ${input.scheduledEnd}`
-    : `starting ${input.scheduledStart}`;
-  return input.supersedesAssignmentId
-    ? `Prepare an append-only Production Job Assignment correction for ${input.crewProfileId} ${timing}. Reason: ${input.correctionReason}`
-    : `Prepare an append-only Production Job Assignment for ${input.crewProfileId} ${timing}.`;
 }
 
 function parseExpectedVersion(value: unknown): number | null {

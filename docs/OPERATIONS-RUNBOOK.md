@@ -195,9 +195,11 @@ customer portal link, the accounting tester as an app user, and one crew (`synth
 with two synthetic field users (`qa-crew-lead@example.invalid`, `qa-crew-hand@example.invalid`)
 through the roster route `/api/v1/admin/crews`. Customer acceptance, the deposit
 and its approval stay with the two named testers. The job is not scheduled to the crew: scheduling
-needs all six production gates cleared, and a gate clears today only by an office waiver or a
-reconciled deposit invoice, both people's decisions, so the seed clears no gate. It never writes
-D1 directly, calls only an
+needs all six production gates cleared, and a gate clears only by an entry in the gate ledger
+(migration `0153`). Deposit clears on the job's reconciled deposit invoice, and a waiver, on
+Deposit, Materials or Access only, is the owner's decision. Safety and Weather are never waivable,
+and Crew has no waiver. D1 refuses every such entry from the seed identity, so the seed clears no
+gate. It never writes D1 directly, calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.
 

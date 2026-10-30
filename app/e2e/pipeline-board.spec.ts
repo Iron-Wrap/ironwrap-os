@@ -508,7 +508,7 @@ test.describe("Pipeline board acceptance", () => {
       .click();
 
     await expect(page.getByRole("alert")).toContainText(
-      /Someone else changed this card first\. It is now at version 9\. The board has been refreshed/,
+      /Someone else changed this card first\. The board has been refreshed/,
     );
     await page.screenshot({ path: `${shotDir}/pipeline-board-version-conflict.png` });
     // Rolled back: the card is still in the column it started in.

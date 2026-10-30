@@ -12,8 +12,9 @@ inventing anything the export does not prove.
 
 It follows [`JOBNIMBUS-MIGRATION-MAP.md`](JOBNIMBUS-MIGRATION-MAP.md) deliberately: same doctrine,
 same capping pattern, same "archive rather than drop" disposition for fields with no home. That
-runbook migrates JobNimbus into Frappe; this one imports any CRM export into the D1 operating core
-and the pipeline board.
+runbook retains a Frappe compatibility importer while its JobNimbus-to-D1 adapter is pending;
+this one imports row files through the existing `generic` and `ghl` adapters into the D1 operating
+core and the pipeline board.
 
 ## Doctrine
 
@@ -93,10 +94,10 @@ stage rows and this module only records the key it placed a card under.
 **Why those cap.** The post-contract job stages assert scheduling, installation and sign-off, which
 need real job-phase and acceptance evidence; a migration never fabricates it. `Deposit` asserts money received; QuickBooks remains posted accounting truth
 and an export carries no payment record. `Materials in prod` asserts production started, which needs
-real `operating_production_gates` rows - exactly the reason `JOBNIMBUS-MIGRATION-MAP.md` caps
-JobNimbus `In Production` and `Closed`. `Contract signed` itself imports directly, matching that
-runbook's `signed / sold / won / approved -> Won` row: it is the last stage the export's own claim
-supports.
+real `operating_production_gates` rows. `Contract signed` imports as a board placement reflecting
+the source claim; it does not create a contract acceptance, publication receipt, or authority to
+advance a job. The planned JobNimbus adapter has a separate mapping that caps advanced job
+statuses at `qualified`; its old Frappe `Won` mapping is not a D1 authority rule.
 
 **A stage placement does not flip authoritative state.** `operating_leads.lifecycle_status` and
 `operating_roof_jobs.job_status` keep their defaults. Coupling a stage to job state is an automation

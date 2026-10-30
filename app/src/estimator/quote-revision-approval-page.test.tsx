@@ -212,10 +212,12 @@ describe("QuoteRevisionApprovalPages", () => {
     const { container } = renderPage(<QuoteRevisionApprovalQueuePage />);
 
     await screen.findByRole("heading", { name: "Quote change reviews" });
-    expect(screen.getByText("Quote V3")).toBeVisible();
-    expect(screen.getByText("Empty draft V4")).toBeVisible();
+    expect(screen.getByText("Current quote")).toBeVisible();
+    expect(screen.getByText("New empty draft")).toBeVisible();
+    // A version number never stands in a person's line (ruling).
+    expect(document.body.textContent).not.toMatch(/\b[vV][34]\b/);
     expect(screen.getByText(/prices, job details, payments/i)).toBeVisible();
-    expect(screen.getByRole("link", { name: /quote v3 empty draft v4/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /current quote new empty draft/i })).toHaveAttribute(
       "href",
       "/quote-revision-approvals/$approvalId",
     );
@@ -259,7 +261,7 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
     expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
     expect(screen.getByText(/waiting for the right person/i)).toBeVisible();
@@ -285,7 +287,7 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
     await user.click(screen.getByRole("button", { name: "Make empty draft" }));
 
     expect(
@@ -338,7 +340,7 @@ describe("QuoteRevisionApprovalPages", () => {
     vi.mocked(reconcileQuoteRevisionApproval).mockResolvedValue({ approval: reconciled });
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
     expect(screen.getByText("Do not try this request again")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Check saved result" }));
@@ -367,7 +369,7 @@ describe("QuoteRevisionApprovalPages", () => {
     const user = userEvent.setup();
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
     expect(screen.getByText("QUOTE-A-V4")).not.toBeVisible();
     await user.click(screen.getByText("System details"));
     expect(screen.getByText("QUOTE-A-V4")).toBeVisible();
@@ -379,7 +381,7 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
     expect(screen.getByRole("img", { name: "Job JOB-A" })).toBeVisible();
     const summary = screen.getByRole("region", { name: "What you are reviewing" });
     const decision = screen.getByRole("complementary", { name: "Decision" });
@@ -422,7 +424,7 @@ describe("QuoteRevisionApprovalPages", () => {
       ]),
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
-    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
     expect(screen.getByText("Check needed")).toBeVisible();
     expect(screen.queryByText("Saved", { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Draft is ready" })).not.toBeInTheDocument();
@@ -457,7 +459,7 @@ describe("QuoteRevisionApprovalPages", () => {
         ]),
       );
       renderPage(<QuoteRevisionApprovalDetailPage />);
-      await screen.findByRole("heading", { name: "Review empty draft V4" });
+      await screen.findByRole("heading", { name: "Review the new empty draft" });
       const decision = within(screen.getByRole("complementary", { name: "Decision" }));
       expect(decision.getByRole("heading", { name: heading })).toBeVisible();
       expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();

@@ -925,7 +925,10 @@ one-way digest of the full receipt-bound dry run. The approver identity, the
 receipts, the raw write arguments, and the private digests never reach the
 browser projection. A partial unique index permits exactly one live intent per
 pack, and an invoked-write transport failure is terminal `execution_uncertain`,
-never an automatic retry.
+never an automatic retry. The frequent Worker sweep also moves expired execution
+leases for its configured tenant into that reconciliation-only state, including
+when the capability has since been disabled. It preserves the saved approval and
+never republishes the pack.
 
 New publication approvals freeze and project `approved_snapshot: {snapshot_id,
 version_label}` during preparation. The label is `Saved proposal publication
@@ -972,7 +975,8 @@ never logged or returned.
     "brand": "IronWrap",
     "locale": "en-CA",
     "time_zone": "America/Edmonton",
-    "currency": "CAD"
+    "currency": "CAD",
+    "office_phone": "780-555-0142"
   },
   "permissions": ["session:read", "jobs:read:assigned"],
   "allowed_actions": ["session.logout", "today.read", "job.read.assigned"],
@@ -983,6 +987,14 @@ never logged or returned.
   "stale_fields": []
 }
 ```
+
+`tenant.office_phone` is the line a crew phone offers under "Call the office" on its emergency
+line. It is the phone on the owner-saved company profile, trimmed and otherwise exactly as stored;
+the app builds the `tel:` link. It is `null` on a signed-out session, while no owner has saved the
+profile, when the saved phone is blank, or when it fails the profile's own save-time check. The
+same value rides in the field bootstrap's `session` and in the magic-link and device-pairing
+consume responses. A failed profile read never fails the session: the phone is `null` and
+`stale_fields` carries `office_phone.unavailable`.
 
 The three operational read endpoints use the same top-level metadata envelope. Their exact v1
 shapes are:

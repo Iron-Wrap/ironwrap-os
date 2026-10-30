@@ -836,7 +836,9 @@ describe("JobPage", () => {
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {
     renderJob();
 
-    expect(await screen.findByText("Safety plan · v2")).toBeVisible();
+    expect(await screen.findByText("Safety plan")).toBeVisible();
+    // A version number never stands in a person's line (ruling); history keeps it.
+    expect(screen.queryByText(/\bv\d+\b|\bversion \d/i)).toBeNull();
     expect(screen.getByText("Your role")).toBeVisible();
     expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByText("Steep-slope fall exposure")).toBeVisible();
@@ -1037,6 +1039,45 @@ describe("JobPage", () => {
 
     expect(await screen.findByText(/This is a saved copy from/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
+  });
+
+  it("never shows a version number or an old plan's record id in a crew line (ruling)", async () => {
+    const model = workPackageModel();
+    const plan = model.packet.work_package!;
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...plan,
+          supersession: {
+            prior_id: "WP-PRIOR-0042",
+            reason: "The north slope needs two more anchors.",
+            changed_steps: [1],
+            changed_hold_points: [],
+          },
+        },
+        change_orders: [
+          {
+            id: "CO-1",
+            number: "CO-1044-1",
+            version: 2,
+            status: "Accepted",
+            title: "Deck repair",
+            scope_delta: "Two more deck sheets",
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByText("This plan replaces an earlier one")).toBeVisible();
+    expect(screen.getByText(/I read this plan\./)).toBeInTheDocument();
+    // The plan header and badge are Track C's (#55); here the safety plan, the change order, the
+    // replaced plan and the review box carry no version number and no old plan's id.
+    const safety = screen.getByRole("region", { name: "Safety and site" });
+    expect(safety.textContent).not.toMatch(/\bv\d+\b|\bversion \d/i);
+    expect(screen.getByText(/Accepted · Two more deck sheets/).textContent).not.toMatch(/\bv2\b/);
+    expect(document.body.textContent).not.toContain("WP-PRIOR-0042");
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {

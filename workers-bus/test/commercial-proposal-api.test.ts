@@ -2687,19 +2687,20 @@ test("D1 refuses moving an unknown send to not executed before its provider's la
 
 test("the reconcile route cannot call an unknown send not executed inside its provider's window", async () => {
   const { recordProposalDeliveryConfirmation } = await import("../src/commercial-store.ts");
-  // The routes take a proposal send only as the QA stand-in on a synthetic Worker (0164), so the two
-  // providers are stand-ins with windows of their own.
-  for (const { provider, windowMs, early } of [
-    { provider: "qa-synthetic-slow-provider", windowMs: 3_600_000, early: true },
-    { provider: "qa-synthetic-instant-provider", windowMs: 0, early: false },
+  // The token takes a proposal send only as the QA seed's pair on a synthetic Worker, so each run
+  // gives that one stand-in a window of its own: a slow provider and an instant one.
+  const provider = "qa-synthetic-publication";
+  for (const { label, windowMs, early } of [
+    { label: "slow", windowMs: 3_600_000, early: true },
+    { label: "instant", windowMs: 0, early: false },
   ]) {
-    const { db, env, prepare } = await publicationReady(`late-reconcile-route-${provider}`);
-    const effectId = `effect:late-reconcile-route:${provider}`;
+    const { db, env, prepare } = await publicationReady(`late-reconcile-route-${label}`);
+    const effectId = `effect:late-reconcile-route:${label}`;
     try {
       db.raw.prepare(
         "INSERT INTO proposal_delivery_late_answer_windows (provider, window_ms, source) VALUES (?, ?, ?)",
-      ).run(provider, windowMs, "Synthetic provider for this test, with its own late-answer window.");
-      await unknownSendThroughRoutes(env, prepare, `late-reconcile-route-${provider}-prepare`, effectId, provider);
+      ).run(provider, windowMs, `Synthetic ${label} window for this test's stand-in provider.`);
+      await unknownSendThroughRoutes(env, prepare, `late-reconcile-route-${label}-prepare`, effectId, provider);
       // A reconcile is no person's record, so the route never calls a proposal send not executed
       // (0164). Inside the provider's window the wait refuses it as well (0161); which of the two
       // answers first is not part of the contract.
@@ -2723,11 +2724,11 @@ test("the reconcile route cannot call an unknown send not executed inside its pr
         actorUserId: OPS_ID, actorRole: "ops", idempotencyKey: key, ...(now ? { now } : {}),
       });
       if (early) {
-        await assert.rejects(notDelivered(`${provider}-early`), { code: "proposal_delivery_answer_may_be_late" });
+        await assert.rejects(notDelivered(`${label}-early`), { code: "proposal_delivery_answer_may_be_late" });
         assert.equal(effectRow(db, effectId).state, "unknown");
       }
       const after = new Date(Date.parse(lastAttemptEnd(db, effectId)) + windowMs + 1_000).toISOString();
-      assert.equal((await notDelivered(`${provider}-after`, after)).effectState, "reconciled");
+      assert.equal((await notDelivered(`${label}-after`, after)).effectState, "reconciled");
     } finally {
       db.close();
     }

@@ -2304,10 +2304,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (L06) or one without its own `released` event.
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
+    // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
     // 0153 lands after 0154-0206 on deployed databases; it touches no object a later-numbered
     // migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 142);
+    assert.equal(migrations.length, 143);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2464,7 +2465,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
     // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
     // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
-    // evidence and readback-conflict guards under their names.
+    // evidence and readback-conflict guards under their names. 0169 re-creates 0067's AP invoice line
+    // readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
       { tables: 281, indexes: 382, triggers: 781 },

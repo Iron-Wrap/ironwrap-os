@@ -925,7 +925,10 @@ one-way digest of the full receipt-bound dry run. The approver identity, the
 receipts, the raw write arguments, and the private digests never reach the
 browser projection. A partial unique index permits exactly one live intent per
 pack, and an invoked-write transport failure is terminal `execution_uncertain`,
-never an automatic retry.
+never an automatic retry. The frequent Worker sweep also moves expired execution
+leases for its configured tenant into that reconciliation-only state, including
+when the capability has since been disabled. It preserves the saved approval and
+never republishes the pack.
 
 New publication approvals freeze and project `approved_snapshot: {snapshot_id,
 version_label}` during preparation. The label is `Saved proposal publication

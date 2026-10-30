@@ -47,17 +47,15 @@ printed by the tools.
 
 ## Source schema provenance
 
-The live export snapshot manifest (counts, date ranges, per-field coverage, schema
-fingerprint) is the binding observation of the JobNimbus schema. Until a live snapshot exists
-(**Blocked**: `JOBNIMBUS_API_KEY` is currently empty in the local `ACCESS.env`; api1 answers
-`401 {"status":401,"body":"Authentication required"}` without it), the field inventory below
-derives from the two live-verified in-repo sources — the bridge's api1 facts
-([`workers-bus/src/jobnimbus.ts`](../workers-bus/src/jobnimbus.ts), live-verified 2026-06-28)
-and the fields the bridge itself writes — plus the JobNimbus api1 client conventions already
-proven in production use. **First action after the key is restored: run the exporter and diff
-the manifest's schema fingerprint against this table; extend the table where reality
-disagrees.** `/account` (workflow stages, record types, custom-field definitions) is part of
-the snapshot for exactly that purpose.
+The live export snapshot manifest (counts, source time ranges, per-field coverage, schema
+fingerprint) is the binding observation of the JobNimbus schema. The field inventory below
+is a source-derived mapping from the bridge's api1 adapter
+([`workers-bus/src/jobnimbus.ts`](../workers-bus/src/jobnimbus.ts)) and the fields it writes;
+it does not establish current provider schema or credential availability. With an authorized
+read-only credential, run the exporter and compare the manifest's schema fingerprint against
+this table before designing the D1 adapter. Extend the map where the snapshot disagrees.
+`/account` (workflow stages, record types, custom-field definitions) is part of the snapshot
+for exactly that purpose.
 
 ## Field map: JobNimbus contact
 
@@ -155,5 +153,8 @@ counts and the adapter's status-cap rules belong in a later gate review, not in 
 | 3 | Production import + JobNimbus freeze (bridge to read-only, owned intake primary) | Owner-authorized flip; rollback documented before execution |
 | 4 | JobNimbus subscription exit after a full parallel period with reconciled evidence | Owner decision on the operating record |
 
-Phase 1 makes no production writes anywhere: the D1 importer refuses remote URLs and
-requires a local `IRONWRAP_D1_SQLITE_PATH` for `--execute`. Nothing here runs automatically.
+Phase 1 makes no production writes. The existing Frappe importer refuses non-local targets
+and defaults to a dry-run plan; `--execute` applies only to that compatibility destination.
+There is no JobNimbus D1 importer or direct-SQLite execution path in this repository. The
+canonical CRM import CLI (`tools/crm-import.mjs`) also refuses non-local Worker targets, and
+its current adapters do not accept a JobNimbus snapshot. Nothing here runs automatically.

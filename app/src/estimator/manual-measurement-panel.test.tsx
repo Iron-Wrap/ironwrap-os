@@ -232,9 +232,11 @@ describe("manual measurements", () => {
       area_sq_ft: 1210,
       correction_reason: "Eaves remeasured",
     });
+    // A reading is told apart by when it was recorded, never by a revision number (ruling).
     expect(
-      within(screen.getByLabelText("Observation history")).getByText("North roof · Revision 1"),
+      within(screen.getByLabelText("Observation history")).getByText(/^North roof · recorded /),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Revision \d/)).not.toBeInTheDocument();
   });
 
   it("recovers a lost acknowledgement by exact receipt without another write", async () => {
@@ -397,7 +399,7 @@ describe("manual measurements", () => {
     view.switchTo(sessionFor("owner"), nextJob);
     await screen.findByLabelText("Area label");
     await act(async () => oldRead.resolve(model({ areas: [observation()] })));
-    expect(screen.queryByText("North roof · Revision 1")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^North roof · recorded /)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Area label")).toHaveValue("");
   });
 
@@ -480,13 +482,15 @@ describe("manual measurements", () => {
     expect(await within(history).findByRole("alert")).toHaveTextContent(
       "History could not be loaded consistently",
     );
-    expect(within(history).getByText("North roof · Revision 2")).toBeVisible();
+    expect(within(history).getAllByText(/^North roof · recorded /)).toHaveLength(1);
     reads({
       ...first,
       history: { items: [observation({ id: `mobs_${"2".repeat(64)}` })], next_before: null },
     });
     await user.click(screen.getByRole("button", { name: "Load older observations" }));
-    expect(await within(history).findByText("North roof · Revision 1")).toBeVisible();
+    await waitFor(() =>
+      expect(within(history).getAllByText(/^North roof · recorded /)).toHaveLength(2),
+    );
     expect(loadManualMeasurements).toHaveBeenLastCalledWith(jobId, { before: 3 });
   });
 });

@@ -12,9 +12,11 @@ import {
   failNewoReceipt,
   getNewoReceipt,
   getNewoSession,
+  listNewoCallbacksForAlert,
   listRetryableNewoEventIds,
   markNewoMissingReports,
   newoOperationalCounts,
+  newoReconciliationNeedsAttention,
   newoTenantId,
   recordNewoReconciliationRun,
   recordNewoSession,
@@ -22,6 +24,7 @@ import {
   markNewoSessionSync,
   touchNewoReceipt,
   type NewoCallbackReason,
+  type NewoCallbackAlertRecord,
   type NewoCallbackRecordInput,
   type NewoSessionRecord,
 } from "./newo-store.ts";
@@ -355,6 +358,12 @@ export async function reconcileNewoSessions(
   if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") {
     return { retryable_syncs_requeued: 0, newly_missing_reports: 0 };
   }
+  // A callback alert must recover even when Newo sends no more events or a landing queue is down.
+  // This bounded sweep finishes before any queue send; a failed alert cannot stop landing recovery.
+  const callbackAlerts = await sweepNewoCallbackAlerts(runtime).catch((error) => {
+    console.error(JSON.stringify({ at: "newo_callback_alert_sweep", error: String(error) }));
+    return { scanned: 0, sent: 0, failed: 1, next_callback_id: null };
+  });
   const ranAt = now.toISOString();
   const configured = Number(runtime.NEWO_SYNC_RETRY_MINUTES ?? "5");
   const retryMinutes = Number.isInteger(configured) && configured >= 1 && configured <= 60
@@ -391,8 +400,7 @@ export async function reconcileNewoSessions(
   }
 
   const counts = await newoOperationalCounts(env);
-  const degraded = counts.failed_events > 0 || counts.failed_sync > 0 ||
-    counts.missing_reports > 0 || counts.control_failures > 0;
+  const degraded = newoReconciliationNeedsAttention(counts) || callbackAlerts.failed > 0;
   await recordNewoReconciliationRun(env, {
     run_id: `newo:five-minute:${crypto.randomUUID()}`,
     run_type: "five_minute",
@@ -410,6 +418,8 @@ export async function reconcileNewoSessions(
     detail_json: JSON.stringify({
       retry_event_ids: retryEventIds,
       newly_missing_session_ids: missing.map((session) => session.session_id),
+      open_callbacks: counts.open_callbacks,
+      callback_alerts: callbackAlerts,
     }),
   });
   return {
@@ -839,8 +849,8 @@ function scheduleOwnerAlerts(
 ): void {
   // Best effort: a send that fails leaves this log line and no sent marker. The failure alert is
   // owed again on the session's next accepted event; a callback request alert only on Newo's
-  // retry of its own handoff event. The D1 callback record holds the callback either way (for a
-  // failed session, when the session knows how to reach the caller).
+  // retry of its own handoff event. The five-minute sweep independently recovers unconfirmed
+  // alerts from the open D1 callback records, including failed sessions with reachable contact.
   for (const alert of newoOwnerAlerts(event, existing)) {
     ctx.waitUntil(deliverNewoOwnerAlert(env, event, alert, processingAttempt).catch((error) =>
       console.log(JSON.stringify({ at: `newo_${alert.kind}_alert`, event_id: event.event_id, error: String(error) }))));
@@ -864,11 +874,11 @@ function scheduleOwnerAlerts(
  */
 async function deliverNewoOwnerAlert(
   env: NewoRuntimeEnv,
-  event: NewoEventV1,
+  event: Pick<NewoEventV1, "session_id" | "event_id">,
   alert: NewoOwnerAlert,
-  processingAttempt: number,
-): Promise<void> {
-  if (await newoOwnerAlertSent(env, alert.marker)) return;
+  processingAttempt: number | string,
+): Promise<boolean> {
+  if (await newoOwnerAlertSent(env, alert.marker)) return false;
   await sendOwnerAlert(env, alert.subject, `${alert.html}${newoOwnerAlertAttemptHtml(event.event_id, processingAttempt)}`);
   await store.putRaw(env, alert.marker, JSON.stringify({
     schema_version: "newo.owner-alert-sent.v1",
@@ -878,12 +888,79 @@ async function deliverNewoOwnerAlert(
     attempt: processingAttempt,
     sent_at: new Date().toISOString(),
   }), "application/json");
+  return true;
 }
 
 /** The line that makes each alert attempt its own message: the event and its processing attempt. */
-export function newoOwnerAlertAttemptHtml(eventId: string, processingAttempt: number): string {
-  return `<p>Alert for event ${escapeHtml(eventId)}, attempt ${processingAttempt}. ` +
+export function newoOwnerAlertAttemptHtml(eventId: string, processingAttempt: number | string): string {
+  return `<p>Alert for event ${escapeHtml(eventId)}, attempt ${escapeHtml(String(processingAttempt))}. ` +
     `If an earlier alert about this caller reached you, this one repeats it.</p>`;
+}
+
+/**
+ * Recover unconfirmed callback alerts without another provider event. The R2 checkpoint is only
+ * a scan position, never evidence that an alert was delivered. Keyset traversal visits every
+ * open row; confirmed alerts in the first batch cannot hide later callbacks. Lost/corrupt cursor
+ * state restarts the scan. Each separate attempt leaves earlier unknown Gmail effects untouched.
+ */
+export async function sweepNewoCallbackAlerts(env: Env): Promise<{
+  scanned: number;
+  sent: number;
+  failed: number;
+  next_callback_id: string | null;
+}> {
+  const runtime = env as NewoRuntimeEnv;
+  const result = { scanned: 0, sent: 0, failed: 0, next_callback_id: null as string | null };
+  if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") return result;
+  const cursorKey = `state/newo/callback-alert-sweep/${encodeURIComponent(newoTenantId(env))}.json`;
+  let after: string | null = null;
+  try {
+    const stored = await runtime.RAW.get(cursorKey);
+    const cursor = stored ? await stored.json<{ after_callback_id?: unknown }>() : null;
+    if (typeof cursor?.after_callback_id === "string" && /^ncb_[0-9a-f]{32}$/.test(cursor.after_callback_id)) {
+      after = cursor.after_callback_id;
+    }
+  } catch {
+    console.error(JSON.stringify({ at: "newo_callback_alert_cursor_read_failed" }));
+  }
+  const limit = 25;
+  let callbacks = await listNewoCallbacksForAlert(env, after, limit);
+  if (callbacks.length === 0 && after) callbacks = await listNewoCallbacksForAlert(env, null, limit);
+  for (const callback of callbacks) {
+    result.scanned += 1;
+    try {
+      if (await deliverNewoOwnerAlert(runtime, callback, callbackRecoveryAlert(callback), `sweep-${crypto.randomUUID()}`)) {
+        result.sent += 1;
+      }
+    } catch (error) {
+      result.failed += 1;
+      const code = error instanceof Error && /^[a-z][a-z0-9_:-]{0,159}$/.test(error.message)
+        ? error.message : "callback_alert_delivery_failed";
+      console.error(JSON.stringify({ at: "newo_callback_alert_failed", callback_id: callback.callback_id, code }));
+    }
+  }
+  result.next_callback_id = callbacks.length === limit ? callbacks.at(-1)!.callback_id : null;
+  if (callbacks.length > 0 || after) {
+    await store.putRaw(env, cursorKey, JSON.stringify({ after_callback_id: result.next_callback_id }), "application/json");
+  }
+  return result;
+}
+
+function callbackRecoveryAlert(callback: NewoCallbackAlertRecord): NewoOwnerAlert {
+  const kind = callback.alert_kind;
+  const address = [callback.address_line1, callback.city, callback.province, callback.postal_code].filter(Boolean).join(", ");
+  return {
+    kind,
+    marker: newoOwnerAlertMarker(callback.session_id, kind, callback.event_id),
+    subject: kind === "failure" ? "Urgent Newo callback required"
+      : callback.alert_urgency === "routine" ? "Newo callback requested" : `Urgent Newo callback requested - ${callback.alert_urgency}`,
+    html: `<p>This callback is still open. Call this caller back. Reason: ${escapeHtml(callback.handoff_summary ?? callback.reason)}</p>` +
+      `<ul><li>Name: ${escapeHtml(callback.contact_name ?? "not given")}</li>` +
+      `<li>Phone: ${escapeHtml(callback.contact_phone ?? "not given")}</li>` +
+      `<li>Email: ${escapeHtml(callback.contact_email ?? "not given")}</li>` +
+      `<li>Address: ${escapeHtml(address || "not given")}</li>` +
+      `<li>Session: ${escapeHtml(callback.session_id)}</li></ul>`,
+  };
 }
 
 /**

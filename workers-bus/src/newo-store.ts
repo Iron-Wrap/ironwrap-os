@@ -268,6 +268,37 @@ export interface NewoCallbackRecord extends NewoCallbackRecordInput {
   recorded_at: string;
 }
 
+export interface NewoCallbackAlertRecord extends NewoCallbackRecord {
+  alert_kind: "handoff" | "failure";
+  alert_urgency: NewoCallbackRecord["urgency"];
+}
+
+/** Bounded, tenant-scoped traversal of every callback still owed, including failed handoffs. */
+export async function listNewoCallbacksForAlert(
+  env: Env,
+  afterCallbackId: string | null,
+  limit: number,
+): Promise<NewoCallbackAlertRecord[]> {
+  const result = await env.DB.prepare(
+    `SELECT callback.*,
+        CASE WHEN session.handoff_status = 'failed' OR callback.reason <> 'callback_requested'
+          THEN 'failure' ELSE 'handoff' END AS alert_kind,
+        CASE WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
+          WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'
+          ELSE 'routine' END AS alert_urgency
+       FROM newo_callback_records callback
+       JOIN newo_sessions session ON session.session_id = callback.session_id
+      WHERE callback.tenant_id = ? AND callback.callback_id > ?
+        AND NOT EXISTS (
+          SELECT 1 FROM newo_handoff_resolutions resolution
+           WHERE resolution.tenant_id = callback.tenant_id
+             AND resolution.session_id = callback.session_id
+        )
+      ORDER BY callback.callback_id ASC LIMIT ?`,
+  ).bind(newoTenantId(env), afterCallbackId ?? "", limit).all<NewoCallbackAlertRecord>();
+  return result.results ?? [];
+}
+
 const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, reason, urgency,
        handoff_summary, contact_name, contact_phone, contact_email, address_line1, city, province,
        postal_code`;
@@ -685,4 +716,12 @@ export async function newoOperationalCounts(env: Env): Promise<{
     last_event_at: typeof row?.last_event_at === "string" ? row.last_event_at : null,
     last_report_at: typeof row?.last_report_at === "string" ? row.last_report_at : null,
   };
+}
+
+/** Both reconciliation schedules stay degraded while any callback is still owed to a caller. */
+export function newoReconciliationNeedsAttention(
+  counts: Awaited<ReturnType<typeof newoOperationalCounts>>,
+): boolean {
+  return counts.failed_events > 0 || counts.failed_sync > 0 || counts.missing_reports > 0 ||
+    counts.control_failures > 0 || counts.open_callbacks > 0 || counts.failed_handoffs > 0;
 }

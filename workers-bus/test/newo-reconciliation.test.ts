@@ -128,6 +128,7 @@ test("Newo reconciliation requeues stale syncs and detects a missing report only
     NEWO_SYNC_RETRY_MINUTES: "5",
     OWNER_ALERT_EMAIL: "owner@example.com",
     BACKUP_ALERT_EMAIL: "owner@example.com",
+    RAW: { get: async () => null },
     NEWO_QUEUE: {
       sendBatch: async (messages: unknown[]) => queued.push(...messages),
     },

@@ -435,9 +435,9 @@ requirements.
 - the shared code must run as separate IronWrap and Facet deployments with product-scoped keys,
   receipts, policy ledgers, and promotion authority;
 - Ivan owns business approval and GitHub merge authority; Sergey owns provider, Cloudflare, DNS,
-  and the Frappe adapter host; Andrei owns the independent issuer/reviewer; Ilya owns permit signing,
-  the policy ledger, and business counter-approval;
-- all four may participate in the repository and business process, but participation grants no
+  and the Frappe adapter host; the independent reviewer role is now AI review (Sonnet) under Ivan's sign-off, as Andrei has
+  left; Ilya, the customer, holds permit signing, the policy ledger, and business counter-approval;
+- the people named may participate in the repository and business process, but participation grants no
   protected credential by implication;
 - the issuer runs in a separately controlled Cloudflare account outside the product account, while
   the Frappe adapter runs on the Frappe VPS under a dedicated OS/service identity; and

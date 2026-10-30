@@ -131,13 +131,21 @@ class MemoryR2 {
 
 type TestEnv = AppEnv & { DB: TestD1; RAW: MemoryR2 };
 
-function testEnv(): TestEnv {
+function testEnv(options: { beforeStopMigration?: boolean; reverseTriggers?: boolean } = {}): TestEnv {
   const DB = new TestD1();
   DB.sqlite.exec("PRAGMA foreign_keys = ON");
   for (const name of readdirSync(new URL("../migrations/", import.meta.url))
     .filter((value) => /^\d{4}_.+\.sql$/.test(value))
     .sort()) {
+    if (options.beforeStopMigration && name === "0170_safety_stop_route_gaps.sql") continue;
     DB.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+  }
+  if (options.reverseTriggers) {
+    const triggers = DB.sqlite.prepare(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY rowid",
+    ).all() as Array<{ name: string; sql: string }>;
+    for (const trigger of triggers) DB.sqlite.exec(`DROP TRIGGER ${trigger.name}`);
+    for (const trigger of triggers.reverse()) DB.sqlite.exec(trigger.sql);
   }
   for (const user of Object.values(USERS)) insertUser(DB, user, TENANT);
   for (const user of Object.values(OTHER_USERS)) insertUser(DB, user, OTHER_TENANT);
@@ -602,6 +610,66 @@ function fieldAuth(user: FixtureUser): AuthContext {
 }
 
 // --- Holds -------------------------------------------------------------------------------------
+
+for (const scopeType of ["roof_job", "work_package"] as const) {
+  for (const layer of ["Worker", "D1", "crew reads"] as const) {
+    test(`unresolved ${scopeType} stays held after its target appears: ${layer}`, async () => {
+      const env = testEnv({ reverseTriggers: layer === "D1" });
+      const { jobA, jobB } = await twoJobs(env);
+      const pending = definition({ jobId: "JOB-HOLD-PENDING" });
+      const stop = await raise(env, {
+        type: scopeType,
+        id: scopeType === "roof_job" ? pending.jobId : pending.workPackageId,
+      });
+      await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "before target exists");
+      // Create the real missing target through the normal issuance path, with every guard enabled.
+      // No occurrence transition, release event or scope decision is written.
+      await issue(env, pending);
+      assert.deepEqual({ ...env.DB.sqlite.prepare(
+        "SELECT state, version, stop_active FROM safety_occurrences WHERE occurrence_id = ?",
+      ).get(stop) }, { state: "reported", version: 1, stop_active: 1 });
+      assert.equal((env.DB.sqlite.prepare(
+        "SELECT COUNT(*) AS count FROM safety_occurrence_events WHERE occurrence_id = ? AND event_kind = 'released'",
+      ).get(stop) as { count: number }).count, 0);
+      if (layer === "Worker") {
+        const readiness = await gate(env, jobA, USERS.mate);
+        assert.equal(readiness.ready, false);
+        assert.deepEqual(readiness.blockers.map((blocker) => [blocker.stop?.occurrence_id, blocker.stop?.scope]),
+          [[stop, "tenant"]]);
+      } else if (layer === "D1") {
+        assert.match(String(await acknowledgeRefusal(env, jobA, USERS.mate)), /safety_stop_active/);
+        assert.match(String(await acknowledgeRefusal(env, jobB, USERS.other)), /safety_stop_active/);
+      } else {
+        const today = await buildTodayReadModel(env, fieldAuth(USERS.other));
+        assert.deepEqual(today.jobs.map((job) => [job.id, job.active_stops?.map((held) => [held.occurrence_id, held.scope])]),
+          [[jobB.jobId, [[stop, "tenant"]]]]);
+        const job = await buildJobReadModel(env, fieldAuth(USERS.mate), jobA.jobId);
+        assert.deepEqual(job?.job.active_stops?.map((held) => [held.occurrence_id, held.scope]), [[stop, "tenant"]]);
+      }
+      await expectHeld(env, jobB, USERS.other, [{ occurrence_id: stop, scope: "tenant" }], "another crew stays held");
+      await lift(env, stop);
+      await expectHeld(env, jobA, USERS.mate, [], "only the existing person release lifts it");
+    });
+  }
+
+  test(`migration preserves an existing unresolved ${scopeType} after its target appears`, async () => {
+    const env = testEnv({ beforeStopMigration: true });
+    const { jobA, jobB } = await twoJobs(env);
+    const pending = definition({ jobId: "JOB-HOLD-MIGRATED" });
+    const stop = await raise(env, {
+      type: scopeType,
+      id: scopeType === "roof_job" ? pending.jobId : pending.workPackageId,
+    });
+    // A resolved stop remains job-scoped when this migration upgrades an existing database.
+    const resolved = await raise(env, { type: "roof_job", id: jobB.jobId });
+    env.DB.sqlite.exec(readFileSync(new URL("../migrations/0170_safety_stop_route_gaps.sql", import.meta.url), "utf8"));
+    await issue(env, pending);
+    await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "backfilled unresolved scope");
+    await lift(env, stop);
+    await expectHeld(env, jobA, USERS.mate, [], "resolved stop still holds only its own job");
+    await expectHeld(env, jobB, USERS.other, [{ occurrence_id: resolved, scope: "job" }], "existing resolved stop");
+  });
+}
 
 test("a stop on a job that doesn't exist holds every job of the tenant, for every crew", async () => {
   const env = testEnv();

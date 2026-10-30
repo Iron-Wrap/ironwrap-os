@@ -221,7 +221,8 @@ export interface SafetyBlocker {
  * - `scope: "job"`: the stop names this job, or a Work Package of this job (any version,
  *   Superseded included).
  * - `scope: "tenant"`: the stop holds every job of the tenant: it is tenant-wide, or it names a job
- *   or Work Package this tenant does not have, which may be a typo for any of its jobs.
+ *   or Work Package this tenant did not have when the scope became unresolved. That hold stays
+ *   latched even if the missing target appears, until an authorized person releases the stop.
  */
 export interface SafetyHoldingStop {
   occurrence_id: string;
@@ -2002,6 +2003,7 @@ const MAX_ACTIVE_STOPS = 500;
  * - a `roof_job` stop holds its job, or every job when `operating_roof_jobs` has no such job;
  * - a `work_package` stop holds the job of every version of that package, Superseded included,
  *   or every job when `work_packages` has no such package.
+ * - an unresolved scope is latched in D1: a later job/package insert never narrows that hold.
  *
  * Shop and vehicle stops hold no job. A lifted stop holds nothing.
  */
@@ -2011,6 +2013,11 @@ async function activeStopRows(env: AppEnv, tenantId: string): Promise<ActiveStop
             occurrence.severity, occurrence.reported_at, occurrence.summary,
             raiser.display_name AS raiser_display_name,
             CASE
+              WHEN EXISTS (
+                SELECT 1 FROM safety_stop_unresolved_scopes latch
+                 WHERE latch.tenant_id = occurrence.tenant_id
+                   AND latch.occurrence_id = occurrence.occurrence_id
+              ) THEN NULL
               WHEN occurrence.scope_type = 'roof_job' THEN (
                 SELECT json_array(job.roof_job_id)
                   FROM operating_roof_jobs job

@@ -603,6 +603,7 @@ for (const conflict of ["event ID", "occurrence version and kind"] as const) {
     const replacement = {
       ...original,
       event_id: conflict === "event ID" ? original.event_id : "soe_replacement_probe_0001",
+      occurrence_version: conflict === "event ID" ? Number(original.occurrence_version) + 1 : original.occurrence_version,
       detail: "Synthetic changed journal evidence.",
       confirmed_by_user_id: USERS.mate.id,
     } as Record<string, unknown>;

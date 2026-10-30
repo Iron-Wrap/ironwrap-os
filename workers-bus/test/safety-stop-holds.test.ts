@@ -690,6 +690,58 @@ test("a stop on a job that doesn't exist holds every job of the tenant, for ever
   await expectHeld(env, jobA, USERS.mate, [], "after release");
 });
 
+test("D1 retains unresolved scope history and refuses direct narrowing", async () => {
+  const env = testEnv();
+  const { jobA, jobB } = await twoJobs(env);
+  const stop = await raise(env, { type: "roof_job", id: "JOB-HOLD-MISSING" });
+  const sqlite = env.DB.sqlite;
+  const original = sqlite.prepare("SELECT * FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").get(stop);
+  assert.ok(original);
+  assert.throws(() => sqlite.prepare(
+    "UPDATE safety_stop_unresolved_scopes SET latched_at = ? WHERE occurrence_id = ?",
+  ).run(at(0), stop), /safety_stop_unresolved_scope_immutable/);
+  assert.throws(() => sqlite.prepare("DELETE FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").run(stop),
+    /safety_stop_unresolved_scope_immutable/);
+  assert.throws(() => sqlite.prepare(
+    "INSERT OR REPLACE INTO safety_stop_unresolved_scopes (occurrence_id, tenant_id) VALUES (?, ?)",
+  ).run(stop, TENANT), /safety_stop_unresolved_scope_immutable/);
+  assert.throws(() => sqlite.prepare(
+    "UPDATE safety_occurrences SET scope_id = ?, version = version + 1 WHERE occurrence_id = ?",
+  ).run(jobA.jobId, stop), /safety_occurrence_identity_immutable/);
+  const resolved = await raise(env, { type: "roof_job", id: jobB.jobId });
+  assert.throws(() => sqlite.prepare(
+    "INSERT INTO safety_stop_unresolved_scopes (occurrence_id, tenant_id) VALUES (?, ?)",
+  ).run(resolved, TENANT), /safety_stop_scope_not_unresolved/);
+  assert.deepEqual(sqlite.prepare("SELECT * FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").get(stop), original);
+  await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "direct narrowing refused");
+  await lift(env, stop);
+  assert.deepEqual(sqlite.prepare("SELECT * FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").get(stop), original,
+    "a release lifts the stop without erasing its unresolved history");
+  await expectHeld(env, jobA, USERS.mate, [], "authorized release");
+});
+
+test("a resolved job that disappears cannot silently narrow its stop when restored", async () => {
+  const env = testEnv({ reverseTriggers: true });
+  const { jobA } = await twoJobs(env);
+  const sqlite = env.DB.sqlite;
+  const original = sqlite.prepare("SELECT * FROM operating_roof_jobs WHERE roof_job_id = ?").get(jobA.jobId)!;
+  const restored = { ...original, roof_job_id: "JOB-HOLD-RESTORED", job_number: "IW-RESTORED" } as Record<string, unknown>;
+  const columns = Object.keys(restored);
+  const insert = () => sqlite.prepare(
+    `INSERT INTO operating_roof_jobs (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...columns.map((name) => restored[name] as never));
+  insert();
+  const stop = await raise(env, { type: "roof_job", id: restored.roof_job_id as string });
+  await expectHeld(env, jobA, USERS.mate, [], "resolved target");
+  // No package or assignment refers to this synthetic target, so the real FK rules permit removal.
+  sqlite.prepare("DELETE FROM operating_roof_jobs WHERE roof_job_id = ?").run(restored.roof_job_id as string);
+  await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "target missing");
+  insert();
+  await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "restoration is not scope authority");
+  await lift(env, stop);
+  await expectHeld(env, jobA, USERS.mate, [], "authorized release");
+});
+
 test("a stop on a Work Package that doesn't exist, or a tenant stop under any id, holds every job", async () => {
   for (const scope of [
     { type: "work_package" as const, id: "wp_hold_typo" },

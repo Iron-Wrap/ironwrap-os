@@ -550,18 +550,21 @@ function JobPacketHeader({
 }) {
   const assignment = assignmentRole(model.assignment);
   const roleLabel = assignmentRoleLabel(useSession().user.role);
+  const customer = model.packet.contact?.display_name?.trim() || null;
   // The job's facts follow the header's own width: the crew shell is a phone-wide column even on
   // a desktop, where window breakpoints squeezed three facts into it.
   return (
     <header className="@container border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
+        {/* The job named the ruled way (D5): the customer and the place lead; the code follows. */}
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-muted">
-            {model.job.job_number ?? "Assigned job"}
-          </p>
+          {customer ? <p className="text-sm font-semibold text-muted">{customer}</p> : null}
           <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-pretty sm:text-4xl">
             {model.job.address ?? "Job plan"}
           </h1>
+          {model.job.job_number ? (
+            <p className="mt-1 text-sm text-muted">Reference {model.job.job_number}</p>
+          ) : null}
         </div>
         <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
           {offline ? "Saved copy" : "Office update"}

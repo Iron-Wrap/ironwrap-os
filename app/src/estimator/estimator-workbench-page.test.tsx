@@ -396,6 +396,40 @@ describe("EstimatorWorkbenchPage", () => {
     expect(commercial.compareDocumentPosition(measurement) & 4).toBeTruthy();
   });
 
+  it.each([
+    ["blocked", "See blocked items", "proposal-readiness-heading"],
+    ["review_required", "See what needs review", "proposal-readiness-heading"],
+    ["ready", "Open proposal details", "proposal-heading"],
+    ["unavailable", "Open saved details", "review-workspace-heading"],
+  ] as const)(
+    "opens the existing read section for %s without approving it",
+    async (state, label, id) => {
+      const model = workbenchModel();
+      vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+        ...model,
+        proposal_readiness: { ...model.proposal_readiness, state },
+      });
+      renderWorkbench();
+
+      const nextStep = await screen.findByRole("region", { name: "Next step" });
+      const action = within(nextStep).getByRole("link", { name: label });
+      expect(action).toHaveAttribute("href", `#${id}`);
+      const proposal = screen.getByRole("heading", { name: "Proposal" }).closest("details")!;
+      expect(proposal).not.toHaveAttribute("open");
+
+      fireEvent.click(action);
+
+      const target = document.getElementById(id)!;
+      expect(target).toBeVisible();
+      expect(target).toHaveFocus();
+      if (state !== "unavailable") expect(proposal).toHaveAttribute("open");
+      expect(createFacetLaunch).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("button", { name: /approve quote|send proposal/i }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("keeps source tables semantic and leaves static geometry notices out of the live region", async () => {
     renderWorkbench();
 

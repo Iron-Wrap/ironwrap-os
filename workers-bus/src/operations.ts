@@ -128,12 +128,6 @@ const OFFICE_OPERATING_PLANE_CHECKS = [
   "measurement_ocr_configuration",
 ] as const satisfies readonly ReadinessCheckName[];
 
-const PROJECTION_RAIL_CHECKS = [
-  ...OWNED_CORE_CHECKS,
-  "frappe_configuration",
-  "newo_frappe_readiness",
-] as const satisfies readonly ReadinessCheckName[];
-
 export interface NewoReadinessDetail {
   required: boolean;
   enabled: boolean;

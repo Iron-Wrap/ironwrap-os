@@ -390,6 +390,8 @@ describe("EstimatorWorkbenchPage", () => {
 
     expect(screen.getByText("Review the roof and quote")).toBeVisible();
     expect(screen.getByText("Quote total")).toBeVisible();
+    // A quote is told apart by when it was made, never by a version number (ruling).
+    expect(screen.getAllByText("Prepared")[0]).toBeVisible();
     expect(nextStep.compareDocumentPosition(commercial) & 4).toBeTruthy();
     expect(commercial.compareDocumentPosition(measurement) & 4).toBeTruthy();
   });
@@ -785,7 +787,8 @@ describe("EstimatorWorkbenchPage", () => {
     openCommercialGroup("Proposal");
     openCommercialGroup("Scope and risks");
     expect(screen.getByText("Quote changes")).toBeVisible();
-    expect(screen.getByText(/Linked V3 → V4/i)).toBeVisible();
+    expect(screen.getByText(/Compared with the earlier quote/)).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/\bV[34]\b/);
     expect(screen.getByText("Job changes")).toBeVisible();
     expect(screen.getByText("Ridge ventilation addition")).toBeVisible();
     expect(screen.getByText(/still needs the customer's written choice/i)).toBeVisible();

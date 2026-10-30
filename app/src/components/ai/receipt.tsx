@@ -11,6 +11,7 @@ import { AiName } from "./name";
 import { SourceList, type SourceProps } from "./source";
 import { type } from "./type";
 import {
+  appliedOf,
   deciderWords,
   initialsOf,
   receiptActions,
@@ -26,7 +27,10 @@ import {
 export interface ReceiptDisplay {
   /** One line with the exact facts: "Final invoice for Ruth Okafor, CAD 9,860.00". */
   title: ReactNode;
-  /** When the step happened: a day word, the time and the zone. */
+  /**
+   * When the step happened: a day word, the time and the zone. For a draft a person closed by
+   * changing its record by hand, when they changed it; the card reads "Changed by hand · {when}".
+   */
   when: When;
   /** One plain label per contract source, in the same order. */
   sources: SourceProps[];
@@ -90,6 +94,8 @@ export interface ReceiptDisplay {
   since?: string;
   /** What a people-only draft changes, for that closing line: "Grace Obi's role". */
   record?: string;
+  /** The signed-in person's id: a step they did reads "You", never their own name. */
+  viewer?: string;
 }
 
 function Row({
@@ -158,12 +164,23 @@ export function Receipt({
   const name = (person: string | null | undefined) =>
     person ? (people[person] ?? undefined) : undefined;
   const where = display.where ?? "the other system";
-  const by = display.by ? (people[display.by] ?? display.by) : undefined;
+  // A closed draft says what a person set by hand and who: their id resolves like any other.
+  const applied = appliedOf(receipt.do_it_myself.context);
+  const by = display.by ? (people[display.by] ?? display.by) : name(applied?.by);
+  // The person who acted is the one reading, by id or by the name `by` may already be: the card
+  // says "You" (gate c2, C2-D4).
+  const actor = display.by || applied?.by;
+  const byViewer =
+    Boolean(display.viewer) &&
+    (actor === display.viewer || (actor !== undefined && actor === name(display.viewer)));
   const words = receiptWords(receipt, {
     by,
     where,
     waitingFor: display.waitingFor,
     record: display.record,
+    applied,
+    byViewer,
+    when: display.when.text,
   });
   const { state } = words;
   // A closed draft's note is what happened since. A done answer's note (VIEW_REFUSED) points at the
@@ -178,25 +195,41 @@ export function Receipt({
   );
 
   const approver = receipt.permit.approved_by
-    ? (name(receipt.permit.approved_by) ?? "a person")
+    ? receipt.permit.approved_by === display.viewer
+      ? "you"
+      : (name(receipt.permit.approved_by) ?? "a person")
     : undefined;
+  // A closed people-only draft's read-back names the record a person changed or the newer draft,
+  // not a check in an outside system; its note says what happened, so it has no Checked line.
+  const closedDraft =
+    receipt.outcome === "succeeded" && (state === "done_by_person" || state === "replaced");
+  // A step done within the owner's limits says outright that no one approved it (gate e-dial:
+  // readers could not tell from "Auto with undo" alone).
+  const onItsOwn =
+    state === "done" && receipt.permit.kind === "within_limits" && !receipt.permit.approved_by
+      ? "It did this on its own; nobody approved it first."
+      : undefined;
   const checked =
-    display.checked ??
-    ([
-      approver
-        ? `Approved by ${approver}${display.approvedWhen ? ` ${display.approvedWhen}` : ""}.`
-        : null,
-      receipt.readback
-        ? `Checked in ${where}${display.checkedWhen ? ` ${display.checkedWhen}` : ""}: ${
-            receipt.readback.matched ? "matches" : "does not match"
-          }.`
-        : receipt.tool && state !== "needs_you"
-          ? "Not checked yet."
-          : null,
+    [
+      onItsOwn,
+      display.checked ??
+        [
+          approver
+            ? `Approved by ${approver}${display.approvedWhen ? ` ${display.approvedWhen}` : ""}.`
+            : null,
+          receipt.readback && !closedDraft
+            ? `Checked in ${where}${display.checkedWhen ? ` ${display.checkedWhen}` : ""}: ${
+                receipt.readback.matched ? "matches" : "does not match"
+              }.`
+            : receipt.tool && state !== "needs_you" && !closedDraft
+              ? "Not checked yet."
+              : null,
+        ]
+          .filter(Boolean)
+          .join(" "),
     ]
       .filter(Boolean)
-      .join(" ") ||
-      undefined);
+      .join(" ") || undefined;
 
   // Needs you waits on one person or role; a viewer who may not decide reads who, in ink.
   const ask = receipt.needs_from_you;
@@ -213,9 +246,13 @@ export function Receipt({
   const stillDecides = decider
     ? `${decider.charAt(0).toUpperCase()}${decider.slice(1)} still decides.`
     : undefined;
+  // An action the owner can never raise says so in words, beside the lock (gate e-dial).
+  const asks = display.why ?? "A person approves this kind of step before it runs.";
   const why =
     state === "needs_you"
-      ? (display.why ?? "A person approves this kind of step before it runs.")
+      ? display.delegation === "always_asks_first"
+        ? `${asks.replace(/[.!?]?$/, ".")} It can never be set to do this on its own.`
+        : asks
       : state === "held"
         ? (display.why ?? words.why)
         : undefined;
@@ -330,8 +367,14 @@ export function Receipt({
           <span className="inline-flex min-w-0 items-center gap-2.5">
             <PersonAvatar initials={by ? initialsOf({ name: by }) : undefined} decorative />
             <span className="grid min-w-0">
-              <span className={cn(type.body, "font-semibold")}>{by ?? "A person"}</span>
-              <span className={cn(type.caption, "text-text-secondary")}>{when}</span>
+              <span className={cn(type.body, "font-semibold")}>
+                {byViewer ? "You" : (by ?? "A person")}
+              </span>
+              {/* A closed draft has two moments; its time is the hand change that closed it (gate c2).
+                  Only applied_by_person reaches this branch closed: a replaced draft has the AI header. */}
+              <span className={cn(type.caption, "text-text-secondary")}>
+                {closedDraft ? <>Changed by hand · {when}</> : when}
+              </span>
             </span>
           </span>
         ) : (

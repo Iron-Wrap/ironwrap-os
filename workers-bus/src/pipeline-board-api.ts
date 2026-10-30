@@ -33,7 +33,6 @@ import {
   PIPELINE_UNDO_WINDOW_MS,
   transitionActorType,
   type PipelineRecord,
-  type PipelineRoleAccess,
   type PipelineRoleGrantRecord,
   type PipelineStageInput,
   type PipelineStageRecord,

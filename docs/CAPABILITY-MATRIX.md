@@ -37,19 +37,18 @@ the launch/readiness tooling and the named external authority.
 Area state uses the six canonical proof classes named under "Status vocabulary" above, never a bare
 "Strong", "Mixed", "Partial", or "Not established" standing in for a class. The class recorded is the
 weakest class any part of the named area earns; `Partial` and `Blocked: <reason>` are orthogonal
-qualifiers attached to that class, never a substitute for one. No area earns Configured or above —
-see the admission note under "Capability-by-capability target" for the two facts that close that
-door for the whole file.
+qualifiers attached to that class, never a substitute for one. This repository matrix does not by itself establish Configured or above; the admission note under
+"Capability-by-capability target" defines the separate environment evidence those classes require.
 
 | Area | Current state | Next gate |
 |---|---|---|
-| Core technical design | Locally-validated. One-writer-per-fact transitions, the versioned transition envelope, and the effect/reconciliation kernel pass focused checks on this checkout (`workers-bus/test/transition-kernel.test.ts`, `effect-runtime.test.ts`, `operating-core.test.ts`, `store.test.ts`, `core.test.ts`), and all 117 Worker migrations apply to an isolated local D1 state. "Strong" was a judgement about the design, not a proof class; the design is validated in the repository and nowhere else. | keep one authority per fact and remove remaining compatibility dependencies |
+| Core technical design | Locally-validated. One-writer-per-fact transitions, the versioned transition envelope, and the effect/reconciliation kernel pass focused checks on this checkout (`workers-bus/test/transition-kernel.test.ts`, `effect-runtime.test.ts`, `operating-core.test.ts`, `store.test.ts`, `core.test.ts`), and the Worker migration set is checked against isolated local D1 state. Its current count is declared in the machine-checked repository evidence contract below. "Strong" was a judgement about the design, not a proof class; the design is validated in the repository and nowhere else. | keep one authority per fact and remove remaining compatibility dependencies |
 | Lead/job/field foundation | Locally-validated, Partial. Acceptance-driven lead conversion, customer activation, and a read-only derived phase route pass focused checks (`workers-bus/test/d1-native-operating-intake.test.ts`, `native-lead-queue.test.ts`, `operating-core.test.ts`, `work-package-actions.test.ts`, `field-actions-d1.test.ts`; `app/e2e/now-work-list.spec.ts`, `field-pwa.spec.ts`). Multi-worker offline packages, full evidence-slot enforcement, and a real-device reference drill are Target — every check above runs headless. | continue orthogonal lifecycle coverage and real reference proof |
-| Safety/evidence/accounting controls | Locally-validated. Stop-work, occurrence, corrective-action, evidence, and accounting-reconciliation controls pass focused checks (`workers-bus/test/safety-lifecycle.test.ts`, `operational-safety.test.ts`, the 22 `accounting-*.test.ts` files, `effect-runtime.test.ts`). "Unusually strong in source" described the code, not a class: no deployed provider, device, failure, or recovery proof exists anywhere. | deployed provider/device/failure and recovery proof |
-| Repository/migration coherence | Locally-validated, Partial. 117 Worker migrations apply cleanly to an isolated local D1 state, the DocType contract validator pins 79 DocTypes, and `node tools/validate-documentation.mjs` passes on this checkout. "Mixed" described completeness, not proof: duplicate brokers and the Frappe wheel are not retired and migration ranges and cutovers are not yet governed, so that half stays Target. | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
-| Configured capability | Target, Blocked: no named environment binds flags, secrets, and deployment jointly. This is the area the two admission facts are about, so it cannot be qualified upward: `IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.3's verified flag audit found no capability with flags, secrets, and deployment jointly bound, and the `Deploy` workflow has failed closed at its release-admission gate on every commit since 2026-08-30. The readiness evaluator itself is locally validated (`workers-bus/test/capability-readiness.test.ts`, `readiness-probe.test.ts`, `node tools/production-readiness.mjs contract`), but an evaluator that can report configuration is a different claim from a capability that is configured. "Partial" claimed completeness against zero configured capabilities. | minimum-provider readiness profiles with readback and proof TTLs |
+| Safety/evidence/accounting controls | Locally-validated. Stop-work, occurrence, corrective-action, evidence, and accounting-reconciliation controls pass focused checks (`workers-bus/test/safety-lifecycle.test.ts`, `operational-safety.test.ts`, the 22 `accounting-*.test.ts` files, `effect-runtime.test.ts`). "Unusually strong in source" described the code, not a class: these source checks do not establish deployed provider, device, failure, or recovery proof. | deployed provider/device/failure and recovery proof |
+| Repository/migration coherence | Locally-validated, Partial. The Worker migration set is checked against isolated local D1 state (current count below), the DocType contract validator pins 79 DocTypes, and `node tools/validate-documentation.mjs` passes on this checkout. "Mixed" described completeness, not proof: duplicate brokers and the Frappe wheel are not retired and migration ranges and cutovers are not yet governed, so that half stays Target. | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
+| Configured capability | Target, Blocked: exact environment evidence required. Repository flags and readiness checks cannot establish that flags, secret identities, and the exact deployed artifact are jointly bound in a named environment. The readiness evaluator is locally validated (`workers-bus/test/capability-readiness.test.ts`, `readiness-probe.test.ts`, `node tools/production-readiness.mjs contract`); its result must be read from the named environment before a capability advances. | minimum-provider readiness profiles with readback and proof TTLs |
 | End-to-end commercial closure | Locally-validated, Partial, Blocked: provider/tax configuration and QuickBooks keys. Native quote/publication routes and the acceptance-created deposit derivation queue pass focused checks (`workers-bus/test/commercial-proposal-api.test.ts`, `customer-contract-acceptance.test.ts`, `iro208-commercial-reference.test.ts`, the `accounting-*.test.ts` family). No no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout has been executed. | no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout |
-| Production/customer proof | Target. No artifact has been admitted to any environment: the `Deploy` workflow has failed closed at its release-admission gate on `b4ae5643`, `991f0e46`, `3da7ee2b`, `9b51b01a`, `2a213dd1`, and `63a28e43`, with build, staging drill, and promotion skipped each time. `customer_validated` remains false. "Not established" was already honest; this restates it as the class that names it. | controlled production reference journey; real-customer validation remains a separate later gate |
+| Production/customer proof | Target. CI and QA deployment receipts are separate from an authenticated full reference journey, accountable business acceptance, and real-customer use. Read the exact revision and environment from fresh release evidence; this matrix does not assert current deployment state. `customer_validated` remains false until independent customer evidence exists. | controlled production reference journey; real-customer validation remains a separate later gate |
 
 The architecture, authority map, user journeys, AI loop, derived lifecycle, and reference-tenant
 rules are canonical in [`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md).
@@ -76,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 141,
+      "count": 142,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -135,8 +134,11 @@ Current implementation: office sales/estimator/today/work-package/Facet/QuickBoo
 reads already use D1. Default `/ready` is the owned office plane and does not AND leftover
 Frappe/Newo credentials. Money-intent job lookup, production-gate clearance, and customer material
 decisions persist on D1. The 79 current DocTypes are leftover compatibility evidence, not the
-target architecture. Frappe remains an optional projection (apps tree, Hermes ERPNext MCP, local
-`--profile frappe` compose, optional CI unittest/wheel) and is not a merge or release blocker.
+target architecture. Frappe activation remains optional (apps tree, Hermes ERPNext MCP and local
+`--profile frappe` compose). While the compatibility app ships, its unittest, lint and wheel checks
+remain mandatory in `make check` and the `contracts` CI job. Optional activation does not waive
+the architecture contract's stage/promote/readback/rollback evidence requirements; repository
+checks alone do not establish those release receipts.
 
 The cutover is incomplete until leftover projection consumers are gone and a live issuer/rollback
 has been proven. Projection failure cannot change authoritative D1 state.
@@ -1432,23 +1434,18 @@ vocabulary and never a bare "Strong"/"Partial"/"Incomplete" standing in for a cl
 recorded is the weakest class any part of the row's named scope earns; `Partial` and
 `Blocked: <reason>` are orthogonal qualifiers attached to that class, never a substitute for one.
 
-**No row in this table earns Configured, Runtime-proven, Business-accepted, or Customer-validated**,
-and two independent facts agree on why:
+**This table does not establish Configured, Runtime-proven, Business-accepted, or Customer-validated.**
+Those classes require fresh evidence for the exact capability, revision, and named environment.
+Repository configuration and synthetic checks cannot establish bound secret identities, deployed
+bytes, provider readback, or accountable acceptance. Read those facts through the release and
+readiness tooling; historical CI failures or successes are not permanent capability facts.
 
-- no capability has its flags, secrets, and deployment jointly bound in a named environment
-  (`IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.3's verified flag-state audit, checked against the
-  repository rather than a live environment);
-- the `Deploy` workflow has failed closed at its release-admission gate on every commit since
-  2026-08-30 — `b4ae5643`, `991f0e46`, `3da7ee2b`, `9b51b01a`, `2a213dd1`, `63a28e43` — with build,
-  staging drill, and promotion skipped each time, so no artifact has been admitted anywhere.
-
-Every `Locally-validated` row below cites a named deterministic check that passed on this exact
-checkout (`main` @ `63a28e43`): the Worker suite (`npm test --prefix workers-bus`, 1604/1604), the
-PWA suite (`npm test --prefix app`, 932 tests across 118 files), the Frappe contract suite
-(`python -m unittest discover -s tests -t .` in `frappe-apps/ironwrap_roofing`, 433/433), and the
-repository validators named per row. Which gate a check sits behind matters and is stated where it
-does: the Frappe unittest, lint, and wheel steps run in `make check` (the `contracts` job of
-`.github/workflows/ci.yml`), so a Frappe-only citation is a merge gate, not live proof.
+Each `Locally-validated` row names its deterministic checks. A current validation claim must cite
+an exact-source receipt from the Worker suite (`npm test --prefix workers-bus`), the PWA suite
+(`npm test --prefix app`), the Frappe contract suite (`python -m unittest discover -s tests -t .`
+in `frappe-apps/ironwrap_roofing`), and the applicable repository validators. Test totals belong
+in those receipts, not in a frozen narrative. The Frappe unittest, lint, and wheel steps remain
+in `make check` (the `contracts` CI job); their passing result is a source gate, not live proof.
 
 | Domain | Current state | Autonomous target gap | Proof required |
 |---|---|---|---|

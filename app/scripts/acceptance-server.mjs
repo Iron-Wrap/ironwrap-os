@@ -396,9 +396,10 @@ const fixtureJob = {
       effective_date: "2026-07-10",
       hazard_summary: "Steep-slope fall exposure",
       controls: "Use roof anchors and harnesses",
-      emergency_plan: "Call dispatch and emergency services",
+      emergency_plan:
+        "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
       ppe_requirements: "Harness and eye protection",
-      weather_limits: "Stop above plan wind limit",
+      weather_limits: "Stop work above 40 km/h wind or 60 km/h gusts",
     },
     contact: {
       display_name: "Acceptance Homeowner",
@@ -414,7 +415,8 @@ const fixtureJob = {
       boundaries: "North slope only; no fascia scope.",
       prerequisites: "Materials staged and fall protection inspected.",
       expected_result: "Weather-tight completed north slope.",
-      stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
+      stop_conditions:
+        "Stop for wind above 40 km/h, gusts above 60 km/h, or unprotected edge exposure.",
       make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
       issued_at: "2026-07-10T15:00:00.000Z",
       // The Worker releases a plan in the same step that issues it (one input.issuedAt).

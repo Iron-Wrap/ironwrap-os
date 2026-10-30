@@ -125,7 +125,7 @@ test("0085 native photo evidence authority is complete in backup and restore con
     // claims and the AI team tables, manual measurement history and the 0153 gate ledger are
     // included in both D1 inventories.
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 281);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 395);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 396);
     assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 781);
   }
 

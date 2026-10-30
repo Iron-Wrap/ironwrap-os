@@ -108,15 +108,25 @@ test("each environment declares the data class of the data it holds", () => {
 });
 
 // The inbound producer (workers-bus/src/agents/inbound.ts) gives the AI team a signal for each
-// envelope recorded from AGENT_INBOUND_FROM on; blank keeps it off. agent_signals is append-only and
-// would hold an inbound's excerpt and its address, scope and timing text with no retention or
-// erasure, which COMPLIANCE-REGISTER.md requires (minimisation and destruction). So production
-// stays off until a retention and erasure path for agent signals lands, aligned with envelope
-// retention, and then until the owner decides to go live; local and qa hold synthetic data only
-// and are on from the recorded instant.
+// envelope recorded from AGENT_INBOUND_FROM on; blank keeps it off. A signal holds an inbound's
+// excerpt and its address, scope and timing text, and COMPLIANCE-REGISTER.md requires minimisation
+// and destruction. Migration 0207 and AGENT_SIGNAL_REDACTION (below) redact that text in place at
+// 90 days. So production stays off until that redaction ships and runs in production, and then
+// until the owner decides to go live; local and qa hold synthetic data only and are on from the
+// recorded instant.
 test("the inbound producer is off in production until agent signals have retention and erasure, and on in local and qa", () => {
   const from = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_INBOUND_FROM]));
   assert.deepEqual(from, { production: "", local: "2026-10-20T15:52:43Z", qa: "2026-10-20T15:52:43Z" });
+});
+
+// Signal text retention (workers-bus/src/agents/retention.ts, migration 0207): "on" redacts the
+// free text of AI team signals in place, daily, once it is 90 days old; blank keeps that off.
+// Production stays off until the redaction slice is merged and independently reviewed; then it is
+// one config change on the production go-live list, with no further ask needed. local and qa hold
+// synthetic data only and run it.
+test("signal text redaction is off in production until its go-live change, and on in local and qa", () => {
+  const redaction = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_SIGNAL_REDACTION]));
+  assert.deepEqual(redaction, { production: "", local: "on", qa: "on" });
 });
 
 test("the flattened key set equals the flat names declared in var-bindings.d.ts", () => {

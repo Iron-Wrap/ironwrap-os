@@ -2307,11 +2307,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0153 lands after 0154-0206 on deployed databases; it touches no object a later-numbered
     // migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 142);
+    // 0207 redacts signal text once after ninety days and adds the unredacted-signal index.
+    assert.equal(migrations.length, 143);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0206_agent_draft_closing.sql",
+      "0207_agent_signal_redaction.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2451,7 +2452,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
-    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged.
+    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged. 0207
+    // re-creates the signal update guard under its name and adds one named partial index.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
     // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
@@ -2467,7 +2469,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence and readback-conflict guards under their names.
     assert.deepEqual(
       { ...counts },
-      { tables: 281, indexes: 382, triggers: 781 },
+      { tables: 281, indexes: 383, triggers: 781 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

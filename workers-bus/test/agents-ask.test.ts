@@ -16,6 +16,7 @@ import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.t
 import { CATALOG_SHA256 } from "../src/agents/contract-catalog.ts";
 import { changeSpecialistControl, setDelegation } from "../src/agents/control.ts";
 import { VIEW_SCHEMA } from "../src/agents/face.ts";
+import { redactSignalText } from "../src/agents/retention.ts";
 import { assertStrictSchema, canonicalJson } from "../src/agents/schema.ts";
 import { appendSignal, peopleOnlyFor, toolsFor, type BoundStatement } from "../src/agents/store.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
@@ -393,6 +394,24 @@ test("only the person who asked, or the owner, reads an ask; anyone else gets no
 
   const run = await openFace(t, askId);
   assert.deepEqual((await t.app("sales", "GET", `/ask/${askId}`)).body, { ...pending, run_id: run.run_id });
+});
+
+test("an ask past its text retention keeps who asked and from where, and a replay of its key conflicts", async () => {
+  const t = setup();
+  // This file's clock starts long over ninety days before the real one, which the redaction reads.
+  const askId = await ask(t, "sales", "ask-retained-0001");
+  const press = () => t.app("sales", "POST", "/requests", { action_id: "quote.draft_revision", target: { aggregate: "job", id: JOB }, ask_id: askId }, { "idempotency-key": "press-retained-0001" });
+  const requestId = (await press()).body.signal_id as string;
+  assert.equal(await redactSignalText(t.db, TENANT), 2);
+  const content = (id: string) => JSON.parse((t.db.raw.prepare("SELECT content_json FROM agent_signals WHERE signal_id = ?").get(id) as { content_json: string }).content_json);
+  assert.deepEqual(content(askId), { asker_role: "sales", context: { route: `/jobs/${JOB}`, object: { aggregate: "job", id: JOB } }, redacted: true });
+  assert.deepEqual(content(requestId), { expected_action_id: "quote.draft_revision", target: { aggregate: "job", id: JOB }, ask_id: askId, requester_role: "sales", redacted: true });
+  // Still the sales person's ask, for them and the owner.
+  assert.equal((await t.app("sales", "GET", `/ask/${askId}`)).body.ask_id, askId);
+  assert.equal((await t.app("owner", "GET", `/ask/${askId}`)).body.ask_id, askId);
+  // Its question is gone, so the same key no longer replays it; a request held no text and still does.
+  assert.deepEqual((await t.app("sales", "POST", "/ask", askBody(), { "idempotency-key": "ask-retained-0001" })).body, { error: "idempotency_conflict" });
+  assert.equal((await press()).body.signal_id, requestId);
 });
 
 test("a sales asker's face run reads as sales: no owner-only fact on open, resume or citation", async () => {

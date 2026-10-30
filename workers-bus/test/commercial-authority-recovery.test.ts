@@ -257,7 +257,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // measurement history. 0153 adds the production gate clearance ledger.
   for (const [name, expected] of [
     ["REQUIRED_TABLE_COUNT", 281],
-    ["REQUIRED_INDEX_COUNT", 395],
+    ["REQUIRED_INDEX_COUNT", 396],
     ["REQUIRED_TRIGGER_COUNT", 781],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
@@ -361,7 +361,7 @@ test("the full schema matches the recovery frontier through 0201", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 281, indexes: 395, triggers: 781 },
+      { tables: 281, indexes: 396, triggers: 781 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

@@ -129,7 +129,7 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
     // exceptions, the fact-version ledger and the shadow/agreement records and watch firings are included in both D1 inventories.
     // So is the 0153 gate clearance ledger with the two state guards it adds to the gate row.
     ["REQUIRED_TABLE_COUNT", 281],
-    ["REQUIRED_INDEX_COUNT", 395],
+    ["REQUIRED_INDEX_COUNT", 396],
     ["REQUIRED_TRIGGER_COUNT", 781],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);

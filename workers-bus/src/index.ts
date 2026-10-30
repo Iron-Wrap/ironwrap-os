@@ -7,6 +7,7 @@
 
 import { handleAgentHostApi, type AgentEnv } from "./agents/api.ts";
 import { inboundFrom, sweepInbound } from "./agents/inbound.ts";
+import { redactSignalText, signalRedactionOn } from "./agents/retention.ts";
 import { sweepShadow } from "./agents/shadow.ts";
 import { retryReportDeliveries, runWatches } from "./agents/watches.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -371,6 +372,17 @@ export default {
           ),
           prunePublicEstimateRateLimits(env as PublicEstimatorEnv).catch((error) =>
             log({ at: "public_estimate_rate_limit_prune", error: String(error) }),
+          ),
+          // AI team signals past their text retention are redacted in place, once
+          // (agents/retention.ts); AGENT_SIGNAL_REDACTION switches it.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId || !signalRedactionOn(env.AGENT_SIGNAL_REDACTION)) return 0;
+            return await redactSignalText(env.DB as unknown as AgentDb, tenantId);
+          })().then((redacted) => {
+            if (redacted > 0) log({ at: "agent_signal_redaction", redacted });
+          }).catch((error) =>
+            log({ at: "agent_signal_redaction", error: String(error) }),
           ),
         ]).then(() => {})).then(
           () =>

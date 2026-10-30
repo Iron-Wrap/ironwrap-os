@@ -1338,7 +1338,8 @@ price book, operating settings such as storm mode, business details and hours, n
 (what a crew phone saved and sent, each under its idempotency key), import runs (each bridge
 import and its items), fleet and equipment, staff access, filings, and coordination records (runs,
 receipts, handoffs, exceptions, reports, notifications, delegation settings, policies and
-findings). Records that hold history are append-only. Frappe projections, JobNimbus, spreadsheets
+findings). Records that hold history are append-only; a signal's free text alone is redacted in
+place ninety days after it was received ("Signal text retention"). Frappe projections, JobNimbus, spreadsheets
 and mailboxes are never the authority for any of them; their content can only be cited as source
 evidence.
 
@@ -1588,10 +1589,10 @@ an owner report's snapshot: no watch condition reads an inbound signal, and a re
 its own watch signal and the objects that signal names.
 
 `AGENT_INBOUND_FROM` switches the producer: envelopes are inbound from that instant on, and while
-it is unset or blank nothing is produced. Production stays off until agent signals have a
-retention and erasure path aligned with envelope retention (`agent_signals` is append-only and
-would hold the excerpt and the form fields; `COMPLIANCE-REGISTER.md` requires minimisation and
-destruction), and then until the owner decides to go live; a test pins it blank. QA and local hold
+it is unset or blank nothing is produced. A signal holds the excerpt and the form fields, and
+`COMPLIANCE-REGISTER.md` requires minimisation and destruction: their text is redacted at ninety
+days ("Signal text retention"). Production stays off until that redaction ships and runs in
+production, and then until the owner decides to go live; a test pins it blank. QA and local hold
 synthetic data only and are on from their recorded instant.
 
 Not built yet (see `CAPABILITY-MATRIX.md`):
@@ -1605,6 +1606,55 @@ Not built yet (see `CAPABILITY-MATRIX.md`):
   `customer_care_warranty` (its `customer_message` watch) is not built.
 - `received_via` stays `null` until intake records which address or number was reached.
 - An inbound event's `actor` is `null`: the Worker writes no `external` actor yet.
+
+### Signal text retention
+
+A signal keeps the free text a person or a specialist wrote for the run that answers it, and then
+for ninety days after it was received (`SIGNAL_TEXT_RETENTION_DAYS`, the owner's ruling, final).
+After that the daily cron redacts it in place, once (`workers-bus/src/agents/retention.ts`):
+
+| Kind | Loses | Keeps |
+|---|---|---|
+| `event` (an inbound) | `excerpt`, `form_fields`, `service` | `envelope_id`, `channel`, `brand`, `received_via`, the `sender` match, `has_phone`, `has_email` |
+| `owner_request` | a person's ask its `question`; a request holds no free text | the ask's `context` and `asker_role`; a request's `expected_action_id`, `target`, `ask_id` and `requester_role` |
+| `handoff` | `reason` | `from_specialist_id`, `from_run_id`, `object`, `expected_action_id` |
+| `watch` | nothing: it holds the Worker's own records | everything |
+
+A redacted signal gains `"redacted": true` and keeps every column but its content: its id, kind,
+specialist, source, subject, dedupe key, chain and time. It keeps its original `content_sha256`,
+which still proves what was received, so a receipt that cited the signal still names the same hash;
+no code recomputes it. No run opens on a redacted signal (`409 signal_redacted`, which the host
+skips), and a person's replay of an ask under its idempotency key after ninety days answers
+`idempotency_conflict`, since the question it compares is gone; a request holds no text and still
+replays. Every signal is stored under `toISOString`'s form of its time, the form the guard compares;
+a writer that passes any other throws.
+
+Runtime migration 0207 lets only this past the signal's append-only guard: one exception added to
+0200's guard, which reads the age on D1's clock in the stored ISO form, pins every other column,
+admits exactly the redaction of the row's kind and only while the row is not yet redacted. The code
+cannot redact a younger signal or redact twice; a delete is still refused. Each run redacts at most
+500 signals, oldest first, through a partial index of the signals still holding their text.
+`AGENT_SIGNAL_REDACTION` switches the run: on in QA and local; blank in production until this
+redaction is merged and independently reviewed, then one config change on the production go-live
+list (a test pins it until then).
+
+The owner's rulings, final:
+
+- Inbound envelopes are the business record and are kept three years. Redacting an envelope at
+  three years is a later slice; it must ship before the first envelopes reach that age, and it is
+  not a launch gate.
+- Only the owner may erase one customer's data from signals, after verifying the customer by a call
+  to the number on file or an email from the address on file, and every erasure is recorded.
+
+Not built yet, a named gap: this redaction reaches the signal row only. Copies of the same text it
+does not reach are a step's `args_json` and a shadowed step's (`agent_shadow_steps.args_json`):
+`lead_fact.propose` copies the service, scope, address and timing from the inbound it cites; a
+run's `close_json` (its answer and reasons may quote a
+signal), `agent_exceptions.summary`, the agent host's `rejected-signals.jsonl`, D1 backups (kept 7
+to 365 days) and the copies the model providers keep under their own retention
+(`COMPLIANCE-REGISTER.md`). The next slice is the owner-only erasure route, an exception that lets
+it clear `lead_fact.propose` arguments, and a privacy-ledger marker that a restore from backup
+reapplies.
 
 ### Owner reports
 

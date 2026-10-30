@@ -13,6 +13,12 @@ Launch order:
 
 The existing business-number human or voicemail route remains the rollback path at every phase. Customer-facing outbound calls and messages remain disabled.
 
+### Enablement hardening blockers
+
+`NEWO_ENABLED` stays false. A callback request with no delivered alert and no screen is a launch blocker: a D1 record alone does not prove that a person can find and work the callback. Before enablement, prove the missing-alert recovery sweep, operations attention state, people-only resolution, and the operator screen on the deployed candidate. The source sweep retries open callbacks with no confirmed sent marker, even when no later Newo event arrives, and both reconciliation schedules stay degraded until a person closes the callback.
+
+The remaining source gates are session/tenant/status validation for callback inserts; every written column and guard in the enablement gate plus runtime schema readiness; corrected contact details in the durable callback record; and redaction with the owner's three-year inbound retention contract, including age-gated deletion in foreign-key-safe order. Repository tests, deployed recovery proof, provider delivery and owner acceptance are separate gates.
+
 ## 1. Repository gate
 
 From the repository root:
@@ -167,7 +173,7 @@ Use the admin bearer for diagnostic readiness. The unauthenticated route intenti
 curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" https://<worker-origin>/ready
 ```
 
-The five-minute cron retries Newo landing and detects missing reports. The daily cron checks actor/webhook/config drift, open Newo `Automation Incident` records in Frappe (no Worker code writes them since the native D1 cutover), downstream failures, and records that call-minute usage is unavailable from the documented API. Provider-console usage alerts remain required evidence.
+The five-minute cron retries unconfirmed alerts for open callbacks before queue recovery, retries Newo landing and detects missing reports. The alert sweep handles at most 25 records per run and continues from a tenant-scoped cursor; a confirmed alert is skipped, while a timed-out send remains unknown in the effect ledger and a later sweep uses a distinct attempt. Both the five-minute and daily runs stay degraded while callbacks or failed handoffs remain open. The daily cron also checks actor/webhook/config drift, open Newo `Automation Incident` records in Frappe (no Worker code writes them since the native D1 cutover), downstream failures, and records that call-minute usage is unavailable from the documented API. Provider-console usage alerts remain required evidence.
 
 ## 10. Rollback
 
@@ -178,3 +184,5 @@ The five-minute cron retries Newo landing and detects missing reports. The daily
 5. Do not delete accepted D1/R2 records, sessions, receipts, incidents, or control evidence.
 6. Leave queue and reconciliation processing enabled until every accepted event has landed or has an owned exception.
 7. Record the rollback time, actor, reason, affected sessions, downstream state, and recovery decision.
+
+Migration `0168` makes the callback-resolution write incompatible with an older Worker that writes `resolved_at` from its JavaScript clock and allows an empty note: the installed guard requires D1's clock and a nonempty note. The release rollback probes exercise `/health` and `/ready`, not that resolution write. Keep Newo off during recovery and verify a synthetic callback read and people-only resolution on the rollback candidate before treating it as compatible. Do not remove the guard to accommodate the older write path; use a compatible Worker or a forward repair. A successful health/readiness rollback probe does not prove callback resolution or recovery-alert delivery.

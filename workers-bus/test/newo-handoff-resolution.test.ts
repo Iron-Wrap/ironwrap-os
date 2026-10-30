@@ -9,7 +9,7 @@ import worker from "../src/index.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildNewoOperationsReadModel, newoOperationsNeedAttention } from "../src/newo-operations-read-model.ts";
-import { newoOperationalCounts } from "../src/newo-store.ts";
+import { listNewoCallbacksForAlert, newoOperationalCounts, newoReconciliationNeedsAttention } from "../src/newo-store.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times.
 const TENANT = "ironwrap";
@@ -411,10 +411,13 @@ test("a callback recorded from a late event is open and can be closed though the
   assert.deepEqual(model.exceptions.open_callbacks.map(({ session_id, urgency }) => [session_id, urgency]), [
     ["newo-session-late", "emergency"],
   ]);
+  assert.deepEqual((await listNewoCallbacksForAlert(env as never, null, 25)).map((row) => row.session_id),
+    ["newo-session-late"]);
   const owner = await personAuth(env, USERS.owner.id);
   const closed = await call(env, owner, "newo-session-late", { outcome: "called_back", note: "Called back." });
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
   assert.equal((await newoOperationalCounts(env as never)).open_callbacks, 0);
+  assert.deepEqual(await listNewoCallbacksForAlert(env as never, null, 25), [], "closed callbacks are not re-alerted");
 });
 
 test("open callbacks list the most urgent first, then the longest waiting, for this tenant only", async () => {
@@ -445,6 +448,17 @@ test("open callbacks list the most urgent first, then the longest waiting, for t
     ["newo-session-routine-old", "routine"],
   ]);
   assert.equal(model.counts.open_callbacks, 4);
+  const sweep = await listNewoCallbacksForAlert(env as never, null, 25);
+  assert.equal(sweep.length, 4);
+  assert.ok(sweep.every((callback) => callback.tenant_id === TENANT), "another tenant's callback is never alerted");
+});
+
+test("both reconciliation schedules stay degraded for open callbacks and failed handoffs alone", async () => {
+  const env = testEnv({ seedSessions: false });
+  const healthy = await newoOperationalCounts(env as never);
+  assert.equal(newoReconciliationNeedsAttention(healthy), false);
+  assert.equal(newoReconciliationNeedsAttention({ ...healthy, open_callbacks: 1 }), true);
+  assert.equal(newoReconciliationNeedsAttention({ ...healthy, failed_handoffs: 1 }), true);
 });
 
 test("D1 keeps the callback record append-only, stamped by its own clock, for a claimed event", async () => {

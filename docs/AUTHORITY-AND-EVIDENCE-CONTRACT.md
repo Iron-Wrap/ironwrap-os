@@ -736,6 +736,11 @@ callback nobody made.
   (`open_callbacks`, with their reason) and the unresolved failed handoffs (`failed_handoffs`), each
   caller in one list, and either keeps the model in `attention`. The Newo reconcile count (`failed_handoffs`) and the operations list share
   one predicate per list.
+- Both reconciliation schedules remain degraded while callbacks are open. The five-minute sweep
+  retries an unconfirmed callback alert without waiting for another provider event, in bounded
+  tenant-scoped batches and before landing queue recovery. Each attempt is a new email effect
+  that explicitly may repeat an earlier alert; an earlier timed-out effect remains unknown.
+  Only confirmed sends write sent markers, and only a person's resolution closes the callback.
 
 ## Customer-facing behavior
 

@@ -11,6 +11,8 @@ The owned store is the initial durable write. Instant acknowledgement follows ow
 acceptance; bridge pushes are separate retried jobs. An unavailable bridge must not lose or delay
 owned intake, and intake success must not be reported as bridge-delivery proof.
 
+Newo callback recovery is bounded to 25 open records per five-minute run, with a tenant-scoped scan cursor and confirmed-alert markers. It runs before landing queue recovery, preserves unknown Gmail effects, and keeps reconciliation degraded while callbacks remain open. See [Newo integration](../docs/NEWO-INTEGRATION.md) for the callback contract and the separate enablement gates.
+
 Failed primary lead, measurement, and Newo deliveries back off by 10, 20, 40, 80, then
 120 seconds using Cloudflare transport attempts. The five-retry limits and DLQ behavior
 remain unchanged. See [Stuck Envelopes](../docs/OPERATIONS-RUNBOOK.md#stuck-envelopes)

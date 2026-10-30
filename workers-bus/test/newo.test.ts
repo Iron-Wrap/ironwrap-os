@@ -15,6 +15,8 @@ import {
   newoOwnerAlerts,
   newoUrgency,
   parseNewoEvent,
+  reconcileNewoSessions,
+  sweepNewoCallbackAlerts,
   sha256Hex,
   type NewoEventV1,
 } from "../src/newo.ts";
@@ -37,6 +39,7 @@ class NativeNewoD1 {
       "0009_replay_approval_audit.sql",
       "0023_newo_reception.sql",
       "0024_newo_caller_association.sql",
+      "0025_newo_control_evidence.sql",
       "0026_newo_reconciliation.sql",
       "0090_operating_core.sql",
       "0082_envelope_operating_tenant.sql",
@@ -1158,12 +1161,16 @@ function alertingNewoState(t: { mock: { method: typeof import("node:test").mock.
     GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: "alerts@example.com", private_key: privateKey }),
     RAW: {
       put: async (key: string, body: string) => { objects.set(key, body); },
+      get: async (key: string) => objects.has(key) ? { json: async () => JSON.parse(objects.get(key)!) } : null,
       head: async (key: string) => {
         if (r2.headFails) throw new Error("simulated_r2_read_failure");
         return objects.has(key) ? { key } : null;
       },
     },
     NEWO_QUEUE: {
+      sendBatch: async () => {
+        if (queue.down) throw new Error("simulated_queue_down");
+      },
       send: async () => {
         if (queue.down) throw new Error("simulated_queue_down");
         if (queue.failNext) {
@@ -1211,7 +1218,7 @@ function alertingNewoState(t: { mock: { method: typeof import("node:test").mock.
     "SELECT session_id, event_id, reason, urgency, handoff_summary, contact_phone FROM newo_callback_records ORDER BY recorded_at",
   ).all().map((row) => ({ ...row })) as Array<Record<string, unknown>>;
   const markers = () => [...objects.keys()].filter((key) => key.includes("owner-alerts")).sort();
-  return { env, objects, queue, gmail, r2, emails, timedOut, deliver, session, callbackRecords, markers };
+  return { env, db: state.db, objects, queue, gmail, r2, emails, timedOut, deliver, session, callbackRecords, markers };
 }
 
 /** The Gmail effects in the ledger, oldest first. */
@@ -1377,6 +1384,122 @@ test("a Gmail timeout never holds the urgent alert behind reconciliation, and no
     assert.ok(alerting.emails.every((email) => email.body.includes("Alert for event event-handoff-001, attempt 2.")));
     assert.deepEqual(alerting.markers(), ["raw/newo/owner-alerts/session-001/handoff-event-handoff-001.json"]);
   });
+});
+
+test("the sweep recovers a timed-out callback alert without another event and leaves unknown effects alone", async (t) => {
+  const alerting = alertingNewoState(t);
+  const event = handoffEvent({ intent: { ...newoEvent().intent, urgency: "urgent" } });
+  alerting.gmail.timeouts = 2;
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", event), 200);
+  assert.deepEqual(alerting.markers(), []);
+  assert.equal(alerting.callbackRecords().length, 1);
+  const sweepAt = new Date(event.occurred_at);
+  await reconcileNewoSessions(alerting.env as never, sweepAt);
+  assert.deepEqual(toAlertBoxes(alerting.emails), [
+    "backup@example.com: Urgent Newo callback requested - urgent",
+    "owner@example.com: Urgent Newo callback requested - urgent",
+  ]);
+  assert.deepEqual(alerting.markers(), ["raw/newo/owner-alerts/session-001/handoff-event-handoff-001.json"]);
+  assert.ok(alerting.emails.every((email) => email.body.includes("attempt sweep-") && email.body.includes("repeats it")));
+  assert.deepEqual((await effectRows(alerting.env)).map((row) => row.state).sort(),
+    ["succeeded", "succeeded", "unknown", "unknown"]);
+  await reconcileNewoSessions(alerting.env as never, sweepAt);
+  assert.equal(alerting.emails.length, 2, "a confirmed alert is not sent again");
+});
+
+test("an open callback alone makes the five-minute reconciliation degraded", async (t) => {
+  const alerting = alertingNewoState(t);
+  const event = handoffEvent();
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", event), 200);
+  await reconcileNewoSessions(alerting.env as never, new Date(event.occurred_at));
+  const run = alerting.db.raw.prepare("SELECT status, missing_reports, failed_handoffs FROM newo_reconciliation_runs").get();
+  assert.deepEqual({ ...run }, { status: "degraded", missing_reports: 0, failed_handoffs: 0 });
+});
+
+test("callback alert recovery completes before a landing queue failure", async (t) => {
+  const alerting = alertingNewoState(t);
+  const event = handoffEvent();
+  alerting.gmail.timeouts = 2;
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", event), 200);
+  alerting.db.raw.prepare("UPDATE newo_sessions SET sync_updated_at = ?").run(
+    new Date(Date.parse(event.occurred_at) - 10 * 60_000).toISOString(),
+  );
+  alerting.queue.down = true;
+  await assert.rejects(reconcileNewoSessions(alerting.env as never, new Date(event.occurred_at)), /simulated_queue_down/);
+  assert.equal(alerting.emails.length, 2);
+  assert.equal(alerting.markers().length, 1);
+});
+
+test("the recovery alert retains a session's higher urgency and stronger failed-handoff status", async (t) => {
+  for (const handoffStatus of ["requested", "failed"]) {
+    await t.test(handoffStatus, async (subtest) => {
+      const alerting = alertingNewoState(subtest);
+      const serviceAccount = alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+      alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = "";
+      assert.equal(await alerting.deliver("/webhook/newo/handoff", handoffEvent()), 200);
+      alerting.db.raw.prepare("UPDATE newo_sessions SET urgency = 'emergency', handoff_status = ?").run(handoffStatus);
+      alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = serviceAccount;
+      assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 1);
+      const expected = handoffStatus === "failed" ? "Urgent Newo callback required" : "Urgent Newo callback requested - emergency";
+      assert.ok(alerting.emails.every((email) => email.subject === expected));
+      assert.deepEqual(alerting.markers(), [newoOwnerAlertMarker("session-001",
+        handoffStatus === "failed" ? "failure" : "handoff", "event-handoff-001")]);
+    });
+  }
+});
+
+test("a timed-out sweep retries as a distinct effect, and disabled recovery sends nothing", async (t) => {
+  const alerting = alertingNewoState(t);
+  alerting.gmail.timeouts = 4;
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", handoffEvent()), 200);
+  const first = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.deepEqual(first, { scanned: 1, sent: 0, failed: 1, next_callback_id: null });
+  assert.deepEqual(alerting.markers(), []);
+  alerting.env.NEWO_ENABLED = "false";
+  assert.deepEqual(await sweepNewoCallbackAlerts(alerting.env as never),
+    { scanned: 0, sent: 0, failed: 0, next_callback_id: null });
+  assert.equal(alerting.emails.length, 0);
+  alerting.env.NEWO_ENABLED = "true";
+  // The provider recovers. The third network failure opened the adapter's breaker, so another
+  // recipient may have been refused before fetch and did not consume a simulated timeout.
+  alerting.gmail.timeouts = 0;
+  // The next cron occurs after the 30-second cooldown. Advance its clock without sleeping or
+  // clearing adapter state; the unknown effects and any suppressed attempt remain in the ledger.
+  const nextTick = Date.now() + 5 * 60_000;
+  t.mock.method(Date, "now", () => nextTick);
+  const second = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.equal(second.sent, 1);
+  assert.equal(alerting.emails.length, 2);
+  const effects = await effectRows(alerting.env);
+  assert.deepEqual(effects.map((row) => row.state).sort(),
+    ["succeeded", "succeeded", "unknown", "unknown", "unknown", "unknown"]);
+  assert.ok(effects.every((row) => Number(row.attempt_count) === 1));
+});
+
+test("confirmed alerts in the first batch cannot starve a later open callback", async (t) => {
+  const alerting = alertingNewoState(t);
+  const serviceAccount = alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = "";
+  for (let i = 0; i < 26; i++) {
+    const event = handoffEvent({ event_id: `event-batch-${i}`, session_id: `session-batch-${i}` });
+    assert.equal(await alerting.deliver("/webhook/newo/handoff", event), 200);
+  }
+  const callbacks = alerting.db.raw.prepare(
+    "SELECT callback_id, session_id, event_id FROM newo_callback_records ORDER BY callback_id",
+  ).all() as Array<{ callback_id: string; session_id: string; event_id: string }>;
+  for (const callback of callbacks.slice(0, 25)) {
+    alerting.objects.set(newoOwnerAlertMarker(callback.session_id, "handoff", callback.event_id), "{}");
+  }
+  alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = serviceAccount;
+  const first = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.deepEqual(first, { scanned: 25, sent: 0, failed: 0, next_callback_id: callbacks[24]!.callback_id });
+  const second = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.deepEqual(second, { scanned: 1, sent: 1, failed: 0, next_callback_id: null });
+  assert.equal(alerting.emails.length, 2);
+  assert.ok(alerting.emails.every((email) => email.body.includes(callbacks[25]!.session_id)));
+  const wrapped = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.equal(wrapped.scanned, 25);
+  assert.equal(wrapped.sent, 0);
 });
 
 test("a callback request alert never stands in for the failure alert", async (t) => {

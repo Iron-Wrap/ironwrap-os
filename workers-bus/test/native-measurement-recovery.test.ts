@@ -100,11 +100,11 @@ test("0084 native measurement authority is complete in backup and restore contra
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
     // Pinned through 0200: privacy, crew-stop guards, the stop release record, durable writer
-    // claims and the AI team tables, manual measurement history and the 0153 gate ledger are
-    // included in both D1 inventories.
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 283);
+    // claims and the AI team tables, manual measurement history, the 0153 gate ledger, the
+    // 0155 tenant deposit policy and the 0205 step pair index are included in both D1 inventories.
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 284);
     assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 402);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 794);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 798);
   }
 
   for (const [name, table] of INDEXES) {

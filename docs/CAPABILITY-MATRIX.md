@@ -75,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 144,
+      "count": 145,
       "latest": "0208_agent_subject_erasure.sql"
     }
   },

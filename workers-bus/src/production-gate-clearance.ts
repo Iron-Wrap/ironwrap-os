@@ -692,7 +692,29 @@ async function depositSettlementEntry(
   } catch {
     throw refusal("accounting_read_unavailable", 502);
   }
-  const intent = settledDepositIntent(intents);
+  // The deposit invoice of the contract in force (0155): the one derived from the job's latest
+  // accepted binding. An earlier contract's invoice never settles a later contract's deposit, so
+  // the job's other deposit invoices count only when that binding has no derivation row at all.
+  // Once a superseding contract re-blocked Deposit, D1 accepts only that one as well.
+  let current: { derivation_id: string | null; intent_id: string | null } | null;
+  try {
+    current = await env.DB.prepare(
+      `SELECT derivation.derivation_id, derivation.intent_id
+         FROM commercial_acceptance_bindings binding
+         LEFT JOIN commercial_deposit_derivations derivation
+           ON derivation.tenant_id = binding.tenant_id
+          AND derivation.acceptance_binding_id = binding.acceptance_binding_id
+        WHERE binding.tenant_id = ? AND binding.roof_job_id = ?
+        ORDER BY binding.accepted_at DESC, binding.acceptance_binding_id DESC
+        LIMIT 1`,
+    ).bind(tenantId, input.roofJobId).first<NonNullable<typeof current>>();
+  } catch {
+    throw refusal("accounting_read_unavailable", 502);
+  }
+  const derivation = current?.derivation_id ? current : null;
+  const intent = settledDepositIntent(
+    derivation ? intents.filter((row) => row.intent_id === derivation.intent_id) : intents,
+  );
   const observedAt = intent ? settlementObservedAt(intent) : null;
   if (!intent || !observedAt) throw refusal("deposit_settlement_not_observed", 409);
   const receipt = depositSettlementReceipt({

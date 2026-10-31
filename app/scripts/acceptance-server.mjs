@@ -509,7 +509,6 @@ function freshFieldMutableState() {
     workPackageActions: new Map(),
     safetyActions: new Map(),
     evidenceCounter: 0,
-    occurrenceCounter: 0,
   };
 }
 
@@ -821,8 +820,7 @@ async function handleSafetyActionRoute(request) {
   let serverRef;
   const safety = fieldMutableState.safety;
   if (kind === "report_occurrence" || kind === "rescue_request") {
-    fieldMutableState.occurrenceCounter += 1;
-    const occurrenceId = `so_acceptance_${fieldMutableState.occurrenceCounter}`;
+    const occurrenceId = `so_${createHash("sha256").update(deviceActionId).digest("hex").slice(0, 32)}`;
     const occurrenceKind = kind === "rescue_request" ? "emergency" : payload.occurrence_kind;
     const severity = kind === "rescue_request" ? "critical" : payload.severity;
     safety.occurrences.push({
@@ -849,7 +847,6 @@ async function handleSafetyActionRoute(request) {
     );
     if (occurrence) {
       occurrence.state = "made_safe";
-      occurrence.stop_active = false;
     }
     serverRef = payload.occurrence_id;
   } else {

@@ -588,7 +588,10 @@ describe("OwnerNowPage", () => {
       due_at: null,
       ...noLeadEvidence,
       reported_by_name: kind === "stop_job_unknown" ? "Sam Keewatin" : null,
-      summary: "Soft deck boards by the back stairs. Crew is off the roof.",
+      summary:
+        kind === "stop_job_unknown"
+          ? "Soft deck boards by the back stairs. Crew is off the roof."
+          : null,
     });
     vi.mocked(loadOwnerNow).mockResolvedValue({
       ...base,
@@ -619,8 +622,21 @@ describe("OwnerNowPage", () => {
     expect(screen.getByText("Sam Keewatin · Today 10:05")).toBeVisible();
     expect(screen.getByText("Name not on record · Today 10:05")).toBeVisible();
     expect(
-      screen.getAllByText("“Soft deck boards by the back stairs. Crew is off the roof.”"),
-    ).toHaveLength(2);
+      screen.getByText(
+        "Work is stopped on every job. Sam Keewatin reported a stop, and we couldn't tell which job it's for. The stop is recorded for the office.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Work is stopped on every job. A stop was reported, and we couldn't tell which job it's for. The stop is recorded for the office.",
+      ),
+    ).toBeVisible();
+    expect(screen.getAllByText("Couldn't tell which one")).toHaveLength(2);
+    expect(
+      screen.getByText("Soft deck boards by the back stairs. Crew is off the roof."),
+    ).toBeVisible();
+    expect(screen.getByText("Reason not on record")).toBeVisible();
+    expect(screen.queryByText("The office is told.")).not.toBeInTheDocument();
     expect(
       screen.getByText(
         "Releasing it, or raising it again on the right job, isn’t in the app yet. Clearing it needs IronWrap support.",

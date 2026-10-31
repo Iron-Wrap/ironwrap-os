@@ -45,6 +45,12 @@ export function byWhom(role: string | null): string {
   return `by ${roleWords(role)}`;
 }
 
+const depositSettlementAction = "Clear Deposit on the settled payment";
+
+function clearAfterReversal(gate: GateName): string {
+  return gate === "Deposit" ? depositSettlementAction : `Clear ${gate} with the right proof`;
+}
+
 export const gateCopy = {
   page: {
     breadcrumbRoot: "Production",
@@ -322,7 +328,7 @@ export const gateCopy = {
 
   /** The Deposit step, for a business that takes deposits (no frame yet). */
   deposit: {
-    clearOnSettlement: "Clear Deposit on the settled payment",
+    clearOnSettlement: depositSettlementAction,
     settlementHelp:
       "Deposit clears once the deposit invoice shows as paid. A waiver is a decision, not a proof.",
   },
@@ -442,10 +448,10 @@ export const gateCopy = {
     waivedBy: (stamp: string, who: string) => `Waived ${stamp} ${who}`,
     why: "Why reverse it?",
     reverse: "Reverse the clearance with this reason",
-    rightProof: (gate: GateName) => `Clear ${gate} with the right proof`,
+    rightProof: clearAfterReversal,
     afterReverse: "after you reverse this",
     next: (gate: GateName) =>
-      `Reversing sets ${gate} back to blocked and keeps this clearance in its history; nothing is deleted. Then “Clear ${gate} with the right proof” turns on.`,
+      `Reversing sets ${gate} back to blocked and keeps this clearance in its history; nothing is deleted. Then “${clearAfterReversal(gate)}” turns on.`,
     reversed: (when: string, gate: GateName) =>
       `Reversed ${when}. ${gate} is blocked again. Nothing was deleted.`,
   },

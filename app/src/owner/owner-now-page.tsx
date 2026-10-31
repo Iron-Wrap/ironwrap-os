@@ -795,18 +795,24 @@ function UnknownScopeStop({
   });
   return (
     <div className="mt-3 grid max-w-3xl gap-3">
-      {exception.why ? <Notice tone="danger" title={exception.why} /> : null}
+      <Notice tone="danger" title={ownerStopCopy.scopeReport(exception.reported_by_name ?? null)}>
+        {exception.why}
+      </Notice>
       <dl className="grid gap-2 text-sm leading-6">
+        <div>
+          <dt className="font-semibold text-muted">{ownerStopCopy.job}</dt>
+          <dd>{ownerStopCopy.jobUnknown}</dd>
+        </div>
         <div>
           <dt className="font-semibold text-muted">{ownerStopCopy.raisedBy}</dt>
           <dd>{ownerStopCopy.raisedByLine(exception.reported_by_name ?? null, stamp)}</dd>
         </div>
-        {exception.summary ? (
-          <div>
-            <dt className="font-semibold text-muted">{ownerStopCopy.theyWrote}</dt>
-            <dd className="break-words">{ownerStopCopy.quoted(exception.summary)}</dd>
-          </div>
-        ) : null}
+        <div>
+          <dt className="font-semibold text-muted">{ownerStopCopy.reason}</dt>
+          <dd className="break-words">
+            {exception.summary?.trim() ? exception.summary : ownerStopCopy.reasonMissing}
+          </dd>
+        </div>
       </dl>
       <Notice
         tone="info"

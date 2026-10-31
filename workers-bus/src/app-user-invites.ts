@@ -272,8 +272,10 @@ export function parseAccessChange(
 /**
  * What moved since `expectedAccessVersion`, read from the person's versioned access audit: the
  * newest change names the actor and when, the first change after that version names the access
- * before it, and the person's row is the access now. `changed_by` and `change.before` are null
- * when the audit cannot say (history from before 0157, or more changes since than it reads).
+ * before it, and the person's row supplies the access at that read. Later audit versions are
+ * excluded so concurrent changes cannot be attributed to this snapshot. `changed_by` and
+ * `change.before` are null when the audit cannot say (history from before 0157, or more changes
+ * since than it reads).
  *
  * There is deliberately no device: the audit keeps only keyed hashes of the network address and
  * browser, and no session, so it cannot tell "your phone" from another tab on this computer.
@@ -285,11 +287,13 @@ export async function accessConflictBody(
   expectedAccessVersion: number,
 ): Promise<AccessConflict | null> {
   if (!current) return null;
+  const currentVersion = Number(current.access_version ?? 1);
   const changes = await authStore.listAccessChangesSince(
     env,
     auth.session.tenant_id,
     current.user_id,
     expectedAccessVersion,
+    currentVersion,
   );
   const newest = changes[0];
   const first = changes.at(-1);
@@ -298,7 +302,7 @@ export async function accessConflictBody(
     : null;
   return {
     user_id: current.user_id,
-    access_version: Number(current.access_version ?? 1),
+    access_version: currentVersion,
     changed_at: newest?.recordedAt ?? null,
     changed_by: newest
       ? {

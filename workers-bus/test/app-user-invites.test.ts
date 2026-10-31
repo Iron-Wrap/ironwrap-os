@@ -1908,6 +1908,75 @@ test("a role or access change applies only against the access version it was dec
   assert.equal(auditCount("user_access_change"), 1);
 });
 
+for (const route of ["role", "provision"] as const) {
+  test(`a refused ${route} change keeps its access and audit on one committed version`, async () => {
+    const h = harness();
+    try {
+      const { user: firstActor, session: firstSession } = await owner(h);
+      const secondActor = await addUser(h.env, "second-owner@example.invalid", "owner", "Second Owner");
+      const secondSession = await signIn(h, secondActor, "b".repeat(43));
+      const target = await addUser(h.env, "conflict-target@example.invalid", "sales", "Conflict Target");
+      assert.equal((await call(h, "POST", `${APP_USERS}/${target.user_id}/role`, {
+        session: firstSession,
+        body: { role: "ops", expected_access_version: 1 },
+      })).status, 200);
+      const versionTwoAudit = h.db.raw.prepare(
+        `SELECT created_at FROM app_auth_audit
+          WHERE tenant_id = ? AND user_id = ? AND json_extract(access_change, '$.v') = 2`,
+      ).get(TENANT, target.user_id) as { created_at: string };
+
+      // The conflict has already read version 2 when another real request commits version 3.
+      const originalPrepare = h.db.prepare.bind(h.db);
+      let interleaved = false;
+      h.db.prepare = ((sql: string) => {
+        const statement = originalPrepare(sql);
+        if (!sql.includes("FROM app_auth_audit") || !sql.includes("json_extract(access_change, '$.v') > ?")) {
+          return statement;
+        }
+        return { bind: (...args: unknown[]) => {
+          const bound = statement.bind(...args);
+          return { ...bound, all: async <T>() => {
+            if (!interleaved) {
+              interleaved = true;
+              const concurrent = await call(h, "POST", `${APP_USERS}/${target.user_id}/role`, {
+                session: secondSession,
+                body: { role: "accounting", expected_access_version: 2 },
+              });
+              assert.equal(concurrent.status, 200);
+            }
+            return await bound.all<T>();
+          } };
+        } };
+      }) as typeof h.db.prepare;
+
+      const stale = await call(h, "POST", route === "role" ? `${APP_USERS}/${target.user_id}/role` : APP_USERS, {
+        session: firstSession,
+        body: route === "role"
+          ? { role: "production", expected_access_version: 1 }
+          : {
+            tenant_id: TENANT, email: target.email_normalized, display_name: "Conflict Target",
+            role: "production", frappe_user_id: null, active: true, expected_access_version: 1,
+          },
+      });
+      assert.equal(interleaved, true);
+      assert.equal(stale.status, 409);
+      assert.equal(stale.body.error, "access_version_conflict");
+      assert.deepEqual(stale.body.conflict, {
+        user_id: target.user_id,
+        access_version: 2,
+        changed_at: versionTwoAudit.created_at,
+        changed_by: { user_id: firstActor.user_id, display_name: "Ada Owner", is_self_actor: true },
+        change: { before: { role: "sales", active: true }, after: { role: "ops", active: true } },
+      });
+      assert.equal(accessVersionOf(h, target.user_id), 3);
+      assert.equal(userRow(h, target.email_normalized)!.access_role, "accounting");
+    } finally {
+      await h.flush();
+      h.db.raw.close();
+    }
+  });
+}
+
 test("a refused change says who changed the access since, what is different and the version now", async () => {
   const h = harness();
   const { user: ada, session } = await owner(h);

@@ -90,15 +90,16 @@ export function accessChangeAuditStatement(
 }
 
 /**
- * The role and access changes in one person's audit above `afterVersion`, newest first, each with
- * when it was recorded, read from `access_change` with json_extract. A person whose access moved
- * more than `limit` times since is described from the newest changes only.
+ * The role and access changes in one person's audit above `afterVersion` and through the returned
+ * person's `throughVersion`, newest first. A concurrent later change must not supply the actor or
+ * timestamp for that older snapshot. More than `limit` changes are described from the newest only.
  */
 export async function listAccessChangesSince(
   env: Env,
   tenantId: string,
   userId: string,
   afterVersion: number,
+  throughVersion: number,
   limit = 50,
 ): Promise<Array<AccessChange & { recordedAt: string }>> {
   const result = await env.DB.prepare(
@@ -112,9 +113,10 @@ export async function listAccessChangesSince(
        FROM app_auth_audit
       WHERE tenant_id = ? AND user_id = ? AND access_change IS NOT NULL
         AND json_extract(access_change, '$.v') > ?
+        AND json_extract(access_change, '$.v') <= ?
       ORDER BY json_extract(access_change, '$.v') DESC, id DESC
       LIMIT ?`,
-  ).bind(tenantId, userId, afterVersion, limit).all<{
+  ).bind(tenantId, userId, afterVersion, throughVersion, limit).all<{
     created_at: string;
     version: number;
     before_role: string | null;

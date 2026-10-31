@@ -256,7 +256,7 @@ export function WorkPackageIssueForm({
       aria-labelledby="work-package-issue-heading"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-info">Production authority</p>
+        {!expanded ? <p className="text-sm font-semibold text-info">Production authority</p> : null}
         {!expanded ? (
           <Button type="button" variant="outline" size="compact" onClick={() => setExpanded(true)}>
             Expand plan editor
@@ -272,7 +272,7 @@ export function WorkPackageIssueForm({
           role="status"
         >
           {workPackage?.status === "Blocked"
-            ? "Expired: the crew can't add proof. Review this plan’s stop for release, then issue a corrected plan."
+            ? "Expired: the crew can't add proof."
             : "Expired: the crew can't add proof. Issue a corrected plan to set a new time."}
         </p>
       ) : null}

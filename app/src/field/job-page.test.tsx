@@ -1413,11 +1413,9 @@ describe("JobPage", () => {
       status: "Blocked",
     };
     const stoppedView = renderJob(stoppedAndExpired, ownerSession);
-    expect(
-      await screen.findByText(
-        "Expired: the crew can't add proof. Review this plan’s stop for release, then issue a corrected plan.",
-      ),
-    ).toBeVisible();
+    expect(await screen.findByText("Expired: the crew can't add proof.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Review this plan’s stop for release" })).toBeVisible();
+    expect(screen.getByText(/Issuing a correction cannot release a stop/)).toBeVisible();
     stoppedView.unmount();
 
     // Before the expiry at the read, there is no expired line.

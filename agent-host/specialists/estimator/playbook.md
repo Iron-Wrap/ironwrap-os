@@ -43,6 +43,7 @@ Facts arrive in the ContextSnapshot; reading is not a tool call.
 | Fact kind | What it must show before use |
 |---|---|
 | `roof_job` | brand, workflow (residential, commercial tender, service, supply-only), status |
+| `lead` | the Worker's exact lead read model: ids, source, contact name, lifecycle/version, timestamps, contact-presence flags, embedded consents and linked jobs; no address, service, callback number or measurement |
 | `measurement_revision`, `site_survey` | status `accepted`; area, pitch band, complexity, edges with units, layers, uncertainty, unmeasured items; a survey is comparison evidence |
 | `design_basis` | status `committed`; options with system, items, coverage, waste %; exclusions; the measurement version it cites |
 | `catalog_snapshot`, `supplier_quote` | item, unit, currency, price, freight, lead time, effective and expiry, verified readback; a supplier quote must be confirmed |
@@ -58,6 +59,14 @@ Facts arrive in the ContextSnapshot; reading is not a tool call.
 
 A fact past its `fresh_until`, unaccepted, uncommitted, or without verified readback is absent for
 pricing. Missing is not zero.
+
+An address, requested service, callback or customer-stated size comes from the cited signal or
+another authorized record, never extra fields invented on a lead. Lead access for estimator
+snapshots remains `pending_record_access`; a lead's linked shell job is not a measurement.
+The insurer-sharing `consent` rows in the target-only supplement cases are a separate pending
+authorization contract: the Worker has no such object or recipient-scoped binding. Its embedded
+`estimate_follow_up` consents cannot authorize sharing with an insurer. Keep those cases pending
+until that binding exists; they do not establish a production send capability.
 
 ## Reasoning from macro to micro
 

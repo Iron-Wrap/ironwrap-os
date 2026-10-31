@@ -14,9 +14,8 @@ import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSett
 import { CEILING_SCHEMA, competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
 import { closeDelegationDrafts } from "./drafts.ts";
 import { afterCatastrophe, decisionAgreement, shadowSetting, unqualifiedSince } from "./shadow.ts";
-import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
+import { canonicalJson, validate } from "./schema.ts";
 import {
-  changesOf,
   getRun,
   namedPerson,
   runContext,
@@ -291,7 +290,7 @@ export async function setDelegation(
   if (control.held && input.setting === "within_limits") return { error: "specialist_held", status: 409 };
   const settingId = `dlg_${crypto.randomUUID()}`;
   // The owner's own change answers the face's open proposals for the pair (contract f5).
-  const answered = await closeDelegationDrafts(db, tenantId, input, input.setting, actor.user_id);
+  const answered = await closeDelegationDrafts(db, tenantId, input, input.setting, actor.user_id, input.ceiling);
   try {
     await db.batch([
       humanGuard(db, tenantId, actor, now, true),

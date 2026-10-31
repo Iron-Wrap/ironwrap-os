@@ -268,6 +268,51 @@ export interface NewoCallbackRecord extends NewoCallbackRecordInput {
   recorded_at: string;
 }
 
+export interface NewoCallbackAlertRecord extends NewoCallbackRecord {
+  alert_kind: "handoff" | "failure";
+  alert_urgency: NewoCallbackRecord["urgency"];
+}
+
+/**
+ * Bounded, tenant-scoped traversal of every callback still owed, including failed handoffs.
+ * An accepted late failure still owes its alert when a newer session projection is healthy.
+ * Read that durable receipt only through the session's owned envelope and matching tenant;
+ * raw input, unaccepted receipts and receipts of another session/envelope do not count.
+ */
+export async function listNewoCallbacksForAlert(
+  env: Env,
+  afterCallbackId: string | null,
+  limit: number,
+): Promise<NewoCallbackAlertRecord[]> {
+  const result = await env.DB.prepare(
+    `SELECT callback.*,
+        CASE WHEN session.status = 'failed' OR session.handoff_status = 'failed'
+          OR callback.reason <> 'callback_requested'
+          OR EXISTS (
+            SELECT 1 FROM newo_event_receipts failure
+            JOIN envelopes envelope ON envelope.envelope_id = failure.envelope_id
+             WHERE failure.session_id = callback.session_id
+               AND failure.event_type = 'session_failed' AND failure.status = 'accepted'
+               AND failure.envelope_id = session.lead_envelope_id
+               AND envelope.tenant_id = callback.tenant_id
+          )
+          THEN 'failure' ELSE 'handoff' END AS alert_kind,
+        CASE WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
+          WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'
+          ELSE 'routine' END AS alert_urgency
+       FROM newo_callback_records callback
+       JOIN newo_sessions session ON session.session_id = callback.session_id
+      WHERE callback.tenant_id = ? AND callback.callback_id > ?
+        AND NOT EXISTS (
+          SELECT 1 FROM newo_handoff_resolutions resolution
+           WHERE resolution.tenant_id = callback.tenant_id
+             AND resolution.session_id = callback.session_id
+        )
+      ORDER BY callback.callback_id ASC LIMIT ?`,
+  ).bind(newoTenantId(env), afterCallbackId ?? "", limit).all<NewoCallbackAlertRecord>();
+  return result.results ?? [];
+}
+
 const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, reason, urgency,
        handoff_summary, contact_name, contact_phone, contact_email, address_line1, city, province,
        postal_code`;
@@ -462,15 +507,6 @@ export async function getNewoSession(
     .bind(sessionId).first<NewoSessionRecord>();
 }
 
-export async function getNewoSessionByAppointment(
-  env: Env,
-  appointmentRequestId: string,
-): Promise<NewoSessionRecord | null> {
-  return await env.DB.prepare(
-    "SELECT * FROM newo_sessions WHERE appointment_request_id = ?",
-  ).bind(appointmentRequestId).first<NewoSessionRecord>();
-}
-
 export async function listRecentNewoSessions(
   env: Env,
   limit: number,
@@ -541,15 +577,6 @@ export async function markNewoMissingReports(
     if (Number(result.meta?.changes ?? 0) === 1) claimed.push(candidate);
   }
   return claimed;
-}
-
-export async function listMissingNewoReports(env: Env, limit: number): Promise<NewoSessionRecord[]> {
-  const result = await env.DB.prepare(
-    `SELECT * FROM newo_sessions
-      WHERE missing_report_detected_at IS NOT NULL AND report_received_at IS NULL
-      ORDER BY missing_report_detected_at ASC LIMIT ?`,
-  ).bind(limit).all<NewoSessionRecord>();
-  return result.results ?? [];
 }
 
 export async function recordNewoReconciliationRun(
@@ -685,4 +712,12 @@ export async function newoOperationalCounts(env: Env): Promise<{
     last_event_at: typeof row?.last_event_at === "string" ? row.last_event_at : null,
     last_report_at: typeof row?.last_report_at === "string" ? row.last_report_at : null,
   };
+}
+
+/** Both reconciliation schedules stay degraded while any callback is still owed to a caller. */
+export function newoReconciliationNeedsAttention(
+  counts: Awaited<ReturnType<typeof newoOperationalCounts>>,
+): boolean {
+  return counts.failed_events > 0 || counts.failed_sync > 0 || counts.missing_reports > 0 ||
+    counts.control_failures > 0 || counts.open_callbacks > 0 || counts.failed_handoffs > 0;
 }

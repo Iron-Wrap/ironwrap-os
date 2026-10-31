@@ -13,14 +13,7 @@ import { getCompanyProfile } from "./company-setup-store.ts";
 
 import { expireRuns, type AgentDb } from "./agents/store.ts";
 import {
-  ALLOWED_SOURCES,
-  type Source,
   type EnvelopeRecord,
-  newEnvelopeId,
-  normalizeEnvelope,
-  dedupKey,
-  validateInbound,
-  classifyIntent,
   reconcileDiff,
   parseBody,
   validateSourceCount,
@@ -48,7 +41,7 @@ import { ingestLead } from "./lead-intake.ts";
 import { companyLogoResponse } from "./company-profile.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
 import { materializeOperatingCore } from "./operating-core.ts";
-import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
+import { sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import {
   handleMeasurementDeadLetter,
@@ -141,9 +134,11 @@ import {
   handleExternalEffectSettlement,
 } from "./effect-runtime-admin.ts";
 import { recoverExpiredExternalEffects } from "./effect-runtime.ts";
+import { escalateStaleProposalDeliveries } from "./proposal-delivery-checks.ts";
 import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
+import { markExpiredProposalPublicationApprovalExecutionLeases } from "./proposal-publication-approval-store.ts";
 import {
   handleNewoQueueMessage,
   handleNewoWebhook,
@@ -154,6 +149,7 @@ import { handleNewoAdmin } from "./newo-admin.ts";
 import { handleCrmImport } from "./crm-import-api.ts";
 import {
   newoOperationalCounts,
+  newoReconciliationNeedsAttention,
   recordNewoReconciliationRun,
 } from "./newo-store.ts";
 
@@ -523,6 +519,22 @@ export default {
               error: String(error),
             }),
           ),
+          // A lost publication broker response requires human reconciliation;
+          // expire only this runtime tenant's claims without dispatching again.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return;
+            await markExpiredProposalPublicationApprovalExecutionLeases(
+              env,
+              new Date().toISOString(),
+              tenantId,
+            );
+          })().catch((error) =>
+            log({
+              at: "proposal_publication_approval_lease_sweep",
+              error: String(error),
+            }),
+          ),
           // Scheduling has an independent append-only assignment ledger. An
           // orphaned execution lease must likewise become reconciliation work,
           // never a second dispatch attempt.
@@ -635,6 +647,12 @@ export default {
             if (result.recovered > 0 || result.failed > 0) log({ at: "external_effect_lease_sweep", ...result });
           }).catch((error) =>
             log({ at: "external_effect_lease_sweep", error: String(error) }),
+          ),
+          // A proposal send left unknown past T opens one owner-visible effect exception (#15b-1b).
+          escalateStaleProposalDeliveries(env as import("./app-types.ts").AppEnv).then((result) => {
+            if (result.opened > 0) log({ at: "proposal_delivery_escalation", ...result });
+          }).catch((error) =>
+            log({ at: "proposal_delivery_escalation", error: String(error) }),
           ),
           drainPipelineStageAutomation(env as import("./app-types.ts").AppEnv).then((result) => {
             log({
@@ -1260,8 +1278,7 @@ async function runNewoDailyReconcile(env: Env): Promise<void> {
     ...(readiness.newo.frappe_error ? [readiness.newo.frappe_error] : []),
   ];
   const usageLimit = Number(runtime.NEWO_USAGE_LIMIT_MINUTES ?? "0");
-  const degraded = !readiness.ok || counts.failed_events > 0 || counts.failed_sync > 0 ||
-    counts.missing_reports > 0 || counts.control_failures > 0 ||
+  const degraded = !readiness.ok || newoReconciliationNeedsAttention(counts) ||
     unresolvedIncidents === null || unresolvedIncidents > 0;
   await recordNewoReconciliationRun(env, {
     run_id: `newo:daily:${crypto.randomUUID()}`,
@@ -1282,6 +1299,7 @@ async function runNewoDailyReconcile(env: Env): Promise<void> {
       last_event_at: counts.last_event_at,
       last_report_at: counts.last_report_at,
       control_failures: counts.control_failures,
+      open_callbacks: counts.open_callbacks,
       usage_evidence: "Newo documented session aggregates do not expose call minutes; verify provider-console alerts.",
     }),
   });

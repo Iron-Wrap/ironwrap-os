@@ -1150,7 +1150,7 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     // and the 0153 gate ledger.
     assert.match(contract, /REQUIRED_TABLE_COUNT=285/);
     assert.match(contract, /REQUIRED_INDEX_COUNT=398/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=813/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=814/);
   }
 });
 

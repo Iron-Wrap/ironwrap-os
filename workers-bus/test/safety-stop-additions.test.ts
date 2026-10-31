@@ -698,3 +698,47 @@ test('concurrent report retries converge despite the occurrence replacement guar
   assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM safety_occurrences').get()?.n, 1);
   assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM safety_occurrence_events').get()?.n, 1);
 });
+
+test('effective latch: only owner or ops person sessions may confirm the same late-arriving job', async () => {
+  for (const actor of [USERS.owner, USERS.ops]) {
+    const env = testEnv();
+    const id = await raisedStop(env, USERS.owner);
+    seedJob(env);
+    const before = occurrence(env, id);
+    const body = { occurrence_version: before.version, scope_type: 'roof_job', scope_id: SCOPE.id,
+      reason: 'Explicitly confirmed the late-arriving synthetic job.' };
+    const headers = { 'idempotency-key': 'late-target-person-session' };
+    assert.equal((await call(env, connectorAuth(actor), `${occurrencePath(id)}/scope`, body, headers)).body.error,
+      'safety_stop_rescope_person_required');
+    const corrected = await call(env, await personAuth(env, actor), `${occurrencePath(id)}/scope`, body, headers);
+    assert.equal(corrected.status, 201, JSON.stringify(corrected.body));
+    const after = occurrence(env, id);
+    assert.equal(after.version, before.version + 1);
+    assert.equal(after.scope_id, before.scope_id);
+    assert.equal(after.stop_active, 1);
+    assert.equal(after.reported_by_user_id, USERS.owner.id);
+    await assert.rejects(recordSafetyResponse(env, { ...releaseInput(id, []), actorUserId: USERS.owner.id }),
+      rejectsCode('safety_stop_release_by_raiser_forbidden'));
+  }
+});
+
+for (const race of ['authority', 'target'] as const) {
+  test(`effective latch: correction refuses raced ${race} changes without phantom history`, async () => {
+    const env = testEnv();
+    seedJob(env, 'JOB-SYNTHETIC-TARGET');
+    const id = await raisedStop(env, USERS.crew);
+    const before = occurrence(env, id);
+    env.DB.beforeBatch = () => {
+      if (race === 'authority') {
+        env.DB.sqlite.prepare("UPDATE app_users SET access_role = 'field' WHERE user_id = ?").run(USERS.owner.id);
+      } else {
+        env.DB.sqlite.prepare('DELETE FROM operating_roof_jobs WHERE roof_job_id = ?').run('JOB-SYNTHETIC-TARGET');
+      }
+    };
+    await assert.rejects(rescopeSafetyStop(env, rescopeInput(env, id)),
+      rejectsCode(race === 'authority' ? 'safety_actor_unknown' : 'safety_stop_scope_target_unknown'));
+    assert.deepEqual(occurrence(env, id), before);
+    assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM safety_occurrence_rescopes').get()?.n, 0);
+    assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM safety_stop_unresolved_scopes').get()?.n, 1);
+  });
+}

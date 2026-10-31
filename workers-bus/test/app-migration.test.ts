@@ -2469,11 +2469,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence and readback-conflict guards under their names. 0170 adds the made-safe confirmer
     // column, the keep-decision and unresolved-scope tables, one named index and fourteen guards
     // (the Work Package stop hold, made-safe confirmer/event, immutable journal and keep history,
-    // and immutable scope-latch capture). 0171 adds two history tables, two indexes and eighteen guards for
+    // and immutable scope-latch capture). 0171 adds two history tables, two indexes and nineteen guards for
     // stop additions, release photos, vehicle use and atomic scope corrections.
     assert.deepEqual(
       { ...counts },
-      { tables: 285, indexes: 385, triggers: 813 },
+      { tables: 285, indexes: 385, triggers: 814 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3742,18 +3742,19 @@ test("0145 and 0152 applied after 0202 on a database already through 0146-0202 g
   }
 });
 
-test("0170 applied after all higher migrations preserves the sorted schema and per-table trigger order", async () => {
-  const late = "0170_safety_stop_route_gaps.sql";
+test("0170 and 0171 applied after higher migrations preserve the sorted schema and per-table trigger order", async () => {
+  const late = ["0170_safety_stop_route_gaps.sql", "0171_safety_stop_additions_release_photo_rescope.sql"];
   const migrations = await d1MigrationNames();
-  assert.ok(migrations.includes(late));
-  assert.ok(migrations.some((name) => name > late));
+  for (const name of late) assert.ok(migrations.includes(name));
+  assert.ok(migrations.some((name) => name > late.at(-1)!));
   const sorted = new DatabaseSync(":memory:");
   const deployed = new DatabaseSync(":memory:");
   try {
     for (const db of [sorted, deployed]) db.exec("PRAGMA foreign_keys = ON");
     for (const name of migrations) await applyD1Migration(sorted, name);
-    for (const name of migrations.filter((name) => name !== late)) await applyD1Migration(deployed, name);
-    await applyD1Migration(deployed, late);
+    // 0171 consumes 0170's latch. Preserve predecessor order while both arrive after 0200-0206.
+    for (const name of migrations.filter((name) => !late.includes(name))) await applyD1Migration(deployed, name);
+    for (const name of late) await applyD1Migration(deployed, name);
     const schema = (db: DatabaseSync) => db.prepare(
       "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name",
     ).all().map((row) => ({ ...row }));

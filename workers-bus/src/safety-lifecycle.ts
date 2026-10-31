@@ -726,29 +726,54 @@ export interface SafetyStopPhoto {
   job_id: string;
 }
 
+/** A latch remains effective until a human correction matches the committed scope and version. */
+const EFFECTIVE_UNRESOLVED_SCOPE_SQL = `EXISTS (
+  SELECT 1 FROM safety_stop_unresolved_scopes latch
+   WHERE latch.tenant_id = occurrence.tenant_id
+     AND latch.occurrence_id = occurrence.occurrence_id
+     AND NOT EXISTS (
+       SELECT 1 FROM safety_occurrence_rescopes correction
+        WHERE correction.tenant_id = occurrence.tenant_id
+          AND correction.occurrence_id = occurrence.occurrence_id
+          AND correction.to_scope_type = occurrence.scope_type
+          AND correction.to_scope_id = occurrence.scope_id
+          AND correction.to_version <= occurrence.version
+     )
+)`;
+
 /**
  * The jobs whose captures belong to a stop: its job, or the job of any version of its Work
  * Package. Null means any job of the tenant: a stop whose job or package does not exist, a tenant
- * stop, a shop stop or a vehicle stop, none of which a job capture can be narrowed to. 0171 binds
- * captures the same way in D1.
+ * stop, a shop stop or a vehicle stop, none of which a job capture can be narrowed to. An effective
+ * unresolved-scope latch also keeps every tenant job eligible after a late target arrives. 0171
+ * binds captures the same way in D1.
  */
 async function stopPhotoJobs(
   env: AppEnv,
-  occurrence: Pick<SafetyOccurrenceRecord, "tenant_id" | "scope_type" | "scope_id">,
+  occurrence: Pick<SafetyOccurrenceRecord, "occurrence_id" | "tenant_id" | "scope_type" | "scope_id">,
 ): Promise<string[] | null> {
-  if (occurrence.scope_type === "roof_job") {
+  const current = await env.DB.prepare(
+    `SELECT occurrence.scope_type, occurrence.scope_id,
+            CASE WHEN ${EFFECTIVE_UNRESOLVED_SCOPE_SQL} THEN 1 ELSE 0 END AS unresolved
+       FROM safety_occurrences occurrence
+      WHERE occurrence.tenant_id = ? AND occurrence.occurrence_id = ?`,
+  ).bind(occurrence.tenant_id, occurrence.occurrence_id)
+    .first<{ scope_type: SafetyScopeType; scope_id: string; unresolved: number }>();
+  if (!current) throw new Error("safety_stop_scope_readback_missing");
+  if (current.unresolved === 1) return null;
+  if (current.scope_type === "roof_job") {
     const job = await env.DB.prepare(
       `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?`,
     )
-      .bind(occurrence.tenant_id, occurrence.scope_id)
+      .bind(occurrence.tenant_id, current.scope_id)
       .first<{ roof_job_id: string }>();
     return job ? [job.roof_job_id] : null;
   }
-  if (occurrence.scope_type === "work_package") {
+  if (current.scope_type === "work_package") {
     const jobs = await env.DB.prepare(
       `SELECT DISTINCT job_id FROM work_packages WHERE tenant_id = ? AND work_package_id = ?`,
     )
-      .bind(occurrence.tenant_id, occurrence.scope_id)
+      .bind(occurrence.tenant_id, current.scope_id)
       .all<{ job_id: string }>();
     return jobs.results.length > 0 ? jobs.results.map((row) => row.job_id) : null;
   }
@@ -862,7 +887,7 @@ async function releaseEvidenceFor(
  */
 export async function stopReleasePhotos(
   env: AppEnv,
-  occurrence: Pick<SafetyOccurrenceRecord, "tenant_id" | "scope_type" | "scope_id" | "reported_at">,
+  occurrence: Pick<SafetyOccurrenceRecord, "occurrence_id" | "tenant_id" | "scope_type" | "scope_id" | "reported_at">,
   limit = 50,
 ): Promise<SafetyStopPhoto[]> {
   const jobs = await stopPhotoJobs(env, occurrence);
@@ -2194,7 +2219,8 @@ const MAX_ACTIVE_STOPS = 500;
  * - a `roof_job` stop holds its job, or every job when `operating_roof_jobs` has no such job;
  * - a `work_package` stop holds the job of every version of that package, Superseded included,
  *   or every job when `work_packages` has no such package.
- * - an unresolved scope is latched in D1: a later job/package insert never narrows that hold.
+ * - an unresolved scope is latched in D1: only a matching committed human correction changes its
+ *   effective hold; a later job/package insert never does.
  *
  * Shop and vehicle stops hold no job. A lifted stop holds nothing.
  */
@@ -2204,11 +2230,7 @@ async function activeStopRows(env: AppEnv, tenantId: string): Promise<ActiveStop
             occurrence.severity, occurrence.reported_at, occurrence.summary,
             raiser.display_name AS raiser_display_name,
             CASE
-              WHEN EXISTS (
-                SELECT 1 FROM safety_stop_unresolved_scopes latch
-                 WHERE latch.tenant_id = occurrence.tenant_id
-                   AND latch.occurrence_id = occurrence.occurrence_id
-              ) THEN NULL
+              WHEN ${EFFECTIVE_UNRESOLVED_SCOPE_SQL} THEN NULL
               WHEN occurrence.scope_type = 'roof_job' THEN (
                 SELECT json_array(job.roof_job_id)
                   FROM operating_roof_jobs job

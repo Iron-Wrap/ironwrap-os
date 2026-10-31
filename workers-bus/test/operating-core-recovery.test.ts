@@ -130,7 +130,7 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
     // So is the 0153 gate clearance ledger with the two state guards it adds to the gate row.
     ["REQUIRED_TABLE_COUNT", 285],
     ["REQUIRED_INDEX_COUNT", 398],
-    ["REQUIRED_TRIGGER_COUNT", 813],
+    ["REQUIRED_TRIGGER_COUNT", 814],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);

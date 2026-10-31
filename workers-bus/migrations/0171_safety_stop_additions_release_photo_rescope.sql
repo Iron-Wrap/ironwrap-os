@@ -6,7 +6,8 @@
 -- manifested, stored Work Package capture of this tenant (as 0145/0152 define one) and its job is
 -- one the stop holds: the stop's job for a `roof_job` stop, the job of any version of its package
 -- for a `work_package` stop, and any job of the tenant for a stop whose job or package does not
--- exist, a tenant stop, a shop stop or a vehicle stop, which no job capture can be narrowed to.
+-- exist or whose unresolved-scope latch has no committed matching human correction, a tenant
+-- stop, a shop stop or a vehicle stop, which no job capture can be narrowed to.
 --
 -- 1. Additions. Any active person may add a note, verified photos, or both to a stop while it is
 --    active. `safety_occurrence_additions` is append-only and its time is D1's clock. An addition
@@ -23,8 +24,8 @@
 --    defect report and a return to the yard stay open. A shop stop holding shop runs is a contract
 --    rule only: no shop-run write exists yet.
 --
--- 4. Re-scope. An owner or ops person may put an active stop that names a job or Work Package this
---    tenant does not have onto the job or package it meant, as an in-place correction recorded in
+-- 4. Re-scope. An owner or ops person may confirm an active unresolved stop onto the job or
+--    package it meant, including the same target after its late arrival, as a correction recorded in
 --    `safety_occurrence_rescopes` (append-only, D1's clock). The occurrence keeps its id, raiser,
 --    state, stop and history; only its scope and version move. 0047's identity guard is re-created
 --    with every clause unchanged except that a scope change is admitted when, and only when, that
@@ -34,7 +35,7 @@
 --    except for a direct write that is both a lift by the raiser and illegal for 0047, which now
 --    reports 0047's code first.
 --
--- Adds two tables, two indexes and eighteen triggers, and re-creates one trigger.
+-- Adds two tables, two indexes and nineteen triggers, and re-creates two triggers.
 
 -- 1. Additions -------------------------------------------------------------------------------------
 
@@ -144,6 +145,18 @@ BEGIN
                    = json_extract(NEW.evidence_refs_json, item.fullkey || '.sha256')
                  AND (
                    occurrence.scope_type NOT IN ('roof_job', 'work_package')
+                   OR EXISTS (
+                     SELECT 1 FROM safety_stop_unresolved_scopes latch
+                      WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
+                        AND NOT EXISTS (
+                          SELECT 1 FROM safety_occurrence_rescopes correction
+                           WHERE correction.tenant_id = occurrence.tenant_id
+                             AND correction.occurrence_id = occurrence.occurrence_id
+                             AND correction.to_scope_type = occurrence.scope_type
+                             AND correction.to_scope_id = occurrence.scope_id
+                             AND correction.to_version <= occurrence.version
+                        )
+                   )
                    OR (occurrence.scope_type = 'roof_job' AND (
                      capture.job_id = occurrence.scope_id
                      OR NOT EXISTS (
@@ -267,6 +280,18 @@ BEGIN
                   = json_extract(NEW.evidence_refs_json, item.fullkey || '.sha256')
                 AND (
                   occurrence.scope_type NOT IN ('roof_job', 'work_package')
+                   OR EXISTS (
+                     SELECT 1 FROM safety_stop_unresolved_scopes latch
+                      WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
+                        AND NOT EXISTS (
+                          SELECT 1 FROM safety_occurrence_rescopes correction
+                           WHERE correction.tenant_id = occurrence.tenant_id
+                             AND correction.occurrence_id = occurrence.occurrence_id
+                             AND correction.to_scope_type = occurrence.scope_type
+                             AND correction.to_scope_id = occurrence.scope_id
+                             AND correction.to_version <= occurrence.version
+                        )
+                   )
                   OR (occurrence.scope_type = 'roof_job' AND (
                     capture.job_id = occurrence.scope_id
                     OR NOT EXISTS (
@@ -466,16 +491,36 @@ BEGIN
        AND occurrence.stop_active != 1
   );
 
-  -- Only a stop whose job or Work Package does not exist is moved.
+  -- A late target's arrival is not a human decision. The immutable latch remains effective
+  -- until a correction matches the occurrence's committed scope and version.
   SELECT RAISE(ABORT, 'safety_stop_scope_resolved')
-  WHERE (NEW.from_scope_type = 'roof_job' AND EXISTS (
-          SELECT 1 FROM operating_roof_jobs job
-           WHERE job.tenant_id = NEW.tenant_id AND job.roof_job_id = NEW.from_scope_id
-        ))
-     OR (NEW.from_scope_type = 'work_package' AND EXISTS (
-          SELECT 1 FROM work_packages package
-           WHERE package.tenant_id = NEW.tenant_id AND package.work_package_id = NEW.from_scope_id
-        ));
+  WHERE EXISTS (
+    SELECT 1 FROM safety_occurrences occurrence
+     WHERE occurrence.tenant_id = NEW.tenant_id
+       AND occurrence.occurrence_id = NEW.occurrence_id
+       AND NOT (EXISTS (
+           SELECT 1 FROM safety_stop_unresolved_scopes latch
+            WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
+              AND NOT EXISTS (
+                SELECT 1 FROM safety_occurrence_rescopes correction
+                 WHERE correction.tenant_id = occurrence.tenant_id
+                   AND correction.occurrence_id = occurrence.occurrence_id
+                   AND correction.to_scope_type = occurrence.scope_type
+                   AND correction.to_scope_id = occurrence.scope_id
+                   AND correction.to_version <= occurrence.version
+              )
+         ))
+       AND (
+         (NEW.from_scope_type = 'roof_job' AND EXISTS (
+           SELECT 1 FROM operating_roof_jobs job
+            WHERE job.tenant_id = NEW.tenant_id AND job.roof_job_id = NEW.from_scope_id
+         ))
+         OR (NEW.from_scope_type = 'work_package' AND EXISTS (
+           SELECT 1 FROM work_packages package
+            WHERE package.tenant_id = NEW.tenant_id AND package.work_package_id = NEW.from_scope_id
+         ))
+       )
+  );
 
   -- And only onto a job or Work Package this tenant has.
   SELECT RAISE(ABORT, 'safety_stop_scope_target_unknown')
@@ -524,6 +569,21 @@ WHEN EXISTS (SELECT 1 FROM operating_roof_jobs WHERE roof_job_id = NEW.roof_job_
    SELECT 1 FROM safety_occurrence_rescopes correction
     WHERE correction.to_scope_type = 'roof_job' AND correction.to_scope_id = NEW.roof_job_id
  )
+BEGIN SELECT RAISE(ABORT, 'safety_stop_scope_target_retained'); END;
+
+-- Work Package definitions are retained too. REPLACE must not bypass the existing DELETE
+-- guard when an interrupted issue has no first journal child and recursive triggers are off.
+CREATE TRIGGER work_packages_rescope_target_no_replace
+BEFORE INSERT ON work_packages
+WHEN EXISTS (
+  SELECT 1 FROM work_packages existing
+   WHERE existing.tenant_id = NEW.tenant_id AND existing.work_package_id = NEW.work_package_id
+     AND existing.version = NEW.version
+) AND EXISTS (
+  SELECT 1 FROM safety_occurrence_rescopes correction
+   WHERE correction.tenant_id = NEW.tenant_id
+     AND correction.to_scope_type = 'work_package' AND correction.to_scope_id = NEW.work_package_id
+)
 BEGIN SELECT RAISE(ABORT, 'safety_stop_scope_target_retained'); END;
 
 CREATE TRIGGER safety_occurrence_rescopes_no_insert_replace
@@ -618,4 +678,61 @@ BEGIN
 
   SELECT RAISE(ABORT, 'safety_stop_reactivation_forbidden')
   WHERE OLD.stop_active = 0 AND NEW.stop_active = 1;
+END;
+
+
+-- Preserve every 0170 work-event clause; only a committed matching human correction consumes
+-- the latch for scope calculation. The latch row and the active stop are never removed.
+DROP TRIGGER work_package_events_safety_stop_guard;
+
+CREATE TRIGGER work_package_events_safety_stop_guard
+BEFORE INSERT ON work_package_events
+WHEN NEW.event_kind IN ('acknowledged', 'start_work', 'complete_work')
+BEGIN
+  SELECT RAISE(ABORT, 'safety_stop_active')
+  WHERE EXISTS (
+    SELECT 1
+      FROM safety_occurrences occurrence
+     WHERE occurrence.tenant_id = NEW.tenant_id
+       AND occurrence.stop_active = 1
+       AND (
+         occurrence.scope_type = 'tenant'
+         OR EXISTS (
+           SELECT 1 FROM safety_stop_unresolved_scopes latch
+            WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
+              AND NOT EXISTS (
+                SELECT 1 FROM safety_occurrence_rescopes correction
+                 WHERE correction.tenant_id = occurrence.tenant_id
+                   AND correction.occurrence_id = occurrence.occurrence_id
+                   AND correction.to_scope_type = occurrence.scope_type
+                   AND correction.to_scope_id = occurrence.scope_id
+                   AND correction.to_version <= occurrence.version
+              )
+         )
+         OR (occurrence.scope_type = 'roof_job' AND (
+           occurrence.scope_id = NEW.job_id
+           OR NOT EXISTS (
+             SELECT 1
+               FROM operating_roof_jobs job
+              WHERE job.tenant_id = occurrence.tenant_id
+                AND job.roof_job_id = occurrence.scope_id
+           )
+         ))
+         OR (occurrence.scope_type = 'work_package' AND (
+           EXISTS (
+             SELECT 1
+               FROM work_packages package
+              WHERE package.tenant_id = occurrence.tenant_id
+                AND package.work_package_id = occurrence.scope_id
+                AND package.job_id = NEW.job_id
+           )
+           OR NOT EXISTS (
+             SELECT 1
+               FROM work_packages package
+              WHERE package.tenant_id = occurrence.tenant_id
+                AND package.work_package_id = occurrence.scope_id
+           )
+         ))
+       )
+  );
 END;

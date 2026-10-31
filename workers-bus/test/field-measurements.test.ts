@@ -14,6 +14,7 @@ import {
 import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
 import { issueNativeWorkPackage, nativeWorkPackageAction } from "../src/work-package-store.ts";
 import type { AuthContext } from "../src/app-types.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 import {
   auth,
   request,
@@ -179,7 +180,7 @@ async function fixture(typed = false) {
     raw
       .prepare(
         `INSERT INTO operating_production_gates(gate_id,tenant_id,roof_job_id,source_envelope_id,gate,state,owner_user,assigned_at,due_at,blocker_reason,version,created_at,updated_at)
-      VALUES (?,'ironwrap',?,'ow_pipeline_board_0001',?,'ready',?, ?, ?, 'Synthetic readiness',1,?,?)`,
+      VALUES (?,'ironwrap',?,'ow_pipeline_board_0001',?,'blocked',?, ?, ?, 'Synthetic readiness',1,?,?)`,
       )
       .run(
         `gate:measurement:${gate}`,
@@ -191,6 +192,7 @@ async function fixture(typed = false) {
         SEED_TIME,
         SEED_TIME,
       );
+  recordLegacyGateStates(raw, { tenantId: "ironwrap", roofJobId: JOB, at: SEED_TIME });
   const assignment = (
     await recordOperatingJobAssignment(
       f.env,

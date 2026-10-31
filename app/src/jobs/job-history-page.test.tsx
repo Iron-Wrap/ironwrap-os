@@ -67,7 +67,7 @@ function model(overrides: Partial<JobHistoryResponse> = {}): JobHistoryResponse 
       items: [
         {
           id: "evi_1",
-          type: "Work Package Evidence",
+          type: "Job plan evidence",
           proof_slot: "North slope",
           occurred_at: "2024-11-02T10:00:00.000Z",
           summary: "Finished roof, north slope",
@@ -123,6 +123,7 @@ it("opens a finished job and shows what was done to it", async () => {
   expect(screen.getByText("88 Riverbend Way, Calgary AB")).toBeInTheDocument();
   expect(screen.getByText("Northside Holdings")).toBeInTheDocument();
   expect(screen.getByText("Finished roof, north slope")).toBeInTheDocument();
+  expect(screen.getByText("Job plan evidence")).toBeInTheDocument();
 });
 
 it("says plainly that nothing here is a control", async () => {

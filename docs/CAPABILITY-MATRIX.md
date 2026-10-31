@@ -75,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 142,
+      "count": 143,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -642,14 +642,23 @@ IRO-38 branch-local side-effect substrate:
   Frappe credentials and provider call; the Worker owns the durable lease and settlement state.
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
   live provider, deployment, or business-acceptance proof.
-- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) never claims, settles, reconciles or
-  retries an outside send. `proposal.publish`, `proposal.withdraw`, `customer.email.send` and
-  `operations.email.send` answer 403 `effect_outside_send_token_refused`: only the bus may execute
-  them, and no production path sends a proposal yet. A `qa-synthetic-*` provider passes only on a
-  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local); elsewhere it answers 403
+- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) handles only actions named `mcp.*`, the
+  MCP host's effects, plus the QA seed's `proposal.publish` through `qa-synthetic-publication` on a
+  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local). It never claims, settles,
+  reconciles or retries anything else. `proposal.publish`, `proposal.withdraw`,
+  `customer.email.send` and `operations.email.send` answer 403 `effect_outside_send_token_refused`:
+  only the bus may execute them, and no production path sends a proposal yet. Every other action
+  outside `mcp.*` answers 403 `effect_runtime_action_not_allowed`. A `qa-synthetic-*` provider
+  outside the seed's pair, or on any Worker that is not `synthetic`, answers 403
   `effect_provider_not_allowed`. A proposal send claimed with a retry answers 422
   `effect_outside_send_retry_forbidden`. Settle, reconcile and retry run on the server's clock.
-  The MCP host's `mcp.*` effects keep the token, as do the remaining actions. Migration
+  They bind the stored effect's tenant to `APP_TENANT_ID` (default `ironwrap`) before checking its
+  action: a mismatch answers 403 `effect_tenant_mismatch`, returns no effect data, and preserves
+  its row, attempts, event journal and exceptions. Router tests in
+  `workers-bus/test/outside-send-guards.test.ts` cover all three routes against the full migration
+  chain, including denial of foreign `mcp.*` effects and successful same-tenant transitions.
+  The allowlist is enforced in the Worker only: D1 cannot tell a bearer write from a bus write,
+  because neither an attempt nor an event records who claimed it (a B2 follow-up). Migration
   `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
   never `retry`) and moves an `unknown` proposal send to `succeeded` or `reconciled` only with a
   person's delivery confirmation (0156). That guard is keyed on the action alone, so a proposal send
@@ -933,7 +942,11 @@ IRO-45 branch-local inventory ledger:
   value-bearing adjustment additionally requires a distinct finance reviewer, and neither the
   counter nor the receiver may approve their own variance or quarantine release.
 - An AP invoice line is admissible only from a succeeded IRO-38 effect whose readback digest
-  matches; a provider webhook is never match proof.
+  matches; a provider webhook is never match proof. Since
+  `0169_inventory_invoice_readback_action.sql` the cited effect must also be a
+  `quickbooks.bill.read` through the line's own provider; a `supplier_ap` line is refused
+  (`inventory_invoice_line_supplier_ap_readback_unsupported`) until a read action exists for that
+  provider. No Worker code writes an AP invoice line yet.
 - An unrecognised offline barcode is captured as `observed_pending_validation` and never
   creates stock; scan replay converges on one observation per device action.
 - The Worker store is `src/inventory-control.ts` with tests in

@@ -353,7 +353,8 @@ test("the full schema matches the recovery frontier through 0201", () => {
     // one readback-conflict guard on proposal_delivery_confirmations. 0165 adds one safety stop release
     // guard.
     // 0167 adds the delivery check table, one index and four guards, and re-creates two 0164 guards
-    // under their names.
+    // under their names. 0169 re-creates 0067's AP invoice line readback guard under its name, so
+    // the counts hold.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office

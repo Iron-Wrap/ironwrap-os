@@ -21,11 +21,14 @@ import {
   type ExternalEffectRequest,
 } from "../src/effect-runtime.ts";
 import worker from "../src/index.ts";
-import { SqliteD1, TENANT, USERS, type SqliteStatement } from "./company-setup-fixture.ts";
+import { SqliteD1, TENANT, OTHER_TENANT, USERS, type SqliteStatement } from "./company-setup-fixture.ts";
 
 // PR-S (0164): the effect-runtime bearer never claims, settles, reconciles or retries a send to
 // someone outside the business, a QA stand-in provider passes only on a synthetic Worker, a
 // proposal send runs once, and an unknown proposal send moves on only with a person's record.
+// The token allowlist (0169's slice): the bearer handles `mcp.*` actions, plus exactly the QA seed's
+// `proposal.publish` through `qa-synthetic-publication` on a synthetic Worker, and refuses every
+// other action by name; D1 cannot tell a bearer write from a bus write, so this is the Worker's rule.
 // Every route call goes through the Worker's own fetch handler, so the bearer is exercised; the D1
 // rules are driven by raw SQL and by the in-process runtime against the full migration chain.
 
@@ -217,7 +220,7 @@ test("a qa-synthetic provider reaches D1 only on a synthetic Worker; unset and m
   assert.equal(count(db, "SELECT count(*) AS n FROM external_effects"), 1);
 });
 
-test("the bus-only email sends are refused on the token; a stand-in passes only on a synthetic Worker", async () => {
+test("the bus-only email sends are refused on the token, through a stand-in as well, on every Worker", async () => {
   const db = new D1();
   for (const action of ["customer.email.send", "operations.email.send"]) {
     for (const dataClass of ["business", "synthetic", undefined]) {
@@ -227,9 +230,13 @@ test("the bus-only email sends are refused on the token; a stand-in passes only 
     const business = await post(workerEnv(db, "business"), "claim", envelope(`mail:${action}:qa`, { action, provider: "qa-synthetic-mail" }));
     assert.deepEqual(business, { status: 403, body: { error: "effect_provider_not_allowed" } });
   }
+  // The token takes one stand-in pair only, the QA seed's publish: a stand-in email is refused even
+  // on a synthetic Worker.
+  for (const action of ["customer.email.send", "operations.email.send"]) {
+    const synthetic = await post(workerEnv(db, "synthetic"), "claim", envelope(`mail:${action}:synthetic`, { action, provider: "qa-synthetic-mail" }));
+    assert.deepEqual(synthetic, { status: 403, body: { error: "effect_outside_send_token_refused" } }, action);
+  }
   assert.equal(count(db, "SELECT count(*) AS n FROM external_effects"), 0);
-  const synthetic = await post(workerEnv(db, "synthetic"), "claim", envelope("mail:qa", { action: "customer.email.send", provider: "qa-synthetic-mail" }));
-  assert.equal(synthetic.status, 200, JSON.stringify(synthetic.body));
 });
 
 test("mcp.* effects keep the token on a business Worker: claim, settle, reconcile and retry as before", async () => {
@@ -268,6 +275,62 @@ test("mcp.* effects keep the token on a business Worker: claim, settle, reconcil
   const standIn = await post(env, "claim", envelope("mcp:qa", { action: "mcp.test_write", provider: QA_PROVIDER }));
   assert.deepEqual(standIn, { status: 403, body: { error: "effect_provider_not_allowed" } });
 });
+
+for (const route of ["settle", "reconcile", "retry"] as const) {
+  test(`${route} binds an existing mcp effect to the configured tenant without leaking or changing foreign state`, async (t) => {
+    for (const dataClass of ["business", "synthetic"]) {
+      const db = new D1();
+      t.after(() => db.raw.close());
+      const ownerEnv = { ...workerEnv(db, dataClass), APP_TENANT_ID: OTHER_TENANT };
+      const body = envelope(`tenant:${dataClass}:${route}`, {
+        action: "mcp.test_write", provider: "frappe", retryLimit: 1, maxAttempts: 2,
+      });
+      body.effect.tenantId = OTHER_TENANT;
+      body.authority.tenantId = OTHER_TENANT;
+      const claimed = await post(ownerEnv, "claim", body);
+      assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+      const effectId = claimed.body.effect.effect_id as string;
+      const settlement = { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" };
+      const reconciliation = { outcome: "not_executed", evidence: { provider: "frappe", found: false } };
+
+      // Each route starts from a state where the tenant that owns the effect may actually use it.
+      if (route !== "settle") {
+        const unknown = await post(ownerEnv, "settle", { effectId, settlement });
+        assert.equal(unknown.status, 200, JSON.stringify(unknown.body));
+        assert.equal(unknown.body.effect.state, "unknown");
+      }
+      if (route === "retry") {
+        const reconciled = await post(ownerEnv, "reconcile", { effectId, ...reconciliation });
+        assert.equal(reconciled.status, 200, JSON.stringify(reconciled.body));
+        assert.equal(reconciled.body.effect.state, "reconciled");
+      }
+
+      // A caller-supplied tenant cannot replace the immutable tenant on the stored effect.
+      const request = {
+        effectId, tenantId: TENANT,
+        ...(route === "settle" ? { settlement } : route === "reconcile" ? reconciliation : {}),
+      };
+      const snapshot = () => Object.fromEntries([
+        "external_effects", "external_effect_attempts", "external_effect_events", "external_effect_exceptions",
+      ].map((table) => [table, db.raw.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()]));
+      const before = snapshot();
+      for (const configuredTenant of [TENANT, ` ${TENANT} `, undefined]) {
+        const callerEnv = { ...workerEnv(db, dataClass), APP_TENANT_ID: configuredTenant };
+        assert.deepEqual(await post(callerEnv, route, request), {
+          status: 403, body: { error: "effect_tenant_mismatch" },
+        }, `${route} on ${dataClass}, configured tenant ${configuredTenant}`);
+        assert.deepEqual(snapshot(), before, "tenant refusal preserves effects, attempts, events and exceptions");
+      }
+
+      // The same body succeeds for the configured owner, including a non-default tenant.
+      const allowed = await post(ownerEnv, route, request);
+      assert.equal(allowed.status, 200, JSON.stringify(allowed.body));
+      assert.equal(allowed.body.effect.tenant_id, OTHER_TENANT);
+      assert.equal(allowed.body.effect.state, { settle: "unknown", reconcile: "reconciled", retry: "retry" }[route]);
+      assert.ok(events(db, effectId) > (before.external_effect_events as unknown[]).length);
+    }
+  });
+}
 
 test("settle, reconcile and retry refuse an existing outside send and leave its row unchanged", async () => {
   const db = new D1();
@@ -378,11 +441,17 @@ test("a claim that would let a proposal send run twice is refused on the route",
   for (const [id, options] of [
     ["retry-limit", { retryLimit: 1 }],
     ["max-attempts", { maxAttempts: 2 }],
+  ] as const) {
+    const answer = await post(env, "claim", envelope(`once:${id}`, { provider: QA_PROVIDER, ...options }));
+    assert.deepEqual(answer, { status: 422, body: { error: "effect_outside_send_retry_forbidden" } }, id);
+  }
+  // A withdrawal is not the QA seed's pair, so the token refuses it before its retry is read.
+  for (const [id, options] of [
     ["withdraw-retry-limit", { action: "proposal.withdraw", retryLimit: 1 }],
     ["withdraw-max-attempts", { action: "proposal.withdraw", maxAttempts: 3 }],
   ] as const) {
     const answer = await post(env, "claim", envelope(`once:${id}`, { provider: QA_PROVIDER, ...options }));
-    assert.deepEqual(answer, { status: 422, body: { error: "effect_outside_send_retry_forbidden" } }, id);
+    assert.deepEqual(answer, { status: 403, body: { error: "effect_outside_send_token_refused" } }, id);
   }
   assert.equal(count(db, "SELECT count(*) AS n FROM external_effects"), 0);
   const once = await post(env, "claim", envelope("once:ok", { provider: QA_PROVIDER, retryLimit: 0, maxAttempts: 1 }));
@@ -415,6 +484,186 @@ test("the QA seed's own claim and settle bodies publish on a synthetic Worker an
   assert.equal(settled.status, 200, JSON.stringify(settled.body));
   assert.equal(settled.body.effect.state, "succeeded");
   assert.equal(settled.body.effect.retry_limit, 0);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The token's action allowlist
+
+/** Every action outside `mcp.*` that a bus path creates today, with the provider it uses. */
+const BUS_ACTIONS: ReadonlyArray<readonly [action: string, provider: string]> = [
+  ["proposal.publish", REAL_PROVIDER],
+  ["proposal.withdraw", REAL_PROVIDER],
+  ["customer.email.send", "gmail"],
+  ["operations.email.send", "gmail"],
+  ["drive.folder.create", "google-drive"],
+  ["drive.file.copy", "google-drive"],
+  ["drive.file.upload", "google-drive"],
+  ["docs.document.merge", "google-docs"],
+  ["document.generate", "r2"],
+  ["accounting.invoice.submit", "quickbooks"],
+  ["quickbooks.invoice.create", "quickbooks"],
+  ["quickbooks.payment.create", "quickbooks"],
+  ["quickbooks.creditmemo.create", "quickbooks"],
+  ["quickbooks.refundreceipt.create", "quickbooks"],
+  ["quickbooks.journalentry.create", "quickbooks"],
+  ["quickbooks.bill.read", "quickbooks"],
+  ["frappe.post", "frappe"],
+  ["frappe.put", "frappe"],
+  ["jobnimbus.post", "jobnimbus"],
+  ["jobnimbus.put", "jobnimbus"],
+  ["postiz.intent.submit", "postiz"],
+  ["postiz.intent.stop", "postiz"],
+  ["preview:agent.publish", "newo"],
+  ["approve:agent.publish", "newo"],
+  ["execute:agent.publish", "newo"],
+  ["facet.design.v2.compatibility_projection", "frappe"],
+  ["facet.design.v2.compatibility_projection.blocked", "frappe"],
+  // Near misses of the prefix.
+  ["mcp", "frappe"],
+  ["MCP.test_write", "frappe"],
+  ["xmcp.test_write", "frappe"],
+  ["mcp_test_write", "frappe"],
+  [" mcp.test_write", "frappe"],
+];
+const OUTSIDE_SENDS = new Set(["proposal.publish", "proposal.withdraw", "customer.email.send", "operations.email.send"]);
+const refusalFor = (action: string) =>
+  OUTSIDE_SENDS.has(action) ? "effect_outside_send_token_refused" : "effect_runtime_action_not_allowed";
+
+/** Each later route on an existing effect answers `expected`, and the effect does not move. */
+async function existingRoutesRefuse(db: D1, env: AppEnv, effectId: string, attemptId: string, expected: string, label: string) {
+  const before = effectRow(db, effectId);
+  const eventCount = events(db, effectId);
+  for (const [route, body] of [
+    ["settle", { effectId, settlement: { attemptId, outcome: "accepted", readback: { status: "match", observed: {} } } }],
+    ["reconcile", { effectId, outcome: "executed", evidence: { synthetic: true } }],
+    ["retry", { effectId }],
+  ] as const) {
+    assert.deepEqual(await post(env, route, body), { status: 403, body: { error: expected } }, `${route}: ${label}`);
+  }
+  assert.deepEqual(effectRow(db, effectId), before, label);
+  assert.equal(events(db, effectId), eventCount, label);
+}
+
+test("the token refuses every non-mcp action on every route, on a business and a synthetic Worker, and nothing moves", async () => {
+  for (const dataClass of ["business", undefined, "synthetic"]) {
+    const db = new D1();
+    const env = workerEnv(db, dataClass);
+    for (const [action, provider] of BUS_ACTIONS) {
+      const answer = await post(env, "claim", envelope(`allowlist:claim:${action}`, { action, provider }));
+      assert.deepEqual(answer, { status: 403, body: { error: refusalFor(action) } }, `claim ${action} on ${dataClass}`);
+    }
+    // The rule reads the effect's own action, never the authority's list: an envelope whose
+    // authority names an mcp tool does not carry a bus action through.
+    for (const [action, provider] of [["accounting.invoice.submit", "quickbooks"], ["proposal.withdraw", REAL_PROVIDER]] as const) {
+      const disguised = envelope(`allowlist:disguised:${action}`, { action, provider });
+      disguised.authority.allowedActions = ["mcp.test_write", action];
+      assert.deepEqual(await post(env, "claim", disguised), { status: 403, body: { error: refusalFor(action) } }, `disguised ${action} on ${dataClass}`);
+    }
+    assert.equal(count(db, "SELECT count(*) AS n FROM external_effects"), 0);
+    // The same actions created by the bus itself: the token may not settle, reconcile or retry one.
+    for (const [action, provider] of BUS_ACTIONS) {
+      const { effect, attempt } = await busClaim(workerEnv(db), `allowlist:existing:${action}`, { action, provider });
+      await existingRoutesRefuse(db, env, effect.effect_id, attempt.attempt_id, refusalFor(action), `${action} on ${dataClass}`);
+    }
+  }
+});
+
+test("the QA seed's pair is the only stand-in the token takes, and only on a synthetic Worker", async () => {
+  const db = new D1();
+  const synthetic = workerEnv(db, "synthetic");
+  // Production refuses the QA pair on every route.
+  for (const dataClass of ["business", undefined, "Business"]) {
+    const env = workerEnv(db, dataClass);
+    assert.deepEqual(await post(env, "claim", envelope(`qa-pair:${dataClass}`, { provider: QA_PROVIDER })), { status: 403, body: { error: "effect_provider_not_allowed" } });
+    const { effect, attempt } = await busClaim(workerEnv(db), `qa-pair:existing:${dataClass}`, { provider: QA_PROVIDER });
+    await existingRoutesRefuse(db, env, effect.effect_id, attempt.attempt_id, "effect_provider_not_allowed", `qa pair on ${dataClass}`);
+  }
+  // The QA exception: claim and settle the pair on a synthetic Worker.
+  const claimed = await post(synthetic, "claim", envelope("qa-pair:synthetic", { provider: QA_PROVIDER }));
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+  const settled = await post(synthetic, "settle", {
+    effectId: claimed.body.effect.effect_id,
+    settlement: { attemptId: claimed.body.attempt.attempt_id, outcome: "accepted", readback: { status: "match", observed: envelope("qa-pair:synthetic").effect.request } },
+  });
+  assert.equal(settled.status, 200, JSON.stringify(settled.body));
+  assert.equal(settled.body.effect.state, "succeeded");
+
+  // Every other stand-in pair is refused on a synthetic Worker too, on every route.
+  const pairs: ReadonlyArray<readonly [action: string, provider: string, expected: string]> = [
+    ["proposal.withdraw", QA_PROVIDER, "effect_outside_send_token_refused"],
+    ["proposal.publish", "qa-synthetic-mail", "effect_outside_send_token_refused"],
+    ["proposal.publish", "qa-synthetic-slow-provider", "effect_outside_send_token_refused"],
+    ["customer.email.send", "qa-synthetic-mail", "effect_outside_send_token_refused"],
+    ["accounting.invoice.submit", QA_PROVIDER, "effect_runtime_action_not_allowed"],
+    ["quickbooks.bill.read", "qa-synthetic-quickbooks", "effect_runtime_action_not_allowed"],
+    ["mcp.test_write", QA_PROVIDER, "effect_provider_not_allowed"],
+    ["mcp.test_write", "qa-synthetic-frappe", "effect_provider_not_allowed"],
+  ];
+  const effects = count(db, "SELECT count(*) AS n FROM external_effects");
+  for (const [action, provider, expected] of pairs) {
+    const answer = await post(synthetic, "claim", envelope(`stand-in:${action}:${provider}`, { action, provider }));
+    assert.deepEqual(answer, { status: 403, body: { error: expected } }, `claim ${action} via ${provider}`);
+  }
+  assert.equal(count(db, "SELECT count(*) AS n FROM external_effects"), effects);
+  for (const [action, provider, expected] of pairs) {
+    const { effect, attempt } = await busClaim(synthetic, `stand-in:existing:${action}:${provider}`, { action, provider });
+    await existingRoutesRefuse(db, synthetic, effect.effect_id, attempt.attempt_id, expected, `${action} via ${provider}`);
+  }
+});
+
+test("mcp.* keeps the token on every Worker, and a misspelt data class reads as business", async () => {
+  for (const dataClass of ["business", undefined, "synthetic", "Synthetic"]) {
+    const db = new D1();
+    const env = workerEnv(db, dataClass);
+    for (const action of ["mcp.test_write", "mcp.request_publish_proposal_evidence_pack"]) {
+      const claimed = await post(env, "claim", envelope(`mcp:${action}`, { action, provider: "frappe" }));
+      assert.equal(claimed.status, 200, `${action} on ${dataClass}: ${JSON.stringify(claimed.body)}`);
+      const settled = await post(env, "settle", {
+        effectId: claimed.body.effect.effect_id,
+        settlement: { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" },
+      });
+      assert.equal(settled.status, 200, JSON.stringify(settled.body));
+      const reconciled = await post(env, "reconcile", { effectId: claimed.body.effect.effect_id, outcome: "not_executed", evidence: { found: false } });
+      assert.equal(reconciled.status, 200, JSON.stringify(reconciled.body));
+      // Past the route, the runtime answers: one attempt was allowed, so no retry.
+      assert.deepEqual(await post(env, "retry", { effectId: claimed.body.effect.effect_id }), { status: 400, body: { error: "effect_retry_exhausted" } });
+    }
+    // The QA pair on a misspelt class is production's refusal.
+    if (dataClass === "Synthetic") {
+      assert.deepEqual(await post(env, "claim", envelope("qa:misspelt", { provider: QA_PROVIDER })), { status: 403, body: { error: "effect_provider_not_allowed" } });
+    }
+  }
+});
+
+test("every bearer route applies the token's allowlist before it reaches the runtime", () => {
+  const read = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+  // index.ts serves exactly four bearer routes, each to its own handler.
+  const index = read("index.ts");
+  const block = /if \(url\.pathname\.startsWith\("\/admin\/effects\/"\)\) \{[\s\S]*?return json\(\{ error: "not_found" \}, 404\);/.exec(index)![0];
+  const routes = Object.fromEntries(
+    [...block.matchAll(/url\.pathname === "\/admin\/effects\/([a-z]+)"\)\n\s*return await (\w+)\(/g)].map((m) => [m[1], m[2]]),
+  );
+  assert.deepEqual(routes, {
+    claim: "handleExternalEffectClaim",
+    reconcile: "handleExternalEffectReconciliation",
+    retry: "handleExternalEffectRetry",
+    settle: "handleExternalEffectSettlement",
+  });
+  assert.match(block, /constantTimeEqual\(bearer\(req\), env\.EFFECT_RUNTIME_TOKEN\)/);
+  assert.equal(index.split('"/admin/effects/').length - 1, 5, "no other route names /admin/effects/");
+  // Each handler refuses by the allowlist before its first runtime call.
+  const admin = read("effect-runtime-admin.ts");
+  const body = (name: string) => new RegExp(`(?:export )?(?:async )?function ${name}\\([\\s\\S]*?\\n\\}\\n`).exec(admin)![0];
+  const runtime = /\b(?:propose|authorize|claim|settle|reconcile|retry)ExternalEffect\(/;
+  for (const handler of Object.values(routes)) {
+    const text = body(handler);
+    const refusal = text.search(handler === "handleExternalEffectClaim" ? /\btokenRefusal\(/ : /\bexistingEffectRefusal\(/);
+    assert.ok(refusal > 0, `${handler} applies the allowlist`);
+    assert.ok(refusal < text.search(runtime), `${handler} refuses before the runtime`);
+  }
+  assert.match(body("existingEffectRefusal"), /\btokenRefusal\(env, existing\.action, existing\.provider\)/);
+  // The module exports the four handlers and nothing else that reaches the runtime.
+  assert.deepEqual([...admin.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]).sort(), Object.values(routes).sort());
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -591,27 +840,49 @@ test("D1 keeps an unknown withdrawal unknown: no person's record exists for one 
 });
 
 test("the evidence guard keys on the action: a proposal send claimed under another aggregate type needs a person's record too", async () => {
-  // The aggregate type is the claimer's own word. A stand-in on a synthetic Worker is claimed with
-  // no permit, so 0093 binds nothing; the guard must hold the send on its action alone.
+  // The aggregate type is the claimer's own word. A stand-in is claimed with no permit, so 0093
+  // binds nothing; the guard must hold the send on its action alone. The token takes the QA seed's
+  // publish on a synthetic Worker; a withdrawal is the bus's own, so it is claimed in the bus here.
   const db = new D1();
   const env = workerEnv(db, "synthetic");
   for (const action of ["proposal.publish", "proposal.withdraw"]) {
     const spoofed = envelope(`spoof:${action}`, { action, provider: QA_PROVIDER });
     spoofed.effect.aggregate = { type: "communication", id: `communication:spoof:${action}`, version: 0 };
-    const claimed = await post(env, "claim", spoofed);
-    assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
-    const effectId = claimed.body.effect.effect_id;
+    let effectId: string;
+    if (action === "proposal.publish") {
+      const claimed = await post(env, "claim", spoofed);
+      assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+      effectId = claimed.body.effect.effect_id;
+      const settled = await post(env, "settle", { effectId, settlement: { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" } });
+      assert.equal(settled.status, 200, JSON.stringify(settled.body));
+    } else {
+      assert.deepEqual(await post(env, "claim", spoofed), { status: 403, body: { error: "effect_outside_send_token_refused" } });
+      const lost = await runExternalEffect(env, { ...spoofed.effect, authority: spoofed.authority } as never, {
+        async dispatch() {
+          throw new Error("synthetic_provider_response_lost");
+        },
+        async replay() {
+          return {};
+        },
+      });
+      effectId = lost.effect.effect_id;
+    }
     assert.equal(effectRow(db, effectId).aggregate_type, "communication");
-    const settled = await post(env, "settle", { effectId, settlement: { attemptId: claimed.body.attempt.attempt_id, outcome: "unknown" } });
-    assert.equal(settled.status, 200, JSON.stringify(settled.body));
     assert.equal(stateOf(db, effectId), "unknown");
     const before = effectRow(db, effectId);
-    for (const outcome of ["executed", "not_executed"]) {
-      assert.deepEqual(
-        await post(env, "reconcile", { effectId, outcome, evidence: { provider: "says so" } }),
-        { status: 409, body: { error: "effect_reconciliation_evidence_missing" } },
-        `${action} ${outcome}`,
-      );
+    for (const outcome of ["executed", "not_executed"] as const) {
+      if (action === "proposal.publish") {
+        assert.deepEqual(
+          await post(env, "reconcile", { effectId, outcome, evidence: { provider: "says so" } }),
+          { status: 409, body: { error: "effect_reconciliation_evidence_missing" } },
+          `${action} ${outcome}`,
+        );
+      } else {
+        await assert.rejects(
+          reconcileExternalEffect(env, effectId, { outcome, evidence: { provider: "says so" }, now: afterLateAnswerWindow() }),
+          /proposal_delivery_settle_evidence_missing/,
+        );
+      }
     }
     assert.throws(() => moveTo(db, effectId, "succeeded"), /proposal_delivery_settle_evidence_missing/);
     assert.throws(() => moveTo(db, effectId, "reconciled", afterLateAnswerWindow()), /proposal_delivery_settle_evidence_missing/);

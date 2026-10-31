@@ -21,7 +21,7 @@ import {
   type NewoEventV1,
 } from "../src/newo.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
-import type { NewoSessionRecord } from "../src/newo-store.ts";
+import { listNewoCallbacksForAlert, type NewoSessionRecord } from "../src/newo-store.ts";
 import { materializeOperatingCore } from "../src/operating-core.ts";
 import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
@@ -1517,6 +1517,178 @@ test("a callback request alert never stands in for the failure alert", async (t)
     newoOwnerAlertMarker("session-001", "handoff", "event-handoff-001"),
     newoOwnerAlertMarker("session-001", "failure", "event-handoff-001"),
   );
+});
+
+test("the sweep recovers a later session failure after the callback request alert was confirmed", async (t) => {
+  const alerting = alertingNewoState(t);
+  const requested = handoffEvent();
+  const handoffMarker = newoOwnerAlertMarker(requested.session_id, "handoff", requested.event_id);
+  const failureMarker = newoOwnerAlertMarker(requested.session_id, "failure", requested.event_id);
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", requested), 200);
+  assert.equal(alerting.emails.length, 2);
+  assert.deepEqual(alerting.markers(), [handoffMarker]);
+
+  alerting.gmail.timeouts = 2;
+  const failed = failedSession({
+    occurred_at: new Date(Date.parse(requested.occurred_at) + 60_000).toISOString(),
+  });
+  assert.equal(await alerting.deliver("/webhook/newo/report", failed), 200);
+  assert.equal(alerting.timedOut.length, 2);
+  assert.deepEqual({ ...alerting.db.raw.prepare(
+    "SELECT status, handoff_status FROM newo_sessions WHERE session_id = ?",
+  ).get(requested.session_id) }, { status: "failed", handoff_status: "requested" });
+  assert.equal(alerting.callbackRecords()[0]?.reason, "callback_requested");
+  assert.equal(alerting.callbackRecords()[0]?.event_id, requested.event_id);
+  assert.deepEqual(alerting.markers(), [handoffMarker]);
+  const unknownEffects = async () => (await alerting.env.DB.prepare(
+    "SELECT effect_id, state, attempt_count FROM external_effects WHERE state = 'unknown' ORDER BY effect_id",
+  ).all()).results.map((row: Row) => ({ ...row }));
+  const unknownBefore = await unknownEffects();
+  assert.equal(unknownBefore.length, 2);
+
+  const before = alerting.emails.length;
+  const recovery = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.equal(recovery.sent, 1, "a confirmed request never confirms a later failure alert");
+  const recovered = alerting.emails.slice(before);
+  assert.deepEqual(toAlertBoxes(recovered), FAILURE_BOXES);
+  assert.ok(recovered.every((email) => email.body.includes("attempt sweep-") && email.body.includes("repeats it")));
+  assert.deepEqual(alerting.markers(), [failureMarker, handoffMarker].sort());
+  assert.deepEqual(await unknownEffects(), unknownBefore, "the timed-out effects stay unknown and are not replayed");
+  const effects = await effectRows(alerting.env);
+  assert.equal(effects.length, 6);
+  assert.ok(effects.every((effect) => Number(effect.attempt_count) === 1));
+  assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 0);
+  assert.equal(alerting.emails.length, before + 2, "confirmed recovery is not sent again");
+});
+
+test("the sweep recovers a late accepted session failure without replacing a newer normal report", async (t) => {
+  const alerting = alertingNewoState(t);
+  const requested = handoffEvent();
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", requested), 200);
+  const originalCallback = alerting.callbackRecords();
+  const handoffMarker = newoOwnerAlertMarker(requested.session_id, "handoff", requested.event_id);
+  assert.deepEqual(alerting.markers(), [handoffMarker]);
+  const newer = {
+    ...closingReport("routine", "requested"),
+    event_id: "event-newer-normal-report",
+    occurred_at: new Date(Date.parse(requested.occurred_at) + 120_000).toISOString(),
+  };
+  assert.equal(await alerting.deliver("/webhook/newo/report", newer), 200);
+  const latestSession = () => ({ ...alerting.db.raw.prepare(
+    "SELECT * FROM newo_sessions WHERE session_id = ?",
+  ).get(requested.session_id) });
+  const latestBefore = latestSession();
+  assert.equal(latestBefore.status, "ended");
+  assert.equal(latestBefore.handoff_status, "requested");
+  assert.equal(latestBefore.report_event_id, newer.event_id);
+
+  alerting.gmail.timeouts = 2;
+  const lateFailure = failedSession({
+    occurred_at: new Date(Date.parse(requested.occurred_at) + 60_000).toISOString(),
+  });
+  assert.equal(await alerting.deliver("/webhook/newo/report", lateFailure), 200);
+  const receipt = alerting.db.raw.prepare(
+    "SELECT status, event_type, session_id, envelope_id FROM newo_event_receipts WHERE event_id = ?",
+  ).get(lateFailure.event_id);
+  assert.deepEqual({ ...receipt }, {
+    status: "accepted", event_type: "session_failed", session_id: requested.session_id,
+    envelope_id: latestBefore.lead_envelope_id,
+  });
+  assert.equal(alerting.timedOut.length, 2);
+  assert.deepEqual(latestSession(), latestBefore, "an older event cannot replace the newer session projection");
+  assert.deepEqual(alerting.callbackRecords(), originalCallback);
+  assert.deepEqual(alerting.markers(), [handoffMarker]);
+  const unknownEffects = async () => (await alerting.env.DB.prepare(
+    "SELECT effect_id, state, attempt_count FROM external_effects WHERE state = 'unknown' ORDER BY effect_id",
+  ).all()).results.map((row: Row) => ({ ...row }));
+  const unknownBefore = await unknownEffects();
+  assert.equal(unknownBefore.length, 2);
+
+  const before = alerting.emails.length;
+  assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 1,
+    "an accepted late failure owes an urgent alert independently of the latest session status");
+  const recovered = alerting.emails.slice(before);
+  assert.deepEqual(toAlertBoxes(recovered), FAILURE_BOXES);
+  assert.ok(recovered.every((email) => email.body.includes("attempt sweep-") && email.body.includes("repeats it")));
+  assert.deepEqual(alerting.markers(), [handoffMarker,
+    newoOwnerAlertMarker(requested.session_id, "failure", lateFailure.event_id)].sort());
+  assert.deepEqual(await unknownEffects(), unknownBefore);
+  assert.ok((await effectRows(alerting.env)).every((effect) => Number(effect.attempt_count) === 1));
+  assert.deepEqual(latestSession(), latestBefore);
+  assert.deepEqual(alerting.callbackRecords(), originalCallback);
+  assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 0);
+  assert.equal(await alerting.deliver("/webhook/newo/report", lateFailure), 200);
+  assert.equal(alerting.emails.length, before + 2, "a confirmed failure marker also suppresses provider replay");
+});
+
+test("failure provenance requires an accepted receipt for this session and its owned tenant envelope", async (t) => {
+  const alerting = alertingNewoState(t);
+  const requested = handoffEvent();
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", requested), 200);
+  const session = alerting.db.raw.prepare(
+    "SELECT lead_envelope_id FROM newo_sessions WHERE session_id = ?",
+  ).get(requested.session_id)!;
+  const envelopeId = String(session.lead_envelope_id);
+  const kinds = async () => (await listNewoCallbacksForAlert(alerting.env as never, null, 25))
+    .map((callback) => callback.alert_kind);
+  const cases = [
+    { name: "processing", status: "processing" },
+    { name: "failed", status: "failed" },
+    { name: "dead", status: "dead" },
+    { name: "another event type", eventType: "session_ended" },
+    { name: "another session", sessionId: "other-session" },
+    { name: "no envelope", envelopeId: null },
+    { name: "missing envelope", envelopeId: "ow_missing_synthetic" },
+    { name: "different owned envelope", envelopeId: "ow_other_synthetic" },
+    { name: "foreign tenant envelope", foreignTenant: true },
+  ];
+  for (const probe of cases) {
+    await t.test(probe.name, async () => {
+      alerting.db.raw.exec("SAVEPOINT receipt_provenance_probe");
+      try {
+        alerting.db.raw.prepare(`INSERT INTO envelopes (
+            envelope_id, source, payload_json, raw_key, ts, status, dedup_key, created_at, updated_at, tenant_id
+          ) SELECT 'ow_other_synthetic', source, payload_json, raw_key, ts, status,
+            'synthetic-other-envelope', created_at, updated_at, tenant_id FROM envelopes WHERE envelope_id = ?`)
+          .run(envelopeId);
+        alerting.db.raw.prepare(`INSERT INTO newo_event_receipts (
+            event_id, session_id, event_type, payload_hash, raw_key, envelope_id, status, first_seen_at, last_seen_at
+          ) VALUES ('synthetic-failure-provenance', ?, ?, 'synthetic-hash', 'raw/newo/synthetic.json', ?, ?, ?, ?)`)
+          .run("sessionId" in probe ? probe.sessionId : requested.session_id,
+            "eventType" in probe ? probe.eventType : "session_failed",
+            "envelopeId" in probe ? probe.envelopeId : envelopeId,
+            "status" in probe ? probe.status : "accepted", requested.occurred_at, requested.occurred_at);
+        if ("foreignTenant" in probe) {
+          alerting.db.raw.prepare("UPDATE envelopes SET tenant_id = 'other-tenant' WHERE envelope_id = ?").run(envelopeId);
+        }
+        assert.deepEqual(await kinds(), ["handoff"]);
+      } finally {
+        alerting.db.raw.exec("ROLLBACK TO receipt_provenance_probe; RELEASE receipt_provenance_probe");
+      }
+    });
+  }
+  assert.deepEqual(await listNewoCallbacksForAlert({ ...alerting.env, APP_TENANT_ID: "other-tenant" } as never,
+    null, 25), []);
+});
+
+test("rejected and conflicting failure input never becomes accepted failure provenance", async (t) => {
+  const alerting = alertingNewoState(t);
+  const requested = handoffEvent();
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", requested), 200);
+  const rejected = failedSession({ event_id: "event-rejected-failure" });
+  assert.equal((await worker.fetch(request("/webhook/newo/report", rejected, "wrong-token"),
+    alerting.env as never, ctx as never)).status, 401);
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", rejected), 422);
+  assert.equal(alerting.db.raw.prepare("SELECT COUNT(*) AS n FROM newo_event_receipts WHERE event_id = ?")
+    .get(rejected.event_id)?.n, 0);
+  assert.equal(await alerting.deliver("/webhook/newo/report", failedSession({ event_id: requested.event_id })), 409);
+  assert.equal(alerting.db.raw.prepare("SELECT event_type FROM newo_event_receipts WHERE event_id = ?")
+    .get(requested.event_id)?.event_type, "handoff_requested");
+  assert.deepEqual((await listNewoCallbacksForAlert(alerting.env as never, null, 25))
+    .map((callback) => callback.alert_kind), ["handoff"]);
+  assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 0);
+  assert.deepEqual(alerting.markers(), [newoOwnerAlertMarker(requested.session_id, "handoff", requested.event_id)]);
+  assert.equal(alerting.emails.length, 2);
 });
 
 test("a sent marker that cannot be read counts as not sent", async (t) => {

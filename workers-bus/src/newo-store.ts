@@ -273,7 +273,12 @@ export interface NewoCallbackAlertRecord extends NewoCallbackRecord {
   alert_urgency: NewoCallbackRecord["urgency"];
 }
 
-/** Bounded, tenant-scoped traversal of every callback still owed, including failed handoffs. */
+/**
+ * Bounded, tenant-scoped traversal of every callback still owed, including failed handoffs.
+ * An accepted late failure still owes its alert when a newer session projection is healthy.
+ * Read that durable receipt only through the session's owned envelope and matching tenant;
+ * raw input, unaccepted receipts and receipts of another session/envelope do not count.
+ */
 export async function listNewoCallbacksForAlert(
   env: Env,
   afterCallbackId: string | null,
@@ -281,7 +286,16 @@ export async function listNewoCallbacksForAlert(
 ): Promise<NewoCallbackAlertRecord[]> {
   const result = await env.DB.prepare(
     `SELECT callback.*,
-        CASE WHEN session.handoff_status = 'failed' OR callback.reason <> 'callback_requested'
+        CASE WHEN session.status = 'failed' OR session.handoff_status = 'failed'
+          OR callback.reason <> 'callback_requested'
+          OR EXISTS (
+            SELECT 1 FROM newo_event_receipts failure
+            JOIN envelopes envelope ON envelope.envelope_id = failure.envelope_id
+             WHERE failure.session_id = callback.session_id
+               AND failure.event_type = 'session_failed' AND failure.status = 'accepted'
+               AND failure.envelope_id = session.lead_envelope_id
+               AND envelope.tenant_id = callback.tenant_id
+          )
           THEN 'failure' ELSE 'handoff' END AS alert_kind,
         CASE WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
           WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'

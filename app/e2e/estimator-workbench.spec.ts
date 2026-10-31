@@ -74,6 +74,12 @@ test.describe("Estimator Workbench acceptance", () => {
       await page.route(`**/api/v1/estimator/jobs/${jobId}`, async (route) => {
         const response = await route.fetch();
         const model = await response.json();
+        model.job = {
+          ...model.job,
+          customer_display_name: "Synthetic Cedar Household",
+          address: "Unit 4, 118 Example Way NW, Edmonton, AB",
+          job_number: "IW-SYNTHETIC-101",
+        };
         model.proposal_readiness.state = state;
         if (state === "ready") model.proposal_readiness.reasons = [];
         await route.fulfill({ response, json: model });

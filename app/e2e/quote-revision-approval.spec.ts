@@ -236,13 +236,20 @@ test.describe("Quote change review acceptance", () => {
     await expect(page.getByText(syntheticJob.customer_display_name)).toHaveCount(0);
   });
 
-  test("names the selected estimator job on the preparation route without expanding its write", async ({
+  test("names the selected estimator job on the preparation route when that action is granted", async ({
     page,
   }) => {
     await page.route(`**/api/v1/estimator/jobs/${syntheticJob.id}`, async (route) => {
       const response = await route.fetch();
       const model = await response.json();
-      await route.fulfill({ response, json: { ...model, job: { ...model.job, ...syntheticJob } } });
+      await route.fulfill({
+        response,
+        json: {
+          ...model,
+          allowed_actions: [...model.allowed_actions, "quote_revision_approval.prepare"],
+          job: { ...model.job, ...syntheticJob },
+        },
+      });
     });
     await page.goto(`/estimator/jobs/${syntheticJob.id}/revision`);
     await expect(page.getByRole("heading", { name: "Ask for a new quote" })).toBeVisible();

@@ -1,15 +1,11 @@
-# Arms GitHub auto-merge for Dependabot pull requests whose every update is a
-# semver patch or minor. GitHub then merges once the required `gate` check is
-# green, and a red check keeps the pull request open. Majors and updates with no
-# semver type (digest-only) are left for review.
+# Read-only dependency metadata for an authorized root's serial review.
+# Never merge, approve or arm auto-merge with GITHUB_TOKEN. The authorized
+# user-token merge path must produce its own push CI and QA qualification.
+# These advisory notices grant no source approval or release authority.
 #
-# Not a required check: it only turns auto-merge on, and it never fails a pull
-# request on policy.
-#
-# Only GitHub-owned actions are allowed in this organization, so this reads the
-# `update-type:` lines Dependabot writes into its commit message with the
-# preinstalled `gh` CLI instead of using dependabot/fetch-metadata.
-name: Dependabot auto-merge
+# Only GitHub-owned actions are allowed, so read Dependabot's commit metadata
+# with the preinstalled gh CLI instead of dependabot/fetch-metadata.
+name: Dependabot review classification
 
 on:
   pull_request:
@@ -18,38 +14,51 @@ on:
 permissions: {}
 
 jobs:
-  auto-merge:
+  classify:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
-      - name: Arm auto-merge for patch and minor updates
+      - name: Classify dependency metadata for serial review
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          types="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate \
-            --jq '.[].commit.message' | sed -n 's/^[[:space:]]*update-type:[[:space:]]*//p' | sort -u)"
-          if [[ -z "${types}" ]]; then
-            echo "::notice::no update type in the commit message; left for review"
+          if ! messages="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate \
+            --jq '.[].commit.message')"; then
+            echo "::warning::dependency_classification=metadata_unavailable; commit metadata read failed"
+            exit 1
+          fi
+          types="$(printf '%s\n' "$messages" | sed -n 's/^[[:space:]]*update-type:[[:space:]]*//p' | sort -u)"
+          counts="$(printf '%s\n' "$messages" | awk '
+            /^[[:space:]]*-[[:space:]]*dependency-name:/ { dependencies++ }
+            /^[[:space:]]*update-type:/ { types++ }
+            END { printf "%d %d", dependencies, types }')"
+          read -r dependencies declared_types <<< "$counts"
+          if [[ -z "$types" || "$dependencies" -eq 0 || "$dependencies" -ne "$declared_types" ]]; then
+            echo "::notice::dependency_classification=metadata_missing; dependency update types are incomplete"
             exit 0
           fi
-          if grep -qvE '^version-update:semver-(patch|minor)$' <<<"${types}"; then
-            echo "::notice::not only patch and minor updates (${types//$'\n'/, }); left for review"
+          if grep -qvE '^version-update:semver-(patch|minor)$' <<<"$types"; then
+            echo "::notice::dependency_classification=review_required; metadata is not only patch and minor updates"
             exit 0
           fi
-          # Auto-merge on a branch with no required status check would merge at once.
-          required="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/${BASE}" \
-            --jq '[.[] | select(.type == "required_status_checks")] | length')"
-          if [[ "${required}" -eq 0 ]]; then
-            echo "::warning::${BASE} has no required status check, so auto-merge would merge without CI; not arming it"
+          if ! required="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/rules/branches/${BASE}" \
+            --jq '[.[] | select(.type == "required_status_checks")] | length')"; then
+            echo "::warning::dependency_classification=checks_unavailable; branch rules read failed"
+            exit 1
+          fi
+          if [[ ! "$required" =~ ^[0-9]+$ ]]; then
+            echo "::warning::dependency_classification=checks_unavailable; branch rules result is invalid"
+            exit 1
+          fi
+          if [[ "$required" -eq 0 ]]; then
+            echo "::warning::dependency_classification=checks_missing; no required status check is configured"
             exit 0
           fi
-          gh pr merge --auto --squash "${PR_URL}"
-          echo "::notice::auto-merge armed (${types//$'\n'/, })"
+          echo "::notice::dependency_classification=eligible_for_serial_review; patch/minor metadata and required checks are configured; authorized root merge and exact push CI/QA remain separate"

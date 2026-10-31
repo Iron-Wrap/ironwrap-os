@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -1057,3 +1060,169 @@ test("release-please workflow validation rejects a per-pull-request run, a write
     validateReleasePleaseWorkflow(workflow.replace("RELEASE_PLEASE_VERSION: 17.11.2", "RELEASE_PLEASE_VERSION: latest")),
   );
 });
+
+
+const dependencyWorkflowUrl = new URL(
+  "../.github/workflows/dependabot-automerge.yml",
+  import.meta.url,
+);
+
+function dependencyWorkflowRun(workflow) {
+  const marker = "        run: |\n";
+  const start = workflow.indexOf(marker);
+  assert.ok(start >= 0, "dependency workflow has its real shell step");
+  const lines = workflow.slice(start + marker.length).split("\n");
+  const run = [];
+  for (const line of lines) {
+    if (line && !line.startsWith("          ")) break;
+    run.push(line.slice(10));
+  }
+  assert.equal(workflow.indexOf(marker, start + marker.length), -1, "one advisory shell step");
+  return run.join("\n");
+}
+
+function dependencyMessages(types) {
+  return [
+    "Bump synthetic dependencies",
+    "---",
+    "updated-dependencies:",
+    ...types.flatMap((type, index) => [
+      `- dependency-name: synthetic-${index}`,
+      "  dependency-type: direct:production",
+      ...(type === null ? [] : [`  update-type: ${type}`]),
+    ]),
+    "...",
+    "",
+  ].join("\n");
+}
+
+function runDependencyClassification(options = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "ironwrap-dependency-review-"));
+  try {
+    const trace = join(directory, "gh-calls.jsonl");
+    const messages = join(directory, "messages.txt");
+    writeFileSync(messages, options.messages ?? dependencyMessages(["version-update:semver-patch"]));
+    const stub = String.raw`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.OFFLINE_GH_TRACE, JSON.stringify(args) + "\n");
+if (process.env.GH_TOKEN !== "offline-test-token" || process.env.GITHUB_TOKEN !== "offline-test-token") {
+  process.stderr.write("The fixture refuses real credentials.\n");
+  process.exit(95);
+}
+let method = args.includes("-f") || args.includes("-F") || args.includes("--field") || args.includes("--raw-field") ? "POST" : "GET";
+const methodIndex = args.findIndex((value) => value === "--method" || value === "-X");
+if (methodIndex >= 0) method = args[methodIndex + 1];
+const endpoint = args.find((value) => value.startsWith("repos/"));
+if (args[0] !== "api" || method !== "GET") {
+  process.stderr.write("Mutation or unexpected command refused by offline gh: " + JSON.stringify(args) + "\n");
+  process.exit(97);
+}
+if (endpoint === "repos/example/synthetic/pulls/123/commits") {
+  if (process.env.OFFLINE_FAIL_COMMITS === "1") process.exit(42);
+  process.stdout.write(fs.readFileSync(process.env.OFFLINE_MESSAGES_PATH, "utf8"));
+} else if (endpoint === "repos/example/synthetic/rules/branches/main") {
+  if (process.env.OFFLINE_FAIL_RULES === "1") process.exit(43);
+  process.stdout.write(process.env.OFFLINE_RULES_RESULT + "\n");
+} else {
+  process.stderr.write("Unexpected API read refused: " + String(endpoint) + "\n");
+  process.exit(98);
+}
+`;
+    writeFileSync(join(directory, "gh"), `#!${process.execPath}\n${stub}`, { mode: 0o755 });
+    const env = {
+      ...process.env,
+      PATH: `${directory}:${dirname(process.execPath)}:/usr/bin:/bin`,
+      GH_TOKEN: "offline-test-token",
+      GITHUB_TOKEN: "offline-test-token",
+      GH_ENTERPRISE_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
+      GH_HOST: "offline.invalid",
+      GITHUB_REPOSITORY: "example/synthetic",
+      PR_NUMBER: "123",
+      PR_URL: "https://example.invalid/pull/123",
+      BASE: "main",
+      OFFLINE_GH_TRACE: trace,
+      OFFLINE_MESSAGES_PATH: messages,
+      OFFLINE_FAIL_COMMITS: options.failCommits ? "1" : "0",
+      OFFLINE_FAIL_RULES: options.failRules ? "1" : "0",
+      OFFLINE_RULES_RESULT: options.rules ?? "1",
+    };
+    const selected = spawnSync("/bin/bash", ["-c", "command -v gh"], { env, encoding: "utf8" });
+    assert.equal(selected.status, 0);
+    assert.equal(selected.stdout.trim(), join(directory, "gh"), "only the offline gh stub is executable here");
+    const result = spawnSync("/bin/bash", ["-c", dependencyWorkflowRun(readFileSync(dependencyWorkflowUrl, "utf8"))], {
+      cwd: directory,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.error, undefined);
+    const calls = readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function assertReadOnlyDependencyCalls(result) {
+  for (const args of result.calls) {
+    assert.equal(args[0], "api", `No mutation may be attempted: ${JSON.stringify(result.calls)}`);
+    const index = args.findIndex((value) => value === "--method" || value === "-X");
+    const method = index >= 0 ? args[index + 1] : "GET";
+    assert.equal(method, "GET", JSON.stringify(args));
+    assert.ok(!args.some((value) => ["-f", "-F", "--field", "--raw-field"].includes(value)), JSON.stringify(args));
+  }
+}
+
+test("dependency bot workflow uses read-only permissions", () => {
+  const workflow = readFileSync(dependencyWorkflowUrl, "utf8");
+  assert.match(workflow, /^permissions: \{\}$/m);
+  const permissions = workflow.match(/^    permissions:\n((?:      [^\n]+\n)+)/m)?.[1];
+  assert.ok(permissions);
+  assert.deepEqual(permissions.trim().split("\n").map((line) => line.trim()).sort(), ["contents: read", "pull-requests: read"]);
+  assert.doesNotMatch(workflow, /:\s*write\b|secrets\./);
+  assert.doesNotMatch(dependencyWorkflowRun(workflow), /\bgh\s+pr\b/);
+  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(workflow, /if: github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'/);
+});
+
+for (const [name, types, classification] of [
+  ["patch", ["version-update:semver-patch"], "eligible_for_serial_review"],
+  ["minor", ["version-update:semver-minor"], "eligible_for_serial_review"],
+  ["patch and minor", ["version-update:semver-patch", "version-update:semver-minor"], "eligible_for_serial_review"],
+  ["major", ["version-update:semver-major"], "review_required"],
+  ["mixed major", ["version-update:semver-patch", "version-update:semver-major"], "review_required"],
+  ["digest", ["version-update:digest"], "review_required"],
+  ["missing type", [null], "metadata_missing"],
+  ["partially missing type", ["version-update:semver-patch", null], "metadata_missing"],
+]) {
+  test(`dependency bot classifies ${name} metadata without mutation`, () => {
+    const result = runDependencyClassification({ messages: dependencyMessages(types) });
+    assertReadOnlyDependencyCalls(result);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`dependency_classification=${classification}(?:;|\s|$)`));
+    assert.equal(result.calls.length, classification === "eligible_for_serial_review" ? 2 : 1);
+  });
+}
+
+test("dependency bot reports missing required checks without mutation", () => {
+  const result = runDependencyClassification({ rules: "0" });
+  assertReadOnlyDependencyCalls(result);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /dependency_classification=checks_missing/);
+  assert.equal(result.calls.length, 2);
+});
+
+for (const [name, options, classification, count] of [
+  ["commit metadata failure", { failCommits: true }, "metadata_unavailable", 1],
+  ["branch metadata failure", { failRules: true }, "checks_unavailable", 2],
+  ["invalid check metadata", { rules: "unknown" }, "checks_unavailable", 2],
+]) {
+  test(`dependency bot fails closed on ${name} without mutation`, () => {
+    const result = runDependencyClassification(options);
+    assertReadOnlyDependencyCalls(result);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, new RegExp(`dependency_classification=${classification}`));
+    assert.equal(result.calls.length, count);
+  });
+}

@@ -5,9 +5,8 @@ import { MAX_AREA_LABEL, MAX_FIELD_MEASUREMENT_FEET } from "./field-measurement-
 const nullableText = z.string().nullable();
 
 /**
- * One stop holding work, in the shape every crew read shares (job, typed work and Today): a
- * job-scoped crew stop, or a tenant-wide safety stop. An unknown scope reads as "job", so a stop is
- * never dropped; the Worker sends null for a summary or raiser it does not know.
+ * A holding stop, shared with the Today consumer: job-scoped or tenant-wide when its job cannot
+ * be resolved. This shape alone does not identify the crew event that blocked a particular plan.
  */
 export const activeStopSchema = z.object({
   occurrence_id: z.string(),
@@ -16,6 +15,36 @@ export const activeStopSchema = z.object({
   summary: z.string().nullable(),
   raiser_display_name: z.string().nullable(),
 });
+
+export type ActiveStop = z.infer<typeof activeStopSchema>;
+
+// Keep the shared Today consumer's tolerant projection: an unreadable optional stop must not
+// disappear or hide the useful packet. Only an explicit [] confirms a successful empty read.
+function readableStop(value: unknown, index: number): unknown {
+  if (activeStopSchema.safeParse(value).success) return value;
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  return {
+    occurrence_id:
+      typeof raw.occurrence_id === "string"
+        ? raw.occurrence_id
+        : `unreadable_${raw.scope === "tenant" ? "tenant" : "job"}_${typeof raw.reported_at === "string" ? raw.reported_at : String(index)}`,
+    scope: raw.scope === "tenant" ? "tenant" : "job",
+    reported_at: typeof raw.reported_at === "string" ? raw.reported_at : "",
+    summary: typeof raw.summary === "string" ? raw.summary : null,
+    raiser_display_name:
+      typeof raw.raiser_display_name === "string" ? raw.raiser_display_name : null,
+  };
+}
+
+const activeStopsSchema = z.preprocess(
+  (value) =>
+    value == null
+      ? null
+      : Array.isArray(value)
+        ? value.map(readableStop)
+        : [readableStop(value, 0)],
+  z.array(activeStopSchema).nullable(),
+);
 // Construct packet validators on first parse so Today bootstrap only initializes its own
 // contract. Parsing remains synchronous, including cached packets and nested work packages.
 const workPackageSchema = z.lazy(() =>
@@ -294,6 +323,7 @@ export const todayResponseSchema = envelopeSchema.extend({
       blocked_gate_count: z.number().int().nonnegative(),
       next_action: z.string().min(1),
       assignment: assignmentSchema.nullable(),
+      active_stops: activeStopsSchema,
     }),
   ),
   work_objects: z
@@ -307,6 +337,7 @@ export const todayResponseSchema = envelopeSchema.extend({
         scheduled_end: nullableText,
         next_action: z.string().min(1),
         assignment: assignmentSchema.nullable(),
+        active_stops: activeStopsSchema,
       }),
     )
     .default([]),
@@ -323,8 +354,8 @@ export const workObjectResponseSchema = z.lazy(() =>
       }),
       assignment: assignmentSchema.nullable(),
       work_package: workPackageSchema.nullish().transform((value) => value ?? null),
-      // Older cached reads have no list: none means no stop.
-      active_stops: z.array(activeStopSchema).default([]),
+      // The typed root is a generic holding projection, not an exact crew-event identity.
+      active_stops: activeStopsSchema,
       field_measurements: z.unknown().optional(),
       field_measurements_more: z.unknown().optional(),
       office_contact: z.unknown().optional(),
@@ -348,6 +379,7 @@ export const jobResponseSchema = z.lazy(() =>
         status: nullableText,
         address: nullableText,
         current_gate_state: nullableText,
+        active_stops: activeStopsSchema,
       }),
       assignment: assignmentSchema.nullable(),
       gates: z.array(
@@ -427,7 +459,8 @@ export const jobResponseSchema = z.lazy(() =>
       }),
       proof_stream: z.array(proofStreamItemSchema),
       proof_page: z.object({ next_cursor: nullableText, page_size: z.number().int().positive() }),
-      // Older cached packets have no list: none means no stop.
+      // Legacy #55 activeCrewStops: the exact event on the current Blocked plan. Kept separate
+      // from job.active_stops, the generic holding projection. [] means no crew detail supplied.
       active_stops: z.array(activeStopSchema).default([]),
       required_proof: z.array(
         z.object({

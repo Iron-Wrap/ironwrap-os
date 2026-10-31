@@ -118,6 +118,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
         address: "123 Example Avenue, Calgary, AB",
         scheduled_start: "2026-07-10T16:00:00.000Z",
         scheduled_end: null,
+        active_stops: [],
         blocked_gate_count: 1,
         next_action: "Delivery confirmation is missing",
         assignment: {
@@ -139,6 +140,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
         address: "456 Example Road, Airdrie, AB",
         scheduled_start: "2026-07-10T18:30:00.000Z",
         scheduled_end: null,
+        active_stops: [],
         blocked_gate_count: 0,
         next_action: "Add job proof",
         assignment: {
@@ -202,6 +204,7 @@ describe("TodayPage", () => {
         jobs: [],
         work_objects: [
           {
+            active_stops: [],
             work_object_type: "Shop Order",
             work_object_id: "SHOP-001",
             physical_context_type: "Shop Floor",

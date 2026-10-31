@@ -395,9 +395,9 @@ describe("active stops on the crew reads", () => {
     raiser_display_name: null,
   };
 
-  it("reads an older cached read with no list as no stop", () => {
+  it("reads an older cached read with no holding list as unknown", () => {
     const result = contracts.workObjectResponseSchema.safeParse(workObject());
-    expect(result.success && result.data.active_stops).toEqual([]);
+    expect(result.success && result.data.active_stops).toBeNull();
   });
 
   it("never drops a stop: an unknown scope reads as a job stop", () => {
@@ -405,7 +405,7 @@ describe("active stops on the crew reads", () => {
       ...workObject(),
       active_stops: [stop, { ...stop, occurrence_id: "occ_2", scope: "site" }],
     });
-    expect(result.success && result.data.active_stops.map((item) => item.scope)).toEqual([
+    expect(result.success && result.data.active_stops?.map((item) => item.scope)).toEqual([
       "job",
       "job",
     ]);

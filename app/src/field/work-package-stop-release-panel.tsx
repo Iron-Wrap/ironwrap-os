@@ -9,7 +9,7 @@ import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError, apiRequest } from "../lib/api";
 import { deleteMeta, getMeta, setMeta } from "../storage/db";
 import { afterFailedSend } from "./work-plan-intent";
-import type { JobResponse } from "./field-contracts";
+import type { ActiveStop, JobResponse } from "./field-contracts";
 import { formatFieldStamp } from "./field-formatting";
 
 // These are projections of the existing person-only stop-releases route, not a new release rule.
@@ -61,14 +61,14 @@ export function WorkPackageStopReleasePanel({
   session,
   workPackage,
   jobId,
-  activeStops,
+  holdingStops,
   offline,
   onReleased,
 }: {
   session: AuthenticatedSession;
   workPackage: Plan;
   jobId: string;
-  activeStops: JobResponse["active_stops"];
+  holdingStops: ActiveStop[] | null;
   offline: boolean;
   onReleased: () => Promise<void>;
 }) {
@@ -167,7 +167,7 @@ export function WorkPackageStopReleasePanel({
     eligible.some((item) => item.evidence_item === id),
   );
   const otherStops = Boolean(
-    stop && activeStops.some((item) => item.occurrence_id !== stop.stop_event_id),
+    stop && holdingStops?.some((item) => item.occurrence_id !== stop.stop_event_id),
   );
   const dates = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
   const canRelease =
@@ -339,6 +339,12 @@ export function WorkPackageStopReleasePanel({
           {otherStops ? (
             <p role="status">
               A separate safety stop also holds this job. This release will not clear it.
+            </p>
+          ) : null}
+          {holdingStops === null ? (
+            <p role="status">
+              Other safety stops could not be confirmed. This release only addresses the crew stop
+              shown here; check the current safety stops before work.
             </p>
           ) : null}
           {ownStop ? (

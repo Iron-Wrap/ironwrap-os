@@ -117,6 +117,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
       status: "In Production",
       address: "123 Example Avenue, Calgary, AB",
       current_gate_state: "Ready",
+      active_stops: [],
     },
     assignment: {
       id: "ASSIGN-1",

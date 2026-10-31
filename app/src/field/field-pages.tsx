@@ -46,6 +46,7 @@ import {
   type FieldDateOptions,
 } from "./field-formatting";
 import { jobPlanBadge, type StampClock } from "./job-plan-status";
+import { HoldingStopNotice } from "./holding-stop-notice";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -299,9 +300,10 @@ function WorkObjectSurface({
   const session = useSession();
   const workPackage = model.work_package;
   const panelModel: WorkPackagePanelModel = {
-    job: { id: model.work_object.workObjectId },
+    job: { id: model.work_object.workObjectId, active_stops: model.active_stops },
     read_model_generated_at: model.read_model_generated_at,
-    active_stops: model.active_stops,
+    // A typed root is a generic holding list. It cannot identify this plan's crew event.
+    active_stops: [],
     assignment: model.assignment,
     allowed_actions: model.allowed_actions,
     packet: { work_package: workPackage },
@@ -332,6 +334,11 @@ function WorkObjectSurface({
           offline={offline}
           dateOptions={workObjectDates}
           clock={session.user.role === "field" ? "12h" : "24h"}
+        />
+        <HoldingStopNotice
+          stops={model.active_stops}
+          unavailable={model.stale_fields.includes("work_object.active_stops_unavailable")}
+          offline={offline}
         />
         <WorkPackagePanel
           model={panelModel}
@@ -479,6 +486,11 @@ function JobSurface({
           onRetry={onRetryOffline}
         />
         <JobPacketHeader model={model} offline={offline} dateOptions={dateOptions} />
+        <HoldingStopNotice
+          stops={model.job.active_stops ?? null}
+          unavailable={model.stale_fields.includes("job.active_stops_unavailable")}
+          offline={offline}
+        />
         {offline ? (
           <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
         ) : null}
@@ -676,10 +688,11 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 }
 
 type WorkPackagePanelModel = {
-  job: Pick<JobResponse["job"], "id"> & Partial<Pick<JobResponse["job"], "job_number" | "address">>;
+  job: Pick<JobResponse["job"], "id" | "active_stops"> &
+    Partial<Pick<JobResponse["job"], "job_number" | "address">>;
   /** When the server made this read: the clock the issue form judges expiry by. */
   read_model_generated_at: string;
-  /** The stops holding work on this job, first the one the plan badge reads. */
+  /** Legacy exact crew-event projection for the current plan, never the generic holding list. */
   active_stops: JobResponse["active_stops"];
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
@@ -1077,7 +1090,7 @@ function WorkPackagePanel({
         open={detailsOpen}
         onClose={() => setDetailsOpen(false)}
         plan={workPackage}
-        activeStops={model.active_stops}
+        crewStops={model.active_stops}
         dateOptions={dateOptions}
         clock={session.user.role === "field" ? "12h" : "24h"}
         jobLabel={
@@ -1092,7 +1105,7 @@ function WorkPackagePanel({
           session={session}
           workPackage={workPackage}
           jobId={model.job.id}
-          activeStops={model.active_stops}
+          holdingStops={model.job.active_stops ?? null}
           offline={offline}
           onReleased={async () => {
             await queryClient.refetchQueries(
@@ -2284,7 +2297,7 @@ function toCheckInJobResponse(model: WorkObjectResponse): JobResponse {
     version: model.version,
     source_updated_at: model.source_updated_at,
     read_model_generated_at: model.read_model_generated_at,
-    active_stops: model.active_stops,
+    active_stops: [],
     stale_fields: model.stale_fields,
     permissions: model.permissions,
     allowed_actions: model.allowed_actions,
@@ -2297,6 +2310,7 @@ function toCheckInJobResponse(model: WorkObjectResponse): JobResponse {
       status: model.work_package?.status ?? null,
       address: `${model.work_object.physicalContextType} · ${model.work_object.physicalContextId}`,
       current_gate_state: null,
+      active_stops: model.active_stops,
     },
     assignment: model.assignment,
     gates: [],

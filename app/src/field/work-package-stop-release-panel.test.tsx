@@ -61,7 +61,7 @@ function mount(overrides: Partial<React.ComponentProps<typeof WorkPackageStopRel
         session={session}
         workPackage={plan}
         jobId="JOB-TEST"
-        activeStops={[]}
+        holdingStops={[]}
         offline={false}
         onReleased={onReleased}
         {...overrides}
@@ -270,7 +270,7 @@ describe("job-plan stop release", () => {
 
   it("keeps an unresolved tenant stop separate from this exact plan release", async () => {
     mount({
-      activeStops: [
+      holdingStops: [
         {
           occurrence_id: "unresolved-safety-stop",
           scope: "tenant",
@@ -299,5 +299,69 @@ describe("job-plan stop release", () => {
     expect(
       screen.queryByRole("heading", { name: "Release this plan’s stop" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not retarget the exact release to a tenant-first or different-plan holding stop", async () => {
+    mount({
+      holdingStops: [
+        {
+          occurrence_id: "tenant-hold",
+          scope: "tenant",
+          reported_at: "2026-07-10T12:00:00Z",
+          summary: "Older tenant hold",
+          raiser_display_name: null,
+        },
+        {
+          occurrence_id: "other-plan-stop",
+          scope: "job",
+          reported_at: "2026-07-10T13:00:00Z",
+          summary: "A different plan",
+          raiser_display_name: null,
+        },
+      ],
+    });
+    const user = await ready();
+    expect(screen.getByText(/Stopped .*Ice on the north slope/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Record release of this plan’s stop" }));
+    await waitFor(() => expect(postCalls()).toHaveLength(1));
+    expect(postCalls()[0]![0].body).toMatchObject({
+      stop_event_id: stop.stop_event_id,
+      work_package_version: plan.version,
+      evidence_ids: [evidenceId],
+    });
+  });
+
+  it("states that other holds are unknown while keeping the exact current-stop selector", async () => {
+    mount({ holdingStops: null });
+    const user = await ready();
+    expect(screen.getByText(/Other safety stops could not be confirmed/)).toBeVisible();
+    expect(screen.getByText(/It does not start work/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Record release of this plan’s stop" }));
+    await waitFor(() => expect(postCalls()).toHaveLength(1));
+    expect(postCalls()[0]![0].body).toMatchObject({ stop_event_id: stop.stop_event_id });
+  });
+
+  it("refuses a different current package even when a generic stop matches", async () => {
+    vi.mocked(apiRequest).mockResolvedValue({
+      ...read,
+      work_package: { ...read.work_package, id: "OTHER-PLAN" },
+    });
+    mount({
+      holdingStops: [
+        {
+          occurrence_id: stop.stop_event_id,
+          scope: "job",
+          reported_at: stop.occurred_at,
+          summary: stop.blocker_reason,
+          raiser_display_name: null,
+        },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Review stop for release" }));
+    expect(await screen.findByText(/This plan or its stop has changed/)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Record release of this plan’s stop" }),
+    ).not.toBeInTheDocument();
+    expect(postCalls()).toHaveLength(0);
   });
 });

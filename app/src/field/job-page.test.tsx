@@ -143,6 +143,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
       status: "In Production",
       address: "123 Example Avenue, Calgary, AB",
       current_gate_state: "Blocked",
+      active_stops: [],
     },
     assignment: {
       id: "ASSIGN-1",
@@ -1383,6 +1384,108 @@ describe("JobPage", () => {
     stopped.packet.work_package = { ...stopped.packet.work_package!, status: "Blocked" };
     renderJob(stopped);
     expect(await screen.findByText("Work stopped")).toBeVisible();
+  });
+
+  it("keeps a tenant-first holding list separate from the exact crew badge", async () => {
+    const stopped = workPackageModel();
+    stopped.packet.work_package = { ...stopped.packet.work_package!, status: "Blocked" };
+    stopped.active_stops = [
+      {
+        occurrence_id: "exact-crew-event",
+        scope: "job",
+        reported_at: "2026-07-10T13:40:00Z",
+        summary: "Exact crew reason",
+        raiser_display_name: null,
+      },
+    ];
+    stopped.job.active_stops = [
+      {
+        occurrence_id: "tenant-first",
+        scope: "tenant",
+        reported_at: "2026-07-10T10:00:00Z",
+        summary: "Older tenant hold",
+        raiser_display_name: null,
+      },
+      {
+        occurrence_id: "other-plan",
+        scope: "job",
+        reported_at: "2026-07-10T11:00:00Z",
+        summary: "Different plan hold",
+        raiser_display_name: null,
+      },
+    ];
+    renderJob(stopped);
+    expect(
+      await screen.findByText("Work stopped · Fri 10 Jul 7:40 a.m. · Exact crew reason"),
+    ).toBeVisible();
+    const holds = screen.getByRole("region", { name: "Safety stops holding this work" });
+    expect(within(holds).getByText(/All assignments/)).toBeVisible();
+    expect(within(holds).getByText(/Older tenant hold/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "See plan and proof" }));
+    const dialog = await screen.findByRole("dialog", { name: "Plan and proof" });
+    expect(
+      within(dialog).getByText("Work stopped · Fri 10 Jul 7:40 a.m. · Exact crew reason"),
+    ).toBeVisible();
+    expect(within(dialog).queryByText(/Older tenant hold/)).not.toBeInTheDocument();
+  });
+
+  it("does not stamp a Blocked plan from a generic job-scoped hold", async () => {
+    const stopped = workPackageModel();
+    stopped.packet.work_package = { ...stopped.packet.work_package!, status: "Blocked" };
+    stopped.job.active_stops = [
+      {
+        occurrence_id: "generic-job-hold",
+        scope: "job",
+        reported_at: "2026-07-10T11:00:00Z",
+        summary: "Unrelated generic reason",
+        raiser_display_name: null,
+      },
+    ];
+    renderJob(stopped);
+    expect(await screen.findByText("Work stopped")).toBeVisible();
+    expect(screen.queryByText(/^Work stopped ·/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    null,
+    [
+      {
+        occurrence_id: "typed-hold",
+        scope: "tenant" as const,
+        reported_at: "2026-07-10T10:00:00Z",
+        summary: "Typed generic hold",
+        raiser_display_name: null,
+      },
+    ],
+  ])("keeps typed holding state separate from the Blocked crew badge (%j)", async (stops) => {
+    const model = workObjectModel();
+    routeParams = { ...model.work_object };
+    model.active_stops = stops;
+    model.work_package = { ...model.work_package!, status: "Blocked" };
+    if (stops === null) model.stale_fields = ["work_object.active_stops_unavailable"];
+    renderWorkObject(model);
+    expect(await screen.findByText("Work stopped")).toBeVisible();
+    expect(screen.queryByText(/^Work stopped ·/)).not.toBeInTheDocument();
+    const holds = screen.getByRole("region", { name: "Safety stops holding this work" });
+    expect(
+      within(holds).getByRole("heading", {
+        name: stops ? "Safety stops hold this work" : "Safety-stop status is unknown",
+      }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "See plan and proof" }));
+    const dialog = await screen.findByRole("dialog", { name: "Plan and proof" });
+    expect(within(dialog).getByText("Work stopped")).toBeVisible();
+  });
+
+  it("distinguishes unavailable holding details from a legacy unknown copy", async () => {
+    const model = jobModel();
+    model.job.active_stops = null;
+    const view = renderJob(model);
+    expect(await screen.findByText("Safety-stop status is unknown")).toBeVisible();
+    expect(screen.getByText(/This copy does not include safety-stop details/)).toBeVisible();
+    view.unmount();
+    renderJob({ ...model, stale_fields: ["job.active_stops_unavailable"] });
+    expect(await screen.findByText(/Safety-stop details could not be read/)).toBeVisible();
   });
 
   it("tells the office an expired plan takes no proof, by the server's clock at the read", async () => {

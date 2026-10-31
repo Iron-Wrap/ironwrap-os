@@ -8,7 +8,7 @@ export function JobPlanDetailsDialog({
   open,
   onClose,
   plan,
-  activeStops,
+  crewStops,
   dateOptions,
   clock,
   jobLabel,
@@ -16,7 +16,7 @@ export function JobPlanDetailsDialog({
   open: boolean;
   onClose: () => void;
   plan: NonNullable<JobResponse["packet"]["work_package"]>;
-  activeStops: JobResponse["active_stops"];
+  crewStops: JobResponse["active_stops"];
   dateOptions: FieldDateOptions;
   clock: StampClock;
   jobLabel: string;
@@ -33,9 +33,7 @@ export function JobPlanDetailsDialog({
       <section className="space-y-5 pb-5 text-foreground">
         <div>
           <h3 className="text-2xl font-bold">{plan.title}</h3>
-          <p className="mt-2 font-semibold">
-            {jobPlanBadge(plan, activeStops, dateOptions, clock)}
-          </p>
+          <p className="mt-2 font-semibold">{jobPlanBadge(plan, crewStops, dateOptions, clock)}</p>
           <p className="mt-2 text-sm">
             Issued to the crew · {formatFieldStamp(plan.released_at, dateOptions, { clock })}
           </p>

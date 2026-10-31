@@ -439,14 +439,6 @@ export async function measurementCalibrationReport(
   };
 }
 
-/** Compatibility projection for callers that only consume the cohort array. */
-export async function aggregateMeasurementDeltas(
-  env: Env,
-  asOf = new Date(),
-): Promise<MeasurementDeltaAggregate[]> {
-  return (await measurementCalibrationReport(env, asOf)).cohorts;
-}
-
 /** Failed comparisons since a cutoff: the tenant-scoped watchdog divergence signal. */
 export async function countFailedDeltasSince(env: Env, sinceIso: string): Promise<number> {
   const tenantId = configuredTenant(env);

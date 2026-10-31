@@ -138,6 +138,7 @@ import { escalateStaleProposalDeliveries } from "./proposal-delivery-checks.ts";
 import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
+import { markExpiredProposalPublicationApprovalExecutionLeases } from "./proposal-publication-approval-store.ts";
 import {
   handleNewoQueueMessage,
   handleNewoWebhook,
@@ -514,6 +515,22 @@ export default {
           ).catch((error) =>
             log({
               at: "quote_revision_approval_lease_sweep",
+              error: String(error),
+            }),
+          ),
+          // A lost publication broker response requires human reconciliation;
+          // expire only this runtime tenant's claims without dispatching again.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return;
+            await markExpiredProposalPublicationApprovalExecutionLeases(
+              env,
+              new Date().toISOString(),
+              tenantId,
+            );
+          })().catch((error) =>
+            log({
+              at: "proposal_publication_approval_lease_sweep",
               error: String(error),
             }),
           ),

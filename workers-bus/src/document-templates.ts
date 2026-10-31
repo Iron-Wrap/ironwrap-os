@@ -102,8 +102,6 @@ export interface DocumentTemplateRevision {
   created_at: string;
 }
 
-export type DocumentTemplate = DocumentTemplateRevision;
-
 export interface DocumentTemplateMutation {
   kind: "created" | "replayed";
   template: DocumentTemplateRevision;

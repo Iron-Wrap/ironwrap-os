@@ -18,6 +18,7 @@ import { diagnosticFromStderr } from "./qa-smoke-diagnostic.mjs";
 
 const execute = promisify(execFile);
 const workflowUrl = new URL("../.github/workflows/deploy.yml", import.meta.url);
+const productionWorkflowUrl = new URL("../.github/workflows/deploy-production.yml", import.meta.url);
 const enforcer = path.resolve(import.meta.dirname, "release-promotion.mjs");
 
 function stepScript(workflow, name) {
@@ -45,9 +46,10 @@ async function fixture(t) {
   return directory;
 }
 
-async function runStep(workflow, name, directory, extraEnv = {}) {
+async function runStep(workflow, name, directory, extraEnv = {}, cwd = undefined) {
   try {
     const result = await execute("bash", ["-c", stepScript(workflow, name)], {
+      cwd,
       env: {
         ...process.env,
         RUNNER_TEMP: directory,
@@ -60,6 +62,124 @@ async function runStep(workflow, name, directory, extraEnv = {}) {
   } catch (error) {
     if (typeof error.code !== "number") throw error;
     return { status: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+}
+
+async function trustedWranglerStep(t, workflow, {
+  manifestVersion = "4.151.0",
+  rootLockVersion = manifestVersion,
+  lockedVersion = manifestVersion,
+  binaryVersion = manifestVersion,
+} = {}) {
+  const directory = await fixture(t);
+  const candidate = path.join(directory, "candidate");
+  const trusted = path.join(directory, "policy-enforcer", "workers-bus");
+  const bin = path.join(directory, "bin");
+  await Promise.all([
+    mkdir(path.join(candidate, "workers-bus"), { recursive: true }),
+    mkdir(path.join(trusted, "node_modules", ".bin"), { recursive: true }),
+    mkdir(path.join(directory, "context-download"), { recursive: true }),
+    mkdir(bin),
+  ]);
+  const manifest = (version) => JSON.stringify({ devDependencies: { wrangler: version } });
+  const lock = (rootVersion, version) => JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "": { devDependencies: { wrangler: rootVersion } },
+      "node_modules/wrangler": version === null ? undefined : { version },
+    },
+  });
+  await Promise.all([
+    writeFile(path.join(candidate, "workers-bus", "package.json"), manifest("4.152.0")),
+    writeFile(path.join(candidate, "workers-bus", "package-lock.json"), lock("4.152.0", "4.152.0")),
+    writeFile(path.join(trusted, "package.json"), manifest(manifestVersion)),
+    writeFile(path.join(trusted, "package-lock.json"), lock(rootLockVersion, lockedVersion)),
+    writeFile(path.join(directory, "context-download", "context.json"), JSON.stringify({ base_commit: "a".repeat(40) })),
+  ]);
+  const stubs = {
+    git: `#!/bin/sh
+set -eu
+printf 'git %s\\n' "$*" >> "$RUNNER_TEMP/tool-calls.log"
+case "$1 $2" in
+  'rev-list --parents') printf '%s %s\\n' "$RELEASE_SOURCE_COMMIT" "$TRUSTED_BASE_COMMIT" ;;
+  'worktree add') test "$3" = --detach; test "$4" = "$RUNNER_TEMP/policy-enforcer"; test "$5" = "$TRUSTED_BASE_COMMIT" ;;
+  *) exit 98 ;;
+esac
+`,
+    npm: `#!/bin/sh
+set -eu
+test "$*" = "ci --ignore-scripts --prefix $RUNNER_TEMP/policy-enforcer/workers-bus"
+printf 'npm %s\\n' "$*" >> "$RUNNER_TEMP/tool-calls.log"
+`,
+    node: `#!/bin/sh
+set -eu
+test "$1" = "$RUNNER_TEMP/policy-enforcer/tools/release-promotion.mjs"
+test "$2" = provider-targets
+printf 'node %s\\n' "$*" >> "$RUNNER_TEMP/tool-calls.log"
+`,
+  };
+  await Promise.all(Object.entries(stubs).map(([name, source]) => writeFile(path.join(bin, name), source, { mode: 0o755 })));
+  await writeFile(path.join(trusted, "node_modules", ".bin", "wrangler"), `#!/bin/sh
+set -eu
+test "$*" = --version
+printf 'wrangler %s\\n' "$*" >> "$RUNNER_TEMP/tool-calls.log"
+printf '%s\\n' "$TRUSTED_BINARY_VERSION"
+`, { mode: 0o755 });
+  const githubEnv = path.join(directory, "github-env");
+  await writeFile(githubEnv, "");
+  const result = await runStep(workflow,
+    "Load generation N policy enforcement and trusted Wrangler", directory, {
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      GITHUB_WORKSPACE: candidate,
+      GITHUB_ENV: githubEnv,
+      RELEASE_SOURCE_COMMIT: "b".repeat(40),
+      TRUSTED_BASE_COMMIT: "a".repeat(40),
+      TRUSTED_BINARY_VERSION: binaryVersion,
+      WORKER_VERSION: "4.152.0",
+    }, candidate);
+  return {
+    result,
+    environment: await readFile(githubEnv, "utf8"),
+    calls: await readFile(path.join(directory, "tool-calls.log"), "utf8"),
+    trusted,
+  };
+}
+
+for (const [name, url] of [["qa", workflowUrl], ["production", productionWorkflowUrl]]) {
+  test(`${name} loads the predecessor's locked Wrangler when the candidate upgrades its CLI`, async (t) => {
+    const workflow = await readFile(url, "utf8");
+    const proof = await trustedWranglerStep(t, workflow);
+    assert.equal(proof.result.status, 0, proof.result.stdout + proof.result.stderr);
+    assert.ok(proof.environment.includes(`WRANGLER_BIN=${path.join(proof.trusted, "node_modules", ".bin", "wrangler")}\n`));
+    assert.ok(proof.environment.includes("/policy-enforcer/tools/release-promotion.mjs\n"));
+    assert.match(proof.calls, /npm ci --ignore-scripts --prefix .*\/policy-enforcer\/workers-bus/);
+    assert.match(proof.calls, /wrangler --version/);
+
+    // Reproduce the old transition defect: a trusted 4.151.0 binary cannot be
+    // compared to the candidate build's 4.152.0 pin, even though both are valid.
+    const regressed = workflow.replace(
+      'test "$("$trusted_wrangler" --version)" = "$trusted_worker_version"',
+      'test "$("$trusted_wrangler" --version)" = "$WORKER_VERSION"',
+    );
+    assert.notEqual(regressed, workflow);
+    const failure = await trustedWranglerStep(t, regressed);
+    assert.notEqual(failure.result.status, 0);
+    assert.ok(!failure.environment.includes("WRANGLER_BIN="));
+  });
+
+  for (const [drift, options] of [
+    ["binary matching only the candidate", { binaryVersion: "4.152.0" }],
+    ["root lock pin", { rootLockVersion: "4.152.0" }],
+    ["resolved lock version", { lockedVersion: "4.152.0" }],
+    ["missing resolved lock version", { lockedVersion: null }],
+    ["non-exact manifest pin", { manifestVersion: "^4.151.0" }],
+  ]) {
+    test(`${name} rejects trusted Wrangler ${drift} drift before exporting the provider CLI`, async (t) => {
+      const proof = await trustedWranglerStep(t, await readFile(url, "utf8"), options);
+      assert.notEqual(proof.result.status, 0);
+      assert.ok(!proof.environment.includes("WRANGLER_BIN="));
+      assert.doesNotMatch(proof.calls, /node .*provider-targets/);
+    });
   }
 }
 

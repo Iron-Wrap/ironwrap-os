@@ -214,6 +214,7 @@ function validateWorkflow(workflow) {
   );
   assert.match(qa, /"\$WRANGLER_BIN" secret list[\s\S]*secret-readback/);
   assert.match(qa, /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/);
+  assert.match(qa, /test "\$\("\$trusted_wrangler" --version\)" = "\$trusted_worker_version"/);
   assert.match(qa, /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment qa/);
   assert.doesNotMatch(qa, /npm ci --ignore-scripts --prefix workers-bus/);
   assert.match(qa, /secrets\.RELEASE_QA_CLOUDFLARE_API_TOKEN/);
@@ -283,7 +284,8 @@ function validateWorkflow(workflow) {
     /npm run (?:deploy|db:migrate)|--keep-vars|PRAGMA integrity_check|<<['"]?NODE|node -e/,
   );
   assert.doesNotMatch(qa, /wrangler deploy\s/);
-  // The trusted Wrangler loaded from the policy base must be the locked one.
+  // The candidate build pin follows the candidate package. Provider operations
+  // independently verify the generation-N binary against its own manifest/lock.
   const workerPackage = JSON.parse(
     readFileSync(new URL("../workers-bus/package.json", import.meta.url), "utf8"),
   );
@@ -566,7 +568,7 @@ function validateProductionWorkflow(workflow) {
     production,
     /trusted_wrangler="\$RUNNER_TEMP\/policy-enforcer\/workers-bus\/node_modules\/\.bin\/wrangler"/,
   );
-  assert.match(production, /test "\$\("\$trusted_wrangler" --version\)" = "\$WORKER_VERSION"/);
+  assert.match(production, /test "\$\("\$trusted_wrangler" --version\)" = "\$trusted_worker_version"/);
   // launch-proof is likewise the base tree's, and it runs in release-smoke mode so
   // the production proof sends no customer mail and enqueues no bridge work.
   assert.match(

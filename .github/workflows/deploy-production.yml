@@ -42,6 +42,7 @@ permissions:
   pull-requests: read
 
 env:
+  # The candidate build pin; provider operations use generation N's locked CLI.
   WORKER_VERSION: 4.152.0
   RELEASE_REPOSITORY: ${{ github.repository }}
   RELEASE_SOURCE_COMMIT: ${{ github.sha }}
@@ -156,9 +157,12 @@ jobs:
           base_commit="${lineage##* }"
           if [[ ! "$base_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "release_admission_base_missing" >&2; exit 1; fi
           git worktree add --detach "$RUNNER_TEMP/policy-enforcer" "$base_commit"
+          trusted_worker_version="$(jq -er '.devDependencies.wrangler | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$RUNNER_TEMP/policy-enforcer/workers-bus/package.json")"
+          test "$(jq -er '.packages[""].devDependencies.wrangler' "$RUNNER_TEMP/policy-enforcer/workers-bus/package-lock.json")" = "$trusted_worker_version"
+          test "$(jq -er '.packages["node_modules/wrangler"].version' "$RUNNER_TEMP/policy-enforcer/workers-bus/package-lock.json")" = "$trusted_worker_version"
           npm ci --ignore-scripts --prefix "$RUNNER_TEMP/policy-enforcer/workers-bus"
           trusted_wrangler="$RUNNER_TEMP/policy-enforcer/workers-bus/node_modules/.bin/wrangler"
-          test "$("$trusted_wrangler" --version)" = "$WORKER_VERSION"
+          test "$("$trusted_wrangler" --version)" = "$trusted_worker_version"
           {
             printf 'RELEASE_ENFORCER=%s\n' "$RUNNER_TEMP/policy-enforcer/tools/release-promotion.mjs"
             printf 'RELEASE_BASE_COMMIT=%s\n' "$base_commit"

@@ -133,8 +133,13 @@ https://developers.cloudflare.com/api/resources/workers/subresources/scripts/sub
 ### Tag path: `deploy-production.yml` — production
 
 **Written, never run.** The workflow has no run (`total_count` 0) and there is no `v*` tag. The
-`production` Environment exists since 2026-10-21 but holds two of its secrets (see Not verified
-and §4).
+`production` Environment exists since 2026-10-21 (see Not verified and §4).
+
+**Account split (2026-10-30, IRO-221).** Production runs in the **Mindburn Labs** account
+`5023dd22…` as `ironwrap.mindburn.org` (zone `mindburn.org`, Workers Paid); qa stays in IronWrap's
+account `7ee5775b…` on Free. `CLOUDFLARE_ACCOUNT_ID` in `deploy-production.yml` and `deploy.yml`
+differ accordingly, `env.qa.account_id` pins qa in `wrangler.jsonc`, and the provider policy (v2)
+carries `account_id` per environment. A qa token therefore cannot reach production at all.
 
 - Trigger: `workflow_dispatch` only, with required `tag` and `declaration_sha` inputs
   (`deploy-production.yml:21-31`). There is no `push` trigger: a tag alone does not deploy. The

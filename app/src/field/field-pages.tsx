@@ -329,16 +329,16 @@ function WorkObjectSurface({
             Today
           </Link>
         </Button>
+        <HoldingStopNotice
+          stops={model.active_stops}
+          unavailable={model.stale_fields.includes("work_object.active_stops_unavailable")}
+          offline={offline}
+        />
         <WorkObjectPacketHeader
           model={model}
           offline={offline}
           dateOptions={workObjectDates}
           clock={session.user.role === "field" ? "12h" : "24h"}
-        />
-        <HoldingStopNotice
-          stops={model.active_stops}
-          unavailable={model.stale_fields.includes("work_object.active_stops_unavailable")}
-          offline={offline}
         />
         <WorkPackagePanel
           model={panelModel}
@@ -478,6 +478,11 @@ function JobSurface({
             </Link>
           )}
         </Button>
+        <HoldingStopNotice
+          stops={model.job.active_stops ?? null}
+          unavailable={model.stale_fields.includes("job.active_stops_unavailable")}
+          offline={offline}
+        />
         <OfflineReadiness
           ready={!model.stale_fields.includes(NOT_SAVED_ON_DEVICE)}
           saving={savingOffline}
@@ -486,11 +491,6 @@ function JobSurface({
           onRetry={onRetryOffline}
         />
         <JobPacketHeader model={model} offline={offline} dateOptions={dateOptions} />
-        <HoldingStopNotice
-          stops={model.job.active_stops ?? null}
-          unavailable={model.stale_fields.includes("job.active_stops_unavailable")}
-          offline={offline}
-        />
         {offline ? (
           <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
         ) : null}

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -67,6 +67,8 @@ type RevisionDecisionAction = (
       evidence: string;
     }
 ) & { scope: RevisionReviewScope };
+
+const decisionMutationKey = ["quote-revision-approval-decision"] as const;
 
 const detailKeyFor = (scope: RevisionReviewScope) =>
   [
@@ -365,6 +367,7 @@ function QuoteRevisionApprovalDetailContent() {
   }
 
   const mutation = useMutation({
+    mutationKey: decisionMutationKey,
     retry: false,
     mutationFn: async (action: RevisionDecisionAction) => {
       let result: QuoteRevisionApprovalMutationResponse;
@@ -483,6 +486,12 @@ function QuoteRevisionApprovalDetailContent() {
     },
   });
 
+  const pendingDecisions = useMutationState({
+    filters: { mutationKey: decisionMutationKey, status: "pending" },
+    // Mutation instances preserve the opaque session reference through structural sharing.
+    select: (decision) => decision,
+  });
+
   if (!approvalId) {
     return (
       <ErrorState
@@ -523,21 +532,31 @@ function QuoteRevisionApprovalDetailContent() {
     !offline &&
     !decisionReadStale &&
     model.allowed_actions.includes("quote_revision_approval.reconcile");
-  const pendingScope = mutation.variables?.scope;
-  const pendingAction =
-    mutation.isPending &&
-    pendingScope?.session === scope.session &&
-    pendingScope.approvalId === scope.approvalId;
+  function pendingForCurrentScope(variables: unknown) {
+    const pendingScope = (variables as RevisionDecisionAction | undefined)?.scope;
+    return pendingScope?.session === scope.session && pendingScope.approvalId === scope.approvalId;
+  }
+  const pendingAction = pendingDecisions.some(
+    (decision) =>
+      decision.state.status === "pending" && pendingForCurrentScope(decision.state.variables),
+  );
+  function hasPendingDecision() {
+    return queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: decisionMutationKey, status: "pending" })
+      .some((decision) => pendingForCurrentScope(decision.state.variables));
+  }
 
   function approve() {
-    if (!canApprove || pendingAction || approval.state !== "pending") return;
+    if (!canApprove || hasPendingDecision() || approval.state !== "pending") return;
     setActionError(undefined);
     mutation.mutate({ kind: "approve", approval, scope });
   }
 
   function reject() {
     const reason = rejectionReason.trim();
-    if (!canReject || pendingAction || approval.state !== "pending" || reason.length < 3) return;
+    if (!canReject || hasPendingDecision() || approval.state !== "pending" || reason.length < 3)
+      return;
     setActionError(undefined);
     mutation.mutate({ kind: "reject", approval, reason, scope });
   }
@@ -546,7 +565,7 @@ function QuoteRevisionApprovalDetailContent() {
     const evidence = reconciliationEvidence.trim();
     if (
       !canReconcile ||
-      pendingAction ||
+      hasPendingDecision() ||
       approval.state !== "execution_uncertain" ||
       evidence.length < 3
     ) {

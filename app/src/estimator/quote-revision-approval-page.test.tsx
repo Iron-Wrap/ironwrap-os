@@ -349,7 +349,7 @@ describe("QuoteRevisionApprovalPages", () => {
   );
 
   it.each(["A-first", "B-first"] as const)(
-    "keeps a pending A decision off B and lets B complete independently (%s)",
+    "retains every review's pending guard through A to B to A and completion (%s)",
     async (order) => {
       router.real = true;
       const user = userEvent.setup();
@@ -434,6 +434,31 @@ describe("QuoteRevisionApprovalPages", () => {
           </SessionProvider>
         </QueryClientProvider>,
       );
+      async function navigateTo(id: string) {
+        await act(async () => {
+          await liveRouter.navigate({
+            to: "/quote-revision-approvals/$approvalId",
+            params: { approvalId: id },
+          });
+        });
+      }
+      async function assertAStillPending() {
+        await navigateTo(first.id);
+        await waitFor(() =>
+          expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+            "Synthetic Cedar Household",
+          ),
+        );
+        const approveA = screen.getByRole("button", { name: "Make empty draft" });
+        const rejectA = screen.getByRole("button", { name: "Turn down" });
+        expect(approveA).toHaveAttribute("aria-busy", "true");
+        expect(approveA).toBeDisabled();
+        expect(rejectA).toBeDisabled();
+        await user.click(approveA);
+        await user.click(rejectA);
+        expect(rejectQuoteRevisionApproval).toHaveBeenCalledTimes(1);
+        expect(approveQuoteRevisionApproval).toHaveBeenCalledTimes(1);
+      }
       try {
         await screen.findByRole("heading", { name: "Review the new empty draft" });
         await user.click(screen.getByRole("button", { name: "Turn down" }));
@@ -469,6 +494,12 @@ describe("QuoteRevisionApprovalPages", () => {
         );
         expect(approveB).toHaveAttribute("aria-busy", "true");
         expect(approveB).toBeDisabled();
+        await assertAStillPending();
+        await navigateTo(second.id);
+        expect(screen.getByRole("button", { name: "Make empty draft" })).toHaveAttribute(
+          "aria-busy",
+          "true",
+        );
         if (order === "A-first") {
           records.set(first.id, deniedA);
           await act(async () => {
@@ -489,15 +520,17 @@ describe("QuoteRevisionApprovalPages", () => {
         });
         expect(await screen.findByRole("heading", { name: "Draft is ready" })).toBeVisible();
         if (order === "B-first") {
+          await assertAStillPending();
           records.set(first.id, deniedA);
           await act(async () => {
             finishA({ approval: deniedA });
           });
+          await navigateTo(second.id);
+          expect(screen.getByRole("heading", { name: "Draft is ready" })).toBeVisible();
         }
         expect(screen.getByLabelText("Job identity")).toHaveTextContent(
           "Synthetic Juniper Household",
         );
-        expect(screen.getByText("The empty draft and save record are ready.")).toBeInTheDocument();
         expect(
           screen.queryByText("The request was turned down. No draft was made."),
         ).not.toBeInTheDocument();

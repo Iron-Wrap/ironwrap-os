@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../../auth/session-context";
-import { JOB_ID, crews, model, runwayJob, session } from "./gate-test-fixtures";
+import { JOB_ID, crews, entry, gate, model, runwayJob, session } from "./gate-test-fixtures";
 import { JobGatesPage } from "./job-gates-page";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -62,7 +62,7 @@ const history = {
   proof_unavailable: false,
 };
 
-function page(answers: Record<string, { status: number; body: unknown }>) {
+function page(answers: Record<string, { status: number; body: unknown }>, step?: string) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string) => {
@@ -74,7 +74,7 @@ function page(answers: Record<string, { status: number; body: unknown }>) {
   const view = render(
     <QueryClientProvider client={client}>
       <SessionProvider session={session("production")}>
-        <JobGatesPage jobId={JOB_ID} />
+        <JobGatesPage jobId={JOB_ID} step={step} />
       </SessionProvider>
     </QueryClientProvider>,
   );
@@ -150,5 +150,80 @@ describe("loading a job's gates", () => {
     answers[path] = { status: 200, body: model("ended") };
     await userEvent.setup().click(screen.getByRole("button", { name: "Load the gates again" }));
     expect(await screen.findByRole("link", { name: "Clear Materials" })).toBeVisible();
+  });
+
+  it("holds the cached crew and start after production refresh fails while gates refresh succeeds", async () => {
+    const path = `/api/v1/production/jobs/${JOB_ID}/gates`;
+    const assignment = {
+      id: "assignment_synthetic",
+      type: "Production",
+      status: "Scheduled",
+      assignment_version: 1,
+      roof_job_version: 3,
+      crew_id: crews[0]!.id,
+      crew_version: crews[0]!.version,
+      scheduled_start: "2026-11-03T13:00:00.000Z",
+      scheduled_end: null,
+    };
+    const answers: Record<string, { status: number; body: unknown }> = {
+      [path]: {
+        status: 200,
+        body: model("ended", {
+          Crew: gate("Crew", {
+            state: "complete",
+            version: 2,
+            entries: [
+              entry({ from_gate_version: 1, basis: "crew_assignment", to_state: "complete" }),
+            ],
+          }),
+        }),
+      },
+      "/api/v1/production": {
+        status: 200,
+        body: { ...runway, jobs: [{ ...runwayJob, assignment }] },
+      },
+      [`/api/v1/jobs/${JOB_ID}/history`]: { status: 200, body: history },
+    };
+    const { client } = page(answers, "crew");
+    expect(await screen.findByText(/Sam Keewatin’s crew scheduled for/)).toBeVisible();
+    answers["/api/v1/production"] = { status: 503, body: { error: "unavailable" } };
+    await act(() => client.invalidateQueries());
+    expect(
+      client.getQueryState([
+        "production-job-gates",
+        "ironwrap",
+        "appu_production_synthetic",
+        JOB_ID,
+      ])?.status,
+    ).toBe("success");
+    expect(
+      client.getQueryState(["production-runway", "ironwrap", "appu_production_synthetic"])?.status,
+    ).toBe("error");
+    expect(
+      await screen.findByText(
+        "The latest production plan could not be checked. A change may already be saved. Reload it before making another change.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/Sam Keewatin’s crew scheduled for/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Issue job plan" })).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Load the production plan again" });
+    await userEvent.setup().click(retry);
+    expect(screen.queryByText(/Sam Keewatin’s crew scheduled for/)).not.toBeInTheDocument();
+    answers["/api/v1/production"] = {
+      status: 200,
+      body: {
+        ...runway,
+        crews: [{ ...crews[0], name: "Rechecked crew" }],
+        jobs: [
+          {
+            ...runwayJob,
+            assignment: { ...assignment, scheduled_start: "2026-11-04T13:00:00.000Z" },
+          },
+        ],
+      },
+    };
+    await userEvent.setup().click(retry);
+    expect(await screen.findByText(/Rechecked crew scheduled for Wed 4 Nov/)).toBeVisible();
+    expect(screen.queryByText(/Sam Keewatin’s crew scheduled for/)).not.toBeInTheDocument();
   });
 });

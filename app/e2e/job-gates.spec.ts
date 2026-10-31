@@ -118,6 +118,7 @@ const history = {
 interface Office {
   gates: JobGatesResponse;
   readFailure?: number;
+  productionReadFailure?: number;
   posts: Array<{ path: string; body: unknown }>;
   answer: (path: string, body: unknown) => { status: number; json: unknown };
 }
@@ -140,7 +141,13 @@ async function office(
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({ json: sessionFor(options.role ?? "owner") }),
   );
-  await page.route("**/api/v1/production", (route) => route.fulfill({ json: runway }));
+  await page.route("**/api/v1/production", (route) =>
+    route.fulfill(
+      state.productionReadFailure
+        ? { status: state.productionReadFailure, json: { error: "unavailable" } }
+        : { json: runway },
+    ),
+  );
   await page.route(`**/api/v1/jobs/${JOB_ID}/history*`, (route) =>
     route.fulfill({ json: history }),
   );
@@ -319,43 +326,57 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await expect(page.getByLabel("Signed copy received")).toHaveCount(0);
   });
 
-  test("a successful save with a failed readback requires a reload without sending the save again", async ({
-    page,
-  }) => {
-    const state = await office(page, {
-      role: "owner",
-      gates: model("unknown"),
-      now: OPEN_NOW,
-      answer: () => {
-        state.gates = model("open");
-        state.readFailure = 503;
-        return {
-          status: 201,
-          json: {
-            cancellation_window: windowState("open"),
-            recorded: true,
-            receipt_id: "pcw_synthetic",
-            replayed: false,
-          },
-        };
-      },
+  for (const failedRead of ["gates", "production"] as const) {
+    test(`a successful save with a failed ${failedRead} readback requires a reload without sending the save again`, async ({
+      page,
+    }) => {
+      const state = await office(page, {
+        role: "owner",
+        gates: model("unknown"),
+        now: OPEN_NOW,
+        answer: () => {
+          state.gates = model("open");
+          if (failedRead === "gates") state.readFailure = 503;
+          else state.productionReadFailure = 503;
+          return {
+            status: 201,
+            json: {
+              cancellation_window: windowState("open"),
+              recorded: true,
+              receipt_id: "pcw_synthetic",
+              replayed: false,
+            },
+          };
+        },
+      });
+      await page.goto(gatesUrl("window"));
+      await page.getByLabel("Signed copy received").fill("2026-10-20T18:26");
+      await page.getByLabel("Why are you recording it?").fill("The email was delivered.");
+      await page.getByLabel("Evidence reference").fill("synthetic-email-reference");
+      await page.getByRole("button", { name: "Record when Elena Marchetti received it" }).click();
+      await expect(
+        page.getByText(
+          failedRead === "gates"
+            ? /The latest gates could not be checked/
+            : /The latest production plan could not be checked/,
+        ),
+      ).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(page.getByRole("button", { name: /Record when/ })).toHaveCount(0);
+      await expect(page.getByText(/Nothing was changed/)).toHaveCount(0);
+      state.readFailure = undefined;
+      state.productionReadFailure = undefined;
+      await page
+        .getByRole("button", {
+          name: failedRead === "gates" ? "Load the gates again" : "Load the production plan again",
+        })
+        .click();
+      await expect(page.getByLabel("New time")).toBeVisible();
+      expect(state.posts).toHaveLength(1);
+      await expectAccessible(page);
     });
-    await page.goto(gatesUrl("window"));
-    await page.getByLabel("Signed copy received").fill("2026-10-20T18:26");
-    await page.getByLabel("Why are you recording it?").fill("The email was delivered.");
-    await page.getByLabel("Evidence reference").fill("synthetic-email-reference");
-    await page.getByRole("button", { name: "Record when Elena Marchetti received it" }).click();
-    await expect(page.getByText(/The latest gates could not be checked/)).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(page.getByRole("button", { name: /Record when/ })).toHaveCount(0);
-    await expect(page.getByText(/Nothing was changed/)).toHaveCount(0);
-    state.readFailure = undefined;
-    await page.getByRole("button", { name: "Load the gates again" }).click();
-    await expect(page.getByLabel("New time")).toBeVisible();
-    expect(state.posts).toHaveLength(1);
-    await expectAccessible(page);
-  });
+  }
 
   test("production asks the owner to waive Materials and waits on the answer", async ({ page }) => {
     const state = await office(page, {
@@ -1117,10 +1138,11 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await page.goto("/production/signed-copy-missing");
     await expect(page.getByText("Jobs that need a signed-copy time: 3")).toBeVisible();
     await capture("q1-signed-copy-missing", "1446:1900", "Q1 · Jobs missing a signed-copy time");
-    {
+    for (const failedRead of ["gates", "production"] as const) {
       const state = await visit(model("unknown"), "window", "owner", OPEN_NOW, () => {
         state.gates = model("open");
-        state.readFailure = 503;
+        if (failedRead === "gates") state.readFailure = 503;
+        else state.productionReadFailure = 503;
         return {
           status: 201,
           json: {
@@ -1133,13 +1155,19 @@ test.describe("Job gates acceptance (PR-C)", () => {
       });
       await fillRecord("2026-10-20T18:26");
       await page.getByRole("button", { name: "Record when Elena Marchetti received it" }).click();
-      await expect(page.getByText(/The latest gates could not be checked/)).toBeVisible({
+      await expect(
+        page.getByText(
+          failedRead === "gates"
+            ? /The latest gates could not be checked/
+            : /The latest production plan could not be checked/,
+        ),
+      ).toBeVisible({
         timeout: 15_000,
       });
       await capture(
-        "readback-failed",
-        "app:gate-readback-failed",
-        "Saved response · Readback unavailable",
+        failedRead === "gates" ? "readback-failed" : "production-readback-failed",
+        failedRead === "gates" ? "app:gate-readback-failed" : "app:production-readback-failed",
+        `Saved response · ${failedRead === "gates" ? "Gates" : "Production plan"} readback unavailable`,
       );
     }
     await visit(model("unknown"), "window", "owner", OPEN_NOW);

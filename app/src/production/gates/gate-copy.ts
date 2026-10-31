@@ -58,6 +58,10 @@ export const gateCopy = {
     loadFailed: "The gates did not load. Nothing was changed.",
     readbackFailed:
       "The latest gates could not be checked. A change may already be saved. Reload the gates before making another change.",
+    productionLoadFailed: "The production plan did not load. Load it again before changing a gate.",
+    productionReadbackFailed:
+      "The latest production plan could not be checked. A change may already be saved. Reload it before making another change.",
+    productionRetry: "Load the production plan again",
     retry: "Load the gates again",
     notFound: "This job has no gates to show. Open it again from the production plan.",
     noAccess: "Only an owner, ops or production can see a job's gates.",

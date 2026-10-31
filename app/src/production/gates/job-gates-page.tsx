@@ -92,24 +92,33 @@ function JobGatesContent({ jobId, step }: { jobId: string; step?: GateStep }) {
     ]);
   }, [queryClient, gatesKey]);
 
-  if (gates.isError || !gates.data) {
-    if (gates.isError) {
-      const notFound = gates.error instanceof ApiError && gates.error.status === 404;
+  if (gates.isError || runway.isError || !gates.data || !runway.data) {
+    if (gates.isError || runway.isError) {
+      const failedGates = gates.isError;
+      const error = failedGates ? gates.error : runway.error;
+      const notFound = error instanceof ApiError && error.status === 404;
+      const title = failedGates
+        ? gates.data
+          ? gateCopy.page.readbackFailed
+          : notFound
+            ? gateCopy.page.notFound
+            : gateCopy.page.loadFailed
+        : runway.data
+          ? gateCopy.page.productionReadbackFailed
+          : gateCopy.page.productionLoadFailed;
       return (
         <section className="mx-auto max-w-3xl">
           <ErrorState
-            title={
-              gates.data
-                ? gateCopy.page.readbackFailed
-                : notFound
-                  ? gateCopy.page.notFound
-                  : gateCopy.page.loadFailed
-            }
-            message={messageForLoad(gates.error)}
-            error={gates.error}
+            title={title}
+            message={messageForLoad(error)}
+            error={error}
             action={
-              <Button type="button" variant="secondary" onClick={() => void gates.refetch()}>
-                {gateCopy.page.retry}
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void Promise.all([gates.refetch(), runway.refetch()])}
+              >
+                {failedGates ? gateCopy.page.retry : gateCopy.page.productionRetry}
               </Button>
             }
           />

@@ -2,7 +2,8 @@
 // reaches a person, so NEWO_ENABLED=true is refused unless IronWrap owns a D1 record of it that a
 // person works and closes: the newo_callback_records table (migration 0168). The gate applies
 // every D1 migration, in filename order as D1 does, to an in-memory SQLite and reads sqlite_master
-// for the complete reviewed callback/resolution schema and guards. It never parses migration text: a CREATE TABLE
+// for the complete reviewed callback/resolution schema, dependencies and guards. It never parses
+// migration text: a CREATE TABLE
 // inside a comment, a string or a quoted alias, or one a later statement drops, leaves no table,
 // and a migration that fails to apply opens nothing. tools/validate-newo-config.mjs and the
 // readiness contract (tools/production-readiness.mjs) both read the gate from here. Turning Newo

@@ -28,3 +28,13 @@ test("schema admission requires callback fields beyond the former seven-column m
   const copy = fixture(t, "ALTER TABLE newo_callback_records RENAME COLUMN event_id TO missing_event_id;");
   assert.equal(await newoCallbackRecordPresent(copy), false);
 });
+
+test("source admission accepts the complete installed migration contract", async (t) => {
+  assert.equal(await newoCallbackRecordPresent(fixture(t)), true);
+});
+
+test("source admission refuses missing guard dependencies and an unexecutable migration", async (t) => {
+  for (const sql of ["DROP TABLE newo_event_receipts;", "SELECT * FROM no_such_admission_table;"]) {
+    assert.equal(await newoCallbackRecordPresent(fixture(t, sql)), false);
+  }
+});

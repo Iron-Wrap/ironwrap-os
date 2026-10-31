@@ -158,7 +158,10 @@ function fakeEnv(options: FakeOptions = {}) {
 
   const executeAll = async (sql: string, args: unknown[]) => {
     sqlCalls.push({ sql, args });
-    if (sql === NEWO_CALLBACK_SCHEMA_QUERY) return { results: newoSchemaRows };
+    if (sql === NEWO_CALLBACK_SCHEMA_QUERY) {
+      if (options.d1Throws) throw new Error("d1_unavailable");
+      return { results: newoSchemaRows };
+    }
     // The sweep's own candidate query. Checked before the shared replayable-dead query below,
     // which it would otherwise match on "FROM dead_letter d".
     if (sql.includes("AS dead_since")) {

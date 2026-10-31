@@ -17,7 +17,7 @@ The existing business-number human or voicemail route remains the rollback path 
 
 `NEWO_ENABLED` stays false. A callback request with no delivered alert and no screen is a launch blocker: a D1 record alone does not prove that a person can find and work the callback. Before enablement, prove the missing-alert recovery sweep, operations attention state, people-only resolution, and the operator screen on the deployed candidate. The source sweep retries open callbacks with no confirmed sent marker, even when no later Newo event arrives, and both reconciliation schedules stay degraded until a person closes the callback.
 
-The remaining source gates are session/tenant/status validation for callback inserts; every written column and guard in the enablement gate plus runtime schema readiness; corrected contact details in the durable callback record; and redaction with the owner's three-year inbound retention contract, including age-gated deletion in foreign-key-safe order. Repository tests, deployed recovery proof, provider delivery and owner acceptance are separate gates.
+The remaining source gates are session/tenant/status validation for callback inserts; corrected contact details in the durable callback record; and redaction with the owner's three-year inbound retention contract, including age-gated deletion in foreign-key-safe order. Source replay and Worker readiness now check the complete installed callback contract, but deployed D1 readback, recovery proof, provider delivery and owner acceptance remain separate gates.
 
 ## 1. Repository gate
 
@@ -98,7 +98,9 @@ NEWO_CONTROL_WRITE_ENABLED=false
 NEWO_JOBNIMBUS_BOOKING_PROVEN=false
 ```
 
-`node tools/validate-newo-config.mjs` and the readiness contract refuse `NEWO_ENABLED=true` unless the D1 callback record exists. They apply the migrations to an in-memory SQLite and read the schema: with migration `0168_newo_callback_records.sql` the `newo_callback_records` table exists, so the gate passes. A JSON boolean `true` counts as on, as it does in the Worker. `NEWO_ENABLED` stays `false` in `wrangler.jsonc` until the go-live change that switches it on. Before that change, confirm that the migrations through `0168` are applied to the production D1 database, so every requested callback lands in a record a person can close.
+`node tools/validate-newo-config.mjs` and the readiness contract refuse `NEWO_ENABLED=true` unless applying the migrations builds the complete reviewed callback/resolution schema. The shared contract binds all 15 callback columns, types, CHECKs, primary/unique keys, foreign keys, all eight guard definitions and table bindings, their per-table creation order, and the session, receipt and actor dependency tables. A table name or synthetic column marker is insufficient. Installed SQL fingerprints preserve literal whitespace and fail closed on changed definitions; a migration changing the contract needs matching fingerprints and behavioral evidence.
+
+The Worker reads the installed contract from its own D1 connection as `checks.newo_callback_schema`, without provider calls or business writes. This result joins the general D1/schema checks in Newo operations' `owned_database` readiness. A static pass proves only repository migration replay. Before enablement, verify the exact deployed candidate's D1 schema and Newo readiness, then complete the separate recovery, screen, provider and owner gates. A JSON boolean `true` counts as on, as it does in the Worker; all shipped Wrangler environments keep `NEWO_ENABLED=false`.
 
 Control writes may be enabled later without enabling customer sends. Outbound customer operations require both governed approval and `NEWO_OUTBOUND_ENABLED=true`.
 

@@ -15,11 +15,31 @@ export interface NewoSchemaObject {
 }
 
 // Bind the installed definitions: columns, types, CHECKs, keys, FKs and every guard's body/table.
+// The three dependency table definitions also bind referenced keys and actor/event columns;
+// retaining a child FK or trigger body while dropping/weakening its target must never admit Newo.
 // Hash the complete sqlite_master SQL, trimming its edges and normalizing only line endings;
 // whitespace inside SQL literals must remain significant. Formatting changes fail closed too.
 // Entries retain per-table trigger creation order. A migration changing this contract must
 // update these fingerprints and the behavioral evidence together; never relax them to enable.
 export const NEWO_CALLBACK_SCHEMA_OBJECTS = Object.freeze([
+  {
+    "type": "table",
+    "name": "app_users",
+    "table": "app_users",
+    "sha256": "8a79c3a86ffa5806f46debc60f2754559f0779a68db30a6dc9f1299540218270"
+  },
+  {
+    "type": "table",
+    "name": "newo_sessions",
+    "table": "newo_sessions",
+    "sha256": "5b650cf4a2a443b1d514cf233eaa5fe4efc6a499d222b18843d8e6a8a238dba3"
+  },
+  {
+    "type": "table",
+    "name": "newo_event_receipts",
+    "table": "newo_event_receipts",
+    "sha256": "bb1c3abe5bb16bb29ef14efecee3d47703d7d24400b6c374287a0268eea671ee"
+  },
   {
     "type": "table",
     "name": "newo_handoff_resolutions",
@@ -83,8 +103,10 @@ export const NEWO_CALLBACK_SCHEMA_OBJECTS = Object.freeze([
 ]);
 
 export const NEWO_CALLBACK_SCHEMA_QUERY = `SELECT type, name, tbl_name, sql FROM main.sqlite_master
- WHERE tbl_name IN ('newo_callback_records', 'newo_handoff_resolutions')
-   AND type IN ('table', 'trigger') ORDER BY rowid`;
+ WHERE (tbl_name IN ('newo_callback_records', 'newo_handoff_resolutions')
+        AND type IN ('table', 'trigger'))
+    OR (type = 'table' AND name IN ('app_users', 'newo_sessions', 'newo_event_receipts'))
+ ORDER BY rowid`;
 
 /** Source replay and runtime readiness share one fail-closed installed-schema contract. */
 export async function newoCallbackSchemaMatches(rows: readonly NewoSchemaObject[]): Promise<boolean> {
@@ -107,7 +129,8 @@ export async function newoCallbackSchemaMatches(rows: readonly NewoSchemaObject[
 /** A schema read only: never writes business data or contacts any provider. */
 export async function newoCallbackSchemaReady(env: Pick<Env, "DB">): Promise<boolean> {
   try {
-    const result = await env.DB.prepare(NEWO_CALLBACK_SCHEMA_QUERY).all<NewoSchemaObject>();
+    const result: { success?: boolean; results?: NewoSchemaObject[] } =
+      await env.DB.prepare(NEWO_CALLBACK_SCHEMA_QUERY).all<NewoSchemaObject>();
     return result.success !== false && await newoCallbackSchemaMatches(result.results ?? []);
   } catch {
     return false;

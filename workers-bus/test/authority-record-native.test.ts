@@ -16,6 +16,7 @@ import {
   type RecordAuthorityReadbackInput,
 } from "../src/authority-records.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 
 const TENANT = "ironwrap";
 const TOKEN = "synthetic-agent-host-token-0001";
@@ -127,7 +128,7 @@ function setup() {
       permissions: permissionsForRole(role),
     });
   }
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN } as unknown as AppEnv;
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger() } as unknown as AppEnv;
   const scalar = (sql: string, ...values: Array<string | number | null>) => db.raw.prepare(sql).get(...values) as Record<string, any>;
   const rows = (sql: string, ...values: Array<string | number | null>) =>
     db.raw.prepare(sql).all(...values).map((row) => ({ ...row })) as Array<Record<string, any>>;

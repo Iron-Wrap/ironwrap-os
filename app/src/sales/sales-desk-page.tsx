@@ -685,9 +685,6 @@ function QuoteSummary({
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-2">
         <StatusChip label={quoteStatusLabel(quote.status)} tone={quoteTone(quote.status)} />
-        {quote.version !== null ? (
-          <span className="text-xs font-bold text-muted">Version {quote.version}</span>
-        ) : null}
       </div>
       {value ? <p className="text-base font-bold tracking-[-0.02em]">{value}</p> : null}
       <p className="text-sm leading-6 text-muted">

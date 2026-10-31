@@ -1641,7 +1641,7 @@ async function terminalizeAuthorityAction(config, actionId, command, issuerRecei
   return requireAppliedAuthorityAction(payload.action ?? payload);
 }
 
-export async function executeAuthorityRecordMutation(config, { args, draft, before, now }) {
+export async function executeAuthorityRecordMutation(config, { args, draft, before }) {
   assertAuthorityExecutorConfigured(config);
   let issuerReceipt = null;
   if (draft.issuer_readback_json) {
@@ -2036,11 +2036,6 @@ const SUPPLIER_ORDER_TRANSITION_GRAPH = Object.freeze({
   Ordered: ["Ordered", "Partially Received", "Received", "Shortage", "Cancelled"],
   "Partially Received": ["Partially Received", "Received", "Shortage"],
 });
-const SUPPLIER_ORDER_RECEIPT_STATUSES = new Set([
-  "Partially Received",
-  "Received",
-  "Shortage",
-]);
 
 function supplierOrderIdentifier(value, errorCode) {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -7362,7 +7357,7 @@ export function buildServer(config) {
           "authority_record_id", "tenant", "authority_kind", "scope_type", "scope_ref", "version", "status",
           "issuer_reference", "evidence_sha256", "supersedes", "exception_status",
         ]),
-        execute: () => executeAuthorityRecordMutation(config, { args, draft, before, now }),
+        execute: () => executeAuthorityRecordMutation(config, { args, draft, before }),
         responseExtra: {
           upserted: true,
           operation: args.authority_operation,

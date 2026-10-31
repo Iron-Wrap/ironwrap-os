@@ -23,7 +23,11 @@ import {
   recordOperatingWorkObjectAssignment,
   type RecordOperatingWorkObjectAssignmentInput,
 } from "../src/operating-work-object-assignment-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import {
+  attestGateInLedger,
+  recordLegacyGateStates,
+  reverseGateInLedger,
+} from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const NOW = new Date("2026-08-21T08:00:00.000Z");
@@ -372,12 +376,10 @@ test("native scheduling rejects unsafe gates, stale identities, partial rosters,
       /operating_job_assignment_crew_invalid/,
     );
 
-    recordLegacyGateStates(db.raw, {
-      tenantId: TENANT,
-      roofJobId: JOB_ID,
-      gates: ["Weather"],
-      state: "blocked",
-    });
+    // A person reverses the Weather entry: the gate is blocked again, so the next assignment
+    // revision is refused until Weather is attested anew.
+    const weatherGate = { tenantId: TENANT, roofJobId: JOB_ID, gate: "Weather" as const };
+    reverseGateInLedger(db.raw, { ...weatherGate, actorUserId: PRODUCTION_ID, actorRole: "production" });
     await assert.rejects(
       recordOperatingJobAssignment(
         appEnv,
@@ -390,7 +392,7 @@ test("native scheduling rejects unsafe gates, stale identities, partial rosters,
       ),
       /operating_job_assignment_gates_blocked/,
     );
-    recordLegacyGateStates(db.raw, { tenantId: TENANT, roofJobId: JOB_ID, gates: ["Weather"] });
+    attestGateInLedger(db.raw, { ...weatherGate, actorUserId: PRODUCTION_ID, actorRole: "production" });
 
     const second = await recordOperatingJobAssignment(
       appEnv,

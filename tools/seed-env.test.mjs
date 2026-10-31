@@ -37,8 +37,8 @@ const config = loadWranglerConfig(wranglerConfigPath);
 test("loads the real wrangler.jsonc and derives production identifiers from it", () => {
   const prod = productionIdentifiers(config);
   assert.equal(prod.workerName, "ironwrap-bus");
-  assert.equal(prod.databaseId, "f0674848-13df-4422-9896-8ba2719663b8");
-  assert.equal(prod.routeHostname, "ironwrap-bus.ironwrapexteriors.com");
+  assert.equal(prod.databaseId, "a8fd0116-7af6-4788-98bd-083addbe58bc");
+  assert.equal(prod.routeHostname, "ironwrap.mindburn.org");
   assert.equal(prod.workersDevHostname, "ironwrap-bus.yellow-rain-7498.workers.dev");
 });
 
@@ -64,11 +64,11 @@ test("refuses --env and --base-url both naming a target, even when --env is '' (
 
 test("refuses a non-loopback --base-url and names both production hostnames", () => {
   try {
-    resolveTarget({ config, baseUrl: "https://ironwrap-bus.ironwrapexteriors.com" });
+    resolveTarget({ config, baseUrl: "https://ironwrap.mindburn.org" });
     assert.fail("expected a refusal");
   } catch (error) {
     assert.ok(error instanceof SeedGuardError);
-    assert.match(error.message, /ironwrap-bus\.ironwrapexteriors\.com/);
+    assert.match(error.message, /ironwrap\.mindburn\.org/);
     assert.match(error.message, /ironwrap-bus\.yellow-rain-7498\.workers\.dev/);
   }
 });

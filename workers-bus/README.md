@@ -251,10 +251,10 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
 | POST | `/admin/app-users/bootstrap` | `Bearer ADMIN_TOKEN` + `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` | one-time bootstrap that creates the first owner only when this tenant has zero app users |
 | GET | `/api/v1/agents/signals?after&limit` | `Bearer AGENT_HOST_TOKEN` | AI team signals after a cursor, for the agent host ([`agent-host`](../agent-host/README.md)); dark (404) while the token is unset |
-| POST | `/api/v1/agents/runs` | `Bearer AGENT_HOST_TOKEN` | open or resume the coordination run for one signal and `host_run_key`; returns the goal, context snapshot and the run's tools; 409 once that run is closed |
+| POST | `/api/v1/agents/runs` | `Bearer AGENT_HOST_TOKEN` | open or resume the coordination run for one signal and `host_run_key`; returns the goal, context snapshot and the run's tools, with the routing hints: the reviewed run and its model family for an audit, the specialist's current passed qualifications (the latest row per provider, model, effort and release) and `close_model: 3`; 409 once that run is closed. A run past its 10-minute wall time closes `ceiling_reached` with its abstention receipt (naming nobody for a question or an owner report) and answers 409 `run_expired`; the five-minute cron closes any other such run |
 | GET | `/api/v1/agents/runs/:id/tools` | `Bearer AGENT_HOST_TOKEN` | the run's tools: owned, registered catalog actions with strict argument schemas |
 | POST | `/api/v1/agents/runs/:id/steps` | `Bearer AGENT_HOST_TOKEN` | propose one step `{action_id, args, citations, step_key}`; deterministic policy records it as a receipt (done, drafted, asks first, escalated, abstained or denied); a repeated `step_key` answers once |
-| POST | `/api/v1/agents/runs/:id/close` | `Bearer AGENT_HOST_TOKEN` | close the run with its outcome; an abstaining or escalating run always leaves a receipt that names a person |
+| POST | `/api/v1/agents/runs/:id/close` | `Bearer AGENT_HOST_TOKEN` | close the run with its outcome; an abstaining or escalating run always leaves a receipt that names a person. A v3 model block's live or shadow output stands only on a qualification it names that is this specialist's, passed, for the close's provider, model, effort and release, with no later failure for its key; otherwise the run abstains `no_qualified_route`. A run class this Worker's `AGENT_DATA_CLASS` cannot hold is refused (422 `run_class_refused`): `synthetic` only on a `synthetic` Worker, `eval_history` never |
 | POST | `/api/v1/agents/host/heartbeat` | `Bearer AGENT_HOST_TOKEN` | the host's readiness, alerts and backlog |
 | GET | `/api/v1/agent-team/receipts?view=needs_you\|doing\|done` | owner or ops session | the team's receipts in Now's three lanes |
 | GET | `/api/v1/agent-team/hosts` | owner or ops session | the agent hosts' last heartbeat and alerts |
@@ -767,6 +767,19 @@ normalization function. This lets the owner see exactly which saved contact cust
 `null` means no public contact, while a null phone beside a valid email means the phone will not
 be shown. Defaults never become a public contact.
 
+### Customer portal first open
+
+When `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED=true`, a resolve that shows a published proposal
+keeps the first open of that publication through that link in `customer_portal_proposal_views`
+(0163): ids and one timestamp, nothing about the device. The write runs after the response
+(`waitUntil`) and a failure is only logged. Staff are skipped when the app sends
+`staff_preview: true` (it does while an office sign-in is live in that browser; the request itself
+omits credentials) or when the request comes from the device that issued the link; a staff member
+on another device without a sign-in counts as the customer. D1 refuses to delete a row younger than
+3 years; the daily cron deletes older rows before it prunes portal links. The flag is `false` in
+every checked-in environment until the owner approves the portal privacy notice that says the first
+open is recorded and kept for at most 3 years.
+
 ### Crew office contact
 
 Authenticated `GET /api/v1/jobs/{job}` and the universal work-object read include
@@ -912,7 +925,10 @@ one-way digest of the full receipt-bound dry run. The approver identity, the
 receipts, the raw write arguments, and the private digests never reach the
 browser projection. A partial unique index permits exactly one live intent per
 pack, and an invoked-write transport failure is terminal `execution_uncertain`,
-never an automatic retry.
+never an automatic retry. The frequent Worker sweep also moves expired execution
+leases for its configured tenant into that reconciliation-only state, including
+when the capability has since been disabled. It preserves the saved approval and
+never republishes the pack.
 
 New publication approvals freeze and project `approved_snapshot: {snapshot_id,
 version_label}` during preparation. The label is `Saved proposal publication
@@ -959,7 +975,8 @@ never logged or returned.
     "brand": "IronWrap",
     "locale": "en-CA",
     "time_zone": "America/Edmonton",
-    "currency": "CAD"
+    "currency": "CAD",
+    "office_phone": "780-555-0142"
   },
   "permissions": ["session:read", "jobs:read:assigned"],
   "allowed_actions": ["session.logout", "today.read", "job.read.assigned"],
@@ -970,6 +987,14 @@ never logged or returned.
   "stale_fields": []
 }
 ```
+
+`tenant.office_phone` is the line a crew phone offers under "Call the office" on its emergency
+line. It is the phone on the owner-saved company profile, trimmed and otherwise exactly as stored;
+the app builds the `tel:` link. It is `null` on a signed-out session, while no owner has saved the
+profile, when the saved phone is blank, or when it fails the profile's own save-time check. The
+same value rides in the field bootstrap's `session` and in the magic-link and device-pairing
+consume responses. A failed profile read never fails the session: the phone is `null` and
+`stale_fields` carries `office_phone.unavailable`.
 
 The three operational read endpoints use the same top-level metadata envelope. Their exact v1
 shapes are:

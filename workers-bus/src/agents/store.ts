@@ -4,16 +4,19 @@
 
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
-import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
+import { APPLY_IN_OWN_SCREEN } from "./receipts.ts";
+import { DEFAULT_CEILINGS, evaluateStep, INBOUND_ONLY, PERSON_REQUEST_ONLY, PREPARES_PEOPLE_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
 import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
-import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
+import { currentDelegation, escalateRunAbstention, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
 import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
-import { OBJECT_MODELS } from "./read-models.ts";
-import { divertsToShadow, recordShadowStep, runMode, signalActions, type ShadowStepRow } from "./shadow.ts";
-import { WATCH_SIGNAL_SOURCE } from "./watches.ts";
+import { OBJECT_MODELS, REPORT_MODELS } from "./read-models.ts";
+import { CANDIDATE_BAR, currentQualifications, delegationCandidates, qualificationHolds, recordShadowStep, runMode, shadowSetting, signalActions, type QualificationHint, type ShadowStepRow } from "./shadow.ts";
+import { OWNER_REPORTS, WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
+import { LEAD_FACT_KEYS, leadProposal, type LeadFacts } from "./lead-proposals.ts";
+import { supersedeDrafts } from "./drafts.ts";
 
 export interface BoundStatement {
   first<T>(): Promise<T | null>;
@@ -77,13 +80,23 @@ export interface RunRow {
   mode?: "live" | "shadow";
 }
 
-/** What the host needs to route a run: its mode, its one expected action and the run it reviews. */
+/**
+ * What the host needs to route a run: its mode, its one expected action, the run it reviews and the
+ * specialist's current qualifications. `close_model: 3` says this Worker takes the v3 close model
+ * block; an older host reads neither, nor `review_of.family`, and closes as it always has.
+ */
 export interface RunHints {
   mode: "live" | "shadow";
   expected_action_id: string | null;
-  review_of: { run_id: string; provider: string } | null;
+  /** The reviewed run's provider id and, when it is known, its model family. */
+  review_of: { run_id: string; provider: string; family?: string } | null;
+  qualifications: QualificationHint[];
+  close_model: 3;
   output_extension?: { view: JsonSchema };
 }
+
+/** What data a Worker holds (`AGENT_DATA_CLASS`): `business`, or `synthetic` on a QA or dev Worker's seed data. */
+export type DataClass = "business" | "synthetic";
 
 export interface StepRow {
   step_id: string;
@@ -286,8 +299,10 @@ export async function openRun(
   if (asker !== null && Date.parse(now) - Date.parse(signal.received_at) > ASK_UNANSWERED_MS) return { error: "ask_expired", status: 409 };
   // A watch names the objects its condition found; the run starts from each of them.
   const watchObjects = watchSubjects(signal);
+  // An owner report's run writes for a wider audience: it reads no lead proposal.
+  const reportRun = signal.kind === "watch" && signal.source === WATCH_SIGNAL_SOURCE && signal.watch_id !== null && Object.hasOwn(OWNER_REPORTS, signal.watch_id);
   const memory = watchObjects
-    ? await subjectsFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
+    ? await subjectsFacts(db, reportRun ? REPORT_MODELS : OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
     : await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
   // A handoff run also starts from the person's ask or request at the root of its chain.
   const root = signal.kind === "handoff" ? await rootOf(db, tenantId, signal) : null;
@@ -381,8 +396,11 @@ async function resumeRun(
     return { error: "run_key_conflict", status: 422 };
   }
   if (existing.state === "closed") return { error: "run_closed", status: 409 };
-  if (Date.parse(now) - Date.parse(existing.started_at) > DEFAULT_CEILINGS.wallTimeMs)
-    return {error: "run_expired", status: 409};
+  // A run past its wall-time ceiling can take no step; it closes now instead of staying open.
+  if (Date.parse(now) - Date.parse(existing.started_at) > DEFAULT_CEILINGS.wallTimeMs) {
+    await expireRun(db, tenantId, existing, now);
+    return { error: "run_expired", status: 409 };
+  }
   const resumed = await db
     .prepare("UPDATE agent_runs SET attempt = attempt + 1, attempt_started_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
     .bind(now, existing.run_id)
@@ -402,29 +420,40 @@ async function resumeRun(
 
 /**
  * Routing hints for the host, all from Worker records: the run's mode; the single action the
- * signal expects (a handoff's, or a watch that proposes one action); and, for the auditor's review
- * of another run, that run and the provider family that ran it, so the gateway can pick a
- * reviewer of a different family (contract "Model routing").
+ * signal expects (a handoff's, or a watch that proposes one action); for the auditor's review of
+ * another run, that run, its provider and the model family that ran it, so the gateway can pick a
+ * reviewer of a different family (contract "Model routing"); and the qualifications the
+ * specialist's live and shadow routes must match (contract "Qualification").
  */
 async function runHints(db: AgentDb, tenantId: string, run: RunRow, signal: SignalRow | null): Promise<RunHints> {
   const actions = signal ? signalActions(signal) : [];
+  const reviewed = signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null;
   return {
     mode: run.mode ?? "live",
     expected_action_id: actions.length === 1 ? actions[0] : null,
-    review_of: signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null,
+    // A family this Worker cannot name is left out; the host then finds no route to review it with.
+    review_of: reviewed && { run_id: reviewed.run_id, provider: reviewed.provider, ...(reviewed.family === null ? {} : { family: reviewed.family }) },
+    qualifications: await currentQualifications(db, tenantId, run.specialist_id),
+    close_model: 3,
     // Only an ask run may return a view, so only its open carries the view schema (face.ts).
     ...(askRun(run) ? { output_extension: { view: VIEW_SCHEMA } } : {}),
   };
 }
 
-async function reviewedRun(db: AgentDb, tenantId: string, specialistId: string, signal: SignalRow): Promise<RunHints["review_of"]> {
+/** The run an audit reviews, with the provider and family its close recorded (null when unknown). */
+async function reviewedRun(
+  db: AgentDb,
+  tenantId: string,
+  specialistId: string,
+  signal: SignalRow,
+): Promise<{ run_id: string; provider: string; family: string | null } | null> {
   if (specialistId !== "independent_auditor" || signal.subject_aggregate !== "coordination_run" || !signal.subject_id) return null;
   const reviewed = await db
     .prepare("SELECT run_id, close_json FROM agent_runs WHERE tenant_id = ? AND run_id = ?")
     .bind(tenantId, signal.subject_id)
     .first<{ run_id: string; close_json: string | null }>();
-  const provider = reviewed?.close_json ? (JSON.parse(reviewed.close_json) as { model?: { provider?: unknown } | null }).model?.provider : undefined;
-  return reviewed && typeof provider === "string" ? { run_id: reviewed.run_id, provider } : null;
+  const model = reviewed?.close_json ? (JSON.parse(reviewed.close_json) as { model?: { provider?: unknown } | null }).model : undefined;
+  return reviewed && typeof model?.provider === "string" ? { run_id: reviewed.run_id, provider: model.provider, family: familyOf(model) } : null;
 }
 
 export async function getRun(db: AgentDb, tenantId: string, runId: string): Promise<RunRow | null> {
@@ -535,7 +564,16 @@ async function runRequest(db: AgentDb, tenantId: string, run: RunRow): Promise<S
   const root = await rootOf(db, tenantId, await runSignalRow(db, tenantId, run));
   if (!root) return null;
   const actor = signalActor(root);
-  return { signal_ref: `signal/${root.signal_id}`, kind: root.kind, source: actor ? actorWord(root) : root.source, actor };
+  const content: unknown = JSON.parse(root.content_json);
+  const expected = typeof content === "object" && content !== null ? (content as { expected_action_id?: unknown }).expected_action_id : undefined;
+  return {
+    signal_ref: `signal/${root.signal_id}`,
+    kind: root.kind,
+    source: actor ? actorWord(root) : root.source,
+    actor,
+    expected_action_id: typeof expected === "string" ? expected : null,
+    subject: root.subject_aggregate && root.subject_id ? { aggregate: root.subject_aggregate, id: root.subject_id } : null,
+  };
 }
 
 export function runTools(run: RunRow): RunTool[] {
@@ -634,12 +672,17 @@ export async function proposeStep(
 
   const control = await specialistControl(db, tenantId, run.specialist_id);
   const delegation = await currentDelegation(db, tenantId, run.specialist_id, input.action_id);
+  // Read once: whether the action practises, and whether its practice stopped. A practice-only action
+  // whose practice runs stopped neither practises nor runs: policy reads it as switched off until the
+  // owner confirms it again (shadow.ts practiceStopped).
+  const practice = await shadowSetting(db, tenantId, run.specialist_id, input.action_id);
+  const practiceStopped = practice.stopped;
   const ceilingMet =
     delegation?.setting === "within_limits"
       ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
       : false;
   // An action only a person's own request may start is checked against the request the run answers.
-  const requester = PERSON_REQUEST_ONLY.has(input.action_id) ? await runRequest(db, tenantId, run) : undefined;
+  const requester = PERSON_REQUEST_ONLY.has(input.action_id) || INBOUND_ONLY.has(input.action_id) ? await runRequest(db, tenantId, run) : undefined;
   let decision = evaluateStep({
     requester,
     specialistId: run.specialist_id,
@@ -649,7 +692,7 @@ export async function proposeStep(
     citations: input.citations,
     snapshot,
     currentVersions,
-    delegation,
+    delegation: practiceStopped ? { delegation_id: delegation?.delegation_id ?? "practice_stopped", setting: "off" } : delegation,
     withinCeiling: ceilingMet,
     stepsOnRun: Number(count?.steps ?? 0),
     runStartedAt: Date.parse(run.started_at),
@@ -673,6 +716,50 @@ export async function proposeStep(
       reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
     };
   }
+  // The system proposes acting within limits only where the action meets the earned-autonomy bar
+  // for that specialist (contract "Delegation" item 13): below it, policy refuses the proposal.
+  if (decision.result !== "deny" && input.action_id === "delegation.propose_change" && (input.args as { proposed?: unknown }).proposed === "within_limits") {
+    const pair = input.args as { specialist_id: string; action_id: string };
+    const earned = (await delegationCandidates(db, tenantId, CANDIDATE_BAR, { specialist_id: pair.specialist_id, action_id: pair.action_id })).length > 0;
+    decision = earned
+      ? { ...decision, checks: [...decision.checks, { check: "earned_autonomy", passed: true }] }
+      : {
+          ...decision,
+          result: "deny",
+          outcome: "failed",
+          reason_codes: ["policy_denied"],
+          checks: [...decision.checks, { check: "earned_autonomy", passed: false }],
+          permit_kind: "none",
+          delegation_id: null,
+          reviewer_role: null,
+        };
+  }
+  // A confirm names an open proposal of the same lead and tenant and confirms only what it proposed
+  // (a non-null value equals the proposal's); a person who wants another value edits the lead by hand.
+  if (decision.result !== "deny" && input.action_id === "lead_fact.confirm") {
+    const confirm = input.args as { lead_id: string; proposal_id: string; fields: LeadFacts };
+    const proposal = await leadProposal(db, tenantId, confirm.proposal_id);
+    const refusal =
+      !proposal || proposal.lead_id !== confirm.lead_id
+        ? "fact_missing"
+        : !proposal.open
+          ? "fact_stale"
+          : LEAD_FACT_KEYS.some((key) => confirm.fields[key] !== null && confirm.fields[key] !== proposal.fields[key])
+            ? "fact_conflict"
+            : null;
+    decision = refusal
+      ? {
+          ...decision,
+          result: "deny",
+          outcome: "abstained",
+          reason_codes: [refusal],
+          checks: [...decision.checks, { check: "proposal", passed: false }],
+          permit_kind: "none",
+          delegation_id: null,
+          reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
+        }
+      : { ...decision, checks: [...decision.checks, { check: "proposal", passed: true }] };
+  }
   const now = new Date(nowMs).toISOString();
   // An admitted read reads now. One its reader may not make, or that fails, stops as an
   // abstention instead of being recorded as done.
@@ -682,7 +769,8 @@ export async function proposeStep(
   // A shadowed action is decided as it would be, then recorded as a shadow step: no receipt, permit,
   // person, handoff or effect can come of it (migration 0203).
   // A step past the run's ceiling is not diverted: it abstains as a receipt that names a person.
-  if (!decision.reason_codes.includes("ceiling_reached") && (await divertsToShadow(db, tenantId, run, input.action_id))) {
+  // Only an action the owner shadowed for this specialist, never a protective one, is diverted.
+  if (!decision.reason_codes.includes("ceiling_reached") && practice.shadow && !practice.stopped && !catalogAction(input.action_id)?.protective) {
     const signal = await db
       .prepare("SELECT subject_aggregate, subject_id FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
       .bind(tenantId, run.signal_id)
@@ -723,6 +811,7 @@ export async function proposeStep(
           delegatedPermitId: decision.delegation_id,
           windowSince: delegatedCeiling ? new Date(nowMs - windowMs[delegatedCeiling.count.per]).toISOString() : null,
           windowMax: delegatedCeiling?.count.max ?? null,
+          proposalId: input.action_id === "lead_fact.confirm" ? (input.args as { proposal_id: string }).proposal_id : null,
         };
   try {
     // An admitted step counts against the run's step ceiling inside the insert itself, so parallel
@@ -760,7 +849,15 @@ export async function proposeStep(
           stepId,
         ),
       ]);
-    } else await insert.run();
+    } else {
+      // A people-only draft replaces the open drafts of the same record, in the same transaction.
+      const replaces =
+        PREPARES_PEOPLE_ONLY.has(input.action_id) && decision.permit_kind === "draft" && decision.outcome === "succeeded"
+          ? await supersedeDrafts(db, tenantId, { step_id: stepId, action_id: input.action_id, args: input.args, args_sha256: argsSha })
+          : null;
+      if (replaces) await db.batch([insert, replaces]);
+      else await insert.run();
+    }
     if (ceiling !== null && !(await stepByKey(db, run.run_id, input.step_key))) {
       const reviewer = catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner";
       const latestControl = admission?.guardControls
@@ -775,14 +872,17 @@ export async function proposeStep(
           latestDelegation?.delegation_id !== delegation?.delegation_id ||
           latestDelegation?.setting !== delegation?.setting ||
           latestDelegation?.fallback !== delegation?.fallback);
+      // Another confirm of the same proposal landed first: the proposal is used, so this one stops
+      // as a confirm of a proposal no longer open.
+      const proposalTaken = admission?.proposalId ? (await leadProposal(db, tenantId, admission.proposalId))?.open === false : false;
       // A proposal overtaken by a committed owner control fails `superseded` (contract reason codes):
       // the owner's own change decided it, so no person is handed a task. A ceiling loser abstains.
       const capped = askReviewer(run, input.action_id, {
         ...decision,
         result: "deny",
         outcome: superseded ? "failed" : "abstained",
-        reason_codes: [superseded ? "superseded" : "ceiling_reached"],
-        checks: [...decision.checks, { check: superseded ? "delegation" : "budget", passed: false }],
+        reason_codes: [superseded ? "superseded" : proposalTaken ? "fact_stale" : "ceiling_reached"],
+        checks: [...decision.checks, { check: superseded ? "delegation" : proposalTaken ? "proposal" : "budget", passed: false }],
         permit_kind: "none",
         delegation_id: null,
         reviewer_role: superseded ? null : reviewer,
@@ -921,6 +1021,8 @@ interface AdmissionSnapshot {
   delegatedPermitId: string | null;
   windowSince: string | null;
   windowMax: number | null;
+  /** A confirm's proposal: no other admitted confirm may name it by the time this one lands. */
+  proposalId: string | null;
 }
 
 function stepInsert(
@@ -963,7 +1065,9 @@ function stepInsert(
   const ask = decision.reviewer_role
     ? decision.result === "needs_approval"
       ? "approve_or_decline"
-      : "acknowledge_and_act"
+      : decision.permit_kind === "draft"
+        ? APPLY_IN_OWN_SCREEN
+        : "acknowledge_and_act"
     : null;
   // Sequence, budgets and the policy/control/delegation snapshot are checked in the insert.
   // A committed pause, hold or revoke cannot leave a permit from the earlier policy read. Scalar subqueries, not HAVING without GROUP BY,
@@ -988,9 +1092,12 @@ function stepInsert(
            AND specialist_id=? AND action_id=? ORDER BY revision DESC LIMIT 1) IS ?)
          AND (? IS NULL OR (SELECT COUNT(*) FROM agent_run_steps WHERE tenant_id=? AND specialist_id=?
            AND action_id=? AND created_at>=? AND json_extract(permit_json,'$.kind')='within_limits') < ?)
-         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=?
+         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=? AND specialist_id=? AND action_id=?
            AND json_extract(permit_json,'$.delegation_id')=?
-           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))`,
+           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))
+         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=? AND specialist_id='lead_concierge'
+           AND action_id='lead_fact.confirm' AND json_extract(args_json,'$.proposal_id')=?
+           AND json_extract(policy_json,'$.result')<>'deny'))`,
     )
     .bind(
       stepId,
@@ -1055,7 +1162,12 @@ function stepInsert(
       admission?.windowMax ?? null,
       admission?.delegatedPermitId ?? null,
       tenantId,
+      run.specialist_id,
+      input.action_id,
       admission?.delegatedPermitId ?? null,
+      admission?.proposalId ?? null,
+      tenantId,
+      admission?.proposalId ?? null,
     );
 }
 
@@ -1242,9 +1354,133 @@ const MODEL_ROUTED_SCHEMA: JsonSchema = {
   },
 };
 
-export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";
+const PROVIDER_ID = { type: "string", pattern: "^[a-z][a-z0-9_]{1,30}$" };
+const FAMILY = { type: "string", pattern: "^[a-z][a-z0-9_]{1,31}$" };
+const MODEL_ID = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" };
+const ROUTE_ID = { type: "string", pattern: "^[a-z][a-z0-9_]{1,40}$" };
+/** As agent_qualifications holds it (migration 0203). */
+const EFFORT = { type: "string", pattern: "^[a-z][a-z0-9_]{0,15}$" };
+const HEX64 = "^[0-9a-f]{64}$";
+const COMPLIANCE_REF = "^[a-z][a-z0-9._-]{1,63}$";
+/** The run classes that decide which provider accounts may serve a run (docs/COMPLIANCE-REGISTER.md "AI model providers"). */
+const RUN_CLASSES = ["live", "shadow", "eval_history", "synthetic"];
 
-const PROVIDER_FAMILIES = new Set(["claude", "codex"]);
+/**
+ * The close model block of a host on gateway config v3, sent once the open advertised
+ * `close_model: 3` (agent-host/src/host/worker.ts `CloseModelV3`): the account (`provider`) and its
+ * adapter, the model's family, the route and the hops it passed over, the qualification it relied
+ * on, the specialist's release, the gateway configuration and the provider terms it ran under.
+ */
+const MODEL_V3_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "provider", "adapter", "family", "model", "effort", "models_used", "auth_mode", "billing", "tier", "route_id", "route", "failover",
+    "qualification_ref", "release_sha256", "gateway_config_sha256", "review_of", "mode", "compliance_ref", "run_class", "risk_acceptance",
+  ],
+  properties: {
+    provider: PROVIDER_ID,
+    adapter: { type: "string", enum: ["openai_compatible", "anthropic_messages", "gemini", "bedrock", "vertex", "claude_agent_sdk", "codex"] },
+    family: FAMILY,
+    model: MODEL_ID,
+    /** The effort of the route that answered, which its qualification names. */
+    effort: EFFORT,
+    models_used: MODEL_PROPERTIES.models_used,
+    /** The account's credential mode. */
+    auth_mode: { type: "string", enum: ["api_key", "oauth", "cloud_identity"] },
+    billing: { type: "string", enum: ["api", "subscription"] },
+    tier: { type: "string", enum: ["routine", "hard", "audit"] },
+    route_id: ROUTE_ID,
+    route: { type: "string", enum: ["primary", "declared_fallback"] },
+    failover: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["route_id", "provider", "model", "family", "reason", "retry_at"],
+        properties: {
+          route_id: ROUTE_ID,
+          provider: PROVIDER_ID,
+          model: MODEL_ID,
+          /** The family of the hop's registry entry; null when the route had none. */
+          family: { type: ["string", "null"], pattern: FAMILY.pattern },
+          reason: { type: "string", pattern: "^[a-z][a-z_]{1,63}$" },
+          retry_at: { type: ["number", "null"], minimum: 0 },
+        },
+      },
+    },
+    qualification_ref: { type: ["string", "null"], pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$" },
+    release_sha256: { type: ["string", "null"], pattern: HEX64 },
+    gateway_config_sha256: { type: "string", pattern: HEX64 },
+    review_of: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["run_id", "family"],
+      properties: { run_id: { type: "string", maxLength: 80 }, family: FAMILY },
+    },
+    mode: { type: "string", enum: ["live", "shadow"] },
+    compliance_ref: { type: ["string", "null"], pattern: COMPLIANCE_REF },
+    run_class: { type: "string", enum: RUN_CLASSES },
+    risk_acceptance: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["ref", "run_class", "reason"],
+      properties: { ref: { type: "string", pattern: COMPLIANCE_REF }, run_class: { type: "string", enum: RUN_CLASSES }, reason: { type: "string", maxLength: 500 } },
+    },
+  },
+};
+
+/** A v3 close model block as validated, with the fields the Worker reads. */
+interface ModelV3 {
+  provider: string;
+  family: string;
+  model: string;
+  effort: string;
+  failover: Array<{ provider: string; model: string; family: string | null }>;
+  qualification_ref: string | null;
+  release_sha256: string | null;
+  run_class: string;
+}
+
+/** The v3 block of a validated close, or null for a legacy or routed block or none (`family` is v3's alone). */
+function modelV3(model: unknown): ModelV3 | null {
+  return typeof model === "object" && model !== null && Object.hasOwn(model, "family") ? (model as ModelV3) : null;
+}
+
+/** The run classes a close may carry here: eval runs never close on a Worker, and synthetic ones only on synthetic data. */
+const CLOSE_RUN_CLASSES: Record<DataClass, ReadonlySet<string>> = {
+  business: new Set(["live", "shadow"]),
+  synthetic: new Set(["live", "shadow", "synthetic"]),
+};
+
+/**
+ * The family each provider id of a gateway config v2 host stands for, which a legacy or routed
+ * close names in place of a family. No v3 family takes either name (agent-host registry.ts).
+ */
+const LEGACY_FAMILIES: Readonly<Record<string, string>> = { claude: "anthropic", codex: "openai" };
+
+/** A close model block's family: a v3 block's own, a legacy provider's, or null when it names none. */
+function familyOf(model: unknown): string | null {
+  if (typeof model !== "object" || model === null) return null;
+  const v3 = modelV3(model);
+  if (v3) return v3.family;
+  const provider = (model as { provider?: unknown }).provider;
+  return typeof provider === "string" && Object.hasOwn(LEGACY_FAMILIES, provider) ? LEGACY_FAMILIES[provider] : null;
+}
+
+/**
+ * Whether an audit ran off the reviewed run's family: its own family is known and another, and so
+ * is the family of every hop a v3 close passed over. A hop that names no family fails closed.
+ */
+function independentOf(model: unknown, reviewedFamily: string | null): boolean {
+  const family = familyOf(model);
+  if (reviewedFamily === null || family === null || family === reviewedFamily) return false;
+  const v3 = modelV3(model);
+  return !v3 || v3.failover.every((hop) => hop.family !== null && hop.family !== reviewedFamily);
+}
+
+export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";
 
 const GATEWAY_REASON_TO_CODE: Record<string, string> = {
   kill_switch: "provider_unavailable",
@@ -1274,6 +1510,7 @@ export async function closeRun(
   body: unknown,
   runOutputSchema: JsonSchema,
   now: string,
+  dataClass: DataClass = "business",
 ): Promise<{ result: RunResult } | StoreError> {
   if (run.state === "closed") return { error: "run_closed", status: 409 };
   if (!closeShapeValid(body)) return { error: "invalid_close", status: 422 };
@@ -1281,6 +1518,7 @@ export async function closeRun(
     status: "ok" | "abstained";
     reason: string | null;
     output: { decision?: string; reason_code?: string | null } | null;
+    model: unknown;
   };
   // Only an ask run may carry a view; the view is checked apart from the run output (face.ts), so
   // on any other run a `view` is an unknown field.
@@ -1288,6 +1526,10 @@ export async function closeRun(
   if (close.status === "ok" && (close.output === null || validate(runOutputSchema, ask ? withoutView(close.output) : close.output).length > 0)) {
     return { error: "invalid_close", status: 422 };
   }
+  // A synthetic run needs no qualification and may run on consumer accounts, so it closes only on a
+  // Worker that holds synthetic data; an eval run never closes on a Worker. Refused, never recorded.
+  const v3 = modelV3(close.model);
+  if (v3 && !CLOSE_RUN_CLASSES[dataClass].has(v3.run_class)) return { error: "run_class_refused", status: 422 };
   let result: RunResult;
   let reasonCode: string | null = null;
   if (close.status === "abstained") {
@@ -1299,21 +1541,37 @@ export async function closeRun(
     if (result !== "completed") reasonCode = close.output?.reason_code ?? "out_of_scope";
   }
   // Per-run independence (contract "Model routing"): an audit of another run that came back from
-  // the same provider family as that run is not an audit, so it abstains instead of completing.
+  // the same model family as that run is not an audit, so it abstains instead of completing. When
+  // the reviewed run recorded a model it fails closed: the audit and the reviewed run must each name
+  // a known family, and different ones. A reviewed run that recorded no model (it closed without a
+  // model's answer, as an expired run does) has no output to be independent of, so it is not checked.
+  let refusal: string | null = null;
   if (close.status === "ok" && run.specialist_id === "independent_auditor") {
     const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<SignalRow>();
     const reviewed = signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null;
-    const provider = (body as { model?: { provider?: unknown } | null }).model?.provider;
-    // Fails closed: the audit must name a known family, and a different one from the reviewed run.
-    if (reviewed && (typeof provider !== "string" || !PROVIDER_FAMILIES.has(provider) || provider === reviewed.provider)) {
-      result = "abstained";
-      reasonCode = "provider_unavailable";
-    }
+    if (reviewed && !independentOf(close.model, reviewed.family)) refusal = "provider_unavailable";
+  }
+  // A live or shadow run relies on its route's qualification (contract "Qualification"): output that
+  // came from a route without a current passed qualification of the specialist is not the
+  // specialist's work, so the run abstains. A synthetic run needs none; an abstention is left as it is.
+  if (close.status === "ok" && refusal === null && v3 && (v3.run_class === "live" || v3.run_class === "shadow")) {
+    const holds = await qualificationHolds(db, tenantId, run.specialist_id, v3);
+    if (!holds) refusal = "no_qualified_route";
+  }
+  if (refusal) {
+    result = "abstained";
+    // Refused output keeps none of its work (the record drops it, below), but an emergency, a safety
+    // event or suspected injection it raised stays the reason, so it still reaches a person, on a
+    // question's run too.
+    const alarm = close.output?.reason_code ?? "";
+    reasonCode = PERSON_CODES.has(alarm) ? alarm : refusal;
   }
   const checked = ask ? recordAskClose(body, ask) : { body, verdict: null };
   // Pausing a specialist stops its drafting (contract "Delegation"): a paused specialist's run
   // closes, but its drafts are withheld from the record, counted and never kept.
-  const recorded = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(checked.body) : checked.body;
+  const stamped = withDataClass(checked.body, dataClass);
+  const kept = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(stamped) : stamped;
+  const recorded = refusal ? refusedClose(kept, refusal) : kept;
   // The abstention receipt and the close commit together, receipt first, so a closed run never
   // lacks the receipt that names a person and no step lands after the close. A completed ask
   // closes with the face's answer receipt the same way.
@@ -1345,16 +1603,109 @@ export async function closeRun(
   return { result };
 }
 
+/** The close the Worker records for a run that outlived its wall-time ceiling with no close from its host. */
+export function expiredClose(run: RunRow, now: string) {
+  return {
+    status: "abstained",
+    reason: "run_expired",
+    detail: `No close arrived within the run's ${DEFAULT_CEILINGS.wallTimeMs / 60_000}-minute wall-time ceiling.`,
+    output: null,
+    model: null,
+    hashes: null,
+    usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
+    cost_usd: 0,
+    attempts: 0,
+    duration_ms: Math.max(0, Date.parse(now) - Date.parse(run.started_at)),
+    tool_calls: [],
+  };
+}
+
+/**
+ * Closes an open run past its wall-time ceiling as a ceiling close does: `ceiling_reached`, with its
+ * abstention receipt in the same batch, then the receipt's exception. A question's receipt names
+ * nobody, as on any close of an ask, and so does an owner report's: its report shows the result.
+ * False when the run had closed already.
+ */
+export async function expireRun(db: AgentDb, tenantId: string, run: RunRow, now: string): Promise<boolean> {
+  const ask = askRun(run) !== null;
+  const signal = await db.prepare("SELECT watch_id, source FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<{ watch_id: string | null; source: string }>();
+  const report = signal?.source === WATCH_SIGNAL_SOURCE && signal.watch_id !== null && Object.hasOwn(OWNER_REPORTS, signal.watch_id);
+  const named = await namesAPerson(db, run.run_id);
+  const statements: BoundStatement[] = [];
+  if (ask || !named) statements.push(await abstentionStep(db, tenantId, run, "ceiling_reached", now, !ask && !report));
+  statements.push(
+    db
+      .prepare("UPDATE agent_runs SET state = 'closed', result = 'ceiling_reached', close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
+      .bind(canonicalJson(expiredClose(run, now)), now, run.run_id),
+  );
+  try {
+    const results = await db.batch(statements);
+    if (changesOf(results.at(-1)) < 1) return false;
+  } catch (error) {
+    if (String(error).includes("agent_run_closed")) return false;
+    throw error;
+  }
+  await escalateRunAbstention(db, tenantId, run, now, null);
+  return true;
+}
+
+/**
+ * How long past its wall-time ceiling the cron leaves a run open: longer than the host's longest
+ * model call chain (agent-host/config/gateway.json: a route and up to three failover hops, each up
+ * to 3 attempts of 240 s with backoff, about 48 minutes), so a close still on its way lands instead
+ * of meeting `run_closed`. A run the host opens again closes at the ceiling itself (resumeRun).
+ * ponytail: a fixed margin; raise it if the gateway's retry, timeout or failover limits grow.
+ */
+export const EXPIRY_GRACE_MS = 60 * 60_000;
+
+/**
+ * Closes every open run past its wall-time ceiling and the grace (expireRun), oldest first, at most
+ * `limit` per cron tick. One run that fails to close does not stop the others.
+ */
+export async function expireRuns(db: AgentDb, tenantId: string, now: string, limit = 50): Promise<{ expired: number; failed: number }> {
+  const before = new Date(Date.parse(now) - DEFAULT_CEILINGS.wallTimeMs - EXPIRY_GRACE_MS).toISOString();
+  const open = await db
+    .prepare("SELECT * FROM agent_runs WHERE tenant_id = ? AND state = 'open' AND started_at < ? ORDER BY started_at ASC, run_id ASC LIMIT ?")
+    .bind(tenantId, before, limit)
+    .all<RunRow>();
+  let expired = 0;
+  let failed = 0;
+  for (const run of open.results ?? []) {
+    try {
+      if (await expireRun(db, tenantId, run, now)) expired += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { expired, failed };
+}
+
 /** A close as the Worker records it before any pause: an ask run's view checked, else as received. */
-export function recordedClose(run: RunRow, body: unknown): unknown {
+export function recordedClose(run: RunRow, body: unknown, dataClass: DataClass = "business"): unknown {
   const ask = askRun(run);
-  return ask ? recordAskClose(body, ask).body : body;
+  return withDataClass(ask ? recordAskClose(body, ask).body : body, dataClass);
+}
+
+/** A v3 close also records the data class of the Worker it closed on, beside the run class in its model block. */
+function withDataClass(body: unknown, dataClass: DataClass): unknown {
+  return modelV3((body as { model?: unknown } | null)?.model) ? { ...(body as Record<string, unknown>), data_class: dataClass } : body;
 }
 
 function withoutView(output: unknown): unknown {
   if (typeof output !== "object" || output === null || Array.isArray(output)) return output;
   const { view: _view, ...rest } = output as Record<string, unknown>;
   return rest;
+}
+
+/**
+ * A close whose output the Worker refused (an audit off independence, or a route without the
+ * qualification it named): recorded without that output, so no answer, view or draft of it is read
+ * back, and with the reason.
+ */
+export function refusedClose(body: unknown, reason: string): unknown {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return body;
+  const { withheld: _withheld, ...close } = body as Record<string, unknown>;
+  return { ...close, output: null, refused: { reason } };
 }
 
 /** A close as recorded for a paused specialist: drafts removed and counted. Unchanged without drafts. */
@@ -1479,8 +1830,10 @@ function closeShapeValid(body: unknown): boolean {
   if (canonicalJson(calls).length > 65_536) return false;
   const model = value.model;
   if (model !== null) {
-    const routed = typeof model === "object" && !Array.isArray(model) && Object.hasOwn(model as object, "route_id");
-    if (validate(routed ? MODEL_ROUTED_SCHEMA : MODEL_SCHEMA, model).length > 0) return false;
+    // A v3 block is the one with a family; a routed one (gateway config v2) has a route but none.
+    const block = typeof model === "object" && !Array.isArray(model) ? (model as object) : null;
+    const schema = block && Object.hasOwn(block, "family") ? MODEL_V3_SCHEMA : block && Object.hasOwn(block, "route_id") ? MODEL_ROUTED_SCHEMA : MODEL_SCHEMA;
+    if (validate(schema, model).length > 0) return false;
   }
   return validate(CLOSE_SCHEMA, { ...value, output: null, tool_calls: null, model: null }).length === 0;
 }

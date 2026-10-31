@@ -77,6 +77,11 @@ export function catalogAction(actionId: string): CatalogAction | null {
   return ACTIONS.get(actionId) ?? null;
 }
 
+/** An action whose autonomy can be earned (contract "Delegation"): `A2` or `A3`, delegable, and neither people-only nor protective. */
+export function earnable(action: CatalogAction): boolean {
+  return (action.autonomy === "A2" || action.autonomy === "A3") && !action.human_only && action.delegable && !action.protective;
+}
+
 export function catalogSpecialist(specialistId: string): CatalogSpecialist | null {
   return SPECIALISTS.get(specialistId) ?? null;
 }
@@ -84,8 +89,4 @@ export function catalogSpecialist(specialistId: string): CatalogSpecialist | nul
 /** MCP tool names allow no dots; action ids never contain "__", so the mapping is one to one. */
 export function toolName(actionId: string): string {
   return actionId.replaceAll(".", "__");
-}
-
-export function isReasonCode(outcome: "failed" | "unknown" | "abstained", code: string): boolean {
-  return (CATALOG.receipt.reason_codes[outcome] ?? []).includes(code);
 }

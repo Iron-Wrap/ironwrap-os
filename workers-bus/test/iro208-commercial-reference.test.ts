@@ -10,9 +10,11 @@ import { test } from "node:test";
 
 import worker from "../src/index.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { buildSalesReadModel } from "../src/app-read-models.ts";
-import { runExternalEffect } from "../src/effect-runtime.ts";
+import { EFFECT_ATTEMPT_LEASE_MS, reconcileExternalEffect, runExternalEffect } from "../src/effect-runtime.ts";
+import { recordProposalDeliveryConfirmation } from "../src/commercial-store.ts";
 import {
   beginCommercialDepositDerivationRequest,
   deriveSuccess,
@@ -29,6 +31,7 @@ import {
   depositIntentIsReconciled,
   selectPhaseWorkPackage,
 } from "../src/commercial-job-phase.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const PUBLIC_ORIGIN = "https://app.example.invalid";
@@ -1029,6 +1032,36 @@ async function jobPhase(h: Harness, jobId: string): Promise<{
   };
 }
 
+/** A signed-in person's own cookie session, authenticated the way the router authenticates it. */
+async function personAuth(h: Harness, userId: string): Promise<AuthContext> {
+  const token = randomToken();
+  const now = Date.now();
+  h.db.raw.prepare(
+    `INSERT INTO app_sessions
+       (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+  ).run(
+    await sessionHashFor(h.env, token),
+    userId,
+    TENANT,
+    new Date(now - 60_000).toISOString(),
+    new Date(now + 3_600_000).toISOString(),
+    new Date(now).toISOString(),
+    "d".repeat(64),
+    "e".repeat(64),
+  );
+  const outcome = await authenticateAppRequest(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/session`, {
+      headers: { cookie: `__Host-ironwrap_session=${token}` },
+    }),
+    h.env,
+  );
+  assert.ok(outcome.ok, "the synthetic person session authenticates");
+  return outcome.auth;
+}
+
+/** Gate writes are people-only (migration 0153): a real cookie session and its own CSRF token. */
 async function clearProductionGate(
   h: Harness,
   jobId: string,
@@ -1037,14 +1070,21 @@ async function clearProductionGate(
   decisionId: string,
   role: AppRole = "owner",
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  const person = await personAuth(h, role === "owner" ? OWNER_ID : role === "ops" ? OPS_ID : `appu_${role}_0001`);
   const response = await handleAuthenticatedRoute(
-    request(
-      `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
-      body,
-      decisionId,
+    new Request(
+      `${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json", "idempotency-key": decisionId,
+          "x-csrf-token": person.csrfToken, origin: PUBLIC_ORIGIN, "cf-connecting-ip": "203.0.113.20",
+        },
+        body: JSON.stringify(body),
+      },
     ),
     h.env,
-    auth(role),
+    person,
   );
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
@@ -1267,12 +1307,11 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
     assert.equal(receiptBody.money_intent.provider_entity_id, invoiceId);
     assert.equal(receiptBody.money_intent.state, "reconciled");
 
+    // The owner is this tenant's only holder of the waiving set, so their Materials and Access
+    // waivers are self-approved with a reason (owner ruling D-08).
     const waiverReasons: Record<string, string> = {
       Materials: "Synthetic materials readiness waived for repository composition proof.",
-      Safety: "Synthetic safety readiness waived for repository composition proof.",
       Access: "Synthetic site access waived for repository composition proof.",
-      Weather: "Synthetic weather readiness waived for repository composition proof.",
-      Crew: "Synthetic crew readiness waived for repository composition proof.",
     };
     for (const [gate, reason] of Object.entries(waiverReasons)) {
       const decisionId = `iro208b-${gate.toLowerCase()}-waiver-0001`;
@@ -1295,6 +1334,22 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       assert.equal(replayed.status, 200);
       assert.equal(replayed.body.replayed, true);
     }
+    // Safety and Weather are never waivable and Crew has no waiver, so no person can clear them
+    // on this route and production stays blocked.
+    for (const gate of ["Safety", "Weather", "Crew"]) {
+      const refused = await clearProductionGate(
+        h,
+        journey.ids.jobId,
+        gate,
+        { basis: "office_waiver", reason: `Synthetic ${gate.toLowerCase()} waiver attempt for repository proof.` },
+        `iro208b-${gate.toLowerCase()}-waiver-0001`,
+      );
+      assert.equal(refused.status, 409, gate);
+      assert.equal(refused.body.error, "production_gate_not_waivable");
+    }
+    const stillBlocked = await jobPhase(h, journey.ids.jobId);
+    assert.equal(stillBlocked.phase, "production_blocked");
+    assert.equal(stillBlocked.facts.production.all_required_gates_ready, false);
     const depositReplay = await clearProductionGate(
       h,
       journey.ids.jobId,
@@ -1345,6 +1400,14 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       depositGateBeforeConflict,
     );
 
+    // Attestation and Crew-by-policy entries do not exist yet, so the journey records Safety,
+    // Weather and Crew the way 0153 backfills gates cleared before the ledger, and proves the
+    // phase then admits the job.
+    recordLegacyGateStates(h.db.raw, {
+      tenantId: TENANT,
+      roofJobId: journey.ids.jobId,
+      gates: ["Safety", "Weather", "Crew"],
+    });
     const ready = await jobPhase(h, journey.ids.jobId);
     assert.equal(ready.phase, "production_ready");
     assert.equal(ready.facts.accounting.deposit_reconciled, true);
@@ -1756,7 +1819,23 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(unknown.status, 409);
     assert.deepEqual(await unknown.json(), { error: "commercial_publication_effect_mismatch" });
-    const refusedPermit = await preparePublication(h, ids, "iro208-publication-prepare-refused-0001");
+    // The unknown settlement above named an effect that never ran, so its permit is still live and
+    // unused; a second live permit for the same version is refused, so the refused send uses it.
+    const secondLivePermit = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-second-live-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(secondLivePermit.status, 409);
+    assert.equal(
+      (await secondLivePermit.json() as { error: string }).error,
+      "proposal_publication_permit_outstanding",
+    );
+    const refusedPermit = unknownPermit;
     await runPublicationEffect(h, refusedPermit, ids, "effect:iro208:refused", "refused");
     const refused = await handleAuthenticatedRoute(
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: refusedPermit.permit_id, external_effect_id: "effect:iro208:refused" }, "iro208-publication-refused-0001"), h.env, auth("ops"),
@@ -1769,6 +1848,43 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: lostPermit.permit_id, external_effect_id: "effect:iro208:lost" }, "iro208-publication-lost-0001"), h.env, auth("ops"),
     );
     assert.equal(lost.status, 409);
+    // A lost send is not confirmed delivered, so the proposal is not sent again until someone
+    // checks delivery; here the check finds it was not delivered.
+    const resendBeforeCheck = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-before-check-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(resendBeforeCheck.status, 409);
+    assert.equal((await resendBeforeCheck.json() as { error: string }).error, "proposal_delivery_unconfirmed");
+    // A lost send moves to "not executed" only on a person's record (0164), and that record waits out
+    // the provider's late-answer window (0161). A reconcile made at once is refused by both rules; the
+    // same reconcile after the window is still no person's record, so it is refused too.
+    const lostSince = (h.db.raw.prepare("SELECT updated_at FROM external_effects WHERE effect_id = ?")
+      .get("effect:iro208:lost") as { updated_at: string }).updated_at;
+    const afterLostWindow = new Date(Date.parse(lostSince) + EFFECT_ATTEMPT_LEASE_MS + 1_000).toISOString();
+    const notExecuted = (now?: string) => reconcileExternalEffect(h.env as never, "effect:iro208:lost", {
+      outcome: "not_executed",
+      evidence: { checked: "provider has no publication for this proposal revision" },
+      ...(now ? { now } : {}),
+    });
+    await assert.rejects(notExecuted(), /proposal_delivery_answer_may_be_late|proposal_delivery_settle_evidence_missing/);
+    await assert.rejects(notExecuted(afterLostWindow), /proposal_delivery_settle_evidence_missing/);
+    const lostChecked = await recordProposalDeliveryConfirmation(h.env as never, {
+      tenantId: TENANT,
+      effectId: "effect:iro208:lost",
+      outcome: "not_delivered",
+      note: "Checked the provider: no publication for this proposal revision.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "iro208-delivery-confirmation-lost-0001",
+      now: afterLostWindow,
+    });
+    assert.equal(lostChecked.effectState, "reconciled");
     const mismatchPermit = await preparePublication(h, ids, "iro208-publication-prepare-mismatch-0001");
     await runPublicationEffect(h, mismatchPermit, ids, "effect:iro208:mismatch", "mismatch");
     const mismatch = await handleAuthenticatedRoute(
@@ -1776,24 +1892,67 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
     );
     assert.equal(mismatch.status, 409);
     assert.deepEqual(await mismatch.json(), { error: "commercial_publication_effect_mismatch" });
-    const successPermit = await preparePublication(h, ids, "iro208-publication-prepare-success-0001");
-    await runPublicationEffect(h, successPermit, ids, "effect:iro208:success", "success");
+    // The provider showed something other than what was sent, so delivery is not confirmed and a
+    // person must record what they found before the proposal goes again.
+    const resendAfterMismatch = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
+        proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
+        publication_version: 1, previous_state: "draft", state: "published",
+        facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+      }, "iro208-publication-prepare-after-mismatch-0001"),
+      h.env, auth("ops"),
+    );
+    assert.equal(resendAfterMismatch.status, 409);
+    assert.equal(
+      (await resendAfterMismatch.json() as { next_step: string }).next_step,
+      "confirm_delivery_by_hand",
+    );
+    h.db.raw.prepare("UPDATE app_users SET access_role = 'ops' WHERE user_id = ?").run(OPS_ID);
+    // The provider answered with something else, so it did something: a person cannot record "not
+    // delivered" for it (0164), which would clear the way for a second send. The customer has the
+    // proposal, so the person records "delivered" and that send becomes the publication.
+    await assert.rejects(
+      recordProposalDeliveryConfirmation(h.env as never, {
+        tenantId: TENANT,
+        effectId: "effect:iro208:mismatch",
+        outcome: "not_delivered",
+        note: "Checked with the customer: no proposal reached them.",
+        actorUserId: OPS_ID,
+        actorRole: "ops",
+        idempotencyKey: "iro208-delivery-confirmation-0001",
+      }),
+      { code: "proposal_delivery_confirmation_conflict_needs_provider_evidence", status: 409 },
+    );
+    const confirmed = await recordProposalDeliveryConfirmation(h.env as never, {
+      tenantId: TENANT,
+      effectId: "effect:iro208:mismatch",
+      outcome: "delivered",
+      note: "Checked with the customer: they have the proposal.",
+      actorUserId: OPS_ID,
+      actorRole: "ops",
+      idempotencyKey: "iro208-delivery-confirmation-0002",
+    });
+    assert.equal(confirmed.effectState, "succeeded");
+    // The send the person confirmed is the one recorded, under the permit it ran with.
+    const settledPermit = mismatchPermit;
     const settled = await handleAuthenticatedRoute(
-      request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: successPermit.permit_id, external_effect_id: "effect:iro208:success" }, "iro208-publication-success-0001"), h.env, auth("ops"),
+      request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: settledPermit.permit_id, external_effect_id: "effect:iro208:mismatch" }, "iro208-publication-success-0001"), h.env, auth("ops"),
     );
     assert.equal(settled.status, 201, await settled.clone().text());
     const otherActor = await handleAuthenticatedRoute(
-      request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: successPermit.permit_id, external_effect_id: "effect:iro208:success" }, "iro208-publication-other-actor-0001"), h.env, auth("ops", OTHER_OPS_ID),
+      request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: settledPermit.permit_id, external_effect_id: "effect:iro208:mismatch" }, "iro208-publication-other-actor-0001"), h.env, auth("ops", OTHER_OPS_ID),
     );
     assert.equal(otherActor.status, 403);
     assert.deepEqual(await otherActor.json(), { error: "commercial_permit_actor_mismatch" });
     const settledReplay = await handleAuthenticatedRoute(
-      request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: successPermit.permit_id, external_effect_id: "effect:iro208:success" }, "iro208-publication-success-0001"), h.env, auth("ops"),
+      request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: settledPermit.permit_id, external_effect_id: "effect:iro208:mismatch" }, "iro208-publication-success-0001"), h.env, auth("ops"),
     );
     assert.equal(settledReplay.status, 200);
     const afterPublication = await commercialContext(h, ids.jobId);
     assert.equal(afterPublication.offer.state, "published");
-    // A refused, lost or mismatched publication attempt above moved nothing; only the settled one did.
+    // The refused and lost publication attempts above moved nothing; only the send recorded as the
+    // publication did.
     assert.deepEqual(
       sourceBindingChanges(afterProposal.source_binding, afterPublication.source_binding),
       ["offer", "publication"],

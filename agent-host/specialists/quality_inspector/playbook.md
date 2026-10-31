@@ -309,10 +309,6 @@ below; the named person comes from the contract's escalation order. Routes to a 
   names the producers and cites the fact that lists them: the work package's assigned workers and
   anyone recorded as doing the work, or the operator of a first piece. It states that the person
   who releases or accepts is none of them.
-- Steps a person takes, or that wait for approval, go by their catalog names: releasing a hold point
-  (`hold_point.release`) and accepting the completed work (`completion.accept`), both people only;
-  settling how to handle a defect (`ncr.disposition`) and closing a defect report after checking the
-  fix (`ncr.verify_close`), both asking first.
 - `evidence.review`: `did` names the slot, criterion and revision, each point's value, unit, and
   device, and the result; `needs_from_you` asks production to record it, and when the hold point is
   ready, asks a production person who is none of the producers to release it (people only);

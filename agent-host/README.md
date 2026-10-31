@@ -8,9 +8,10 @@ coordination loop in [`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHIT
 
 This package holds the provider gateway (`src/gateway/`), the host service (`src/host/`) and the
 replay and qualification runner (`src/replay/`). The Worker-side coordination record, signal
-transport, policy decisions and receipts live in `workers-bus/src/agents/`. Shared-memory read
-models and standing-watch scheduling remain later slices. `specialists/` and `evals/` are owned by
-the specialist track.
+transport, policy decisions, receipts, shared-memory read models and standing-watch scheduling
+live in `workers-bus/src/agents/`. Only watches with a registered deterministic condition fire;
+the current coverage is recorded in [`docs/CAPABILITY-MATRIX.md`](../docs/CAPABILITY-MATRIX.md).
+`specialists/` and `evals/` hold the runtime instructions and their evaluation cases.
 
 ## Provider gateway
 
@@ -96,11 +97,14 @@ hop's provider, model and effort at the specialist's release, the `release_sha25
 `src/host/release.ts` that the host hashes from the specialist's files on disk. The matching
 `qualification_id` is recorded on the run. Eval runs and runs on a synthetic host need none.
 
-The Worker does not send qualifications yet (that is the Worker change of R3), so until it does every
-live and shadow run on a business host abstains `no_qualified_route` before any provider call. That
-fail-closed outcome is intended: no specialist acts in production on a route nobody qualified. Keep
-the QA host's unit stopped, or run it with `AGENT_HOST_DATA_CLASS=synthetic`, until wave-1
-qualifications are recorded.
+Until the owner records a qualification for a route at the specialist's release, every live and
+shadow run on a business host abstains `no_qualified_route` before any provider call. That
+fail-closed outcome is intended: no specialist acts in production on a route nobody qualified. The
+Worker checks the close too: output whose `qualification_ref` is not a passed record of the
+specialist for the close's provider, model, effort and release, with no failure recorded for its key since,
+is recorded as an abstention `no_qualified_route`, and a synthetic host's runs close only on a
+Worker whose `AGENT_DATA_CLASS` is `synthetic`. Keep the QA host's unit stopped, or run it with
+`AGENT_HOST_DATA_CLASS=synthetic`, until wave-1 qualifications are recorded.
 
 ### Provider terms per run class
 
@@ -225,14 +229,16 @@ by name (`passEnv`), never placed on a command line. Output must match a strict 
 
 ## Host service
 
-`src/host/main.ts` is the long-running process. Each pass it:
+`src/host/main.ts` is the long-running process. Each work-loop pass it:
 
-1. retries run closes that failed earlier (`<state>/pending-closes.jsonl`);
+1. retries run closes that failed earlier (`<state>/pending-closes/`);
 2. pulls signals from the Worker after the persisted cursor (`<state>/signal-cursor`);
 3. runs each signal as one coordination run, with bounded concurrency;
 4. advances the cursor only when the whole batch is handled, so a crash re-delivers at most one
-   batch, and runs are idempotent by `host_run_key` (derived from the signal and specialist);
-5. sends a heartbeat with the gateway's readiness and alerts to the Worker.
+   batch, and runs are idempotent by `host_run_key` (derived from the signal and specialist).
+
+A separate heartbeat loop sends the gateway's readiness and alerts to the Worker while work is
+in flight.
 
 One run: the Worker opens it and returns the goal, the context snapshot and the run's tool list;
 the host loads the specialist (`COMMON.md`, `playbook.md`, `allowlist.json`, failing closed on a
@@ -262,7 +268,8 @@ null` and `current: false`. Contact values, payee details, provider payloads and
 stay out of facts; names and references typed at intake are kept as identity fields.
 
 `GET /health` always answers with the full state and alerts; `GET /ready` answers 503 until every
-routed provider is usable and the Worker answered a recent poll. Both bind to loopback.
+routed provider is usable, the Worker answered a recent request, and the last work batch has no
+error. Both bind to loopback by default.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -283,10 +290,10 @@ The host and the action server call only these Worker routes, with
 | Route | Caller | Contract |
 |---|---|---|
 | `GET /api/v1/agents/signals?after&limit` | host | `{signals[], next_cursor}`; a signal names its specialist, kind (`event`, `watch`, `owner_request`, `handoff`), subject and untrusted content, and `actor`: for a person's ask or request through the app, `source` is `ask` or `request` and `actor` is `{type: "owner" \| "staff" \| "worker", role, ref: "person:<user_id>", authenticated: true}` from the Worker's record (`owner` only for the owner, `worker` for a field person, `staff` for every other role); every other signal has `actor: null` |
-| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[], omitted[]}, tools[], people_only[]}` (`people_only` is `{action_id, name}` for each people-only act the specialist owns, names the run may use in receipts and never tools; a run on a handoff also has the person's ask or request at the root of its chain as fact `signal/<root_id>`, version 1, hashed over its own data (`signal_id`, `kind`, `source`, `actor`, and `content` only when the run reads as the owner), so its hash differs from the face run's `signal/<id>`, which hashes the ask's content; `facts/current` serves the face's form) with the routing hints `review_of: {run_id, provider} \| null` (when the auditor reviews another run, so the gateway picks a different family; a Worker on the v3 close model adds `family`, and a legacy `provider` maps to its family), `expected_action_id: string \| null` (the signal's single expected action) and `mode: "live" \| "shadow"` (`shadow` when every action the signal can lead to is in shadow; missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; `qualifications: [{qualification_id, provider, model, effort, release_sha256}]`, the specialist's current passing owner records, which a live or shadow run needs (none yet: the Worker change of R3 adds them, and until then those runs abstain `no_qualified_route`); and `close_model: 3` when the Worker takes the v3 close (below). The host sends the specialist's release with the run; a face run answering a person's ask also carries `output_extension: {view}`, the strict view spec schema, which the host adds to that run's output schema as a required, nullable `view` (every other run's input is unchanged); 409 when that key's run is already closed |
+| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[], omitted[]}, tools[], people_only[]}` (`people_only` is `{action_id, name}` for each people-only act the specialist owns, names the run may use in receipts and never tools; a run on a handoff also has the person's ask or request at the root of its chain as fact `signal/<root_id>`, version 1, hashed over its own data (`signal_id`, `kind`, `source`, `actor`, and `content` only when the run reads as the owner), so its hash differs from the face run's `signal/<id>`, which hashes the ask's content; `facts/current` serves the face's form) with the routing hints `review_of: {run_id, provider} \| null` (when the auditor reviews another run, so the gateway picks a different family; a Worker on the v3 close model adds `family`, and a legacy `provider` maps to its family), `expected_action_id: string \| null` (the signal's single expected action) and `mode: "live" \| "shadow"` (`shadow` when every action the signal can lead to is in shadow; missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; `qualifications: [{qualification_id, provider, model, effort, release_sha256}]`, the specialist's current passing owner records, which a live or shadow run needs (without one for its route it abstains `no_qualified_route`); and `close_model: 3` when the Worker takes the v3 close (below). The host sends the specialist's release with the run; a face run answering a person's ask also carries `output_extension: {view}`, the strict view spec schema, which the host adds to that run's output schema as a required, nullable `view` (every other run's input is unchanged); 409 when that key's run is already closed |
 | `GET /api/v1/agents/runs/:id/tools` | action server | the run's tools: `action_id`, `tool_name`, `autonomy`, `side_effect_class`, `undo`, `description` (`<action_id> on <aggregate>: <catalog name>.`, with ` (protective)` before the full stop for a protective action), strict `args_schema` |
 | `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention; an admitted `authority.evaluate` also returns `evaluation`, the authority records as the run's reader may read them (`authority:read` and `production:read` or `jobs:read:any`); a read the reader may not make, or one that fails, abstains (`out_of_scope`, `fact_missing`) and returns `evaluation: {reason: "role_may_not_read" | "read_failed"}`; a shadowed action answers `decision: "shadowed"` with the decision policy would have made (`would_be`) and no receipt |
-| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode`, and a run for such a Worker may use only the provider ids it records (`claude`, `codex`; another is `provider_disabled`); a Worker that advertised `close_model: 3` gets the v3 block instead: `provider`, `adapter`, `family`, `model`, `models_used`, `auth_mode` (the credential mode), `billing`, `tier`, `route_id`, `route` (`primary` or `declared_fallback`), `failover` (at most three hops with their reasons and retry times), `qualification_ref`, `release_sha256`, `gateway_config_sha256`, `review_of {run_id, family}`, `mode`, `compliance_ref`, `run_class` and `risk_acceptance`; only an ask run's output may carry `view`, which the Worker checks and records as the spec or null |
+| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode`, and a run for such a Worker may use only the provider ids it records (`claude`, `codex`; another is `provider_disabled`); a Worker that advertised `close_model: 3` gets the v3 block instead: `provider`, `adapter`, `family`, `model`, `effort` (the effort of the route that answered), `models_used`, `auth_mode` (the credential mode), `billing`, `tier`, `route_id`, `route` (`primary` or `declared_fallback`), `failover` (at most three hops, each with its family, null when its route has no registry entry, its reason and retry time; the Worker refuses an audit when any hop is of the reviewed run's family or names none), `qualification_ref`, `release_sha256`, `gateway_config_sha256`, `review_of {run_id, family}`, `mode`, `compliance_ref`, `run_class` and `risk_acceptance`; only an ask run's output may carry `view`, which the Worker checks and records as the spec or null |
 | `POST /api/v1/agents/host/heartbeat` | host | readiness, alerts, `in_flight` and the close and dead-letter `backlog`, so a sign-in that stopped refreshing or a stalled feed reaches the owner |
 
 ### Owner controls and human decisions
@@ -353,9 +360,11 @@ recorded unscored, never counted as agreement. A decline or take-over can flag T
 action, writes an asks-first setting as `system:auto_demotion`, the one automatic delegation change.
 A candidate needs at least the last 50 compared agreements at a 95 % match rate, none of them a
 catastrophe, a passed latest qualification for the provider and model the specialist actually runs
-on (its most recent closed run), and a delegable A2/A3 action that
+on (its most recent closed run), at the effort and release its close names when it is a v3 close,
+and a delegable A2/A3 action that
 does not already act within limits. An auditor's review that comes back from the reviewed run's own
-provider family closes abstained.
+model family, from a family the Worker cannot name, or past a failover hop of that family or one that
+names no family closes abstained.
 
 Pause and auditor hold remain independent. Either makes non-protective actions ask first; pause
 also stops drafting. An off or revoked action stays off. Protective exceptions and holds remain
@@ -447,8 +456,10 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
 ```
 
 - A case becomes a production-shaped run: its signal and facts form the Signal and the context
-  snapshot (case times resolved against the case clock, the signal first as untrusted text), the
-  specialist loads as in production, and the production `buildRunInput` assembles the input. The
+  snapshot (case times resolved against the case clock, the signal first as untrusted text), a
+  case signal's `subject` (`{aggregate, id}`, as the inbound producer sets it) reaches the run's
+  signal and goal as in production, the specialist loads as in production, and the production
+  `buildRunInput` assembles the input. The
   replay offers the specialist's full allowlist, worded and ordered as the Worker words its tools,
   with open arguments: the cases follow the contract's argument conventions, and the Worker registry
   has strict schemas for only a few actions, some under other names. A production run sees only the
@@ -477,7 +488,18 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   the case alone. An A0 read returns the case facts it names. Every other call is captured, never
   executed, and answered with the Worker's deterministic decision: drafted for A1, escalated for a
   protective action, awaiting approval for other A2 and A3 actions, abstained for an unknown,
-  wrong-version or stale citation.
+  wrong-version or stale citation. An inbound-only action (`lead_fact.propose`) stops `out_of_scope`
+  as the Worker's policy stops it, before its citations are checked: unless the case signal is an
+  event from an inbound channel about a lead, no other lead is named in `lead_id`, and it cites only
+  the signal (a missing `lead_id` passes here; the Worker's schema refuses it, and replay arguments
+  are open). An event on any other source, `email` and `sms` included, therefore stops: a case that
+  expects `lead_fact.propose` comes by an inbound channel and carries the lead as `signal.subject`,
+  as the producer sets it. The tool file carries the signal's kind, source and subject for that
+  (`requester`); no other requester rule is mirrored, and a handoff never reads its chain's root
+  here (the Worker's does, and stops it on its citations instead). A test in
+  `workers-bus/test/agents-policy.test.ts` compares this rule with the Worker's on every
+  combination of kind, source, subject, lead id and citations. A stage started before this rule
+  replays its remaining repetitions under it on `--resume`; start a new stage to compare runs.
 - Runs go through an eval gateway (`qualification` option, `scope: "eval"`) whose state directory
   is `<output_dir>/<stage>/gateway` (`<output_dir>/replay/gateway` for a single-case replay, and
   `<output_dir>/gateway` when `ledger.per_stage` is false), so each stage books in its own
@@ -549,12 +571,13 @@ platform binaries (`npm ci`) and a signed-in credential.
 Locally-validated: `npm test` and `npm run typecheck` in this package, and
 `node --test tools/start-local-runtime.test.mjs` for the local launch. The Worker agent API is source-present and its authenticated host-client integration is tested
 against SQLite with D1 transaction semantics. Unbound actions abstain with `policy_missing`; the
-contract catalog alone does not implement their effects. Shared-memory read models and
-standing-watch scheduling remain open. The replay and qualification runner is tested with injected
+contract catalog alone does not implement their effects. Shared-memory readers and registered
+cadence-watch conditions have Worker tests (`agents-memory.test.ts`, `agents-watches.test.ts`);
+unregistered watches remain inactive. The replay and qualification runner is tested with injected
 fakes only; no qualification stage has run on a provider. Gateway config v3 (registry, declared
 failover, the qualification gate, provider terms per run class) is tested with fake providers only;
-until the Worker sends qualifications, every live and shadow run on a business host abstains
-`no_qualified_route`. Live proof is blocked on an owner-provisioned Worker
+until the owner records qualifications, which the Worker sends with each run and checks at close,
+every live and shadow run on a business host abstains `no_qualified_route`. Live proof is blocked on an owner-provisioned Worker
 `AGENT_HOST_TOKEN`, Claude OAuth sign-in and a dedicated Codex ChatGPT sign-in, followed by the
 authenticated runtime journey and `npm run smoke`. No provider or QA activation is established by
 these local checks.

@@ -165,20 +165,35 @@ function setup() {
   }
 
   let sequence = 0;
-  /** A compliance run about the crew the worker belongs to; its snapshot holds the crew fact. */
-  async function complianceRun() {
+  /**
+   * A compliance run about the crew the worker belongs to; its snapshot holds the crew fact. By
+   * default it answers the production manager's press on compliance's view (a `request`), the only
+   * signal a competency record may answer; `event` starts it from a non-person event instead.
+   */
+  async function complianceRun(start: "request" | "event" = "request") {
+    const subject = { aggregate: "crew", id: CREW };
     const signal = await appendSignal(
       db,
       TENANT,
-      {
-        kind: "event",
-        specialist_id: "compliance",
-        watch_id: null,
-        source: "synthetic-test",
-        subject: { aggregate: "crew", id: CREW },
-        content: { text: "Synthetic assessment finished" },
-        dedupe_key: `signal:${++sequence}`,
-      },
+      start === "request"
+        ? {
+            kind: "owner_request",
+            specialist_id: "compliance",
+            watch_id: null,
+            source: "request:appu_test_production",
+            subject,
+            content: { expected_action_id: "authority.record", target: subject, ask_id: null, requester_role: "production" },
+            dedupe_key: `signal:${++sequence}`,
+          }
+        : {
+            kind: "event",
+            specialist_id: "compliance",
+            watch_id: null,
+            source: "synthetic-test",
+            subject,
+            content: { text: "Synthetic assessment finished" },
+            dedupe_key: `signal:${++sequence}`,
+          },
       NOW,
     );
     assert.ok("signal_id" in signal);
@@ -527,6 +542,20 @@ test("a repeated idempotency key replays its first result and refuses any other 
   const both = await Promise.all([s.command("owner", fresh, "people-replay-0002"), s.command("owner", fresh, "people-replay-0002")]);
   assert.deepEqual(both.map((response) => response.status).sort(), [200, 201]);
   assert.equal(s.scalar("SELECT COUNT(*) AS n FROM authority_record_readbacks").n, 2);
+});
+
+test("a competency record answers only a person's press on compliance's view", async () => {
+  const s = setup();
+  // A run started by an event, not a person's request, proposes nothing a person must approve.
+  const fromEvent = await s.propose(await s.complianceRun("event"), recordCommand());
+  assert.deepEqual([fromEvent.decision, fromEvent.reason_codes], ["abstained", ["out_of_scope"]]);
+  assert.deepEqual(fromEvent.receipt.policy.checks.find((check: { check: string }) => check.check === "requester"), { check: "requester", passed: false });
+  // The press itself must be cited.
+  const run = await s.complianceRun();
+  const uncited = await s.propose({ ...run, citations: run.citations.slice(1) }, recordCommand());
+  assert.deepEqual([uncited.decision, uncited.reason_codes], ["abstained", ["out_of_scope"]]);
+  const pressed = await s.propose(run, recordCommand());
+  assert.equal(pressed.decision, "awaiting_approval");
 });
 
 test("an approved authority.record step runs natively and records an owned-store receipt", async () => {

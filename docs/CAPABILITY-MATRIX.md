@@ -37,19 +37,18 @@ the launch/readiness tooling and the named external authority.
 Area state uses the six canonical proof classes named under "Status vocabulary" above, never a bare
 "Strong", "Mixed", "Partial", or "Not established" standing in for a class. The class recorded is the
 weakest class any part of the named area earns; `Partial` and `Blocked: <reason>` are orthogonal
-qualifiers attached to that class, never a substitute for one. No area earns Configured or above —
-see the admission note under "Capability-by-capability target" for the two facts that close that
-door for the whole file.
+qualifiers attached to that class, never a substitute for one. This repository matrix does not by itself establish Configured or above; the admission note under
+"Capability-by-capability target" defines the separate environment evidence those classes require.
 
 | Area | Current state | Next gate |
 |---|---|---|
-| Core technical design | Locally-validated. One-writer-per-fact transitions, the versioned transition envelope, and the effect/reconciliation kernel pass focused checks on this checkout (`workers-bus/test/transition-kernel.test.ts`, `effect-runtime.test.ts`, `operating-core.test.ts`, `store.test.ts`, `core.test.ts`), and all 117 Worker migrations apply to an isolated local D1 state. "Strong" was a judgement about the design, not a proof class; the design is validated in the repository and nowhere else. | keep one authority per fact and remove remaining compatibility dependencies |
+| Core technical design | Locally-validated. One-writer-per-fact transitions, the versioned transition envelope, and the effect/reconciliation kernel pass focused checks on this checkout (`workers-bus/test/transition-kernel.test.ts`, `effect-runtime.test.ts`, `operating-core.test.ts`, `store.test.ts`, `core.test.ts`), and the Worker migration set is checked against isolated local D1 state. Its current count is declared in the machine-checked repository evidence contract below. "Strong" was a judgement about the design, not a proof class; the design is validated in the repository and nowhere else. | keep one authority per fact and remove remaining compatibility dependencies |
 | Lead/job/field foundation | Locally-validated, Partial. Acceptance-driven lead conversion, customer activation, and a read-only derived phase route pass focused checks (`workers-bus/test/d1-native-operating-intake.test.ts`, `native-lead-queue.test.ts`, `operating-core.test.ts`, `work-package-actions.test.ts`, `field-actions-d1.test.ts`; `app/e2e/now-work-list.spec.ts`, `field-pwa.spec.ts`). Multi-worker offline packages, full evidence-slot enforcement, and a real-device reference drill are Target — every check above runs headless. | continue orthogonal lifecycle coverage and real reference proof |
-| Safety/evidence/accounting controls | Locally-validated. Stop-work, occurrence, corrective-action, evidence, and accounting-reconciliation controls pass focused checks (`workers-bus/test/safety-lifecycle.test.ts`, `operational-safety.test.ts`, the 22 `accounting-*.test.ts` files, `effect-runtime.test.ts`). "Unusually strong in source" described the code, not a class: no deployed provider, device, failure, or recovery proof exists anywhere. | deployed provider/device/failure and recovery proof |
-| Repository/migration coherence | Locally-validated, Partial. 117 Worker migrations apply cleanly to an isolated local D1 state, the DocType contract validator pins 79 DocTypes, and `node tools/validate-documentation.mjs` passes on this checkout. "Mixed" described completeness, not proof: duplicate brokers and the Frappe wheel are not retired and migration ranges and cutovers are not yet governed, so that half stays Target. | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
-| Configured capability | Target, Blocked: no named environment binds flags, secrets, and deployment jointly. This is the area the two admission facts are about, so it cannot be qualified upward: `IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.3's verified flag audit found no capability with flags, secrets, and deployment jointly bound, and the `Deploy` workflow has failed closed at its release-admission gate on every commit since 2026-08-30. The readiness evaluator itself is locally validated (`workers-bus/test/capability-readiness.test.ts`, `readiness-probe.test.ts`, `node tools/production-readiness.mjs contract`), but an evaluator that can report configuration is a different claim from a capability that is configured. "Partial" claimed completeness against zero configured capabilities. | minimum-provider readiness profiles with readback and proof TTLs |
+| Safety/evidence/accounting controls | Locally-validated. Stop-work, occurrence, corrective-action, evidence, and accounting-reconciliation controls pass focused checks (`workers-bus/test/safety-lifecycle.test.ts`, `operational-safety.test.ts`, the 22 `accounting-*.test.ts` files, `effect-runtime.test.ts`). "Unusually strong in source" described the code, not a class: these source checks do not establish deployed provider, device, failure, or recovery proof. | deployed provider/device/failure and recovery proof |
+| Repository/migration coherence | Locally-validated, Partial. The Worker migration set is checked against isolated local D1 state (current count below), the DocType contract validator pins 79 DocTypes, and `node tools/validate-documentation.mjs` passes on this checkout. "Mixed" described completeness, not proof: duplicate brokers and the Frappe wheel are not retired and migration ranges and cutovers are not yet governed, so that half stays Target. | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
+| Configured capability | Target, Blocked: exact environment evidence required. Repository flags and readiness checks cannot establish that flags, secret identities, and the exact deployed artifact are jointly bound in a named environment. The readiness evaluator is locally validated (`workers-bus/test/capability-readiness.test.ts`, `readiness-probe.test.ts`, `node tools/production-readiness.mjs contract`); its result must be read from the named environment before a capability advances. | minimum-provider readiness profiles with readback and proof TTLs |
 | End-to-end commercial closure | Locally-validated, Partial, Blocked: provider/tax configuration and QuickBooks keys. Native quote/publication routes and the acceptance-created deposit derivation queue pass focused checks (`workers-bus/test/commercial-proposal-api.test.ts`, `customer-contract-acceptance.test.ts`, `iro208-commercial-reference.test.ts`, the `accounting-*.test.ts` family). No no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout has been executed. | no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout |
-| Production/customer proof | Target. No artifact has been admitted to any environment: the `Deploy` workflow has failed closed at its release-admission gate on `b4ae5643`, `991f0e46`, `3da7ee2b`, `9b51b01a`, `2a213dd1`, and `63a28e43`, with build, staging drill, and promotion skipped each time. `customer_validated` remains false. "Not established" was already honest; this restates it as the class that names it. | controlled production reference journey; real-customer validation remains a separate later gate |
+| Production/customer proof | Target. CI and QA deployment receipts are separate from an authenticated full reference journey, accountable business acceptance, and real-customer use. Read the exact revision and environment from fresh release evidence; this matrix does not assert current deployment state. `customer_validated` remains false until independent customer evidence exists. | controlled production reference journey; real-customer validation remains a separate later gate |
 
 The architecture, authority map, user journeys, AI loop, derived lifecycle, and reference-tenant
 rules are canonical in [`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md).
@@ -76,8 +75,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 132,
-      "latest": "0204_agent_watch_firings.sql"
+      "count": 142,
+      "latest": "0206_agent_draft_closing.sql"
     }
   },
   "test_observation_policy": {
@@ -135,8 +134,11 @@ Current implementation: office sales/estimator/today/work-package/Facet/QuickBoo
 reads already use D1. Default `/ready` is the owned office plane and does not AND leftover
 Frappe/Newo credentials. Money-intent job lookup, production-gate clearance, and customer material
 decisions persist on D1. The 79 current DocTypes are leftover compatibility evidence, not the
-target architecture. Frappe remains an optional projection (apps tree, Hermes ERPNext MCP, local
-`--profile frappe` compose, optional CI unittest/wheel) and is not a merge or release blocker.
+target architecture. Frappe activation remains optional (apps tree, Hermes ERPNext MCP and local
+`--profile frappe` compose). While the compatibility app ships, its unittest, lint and wheel checks
+remain mandatory in `make check` and the `contracts` CI job. Optional activation does not waive
+the architecture contract's stage/promote/readback/rollback evidence requirements; repository
+checks alone do not establish those release receipts.
 
 The cutover is incomplete until leftover projection consumers are gone and a live issuer/rollback
 has been proven. Projection failure cannot change authoritative D1 state.
@@ -229,13 +231,37 @@ Current source tracing distinguishes implemented modules from reachable producti
   context snapshot and tool manifest, and decides every proposed step by deterministic policy: an
   unregistered action or argument, a missing, unknown or stale citation, or a ceiling abstains,
   and people-only actions are refused. The owner sets delegation, pauses a specialist or clears an
-  auditor hold from a fresh app session; a reviewer decides a waiting step's exact version. An
+  auditor hold from a fresh app session, one signed in within the last five minutes; a second
+  factor and step-up evidence on the setting record are not built yet. A reviewer decides a
+  waiting step's exact version. An
   approval reads the step's cited facts again, so a fact that changed since the proposal abstains
   the step, and its transaction refuses a delegation setting that changed after it was read. The
   protective exception and hold bindings execute against owned records with readback, and so does
   an approved `authority.record`: the internal worker competency command runs natively in D1 in
   the decision's own transaction, with an owned-store readback on its receipt. Every other
-  approved step records the decision and abstains, so no other agent step has a business effect.
+  approved step records the decision and abstains, so no other agent step has a business effect;
+  `import.retry_failed` and `lead_fact.confirm` have no executor yet, so an approval returns their
+  step to the reviewer to do by hand. `lead_fact.propose` records a draft from the inbound event the
+  run answers, an event that came by an inbound channel, for the lead that event is about, and may
+  cite only that event (`signal/<id>`); the host offers it once the receptionist's allowlist names it. An open proposal
+  is the fact `lead_proposal/<step_id>` (read at
+  `sales:read`), linked from its lead, so a later run about the lead can confirm it; a
+  `lead_fact.confirm` must name an open proposal of the same lead and tenant (else `fact_missing`
+  or, once used or superseded, `fact_stale`) and may only repeat its values (else `fact_conflict`).
+  The app has no import screen, so the Retry a person would use for an import run's failed items is
+  not built yet. A prepared people-only act (`access.prepare_change`,
+  `delegation.propose_change`) waits in the Needs you of the person who performs it, under a hold
+  too, and never under Done for you. It closes once: `applied_by_person` when the person's role
+  change or the owner's delegation or practice setting for its record lands, naming what is set
+  and whether it is what the draft proposed (`as_proposed`: the same role, or the same setting and,
+  within limits, the same ceiling), `superseded` when a newer draft for the same record replaces
+  it; migration 0206 lets only that close past the decided-step guard. A "Not now" for it is not
+  built yet.
+  `authority.record` answers only a press on compliance's view for that action, and
+  `access.prepare_change` an owner's or staff member's ask or any press.
+  Every signal carries the actor the Worker writes: owner, staff and worker actors for a person's
+  ask or request, and `null` for watch firings, handoffs and inbound events; it writes no
+  `external` actor yet.
   Shared memory gives a run's snapshot the signal's subject and the objects it
   links to (job, customer, lead, property, roof, measurement, crew, inventory position, money
   item) through the role screens' readers, as far as the specialist's reviewer role may read them,
@@ -244,11 +270,117 @@ Current source tracing distinguishes implemented modules from reachable producti
   conversation object yet, so those cannot be cited. Shadow mode (`0203`) records a shadowed action's
   proposals with no effect and counts agreement with people's decisions; no shadow comparator is
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
-  within-limits action to asks first. An audit from the reviewed run's own provider family is not
-  accepted. Five cadence watches fire from the cron with deterministic conditions (`0204`),
-  including the four owner reports; the other watches and every event-triggered watch do not fire yet.
-  The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
-  live provider call, deployment or reference run has happened.
+  within-limits action to asks first. A within-limits setting also reads as asks first after a
+  step under it ends `unknown`, with a readback mismatch or done by a person, after a catalog or
+  step-policy change (the step policy is at version 5), after a later hold, and after a run of the
+  specialist ends without a qualified route; that run, or a catastrophe on the action, also stops
+  a practice-only action's practice runs until the owner confirms it again. The undo fallback is
+  not built yet, and practice runs do not stop under a hold yet. The earned-autonomy window counts
+  scored decisions of runs under the current step policy and the specialist's current release,
+  never a refused run's matches, and a catastrophe since the window began blocks the bar.
+  `delegation.propose_change` is registered: a proposal to act within limits below the bar is
+  refused, the owner's preview is `GET /api/v1/agent-team/specialists/:id/preview`, and each pair
+  is the fact `delegation/<specialist>:<action>`. Within-limits steps
+  carry their setting's id, but the auditor's check of them (every step until 20 clean ones, then
+  one in ten) is not built yet. An audit from the reviewed run's own model family is not
+  accepted. A run's open sends the specialist's current qualifications, and a live or shadow run's
+  v3 close keeps its output only on one of them; a close on an older close model is accepted and
+  is not held to a qualification. The host sends the newest close model it knows that is no newer
+  than the Worker's: the v3 close to a Worker naming close model 3 or later. A synthetic run closes
+  only on a Worker whose `AGENT_DATA_CLASS` is synthetic. Seven cadence watches fire from the cron
+  with deterministic conditions (`0204`), the four owner reports, `delegation_review` and
+  `import_failed_items` among them, and the event-triggered `new_inbound` fires from the inbound
+  producer below; the other watches, event-triggered or not, do not fire yet, and nothing emits
+  `injection.flagged` yet.
+  The inbound producer (`workers-bus/src/agents/inbound.ts`, `test/agents-inbound.test.ts`)
+  appends one `event` signal for `lead_concierge`, watch `new_inbound`, per inbound envelope from
+  generic ingest, office capture, the estimator and Newo: at the end of `insertEnvelope`, best
+  effort and waited on at most two seconds, so intake never fails on it, and from the five-minute
+  cron's sweep for any envelope of the last two days still without one; its dedupe key
+  `inbound:<envelope_id>` keeps it to one. A CRM import's envelopes, release-smoke rows and
+  envelopes with neither a phone nor an email give none. Its source is the channel, its subject the lead the envelope
+  becomes, and its content exactly `envelope_id`, `channel`, `brand`, `received_via`, `sender`,
+  `has_phone`, `has_email`, `service`, `excerpt` and `form_fields` (contract "The inbound signal");
+  the sender's match to an existing customer is recorded only and links nothing. The excerpt and
+  the form fields may hold a name, a number or an address, which the receptionist needs: they are
+  `untrusted_text` inside its run and reach no watch digest or owner report snapshot, since no
+  watch condition reads an inbound signal and a report run reads only its own watch signal and the
+  objects that signal names.
+  `AGENT_INBOUND_FROM` switches the producer: blank in production, pinned by a test, until agent
+  signals have a retention and erasure path aligned with envelope retention and then the owner's
+  go-live decision; 2026-10-20T15:52:43Z in qa and local (synthetic data), so on from that
+  instant there.
+  Repository tests only; no deploy has run it yet. Not built yet: email, SMS, WhatsApp and social
+  inbound do not exist in the Worker, and WhatsApp, a first-class channel for the owner, is a named
+  gap; `newo_call` is built but no Newo call makes an envelope while `NEWO_ENABLED` is false; a
+  repeat from the same contact within 72 hours makes no envelope, so no signal; an inbound from a
+  customer with an accepted job is not routed to `customer_care_warranty`; and `received_via`
+  stays `null` until intake records it.
+  The agent host runs specialists through a provider gateway over Claude and Codex sign-ins, and
+  takes signals in the order the Worker feeds them: the contract's queue priority is not
+  implemented yet. The five HTTP adapters (`openai_compatible`, `anthropic_messages`, `gemini`,
+  `bedrock`, `vertex`) and the `cloud_identity` credential mode are not built yet. No live provider
+  call, deployment or reference run has happened.
+- AI team contract f5 (owner rulings D-01 to D-10 and Q1 to Q10; `docs/AI-TEAM-CONTRACT.md` "Owner
+  rulings", "Dial levels" and "Appendix: autonomy screen mapping") is Target, Partial, with one
+  Locally-validated part. The owner's caps are Locally-validated: every send outside IronWrap and
+  every price commitment asks first, and so does every commitment of money to an outside party, live
+  answering the owner's exception (D-05, D-09, Q4, L04). Twenty-four actions carry it:
+  `quote.commit_revision`, `quote.apply_discount`, `change_order.commit`, `ad_spend.commit`,
+  `supplier_bill.approve`, `customer_message.send` (every purpose), `visit.confirm`,
+  `portal_link.send`, `proposal.publish`, `change_order.send_for_decision`, `remedy.offer`,
+  `campaign.send`, `invoice.commit_intent`, `rfq.send`, `purchase_order.place`,
+  `purchase_order.change`, `purchase_order.expedite`, `supplier_message.send`,
+  `supplier_return.request`, `document.request`, `cost_recovery.claim`, `content.publish`,
+  `review_response.publish` and `insurance_supplement.send`. Four actions that send nothing and
+  commit no price stay delegable (`dead_letter.replay`, `privacy_incident.contain`, `content.stop`,
+  `proposal.withdraw`). None of the twenty-four is delegable, so the Worker refuses every delegation
+  setting for them (`not_delegable`), never lists them as delegation candidates, refuses a
+  `delegation.propose_change` for them (`delegation_not_earnable`), serves no
+  `delegation/<specialist>:<action>` fact or preview for them, and runs a within-limits setting
+  recorded before the cap as asks first (`test/agents-control.test.ts`, "the owner's caps keep every
+  outside send and price commitment at asks first"); before the caps the Worker accepted within
+  limits for all twenty-four. The rest is not built yet:
+  - The dial (D-09): the Worker's `off` setting stops a delegable `A2` or `A3` action, but Off for
+    a Prepares action or an action whose `delegable` is false takes no setting; Auto with undo has
+    no undo flow, no non-protective action has a proven machine path (a within-limits step asks
+    first), and the Worker accepts within limits whatever an action's undo, so the app's "Auto with
+    undo" pill (`app/src/components/ai/words.ts`, owner ruling) runs ahead of any undo flow; no
+    autonomy screen shows the dial; "Facts only, live" has no live conversation runtime.
+  - Customer reminders (Q4 as the owner revised it: by approval, never automatic): no customer
+    message purpose covers a visit reminder, and `customer_message.send` is not registered; it
+    always asks first, so no reminder can run automatically.
+  - Voice reception (D-02, D-03): `config/newo/production.expected.json` books in `request_only`
+    mode, its tools check availability and record a request, and no tool holds a slot; the mid-call
+    webhook is unverified (YELLOW, Newo assumption A-05). The reception script and configuration
+    in `config/newo` still transfer a caller to the owner's line first, where D-03 allows no live
+    transfer.
+  - Live answering (D-07): no record behind `reception_settings:<tenant>` exists; the AI
+    receptionist's playbook reads it as a placeholder fact.
+  - Free text running an action (D-04): `POST /api/v1/agent-team/ask` runs nothing itself, and the
+    face's run may propose only its own actions or hand work to the owning specialist
+    (`handoff.create`); an ask shows its answer, its view and that view's actions, never a decision;
+    `authority.record` answers only a press; the app has no Ask IronWrap screen.
+  - Single-holder self-approval (D-08, basis `only_holder`) is not on `main`: Track C's A1 slice
+    (#17, not merged) records it for production gate waiver decisions.
+  - Operation sets (Q1): each person has one app role, and the reviewer is a role; Track C's
+    operation-sets slice builds the four sets.
+  - A prepared people-only draft: "Not now" is not built, and `payee.unfreeze_prepare` and
+    `safety_stop.release_prepare` drafts (no registered arguments) do not close. A closed draft's
+    receipt shows its note on its "Since then" row; no screen hosts the answer message that shows
+    `VIEW_REFUSED` under the answer.
+  - Q3: the `portfolio_candidate` watch is parked (event-triggered watches do not fire yet), and
+    tenant policy lists no company pages.
+  - Q5, the cancellation-window hold: Track C's A5 slice is to hold a purchase order through its
+    job link, so a stock coil order with no job passes, and to hold shop cutting once the shop has
+    its first write.
+  - Q6, "No deposit under this contract": acceptance still queues a deposit derivation; Track C's
+    A2 slice (#22, not merged) clears Deposit by contract.
+  - Q7's release by a named outside person; Q10 (no permit line among the six production gates,
+    no default hold points, no daily hazard acknowledgement); L04 for every send but proposal
+    publication (migration 0156); L05 (no Worker code checks the margin floor); L08 (no route
+    records a person's acceptance of completed work); L09 (no payee record or guard in D1); and
+    L10 (no shop-run screen for the first piece).
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.
@@ -510,6 +642,56 @@ IRO-38 branch-local side-effect substrate:
   Frappe credentials and provider call; the Worker owns the durable lease and settlement state.
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
   live provider, deployment, or business-acceptance proof.
+- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) never claims, settles, reconciles or
+  retries an outside send. `proposal.publish`, `proposal.withdraw`, `customer.email.send` and
+  `operations.email.send` answer 403 `effect_outside_send_token_refused`: only the bus may execute
+  them, and no production path sends a proposal yet. A `qa-synthetic-*` provider passes only on a
+  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local); elsewhere it answers 403
+  `effect_provider_not_allowed`. A proposal send claimed with a retry answers 422
+  `effect_outside_send_retry_forbidden`. Settle, reconcile and retry run on the server's clock.
+  The MCP host's `mcp.*` effects keep the token, as do the remaining actions. Migration
+  `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
+  never `retry`) and moves an `unknown` proposal send to `succeeded` or `reconciled` only with a
+  person's delivery confirmation (0156). That guard is keyed on the action alone, so a proposal send
+  claimed under another aggregate type is held the same way. 0156 confirms publishes only, so an
+  unknown withdrawal stays unknown until its creator brings an evidence path. A send whose provider
+  answered cannot be recorded as not delivered by a person, in the Worker or in D1 (409
+  `proposal_delivery_confirmation_conflict_needs_provider_evidence`): its readback conflicted, or
+  it refused the send and a later check then said it ran or could not tell, an inconclusive check
+  of a refused send included. The rule reads that send's own latest move into the exception. Such a
+  send stays a manual exception and keeps blocking a second send of the same revision until a
+  provider check that cites the provider's answer exists (planned, not built); "delivered" stays
+  open. Nothing reaches this today: no bearer path takes a real proposal send, and no in-process
+  caller reconciles one. Checks:
+  `workers-bus/test/outside-send-guards.test.ts`, `commercial-proposal-api.test.ts`,
+  `qa-seed-journey.test.ts`.
+- A person checks a proposal send's delivery (#15b-1b, migration
+  `0167_proposal_delivery_checks.sql`): `POST /api/v1/commercial/proposal-publications/delivery-checks`
+  (people only: the commercial set in a person's own session, CSRF and an Idempotency-Key) reads
+  back what the provider knows inside that request and keeps one append-only, audited
+  `proposal_delivery_checks` row (`sent`, `bounced`, `not_found`, `unknown` or
+  `provider_unavailable`), dated as the readback starts. No check moves the send, and none sends
+  anything; a send whose lease ran out is checked only once the `*/5` lease sweep has recorded it as
+  unknown. Each send keeps at most 20 checks of each kind (a citable complete-scan `not_found`, a
+  found message `sent`, and every other answer), and the read's `check_allowed` is false once no
+  further check could be kept.
+  Only the QA stand-in has a readback, on a synthetic Worker; every other provider answers `unknown`
+  / `readback_not_supported`, so `not_found` (a complete scan begun after the provider's window) is
+  never written before Proof P1. `GET …/proposal-publications/delivery` derives one delivery state
+  per revision; the `*/5` cron opens one owner-visible exception
+  (`proposal_delivery_unconfirmed_stale`) for any `proposal.publish` send left unknown
+  `PROPOSAL_DELIVERY_ESCALATION_MS` (four hours, an interim technical default) after its attempt
+  ended. A send whose provider answered (a readback conflict from `reconciling` or from `failed`)
+  may be recorded as not delivered only by citing a check of that send, newer than the conflict,
+  with `not_found` and a complete scan; until P1 it stays an exception. Once a check found the
+  message `sent`, no send is recorded as not delivered, cited or not, through 0156's path or out of
+  a conflict (409 `proposal_delivery_confirmation_check_contradicted`); a `bounced` check leaves "not
+  delivered" open, the way to send again. 0167 re-creates 0164's evidence guard so that, from B2
+  on, a check dated at the move may justify it; a check-justified move to `succeeded` needs the
+  send's own permit, whose holder records the publication (D1 refuses it otherwise:
+  `proposal_delivery_settle_permit_holder_missing`). No Worker path makes that move yet: the in-bus
+  executor, the Gmail readback and the auto-record (Part B) are not built. Checks:
+  `workers-bus/test/proposal-delivery-checks.test.ts`.
 
 ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
 
@@ -583,6 +765,30 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
 - `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.
+
+Customer portal first open of a proposal (B1, migration 0163):
+
+- `customer_portal_proposal_views` keeps one row per portal link and proposal publication, never
+  updated and deleted only once it is older than 3 years: the first time someone holding the
+  customer's link opened that published proposal. It stores ids and one timestamp, never an IP
+  address, user agent, location or later visit. D1 checks the link, job, customer and `published`
+  publication, and holds the time to within 60 seconds of its own clock. The data class, its
+  retention (at most 3 years) and its notice are recorded in
+  [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
+- Fail-closed by default. `APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED` is `"false"` in production,
+  local and qa, and can go on once the owner approves the portal privacy notice text that says the
+  first open is recorded and kept for at most 3 years.
+- Staff: the app sends `staff_preview: true` while an office sign-in is live in that browser, and
+  the Worker never records such a request; nor one from the device that issued the link. A staff
+  member on another device or browser without a sign-in counts as the customer.
+- The record is written after the response (`waitUntil`), so a slow or failed write never changes
+  the customer's page.
+- Retention: D1 refuses to delete a row younger than 3 years by its own clock, and the daily cron
+  deletes older rows before it prunes portal links. That link prune now keeps every link that a
+  RESTRICT key names (acceptance challenges and intents, material decisions, first opens), instead
+  of failing as a whole once one such link is a year past its end.
+- No staff read model shows the first open yet; the delivery read model behind frame 8(b) is not
+  built.
 
 ELEC-133 legible authority refusals and a clean first boot (2026-08-21):
 
@@ -668,6 +874,14 @@ stale from before that merge):
   notification, independent verification, and stop release each require the exact current role, and
   the occurrence reporter, corrective-action owner, and evidence capturer are all refused
   verification of that closure.
+- Lifting a safety-occurrence stop enforces owner rule L06 the way a Work Package stop release
+  does. The person who raised the stop never lifts it, under any identity they carry, and there is
+  no exception for working alone. Only a person's own cookie session lifts a stop, never an agent
+  or service credential. Migration `0165` records who lifted the stop. In D1 it refuses a lift by
+  the raiser, a lift that names nobody or an unknown user, and a lift without that person's own
+  `released` event. The occurrence and its event now commit in one batch. The release by another
+  Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
+  Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.
@@ -1220,23 +1434,18 @@ vocabulary and never a bare "Strong"/"Partial"/"Incomplete" standing in for a cl
 recorded is the weakest class any part of the row's named scope earns; `Partial` and
 `Blocked: <reason>` are orthogonal qualifiers attached to that class, never a substitute for one.
 
-**No row in this table earns Configured, Runtime-proven, Business-accepted, or Customer-validated**,
-and two independent facts agree on why:
+**This table does not establish Configured, Runtime-proven, Business-accepted, or Customer-validated.**
+Those classes require fresh evidence for the exact capability, revision, and named environment.
+Repository configuration and synthetic checks cannot establish bound secret identities, deployed
+bytes, provider readback, or accountable acceptance. Read those facts through the release and
+readiness tooling; historical CI failures or successes are not permanent capability facts.
 
-- no capability has its flags, secrets, and deployment jointly bound in a named environment
-  (`IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.3's verified flag-state audit, checked against the
-  repository rather than a live environment);
-- the `Deploy` workflow has failed closed at its release-admission gate on every commit since
-  2026-08-30 — `b4ae5643`, `991f0e46`, `3da7ee2b`, `9b51b01a`, `2a213dd1`, `63a28e43` — with build,
-  staging drill, and promotion skipped each time, so no artifact has been admitted anywhere.
-
-Every `Locally-validated` row below cites a named deterministic check that passed on this exact
-checkout (`main` @ `63a28e43`): the Worker suite (`npm test --prefix workers-bus`, 1604/1604), the
-PWA suite (`npm test --prefix app`, 932 tests across 118 files), the Frappe contract suite
-(`python -m unittest discover -s tests -t .` in `frappe-apps/ironwrap_roofing`, 433/433), and the
-repository validators named per row. Which gate a check sits behind matters and is stated where it
-does: the Frappe unittest, lint, and wheel steps run in `make check` (the `contracts` job of
-`.github/workflows/ci.yml`), so a Frappe-only citation is a merge gate, not live proof.
+Each `Locally-validated` row names its deterministic checks. A current validation claim must cite
+an exact-source receipt from the Worker suite (`npm test --prefix workers-bus`), the PWA suite
+(`npm test --prefix app`), the Frappe contract suite (`python -m unittest discover -s tests -t .`
+in `frappe-apps/ironwrap_roofing`), and the applicable repository validators. Test totals belong
+in those receipts, not in a frozen narrative. The Frappe unittest, lint, and wheel steps remain
+in `make check` (the `contracts` CI job); their passing result is a source gate, not live proof.
 
 | Domain | Current state | Autonomous target gap | Proof required |
 |---|---|---|---|

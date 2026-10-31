@@ -99,6 +99,26 @@ test("every environment flattens to the same key set", () => {
   for (const keys of rest) assert.deepEqual(keys, first, "an environment's flattened var set has drifted from the others");
 });
 
+// The data class decides which runs a Worker closes (workers-bus/src/agents/store.ts): only the
+// production Worker holds business data and takes live and shadow closes; local and qa hold
+// synthetic data and take synthetic closes on consumer accounts. A swapped value fails here.
+test("each environment declares the data class of the data it holds", () => {
+  const dataClass = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_DATA_CLASS]));
+  assert.deepEqual(dataClass, { production: "business", local: "synthetic", qa: "synthetic" });
+});
+
+// The inbound producer (workers-bus/src/agents/inbound.ts) gives the AI team a signal for each
+// envelope recorded from AGENT_INBOUND_FROM on; blank keeps it off. agent_signals is append-only and
+// would hold an inbound's excerpt and its address, scope and timing text with no retention or
+// erasure, which COMPLIANCE-REGISTER.md requires (minimisation and destruction). So production
+// stays off until a retention and erasure path for agent signals lands, aligned with envelope
+// retention, and then until the owner decides to go live; local and qa hold synthetic data only
+// and are on from the recorded instant.
+test("the inbound producer is off in production until agent signals have retention and erasure, and on in local and qa", () => {
+  const from = Object.fromEntries(ENVIRONMENTS.map((environment) => [environment, flattenWranglerVars(environmentVars(environment)).AGENT_INBOUND_FROM]));
+  assert.deepEqual(from, { production: "", local: "2026-10-20T15:52:43Z", qa: "2026-10-20T15:52:43Z" });
+});
+
 test("the flattened key set equals the flat names declared in var-bindings.d.ts", () => {
   const flatKeys = new Set(Object.keys(flattenWranglerVars(config.vars)));
   assert.deepEqual([...flatKeys].sort(), [...declaredFlatNames].sort());

@@ -3,6 +3,7 @@ import { LayoutGrid, Menu, Search, ShieldAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useSession } from "../auth/session-context";
+import { jobIdFromPath } from "../field/job-stop";
 import { SafetyActionPanel } from "../field/safety-action-panel";
 import { cn } from "../lib/cn";
 import {
@@ -13,7 +14,13 @@ import {
 } from "../lib/roles";
 import { scopes } from "../lib/theme";
 import { CrewShell } from "./crew-shell";
-import { groupNavigation, initials, phoneTabs, shellPlace } from "./shell-navigation";
+import {
+  breadcrumbTrail,
+  groupNavigation,
+  initials,
+  phoneTabs,
+  shellPlace,
+} from "./shell-navigation";
 import { PersonMenu, SearchPalette } from "./shell-controls";
 import { useCompanyLogoUrl, useSearchPalette } from "./shell-hooks";
 import { ShopReadingContext } from "./shop-reading";
@@ -52,6 +59,9 @@ function OfficeShell() {
   const [shopReading, setShopReading] = useState(false);
   const groups = groupNavigation(items);
   const place = shellPlace(items, pathname === "/now" && showDecisions ? "/approvals" : pathname);
+  // A safety report from an open job holds that job, not every Work Package in the company.
+  const officeStopJob = jobIdFromPath(pathname);
+  const trail = breadcrumbTrail(place);
   const tabs = phoneTabs(items);
   const tabsInMore = tabs.hasMore && !tabs.primary.some((item) => item.to === place.item.to);
   const name = session.user.display_name || session.user.email;
@@ -153,25 +163,48 @@ function OfficeShell() {
             className="shell-topbar-row-item flex min-w-0 flex-1 items-center text-[0.84375rem] text-faint"
           >
             <ol className="flex min-w-0 items-center gap-2">
-              <li className="sr-only shrink-0 min-[1101px]:not-sr-only">{place.item.workspace}</li>
-              {place.record ? (
-                <li className="hidden shrink-0 items-center gap-2 min-[1101px]:flex">
-                  <span aria-hidden="true">/</span>
-                  <Link
-                    to={place.item.to}
-                    {...(place.item.to === "/now" ? nowLinkOptions : {})}
-                    className="environment-control inline-flex items-center hover:text-foreground"
-                  >
-                    {place.item.label}
-                  </Link>
+              {trail.workspace ? (
+                // Below 1101px the workspace is read, not seen; its link shows itself when tabbed to.
+                <li className="sr-only shrink-0 focus-within:not-sr-only min-[1101px]:not-sr-only">
+                  {trail.workspace.to ? (
+                    <Link
+                      to={trail.workspace.to}
+                      activeOptions={{ exact: true }}
+                      className="environment-control inline-flex items-center hover:text-foreground"
+                    >
+                      {trail.workspace.label}
+                    </Link>
+                  ) : (
+                    trail.workspace.label
+                  )}
                 </li>
               ) : null}
+              {[trail.destination, trail.parent].map((crumb) =>
+                crumb ? (
+                  <li
+                    key={crumb.to}
+                    className="hidden shrink-0 items-center gap-2 min-[1101px]:flex"
+                  >
+                    <span aria-hidden="true">/</span>
+                    <Link
+                      to={crumb.to}
+                      activeOptions={{ exact: true }}
+                      {...(crumb.to === "/now" ? nowLinkOptions : {})}
+                      className="environment-control inline-flex items-center hover:text-foreground"
+                    >
+                      {crumb.label}
+                    </Link>
+                  </li>
+                ) : null,
+              )}
               <li className="flex min-w-0 items-center gap-2">
-                <span aria-hidden="true" className="hidden min-[1101px]:inline">
-                  /
-                </span>
+                {trail.workspace ? (
+                  <span aria-hidden="true" className="hidden min-[1101px]:inline">
+                    /
+                  </span>
+                ) : null}
                 <strong className="truncate font-[580] text-foreground" aria-current="page">
-                  {place.record ?? place.item.label}
+                  {trail.current}
                 </strong>
               </li>
             </ol>
@@ -267,7 +300,10 @@ function OfficeShell() {
         side="end"
         className="[&>div:nth-child(2)]:p-0"
       >
-        <SafetyActionPanel session={session} />
+        <SafetyActionPanel
+          session={session}
+          scope={officeStopJob ? { type: "roof_job", id: officeStopJob } : undefined}
+        />
       </Dialog>
     </div>
   );

@@ -473,6 +473,16 @@ const CASES: [ViewSpecIssueCode, string, () => unknown, string, Place?][] = [
     "/slots/side/0/words",
   ],
   [
+    "literal_delegation_words",
+    "a dial word in words",
+    () =>
+      edit(
+        list(),
+        (draft) => void (draft.slots.side[0].words = "Sending this quote is Auto with undo."),
+      ),
+    "/slots/side/0/words",
+  ],
+  [
     "control_label_not_verb_object",
     "a link labelled Open",
     () => edit(list(), (draft) => void (draft.links[0].label = "Open")),

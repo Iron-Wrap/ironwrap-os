@@ -1423,8 +1423,7 @@ export async function buildTodayReadModel(
           ...scope,
           scheduled_start: assignment.scheduled_start,
           scheduled_end: assignment.scheduled_end,
-          next_action:
-            assignment.blocker_reason ?? "Open the typed physical work package",
+          next_action: assignment.blocker_reason ?? "See job plan",
           assignment,
         },
       ];
@@ -3073,9 +3072,6 @@ export async function buildEstimatorWorkbenchReadModel(
     (measurementRead.row && !measurementDetail
       ? "measurement_detail_mismatch"
       : null);
-  const takeoffDetailIssue =
-    takeoffRead.unavailable_reason ??
-    (takeoffRead.row && !takeoffDetail ? "takeoff_detail_mismatch" : null);
 
   const geometryCapture: { model?: GeometryModel } = {};
   const geometry = measurementDetail
@@ -4099,23 +4095,6 @@ function evidenceProofItem(row: FrappeRow): ProofStreamItem | null {
     : null;
 }
 
-function checkInProofItem(row: FrappeRow): ProofStreamItem | null {
-  const id = text(row.checkin_id) ?? text(row.name);
-  return id
-    ? {
-        id,
-        type: "Field Check-in",
-        proof_slot: null,
-        occurred_at: text(row.submitted_at),
-        summary: text(row.blocker_summary) ?? text(row.notes),
-        customer_safe: false,
-        source: text(row.source_system),
-        sync_state: text(row.sync_state),
-        blocker: booleanValue(row.blocker_flag) === true,
-      }
-    : null;
-}
-
 function compareProofItems(
   left: ProofStreamItem,
   right: ProofStreamItem,
@@ -4161,7 +4140,7 @@ function nativeWorkPackageEvidenceRow(
   return {
     name: row.eventId,
     evidence_id: row.evidenceItem,
-    evidence_type: "Work Package Evidence",
+    evidence_type: "Job plan evidence",
     proof_slot: row.slotId,
     captured_at: row.capturedAt,
     summary: row.requirement,
@@ -4371,18 +4350,6 @@ function groupBy(rows: FrappeRow[], field: string): Map<string, FrappeRow[]> {
   return grouped;
 }
 
-function mapRowsByReference(
-  rows: FrappeRow[],
-  field: string,
-): Map<string, FrappeRow> {
-  const mapped = new Map<string, FrappeRow>();
-  for (const row of rows) {
-    const key = text(row[field]);
-    if (key) mapped.set(key, row);
-  }
-  return mapped;
-}
-
 function latestRowsByReference(
   rows: FrappeRow[],
   field: string,
@@ -4415,17 +4382,6 @@ function newestFirst(rows: FrappeRow[]): FrappeRow[] {
     if (recordIsNewer(right, left)) return 1;
     return 0;
   });
-}
-
-function uniqueRows(rows: FrappeRow[]): FrappeRow[] {
-  const unique = new Map<string, FrappeRow>();
-  for (const row of rows) {
-    const key = text(row.name);
-    if (!key) continue;
-    const current = unique.get(key);
-    if (!current || recordIsNewer(row, current)) unique.set(key, row);
-  }
-  return [...unique.values()];
 }
 
 function recordIsNewer(
@@ -6323,10 +6279,6 @@ function booleanValue(value: unknown): boolean | null {
   if (value === true || value === 1 || value === "1") return true;
   if (value === false || value === 0 || value === "0") return false;
   return null;
-}
-
-function numberValue(value: unknown): number {
-  return optionalNumber(value) ?? 0;
 }
 
 function optionalNumber(value: unknown): number | null {

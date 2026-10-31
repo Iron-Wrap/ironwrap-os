@@ -5,8 +5,9 @@
 // the run with the exact outcome and route. An abstention closes the run too, so every receipt says
 // why nothing happened.
 //
-// Close shape: the v3 model block goes only to a Worker that advertises `close_model: 3`. Any other
-// Worker gets the legacy block, which records a provider id it knows (`claude` or `codex`), so the
+// Close shape: the host sends the newest close model it knows that is not newer than the one the
+// Worker advertises: the v3 model block to a Worker on `close_model` 3 or later (a later Worker
+// still accepts the model before its own). Any other Worker gets the legacy block, which records a provider id it knows (`claude` or `codex`), so the
 // run may use only those providers; another is unavailable (`provider_disabled`).
 //
 // Durability: the close body is written to `pending-closes/` before it is sent and removed once
@@ -23,6 +24,9 @@ import { buildRunInput } from "./prompt.ts";
 import { specialistRelease } from "./release.ts";
 import { loadSpecialist, type Specialist } from "./specialists.ts";
 import { WorkerError, type OpenedRun, type RunClose, type Signal, type WorkerClient } from "./worker.ts";
+
+/** The newest close model this host sends (the v3 model block). */
+export const HOST_CLOSE_MODEL = 3;
 
 export type WorkerLike = Pick<WorkerClient, "openRun" | "closeRun">;
 export interface GatewayLike {
@@ -92,7 +96,7 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
 
   // A Worker that sends any routing field also accepts them back in the close.
   const routed = ["review_of", "expected_action_id", "mode"].some((field) => Object.hasOwn(run, field));
-  const closeV3 = run.close_model === 3;
+  const closeV3 = Number.isInteger(run.close_model) && (run.close_model as number) >= HOST_CLOSE_MODEL;
   const reviewed = run.review_of ?? null;
   const reviewOf = reviewed ? { runId: reviewed.run_id, family: reviewedFamily(reviewed) } : null;
   const action = run.expected_action_id ?? null;
@@ -304,24 +308,27 @@ function closeBody(result: GatewayResult, mode: "live" | "shadow" | null, review
 
 /** The close for a Worker on the v3 close model (`close_model: 3`). */
 function closeBodyV3(result: GatewayResult, mode: "live" | "shadow", release: string | undefined): RunClose {
-  const { provider, model, authMode, routeId, family, adapter, billing, route } = result;
+  const { provider, model, authMode, routeId, family, effort, adapter, billing, route } = result;
   return {
     ...closeCommon(result),
     model:
-      provider === null || model === null || authMode === null || routeId === null || family === null || adapter === null || billing === null || route === null
+      provider === null || model === null || authMode === null || routeId === null || family === null || effort === null || adapter === null || billing === null || route === null
         ? null
         : {
             provider,
             adapter,
             family,
             model,
+            effort,
             models_used: result.modelsUsed,
             auth_mode: authMode,
             billing,
             tier: result.tier,
             route_id: routeId,
             route,
-            failover: result.failover.slice(0, 3).map((hop) => ({ route_id: hop.routeId, provider: hop.provider, model: hop.model, reason: hop.reason, retry_at: hop.retryAt })),
+            failover: result.failover
+              .slice(0, 3)
+              .map((hop) => ({ route_id: hop.routeId, provider: hop.provider, model: hop.model, family: hop.family, reason: hop.reason, retry_at: hop.retryAt })),
             qualification_ref: result.qualificationRef,
             release_sha256: release ?? null,
             gateway_config_sha256: result.gatewayConfigSha256,

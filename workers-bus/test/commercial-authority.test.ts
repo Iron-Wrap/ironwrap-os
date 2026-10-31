@@ -310,6 +310,7 @@ test("native commercial authority records a complete autonomous customer contrac
       "effect:commercial-publication:0001",
     );
     assert.equal(effect.effect.state, "succeeded");
+    // The first send succeeded but is not recorded yet, so D1 refuses a second send (0156).
     await assert.rejects(
       executePublicationEffect(
         env,
@@ -318,7 +319,7 @@ test("native commercial authority records a complete autonomous customer contrac
         PROPOSAL_REVISION_ID,
         "effect:commercial-publication:duplicate",
       ),
-      errorCode("effect_proposal_failed"),
+      errorCode("effect_proposal_delivery_unconfirmed"),
     );
 
     const publication = await recordCommercialProposalPublication(env, publicationInput, at(4));
@@ -857,7 +858,8 @@ async function executePublicationEffect(
     preconditions: { quote_status: "approved" },
     evidenceRefs: EVIDENCE.map(({ ref }) => ref),
     expectedReadback: { state },
-    retryLimit: 1,
+    // A proposal send runs once: D1 refuses any other retry limit for it (0164).
+    retryLimit: 0,
     compensationPlan: { action: "proposal.withdraw" },
     correlationId: `correlation:${effectId}`,
   }, {

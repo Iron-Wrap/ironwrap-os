@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "measurement_design",
-  "catalog_sha256": "a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852",
+  "catalog_sha256": "59e0eaabfdcf8267e15abc387f3743ac03054a6f4f712d64b3260d3fa37879f6",
   "actions": [
     { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain measurement, hazard, and design facts to the owner, staff, or an inspector, with citations" },
     { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Route visit requests, capture items, customer photo requests, option pricing, privacy requests, and bulletins to the owning specialist" },

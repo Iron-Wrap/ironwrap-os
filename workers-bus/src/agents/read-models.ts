@@ -17,6 +17,8 @@ import { listCurrentJobMeasurements } from "../measurement-intake-store.ts";
 import { canonicalJson, sha256Hex } from "../newo-hash.ts";
 import type { ObjectModel, ObjectRead } from "./memory.ts";
 import type { AgentDb } from "./store.ts";
+import { delegationRecord } from "./shadow.ts";
+import { leadProposal, openLeadProposals } from "./lead-proposals.ts";
 
 /** The role-screen readers take the Worker environment; they read only its D1 binding. */
 const envOf = (db: AgentDb) => ({ DB: db }) as unknown as AppEnv;
@@ -77,16 +79,16 @@ const job: ObjectModel = {
     { permission: "accounting:read", pointers: ["/job", "/facts/accounting"] },
   ],
   async read(db, tenantId, id) {
-    const phase = await readCommercialJobPhase(envOf(db), tenantId, id);
+    // The intents' currencies are read alongside the phase, so a job costs one round trip less.
+    const [phase, intentCurrencies] = await Promise.all([
+      readCommercialJobPhase(envOf(db), tenantId, id),
+      rows<{ intent_id: string; currency: string }>(db, "SELECT intent_id, currency FROM accounting_intents WHERE tenant_id = ? AND roof_job_id = ?", tenantId, id),
+    ]);
     if (!phase) return null;
     // The generation time is when the screen was drawn, not part of the job.
     const { read_model_generated_at: _drawnAt, ...data } = phase;
     // The phase shows intent amounts as two-place text; facts carry minor units and currency.
-    const currencies = new Map(
-      (await rows<{ intent_id: string; currency: string }>(db, "SELECT intent_id, currency FROM accounting_intents WHERE tenant_id = ? AND roof_job_id = ?", tenantId, id)).map(
-        (row) => [row.intent_id, row.currency],
-      ),
-    );
+    const currencies = new Map(intentCurrencies.map((row) => [row.intent_id, row.currency]));
     const exact = (intent: Record<string, unknown>) => {
       const { total_amount, settled_amount, ...rest } = intent;
       const total = minorUnits(total_amount as string | null);
@@ -129,18 +131,21 @@ const customer: ObjectModel = {
       .bind(tenantId, id)
       .first<Record<string, unknown>>();
     if (!row) return null;
-    const jobs = await rows<{ roof_job_id: string }>(
-      db,
-      `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND customer_id = ?
-        ORDER BY updated_at DESC, roof_job_id ASC LIMIT ${LINKED_JOBS}`,
-      tenantId,
-      id,
-    );
+    const [jobs, consented] = await Promise.all([
+      rows<{ roof_job_id: string }>(
+        db,
+        `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND customer_id = ?
+          ORDER BY updated_at DESC, roof_job_id ASC LIMIT ${LINKED_JOBS}`,
+        tenantId,
+        id,
+      ),
+      consents(db, tenantId, "customer_id", id),
+    ]);
     const { has_phone, has_email, ...identity } = row;
     return {
       data: {
         identity,
-        contact: { has_phone: has_phone === 1, has_email: has_email === 1, consents: await consents(db, tenantId, "customer_id", id) },
+        contact: { has_phone: has_phone === 1, has_email: has_email === 1, consents: consented },
         jobs: jobs.map((entry) => entry.roof_job_id),
       },
       links: jobLinks(jobs),
@@ -160,23 +165,42 @@ const lead: ObjectModel = {
       .bind(tenantId, id)
       .first<Record<string, unknown>>();
     if (!row) return null;
-    const jobs = await rows<{ roof_job_id: string }>(
-      db,
-      `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND lead_id = ?
-        ORDER BY updated_at DESC, roof_job_id ASC LIMIT ${LINKED_JOBS}`,
-      tenantId,
-      id,
-    );
+    const [jobs, consented, proposals] = await Promise.all([
+      rows<{ roof_job_id: string }>(
+        db,
+        `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND lead_id = ?
+          ORDER BY updated_at DESC, roof_job_id ASC LIMIT ${LINKED_JOBS}`,
+        tenantId,
+        id,
+      ),
+      consents(db, tenantId, "lead_id", id),
+      // The lead's open proposals reach a run about it, so a later inbound can confirm one.
+      openLeadProposals(db, tenantId, id, LINKED_PROPOSALS),
+    ]);
     return {
       data: {
         ...row,
         has_phone: row.has_phone === 1,
         has_email: row.has_email === 1,
-        consents: await consents(db, tenantId, "lead_id", id),
+        consents: consented,
         jobs: jobs.map((entry) => entry.roof_job_id),
       },
-      links: jobLinks(jobs),
+      links: [...jobLinks(jobs), ...proposals.map((stepId) => ({ kind: "lead_proposal", id: stepId }))],
     };
+  },
+};
+
+const LINKED_PROPOSALS = 5;
+
+const leadProposalModel: ObjectModel = {
+  // An open lead_fact.propose draft (lead-proposals.ts); a closed one reads as no fact. Its fields
+  // carry customer details, so only the sales view reads it.
+  views: [{ permission: "sales:read", pointers: null }],
+  async read(db, tenantId, id) {
+    const proposal = await leadProposal(db, tenantId, id);
+    if (!proposal?.open) return null;
+    const { open: _open, ...data } = proposal;
+    return { data, links: [{ kind: "lead", id: proposal.lead_id }] };
   },
 };
 
@@ -212,21 +236,23 @@ const roof: ObjectModel = {
       .first();
     if (!exists) return null;
     const env = envOf(db);
-    const measurements = await listCurrentJobMeasurements(env, tenantId, id);
-    const head = await readEstimatorEvidenceHead(env, tenantId, id);
-    const design = await db
-      .prepare(
-        `SELECT design_revision_id, design_revision_sha256, design_sequence, design_state, decision_kind, projected_at,
-                (SELECT COUNT(*) FROM facet_v2_link_revocations revoked
-                  WHERE (revoked.link_kind = 'project' AND revoked.link_id = design.external_project_link_id)
-                     OR (revoked.link_kind = 'producer_identity' AND revoked.link_id = design.producer_identity_link_id)
-                     OR (revoked.link_kind = 'customer_identity' AND revoked.link_id = design.external_customer_identity_link_id)) AS revocations
-           FROM facet_v2_native_design_projections design
-          WHERE destination_tenant_id = ? AND roof_job_id = ?
-          ORDER BY design_sequence DESC, projection_id ASC LIMIT 1`,
-      )
-      .bind(tenantId, id)
-      .first<Record<string, unknown> & { revocations: number }>();
+    const [measurements, head, design] = await Promise.all([
+      listCurrentJobMeasurements(env, tenantId, id),
+      readEstimatorEvidenceHead(env, tenantId, id),
+      db
+        .prepare(
+          `SELECT design_revision_id, design_revision_sha256, design_sequence, design_state, decision_kind, projected_at,
+                  (SELECT COUNT(*) FROM facet_v2_link_revocations revoked
+                    WHERE (revoked.link_kind = 'project' AND revoked.link_id = design.external_project_link_id)
+                       OR (revoked.link_kind = 'producer_identity' AND revoked.link_id = design.producer_identity_link_id)
+                       OR (revoked.link_kind = 'customer_identity' AND revoked.link_id = design.external_customer_identity_link_id)) AS revocations
+             FROM facet_v2_native_design_projections design
+            WHERE destination_tenant_id = ? AND roof_job_id = ?
+            ORDER BY design_sequence DESC, projection_id ASC LIMIT 1`,
+        )
+        .bind(tenantId, id)
+        .first<Record<string, unknown> & { revocations: number }>(),
+    ]);
     const revision = head.revision;
     return {
       data: {
@@ -404,6 +430,16 @@ const moneyItem: ObjectModel = {
   },
 };
 
+const delegation: ObjectModel = {
+  // One specialist and action's earned-autonomy record, as the owner's AI team settings read it
+  // (shadow.ts delegationRecord); the id is `<specialist_id>:<action_id>`.
+  views: [{ permission: "owner:read", pointers: null }],
+  async read(db, tenantId, id) {
+    const record = await delegationRecord(db, tenantId, id);
+    return record ? { data: record, links: [] } : null;
+  },
+};
+
 export const OBJECT_MODELS: Record<string, ObjectModel> = {
   job,
   customer,
@@ -414,4 +450,14 @@ export const OBJECT_MODELS: Record<string, ObjectModel> = {
   crew,
   inventory_position: inventoryPosition,
   money_item: moneyItem,
+  delegation,
+  lead_proposal: leadProposalModel,
 };
+
+/**
+ * The objects a report run reads: every one but an open lead proposal, whose fields carry customer
+ * details and so never reach text written for a wider audience (contract "Citing facts").
+ */
+export const REPORT_MODELS: Record<string, ObjectModel> = Object.fromEntries(
+  Object.entries(OBJECT_MODELS).filter(([kind]) => kind !== "lead_proposal"),
+);

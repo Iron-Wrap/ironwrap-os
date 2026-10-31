@@ -407,6 +407,8 @@ export interface AppliedByPerson {
   value: string;
   /** The person's user id; without it the note says "A person". */
   by?: string;
+  /** True only when the value set is the one the draft proposed; anything else says nothing. */
+  as_proposed?: boolean;
 }
 
 const appliedSchema = z.object({
@@ -414,6 +416,8 @@ const appliedSchema = z.object({
     field: z.enum(["role", "delegation_setting"]),
     value: z.string().min(1),
     by: z.string().min(1).optional(),
+    // A malformed flag reads as absent rather than dropping what was set.
+    as_proposed: z.boolean().optional().catch(undefined),
   }),
 });
 
@@ -477,14 +481,16 @@ export function timeInSentence(when: string): string | undefined {
 export function appliedByPersonNote(
   by = "A person",
   record?: string,
-  applied?: Pick<AppliedByPerson, "field" | "value">,
+  applied?: Pick<AppliedByPerson, "field" | "value" | "as_proposed">,
   when?: string,
 ): string {
   const value = applied && appliedValueWords(applied);
   if (applied && value) {
     const subject = record ?? APPLIED_SUBJECT[applied.field];
     const at = when ? timeInSentence(when) : undefined;
-    return `${by} changed ${subject} by hand${at ? ` ${at}` : ""}, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.`;
+    // Only the Worker's as_proposed says the value is the draft's own; the app never guesses.
+    const proposed = applied.as_proposed === true ? " That is what this draft proposed." : "";
+    return `${by} changed ${subject} by hand${at ? ` ${at}` : ""}, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.${proposed}`;
   }
   return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. The change stays in place, and nothing is left to do.`;
 }

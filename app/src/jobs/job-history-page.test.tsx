@@ -118,13 +118,59 @@ it("opens a finished job and shows what was done to it", async () => {
   loadJobHistoryMock.mockResolvedValue(model());
   render();
 
-  expect(await screen.findByRole("heading", { name: "IW-1001" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", {
+      name: /^Job record for: Northside Holdings\s· 88 Riverbend Way\s· Ref IW-1001$/,
+    }),
+  ).toBeInTheDocument();
   expect(screen.getByText(/Complete · Metal re-roof/)).toBeInTheDocument();
   expect(screen.getByText("88 Riverbend Way, Calgary AB")).toBeInTheDocument();
   expect(screen.getByText("Northside Holdings")).toBeInTheDocument();
   expect(screen.getByText("Finished roof, north slope")).toBeInTheDocument();
   expect(screen.getByText("Job plan evidence")).toBeInTheDocument();
 });
+
+it.each([
+  {
+    customer: null,
+    address: "88 Riverbend Way, Calgary AB",
+    code: "IW-1001",
+    title: "Job record for: 88 Riverbend Way · Ref IW-1001",
+  },
+  {
+    customer: "Northside Holdings",
+    address: null,
+    code: "IW-1001",
+    title: "Job record for: Northside Holdings · Ref IW-1001",
+  },
+  {
+    customer: "Northside Holdings",
+    address: "88 Riverbend Way, Calgary AB",
+    code: null,
+    title: "Job record for: Northside Holdings · 88 Riverbend Way",
+  },
+  { customer: null, address: null, code: "IW-1001", title: "Job record · Reference IW-1001" },
+  { customer: null, address: null, code: null, title: "Job record" },
+  { customer: " ", address: " ", code: " ", title: "Job record" },
+])(
+  "names only the job identity the record supplies: $title",
+  async ({ customer, address, code, title }) => {
+    loadJobHistoryMock.mockResolvedValue(
+      model({
+        customer: customer === null ? null : { display_name: customer, phone: null },
+        job: { ...model().job, address, job_number: code },
+      }),
+    );
+    render();
+
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: (name) => name.replace(/\s+/g, " ") === title,
+    });
+    expect(heading).not.toHaveTextContent("JOB-FINISHED");
+    expect(loadJobHistoryMock).toHaveBeenCalledExactlyOnceWith("JOB-FINISHED");
+  },
+);
 
 it("says plainly that nothing here is a control", async () => {
   loadJobHistoryMock.mockResolvedValue(model());

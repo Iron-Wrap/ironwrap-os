@@ -164,13 +164,24 @@ test.describe("The record of a finished job", () => {
     await record.click();
 
     await expect(page).toHaveURL(new RegExp(`/jobs/${FINISHED_JOB}/history$`));
-    await expect(page.getByRole("heading", { name: "IW-2019" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "Job record for: Northside Holdings · 88 Riverbend Way · Ref IW-2019",
+      }),
+    ).toBeVisible();
   });
 
   test("the record opens, shows what was done, and offers nothing to act on", async ({ page }) => {
     await page.goto(`/jobs/${FINISHED_JOB}/history`);
 
-    await expect(page.getByRole("heading", { name: "IW-2019" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "Job record for: Northside Holdings · 88 Riverbend Way · Ref IW-2019",
+      }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
     await expect(page.getByText("Complete · Metal re-roof")).toBeVisible();
     await expect(page.getByText("Nothing on this page changes it")).toBeVisible();
     await expect(page.getByText("Finished roof, north slope")).toBeVisible();

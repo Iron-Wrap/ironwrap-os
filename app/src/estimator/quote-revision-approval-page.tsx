@@ -523,7 +523,11 @@ function QuoteRevisionApprovalDetailContent() {
     !offline &&
     !decisionReadStale &&
     model.allowed_actions.includes("quote_revision_approval.reconcile");
-  const pendingAction = mutation.isPending;
+  const pendingScope = mutation.variables?.scope;
+  const pendingAction =
+    mutation.isPending &&
+    pendingScope?.session === scope.session &&
+    pendingScope.approvalId === scope.approvalId;
 
   function approve() {
     if (!canApprove || pendingAction || approval.state !== "pending") return;

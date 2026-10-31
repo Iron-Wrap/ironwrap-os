@@ -348,6 +348,184 @@ describe("QuoteRevisionApprovalPages", () => {
     },
   );
 
+  it.each(["A-first", "B-first"] as const)(
+    "keeps a pending A decision off B and lets B complete independently (%s)",
+    async (order) => {
+      router.real = true;
+      const user = userEvent.setup();
+      const first = request();
+      const second = request({
+        id: "quote-revision-approval:ui-other",
+        roof_job_id: "JOB-B",
+        source: { ...first.source, customer_quote_id: "QUOTE-B" },
+        target: { ...first.target, customer_quote_id: "QUOTE-B-V4" },
+        preview: null,
+        run_id: "run:quote-revision:ui-other",
+      });
+      const deniedA = { ...first, state: "denied" as const, version: 2 };
+      const executedB = quoteRevisionApprovalMutationResponseSchema.parse({
+        approval: {
+          ...second,
+          state: "executed",
+          version: 2,
+          hermes_run_id: second.run_id,
+          outcome: {
+            run_id: second.run_id,
+            created: true,
+            customer_quote_id: second.target.customer_quote_id,
+            quote_version: second.target.quote_version,
+            supersedes: second.source.customer_quote_id,
+            audit_finalized: true,
+            customer_notified: false,
+            commercial_terms_copied: false,
+            proposal_sent: false,
+            accounting_mutated: false,
+          },
+        },
+      });
+      const records = new Map([
+        [first.id, first],
+        [second.id, second],
+      ]);
+      const actions = [
+        "quote_revision_approval.read",
+        "quote_revision_approval.approve",
+        "quote_revision_approval.reject",
+      ];
+      vi.mocked(loadQuoteRevisionApproval).mockImplementation(async (id) => ({
+        ...detailModel(records.get(id)!, actions),
+        job:
+          id === first.id
+            ? syntheticJob
+            : {
+                ...syntheticJob,
+                id: "JOB-B",
+                roof_job_id: "JOB-B",
+                customer_display_name: "Synthetic Juniper Household",
+              },
+      }));
+      let finishA!: (value: { approval: QuoteRevisionApprovalRequest }) => void;
+      let finishB!: (value: { approval: QuoteRevisionApprovalRequest }) => void;
+      vi.mocked(rejectQuoteRevisionApproval).mockReturnValue(
+        new Promise((resolve) => {
+          finishA = resolve;
+        }),
+      );
+      vi.mocked(approveQuoteRevisionApproval).mockReturnValue(
+        new Promise((resolve) => {
+          finishB = resolve;
+        }),
+      );
+      const rootRoute = createRootRoute({ component: Outlet });
+      const detailRoute = createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/quote-revision-approvals/$approvalId",
+        component: QuoteRevisionApprovalDetailPage,
+      });
+      const liveRouter = createRouter({
+        routeTree: rootRoute.addChildren([detailRoute]),
+        history: createMemoryHistory({ initialEntries: ["/quote-revision-approvals/" + first.id] }),
+      });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SessionProvider session={ownerSession}>
+            <RouterProvider router={liveRouter} />
+          </SessionProvider>
+        </QueryClientProvider>,
+      );
+      try {
+        await screen.findByRole("heading", { name: "Review the new empty draft" });
+        await user.click(screen.getByRole("button", { name: "Turn down" }));
+        await user.type(
+          screen.getByLabelText("Why should we stop this request?"),
+          "Check A's source.",
+        );
+        await user.click(screen.getByRole("button", { name: "Turn down request" }));
+        await waitFor(() => expect(rejectQuoteRevisionApproval).toHaveBeenCalledTimes(1));
+        await act(async () => {
+          await liveRouter.navigate({
+            to: "/quote-revision-approvals/$approvalId",
+            params: { approvalId: second.id },
+          });
+        });
+        await waitFor(() =>
+          expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+            "Synthetic Juniper Household",
+          ),
+        );
+        const approveB = screen.getByRole("button", { name: "Make empty draft" });
+        expect(approveB).not.toHaveAttribute("aria-busy", "true");
+        expect(approveB).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Turn down" })).toBeEnabled();
+        await user.click(approveB);
+        await waitFor(() =>
+          expect(approveQuoteRevisionApproval).toHaveBeenCalledWith(
+            ownerSession,
+            second.id,
+            second.version,
+            "quote-revision-approval:decision-ui-001",
+          ),
+        );
+        expect(approveB).toHaveAttribute("aria-busy", "true");
+        expect(approveB).toBeDisabled();
+        if (order === "A-first") {
+          records.set(first.id, deniedA);
+          await act(async () => {
+            finishA({ approval: deniedA });
+          });
+          expect(screen.getByRole("button", { name: "Make empty draft" })).toHaveAttribute(
+            "aria-busy",
+            "true",
+          );
+          expect(screen.getByRole("button", { name: "Make empty draft" })).toBeDisabled();
+          expect(
+            screen.queryByText("The request was turned down. No draft was made."),
+          ).not.toBeInTheDocument();
+        }
+        records.set(second.id, executedB.approval);
+        await act(async () => {
+          finishB(executedB);
+        });
+        expect(await screen.findByRole("heading", { name: "Draft is ready" })).toBeVisible();
+        if (order === "B-first") {
+          records.set(first.id, deniedA);
+          await act(async () => {
+            finishA({ approval: deniedA });
+          });
+        }
+        expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+          "Synthetic Juniper Household",
+        );
+        expect(screen.getByText("The empty draft and save record are ready.")).toBeInTheDocument();
+        expect(
+          screen.queryByText("The request was turned down. No draft was made."),
+        ).not.toBeInTheDocument();
+        expect(
+          client.getQueryData<QuoteRevisionApprovalDetailResponse>([
+            "quote-revision-approval",
+            ownerSession.tenant.id,
+            ownerSession.user.id,
+            first.id,
+          ])?.approval.state,
+        ).toBe("denied");
+        expect(
+          client.getQueryData<QuoteRevisionApprovalDetailResponse>([
+            "quote-revision-approval",
+            ownerSession.tenant.id,
+            ownerSession.user.id,
+            second.id,
+          ])?.approval.state,
+        ).toBe("executed");
+      } finally {
+        await act(async () => {
+          finishA({ approval: deniedA });
+          finishB(executedB);
+        });
+      }
+    },
+  );
+
   it.each(["other-identity", "same-identity-new-sign-in"])(
     "does not apply a prior session's delayed choice or refresh under %s",
     async (change) => {

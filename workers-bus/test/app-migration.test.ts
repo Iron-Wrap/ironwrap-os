@@ -2310,7 +2310,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0153 lands after 0154-0206 on deployed databases, and 0155 after 0153 and 0156-0206; neither
     // touches an object a later-numbered migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 144);
+    assert.equal(migrations.length, 145);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2470,6 +2470,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
     // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
     // evidence and readback-conflict guards under their names.
+    // 0158 re-creates the ledger validate and replace guards; object counts stay unchanged.
     assert.deepEqual(
       { ...counts },
       { tables: 282, indexes: 382, triggers: 785 },
@@ -3810,9 +3811,10 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155 applied after 0156-0167 and 0200-0206 on a database already through them gives the sorted schema", async () => {
-  // qa applied 0153, 0156-0167 and 0200-0206 first, so it receives 0155 after them.
-  const late = ["0155_od01_deposit_policy.sql"];
+test("0155 and 0158 applied after higher main migrations give the sorted schema", async () => {
+  // Existing databases receive 0155 and then 0158 after higher-numbered main migrations.
+  // 0158 re-creates the validate guard from 0155, so it follows that migration.
+  const late = ["0155_od01_deposit_policy.sql", "0158_production_gate_attestations.sql"];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));
   assert.ok(migrations.indexOf(late[0]!) < migrations.indexOf("0156_proposal_delivery_confirmations.sql"));

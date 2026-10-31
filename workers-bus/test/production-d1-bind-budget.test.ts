@@ -171,35 +171,67 @@ function jsonRows(rows: Rows) {
   return JSON.parse(JSON.stringify(rows));
 }
 
-test("100-job boundary: production route succeeds under the actual D1 binding cap", async () => {
-  const db = new D1BudgetHarness();
-  const response = await handleAuthenticatedRoute(
-    new Request("https://app.example.invalid/api/v1/production"), db.env(), auth(),
-  );
-  assert.equal(response.status, 200, JSON.stringify(db.statements.filter((entry) => entry.count > MAX_D1_BINDINGS).map((entry) => ({ count: entry.count, source: entry.sql.includes("FROM inventory_exceptions") ? "materials" : "gates" }))));
-  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
-  const body = await response.json() as {
-    partial_sources: string[]; summary: { active_jobs: number; blocked: number };
-    jobs: Array<{ id: string; customer_display_name: string | null; address: string | null;
-      lane: string; gate_coverage: string; scheduling_preparation_allowed: boolean;
-      gate_summary: { blocked: number }; material_attention: Array<{ status: string; requested_delivery_date: string | null }> }>;
+test("100-job boundary: legacy and opt-in production routes stay under the actual D1 binding cap", async (context) => {
+  type Job = {
+    id: string; customer_display_name?: string | null; address?: string | null;
+    lane: string; gate_coverage: string; scheduling_preparation_allowed: boolean;
+    gate_summary: { blocked: number };
+    material_attention: Array<{ status: string; requested_delivery_date: string | null }>;
   };
-  assert.equal(body.summary.active_jobs, 100);
-  assert.equal(body.summary.blocked, 100);
-  assert.deepEqual(body.partial_sources, []);
-  assert.deepEqual(body.jobs.map((job) => job.id), JOBS);
-  for (const [index, job] of body.jobs.entries()) {
-    assert.equal(job.customer_display_name, "Synthetic Binding Customer");
-    assert.equal(job.address, null);
-    assert.equal(job.lane, "blocked");
-    assert.equal(job.gate_coverage, "complete");
-    assert.equal(job.gate_summary.blocked, 6);
-    assert.equal(job.scheduling_preparation_allowed, false);
-    assert.deepEqual(job.material_attention, [{
-      status: index % 2 ? "backorder" : "shortage", requested_delivery_date: null,
-    }]);
+  const runs: Array<{ identity: boolean; jobs: Job[]; statements: Statement[] }> = [];
+  for (const identity of [false, true]) {
+    const db = new D1BudgetHarness();
+    const response = await handleAuthenticatedRoute(
+      new Request(`https://app.example.invalid/api/v1/production${identity ? "?include_job_identity=1" : ""}`),
+      db.env(), auth(),
+    );
+    assert.equal(response.status, 200, JSON.stringify(db.statements.filter((entry) => entry.count > MAX_D1_BINDINGS).map((entry) => ({ count: entry.count, source: entry.sql.includes("FROM inventory_exceptions") ? "materials" : "gates" }))));
+    assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+    const body = await response.json() as {
+      partial_sources: string[]; summary: { active_jobs: number; blocked: number }; jobs: Job[];
+    };
+    assert.equal(body.summary.active_jobs, 100);
+    assert.equal(body.summary.blocked, 100);
+    assert.deepEqual(body.partial_sources, []);
+    assert.deepEqual(body.jobs.map((job) => job.id), JOBS);
+    for (const [index, job] of body.jobs.entries()) {
+      assert.equal(Object.hasOwn(job, "customer_display_name"), identity);
+      assert.equal(Object.hasOwn(job, "address"), identity);
+      if (identity) {
+        assert.equal(job.customer_display_name, "Synthetic Binding Customer");
+        assert.equal(job.address, null);
+      }
+      assert.equal(job.lane, "blocked");
+      assert.equal(job.gate_coverage, "complete");
+      assert.equal(job.gate_summary.blocked, 6);
+      assert.equal(job.scheduling_preparation_allowed, false);
+      assert.deepEqual(job.material_attention, [{
+        status: index % 2 ? "backorder" : "shortage", requested_delivery_date: null,
+      }]);
+    }
+    const identityReads = db.statements.filter((entry) => entry.sql.includes("AS customer_display_name"));
+    assert.equal(identityReads.length, identity ? 1 : 0);
+    const gateReads = db.statements.filter((entry) => entry.sql.includes("FROM operating_production_gates"));
+    const materialReads = db.statements.filter((entry) => entry.sql.includes("FROM inventory_exceptions"));
+    assert.equal(gateReads.length, 1);
+    assert.equal(materialReads.length, 1);
+    assert.equal(gateReads[0].count, 3);
+    assert.equal(materialReads[0].count, 3);
+    assert.deepEqual(JSON.parse(String(gateReads[0].parameters[1])), JOBS);
+    assert.deepEqual(JSON.parse(String(materialReads[0].parameters[1])), JOBS);
+    assert.ok(db.statements.every((entry) => entry.count <= MAX_D1_BINDINGS));
+    context.diagnostic(`D1_BIND_BUDGET_ROUTE ${JSON.stringify({
+      representation: identity ? "job-identity-v1" : "legacy", status: response.status,
+      jobs: body.jobs.length, queries: db.statements.length, identity_queries: identityReads.length,
+      max_bindings: Math.max(...db.statements.map((entry) => entry.count)),
+      gate_bindings: gateReads[0].count, material_bindings: materialReads[0].count,
+    })}`);
+    runs.push({ identity, jobs: body.jobs, statements: db.statements });
   }
-  assert.ok(db.statements.every((entry) => entry.count <= MAX_D1_BINDINGS));
+  const [legacy, optIn] = runs;
+  assert.equal(optIn.statements.length, legacy.statements.length + 1);
+  assert.deepEqual(optIn.statements.filter((entry) => !entry.sql.includes("AS customer_display_name")), legacy.statements);
+  assert.deepEqual(optIn.jobs.map(({ customer_display_name, address, ...job }) => job), legacy.jobs);
 });
 
 test("100-job boundary: unfiltered gates retain all600 rows and nullable ledger join", async () => {
@@ -212,7 +244,7 @@ test("100-job boundary: unfiltered gates retain all600 rows and nullable ledger 
   assert.ok(db.statements.every((entry) => entry.count <= MAX_D1_BINDINGS));
 });
 
-test("100-job boundary: state-filtered gates retain their extra filter and custom result limit", async () => {
+test("100-job boundary: state-filtered gates retain their extra filter and custom result limit", async (context) => {
   const db = new D1BudgetHarness();
   const blocked = await readers.gates(db.env(), TENANT, JOBS, "blocked", 2);
   assert.equal(blocked.rows.length, 2);
@@ -221,7 +253,9 @@ test("100-job boundary: state-filtered gates retain their extra filter and custo
   const other = await readers.gates(db.env(), TENANT, JOBS, "ready");
   assert.equal(other.rows.length, 0);
   assert.equal(other.partial, false);
+  assert.deepEqual(db.statements.map((entry) => entry.count), [4, 4]);
   assert.ok(db.statements.every((entry) => entry.count <= MAX_D1_BINDINGS));
+  context.diagnostic(`D1_BIND_BUDGET_STATE ${JSON.stringify({ states: ["blocked", "ready"], bindings: db.statements.map((entry) => entry.count) })}`);
 });
 
 test("100-job boundary: materials preserve statuses, type, tenant, ordering and custom limit", async () => {

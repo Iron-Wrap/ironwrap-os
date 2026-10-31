@@ -47,11 +47,13 @@ import {
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
+  accessConflictBody,
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
   closeRoleDrafts,
   createUserInvite,
+  type AccessConflict,
   listAppUsersForOffice,
   listUserInvitesForOffice,
   resendUserInviteForOffice,
@@ -455,18 +457,59 @@ export async function handleAdminAppUserProvision(
   );
   const authority = authorizeAppUserMutation(auth, target, validated.value.role);
   if (authority) return appJson({ error: authority.error }, authority.status);
+  // A change to an existing person names the access version it was decided on; a new person has
+  // none yet (0157).
+  const { expected_access_version: expectedAccessVersion, ...provision } = validated.value;
+  if (target && expectedAccessVersion === null) {
+    return appJson({ error: "expected_access_version_required" }, 400);
+  }
+  if (
+    (target && Number(target.access_version ?? 1) !== expectedAccessVersion) ||
+    (!target && expectedAccessVersion !== null)
+  ) {
+    return appJson({
+      error: "access_version_conflict",
+      conflict: await accessConflictBody(appEnv, auth, target, expectedAccessVersion ?? 0),
+    }, 409);
+  }
   const user = await provisionAppUser(appEnv, {
-    ...validated.value,
+    ...provision,
     provisioned_by: auth.session.email_normalized,
   }, req, {
     actorUserId: auth.session.user_id,
     actorRole: auth.session.role,
     expectedTarget: target,
   });
-  if (!user) return appJson({ error: "app_user_state_changed" }, 409);
-  // An existing person's new role answers the AI team's open role-change drafts for them.
-  if (target && target.role !== user.role)
-    await closeRoleDrafts(appEnv, req, user.tenant_id, user.user_id, user.role, auth.session.user_id);
+  if (!user) {
+    const current = await appAuthStore.findAppUserByEmail(
+      appEnv,
+      provision.tenant_id,
+      provision.email_normalized,
+    );
+    const moved = target
+      ? Number(current?.access_version ?? 1) !== expectedAccessVersion
+      : current !== null;
+    return moved
+      ? appJson({
+        error: "access_version_conflict",
+        conflict: await accessConflictBody(appEnv, auth, current, expectedAccessVersion ?? 0),
+      }, 409)
+      : appJson({ error: "app_user_state_changed" }, 409);
+  }
+  // An existing person's new role answers the AI team's role-change drafts for them that were
+  // prepared against an older access version. The close names what this request wrote, not the row
+  // read back after it: the write held only at `expectedAccessVersion`, so it produced the next one.
+  if (target && expectedAccessVersion !== null && target.role !== provision.role) {
+    await closeRoleDrafts(
+      appEnv,
+      req,
+      user.tenant_id,
+      user.user_id,
+      provision.role,
+      auth.session.user_id,
+      expectedAccessVersion + 1,
+    );
+  }
   return appJson({
     user: {
       user_id: user.user_id,
@@ -476,7 +519,14 @@ export async function handleAdminAppUserProvision(
       role: user.role,
       frappe_user_id: user.frappe_user_id,
       active: user.active === 1,
+      access_version: Number(user.access_version ?? 1),
       updated_at: user.updated_at,
+      // Whether removing their access unpaired a crew phone; never which one (0157).
+      crew_phone_unpaired: (await appAuthStore.usersWithCrewPhoneUnpairedByRemoval(
+        appEnv,
+        user.tenant_id,
+        user.user_id,
+      )).has(user.user_id),
     },
   });
 }
@@ -634,7 +684,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserRole(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   const appUserAccessMatch = url.pathname.match(
     /^\/api\/v1\/admin\/app-users\/([^/]+)\/access$/,
@@ -645,7 +695,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserAccess(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   if (url.pathname === "/api/v1/admin/user-invites") {
     if (req.method === "GET") {
@@ -1087,15 +1137,16 @@ export async function handleAuthenticatedRoute(
         new Date().toISOString(),
       );
       if (!approval) return privateAppJson({ error: "not_found" }, 404);
-      const job = await readQuoteRevisionOfficeJob(env, auth.session.tenant_id, {
-        roofJobId: approval.roof_job_id,
-        sourceQuoteId: approval.source_customer_quote_id,
-        sourceQuoteVersion: approval.source_quote_version,
-      });
       return privateAppJson(
         quoteRevisionApprovalReadEnvelope(env, auth, {
           approval: quoteRevisionApprovalProjection(approval),
-          job,
+          ...(requestsOfficeJobIdentity(url) ? {
+            job: await readQuoteRevisionOfficeJob(env, auth.session.tenant_id, {
+              roofJobId: approval.roof_job_id,
+              sourceQuoteId: approval.source_customer_quote_id,
+              sourceQuoteVersion: approval.source_quote_version,
+            }),
+          } : {}),
         }),
       );
     } catch {
@@ -1736,7 +1787,9 @@ export async function handleAuthenticatedRoute(
     const jobName = decodedPathSegment(estimatorJobMatch[1]);
     if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
-      const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName);
+      const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName, undefined, {
+        includeJobIdentity: requestsOfficeJobIdentity(url),
+      });
       return model
         ? privateAppJson(model)
         : privateAppJson({ error: "not_found" }, 404);
@@ -2011,7 +2064,9 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "office_role_required" }, 403);
     }
     try {
-      return privateAppJson(await buildProductionRunwayReadModel(env, auth));
+      return privateAppJson(await buildProductionRunwayReadModel(env, auth, {
+        includeJobIdentity: requestsOfficeJobIdentity(url),
+      }));
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
@@ -8002,6 +8057,15 @@ function decodedPathSegment(value: string): string | null {
   }
 }
 
+/** A refused role or access change; a version conflict also says what moved (0157). */
+function accessChangeFailureBody(
+  failure: { error: string; conflict?: AccessConflict | null },
+): Record<string, unknown> {
+  return failure.conflict === undefined
+    ? { error: failure.error }
+    : { error: failure.error, conflict: failure.conflict };
+}
+
 function decodeWorkObjectScope(
   match: RegExpMatchArray,
 ): WorkObjectScope | null {
@@ -8100,6 +8164,11 @@ function unavailableAppRoute(): Response {
   const response = appJson({ error: "not_found" }, 404);
   response.headers.set("cache-control", "no-store");
   return response;
+}
+
+function requestsOfficeJobIdentity(url: URL): boolean {
+  const values = url.searchParams.getAll("include_job_identity");
+  return values.length === 1 && values[0] === "1";
 }
 
 function privateAppJson(body: unknown, status = 200): Response {

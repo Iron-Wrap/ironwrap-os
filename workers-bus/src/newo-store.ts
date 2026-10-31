@@ -281,7 +281,8 @@ export async function listNewoCallbacksForAlert(
 ): Promise<NewoCallbackAlertRecord[]> {
   const result = await env.DB.prepare(
     `SELECT callback.*,
-        CASE WHEN session.handoff_status = 'failed' OR callback.reason <> 'callback_requested'
+        CASE WHEN session.status = 'failed' OR session.handoff_status = 'failed'
+          OR callback.reason <> 'callback_requested'
           THEN 'failure' ELSE 'handoff' END AS alert_kind,
         CASE WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
           WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'

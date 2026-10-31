@@ -1519,6 +1519,48 @@ test("a callback request alert never stands in for the failure alert", async (t)
   );
 });
 
+test("the sweep recovers a later session failure after the callback request alert was confirmed", async (t) => {
+  const alerting = alertingNewoState(t);
+  const requested = handoffEvent();
+  const handoffMarker = newoOwnerAlertMarker(requested.session_id, "handoff", requested.event_id);
+  const failureMarker = newoOwnerAlertMarker(requested.session_id, "failure", requested.event_id);
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", requested), 200);
+  assert.equal(alerting.emails.length, 2);
+  assert.deepEqual(alerting.markers(), [handoffMarker]);
+
+  alerting.gmail.timeouts = 2;
+  const failed = failedSession({
+    occurred_at: new Date(Date.parse(requested.occurred_at) + 60_000).toISOString(),
+  });
+  assert.equal(await alerting.deliver("/webhook/newo/report", failed), 200);
+  assert.equal(alerting.timedOut.length, 2);
+  assert.deepEqual({ ...alerting.db.raw.prepare(
+    "SELECT status, handoff_status FROM newo_sessions WHERE session_id = ?",
+  ).get(requested.session_id) }, { status: "failed", handoff_status: "requested" });
+  assert.equal(alerting.callbackRecords()[0]?.reason, "callback_requested");
+  assert.equal(alerting.callbackRecords()[0]?.event_id, requested.event_id);
+  assert.deepEqual(alerting.markers(), [handoffMarker]);
+  const unknownEffects = async () => (await alerting.env.DB.prepare(
+    "SELECT effect_id, state, attempt_count FROM external_effects WHERE state = 'unknown' ORDER BY effect_id",
+  ).all()).results.map((row: Row) => ({ ...row }));
+  const unknownBefore = await unknownEffects();
+  assert.equal(unknownBefore.length, 2);
+
+  const before = alerting.emails.length;
+  const recovery = await sweepNewoCallbackAlerts(alerting.env as never);
+  assert.equal(recovery.sent, 1, "a confirmed request never confirms a later failure alert");
+  const recovered = alerting.emails.slice(before);
+  assert.deepEqual(toAlertBoxes(recovered), FAILURE_BOXES);
+  assert.ok(recovered.every((email) => email.body.includes("attempt sweep-") && email.body.includes("repeats it")));
+  assert.deepEqual(alerting.markers(), [failureMarker, handoffMarker].sort());
+  assert.deepEqual(await unknownEffects(), unknownBefore, "the timed-out effects stay unknown and are not replayed");
+  const effects = await effectRows(alerting.env);
+  assert.equal(effects.length, 6);
+  assert.ok(effects.every((effect) => Number(effect.attempt_count) === 1));
+  assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 0);
+  assert.equal(alerting.emails.length, before + 2, "confirmed recovery is not sent again");
+});
+
 test("a sent marker that cannot be read counts as not sent", async (t) => {
   const alerting = alertingNewoState(t);
   alerting.r2.headFails = true;

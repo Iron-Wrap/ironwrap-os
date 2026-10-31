@@ -20,7 +20,7 @@ Cloudflare token. Authority:
 
 Global flags present on every command in 4.131.0: `-c, --config`, `--cwd`, `-e, --env`,
 `--env-file`, `--profile`. Production commands take **no** `--env`
-(`deploy-production.yml:339-341`, `:455`, `:461`, `:472`); `--env=""` in
+(`deploy-production.yml:387-389`, `:503`, `:509`, `:520`); `--env=""` in
 `workers-bus/package.json:14` is the npm-script equivalent.
 
 Environment variables:
@@ -102,7 +102,7 @@ false), Wrangler will delete all vars before setting those found in the Wrangler
 default `false` — a destructive default that the pipeline's var handling depends on; the guard is
 `environment_preflight_var_inventory_drift`, raised at `tools/release-permit.mjs:2071` inside
 `validateReleaseEnvironmentPreflight` (`:2061`) and run by `deploy.yml:338-341` and
-`deploy-production.yml:327-330`), `--preview-alias`, `--dry-run`, `--outdir`. A relative `--outdir`
+`deploy-production.yml:375-378`), `--preview-alias`, `--dry-run`, `--outdir`. A relative `--outdir`
 resolves against the config file's directory, here `workers-bus/`, not the working directory;
 `deploy.yml:185-189` passes an absolute `$RUNNER_TEMP/worker-bundle` and is unaffected. Restriction
 from Cloudflare: "Service worker syntax is not supported for versions that are uploaded through
@@ -132,56 +132,68 @@ https://developers.cloudflare.com/api/resources/workers/subresources/scripts/sub
 
 ### Tag path: `deploy-production.yml` — production
 
-**Written, never run.** The workflow has no run (`total_count` 0), there is no `v*` tag, and the
-`production` Environment does not exist (see Not verified and §4).
+**Written, never run.** The workflow has no run (`total_count` 0) and there is no `v*` tag. The
+`production` Environment exists since 2026-10-21 (see Not verified and §4).
 
-- Triggers: `on: push: tags: ["v*"]` and `workflow_dispatch` with a `tag` input
-  (`deploy-production.yml:15-23`). The
-  first step requires `github.ref_type == tag`, the shape `^v[0-9]+\.[0-9]+\.[0-9]+$`, and for a
-  dispatch that the input equals the ref (`deploy-production.yml:71-89`).
-- One job, `production`, with `environment: production` (`deploy-production.yml:59`) and
+**Account split (2026-10-30, IRO-221).** Production runs in the **Mindburn Labs** account
+`5023dd22…` as `ironwrap.mindburn.org` (zone `mindburn.org`, Workers Paid); qa stays in IronWrap's
+account `7ee5775b…` on Free. `CLOUDFLARE_ACCOUNT_ID` in `deploy-production.yml` and `deploy.yml`
+differ accordingly, `env.qa.account_id` pins qa in `wrangler.jsonc`, and the provider policy (v2)
+carries `account_id` per environment. A qa token therefore cannot reach production at all.
+
+- Trigger: `workflow_dispatch` only, with required `tag` and `declaration_sha` inputs
+  (`deploy-production.yml:21-31`). There is no `push` trigger: a tag alone does not deploy. The
+  caller is `promote-production.yml` in `Iron-Wrap/iron-wrap-infra`, after a promotion PR
+  changes `environments/production/stand.yml` on its `main` (GitOps, owner decision 2026-10-21).
+  The first step requires `github.ref_type == tag`, the shape `^v[0-9]+\.[0-9]+\.[0-9]+$`, and that
+  the `tag` input equals the ref (`deploy-production.yml:81-99`). The second reads the declaration
+  with `RELEASE_DECLARATION_READ_TOKEN` and fails `release_production_declaration_mismatch:<reason>`
+  unless `stand.yml` at `declaration_sha` and on `main` both name this tag and `declaration_sha` is
+  an ancestor of `main` (`GET /repos/…/compare/<sha>...main` → `ahead` or `identical`)
+  (`deploy-production.yml:101-138`). Both run before the checkout.
+- One job, `production`, with `environment: production` (`deploy-production.yml:69`) and
   `concurrency:
-  deploy-production`, `cancel-in-progress: false` (`deploy-production.yml:27-29`).
+  deploy-production`, `cancel-in-progress: false` (`deploy-production.yml:35-37`).
 - It **never builds** (`deploy-production.yml:5-6`). It finds the tagged commit's CI run and Deploy
-  run (`deploy-production.yml:123-143`),
-  downloads that Deploy run's release artifact and qa proof (`deploy-production.yml:145-156`),
+  run (`deploy-production.yml:171-191`),
+  downloads that Deploy run's release artifact and qa proof (`deploy-production.yml:193-204`),
 requires the proof to
-  carry this commit and tree (`deploy-production.yml:161-173`), and re-verifies the artifact digest
-(`deploy-production.yml:251-266`). It
+  carry this commit and tree (`deploy-production.yml:209-221`), and re-verifies the artifact digest
+(`deploy-production.yml:299-314`). It
   promotes the bytes qa proved.
 
 One line per Cloudflare call, with its anchor:
 
 1. Ledger: `POST /accounts/{id}/d1/database/{id}/query` with `RELEASE_POLICY_LEDGER_API_TOKEN`
-   (`deploy-production.yml:218-230`; the endpoint is built at `tools/release-permit.mjs:2299`).
-2. `wrangler secret list --config … --format json` (`deploy-production.yml:318-319`).
-3. `environment-preflight` (`deploy-production.yml:327-330`).
+   (`deploy-production.yml:266-278`; the endpoint is built at `tools/release-permit.mjs:2299`).
+2. `wrangler secret list --config … --format json` (`deploy-production.yml:366-367`).
+3. `environment-preflight` (`deploy-production.yml:375-378`).
 4. `wrangler versions upload "<artifact>/worker/index.js" --config … --no-bundle --assets
-   "<artifact>/app/dist" --strict --message "<msg>"` (`deploy-production.yml:339-341`); version id
+   "<artifact>/app/dist" --strict --message "<msg>"` (`deploy-production.yml:387-389`); version id
 scraped from the log
-   (`deploy-production.yml:343-344`).
-5. `wrangler versions view <id> --json` (`deploy-production.yml:352`).
+   (`deploy-production.yml:391-392`).
+5. `wrangler versions view <id> --json` (`deploy-production.yml:400`).
 6. `deployments list --json` and `versions view <previous> --json`
-   (`deploy-production.yml:370-374`).
-7. `wrangler d1 time-travel info ironwrap-bus --json` (`deploy-production.yml:385-386`) — the
+   (`deploy-production.yml:418-422`).
+7. `wrangler d1 time-travel info ironwrap-bus --json` (`deploy-production.yml:433-434`) — the
    recovery bookmark.
    `--timestamp` accepts Unix seconds or RFC3339.
 8. The signed permit is assembled and consumed once through the D1 ledger
-   (`deploy-production.yml:392-431`).
-9. `wrangler d1 migrations apply ironwrap-bus --config … --remote` (`deploy-production.yml:455`) —
+   (`deploy-production.yml:440-479`).
+9. `wrangler d1 migrations apply ironwrap-bus --config … --remote` (`deploy-production.yml:503`) —
    the database
    **name**, no `--env`.
-10. `wrangler versions deploy --config … --version-id <id> --yes` (`deploy-production.yml:461`).
-11. `wrangler triggers deploy --config …` (`deploy-production.yml:471-472`).
-12. `GET /accounts/{id}/workers/domains` (`deploy-production.yml:481-485`) — docs-cited only.
-13. `GET /accounts/{id}/workers/scripts/ironwrap-bus/schedules` (`deploy-production.yml:502-505`).
-14. Smoke (`deploy-production.yml:511-534`), then the durable generation advance
-    (`deploy-production.yml:555-569`).
+10. `wrangler versions deploy --config … --version-id <id> --yes` (`deploy-production.yml:509`).
+11. `wrangler triggers deploy --config …` (`deploy-production.yml:519-520`).
+12. `GET /accounts/{id}/workers/domains` (`deploy-production.yml:529-533`) — docs-cited only.
+13. `GET /accounts/{id}/workers/scripts/ironwrap-bus/schedules` (`deploy-production.yml:550-553`).
+14. Smoke (`deploy-production.yml:559-582`), then the durable generation advance
+    (`deploy-production.yml:603-617`).
 15. On failure, `wrangler rollback <previous> --config … --message "<reason>" --yes`
-    (`deploy-production.yml:582`); a
+    (`deploy-production.yml:630`); a
     nonzero exit is reconciled by readback with `deployments list --json`
-(`deploy-production.yml:582-585`), the
-    receipt and the D1 outcome (`deploy-production.yml:571-610`).
+(`deploy-production.yml:630-633`), the
+    receipt and the D1 outcome (`deploy-production.yml:619-658`).
 
 ### Rollback and recovery
 
@@ -189,7 +201,7 @@ scraped from the log
   (`deploy.yml:515`) and the failure cleanup (`:569-570`), because it is the same idempotent
   promote path.
 - production: `wrangler rollback <version-id> --config workers-bus/wrangler.jsonc --message
-  "<reason>" --yes` (`deploy-production.yml:582`). Flags in 4.131.0: `--name`, `-m/--message`,
+  "<reason>" --yes` (`deploy-production.yml:630`). Flags in 4.131.0: `--name`, `-m/--message`,
   `-y/--yes` only. **No `--dry-run`, no `--json`** — it cannot be proven offline and its result
   must be read back with `deployments list --json`.
 - `wrangler d1 time-travel restore <db> --config … --bookmark <b>` or `--timestamp <t>`. The
@@ -209,7 +221,7 @@ scraped from the log
   with `.env`; with no file argument it reads stdin.
 - `wrangler secret list --config … --env qa --format json` — `--format` is `json|pretty`, default
   `json`. Names only, never values. Both workflows run it (`deploy.yml:329-330`,
-  `deploy-production.yml:318-319`) and feed it to `tools/release-promotion.mjs secret-readback`.
+  `deploy-production.yml:366-367`) and feed it to `tools/release-promotion.mjs secret-readback`.
 - `wrangler versions secret put|bulk|delete|list` — the version-scoped variants. Not used by either
   workflow.
 
@@ -315,7 +327,7 @@ limitation and has no `--dry-run` or `--json` in 4.131.0 at all.
 
 `version_id` is `null` because this is a dry run; a real upload carries the UUID. This is the
 readback that would replace log-scraping: today `tools/release-promotion.mjs parse-version` reads
-the upload log (`deploy.yml:372-373`, `deploy-production.yml:343-344`).
+the upload log (`deploy.yml:372-373`, `deploy-production.yml:391-392`).
 
 ## 2. Token permission matrix
 
@@ -333,9 +345,9 @@ Which Cloudflare token each workflow uses:
 - `RELEASE_QA_CLOUDFLARE_API_TOKEN`: every Cloudflare call in the `qa` job (for example
   `deploy.yml:309`).
 - `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN`: every production Wrangler and REST call
-  (`deploy-production.yml:293` onward).
-- `RELEASE_POLICY_LEDGER_API_TOKEN`: the D1 ledger only (`deploy-production.yml:220`, `:421`,
-  `:558`, `:615`, `:630`).
+  (`deploy-production.yml:341` onward).
+- `RELEASE_POLICY_LEDGER_API_TOKEN`: the D1 ledger only (`deploy-production.yml:268`, `:469`,
+  `:606`, `:663`, `:678`).
 
 | Command / endpoint | Group | Status |
 | --- | --- | --- |
@@ -353,7 +365,7 @@ Which Cloudflare token each workflow uses:
 | R2 bucket binding resolved at `versions upload` | Workers R2 Storage — Read | Inferred — `bucket_name` is in the config; may not need a lookup |
 | D1 binding resolved at `versions upload` | none | Inferred — `database_id` is in `wrangler.jsonc`, so no D1 lookup should be required |
 | `wrangler tail` | Workers Tail — Read ("Grants wrangler tail read permissions") | Documented |
-| `wrangler whoami`, account resolution when no `account_id`/`CLOUDFLARE_ACCOUNT_ID` is present | Account Settings — Read | Documented — **not needed here**: `account_id` is at `wrangler.jsonc:4`, `CLOUDFLARE_ACCOUNT_ID` at `deploy.yml:25` and `deploy-production.yml:41` |
+| `wrangler whoami`, account resolution when no `account_id`/`CLOUDFLARE_ACCOUNT_ID` is present | Account Settings — Read | Documented — **not needed here**: `account_id` is at `wrangler.jsonc:4`, `CLOUDFLARE_ACCOUNT_ID` at `deploy.yml:25` and `deploy-production.yml:51` |
 | nothing in this repository | Cloudflare Tunnel — Edit | **Removable** from the QA token: `git grep -nIiE 'wrangler tunnel\|cfd_tunnel\|/tunnels'` outside this page finds nothing on `6a1318a1` |
 | token self-check | account-owned tokens verify at `GET /accounts/{id}/tokens/verify`, not `/user/tokens/verify` | Documented |
 
@@ -399,7 +411,7 @@ budget, and the repository counts them together: `tools/wrangler-binding-budget.
 non-secret vars into `CFG_*` JSON bindings (see the binding table in §1).
 
 The cron cap is **per account, not per Worker**. Production's two crons (`wrangler.jsonc:89`) are
-written only by `triggers deploy` (`deploy-production.yml:472`, never run) or `wrangler deploy`.
+written only by `triggers deploy` (`deploy-production.yml:520`, never run) or `wrangler deploy`.
 qa's two (`wrangler.jsonc:567`) were written by `deploy.yml:427` and read back in run 37022977020.
 That is 4 of 5
 on Free once both are registered; the live count is Not verified.
@@ -408,13 +420,12 @@ on Free once both are registered; the live count is Not verified.
 
 - **Environments.** Read 2026-10-02: `qa` and `release` exist, each with one deployment-branch
   policy, `main` (`GET …/environments`, `…/environments/{name}/deployment-branch-policies`).
-  **`production` does not exist**, though `deploy-production.yml:59` names it. GitHub: "Running a
-  workflow that references an environment that does not exist will create an environment with the
-  referenced name."
+  `production` (named at `deploy-production.yml:69`) was created by the owner on 2026-10-21 with
+  one deployment rule, tag `v*` (`…/environments/production/deployment-branch-policies` → `tag v*`,
+  read 2026-10-22). Before that it did not exist, and GitHub: "Running a workflow that references
+  an environment that does not exist will create an environment with the referenced name."
 (https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
-  The first `v*` tag would therefore create `production` with no tag rule. **Owner action**
-  (repository admin): create `production` with the `v*` tag rule before the first release tag
-  exists. "These secrets are only available to workflow jobs that use the environment" — a job reads
+  "These secrets are only available to workflow jobs that use the environment" — a job reads
   an environment's secrets only by declaring `environment: <name>`. Which secrets and variables
   live in which store is unreadable with the agent token (403) and is Not verified.
 - **"tags `v*` only".** Environment → Deployment branches and tags → **Selected branches and
@@ -426,19 +437,22 @@ on Free once both are registered; the live count is Not verified.
 - **The trigger constraint that decided the design.** A `workflow_run`-triggered run has
   `GITHUB_REF` = "Default branch" and `GITHUB_SHA` = "Last commit on default branch"
 (https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows),
-  so its ref is a branch and can never match a tag rule. Production-by-tag therefore needs
-  `on: push: tags`. Two further notes from the same page: a `workflow_run` workflow file must exist
-  on the default branch, and `workflow_run` cannot chain more than three levels. The design now
-  exists: `deploy.yml` is `workflow_run` and deploys qa only; `deploy-production.yml` is
-  `push: tags: ["v*"]` plus `workflow_dispatch` and re-checks `ref_type` and the tag shape
-  (`:71-89`).
+  so its ref is a branch and can never match a tag rule. Production-by-tag therefore needs a run
+  whose ref is the tag: a tag push, or a `workflow_dispatch` with `--ref <tag>`. Two further notes
+  from the same page: a `workflow_run` workflow file must exist on the default branch, and
+  `workflow_run` cannot chain more than three levels. The design now exists: `deploy.yml` is
+  `workflow_run` and deploys qa only; `deploy-production.yml` is `workflow_dispatch` only, dispatched
+  on the tag by `iron-wrap-infra`'s `promote-production.yml`, and re-checks `ref_type` and the tag
+  shape (`:81-99`).
 - **The chain.** CI → Deploy (`workflow_run`) → `release-please.yml` `github-release`
-  (`workflow_run` of Deploy, `release-please.yml:25-27`, `:112-174`) → `v*` tag push → Deploy
-  Production. The tag is written with `RELEASE_TAG_TOKEN`, not `GITHUB_TOKEN`. GitHub: "events
+  (`workflow_run` of Deploy, `release-please.yml:25-27`, `:112-174`) → `v*` tag → promotion PR
+  merged in `iron-wrap-infra` → `promote-production.yml` dispatches Deploy Production with
+  `RELEASE_PROMOTION_DISPATCH_TOKEN`. The tag is written with `RELEASE_TAG_TOKEN`, not `GITHUB_TOKEN`. GitHub: "events
   triggered by the `GITHUB_TOKEN` will not create a new workflow run, with the following
   exceptions: `workflow_dispatch` and `repository_dispatch` events always create workflow runs"
   (https://docs.github.com/en/actions/concepts/security/github_token). A tag pushed with
-  `GITHUB_TOKEN` would never start `deploy-production.yml`. Because Deploy has not succeeded since
+  `GITHUB_TOKEN` started nothing; since the tag no longer triggers `deploy-production.yml` at all,
+  that now matters for CI on the release pull request only. Because Deploy has not succeeded since
   #305, `github-release` cannot tag and the chain cannot start.
 - **What each trigger exposes.** `workflow_run`: `github.event.workflow_run.head_sha`, `.id`,
   `.conclusion`, `.event`, `.head_branch`, `.head_repository.full_name`. `deploy.yml:43-47` gates on
@@ -446,12 +460,12 @@ on Free once both are registered; the live count is Not verified.
   `.event`, `.head_branch`); `.head_sha` and `.id` are read as `RELEASE_SOURCE_COMMIT` and
   `RELEASE_CI_RUN_ID` (`deploy.yml:22-23`). It does **not** populate `workflow_run.pull_requests`
   for a push event, which is why `deploy.yml:66-79` recovers the base commit from the squash
-  commit's single parent. `push` on a tag: `github.ref` = `refs/tags/vX.Y.Z`, `github.ref_name` =
+  commit's single parent. `workflow_dispatch` on a tag: `github.ref` = `refs/tags/vX.Y.Z`, `github.ref_name` =
   `vX.Y.Z`, `github.sha` = the tag's tip, read as `RELEASE_SOURCE_COMMIT: ${{ github.sha }}`
-  (`deploy-production.yml:39`). It has no CI-success field, so the workflow rebuilds that gate by
-  locating the commit's CI and Deploy runs (`:123-143`).
+  (`deploy-production.yml:47`). It has no CI-success field, so the workflow rebuilds that gate by
+  locating the commit's CI and Deploy runs (`:171-191`).
 - **`concurrency`.** Two groups, both `cancel-in-progress: false`: `deploy-qa`
-  (`deploy.yml:267-269`) and `deploy-production` (`deploy-production.yml:27-29`). Cancelling
+  (`deploy.yml:267-269`) and `deploy-production` (`deploy-production.yml:35-37`). Cancelling
   mid-run could leave `d1 migrations apply` half-applied, and migrations are forward-only.
 - **release-please, as implemented.** The organisation permits GitHub-owned actions only, so it
   runs through `npx release-please@17.11.2` (`release-please.yml:33`, `:105`, `:169`), not an
@@ -459,7 +473,7 @@ on Free once both are registered; the live count is Not verified.
   (`:112-174`). Flags: `--config-file release-please-config.json` (the file has no leading dot) and
   `--manifest-file .release-please-manifest.json`. `"release-type": "simple"` and
   `"include-v-in-tag": true` (`release-please-config.json:2`, `:4`) give `vX.Y.Z` tags, matching
-  `deploy-production.yml:17` and `:82`. The manifest is `{".": "0.1.0"}`. Writes go through
+  `deploy-production.yml:92`. The manifest is `{".": "0.1.0"}`. Writes go through
   `RELEASE_TAG_TOKEN` in the `release` environment (`release-please.yml:87`, `:101`, `:124`,
   `:165`) under `permissions: {}` (`:30`). Release PR #323 changes
   `.release-please-manifest.json` and `CHANGELOG.md` only. No `v*` tag exists — 20 tags, none
@@ -474,7 +488,7 @@ on Free once both are registered; the live count is Not verified.
   parse`. It is **not** a required check: ruleset 20652163 requires exactly `gate`. The owner would
   have to add it to the ruleset; no agent token can write a ruleset.
 - **Untrusted interpolation.** An audit of every `${{ }}` inside a `run:` block on `6a1318a1`
-  finds only step outputs (`deploy.yml:514`, `:566`, `deploy-production.yml:579`) and matrix or
+  finds only step outputs (`deploy.yml:514`, `:566`, `deploy-production.yml:627`) and matrix or
   workflow `env` values (`ci.yml:164`, `:243`, `:277`). Nothing attacker-controlled is
   interpolated into a script.
 - **Rulesets.** Ruleset **20652163** ("Required CI - validate-and-test", target
@@ -498,10 +512,10 @@ Loss, concretely: the build configuration lives in the Cloudflare dashboard, so 
 not reviewed, and not covered by `make validate`. Cloudflare rebuilds per branch, so the qa bytes
 are not the artifact production promotes; the production workflow promotes the very bytes qa
 proved (`deploy-production.yml:5-6`), and the identical-digest property in §1 is gone. And none of
-the evidence chain survives: the signed permit (`deploy-production.yml:392-431`), the durable D1
-ledger (`:218-230`, `:555-569`), the qa smoke (`deploy.yml:443-464`), the export-and-restore drill
+the evidence chain survives: the signed permit (`deploy-production.yml:440-479`), the durable D1
+ledger (`:266-278`, `:603-617`), the qa smoke (`deploy.yml:443-464`), the export-and-restore drill
 (`:466-504`) and rollback drill (`:506-534`), and the automatic rollback after a failed promotion
-(`deploy-production.yml:571-610`).
+(`deploy-production.yml:619-658`).
 
 Docs: https://developers.cloudflare.com/workers/ci-cd/builds/
 
@@ -511,7 +525,13 @@ qa/production release train.
 
 ## Not verified
 
-- No `production` Environment exists; the first `v*` tag would create it with no tag rule.
+- `production` exists with the `v*` tag rule (read back 2026-10-22) but holds only
+  `RELEASE_DECLARATION_READ_TOKEN` and `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN`; the permit,
+  ledger, admin and ingest secrets and `vars.RELEASE_PRODUCTION_ZONE_ID` are missing.
+- The declaration check (`deploy-production.yml:101-138`) is exercised only for its refusals, run by
+  hand against real `iron-wrap-infra` commits on 2026-10-22 (`sha_invalid`, `ref_not_tag`,
+  `not_on_main:behind`, `policy_not_pin`, `token_missing`); the accepting path and `superseded`
+  need a promotion on `iron-wrap-infra` `main`.
 - No `v*` tag, no release, and Deploy Production has never run: every tag-path line is as written,
   not as run.
 - Deploy has not succeeded since #305: the latest run fails at the qa smoke, so the export/restore

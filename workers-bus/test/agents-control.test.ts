@@ -5,7 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.ts";
 import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
+import { catalogAction, earnable } from "../src/agents/catalog.ts";
 import { currentDelegation, specialistControl } from "../src/agents/control.ts";
+import { effectiveDelegation } from "../src/agents/policy.ts";
 import { CATASTROPHE_IDS, SHADOW_COMPARE_WINDOW_MS, sweepShadow } from "../src/agents/shadow.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import { WATCH_CONDITIONS } from "../src/agents/watches.ts";
@@ -39,6 +41,7 @@ class SqliteD1 {
           "0203_agent_shadow_agreement.sql",
           "0204_agent_watch_firings.sql",
           "0205_agent_step_pair_index.sql",
+          "0206_agent_draft_closing.sql",
         ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")
@@ -203,7 +206,8 @@ function setup(fullSchema = false, workerVars: Record<string, string> = {}) {
         kind: "event",
         specialist_id: specialist,
         watch_id: null,
-        source: "synthetic-test",
+        // An inbound by web form, as the inbound producer records one (agents/inbound.ts).
+        source: "web_form",
         subject: { aggregate: "lead", id: "synthetic-lead" },
         content: { text: "Untrusted customer request" },
         dedupe_key: `signal:${++sequence}`,
@@ -385,6 +389,60 @@ test("H, protective and never-delegable actions cannot receive owner delegation"
   );
 });
 
+test("the owner's caps keep every outside send and price commitment at asks first", async () => {
+  const s = setup();
+  // Every send outside IronWrap, every price commitment and every commitment of money to an outside
+  // party asks first (D-05, D-09, Q4, L04): the twenty-four actions the catalog caps, with
+  // customer_message.send for two of its owners.
+  const capped = [
+    ["estimator", "quote.commit_revision"],
+    ["estimator", "quote.apply_discount"],
+    ["estimator", "change_order.commit"],
+    ["lead_concierge", "customer_message.send"],
+    ["billing_reconciliation", "customer_message.send"],
+    ["lead_concierge", "visit.confirm"],
+    ["proposal_contract", "portal_link.send"],
+    ["proposal_contract", "proposal.publish"],
+    ["proposal_contract", "change_order.send_for_decision"],
+    ["customer_care_warranty", "remedy.offer"],
+    ["marketing_reputation", "campaign.send"],
+    ["billing_reconciliation", "invoice.commit_intent"],
+    ["marketing_reputation", "review_response.publish"],
+    ["estimator", "insurance_supplement.send"],
+    ["purchasing_inventory", "rfq.send"],
+    ["purchasing_inventory", "purchase_order.place"],
+    ["purchasing_inventory", "purchase_order.change"],
+    ["purchasing_inventory", "purchase_order.expedite"],
+    ["billing_reconciliation", "supplier_message.send"],
+    ["purchasing_inventory", "supplier_return.request"],
+    ["compliance", "document.request"],
+    ["customer_care_warranty", "cost_recovery.claim"],
+    ["marketing_reputation", "content.publish"],
+    ["marketing_reputation", "ad_spend.commit"],
+    ["billing_reconciliation", "supplier_bill.approve"],
+  ] as const;
+  for (const [specialist, actionId] of capped) {
+    const action = catalogAction(actionId);
+    assert.ok(action, actionId);
+    assert.equal(action.delegable, false, actionId);
+    // Never a delegation candidate, so the face never proposes acting within limits for it.
+    assert.equal(earnable(action), false, actionId);
+    for (const [key, body] of [
+      ["within", setting({ action_id: actionId })],
+      ["asks", setting({ action_id: actionId, setting: "asks_first", ceiling: null })],
+      ["off", setting({ action_id: actionId, setting: "off", ceiling: null })],
+    ] as const) {
+      const r = await s.app(`/specialists/${specialist}/delegation`, body, "owner", `cap-${key}-${specialist}-${actionId}`);
+      assert.equal(r.status, 422, `${actionId} ${key}`);
+      assert.equal(r.body.error, "not_delegable", `${actionId} ${key}`);
+    }
+    // A within-limits setting recorded before the cap no longer applies: the step asks first.
+    const before = { delegation_id: "dlg_recorded_before_the_cap", setting: "within_limits" } as const;
+    assert.equal(effectiveDelegation(action, { delegation: before, specialistState: { paused: false, held: false } }), "asks_first");
+  }
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_delegation_settings").n, 0);
+});
+
 test("auditor holds execute once, cannot target the auditor, and clearing requires per-action reconfirmation", async () => {
   const s = setup();
   const delegated = await s.app("/specialists/lead_concierge/delegation", setting());
@@ -556,9 +614,13 @@ test("approval is recorded but an unbound effect remains policy_missing with no 
 
 test("an approved import retry or lead confirmation runs nothing: the decision is recorded and its reviewer takes the work over", async () => {
   const s = setup();
+  // The confirm names an open proposal of the same lead, made from the inbound earlier.
+  const fields = { service: "metal_roofing", scope: null, address: null, timing: null };
+  const proposal = (await s.propose(await s.run(), "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body;
+  assert.equal(proposal.decision, "drafted");
   const steps = [
     { specialist: "orchestrator", action: "import.retry_failed", args: { import_run_id: "import_run:synthetic-0001", source_keys: ["SRC-0001", "SRC-0002"] }, reviewer: "owner" },
-    { specialist: "lead_concierge", action: "lead_fact.confirm", args: { lead_id: "synthetic-lead", proposal_id: "proposal-0001", fields: { service: "metal_roofing", scope: null, address: null, timing: null } }, reviewer: "sales" },
+    { specialist: "lead_concierge", action: "lead_fact.confirm", args: { lead_id: "synthetic-lead", proposal_id: proposal.step_id, fields }, reviewer: "sales" },
   ];
   for (const item of steps) {
     const proposed = await s.propose(await s.run(item.specialist), item.action, item.args);
@@ -2296,4 +2358,339 @@ test("the pair index serves the delegation reads, and only the face proposes del
     "SELECT COUNT(*) FROM agent_run_steps s LEFT JOIN agent_step_decisions d ON d.step_id = s.step_id WHERE s.tenant_id = 't' AND s.specialist_id = 's' AND s.action_id = 'a'",
   ])
     assert.match(plan(sql), /idx_agent_run_steps_pair/, sql);
+});
+
+// --- Closing prepared people-only drafts (contract f5) ---
+
+test("a delegation proposal closes when the owner sets the pair, or when a newer proposal replaces it", async () => {
+  const s = setup(true);
+  const face = async () => await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+  const propose = async (proposed: string, reason: string) => {
+    const body = (await s.propose(await face(), "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "note.add", proposed, ceiling: null, reason })).body;
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return body.step_id as string;
+  };
+  const step = (id: string) => {
+    const row = s.scalar("SELECT outcome, reason_code, needs_ask, readback_json, do_it_myself_json, permit_json, policy_json FROM agent_run_steps WHERE step_id = ?", id);
+    return {
+      outcome: row.outcome,
+      reason_code: row.reason_code,
+      reason_codes: JSON.parse(row.policy_json).reason_codes,
+      needs_ask: row.needs_ask,
+      readback: row.readback_json ? JSON.parse(row.readback_json) : null,
+      applied: JSON.parse(row.do_it_myself_json).context?.applied ?? null,
+      approved_by: JSON.parse(row.permit_json).approved_by,
+    };
+  };
+  const lane = async (view: string) => (await s.app(`/receipts?view=${view}`)).body.receipts.map((entry: { step_id: string }) => entry.step_id);
+
+  // A newer proposal for the same pair replaces the older one, which names where the newer waits.
+  const first = await propose("asks_first", "Synthetic: keep asking.");
+  s.tick(1_000);
+  const second = await propose("shadow", "Synthetic: practise first.");
+  assert.deepEqual(step(first), {
+    outcome: "succeeded",
+    reason_code: "superseded",
+    reason_codes: ["superseded"],
+    needs_ask: null,
+    readback: { source: "owned_store", reference: `step/${second}`, response_hash: s.scalar("SELECT args_sha256 a FROM agent_run_steps WHERE step_id = ?", second).a, matched: true },
+    applied: null,
+    approved_by: null,
+  });
+  assert.deepEqual([(await lane("needs_you")).includes(first), (await lane("done")).includes(first), (await lane("needs_you")).includes(second)], [false, true, true]);
+
+  // The owner turns practice on: the proposal that asked for it is applied by the owner.
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "close-shadow")).status, 200);
+  const applied = step(second);
+  assert.deepEqual(
+    [applied.reason_codes, applied.needs_ask, applied.readback.reference, applied.readback.matched, applied.applied, applied.approved_by],
+    [["applied_by_person"], null, "delegation/lead_concierge:note.add", true, { field: "delegation_setting", value: "shadow", by: "appu_test_owner", as_proposed: true }, null],
+  );
+  // The owner sets something else than a proposal asked for: still the owner's own change, so
+  // applied, naming what is set now.
+  s.tick(1_000);
+  const third = await propose("shadow", "Synthetic: practise again.");
+  s.tick(1_000);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null }), "owner", "close-asks")).status, 200);
+  const other = step(third);
+  assert.deepEqual(
+    [other.reason_codes, other.readback.reference, other.applied],
+    [["applied_by_person"], "delegation/lead_concierge:note.add", { field: "delegation_setting", value: "asks_first", by: "appu_test_owner", as_proposed: false }],
+  );
+  // Turning practice off closes it too, naming the setting back in force.
+  const fourth = await propose("shadow", "Synthetic: practise once more.");
+  s.tick(1_000);
+  const off = await s.app("/specialists/lead_concierge/shadow", shadowBody({ shadow: false, expected_revision: s.scalar("SELECT MAX(revision) r FROM agent_shadow_settings WHERE action_id = 'note.add'").r }), "owner", "close-shadow-off");
+  assert.equal(off.status, 200, JSON.stringify(off.body));
+  assert.deepEqual([step(fourth).reason_codes, step(fourth).applied?.value, step(fourth).applied?.as_proposed], [["applied_by_person"], "asks_first", false]);
+  // Another pair's proposal is untouched.
+  const elsewhere = (await s.propose(await face(), "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "lead.qualify", proposed: "shadow", ceiling: null, reason: "Synthetic: another action." })).body;
+  if (elsewhere.decision === "drafted") assert.equal(step(elsewhere.step_id).needs_ask, "apply_in_own_screen");
+  // A retried proposal records nothing new and so replaces nothing.
+  const run = await face();
+  const args = { specialist_id: "lead_concierge", action_id: "note.add", proposed: "asks_first", ceiling: null, reason: "Synthetic: once." };
+  const once = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
+  const again = (await s.propose(run, "delegation.propose_change", args)).body.step_id;
+  assert.deepEqual([again, step(once).needs_ask], [once, "apply_in_own_screen"]);
+});
+
+test("a closed delegation draft says whether the owner set what it proposed, its ceiling included", async () => {
+  const s = setup(true);
+  const propose = async (proposed: string, proposedCeiling: unknown) => {
+    const face = await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+    const body = (await s.propose(face, "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "note.add", proposed, ceiling: proposedCeiling, reason: "Synthetic: as proposed." })).body;
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return body.step_id as string;
+  };
+  const applied = (id: string) => {
+    const row = s.scalar("SELECT reason_code, do_it_myself_json FROM agent_run_steps WHERE step_id = ?", id);
+    const set = JSON.parse(row.do_it_myself_json).context?.applied;
+    return [row.reason_code, set?.value, set?.as_proposed];
+  };
+  const revision = (table: string) => s.scalar(`SELECT COALESCE(MAX(revision), 0) r FROM ${table} WHERE action_id = 'note.add'`).r as number;
+  const delegate = async (key: string, overrides: Record<string, unknown>) =>
+    assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ expected_revision: revision("agent_delegation_settings"), ...overrides }), "owner", key)).status, 200);
+  const practice = async (key: string, on: boolean) =>
+    assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody({ shadow: on, expected_revision: revision("agent_shadow_settings") }), "owner", key)).status, 200);
+
+  // The face proposes acting within limits only once the action meets the earned-autonomy bar.
+  const qualified = await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-as-proposed");
+  await seedCompared(s, qualified.body.qualification_id, 50, "match");
+  // Within limits at the ceiling it proposed: as proposed.
+  const same = await propose("within_limits", ceiling);
+  s.tick(1_000);
+  await delegate("as-proposed-same", {});
+  assert.deepEqual(applied(same), ["applied_by_person", "within_limits", true]);
+  // Within limits at another ceiling than it proposed: the person's own change, not as proposed.
+  const tighter = await propose("within_limits", { ...ceiling, count: { max: 1, per: "hour" } });
+  s.tick(1_000);
+  await delegate("as-proposed-tighter", {});
+  assert.deepEqual(applied(tighter), ["applied_by_person", "within_limits", false]);
+  // Recipients are a set: the same ones in another order are as proposed; another set is not, and
+  // no limit (null) is not an empty list.
+  const recipients = (list: string[] | null) => ({ ...ceiling, recipients: list });
+  const reordered = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-reordered", { ceiling: recipients(["office@example.invalid", "crew@example.invalid"]) });
+  assert.deepEqual(applied(reordered), ["applied_by_person", "within_limits", true]);
+  const otherSet = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-other-set", { ceiling: recipients(["crew@example.invalid", "yard@example.invalid"]) });
+  assert.deepEqual(applied(otherSet), ["applied_by_person", "within_limits", false]);
+  const subset = await propose("within_limits", recipients(["crew@example.invalid", "office@example.invalid"]));
+  s.tick(1_000);
+  await delegate("as-proposed-subset", { ceiling: recipients(["crew@example.invalid"]) });
+  assert.deepEqual(applied(subset), ["applied_by_person", "within_limits", false]);
+  const unlimited = await propose("within_limits", recipients(null));
+  s.tick(1_000);
+  await delegate("as-proposed-empty", { ceiling: recipients([]) });
+  assert.deepEqual(applied(unlimited), ["applied_by_person", "within_limits", false]);
+  // Another setting than it proposed: not as proposed.
+  const asks = await propose("asks_first", null);
+  s.tick(1_000);
+  await delegate("as-proposed-other", {});
+  assert.deepEqual(applied(asks), ["applied_by_person", "within_limits", false]);
+  // Practice on answers a within-limits proposal with practice: not as proposed. Practice off puts
+  // back the setting in force with its ceiling, which is what the next proposal asked for.
+  const before = await propose("within_limits", ceiling);
+  s.tick(1_000);
+  await practice("as-proposed-practice-on", true);
+  assert.deepEqual(applied(before), ["applied_by_person", "shadow", false]);
+  const back = await propose("within_limits", ceiling);
+  s.tick(1_000);
+  await practice("as-proposed-practice-off", false);
+  assert.deepEqual(applied(back), ["applied_by_person", "within_limits", true]);
+  // A superseded draft names the newer draft and says nothing was set.
+  const older = await propose("asks_first", null);
+  s.tick(1_000);
+  const newer = await propose("shadow", null);
+  assert.deepEqual(applied(older), ["superseded", undefined, undefined]);
+  assert.equal(JSON.parse(s.scalar("SELECT readback_json FROM agent_run_steps WHERE step_id = ?", older).readback_json).reference, `step/${newer}`);
+});
+
+test("migration 0206: the decided-step guard is 0200's plus one exception that only closes an open draft, once", async () => {
+  const s = setup(true);
+  const face = await s.run("orchestrator", { kind: "watch", watch_id: "delegation_review" });
+  const draft = (await s.propose(face, "delegation.propose_change", { specialist_id: "lead_concierge", action_id: "note.add", proposed: "shadow", ceiling: null, reason: "Synthetic: guard." })).body;
+  assert.equal(draft.decision, "drafted", JSON.stringify(draft));
+
+  // The trigger body is 0200's with exactly the one exception clause added.
+  const live = s.db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_decided_agent_step_update'").get() as { sql: string };
+  const migration = (file: string) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+  const base = /CREATE TRIGGER IF NOT EXISTS prevent_decided_agent_step_update\n[\s\S]*?\nEND/.exec(migration("0200_agent_coordination.sql"))![0];
+  const exception = /\n {2}AND NOT \([\s\S]*?\n {2}\)/.exec(migration("0206_agent_draft_closing.sql"))![0];
+  assert.equal(live.sql.split(exception).length, 2, "the exception appears once");
+  assert.equal(live.sql.replace(exception, ""), base.replace("IF NOT EXISTS ", ""));
+
+  // The close: the ask clears, one fixed reason code, version +1, decision time from D1's clock.
+  const CLOSE =
+    "needs_ask = NULL, reason_code = 'superseded', policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded')), " +
+    "readback_json = '{}', decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), version = version + 1";
+  const update = (set: string) => () => s.db.raw.prepare(`UPDATE agent_run_steps SET ${set} WHERE step_id = ?`).run(draft.step_id);
+  // Each frozen field, moved alone alongside an otherwise valid close, is refused (the last
+  // assignment to a column wins in SQLite).
+  for (const change of [
+    "permit_json = json_set(permit_json, '$.approved_by', 'appu_test_owner')",
+    "tool_json = '{}'",
+    "undo_json = json_set(undo_json, '$.synthetic', 1)",
+    "needs_reviewer_role = 'production'",
+    "needs_person_id = 'appu_synthetic'",
+    "policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded'), '$.result', 'synthetic')",
+    "outcome = 'failed'",
+    "args_json = json_set(args_json, '$.proposed', 'off')",
+    "args_sha256 = 'synthetic'",
+    "sources_json = '[]'",
+    "step_key = 'synthetic'",
+    "step_seq = step_seq + 100",
+    "action_id = 'access.prepare_change'",
+    "specialist_id = 'estimator'",
+    "autonomy = 'A2'",
+    "tenant_id = 'tenant_synthetic'",
+    "created_at = '2000-01-01T00:00:00.000Z'",
+    "do_it_myself_json = json_set(do_it_myself_json, '$.synthetic', 1)",
+    "decided_at = '2000-01-01T00:00:00.000Z'",
+    "version = version",
+    "version = version + 2",
+    "reason_code = 'declined', policy_json = json_set(policy_json, '$.reason_codes', json_array('declined'))",
+    "policy_json = json_set(policy_json, '$.reason_codes', json_array('applied_by_person'))",
+    "policy_json = json_set(policy_json, '$.reason_codes', json_array('superseded', 'superseded'))",
+    "needs_ask = 'apply_in_own_screen'",
+  ])
+    assert.throws(update(`${CLOSE}, ${change}`), /agent_step_decided/, change);
+  // No other people-only draft closes: a payee unfreeze draft, otherwise the same, is refused.
+  s.db.raw
+    .prepare(
+      `INSERT INTO agent_run_steps SELECT 'step_synthetic_payee', tenant_id, run_id, step_seq + 1000, 'synthetic-payee', specialist_id, 'payee.unfreeze_prepare',
+        autonomy, args_json, args_sha256, sources_json, policy_json, permit_json, tool_json, readback_json, outcome, reason_code, needs_reviewer_role,
+        needs_person_id, needs_ask, undo_json, do_it_myself_json, created_at, decided_at, version FROM agent_run_steps WHERE step_id = ?`,
+    )
+    .run(draft.step_id);
+  assert.throws(() => s.db.raw.prepare(`UPDATE agent_run_steps SET ${CLOSE} WHERE step_id = 'step_synthetic_payee'`).run(), /agent_step_decided/);
+
+  // The closing code leaves the draft open when its own condition fails: a newer draft that was
+  // never recorded, another tenant, or an owner setting refused as stale.
+  const { closeAccessDrafts, closeDelegationDrafts, supersedeDrafts } = await import("../src/agents/drafts.ts");
+  const args = { specialist_id: "lead_concierge", action_id: "note.add", proposed: "asks_first", ceiling: null, reason: "Synthetic." };
+  await (await supersedeDrafts(s.db, TENANT, { step_id: "step_never_recorded", action_id: "delegation.propose_change", args, args_sha256: "synthetic" }))!.run();
+  await (await closeDelegationDrafts(s.db, "tenant_synthetic", args, "asks_first", "appu_test_owner", null)).run();
+  const stale = await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 7 }), "owner", "close-stale");
+  assert.equal(stale.status, 409);
+  assert.equal(s.scalar("SELECT needs_ask FROM agent_run_steps WHERE step_id = ?", draft.step_id).needs_ask, "apply_in_own_screen");
+  // Every close reads the pair index, never every succeeded step of the tenant.
+  const closes: string[] = [];
+  const spy = { prepare: (sql: string) => (closes.push(sql), s.db.prepare(sql)) } as unknown as typeof s.db;
+  await supersedeDrafts(spy, TENANT, { step_id: "step_x", action_id: "access.prepare_change", args: { person_ref: "person:x", change: "change_role", device_ref: null }, args_sha256: "x" });
+  await closeDelegationDrafts(spy, TENANT, args, "asks_first", "appu_test_owner", null);
+  await closeAccessDrafts(spy, TENANT, "appu_x", "sales", "appu_test_owner", 2);
+  assert.equal(closes.length, 3);
+  for (const sql of closes) {
+    const plan = (s.db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((row) => row.detail).join("; ");
+    assert.match(plan, /^SEARCH agent_run_steps USING INDEX idx_agent_run_steps_pair/, plan);
+  }
+
+  const before = s.scalar("SELECT version FROM agent_run_steps WHERE step_id = ?", draft.step_id).version as number;
+  assert.equal(update(CLOSE)().changes, 1);
+  const closed = s.scalar("SELECT version, decided_at FROM agent_run_steps WHERE step_id = ?", draft.step_id);
+  assert.equal(closed.version, before + 1);
+  assert.ok(Math.abs(Date.parse(closed.decided_at as string) - Date.now()) < 60_000, "decided_at is D1's clock");
+  // Closed once: it never closes again or reopens.
+  assert.throws(update(CLOSE), /agent_step_decided/, "a closed draft does not close again");
+  assert.throws(update("needs_ask = 'apply_in_own_screen'"), /agent_step_decided/, "a closed draft does not reopen");
+  assert.throws(update("readback_json = '{}'"), /agent_step_decided/, "a closed draft is final");
+  // Only the closing path in agents/drafts.ts writes this transition, with its reason codes fixed.
+  const src = new URL("../src/", import.meta.url);
+  const writers = (readdirSync(src, { recursive: true }) as string[])
+    .filter((file) => file.endsWith(".ts") && /needs_ask\s*=\s*NULL|applied_by_person/i.test(readFileSync(new URL(file, src), "utf8")))
+    .sort();
+  assert.deepEqual(writers, ["agents/contract-catalog.ts", "agents/drafts.ts"]);
+});
+
+test("an open lead proposal reaches a later run, and a confirm must name it, for its lead, with its values", async () => {
+  const s = setup(true);
+  const { OBJECT_MODELS } = await import("../src/agents/read-models.ts");
+  const at = s.now();
+  s.db.raw.prepare("INSERT OR IGNORE INTO envelopes (envelope_id, source, payload_json, ts, status, created_at, updated_at) VALUES ('ow_synthetic-lead', 'website', '{}', ?, 'received', ?, ?)").run(at, at, at);
+  s.db.raw.prepare("INSERT INTO operating_leads (lead_id, tenant_id, source_envelope_id, source, contact_name, created_at, updated_at) VALUES ('synthetic-lead', ?, 'ow_synthetic-lead', 'website', 'Synthetic Lead', ?, ?)").run(TENANT, at, at);
+  const propose = async (fields: Record<string, string | null>) => {
+    s.tick(1_000);
+    const run = await s.run();
+    const body = (await s.propose(run, "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body;
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return { step_id: body.step_id as string, signal: `signal/${run.signal_id}` };
+  };
+  const proposalFact = async (id: string) => (await OBJECT_MODELS.lead_proposal.read(s.db, TENANT, id))?.data ?? null;
+  const leadLinks = async () => ((await OBJECT_MODELS.lead.read(s.db, TENANT, "synthetic-lead"))?.links ?? []).filter((link) => link.kind === "lead_proposal").map((link) => link.id);
+  const confirm = async (proposalId: string, fields: Record<string, string | null>, leadId = "synthetic-lead") =>
+    (await s.propose(await s.run(), "lead_fact.confirm", { lead_id: leadId, proposal_id: proposalId, fields })).body;
+
+  const first = await propose({ service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null });
+  assert.deepEqual(await proposalFact(first.step_id), {
+    lead_id: "synthetic-lead",
+    fields: { service: "metal_roofing", scope: null, address: "1 Synthetic Way", timing: null },
+    proposed_at: s.now(),
+    source: first.signal,
+  });
+  assert.deepEqual(await leadLinks(), [first.step_id]);
+  // A newer proposal that covers only some of its keys leaves it open.
+  const partial = await propose({ service: "asphalt_roofing", scope: null, address: null, timing: null });
+  assert.deepEqual(await leadLinks(), [partial.step_id, first.step_id]);
+
+  // A confirm names an open proposal of its own lead and only its values.
+  const refused = (body: any) => [body.decision, body.reason_codes, body.receipt.policy.checks.at(-1)];
+  assert.deepEqual(refused(await confirm("step_not_a_proposal", { service: "metal_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_missing"], { check: "proposal", passed: false }]);
+  assert.deepEqual(refused(await confirm(first.step_id, { service: "metal_roofing", scope: null, address: null, timing: null }, "another-lead")), ["abstained", ["fact_missing"], { check: "proposal", passed: false }]);
+  assert.deepEqual(refused(await confirm(first.step_id, { service: "metal_roofing", scope: null, address: "2 Other Way", timing: null })), ["abstained", ["fact_conflict"], { check: "proposal", passed: false }]);
+  // Confirming part of it is a confirm: once policy admits one, the proposal is used and closes.
+  const confirmed = await confirm(first.step_id, { service: null, scope: null, address: "1 Synthetic Way", timing: null });
+  assert.deepEqual([confirmed.decision, confirmed.receipt.policy.checks.at(-1)], ["awaiting_approval", { check: "proposal", passed: true }]);
+  assert.equal(await proposalFact(first.step_id), null);
+  assert.deepEqual(await leadLinks(), [partial.step_id]);
+  assert.deepEqual(refused(await confirm(first.step_id, { service: "metal_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  // A newer proposal that sets every key of an older one supersedes it.
+  const covering = await propose({ service: "metal_roofing", scope: "house only", address: null, timing: null });
+  assert.equal(await proposalFact(partial.step_id), null);
+  assert.deepEqual(await leadLinks(), [covering.step_id]);
+  assert.deepEqual(refused(await confirm(partial.step_id, { service: "asphalt_roofing", scope: null, address: null, timing: null })), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  // A refused confirm goes to the specialist's reviewer.
+  const missing = await confirm("step_not_a_proposal", { service: "metal_roofing", scope: null, address: null, timing: null });
+  assert.equal(missing.receipt.needs_from_you?.reviewer_role, "sales");
+  // Proposals made in the same instant: the later one by insertion order supersedes, never by id.
+  const tie = s.now();
+  const tied = async (fields: Record<string, string | null>) => (await s.propose(await s.run(), "lead_fact.propose", { lead_id: "synthetic-lead", fields })).body.step_id as string;
+  s.tick(1_000);
+  const sameInstant = s.now();
+  assert.notEqual(sameInstant, tie);
+  const earlier = await tied({ service: null, scope: null, address: null, timing: "next week" });
+  const later = await tied({ service: "metal_roofing", scope: "house only", address: null, timing: "this week" });
+  assert.equal(await proposalFact(earlier), null, "the later of two same-instant proposals supersedes the earlier");
+  assert.deepEqual(await leadLinks(), [later]);
+  // Two confirms of one proposal racing: the second to land stops as a used proposal.
+  s.db.beforeStepInsert = async () => {
+    const first = await confirm(later, { service: "metal_roofing", scope: null, address: null, timing: null });
+    assert.equal(first.decision, "awaiting_approval");
+  };
+  const raced = await confirm(later, { service: null, scope: "house only", address: null, timing: null });
+  assert.deepEqual(refused(raced), ["abstained", ["fact_stale"], { check: "proposal", passed: false }]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'lead_fact.confirm' AND json_extract(args_json, '$.proposal_id') = ? AND json_extract(policy_json, '$.result') <> 'deny'", later).n, 1);
+  // An owner report's run writes for a wider audience: its snapshot holds no proposal, while an
+  // ordinary run about the same lead does.
+  const watched = async (watch_id: string, key: string) => {
+    const signal = await appendSignal(
+      s.db,
+      TENANT,
+      { kind: "watch", specialist_id: "lead_concierge", watch_id, source: "watch_scheduler", subject: null, content: { watch_id, period_key: key, objects: [{ aggregate: "lead", id: "synthetic-lead" }], digest: {}, summary: "Synthetic" }, dedupe_key: `watch:${watch_id}:${key}` },
+      s.now(),
+    );
+    assert.ok("signal_id" in signal);
+    const opened = await s.worker.openRun({ signal_id: signal.signal_id, specialist_id: "lead_concierge", host_run_key: `proposal-${key}` });
+    return opened.context.facts.map((fact: { fact_id: string }) => fact.fact_id);
+  };
+  const fresh = await propose({ service: "metal_roofing", scope: "house only", address: "1 Synthetic Way", timing: "next week" });
+  const report = await watched("new_leads", "report");
+  assert.ok(report.includes("lead/synthetic-lead") && !report.some((id: string) => id.startsWith("lead_proposal/")), JSON.stringify(report));
+  assert.ok((await watched("first_response_due", "work")).includes(`lead_proposal/${fresh.step_id}`));
+  // Only the sales view reads it: its fields carry customer details.
+  const { viewFor } = await import("../src/agents/memory.ts");
+  assert.deepEqual([{ role: "sales" }, { role: "owner" }, { role: "field" }, { role: "accounting" }].map((reader) => viewFor(OBJECT_MODELS, reader, "lead_proposal") !== null), [true, true, false, false]);
 });

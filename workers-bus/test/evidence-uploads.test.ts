@@ -35,7 +35,7 @@ test("backup and restore inventories require the receipt and corrective manifest
       ["evidence_upload_disposition_write_claim_insert_guard", "evidence_upload_dispositions"],
       ["evidence_upload_disposition_write_claim_transition_guard", "evidence_upload_dispositions"],
     ]) assert.ok(contract.includes(`${trigger}=${table}`));
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=761/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=786/);
   }
 });
 class D1 {

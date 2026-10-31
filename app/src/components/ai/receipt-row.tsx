@@ -64,7 +64,7 @@ export function ReceiptRow(props: ReceiptRowProps) {
   const id = useId();
   const { kind, words } =
     props.state === "done_by_person"
-      ? personDoneWords(props.by.name, props.waitingFor)
+      ? personDoneWords(props.by.isViewer ? "you" : props.by.name, props.waitingFor)
       : state === "needs_you" && !viewerMayDecide
         ? { kind: "pending" as const, words: `Waiting on ${waitingOn ?? "a person"}` }
         : RECEIPT_STATE[state];

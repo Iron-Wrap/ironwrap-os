@@ -21,6 +21,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { loadIntegrationReadiness } from "./integration-readiness-api";
 import type {
@@ -115,9 +116,10 @@ function ReadinessScreen({
             <p className="mt-2 text-2xl font-bold tracking-[-0.03em]">
               {ready} of {required.length} ready
             </p>
-            <p className="mt-2 text-sm leading-6 text-muted">
-              Profile v{model.profile.version ?? "Not reported"}
-            </p>
+            {/* A version number never stands in a person's line; it stays in System details. */}
+            <SystemDetails className="mt-2 text-sm text-muted">
+              <p>Profile version {model.profile.version ?? "not reported"}</p>
+            </SystemDetails>
             {disabled.length > 0 ? (
               <p className="mt-2 text-sm leading-6 text-muted">
                 {disabled.length} deliberately switched off, and not counted above.
@@ -233,9 +235,12 @@ function CapabilityCard({ capability }: { capability: IntegrationCapability }) {
         )}
       </div>
       {capability.manifest ? (
-        <p className="mt-3 text-sm leading-6 text-muted">
-          {capability.manifest.provider} · manifest v{capability.manifest.version}
-        </p>
+        <>
+          <p className="mt-3 text-sm leading-6 text-muted">{capability.manifest.provider}</p>
+          <SystemDetails className="text-sm text-muted">
+            <p>Manifest version {capability.manifest.version}</p>
+          </SystemDetails>
+        </>
       ) : (
         <p className="mt-3 text-sm leading-6 text-muted">No approved manifest</p>
       )}

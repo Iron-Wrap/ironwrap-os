@@ -6,8 +6,10 @@ import {
   consumeMagicLink,
   requestMagicLink,
   sessionHashFor,
+  sha256Hex,
 } from "../src/app-auth.ts";
-import { upsertAppUser } from "../src/app-auth-store.ts";
+import { replaceDevicePairing } from "../src/app-auth-store.ts";
+import { seedAppUser } from "./app-user-seed.ts";
 import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
 
 interface MagicRow {
@@ -72,6 +74,11 @@ class AuthMemoryDb {
   devices = new Map<string, DeviceRow>();
   throttles = new Map<string, { scope: string; started: string; expires: string; attempts: number }>();
   audits: Array<Record<string, unknown>> = [];
+  /** Saved company profiles by tenant; a tenant with no entry has never saved one. */
+  companyProfiles = new Map<string, { phone: string }>();
+  companyProfileUnavailable = false;
+  /** The tenant id every company-profile read was bound to, in order. */
+  companyProfileReads: string[] = [];
 
   prepare(sql: string) {
     return {
@@ -95,6 +102,12 @@ class AuthMemoryDb {
   }
 
   private first(sql: string, args: unknown[]): unknown {
+    if (sql.includes("FROM tenant_company_profiles")) {
+      if (this.companyProfileUnavailable) throw new Error("company_profile_unavailable");
+      this.companyProfileReads.push(String(args[0]));
+      const profile = this.companyProfiles.get(String(args[0]));
+      return profile ? { ...profile } : null;
+    }
     if (sql.includes("INSERT INTO app_auth_throttles")) {
       const [key, scope, now, expires] = args.map(String);
       const previous = this.throttles.get(key);
@@ -117,6 +130,7 @@ class AuthMemoryDb {
     if (sql.includes("FROM app_device_pairings p")) {
       const pairing = this.pairings.get(String(args[0]));
       if (!pairing || pairing.consumed_at || pairing.revoked_at || pairing.expires_at <= String(args[1])) return null;
+      if (sql.includes("p.tenant_id = ?") && pairing.tenant_id !== String(args[2])) return null;
       const user = this.users.get(pairing.user_id);
       return user?.active === 1 && user.tenant_id === pairing.tenant_id && user.role === "field" ? { ...user } : null;
     }
@@ -186,7 +200,15 @@ class AuthMemoryDb {
     return [];
   }
 
+  private lastChanges = 0;
+
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
+    const result = this.runStatement(sql, args);
+    if (!sql.includes("INSERT INTO app_auth_audit")) this.lastChanges = result.meta.changes;
+    return result;
+  }
+
+  private runStatement(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
     if (
       sql.includes("UPDATE app_users") && sql.includes("display_name = ?") &&
       sql.includes("actor.access_role = ?")
@@ -204,6 +226,7 @@ class AuthMemoryDb {
         expectedRole,
         expectedActive,
         expectedUpdatedAt,
+        expectedVersion,
         actorTenant,
         actorUserId,
         actorRole,
@@ -214,6 +237,7 @@ class AuthMemoryDb {
         !user || user.tenant_id !== String(tenant) ||
         user.email_normalized !== String(email) || user.role !== String(expectedRole) ||
         user.active !== Number(expectedActive) || user.updated_at !== String(expectedUpdatedAt) ||
+        (user.access_version ?? 1) !== Number(expectedVersion) ||
         !actor || actor.tenant_id !== String(actorTenant) || actor.active !== 1 ||
         actor.role !== String(actorRole)
       ) return changed(0);
@@ -223,6 +247,7 @@ class AuthMemoryDb {
         frappe_user_id: frappeUser === null ? null : String(frappeUser),
         active: Number(active),
         updated_at: String(updatedAt),
+        access_version: (user.access_version ?? 1) + 1,
       });
       this.storageRoles.set(user.user_id, {
         role: String(storageRole) as Extract<AppRole, "owner" | "ops" | "field">,
@@ -330,11 +355,12 @@ class AuthMemoryDb {
       return changed(1);
     }
     if (sql.includes("UPDATE app_device_pairings SET consumed_at")) {
-      const [now, tokenHash, userId, expiryNow] = args;
+      const [now, tokenHash, userId, expiryNow, tenantId] = args;
       const pairing = this.pairings.get(String(tokenHash));
       if (!pairing || pairing.user_id !== String(userId) || pairing.consumed_at || pairing.revoked_at || pairing.expires_at <= String(expiryNow)) {
         return changed(0);
       }
+      if (sql.includes("tenant_id = ?") && pairing.tenant_id !== String(tenantId)) return changed(0);
       pairing.consumed_at = String(now);
       return changed(1);
     }
@@ -441,6 +467,8 @@ class AuthMemoryDb {
       return changed(changes);
     }
     if (sql.includes("INSERT INTO app_auth_audit")) {
+      // An access change's audit row is written only after that change wrote a row (0157).
+      if (sql.includes("changes() = 1") && this.lastChanges !== 1) return changed(0);
       this.audits.push({ args: [...args] });
       return changed(1);
     }
@@ -495,7 +523,7 @@ function waitContext() {
 }
 
 async function addFieldUser(env: AppEnv): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "crew@example.com",
     display_name: "Crew Member",
@@ -510,7 +538,7 @@ async function addOfficeUser(
   env: AppEnv,
   role: Exclude<AppRole, "field"> = "owner",
 ): Promise<AppUserRecord> {
-  return await upsertAppUser(env, {
+  return await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "owner@example.com",
     display_name: "Office Owner",
@@ -528,6 +556,8 @@ async function signInOffice(
   user: AppUserRecord;
   cookiePair: string;
   csrfToken: string;
+  /** `tenant.office_phone` from the consume response itself, the session the PWA first stores. */
+  officePhone: string | null;
 }> {
   const user = await addOfficeUser(env, role);
   let token = "";
@@ -541,11 +571,15 @@ async function signInOffice(
   await waiter.flush();
   const consumed = await consumeMagicLink(jsonRequest("/api/v1/auth/magic-link/consume", { token }), env);
   assert.equal(consumed.status, 200);
-  const body = await consumed.json() as { csrf_token: string };
+  const body = await consumed.json() as {
+    csrf_token: string;
+    tenant: { office_phone: string | null };
+  };
   return {
     user,
     cookiePair: (consumed.headers.get("set-cookie") ?? "").split(";")[0],
     csrfToken: body.csrf_token,
+    officePhone: body.tenant.office_phone,
   };
 }
 
@@ -554,7 +588,7 @@ test("magic-link request is enumeration-resistant and stores only a hash", async
   const env = baseEnv(db);
   await addOfficeUser(env);
   await addFieldUser(env);
-  await upsertAppUser(env, {
+  await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "inactive@example.com",
     display_name: "Inactive User",
@@ -858,7 +892,7 @@ test("session envelope is exact, unauthenticated session is 200, and logout requ
   ].sort());
   assert.deepEqual(body.tenant, {
     id: "ironwrap", name: "IronWrap OS", brand: "IronWrap", locale: "en-CA",
-    time_zone: "America/Edmonton", currency: "CAD",
+    time_zone: "America/Edmonton", currency: "CAD", office_phone: null,
   });
   assert.deepEqual(body.user, {
     id: [...db.users.values()][0].user_id,
@@ -891,6 +925,7 @@ test("session envelope is exact, unauthenticated session is 200, and logout requ
   assert.equal(afterBody.authenticated, false);
   assert.equal(afterBody.user, null);
   assert.equal(afterBody.csrf_token, null);
+  assert.equal((afterBody.tenant as { office_phone: unknown }).office_phone, null);
 });
 
 test("field bootstrap returns only the unauthenticated session envelope", async () => {
@@ -1059,6 +1094,14 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
   const provisionAudit = db.audits.at(-1)?.args as unknown[] | undefined;
   assert.equal(provisionAudit?.[3], "user_provision");
   assert.equal(provisionAudit?.[7], "field:owner@example.com");
+  // The grant as a structured change: the version it produced, no earlier access, the access
+  // granted, and the signed-in actor the server attributes it to (0157).
+  assert.deepEqual(JSON.parse(String(provisionAudit?.[8])), {
+    v: 1,
+    before: null,
+    after: { role: "field", active: true },
+    actor: office.user.user_id,
+  });
 
   const salesResponse = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
@@ -1205,6 +1248,7 @@ test("legacy app-user provisioning cannot bypass owner and self-change authority
     role: "sales",
     frappe_user_id: null,
     active: true,
+    expected_access_version: 1,
   }, {
     cookie: ops.cookiePair,
     "x-csrf-token": ops.csrfToken,
@@ -1216,7 +1260,7 @@ test("legacy app-user provisioning cannot bypass owner and self-change authority
     "an exact retry remains one grant",
   );
 
-  const protectedOwner = await upsertAppUser(opsEnv, {
+  const protectedOwner = await seedAppUser(opsEnv, {
     tenant_id: "ironwrap",
     email_normalized: "protected-owner@example.com",
     display_name: "Protected Owner",
@@ -1269,7 +1313,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
   const office = await signInOffice(env);
-  const target = await upsertAppUser(env, {
+  const target = await seedAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "departing@example.com",
     display_name: "Departing Teammate",
@@ -1319,6 +1363,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
     role: target.role,
     frappe_user_id: null,
     active: false,
+    expected_access_version: 1,
   }, {
     cookie: office.cookiePair,
     "x-csrf-token": office.csrfToken,
@@ -1636,4 +1681,208 @@ test("a proofless field request is refused without expiring a live session cooki
   assert.equal(signedOutSession.status, 200);
   assert.equal((await signedOutSession.json() as { authenticated: boolean }).authenticated, false);
   assert.match(signedOutSession.headers.get("set-cookie") ?? "", /Max-Age=0/);
+});
+
+interface OfficePhoneSession {
+  authenticated: boolean;
+  tenant: { id: string; office_phone: string | null } | null;
+  stale_fields: string[];
+}
+
+async function sessionRead(
+  env: AppEnv,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: OfficePhoneSession }> {
+  const response = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: { origin: "https://app.example.com", ...headers },
+  }), env, waitContext().ctx as never);
+  return { status: response.status, body: await response.json() as OfficePhoneSession };
+}
+
+/** An office-issued QR pairing consumed by a crew phone, as the pairing test drives it. */
+async function pairCrewPhone(env: AppEnv): Promise<{
+  consumed: { status: number; body: OfficePhoneSession };
+  headers: Record<string, string>;
+}> {
+  const fieldUser = await addFieldUser(env);
+  const office = await signInOffice(env);
+  const ctx = waitContext();
+  const issued = await worker.fetch(jsonRequest("/api/v1/device-pairings", {
+    field_user_id: fieldUser.user_id,
+  }, { cookie: office.cookiePair, "x-csrf-token": office.csrfToken }), env, ctx.ctx as never);
+  assert.equal(issued.status, 200);
+  const pairingUrl = new URL((await issued.json() as { pairing_url: string }).pairing_url);
+  const deviceProof = "p".repeat(43);
+  const paired = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: pairingUrl.hash.slice("#token=".length),
+    device_proof: deviceProof,
+  }), env, ctx.ctx as never);
+  return {
+    consumed: { status: paired.status, body: await paired.json() as OfficePhoneSession },
+    headers: {
+      cookie: (paired.headers.get("set-cookie") ?? "").split(";")[0],
+      "x-ironwrap-device-proof": deviceProof,
+    },
+  };
+}
+
+async function fieldBootstrapSession(
+  env: AppEnv,
+  headers: Record<string, string>,
+): Promise<{ status: number; session: OfficePhoneSession }> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ data: [] });
+  try {
+    const response = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
+      headers: { origin: "https://app.example.com", ...headers },
+    }), env, waitContext().ctx as never);
+    const body = await response.json() as { session: OfficePhoneSession };
+    return { status: response.status, session: body.session };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("a signed-in session carries the saved company phone as the office line", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "  780-555-0142  " });
+  const env = baseEnv(db);
+  const office = await signInOffice(env);
+  assert.equal(office.officePhone, "780-555-0142");
+
+  // Trimmed, and otherwise exactly what the owner saved: the app builds the tel: link.
+  const session = await sessionRead(env, { cookie: office.cookiePair });
+  assert.equal(session.status, 200);
+  assert.equal(session.body.authenticated, true);
+  assert.equal(session.body.tenant?.office_phone, "780-555-0142");
+  assert.deepEqual(session.body.stale_fields, []);
+
+  // The business line is for signed-in staff: a signed-out browser gets the key, always null.
+  const signedOut = await sessionRead(env, {});
+  assert.equal(signedOut.status, 200);
+  assert.equal(signedOut.body.authenticated, false);
+  assert.equal(signedOut.body.tenant?.office_phone, null);
+  const signedOutBootstrap = await fieldBootstrapSession(env, {});
+  assert.equal(signedOutBootstrap.status, 200);
+  assert.equal(signedOutBootstrap.session.tenant?.office_phone, null);
+});
+
+test("the office line is null with no saved profile, a blank phone, or a phone the profile refuses", async () => {
+  const cases: Array<[string, { phone: string } | undefined]> = [
+    ["no saved profile", undefined],
+    ["empty phone", { phone: "" }],
+    ["blank phone", { phone: "   " }],
+    ["too short for the profile check", { phone: "555-01" }],
+    ["not a phone number", { phone: "call the office" }],
+  ];
+  for (const [label, profile] of cases) {
+    const db = new AuthMemoryDb();
+    if (profile) db.companyProfiles.set("ironwrap", profile);
+    // Another tenant's saved phone is never borrowed for this one.
+    db.companyProfiles.set("other-tenant", { phone: "780-555-0199" });
+    const env = baseEnv(db);
+    const office = await signInOffice(env);
+    assert.equal(office.officePhone, null, label);
+    const session = await sessionRead(env, { cookie: office.cookiePair });
+    assert.equal(session.status, 200, label);
+    assert.equal(session.body.authenticated, true, label);
+    assert.equal(session.body.tenant?.office_phone, null, label);
+    assert.deepEqual(session.body.stale_fields, [], label);
+  }
+});
+
+test("a paired crew phone gets the same office line from pairing, session and field bootstrap", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "(780) 555-0142" });
+  const env = baseEnv(db);
+  const crew = await pairCrewPhone(env);
+  assert.equal(crew.consumed.status, 200);
+  assert.equal(crew.consumed.body.tenant?.office_phone, "(780) 555-0142");
+
+  const session = await sessionRead(env, crew.headers);
+  assert.equal(session.status, 200);
+  assert.equal(session.body.tenant?.office_phone, "(780) 555-0142");
+
+  const bootstrap = await fieldBootstrapSession(env, crew.headers);
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.session.authenticated, true);
+  assert.equal(bootstrap.session.tenant?.office_phone, "(780) 555-0142");
+  assert.deepEqual(bootstrap.session.stale_fields, []);
+});
+
+test("an unreadable company profile leaves the office line null and says so without failing sign-in", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "780-555-0142" });
+  const env = baseEnv(db);
+  const crew = await pairCrewPhone(env);
+  db.companyProfileUnavailable = true;
+
+  const session = await sessionRead(env, crew.headers);
+  assert.equal(session.status, 200);
+  assert.equal(session.body.authenticated, true);
+  assert.equal(session.body.tenant?.office_phone, null);
+  assert.deepEqual(session.body.stale_fields, ["office_phone.unavailable"]);
+
+  const bootstrap = await fieldBootstrapSession(env, crew.headers);
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.session.tenant?.office_phone, null);
+  assert.deepEqual(bootstrap.session.stale_fields, ["office_phone.unavailable"]);
+
+  // A fresh sign-in still issues its session; only the optional line is missing.
+  const office = await signInOffice(env);
+  assert.equal(office.officePhone, null);
+  const officeSession = await sessionRead(env, { cookie: office.cookiePair });
+  assert.equal(officeSession.body.authenticated, true);
+  assert.deepEqual(officeSession.body.stale_fields, ["office_phone.unavailable"]);
+});
+
+test("a pairing issued for another tenant is refused before it binds a device or shows a phone", async () => {
+  const db = new AuthMemoryDb();
+  db.companyProfiles.set("ironwrap", { phone: "780-555-0142" });
+  db.companyProfiles.set("other-tenant", { phone: "780-555-0199" });
+  const env = baseEnv(db);
+  const foreignCrew = await seedAppUser(env, {
+    tenant_id: "other-tenant",
+    email_normalized: "crew@other-tenant.example.invalid",
+    display_name: "Other Crew",
+    role: "field",
+    frappe_user_id: null,
+    active: true,
+    provisioned_by: "owner@other-tenant.example.invalid",
+  });
+  const rawToken = "f".repeat(43);
+  const issuedAt = new Date();
+  await replaceDevicePairing(env, {
+    tokenHash: await sha256Hex(rawToken),
+    user: foreignCrew,
+    issuedByUserId: "appu_other_owner",
+    createdAt: issuedAt.toISOString(),
+    expiresAt: new Date(issuedAt.getTime() + 10 * 60 * 1000).toISOString(),
+    request: { ip_hash: "a".repeat(64), user_agent_hash: "b".repeat(64) },
+  });
+
+  const refused = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: rawToken,
+    device_proof: "p".repeat(43),
+  }), env, waitContext().ctx as never);
+  const refusedText = await refused.text();
+  assert.equal(refused.status, 401);
+  assert.deepEqual(JSON.parse(refusedText), { error: "invalid_or_expired_pairing" });
+  assert.equal(refusedText.includes("555-0199"), false);
+  assert.equal(refused.headers.get("set-cookie"), null);
+  // Nothing was written: the token is still unconsumed, and no device or session exists.
+  assert.equal([...db.pairings.values()][0].consumed_at, null);
+  assert.equal(db.devices.size, 0);
+  assert.equal(db.sessions.size, 0);
+  assert.deepEqual(db.companyProfileReads, []);
+
+  // A pairing this deployment issued still works, and shows only this tenant's line.
+  const crew = await pairCrewPhone(env);
+  assert.equal(crew.consumed.status, 200);
+  assert.equal(crew.consumed.body.tenant?.id, "ironwrap");
+  assert.equal(crew.consumed.body.tenant?.office_phone, "780-555-0142");
+  const session = await sessionRead(env, crew.headers);
+  assert.equal(session.body.tenant?.office_phone, "780-555-0142");
+  assert.equal(JSON.stringify([crew.consumed.body, session.body]).includes("555-0199"), false);
+  assert.deepEqual(new Set(db.companyProfileReads), new Set(["ironwrap"]));
 });

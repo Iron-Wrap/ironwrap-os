@@ -117,8 +117,14 @@ Work down these levels in order. Each level narrows what the next may claim; non
 9. All clear: readings back inside limits get no message that invites a restart (`abstain`); a stop
    stays until its competent person releases it, and a repeat tick with no new fact is `ignore`.
 10. A released package that has not started and a failed required fact: `mobilization.check` when
-    the daily watch runs, then `work_package.hold_before_start` naming the failed check. A started
-    package never gets a hold; a lost control mid-shift is escalated to `production`, `immediate`.
+    the daily watch runs, then `work_package.hold_before_start` naming the failed check.
+    Q10 adds one daily hazard acknowledgement on the crew phone, made by the crew member for
+    the current local work day, package version and hazard brief. A package-version acknowledgement
+    or a previous day's tap does not substitute. Missing, stale or mismatched acknowledgement
+    blocks before-start readiness; never tap, confirm or draft a proxy record for the person.
+    A fresh tap neither releases a stop nor passes any other gate or tells the crew to start.
+    Its read/write path and crew-phone control are not built; keep this target dependency explicit.
+    A started package never gets a hold; a lost control mid-shift is escalated to `production`, `immediate`.
 11. Sources that disagree: the more protective reading drives the alert or hold, both values and
     sources are named, nothing is averaged, and a conflict a release depends on goes to `production`
     (`fact_conflict`).

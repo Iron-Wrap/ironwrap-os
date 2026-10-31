@@ -2,7 +2,8 @@
 // reaches a person, so NEWO_ENABLED=true is refused unless IronWrap owns a D1 record of it that a
 // person works and closes: the newo_callback_records table (migration 0168). The gate applies
 // every D1 migration, in filename order as D1 does, to an in-memory SQLite and reads sqlite_master
-// for that table and the columns a person needs. It never parses migration text: a CREATE TABLE
+// for the complete reviewed callback/resolution schema, dependencies and guards. It never parses
+// migration text: a CREATE TABLE
 // inside a comment, a string or a quoted alias, or one a later statement drops, leaves no table,
 // and a migration that fails to apply opens nothing. tools/validate-newo-config.mjs and the
 // readiness contract (tools/production-readiness.mjs) both read the gate from here. Turning Newo
@@ -13,26 +14,22 @@ import { DatabaseSync } from "node:sqlite";
 
 import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
+import {
+  NEWO_CALLBACK_RECORD_COLUMNS,
+  NEWO_CALLBACK_SCHEMA_QUERY,
+  newoCallbackSchemaMatches,
+} from "../workers-bus/src/newo-callback-schema.ts";
 
 export const NEWO_CALLBACK_RECORD_TABLE = "newo_callback_records";
-/** The columns that make the table the record a person works: whose, which call, how to reach them, when. */
-export const NEWO_CALLBACK_RECORD_COLUMNS = Object.freeze([
-  "callback_id",
-  "tenant_id",
-  "session_id",
-  "reason",
-  "urgency",
-  "contact_phone",
-  "recorded_at",
-]);
+export { NEWO_CALLBACK_RECORD_COLUMNS };
 const MIGRATION_FILE = /^\d{4}_.+\.sql$/;
 
 /**
  * Does the D1 schema the migrations build hold the callback record? The migrations run in an
- * in-memory SQLite with foreign keys on; only a real table in the main schema with every
- * NEWO_CALLBACK_RECORD_COLUMNS column counts.
+ * in-memory SQLite with foreign keys on. Source replay and runtime use the same installed table
+ * and guard fingerprints, including their bindings and per-table creation order.
  */
-export function newoCallbackRecordPresent(root) {
+export async function newoCallbackRecordPresent(root) {
   const directory = join(root, "workers-bus/migrations");
   let names;
   try {
@@ -45,15 +42,7 @@ export function newoCallbackRecordPresent(root) {
   try {
     database.exec("PRAGMA foreign_keys = ON");
     for (const name of names) database.exec(readFileSync(join(directory, name), "utf8"));
-    const table = database.prepare(
-      "SELECT name FROM main.sqlite_master WHERE type = 'table' AND name = ?",
-    ).get(NEWO_CALLBACK_RECORD_TABLE);
-    if (!table) return false;
-    const columns = new Set(
-      database.prepare("SELECT name FROM pragma_table_info(?)").all(NEWO_CALLBACK_RECORD_TABLE)
-        .map((column) => String(column.name)),
-    );
-    return NEWO_CALLBACK_RECORD_COLUMNS.every((column) => columns.has(column));
+    return await newoCallbackSchemaMatches(database.prepare(NEWO_CALLBACK_SCHEMA_QUERY).all());
   } catch {
     return false;
   } finally {
@@ -86,5 +75,5 @@ export function newoEnablementRefusal({ enabledIn, callbackRecordPresent }) {
   if (enabledIn.length === 0 || callbackRecordPresent) return null;
   return `NEWO_ENABLED=true (${enabledIn.join(", ")}) is refused until the D1 callback record exists ` +
     `(the workers-bus/migrations, applied in order, build no ${NEWO_CALLBACK_RECORD_TABLE} table with ` +
-    `${NEWO_CALLBACK_RECORD_COLUMNS.join(", ")})`;
+    `the reviewed columns, keys, foreign keys and callback/resolution guards: ${NEWO_CALLBACK_RECORD_COLUMNS.join(", ")})`;
 }

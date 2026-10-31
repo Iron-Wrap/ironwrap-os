@@ -186,8 +186,9 @@ const fixtureTypedAssignment = {
 };
 
 function todayWithActiveStops(today) {
-  const mode = process.env.ACCEPTANCE_ACTIVE_STOPS;
-  if (!mode) return today;
+  const mode = process.env.ACCEPTANCE_ACTIVE_STOPS ?? "";
+  const mixedPlans = process.env.ACCEPTANCE_PLAN_LIST === "mixed";
+  if (!mode && !mixedPlans) return today;
   const typed = mode.startsWith("typed-");
   const unknown = mode === "typed-unknown";
   const stops = [
@@ -211,9 +212,22 @@ function todayWithActiveStops(today) {
       ? [...today.stale_fields, "jobs.active_stops_unavailable"]
       : today.stale_fields,
     jobs: typed ? [] : today.jobs.map((job) => ({ ...job, active_stops: stops })),
-    work_objects: typed
-      ? [{ ...fixtureTypedAssignment, active_stops: unknown ? null : stops }]
-      : (today.work_objects ?? []),
+    work_objects:
+      typed || mixedPlans
+        ? [
+            {
+              ...fixtureTypedAssignment,
+              active_stops: unknown
+                ? null
+                : mixedPlans
+                  ? [
+                      ...stops.filter((stop) => stop.scope === "tenant"),
+                      acceptanceActiveStops.typed,
+                    ]
+                  : stops,
+            },
+          ]
+        : (today.work_objects ?? []),
   };
 }
 
@@ -485,6 +499,10 @@ const fixtureJob = {
     },
     work_package: {
       id: "WP-ACCEPTANCE-3",
+      work_object_type: "Roof Job",
+      work_object_id: "JOB-ACCEPTANCE",
+      physical_context_type: "Roof Site",
+      physical_context_id: "JOB-ACCEPTANCE",
       version: 3,
       status: "Released",
       title: "North slope replacement",
@@ -1155,6 +1173,10 @@ const CURRENT_WORK_PACKAGE_STATUSES = ["Released", "Acknowledged", "In Progress"
 
 function buildFixtureJobResponse() {
   const model = structuredClone(fixtureJob);
+  if (process.env.ACCEPTANCE_SITE_SAFETY_MISSING === "1") {
+    model.packet.safety_plan = null;
+    model.stale_fields.push("packet.safety_plan.native_unavailable");
+  }
   const wp = fieldMutableState.workPackage;
   if (!CURRENT_WORK_PACKAGE_STATUSES.includes(wp.status)) {
     model.packet.work_package = null;
@@ -1170,6 +1192,48 @@ function buildFixtureJobResponse() {
   workPackage.evidence_slots = wp.evidenceSlots;
   model.allowed_actions = computeWorkPackageAllowedActions();
   return model;
+}
+
+/** Synthetic instance of the existing universal GET projection; it supplies no lifecycle grant. */
+function buildFixtureWorkObjectResponse() {
+  const job = buildFixtureJobResponse();
+  const plan = job.packet.work_package;
+  return {
+    ...fixtureEnvelope,
+    allowed_actions: ["field.checkin.create"],
+    work_object: {
+      workObjectType: fixtureTypedAssignment.work_object_type,
+      workObjectId: fixtureTypedAssignment.work_object_id,
+      physicalContextType: fixtureTypedAssignment.physical_context_type,
+      physicalContextId: fixtureTypedAssignment.physical_context_id,
+    },
+    assignment: fixtureTypedAssignment.assignment,
+    work_package: plan
+      ? {
+          ...plan,
+          id: "WP-SHOP-ACCEPTANCE-3",
+          title: "Synthetic shop panel handling",
+          objective: "Move the synthetic panels within the training shop.",
+          boundaries: "Training shop only; no roof work.",
+          prerequisites: "Inspect the rack and keep the walkway clear.",
+          expected_result: "Panels secured in the training rack.",
+          stop_conditions: "Stop if loose stock enters the walkway.",
+          make_safe_procedure: "Secure loose stock, close the walkway and contact the office.",
+          work_object_type: fixtureTypedAssignment.work_object_type,
+          work_object_id: fixtureTypedAssignment.work_object_id,
+          physical_context_type: fixtureTypedAssignment.physical_context_type,
+          physical_context_id: fixtureTypedAssignment.physical_context_id,
+          steps: [
+            {
+              sequence: 1,
+              instruction: "Inspect the training rack before handling panels.",
+              required_evidence: "Training rack inspection record.",
+              acceptance_criteria: "The rack and walkway controls are present.",
+            },
+          ],
+        }
+      : null,
+  };
 }
 
 // ---- POST route dispatch for the fixtures above ----
@@ -3423,6 +3487,16 @@ const requestListener = async (request, response) => {
   }
   if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE") {
     return sendJson(response, method, 200, buildFixtureJobResponse());
+  }
+  if (
+    ACCEPTANCE_MODE === "field" &&
+    requestUrl.pathname ===
+      "/api/v1/work-objects/Shop%20Order/SHOP-ACCEPTANCE/physical-contexts/Shop%20Floor/SHOP-FLOOR-ACCEPTANCE"
+  ) {
+    if (request.headers["x-ironwrap-device-proof"] !== FIXTURE_FIELD_DEVICE_PROOF) {
+      return sendJson(response, method, 401, { error: "not_authenticated" });
+    }
+    return sendJson(response, method, 200, buildFixtureWorkObjectResponse());
   }
   if (requestUrl.pathname === "/api/v1/safety/panel") {
     return sendJson(response, method, 200, buildSafetyPanelPayload());

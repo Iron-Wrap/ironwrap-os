@@ -14,15 +14,17 @@ import type { OutboxAction } from "../storage/outbox-types";
 import { todayResponseSchema, type TodayResponse } from "./field-contracts";
 import { loadOperatingIntake } from "../operating-intake/operating-intake-api";
 import { operatingIntakePayload } from "../operating-intake/operating-intake-fixture";
-import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
+import { cacheToday, loadToday } from "./field-cache";
+import { hasSavedPlan, prefetchSavedPlans } from "./saved-plan";
+import { assignedPlanTargets, savedPlanTargetKey } from "./saved-plan-context";
 import { TodayPage } from "./today-page";
 
 vi.mock("./field-cache", () => ({
   cacheToday: vi.fn().mockResolvedValue(undefined),
-  hasCachedJobPacket: vi.fn(),
   loadToday: vi.fn(),
-  prefetchAssignedPackets: vi.fn(),
 }));
+
+vi.mock("./saved-plan", () => ({ hasSavedPlan: vi.fn(), prefetchSavedPlans: vi.fn() }));
 
 vi.mock("../storage/use-outbox", () => ({
   useOutboxActionsNeedingAttention: vi.fn(),
@@ -47,10 +49,10 @@ vi.mock("@tanstack/react-router", () => ({
     <a
       {...props}
       href={
-        to === "/jobs/$jobId" && params?.jobId
-          ? `/jobs/${params.jobId}`
+        to.startsWith("/jobs/$jobId") && params?.jobId
+          ? to.replace("$jobId", params.jobId)
           : to.startsWith("/work-objects/") && params
-            ? `/work-objects/${encodeURIComponent(params.workObjectType ?? "")}/${encodeURIComponent(params.workObjectId ?? "")}/physical-contexts/${encodeURIComponent(params.physicalContextType ?? "")}/${encodeURIComponent(params.physicalContextId ?? "")}`
+            ? `/work-objects/${encodeURIComponent(params.workObjectType ?? "")}/${encodeURIComponent(params.workObjectId ?? "")}/physical-contexts/${encodeURIComponent(params.physicalContextType ?? "")}/${encodeURIComponent(params.physicalContextId ?? "")}${to.endsWith("/plan") ? "/plan" : ""}`
             : to
       }
     >
@@ -221,10 +223,12 @@ describe("TodayPage", () => {
 
   beforeEach(() => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
-    vi.mocked(hasCachedJobPacket).mockResolvedValue(true);
-    vi.mocked(prefetchAssignedPackets).mockImplementation(async (_session, model, options) => {
-      for (const job of model.jobs) options?.onPacket?.(job.id, true);
-      return Object.fromEntries(model.jobs.map((job) => [job.id, true]));
+    vi.mocked(hasSavedPlan).mockResolvedValue(true);
+    vi.mocked(prefetchSavedPlans).mockImplementation(async (_session, model, options) => {
+      for (const target of assignedPlanTargets(model)) options?.onPacket?.(target, true);
+      return Object.fromEntries(
+        assignedPlanTargets(model).map((target) => [savedPlanTargetKey(target), true]),
+      );
     });
     vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([]);
     vi.mocked(useOutboxActionsSettledByOffice).mockReturnValue([]);
@@ -829,7 +833,7 @@ describe("TodayPage", () => {
 
   it("keeps availability in checking state until the local packet probe resolves", async () => {
     let resolvePacket: ((value: boolean) => void) | undefined;
-    vi.mocked(hasCachedJobPacket).mockImplementation(
+    vi.mocked(hasSavedPlan).mockImplementation(
       () =>
         new Promise((resolve) => {
           resolvePacket = resolve;
@@ -844,9 +848,9 @@ describe("TodayPage", () => {
   });
 
   it("exposes a retry only after a failed online packet save", async () => {
-    vi.mocked(hasCachedJobPacket).mockResolvedValue(false);
-    vi.mocked(prefetchAssignedPackets).mockImplementation(async (_session, model, options) => {
-      options?.onPacket?.(model.jobs[0]!.id, false);
+    vi.mocked(hasSavedPlan).mockResolvedValue(false);
+    vi.mocked(prefetchSavedPlans).mockImplementation(async (_session, model, options) => {
+      options?.onPacket?.({ kind: "job", jobId: model.jobs[0]!.id }, false);
       return { [model.jobs[0]!.id]: false };
     });
     renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
@@ -862,7 +866,7 @@ describe("TodayPage", () => {
     expect(await screen.findByText("Saved copy")).toBeVisible();
     expect(screen.getByText(/This is a saved copy for .*Jul 10, 2026/i)).toBeVisible();
     expect(screen.queryByText("Current assignment read")).not.toBeInTheDocument();
-    expect(prefetchAssignedPackets).not.toHaveBeenCalled();
+    expect(prefetchSavedPlans).not.toHaveBeenCalled();
   });
 
   it("shows D1 website intake separately from assigned field jobs, for an office reader", async () => {

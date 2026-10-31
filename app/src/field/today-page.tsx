@@ -6,7 +6,13 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { useInitialToday, useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
-import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
+import { cacheToday, loadToday } from "./field-cache";
+import { hasSavedPlan, prefetchSavedPlans } from "./saved-plan";
+import {
+  assignedPlanTargets,
+  savedPlanTargetKey,
+  type SavedPlanTarget,
+} from "./saved-plan-context";
 import { NOT_SAVED_ON_DEVICE, type TodayResponse } from "./field-contracts";
 import {
   formatFieldDay,
@@ -101,41 +107,58 @@ export function TodayPage() {
     if (!today) return;
     let active = true;
     const online = navigator.onLine;
+    const targets = assignedPlanTargets(today);
     void (async () => {
       try {
         const cached = await Promise.all(
-          today.jobs.map(
-            async (job) => [job.id, await hasCachedJobPacket(session, job.id)] as const,
+          targets.map(
+            async (target) =>
+              [savedPlanTargetKey(target), await hasSavedPlan(session, target)] as const,
           ),
         );
         if (!active) return;
         setPacketAvailability((current) => ({
           ...current,
           ...Object.fromEntries(
-            cached.map(([jobId, exists]) => [
-              jobId,
+            cached.map(([key, exists]) => [
+              key,
               online ? "saving" : exists ? "saved" : "not_saved",
             ]),
           ),
         }));
         if (!online) return;
-        await prefetchAssignedPackets(session, today, {
+        await prefetchSavedPlans(session, today, {
           concurrency: 3,
-          onPacket(jobId, saved, model) {
+          onPacket(target, saved, model) {
             if (!active) return;
             setPacketAvailability((current) => ({
               ...current,
-              [jobId]: saved ? "saved" : "not_saved",
+              [savedPlanTargetKey(target)]: saved ? "saved" : "not_saved",
             }));
-            if (model)
-              queryClient.setQueryData(["job", session.tenant.id, session.user.id, jobId], model);
+            if (model) {
+              const key =
+                target.kind === "job"
+                  ? ["job", session.tenant.id, session.user.id, target.jobId]
+                  : [
+                      "work-object",
+                      session.tenant.id,
+                      session.user.id,
+                      target.scope.workObjectType,
+                      target.scope.workObjectId,
+                      target.scope.physicalContextType,
+                      target.scope.physicalContextId,
+                    ];
+              queryClient.setQueryData(key, model);
+            }
           },
         });
       } catch {
         if (!active) return;
         setPacketAvailability((current) => ({
           ...current,
-          ...Object.fromEntries(today.jobs.map((job) => [job.id, "unavailable"])),
+          ...Object.fromEntries(
+            targets.map((target) => [savedPlanTargetKey(target), "unavailable"]),
+          ),
         }));
       }
     })();
@@ -157,15 +180,16 @@ export function TodayPage() {
   if (!today) return <LoadingState label="Loading assigned work…" />;
   const offline = today.stale_fields.includes("offline.cached_packet");
   const dateOptions = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
-  const availabilityFor = (job: TodayJob): PacketAvailability =>
-    packetAvailability[job.id] ?? "checking";
-  const savedPacketCount = today.jobs.filter((job) => availabilityFor(job) === "saved").length;
-  const hasCheckingPackets = today.jobs.some((job) => availabilityFor(job) === "checking");
-  const hasSavingPackets = today.jobs.some((job) => availabilityFor(job) === "saving");
+  const targets = assignedPlanTargets(today);
+  const availabilityFor = (target: SavedPlanTarget): PacketAvailability =>
+    packetAvailability[savedPlanTargetKey(target)] ?? "checking";
+  const savedPacketCount = targets.filter((target) => availabilityFor(target) === "saved").length;
+  const hasCheckingPackets = targets.some((target) => availabilityFor(target) === "checking");
+  const hasSavingPackets = targets.some((target) => availabilityFor(target) === "saving");
   const runSheetNotSaved = today.stale_fields.includes(NOT_SAVED_ON_DEVICE);
   const savingOffline =
     bootstrapSaving || query.isFetching || hasCheckingPackets || hasSavingPackets;
-  const readyOffline = !runSheetNotSaved && savedPacketCount === today.jobs.length;
+  const readyOffline = !runSheetNotSaved && savedPacketCount === targets.length;
   const fieldCaptureAllowed =
     session.user.role === "field" && today.allowed_actions.includes("field.checkin.create");
   const stopStatusUnavailable =
@@ -195,14 +219,14 @@ export function TodayPage() {
         ready={readyOffline}
         saving={savingOffline}
         savedDetail={
-          today.jobs.length > 0
-            ? `This run sheet and ${savedPacketCount} job ${savedPacketCount === 1 ? "plan are" : "plans are"} saved on this phone. Open each plan and check its work and safety steps before you start.`
+          targets.length > 0
+            ? `This run sheet and ${savedPacketCount} ${today.work_objects.length ? "work" : "job"} ${savedPacketCount === 1 ? "plan is" : "plans are"} saved on this phone. Before starting, choose ${today.jobs.length ? "Review saved job plan on each job card" : "Review saved work plan on each work card"}${today.jobs.length && today.work_objects.length ? " or Review saved work plan on each work card" : ""} and check its work and safety steps. The office must release every applicable stop, and all open work checks must also be cleared.`
             : "This run sheet is saved on this phone."
         }
         missingDetail={
           runSheetNotSaved
             ? "This run sheet is not saved on this phone."
-            : "Some job plans are not saved on this phone."
+            : "Some work plans are missing, unavailable, or not saved on this phone."
         }
         onRetry={() => {
           if (runSheetNotSaved) void query.refetch();
@@ -260,7 +284,7 @@ export function TodayPage() {
               <TodayJobRow
                 key={job.id}
                 job={job}
-                availability={availabilityFor(job)}
+                availability={availabilityFor({ kind: "job", jobId: job.id })}
                 dateOptions={dateOptions}
                 checkedAt={today.read_model_generated_at}
                 offline={offline}
@@ -280,6 +304,9 @@ export function TodayPage() {
                   <TodayWorkObjectRow
                     key={`${workObject.work_object_type}:${workObject.work_object_id}:${workObject.physical_context_type}:${workObject.physical_context_id}`}
                     workObject={workObject}
+                    availability={availabilityFor(workObjectPlanTarget(workObject))}
+                    canRetryPacket={navigator.onLine}
+                    onRetryPacket={() => setPacketRefreshCycle((cycle) => cycle + 1)}
                     dateOptions={dateOptions}
                     checkedAt={today.read_model_generated_at}
                     offline={offline}
@@ -513,6 +540,12 @@ function TodayJobRow({
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>
+          <Button asChild size="field" fullWidth variant="outline">
+            <Link to="/jobs/$jobId/plan" params={{ jobId: job.id }}>
+              {availability === "saved" ? "Review saved job plan" : "Review job plan"}
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
           {canRetryPacket && (availability === "not_saved" || availability === "unavailable") ? (
             <Button type="button" fullWidth variant="outline" onClick={onRetryPacket}>
               Save job plan again
@@ -526,6 +559,9 @@ function TodayJobRow({
 
 function TodayWorkObjectRow({
   workObject,
+  availability,
+  canRetryPacket,
+  onRetryPacket,
   dateOptions,
   checkedAt,
   offline,
@@ -533,6 +569,9 @@ function TodayWorkObjectRow({
   tenantStopActive,
 }: {
   workObject: TodayWorkObject;
+  availability: PacketAvailability;
+  canRetryPacket: boolean;
+  onRetryPacket: () => void;
   dateOptions: FieldDateOptions;
   checkedAt: string;
   offline: boolean;
@@ -594,6 +633,7 @@ function TodayWorkObjectRow({
               }
             />
           </dl>
+          <PacketAvailabilityBadge availability={availability} kind="work" />
         </div>
         <div className="space-y-3 @3xl:pt-1">
           <Button asChild size="field" fullWidth variant={reviewOnly ? "outline" : "accent"}>
@@ -605,6 +645,20 @@ function TodayWorkObjectRow({
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>
+          <Button asChild size="field" fullWidth variant="outline">
+            <Link
+              to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId/plan"
+              params={params}
+            >
+              {availability === "saved" ? "Review saved work plan" : "Review work and safety steps"}
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+          {canRetryPacket && (availability === "not_saved" || availability === "unavailable") ? (
+            <Button type="button" fullWidth variant="outline" onClick={onRetryPacket}>
+              Save work plan again
+            </Button>
+          ) : null}
         </div>
       </article>
     </li>
@@ -620,7 +674,25 @@ function DispatchFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PacketAvailabilityBadge({ availability }: { availability: PacketAvailability }) {
+function workObjectPlanTarget(work: TodayWorkObject): SavedPlanTarget {
+  return {
+    kind: "work-object",
+    scope: {
+      workObjectType: work.work_object_type,
+      workObjectId: work.work_object_id,
+      physicalContextType: work.physical_context_type,
+      physicalContextId: work.physical_context_id,
+    },
+  };
+}
+
+function PacketAvailabilityBadge({
+  availability,
+  kind = "job",
+}: {
+  availability: PacketAvailability;
+  kind?: "job" | "work";
+}) {
   const state = packetAvailabilityCopy(availability);
   const Icon = state.Icon;
   return (
@@ -628,7 +700,9 @@ function PacketAvailabilityBadge({ availability }: { availability: PacketAvailab
       className={`mt-3 inline-flex min-h-8 items-center gap-2 rounded-md border border-border bg-surface px-2.5 text-xs font-bold ${state.className}`}
     >
       <Icon className="size-4 shrink-0" aria-hidden="true" />
-      {state.label}
+      {kind === "work"
+        ? state.label.replace(/job/gi, (word) => (word === "Job" ? "Work" : "work"))
+        : state.label}
     </p>
   );
 }

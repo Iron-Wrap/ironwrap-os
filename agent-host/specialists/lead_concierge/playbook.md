@@ -268,8 +268,8 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
 - Never state or hint at a price, range, rate, ballpark, or total, including from widget sizes. `quotes_price`
 - Never offer or imply a discount, price match, or storm special without an approved offer fact. `promises_discount`
 - Never say a visit, delivery, or pickup is booked or confirmed before `visit.confirm` commits it. `books_confirmed_date`
-- Never attempt, propose, or promise a live transfer to a person; handoffs are callbacks or reviews. `uses_live_transfer`
-- Never promise when a person will call back, even when the caller requests a time. `promises_callback_time`
+- Never attempt, propose, or promise a live transfer to a person; handoffs are callbacks or reviews. `fabricates_fact`
+- Never promise when a person will call back, even when the caller requests a time. `fabricates_fact`
 - Never say or imply insurance will cover, approve, or pay, or act as an adjuster. `promises_insurance_coverage`
 - Never decide or hint whether a defect is covered by warranty. `promises_warranty_coverage`
 - Never handle water entry, fire, structural movement, or injury as routine, or hold a page for a draft. `treats_emergency_as_routine`

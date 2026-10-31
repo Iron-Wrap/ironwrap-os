@@ -142,7 +142,7 @@ async function assertReadable(page: Page) {
   }
 }
 
-async function capture(page: Page, info: TestInfo) {
+async function capture(page: Page, info: TestInfo, model: NewoOperationsResponse) {
   const directory = process.env.NEWO_CAPTURE_DIR;
   if (!directory) return;
   const head = process.env.NEWO_SOURCE_HEAD;
@@ -184,6 +184,19 @@ async function capture(page: Page, info: TestInfo) {
     viewport: page.viewportSize(),
   });
   await writeFile(
+    join(directory, `${prefix}-fixture.json`),
+    JSON.stringify(
+      {
+        synthetic: true,
+        session: { method: "GET", path: "/api/v1/session", response: syntheticOwner },
+        overview: { method: "GET", path: "/api/v1/newo/operations", response: model },
+        mechanism: "Browser route.fulfill; real browser parser and app role guard; no Worker read",
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  await writeFile(
     join(directory, `${prefix}-capture.json`),
     JSON.stringify(
       {
@@ -219,7 +232,8 @@ test("callback-only work stays readable in supplied urgency order without identi
     callback(12, { urgency: "urgent", reason: "session_failed" }),
     callback(11),
   ];
-  const reads = await openOverview(page, overview(3, callbacks));
+  const model = overview(3, callbacks);
+  const reads = await openOverview(page, model);
   const queue = page.getByRole("region", { name: "Calls to return" });
   await expect(queue).toBeVisible();
   await expect(queue.getByText("Total reported: 3")).toBeVisible();
@@ -238,7 +252,7 @@ test("callback-only work stays readable in supplied urgency order without identi
   }
   expect(reads.overviewRequests).toEqual(["GET"]);
   await assertReadable(page);
-  await capture(page, info);
+  await capture(page, info, model);
 });
 
 test("total count remains distinct from the full bounded returned subset", async ({ page }) => {

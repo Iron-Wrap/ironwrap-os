@@ -429,7 +429,22 @@ test.describe("Field Companion PWA acceptance", () => {
     await expect(page.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Start work" })).toHaveCount(0);
-    await expect(page.getByText(/this app cannot clear the stop/i)).toBeVisible();
+    await expect(
+      page.getByText(
+        "This saved plan may be old. You may save a review or a Stop Work report. Neither one starts work, clears a stop, or changes the job plan.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    const holdCheck = page.locator("section[aria-labelledby='work-package-holds-heading']");
+    await expect(
+      holdCheck.getByText(
+        "Waiting for Production manager. You can add proof, but this check is separate from a crew stop and cannot be cleared here.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Record release of this plan’s stop", exact: true }),
+    ).toHaveCount(0);
   });
 
   test("uses one proof-bound bootstrap read for an already paired field device", async ({
@@ -535,7 +550,20 @@ test.describe("Field Companion PWA acceptance", () => {
           "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",
         )
         .all();
-      expect(cells.length).toBe(18);
+      const planFacts = page.locator("section[aria-labelledby='work-package-heading'] > header dl");
+      await expect(page.locator("header dl").first().locator("dt")).toHaveText([
+        "Service",
+        "Your role",
+        "Scheduled",
+      ]);
+      await expect(planFacts.nth(0).locator("dt")).toHaveText(["Issued to the crew", "Expires"]);
+      await expect(planFacts.nth(1).locator("dt")).toHaveText(["Job", "Site"]);
+      await expect(
+        page.locator("section[aria-labelledby='safety-access-heading'] article"),
+      ).toHaveCount(2);
+      // Three job facts, four plan facts and two safety cards. The canonical issue stamp
+      // replaces the previous duplicate Issued/Released pair; no fact or overflow guard is dropped.
+      expect(cells.length).toBe(16);
       for (const cell of cells)
         expect(
           await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),

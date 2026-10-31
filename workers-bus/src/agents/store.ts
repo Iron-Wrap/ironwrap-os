@@ -388,8 +388,16 @@ export async function openRun(
       input.signal_id,
     )
     .run();
-  if (changesOf(inserted) >= 1)
-    return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
+  if (changesOf(inserted) >= 1) {
+    // Admission checks the triggering row atomically, but a handoff also copied its root ask.
+    // Re-read every canonical signal value after that boundary, just as resume does. Retention
+    // keeps the trigger's original hash and can change a root fact's hash; hydrate then supplies
+    // reduced content or a stale/null fact, never the plaintext cached before the INSERT.
+    const admittedSignals = await hydrate(facts.filter((fact) => fact.kind === "signal").map(refOf), runFactReader(db, tenantId, run, now));
+    const signalsById = new Map(admittedSignals.map((fact) => [fact.fact_id, fact]));
+    const admittedFacts = facts.map((fact) => fact.kind === "signal" ? signalsById.get(fact.fact_id)! : fact);
+    return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts: admittedFacts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
+  }
   // Another open for the same key won the insert: that run is the one, so resume it.
   const winner = await runByKey(db, tenantId, input.host_run_key);
   if (winner) return await resumeRun(db, tenantId, winner, input, now);

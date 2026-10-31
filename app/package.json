@@ -97,6 +97,8 @@
   "overrides": {
     "@rollup/plugin-node-resolve@16.0.3": {
       "deepmerge": "$deepmerge"
-    }
+    },
+    "glob": "14.0.3",
+    "minimatch": "11.0.3"
   }
 }

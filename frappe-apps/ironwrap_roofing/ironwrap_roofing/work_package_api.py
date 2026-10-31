@@ -1207,14 +1207,6 @@ def _assignment_worker_roster(assignment: Mapping[str, Any]) -> list[dict[str, A
     ]
 
 
-def _required_worker_users(assignment: Mapping[str, Any]) -> set[str]:
-    return {
-        str(row["worker_user"])
-        for row in _assignment_worker_roster(assignment)
-        if row.get("required") in (True, 1, "1")
-    }
-
-
 def _package_worker_users(package: Any, assignment: Mapping[str, Any]) -> set[str]:
     rows = _value(package, "assigned_workers")
     if not isinstance(rows, (list, tuple)) or not rows:

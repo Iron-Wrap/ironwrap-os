@@ -278,19 +278,6 @@ export async function listRecentEnvelopes(env: Env, limit: number): Promise<Enve
   return res.results ?? [];
 }
 
-/**
- * Find an earlier non-duplicate envelope with the same dedup key inside the window.
- * Idempotency/dedup keyed on phone/email across ALL inbound paths (spec 06).
- */
-export async function findDuplicate(env: Env, key: string, sinceIso: string): Promise<string | null> {
-  const row = await env.DB.prepare(
-    `SELECT envelope_id FROM envelopes
-     WHERE dedup_key = ? AND status != 'duplicate' AND created_at >= ?
-     ORDER BY created_at ASC LIMIT 1`,
-  ).bind(key, sinceIso).first<{ envelope_id: string }>();
-  return row?.envelope_id ?? null;
-}
-
 export async function claimDedup(
   env: Env,
   key: string,
@@ -506,24 +493,6 @@ export async function getQuickBooksWebhookReceipt(
   return await env.DB.prepare(
     `SELECT * FROM quickbooks_webhook_receipts WHERE payload_hash = ?`,
   ).bind(payloadHash).first<QuickBooksWebhookReceipt>();
-}
-
-export async function insertQuickBooksWebhookReceipt(
-  env: Env,
-  receipt: Omit<QuickBooksWebhookReceipt, "replay_count">,
-): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO quickbooks_webhook_receipts
-       (payload_hash, first_seen_at, last_seen_at, envelope_id, raw_key, events_count, replay_count)
-     VALUES (?,?,?,?,?,?,0)`,
-  ).bind(
-    receipt.payload_hash,
-    receipt.first_seen_at,
-    receipt.last_seen_at,
-    receipt.envelope_id,
-    receipt.raw_key,
-    receipt.events_count,
-  ).run();
 }
 
 /**

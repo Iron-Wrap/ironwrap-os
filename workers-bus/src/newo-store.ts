@@ -493,15 +493,6 @@ export async function getNewoSession(
     .bind(sessionId).first<NewoSessionRecord>();
 }
 
-export async function getNewoSessionByAppointment(
-  env: Env,
-  appointmentRequestId: string,
-): Promise<NewoSessionRecord | null> {
-  return await env.DB.prepare(
-    "SELECT * FROM newo_sessions WHERE appointment_request_id = ?",
-  ).bind(appointmentRequestId).first<NewoSessionRecord>();
-}
-
 export async function listRecentNewoSessions(
   env: Env,
   limit: number,
@@ -572,15 +563,6 @@ export async function markNewoMissingReports(
     if (Number(result.meta?.changes ?? 0) === 1) claimed.push(candidate);
   }
   return claimed;
-}
-
-export async function listMissingNewoReports(env: Env, limit: number): Promise<NewoSessionRecord[]> {
-  const result = await env.DB.prepare(
-    `SELECT * FROM newo_sessions
-      WHERE missing_report_detected_at IS NOT NULL AND report_received_at IS NULL
-      ORDER BY missing_report_detected_at ASC LIMIT ?`,
-  ).bind(limit).all<NewoSessionRecord>();
-  return result.results ?? [];
 }
 
 export async function recordNewoReconciliationRun(

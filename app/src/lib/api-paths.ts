@@ -159,6 +159,17 @@ export const API_PATHS = {
   productionJobSchedule: (jobId: string) => `/api/v1/jobs/${encodeURIComponent(jobId)}/schedule`,
   productionGateClearance: (jobId: string, gate: string) =>
     `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
+  // The gate train's office routes (A1-A5): the job's gates and cancellation window, a waiver
+  // decision, a reversal, the people-only signed-copy record and the Q1 work queue.
+  productionJobGates: (jobId: string) =>
+    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates`,
+  productionGateWaiverDecision: (jobId: string, gate: string) =>
+    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/waiver-decisions`,
+  productionGateReversal: (jobId: string, gate: string) =>
+    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/reversals`,
+  productionSignedCopyRecord: (jobId: string) =>
+    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/cancellation-window/signed-copy`,
+  productionSignedCopyMissing: "/api/v1/production/cancellation-window/signed-copy-missing",
   sales: "/api/v1/sales",
   // Configurable pipeline boards (ELEC-155 "API route contract"). Generic on purpose:
   // no vertical is named in the path space, only pipelines, cards and transitions.

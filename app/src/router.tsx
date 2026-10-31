@@ -51,6 +51,11 @@ const OwnerPipelineBoardPage = lazy(async () => ({
 const ProductionRunwayPage = lazy(async () => ({
   default: (await import("./production/production-runway-page")).ProductionRunwayPage,
 }));
+const loadJobGatesPage = () => import("./production/gates/job-gates-page");
+const JobGatesPage = lazy(async () => ({ default: (await loadJobGatesPage()).JobGatesPage }));
+const SignedCopyQueuePage = lazy(async () => ({
+  default: (await import("./production/gates/signed-copy-queue-page")).SignedCopyQueuePage,
+}));
 const NewoOperationsPage = lazy(async () => ({
   default: (await import("./newo/newo-operations-page")).NewoOperationsPage,
 }));
@@ -630,6 +635,39 @@ const productionRoute = createRoute({
   component: ProductionRoute,
 });
 
+const jobGatesRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/production/jobs/$jobId/gates",
+  validateSearch: (search: Record<string, unknown>): { step?: string } => ({
+    step: typeof search.step === "string" ? search.step : undefined,
+  }),
+  component: JobGatesRoute,
+});
+
+function JobGatesRoute() {
+  const { jobId } = jobGatesRoute.useParams();
+  const { step } = jobGatesRoute.useSearch();
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <JobGatesPage jobId={jobId} step={step} />
+    </Suspense>
+  );
+}
+
+const signedCopyQueueRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/production/signed-copy-missing",
+  component: SignedCopyQueueRoute,
+});
+
+function SignedCopyQueueRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <SignedCopyQueuePage />
+    </Suspense>
+  );
+}
+
 const newoOperationsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/newo",
@@ -1100,6 +1138,8 @@ const routeTree = rootRoute.addChildren([
     quickBooksFinalInvoiceRoute,
     facetDesignsRoute,
     productionRoute,
+    jobGatesRoute,
+    signedCopyQueueRoute,
     salesRoute,
     salesPipelineBoardRoute,
     ownerPipelineBoardRoute,

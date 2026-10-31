@@ -5,7 +5,7 @@ const laneDefinitions = [
     id: "work_stopped",
     title: "Work stopped",
     description: "Crew reports and job gates that stop work.",
-    kinds: ["field_blocker", "blocked_gate"],
+    kinds: ["stop_job_unknown", "stop_work_package_unknown", "field_blocker", "blocked_gate"],
   },
   {
     id: "operating_exceptions",
@@ -170,6 +170,9 @@ function sortExceptions(
   dueTimingAvailable: boolean,
 ): OwnerException[] {
   return [...exceptions].sort((left, right) => {
+    // A work stop that names a job or job plan that doesn't exist holds every job: it comes first.
+    const stop = stopPriority(left.kind) - stopPriority(right.kind);
+    if (stop !== 0) return stop;
     const severity = severityPriority(left.severity) - severityPriority(right.severity);
     if (severity !== 0) return severity;
     if (dueTimingAvailable) {
@@ -179,6 +182,10 @@ function sortExceptions(
     const title = compareText(left.title, right.title);
     return title === 0 ? compareText(left.id, right.id) : title;
   });
+}
+
+function stopPriority(kind: string): number {
+  return kind === "stop_job_unknown" || kind === "stop_work_package_unknown" ? 0 : 1;
 }
 
 function compareDueAt(left: string | null, right: string | null): number {

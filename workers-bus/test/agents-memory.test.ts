@@ -305,6 +305,26 @@ test("cited facts are read again: a new value is stale, a lost read or a missing
   assert.equal(currentVersions.get("signal/sig_0001"), 1);
 });
 
+test("citations require the exact snapshot identity, version and hash before resolving whole or partial values", async () => {
+  const original: ContextFact = { ...SIGNAL, hash: sha(SIGNAL.data) };
+  const refs = [refOf(original)];
+  const citations = [{ fact_id: original.fact_id, version: 1 }, { fact_id: `${original.fact_id}#/text`, version: 1 }];
+  const cases: Array<{ label: string; current: ContextFact | null; version: number | null }> = [
+    { label: "unchanged", current: original, version: 1 },
+    { label: "same-version hash drift", current: { ...original, hash: sha({ text: "Synthetic changed" }), data: { text: "Synthetic changed" } }, version: null },
+    { label: "another identity with equal value", current: { ...original, fact_id: "signal/sig_other" }, version: null },
+    { label: "new numeric version", current: { ...original, version: 2, hash: sha({ text: "Synthetic changed" }), data: { text: "Synthetic changed" } }, version: 2 },
+    { label: "unreadable", current: null, version: null },
+  ];
+  for (const { label, current, version } of cases) {
+    const { snapshot, currentVersions } = await citedFacts(citations, refs, async () => current);
+    for (const citation of citations) assert.equal(currentVersions.get(citation.fact_id), version, `${label}: ${citation.fact_id}`);
+    assert.equal(snapshot.get(original.fact_id)?.hash, original.hash, `${label}: original immutable reference stays`);
+    assert.equal(snapshot.has(`${original.fact_id}#/text`), label === "unchanged", `${label}: no pointer is derived from a different current value`);
+    if (label === "unchanged") assert.equal(snapshot.get(`${original.fact_id}#/text`)?.hash, sha("Synthetic"));
+  }
+});
+
 // --- The real read models over the full schema, through the run and step store. ---
 
 function seedOperatingJob(db: SqliteD1) {

@@ -18,7 +18,7 @@ import { changeSpecialistControl, setDelegation } from "../src/agents/control.ts
 import { VIEW_SCHEMA } from "../src/agents/face.ts";
 import { redactSignalText } from "../src/agents/retention.ts";
 import { assertStrictSchema, canonicalJson } from "../src/agents/schema.ts";
-import { appendSignal, peopleOnlyFor, toolsFor, type BoundStatement } from "../src/agents/store.ts";
+import { appendSignal, peopleOnlyFor, runFactReader, toolsFor, type BoundStatement, type RunRow } from "../src/agents/store.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
 import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
@@ -1467,6 +1467,30 @@ test("handoff admission rehydrates canonical root text after retention while pre
           if (ordering === "metadata-only child") { assert.equal(rootFact.data.content, undefined); assert.equal(rootFact.data.actor.role, "ops"); assert.equal(rootFact.trust, "owned"); }
           else if (ordering === "root already redacted") { assert.equal(rootFact.data.content.redacted, true); assert.equal(rootFact.current, undefined); }
           else { assert.equal(rootFact.data, null); assert.equal(rootFact.current, false); }
+        }
+        const currentChild = await step(s, opened.body.run_id, "fact.explain", { object: null, explanation: "Synthetic current child evidence." }, [{ fact_id: `signal/${childId}`, version: 1 }]);
+        assert.equal(currentChild.decision, "recorded", JSON.stringify(currentChild));
+        const storedRun = s.db.raw.prepare("SELECT * FROM agent_runs WHERE run_id = ?").get(opened.body.run_id) as unknown as RunRow;
+        const currentRoot = await runFactReader(s.db, TENANT, storedRun, new Date(s.clock()).toISOString())(rootFact);
+        assert.ok(currentRoot); assert.equal(currentRoot.version, rootFact.version);
+        const staleRoot = rootFact.current === false;
+        assert.equal(currentRoot.hash === rootFact.hash, !staleRoot);
+        const rootCitation = [cite(rootFact)];
+        const rootRead = await step(s, opened.body.run_id, "fact.explain", { object: null, explanation: "Synthetic root evidence." }, rootCitation);
+        const suppliedFormerText = await step(s, opened.body.run_id, "fact.explain", { object: null, explanation: question }, rootCitation);
+        const preparation = await step(s, opened.body.run_id, "access.prepare_change", pairing(rootFact.fact_id), rootCitation);
+        for (const result of [rootRead, suppliedFormerText, preparation]) {
+          const fresh = result.receipt.policy.checks.find((check: { check: string }) => check.check === "fresh")?.passed;
+          if (staleRoot) {
+            assert.equal(result.decision, "abstained", JSON.stringify(result));
+            assert.ok(result.reason_codes.includes("citation_unverifiable"), JSON.stringify(result));
+            assert.notEqual(fresh, true);
+          } else assert.equal(fresh, true, JSON.stringify(result));
+        }
+        if (!staleRoot) {
+          assert.equal(rootRead.decision, "recorded"); assert.equal(suppliedFormerText.decision, "recorded");
+          assert.equal(preparation.decision, "drafted", JSON.stringify(preparation));
+          assert.equal(preparation.receipt.policy.checks.find((check: { check: string }) => check.check === "requester")?.passed, true);
         }
         const replay = await openChild(); assert.equal(replay.status, 200); assert.equal(replay.body.run_id, opened.body.run_id);
         if (ordering !== "foreign retention") assert.equal(JSON.stringify(replay.body).includes(question), false);

@@ -241,6 +241,115 @@ test("older D1 restore is held before disclosure and real paged replay erases li
   } finally { s.db.raw.close(); rmSync(scratch, { recursive: true, force: true }); }
 });
 
+test("a surviving request holds exact frozen signals after a pre-decision restore loses their markers", async () => {
+  const s = setup(), scratch = mkdtempSync(join(tmpdir(), "ironwrap-agent-request-restore-"));
+  try {
+    const signal = await s.signal();
+    s.db.raw.prepare("VACUUM INTO ?").run(join(scratch, "before.sqlite"));
+    const accepted = await s.app("POST"); assert.equal(accepted.status, 200, JSON.stringify(accepted));
+    const requestKey = requestMarkerKey(TENANT, accepted.body.erasure_id), request = s.ledger.objects.get(requestKey);
+    assert.ok(request); s.ledger.objects.delete(signalMarkerKey(TENANT, signal));
+    s.db.raw.close(); copyFileSync(join(scratch, "before.sqlite"), join(scratch, "restored.sqlite"));
+    s.db.raw = new DatabaseSync(join(scratch, "restored.sqlite")); s.db.raw.exec("PRAGMA foreign_keys=ON");
+    const status = await s.app("GET", `/privacy/erasures/${accepted.body.erasure_id}`);
+    assert.equal(status.status, 200, JSON.stringify(status)); assert.equal(status.body.completed, false);
+    assert.deepEqual(status.body.missing_marker_signal_ids, [signal]);
+    s.db.raw.close(); copyFileSync(join(scratch, "before.sqlite"), join(scratch, "restored.sqlite"));
+    s.db.raw = new DatabaseSync(join(scratch, "restored.sqlite")); s.db.raw.exec("PRAGMA foreign_keys=ON");
+    const listed = await s.host("GET", "/signals");
+    assert.equal(listed.status, 503, JSON.stringify(listed));
+    assert.equal(listed.body.error, "privacy_marker_missing"); assert.ok(!JSON.stringify(listed).includes(ORIGINAL));
+    let cursor: string | null = null, failure: { status: number; body: any } | null = null;
+    for (let page = 0; page < 6; page++) {
+      const replay = await s.app("POST", "/privacy/erasures/reapply", { cursor });
+      if (replay.status >= 400) { failure = replay; break; }
+      assert.ok(replay.body.next_cursor, "an unresolved committed marker cannot finish replay"); cursor = replay.body.next_cursor;
+    }
+    assert.equal(failure?.status, 503); assert.equal(failure?.body.error, "privacy_marker_missing");
+    assert.equal(s.ledger.objects.get(requestKey), request); assert.equal(s.ledger.objects.size, 1);
+    assert.equal(JSON.parse(s.db.row("agent_signals", "signal_id", signal).content_json).excerpt, ORIGINAL, "reads never perform owner erasure");
+    const later = await s.signal({ content: { excerpt: "Synthetic later inquiry" } });
+    const unaffected = await s.host("POST", "/runs", { signal_id: later, specialist_id: "lead_concierge", host_run_key: "synthetic-after-lost-marker" });
+    assert.equal(unaffected.status, 201, JSON.stringify(unaffected));
+    assert.equal(s.db.row("agent_signal_erasures", "signal_id", later), undefined);
+  } finally { s.db.raw.close(); rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("request commitments reconstruct targets omitted from the external signal inventory", async () => {
+  const s = setup(), scratch = mkdtempSync(join(tmpdir(), "ironwrap-agent-request-inventory-"));
+  try {
+    const signal = await s.signal(), run = await s.run(signal), step = s.proposal(run, signal);
+    s.db.raw.prepare("VACUUM INTO ?").run(join(scratch, "before.sqlite"));
+    const accepted = await s.app("POST"); assert.equal(accepted.status, 200);
+    s.db.raw.close(); copyFileSync(join(scratch, "before.sqlite"), join(scratch, "restored.sqlite"));
+    s.db.raw = new DatabaseSync(join(scratch, "restored.sqlite")); s.db.raw.exec("PRAGMA foreign_keys=ON");
+    const normalList = s.ledger.list.bind(s.ledger);
+    s.ledger.listOverride = (options) => {
+      if (options.prefix.includes("/signals/")) return { objects: [], truncated: false };
+      s.ledger.listOverride = null;
+      const result = normalList(options);
+      s.ledger.listOverride = override;
+      return result;
+    };
+    const override = s.ledger.listOverride;
+    let cursor: string | null = null, pages = 0;
+    do {
+      const page = await s.app("POST", "/privacy/erasures/reapply", { cursor }); assert.equal(page.status, 200, JSON.stringify(page));
+      cursor = page.body.next_cursor; assert.ok(++pages <= 6);
+    } while (cursor);
+    assert.equal(JSON.parse(s.db.row("agent_signals", "signal_id", signal).content_json).redacted, true);
+    assert.equal(JSON.parse(s.db.row("agent_run_steps", "step_id", step).args_json).redacted, true);
+    assert.equal((await s.app("GET", `/privacy/erasures/${accepted.body.erasure_id}`)).body.completed, true);
+    assert.ok(!JSON.stringify(await s.host("GET", "/signals")).includes(ORIGINAL));
+  } finally { s.db.raw.close(); rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("an incomplete request inventory cannot allow a restored signal or finish replay", async () => {
+  const s = setup(), scratch = mkdtempSync(join(tmpdir(), "ironwrap-agent-request-incomplete-"));
+  try {
+    const signal = await s.signal(); s.db.raw.prepare("VACUUM INTO ?").run(join(scratch, "before.sqlite"));
+    assert.equal((await s.app("POST")).status, 200); s.ledger.objects.delete(signalMarkerKey(TENANT, signal));
+    s.db.raw.close(); copyFileSync(join(scratch, "before.sqlite"), join(scratch, "restored.sqlite"));
+    s.db.raw = new DatabaseSync(join(scratch, "restored.sqlite")); s.db.raw.exec("PRAGMA foreign_keys=ON");
+    s.ledger.listOverride = (options) => options.prefix.includes("/signals/") ? { objects: [], truncated: false }
+      : { objects: [], truncated: true, cursor: "synthetic-incomplete-request-page" };
+    const listed = await s.host("GET", "/signals"); assert.equal(listed.status, 503, JSON.stringify(listed));
+    assert.ok(!JSON.stringify(listed).includes(ORIGINAL));
+    const first = await s.app("POST", "/privacy/erasures/reapply", { cursor: null }); assert.equal(first.status, 200);
+    const next = await s.app("POST", "/privacy/erasures/reapply", { cursor: first.body.next_cursor });
+    assert.equal(next.status, 503, JSON.stringify(next));
+  } finally { s.db.raw.close(); rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("complete paginated request inventories leave later signals usable within one response budget", async () => {
+  const s = setup();
+  try {
+    const empty = await s.app("POST"); assert.equal(empty.status, 200); assert.equal(empty.body.eligible_signals, 0);
+    const template = JSON.parse(s.ledger.objects.get(requestMarkerKey(TENANT, empty.body.erasure_id))!);
+    for (let n = 0; n < 11; n++) {
+      const copy = structuredClone(template);
+      copy.decision.idempotency_key = hash(`synthetic-empty-request-${n}`);
+      copy.decision.erasure_id = `era_${hash(canonicalJson([TENANT, copy.decision.idempotency_key]))}`;
+      s.ledger.objects.set(requestMarkerKey(TENANT, copy.decision.erasure_id), canonicalJson(copy));
+    }
+    const signals = [await s.signal({ content: { excerpt: "Synthetic first later inquiry" } }),
+      await s.signal({ content: { excerpt: "Synthetic second later inquiry" } })];
+    let requestPages = 0;
+    const normalList = s.ledger.list.bind(s.ledger);
+    s.ledger.listOverride = (options) => {
+      if (options.prefix.includes("/requests/")) requestPages++;
+      s.ledger.listOverride = null;
+      const result = normalList(options); s.ledger.listOverride = override; return result;
+    };
+    const override = s.ledger.listOverride;
+    const listed = await s.host("GET", "/signals"); assert.equal(listed.status, 200, JSON.stringify(listed));
+    assert.deepEqual(listed.body.signals.map((signal: any) => signal.signal_id), signals);
+    assert.equal(requestPages, 2, "a complete inventory is shared only within this response");
+    for (const signal of listed.body.signals) assert.ok(signal.content.excerpt.includes("later inquiry"));
+    assert.equal(s.db.count("agent_signal_erasures"), 0);
+  } finally { s.db.raw.close(); }
+});
+
 test("signal and argument budgets require explicit progress without widening the frozen frontier", async () => {
   const s = setup();
   try {
@@ -292,7 +401,8 @@ test("an old restore assigning low sequences to new signal IDs cannot widen the 
     const absent: string[] = []; let cursor: string | null = null, pages = 0;
     do { const page = await s.app("POST", "/privacy/erasures/reapply", { cursor }); assert.equal(page.status, 200, JSON.stringify(page));
       absent.push(...page.body.absent_signal_ids); cursor = page.body.next_cursor; assert.ok(++pages <= 4); } while (cursor);
-    assert.deepEqual(absent.sort(), [...originals].sort());
+    // Signal replay and request audit may report the same absent frozen source on their pages.
+    assert.deepEqual([...new Set(absent)].sort(), [...originals].sort());
     for (const id of later) { assert.equal(JSON.parse(s.db.row("agent_signals", "signal_id", id).content_json).excerpt, ORIGINAL);
       assert.equal((await s.host("POST", "/runs", { signal_id: id, specialist_id: "lead_concierge", host_run_key: `later:${id}` })).status, 201); }
     assert.equal(s.db.count("agent_signal_erasures"), 0);

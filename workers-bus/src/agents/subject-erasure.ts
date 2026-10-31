@@ -9,13 +9,15 @@ import type { AgentDb, BoundStatement, SignalRow } from "./store.ts";
 import {
   AgentPrivacyError, decisionDigest, ensureRequestMarker, ensureSignalMarker, listPrivacyMarkers,
   parseErasureScope, readRequestMarker, readSignalMarker, signalMarkerDigest, validateDecision,
-  type ErasureDecision, type PrivacyEnv, type SignalErasureMarker,
+  type ErasureDecision, type PrivacyEnv, type RequestErasureMarker, type SignalErasureMarker,
 } from "./privacy-ledger.ts";
 
 export const ERASURE_SIGNAL_BATCH = 10;
 export const ERASURE_ARGUMENT_BATCH = 100;
 /** A decision larger than this is refused before it is accepted; each call still claims only ten. */
 export const ERASURE_MAX_SIGNALS = 100;
+/** Incomplete independent inventories refuse runtime admission rather than assume absence. */
+const ERASURE_REQUEST_SCAN_PAGES = 10;
 export const ERASURE_COPY_LIMITS = [
   "inbound_envelopes_retained_3_years_disposal_deferred", "native_customer_contact_and_operating_facts",
   "confirmed_lead_facts", "run_trigger_goal_context_and_close_copies", "step_policy_readback_and_other_actions",
@@ -141,6 +143,9 @@ export async function materializeSignalMarker(db: AgentDb, env: PrivacyEnv, mark
   guard?: { actor: HumanPrincipal }): Promise<"present" | "absent"> {
   const request = await readRequestMarker(env, marker.tenant_id, marker.erasure_id);
   if (!request || await decisionDigest(request.decision) !== marker.decision_sha256) return fail("privacy_marker_conflict");
+  const frozen = parseErasureScope(request.decision.scope_json).signals.find((entry) => entry.signal_id === marker.signal_id);
+  if (!frozen || frozen.content_sha256 !== marker.content_sha256 || marker.signal_seq_at_decision > request.decision.signal_seq_ceiling)
+    return fail("privacy_marker_conflict");
   const decisionInsert = restoreDecisionStatement(db, request.decision);
   if (guard) await ownerBatch(db, marker.tenant_id, guard.actor, now, [decisionInsert]); else await db.batch([decisionInsert]);
   await assertDecision(db, request.decision);
@@ -153,8 +158,45 @@ export async function materializeSignalMarker(db: AgentDb, env: PrivacyEnv, mark
   return "present";
 }
 
+interface PrivacyReadAudit { requests?: { tenantId: string; markers: Promise<RequestErasureMarker[]> } }
+async function requestInventory(env: PrivacyEnv, tenantId: string): Promise<RequestErasureMarker[]> {
+  let cursor: string | undefined, last = "";
+  const cursors = new Set<string>();
+  const requests: RequestErasureMarker[] = [];
+  for (let pageNumber = 0; pageNumber < ERASURE_REQUEST_SCAN_PAGES; pageNumber++) {
+    const page = await listPrivacyMarkers(env, tenantId, "requests", 10, cursor);
+    if (!page.markers.length && page.next_cursor) return fail("privacy_marker_conflict");
+    for (const value of page.markers) {
+      if (value.type !== "request" || value.decision.erasure_id <= last) return fail("privacy_marker_conflict");
+      last = value.decision.erasure_id;
+      requests.push(value);
+    }
+    if (!page.next_cursor) return requests;
+    if (cursors.has(page.next_cursor)) return fail("privacy_marker_conflict");
+    cursors.add(page.next_cursor); cursor = page.next_cursor;
+  }
+  return fail("privacy_reconciliation_incomplete");
+}
+
+/** An older D1 restore cannot erase the request's exact independent membership commitment. */
+async function assertNoCommittedSignal(db: AgentDb, env: PrivacyEnv, tenantId: string, signalId: string, audit: PrivacyReadAudit): Promise<void> {
+  // Reuse only within one response, never across requests or processes.
+  audit.requests ??= { tenantId, markers: requestInventory(env, tenantId) };
+  if (audit.requests.tenantId !== tenantId) return fail("privacy_marker_conflict");
+  for (const request of await audit.requests.markers) {
+    const frozen = parseErasureScope(request.decision.scope_json).signals.find((entry) => entry.signal_id === signalId);
+    if (!frozen) continue;
+    const signal = await db.prepare("SELECT content_sha256 FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
+      .bind(tenantId, signalId).first<{ content_sha256: string }>();
+    if (signal && signal.content_sha256 !== frozen.content_sha256) return fail("privacy_marker_conflict");
+    await db.batch([restoreDecisionStatement(db, request.decision)]);
+    await assertDecision(db, request.decision);
+    return fail("privacy_marker_missing");
+  }
+}
+
 /** Every signal/run response checks independent storage, including after a pre-decision restore. */
-export async function assertAgentSignalAvailable(db: AgentDb, env: PrivacyEnv, tenantId: string, signalId: string, now: string): Promise<void> {
+export async function assertAgentSignalAvailable(db: AgentDb, env: PrivacyEnv, tenantId: string, signalId: string, now: string, audit: PrivacyReadAudit = {}): Promise<void> {
   if (!ID.test(signalId)) return fail("privacy_reference_invalid");
   const marker = await readSignalMarker(env, tenantId, signalId);
   if (marker) {
@@ -165,10 +207,15 @@ export async function assertAgentSignalAvailable(db: AgentDb, env: PrivacyEnv, t
   const target = await targetFor(db, tenantId, signalId);
   if (target?.marker_confirmed_at) return fail("privacy_marker_missing");
   if (target) return fail("agent_source_erased", 409);
+  await assertNoCommittedSignal(db, env, tenantId, signalId, audit);
+  // The independent inventory can await storage while a current D1 claim commits.
+  const claimed = await targetFor(db, tenantId, signalId);
+  if (claimed?.marker_confirmed_at) return fail("privacy_marker_missing");
+  if (claimed) return fail("agent_source_erased", 409);
 }
 
 /** Check explicit record references, including a resumed run's complete frozen fact references. */
-export async function assertAgentValueAvailable(db: AgentDb, env: PrivacyEnv, tenantId: string, value: unknown, now: string): Promise<void> {
+export async function assertAgentValueAvailable(db: AgentDb, env: PrivacyEnv, tenantId: string, value: unknown, now: string, audit: PrivacyReadAudit = {}): Promise<void> {
   const signals = new Set<string>(), runs = new Set<string>(), steps = new Set<string>(), shadows = new Set<string>();
   let visited = 0;
   function collect(node: unknown, depth = 0): void {
@@ -211,7 +258,7 @@ export async function assertAgentValueAvailable(db: AgentDb, env: PrivacyEnv, te
     }
     if (!advanced) break;
   }
-  for (const signalId of signals) await assertAgentSignalAvailable(db, env, tenantId, signalId, now);
+  for (const signalId of signals) await assertAgentSignalAvailable(db, env, tenantId, signalId, now, audit);
 }
 
 // The customer/native links and frontier are read again in the decision INSERT transaction.
@@ -317,9 +364,14 @@ async function eraseCoveredText(db: AgentDb, tenantId: string, actor: HumanPrinc
 
 async function erasureStatus(db: AgentDb, env: PrivacyEnv, tenantId: string, actor: HumanPrincipal, erasureId: string, now: () => string) {
   await ownerBatch(db, tenantId, actor, now);
-  const decision = await decisionFor(db, tenantId, erasureId);
-  if (!decision) return fail("erasure_not_found", 404);
+  let decision = await decisionFor(db, tenantId, erasureId);
   const request = await readRequestMarker(env, tenantId, erasureId);
+  if (!decision) {
+    if (!request) return fail("erasure_not_found", 404);
+    await ownerBatch(db, tenantId, actor, now, [restoreDecisionStatement(db, request.decision)]);
+    await assertDecision(db, request.decision);
+    decision = request.decision;
+  }
   if (!request || canonicalJson(request.decision) !== canonicalJson(decision)) return fail(request ? "privacy_marker_conflict" : "privacy_marker_missing");
   const signals = (await db.prepare(`SELECT s.* ${scopedSignals} ORDER BY s.signal_seq LIMIT ${ERASURE_MAX_SIGNALS + 1}`).bind(tenantId, erasureId).all<SignalRow>()).results;
   if (signals.length > ERASURE_MAX_SIGNALS) return fail("privacy_scope_bounds");
@@ -328,6 +380,12 @@ async function erasureStatus(db: AgentDb, env: PrivacyEnv, tenantId: string, act
   const present = new Set(signals.map((signal) => signal.signal_id));
   const absent = frozenScope.signals.filter((entry) => !present.has(entry.signal_id)).map((entry) => entry.signal_id);
   let pendingSignals = absent.length, pendingArguments = 0;
+  const missingMarkers: string[] = [];
+  for (const signalId of absent) {
+    const marker = await readSignalMarker(env, tenantId, signalId);
+    if (!marker) missingMarkers.push(signalId);
+    else if (marker.content_sha256 !== frozenHashes.get(signalId)) return fail("privacy_marker_conflict");
+  }
   for (const signal of signals) {
     if (frozenHashes.get(signal.signal_id) !== signal.content_sha256) return fail("privacy_marker_conflict");
     const target = await targetFor(db, tenantId, signal.signal_id);
@@ -337,7 +395,10 @@ async function erasureStatus(db: AgentDb, env: PrivacyEnv, tenantId: string, act
       const originalRequest = await readRequestMarker(env, tenantId, marker.erasure_id);
       if (!originalRequest || await decisionDigest(originalRequest.decision) !== marker.decision_sha256) return fail("privacy_marker_conflict");
       if (target) await assertTarget(db, marker, !!target.marker_confirmed_at);
-    } else if (target?.marker_confirmed_at) return fail("privacy_marker_missing");
+    } else {
+      if (target?.marker_confirmed_at) return fail("privacy_marker_missing");
+      missingMarkers.push(signal.signal_id);
+    }
     if (!marker || !target?.marker_confirmed_at || JSON.parse(signal.content_json).redacted !== true) pendingSignals++;
     for (const table of ["agent_run_steps", "agent_shadow_steps"] as const) {
       const n = await db.prepare(`SELECT COUNT(*) AS n ${proposalRows(table)}`).bind(tenantId, signal.signal_id).first<{ n: number }>();
@@ -346,24 +407,50 @@ async function erasureStatus(db: AgentDb, env: PrivacyEnv, tenantId: string, act
   }
   await ownerBatch(db, tenantId, actor, now);
   return { erasure_id: erasureId, decision, completed: pendingSignals === 0 && pendingArguments === 0,
-    eligible_signals: frozenScope.signals.length, present_signals: signals.length, absent_signal_ids: absent, remaining_signals: pendingSignals, remaining_argument_rows: pendingArguments,
+    eligible_signals: frozenScope.signals.length, present_signals: signals.length, absent_signal_ids: absent, missing_marker_signal_ids: missingMarkers,
+    remaining_signals: pendingSignals, remaining_argument_rows: pendingArguments,
     coverage: ["eligible_signal_text", "source_bound_live_and_shadow_lead_fact_proposal_fields"], unreached_copies: ERASURE_COPY_LIMITS };
 }
 
-interface ReplayCursor { phase: "external" | "expected"; after: string | null; last: string | null; pending: string | null; next: string | null }
+interface ReplayCursor { phase: "external" | "requests" | "expected"; after: string | null; last: string | null; pending: string | null; next: string | null }
 function encodeReplay(value: ReplayCursor): string { return btoa(canonicalJson(value)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, ""); }
 function decodeReplay(value: unknown): ReplayCursor {
   if (value === null || value === undefined) return { phase: "external", after: null, last: null, pending: null, next: null };
   if (typeof value !== "string" || value.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(value)) return fail("invalid_cursor", 400);
   let parsed: unknown;
   try { parsed = JSON.parse(atob(value.replaceAll("-", "+").replaceAll("_", "/"))); } catch { return fail("invalid_cursor", 400); }
-  if (!exact(parsed, ["phase", "after", "last", "pending", "next"]) || !["external", "expected"].includes(parsed.phase as string) || [parsed.after, parsed.next].some((v) => v !== null && (typeof v !== "string" || v.length > 2048)) ||
+  if (!exact(parsed, ["phase", "after", "last", "pending", "next"]) || !["external", "requests", "expected"].includes(parsed.phase as string) || [parsed.after, parsed.next].some((v) => v !== null && (typeof v !== "string" || v.length > 2048)) ||
       [parsed.last, parsed.pending].some((v) => v !== null && (typeof v !== "string" || !ID.test(v)))) return fail("invalid_cursor", 400);
+  if (parsed.phase === "requests" && (parsed.pending !== null || parsed.next !== null)) return fail("invalid_cursor", 400);
   return parsed as unknown as ReplayCursor;
 }
 async function reapply(db: AgentDb, env: PrivacyEnv, tenantId: string, actor: HumanPrincipal, cursor: unknown, now: () => string) {
   await ownerBatch(db, tenantId, actor, now);
   const state = decodeReplay(cursor);
+  if (state.phase === "requests") {
+    const page = await listPrivacyMarkers(env, tenantId, "requests", 1, state.after ?? undefined);
+    if (!page.markers.length) {
+      if (page.next_cursor) return fail("privacy_marker_conflict");
+      return { page_applied: true, next_cursor: encodeReplay({ phase: "expected", after: null, last: null, pending: null, next: null }), absent_signal_ids: [], unreached_copies: ERASURE_COPY_LIMITS };
+    }
+    const request = page.markers[0];
+    if (request.type !== "request" || (state.last !== null && request.decision.erasure_id <= state.last)) return fail("privacy_marker_conflict");
+    await ownerBatch(db, tenantId, actor, now, [restoreDecisionStatement(db, request.decision)]);
+    await assertDecision(db, request.decision);
+    const absent: string[] = [];
+    for (const frozen of parseErasureScope(request.decision.scope_json).signals) {
+      const expected = await readSignalMarker(env, tenantId, frozen.signal_id);
+      if (!expected) return fail("privacy_marker_missing");
+      if (expected.content_sha256 !== frozen.content_sha256) return fail("privacy_marker_conflict");
+      if (await materializeSignalMarker(db, env, expected, now, { actor }) === "absent") absent.push(frozen.signal_id);
+    }
+    const actual = await readRequestMarker(env, tenantId, request.decision.erasure_id);
+    if (!actual || canonicalJson(actual) !== canonicalJson(request)) return fail("privacy_marker_conflict");
+    await ownerBatch(db, tenantId, actor, now);
+    return { page_applied: true, next_cursor: encodeReplay(page.next_cursor
+      ? { phase: "requests", after: page.next_cursor, last: request.decision.erasure_id, pending: null, next: null }
+      : { phase: "expected", after: null, last: null, pending: null, next: null }), absent_signal_ids: absent, unreached_copies: ERASURE_COPY_LIMITS };
+  }
   let marker: SignalErasureMarker, next: string | null;
   if (state.pending) {
     const existing = await readSignalMarker(env, tenantId, state.pending);
@@ -380,7 +467,7 @@ async function reapply(db: AgentDb, env: PrivacyEnv, tenantId: string, actor: Hu
     const page = await listPrivacyMarkers(env, tenantId, "signals", 1, state.after ?? undefined);
     if (!page.markers.length) {
       if (page.next_cursor) return fail("privacy_marker_conflict");
-      return { page_applied: true, next_cursor: encodeReplay({ phase: "expected", after: null, last: null, pending: null, next: null }), absent_signal_ids: [], unreached_copies: ERASURE_COPY_LIMITS };
+      return { page_applied: true, next_cursor: encodeReplay({ phase: "requests", after: null, last: null, pending: null, next: null }), absent_signal_ids: [], unreached_copies: ERASURE_COPY_LIMITS };
     }
     marker = page.markers[0] as SignalErasureMarker; next = page.next_cursor;
     // R2 lists keys lexically; progress by key also rejects cycles across multiple pages.
@@ -400,7 +487,7 @@ async function reapply(db: AgentDb, env: PrivacyEnv, tenantId: string, actor: Hu
   return { page_applied: !pending, next_cursor: pending ? encodeReplay({ ...state, pending: marker.signal_id, next })
     : state.phase === "expected" ? encodeReplay({ phase: "expected", after: null, last: marker.signal_id, pending: null, next: null })
     : next ? encodeReplay({ phase: "external", after: next, last: marker.signal_id, pending: null, next: null })
-    : encodeReplay({ phase: "expected", after: null, last: null, pending: null, next: null }),
+    : encodeReplay({ phase: "requests", after: null, last: null, pending: null, next: null }),
     absent_signal_ids: presence === "absent" ? [marker.signal_id] : [], unreached_copies: ERASURE_COPY_LIMITS };
 }
 

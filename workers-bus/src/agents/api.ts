@@ -106,8 +106,9 @@ async function handleAgentHostApiInner(req: Request, env: AgentEnv, now: () => n
       return reply({ error: "invalid_query" }, 400);
     }
     const listed = await listSignals(db, tenantId, Number(after ?? "0"), limit);
+    const privacyAudit = {};
     for (const signal of listed.signals) {
-      try { await assertAgentValueAvailable(db, env, tenantId, { signal_id: signal.signal_id }, iso()); }
+      try { await assertAgentValueAvailable(db, env, tenantId, { signal_id: signal.signal_id }, iso(), privacyAudit); }
       catch (error) {
         if (!(error instanceof AgentPrivacyError) || error.code !== "agent_source_erased") throw error;
         signal.content = { redacted: true };

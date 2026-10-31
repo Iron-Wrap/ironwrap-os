@@ -1675,6 +1675,13 @@ original hashes and decision/verification commitments, without contacts or erase
 claim holds new/resumed runs, live/shadow steps and settlement. Signal/run/API responses consult
 the independent ledger, including after D1 is restored to a point before those claims existed.
 Missing expected, malformed, foreign, unavailable or conflicting commitments fail closed.
+When the signal marker and restored D1 target are both absent, runtime admission also checks
+the surviving independent request inventory for that exact frozen signal ID. A matching request
+restores only its original decision metadata and refuses the read with `privacy_marker_missing`;
+it neither erases text nor claims later signals. The absence check scans at most ten pages of ten
+requests. An incomplete or cyclic inventory fails closed (`privacy_reconciliation_incomplete`
+for the page bound), rather than treating an unfinished scan as proof of absence. A larger
+inventory needs a separately implemented bounded independent lookup before runtime admission.
 
 A confirmed decision admits exactly the existing kind-specific signal transformation before
 ninety days. For a same-tenant inbound signal whose lead and citation agree with its run, only
@@ -1687,12 +1694,17 @@ are neither open nor confirmable through the proposal reader. Other actions, inc
 
 After an older D1 restoration, the owner uses
 `POST /api/v1/agent-team/privacy/erasures/reapply` with `{"cursor":null}` and repeats with each
-returned opaque cursor until it is null. Each bounded page validates the independent request and
-signal commitments, reconstructs the original decision/target and actually erases covered text.
-It then audits D1 targets against the independent ledger before finishing traversal; a vanished
+returned opaque cursor until it is null. Signal pages validate the independent request and
+signal commitments, reconstruct the original decision/target and actually erase covered text.
+A request-inventory phase then audits each surviving request's complete frozen cohort (at most
+one hundred exact IDs/hashes per request page), reconstructing intact targets even when the
+signal inventory omitted their keys. A missing committed signal marker refuses replay. The final
+phase audits D1 targets against the independent ledger before finishing traversal; a vanished
 expected marker cannot be reported as an empty successful restore.
 A page with remaining arguments retains its current signal in the cursor; absent source rows are
-reported separately; a request status with missing original signal IDs stays incomplete. `GET /api/v1/agent-team/privacy/erasure-markers` inventories the surviving
+reported separately on each page, so signal and request phases can name the same absent ID.
+Request status can reconstruct its decision from the independent request;
+missing original signal IDs or `missing_marker_signal_ids` keep it incomplete. `GET /api/v1/agent-team/privacy/erasure-markers` inventories the surviving
 independent markers. The privacy bucket must remain outside D1/RAW restore and must not be
 rolled back or deleted with those stores. Do not reopen runtime processing while a privacy-ledger
 or replay failure remains unresolved. This is source behavior and synthetic repository proof;

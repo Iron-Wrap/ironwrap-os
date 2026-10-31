@@ -41,10 +41,10 @@ ci-sqlite:
 workers-bus/node_modules/.package-lock.json: workers-bus/package-lock.json
 	npm ci --ignore-scripts --no-audit --no-fund --prefix workers-bus
 
-# The Claude and Codex SDKs pull their CLIs in as optional platform binaries (about 700 MB);
-# the tests inject fakes, so checks install the SDK code only.
+# TypeScript supplies its compiler through an optional platform package. Keep
+# optional dependencies available while skipping dependency install scripts.
 agent-host/node_modules/.package-lock.json: agent-host/package-lock.json
-	npm ci --omit=optional --ignore-scripts --no-audit --no-fund --prefix agent-host
+	npm ci --include=optional --ignore-scripts --no-audit --no-fund --prefix agent-host
 
 deps: $(addsuffix /node_modules/.package-lock.json,$(NODE_PACKAGES) workers-bus)
 

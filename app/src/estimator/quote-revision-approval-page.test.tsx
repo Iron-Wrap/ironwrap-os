@@ -19,10 +19,11 @@ import {
   reconcileQuoteRevisionApproval,
   rejectQuoteRevisionApproval,
 } from "./quote-revision-approval-api";
-import type {
-  QuoteRevisionApprovalDetailResponse,
-  QuoteRevisionApprovalListResponse,
-  QuoteRevisionApprovalRequest,
+import {
+  quoteRevisionApprovalMutationResponseSchema,
+  type QuoteRevisionApprovalDetailResponse,
+  type QuoteRevisionApprovalListResponse,
+  type QuoteRevisionApprovalRequest,
 } from "./quote-revision-approval-contracts";
 import {
   QuoteRevisionApprovalDetailPage,
@@ -172,6 +173,7 @@ function detailModel(
     permissions: ["estimator:read"],
     allowed_actions: allowedActions as QuoteRevisionApprovalDetailResponse["allowed_actions"],
     approval,
+    job: null,
   };
 }
 
@@ -207,6 +209,150 @@ describe("QuoteRevisionApprovalPages", () => {
       "quote-revision-approval:decision-ui-001",
     );
   });
+
+  const syntheticJob = {
+    id: "JOB-A",
+    roof_job_id: "JOB-A",
+    job_number: "IW-SYNTHETIC-101",
+    customer_display_name: "Synthetic Cedar Household",
+    address: "Unit 4, 118 Example Way NW, Edmonton, AB",
+  };
+
+  it.each([
+    [syntheticJob, "Synthetic Cedar Household · Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101"],
+    [
+      { ...syntheticJob, customer_display_name: null },
+      "Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101",
+    ],
+    [{ ...syntheticJob, address: null }, "Synthetic Cedar Household · Job IW-SYNTHETIC-101"],
+    [{ ...syntheticJob, customer_display_name: null, address: null }, "Job IW-SYNTHETIC-101"],
+    [
+      { ...syntheticJob, job_number: null },
+      "Synthetic Cedar Household · Unit 4, 118 Example Way NW",
+    ],
+    [
+      { ...syntheticJob, customer_display_name: " ", address: "\t", job_number: " " },
+      "Job details unavailable",
+    ],
+    [null, "Job details unavailable"],
+  ])(
+    "names the exact reviewed job without substituting an internal ID (%j)",
+    async (job, expected) => {
+      vi.mocked(loadQuoteRevisionApproval).mockResolvedValue({ ...detailModel(), job });
+      renderPage(<QuoteRevisionApprovalDetailPage />);
+      await screen.findByRole("heading", { name: "Review the new empty draft" });
+      const identity = screen.getByLabelText("Job identity");
+      expect(identity).toHaveTextContent(expected);
+      expect(identity).not.toHaveTextContent("JOB-A");
+      expect(identity).not.toHaveTextContent("Edmonton");
+      expect(loadEstimatorWorkbench).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses the selected estimator job identity on the preparation page", async () => {
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+      ...workbench(),
+      job: { ...workbench().job, ...syntheticJob },
+    });
+    renderPage(<QuoteRevisionApprovalPreparePage />);
+    await screen.findByRole("heading", { name: "Ask for a new quote" });
+    expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+      "Synthetic Cedar Household · Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101",
+    );
+  });
+
+  it("keeps distinct job identities separate on separate detail reads", async () => {
+    vi.mocked(loadQuoteRevisionApproval).mockResolvedValueOnce({
+      ...detailModel(),
+      job: syntheticJob,
+    });
+    const first = renderPage(<QuoteRevisionApprovalDetailPage />);
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
+    expect(screen.getByLabelText("Job identity")).toHaveTextContent("Synthetic Cedar Household");
+    first.unmount();
+    router.params = { approvalId: "quote-revision-approval:ui-other" };
+    vi.mocked(loadQuoteRevisionApproval).mockResolvedValueOnce({
+      ...detailModel(request({ id: router.params.approvalId, roof_job_id: "JOB-B" })),
+      job: {
+        ...syntheticJob,
+        id: "JOB-B",
+        roof_job_id: "JOB-B",
+        customer_display_name: "Synthetic Juniper Household",
+        address: "216 Example Lane NW, Edmonton, AB",
+        job_number: "IW-SYNTHETIC-102",
+      },
+    });
+    renderPage(<QuoteRevisionApprovalDetailPage />);
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
+    expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+      "Synthetic Juniper Household · 216 Example Lane NW · Job IW-SYNTHETIC-102",
+    );
+    expect(screen.getByLabelText("Job identity")).not.toHaveTextContent(
+      "Synthetic Cedar Household",
+    );
+  });
+
+  it("retains identity after a decision only for the same immutable review binding", async () => {
+    const user = userEvent.setup();
+    const initial = request();
+    vi.mocked(loadQuoteRevisionApproval)
+      .mockResolvedValueOnce({
+        ...detailModel(initial, ["quote_revision_approval.read", "quote_revision_approval.reject"]),
+        job: syntheticJob,
+      })
+      .mockRejectedValue(new Error("fresh read unavailable"));
+    vi.mocked(rejectQuoteRevisionApproval).mockResolvedValue({
+      approval: { ...initial, state: "denied", version: 2, rejection_reason: "Check the source." },
+    });
+    renderPage(<QuoteRevisionApprovalDetailPage />);
+    await screen.findByRole("heading", { name: "Review the new empty draft" });
+    await user.click(screen.getByRole("button", { name: "Turn down" }));
+    await user.type(screen.getByLabelText("Why should we stop this request?"), "Check the source.");
+    await user.click(screen.getByRole("button", { name: "Turn down request" }));
+    expect(await screen.findByRole("heading", { name: "Turned down" })).toBeVisible();
+    expect(screen.getByLabelText("Job identity")).toHaveTextContent("Synthetic Cedar Household");
+  });
+
+  it.each(["job", "source", "source-version", "request"])(
+    "refuses to bind loaded identity to a decision response with a different %s",
+    async (mismatch) => {
+      const user = userEvent.setup();
+      const initial = request();
+      const changed = {
+        ...initial,
+        state: "denied" as const,
+        version: 2,
+        preview: null,
+        ...(mismatch === "job" ? { roof_job_id: "JOB-B" } : {}),
+        ...(mismatch === "request" ? { id: "quote-revision-approval:other" } : {}),
+        source: {
+          ...initial.source,
+          ...(mismatch === "source" ? { customer_quote_id: "QUOTE-B" } : {}),
+          ...(mismatch === "source-version" ? { quote_version: 5 } : {}),
+        },
+      };
+      vi.mocked(loadQuoteRevisionApproval)
+        .mockResolvedValueOnce({
+          ...detailModel(initial, [
+            "quote_revision_approval.read",
+            "quote_revision_approval.approve",
+          ]),
+          job: syntheticJob,
+        })
+        .mockRejectedValue(new Error("fresh read unavailable"));
+      vi.mocked(approveQuoteRevisionApproval).mockResolvedValue(
+        quoteRevisionApprovalMutationResponseSchema.parse({ approval: changed }),
+      );
+      renderPage(<QuoteRevisionApprovalDetailPage />);
+      await screen.findByRole("heading", { name: "Review the new empty draft" });
+      await user.click(screen.getByRole("button", { name: "Make empty draft" }));
+      expect(await screen.findByText("Check the saved state")).toBeVisible();
+      expect(await screen.findByText("Load this request again")).toBeVisible();
+      expect(screen.queryByRole("heading", { name: "Turned down" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Job identity")).toHaveTextContent("Synthetic Cedar Household");
+      expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
+    },
+  );
 
   it("keeps the dedicated queue on the bounded source-to-blank-Draft decision", async () => {
     const { container } = renderPage(<QuoteRevisionApprovalQueuePage />);
@@ -382,7 +528,8 @@ describe("QuoteRevisionApprovalPages", () => {
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
     await screen.findByRole("heading", { name: "Review the new empty draft" });
-    expect(screen.getByRole("img", { name: "Job JOB-A" })).toBeVisible();
+    expect(screen.getByLabelText("Job identity")).toHaveTextContent("Job details unavailable");
+    expect(screen.queryByRole("img", { name: "Job JOB-A" })).not.toBeInTheDocument();
     const summary = screen.getByRole("region", { name: "What you are reviewing" });
     const decision = screen.getByRole("complementary", { name: "Decision" });
     const audit = screen.getByText("System details").closest("details")!;

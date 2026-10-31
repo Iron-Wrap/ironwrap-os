@@ -25,6 +25,7 @@ import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
+import { jobLabelParts } from "../lib/job-label";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
 import { CustomerPortalOfficeAccess } from "../portal/customer-portal-office-access";
@@ -178,7 +179,11 @@ function EstimatorWorkbenchScreen({
 
 function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse; locale: string }) {
   const decision = nextSafeStep(model);
-  const jobIdentity = model.job.job_number ?? model.job.id;
+  const { lead, code } = jobLabelParts({
+    customer: model.job.customer_display_name,
+    address: model.job.address,
+    code: model.job.job_number,
+  });
   return (
     <header className="grid min-w-0 gap-4 border-b border-border pb-5 sm:gap-6 sm:pb-8 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
       <div className="min-w-0">
@@ -189,7 +194,12 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
           </Link>
         </Button>
         <div className="mt-3 min-w-0 sm:mt-6">
-          <p className="text-sm font-bold break-all text-muted">{jobIdentity}</p>
+          <p aria-label="Job identity" className="text-sm font-bold break-words text-muted">
+            {lead}
+            {lead && code ? " · " : null}
+            {code ? <span className="whitespace-nowrap">Job {code}</span> : null}
+            {!lead && !code ? "Job details unavailable" : null}
+          </p>
           <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">
             Roof and quote review
           </h1>

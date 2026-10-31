@@ -23,7 +23,6 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { PageHeader } from "../components/ui/page-header";
-import { RefTag } from "../components/ui/ref-tag";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { Status, type StatusKind } from "../components/ui/status";
@@ -31,6 +30,7 @@ import { SystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { jobLabelParts } from "../lib/job-label";
 import { ApprovalReceipt } from "../owner/approval-receipt";
 import { loadEstimatorWorkbench } from "./estimator-api";
 import {
@@ -327,36 +327,50 @@ function QuoteRevisionApprovalDetailContent() {
   const mutation = useMutation({
     retry: false,
     mutationFn: async (action: RevisionDecisionAction) => {
+      let result: QuoteRevisionApprovalMutationResponse;
       if (action.kind === "reconcile") {
-        return await reconcileQuoteRevisionApproval(
+        result = await reconcileQuoteRevisionApproval(
           session,
           action.approval.id,
           action.approval.version,
           action.outcome,
           action.evidence,
         );
+      } else {
+        const keyName = `${action.kind}:${action.approval.id}`;
+        const idempotencyKey = keys.current.get(keyName) ?? newQuoteRevisionApprovalDecisionKey();
+        keys.current.set(keyName, idempotencyKey);
+        result =
+          action.kind === "approve"
+            ? await approveQuoteRevisionApproval(
+                session,
+                action.approval.id,
+                action.approval.version,
+                idempotencyKey,
+              )
+            : await rejectQuoteRevisionApproval(
+                session,
+                action.approval.id,
+                action.approval.version,
+                action.reason,
+                idempotencyKey,
+              );
       }
-      const keyName = `${action.kind}:${action.approval.id}`;
-      const idempotencyKey = keys.current.get(keyName) ?? newQuoteRevisionApprovalDecisionKey();
-      keys.current.set(keyName, idempotencyKey);
-      return action.kind === "approve"
-        ? await approveQuoteRevisionApproval(
-            session,
-            action.approval.id,
-            action.approval.version,
-            idempotencyKey,
-          )
-        : await rejectQuoteRevisionApproval(
-            session,
-            action.approval.id,
-            action.approval.version,
-            action.reason,
-            idempotencyKey,
-          );
+      if (!sameReviewBinding(action.approval, result.approval)) {
+        throw new ApiError({
+          status: 502,
+          code: "quote_revision_approval_binding_mismatch",
+          message: "The decision result does not match the reviewed request.",
+        });
+      }
+      return result;
     },
     onSuccess: (result: QuoteRevisionApprovalMutationResponse, action: RevisionDecisionAction) => {
       queryClient.setQueryData<QuoteRevisionApprovalDetailResponse>(queryKey, (current) =>
-        current ? { ...current, approval: result.approval } : current,
+        // Keep the current identity only with the same immutable request/job/source-quote binding.
+        current && sameReviewBinding(current.approval, result.approval)
+          ? { ...current, approval: result.approval }
+          : current,
       );
       queryClient.setQueryData<QuoteRevisionApprovalListResponse>(queueKey, (current) =>
         current
@@ -482,12 +496,7 @@ function QuoteRevisionApprovalDetailContent() {
             Quote change reviews
           </Link>
         }
-        eyebrow={
-          <RefTag
-            id={approval.roof_job_id}
-            className="h-auto! min-h-6 max-w-full whitespace-normal! py-1! leading-4!"
-          />
-        }
+        eyebrow={<RevisionJobIdentity job={model.job} />}
         title="Review the new empty draft"
       />
 
@@ -721,6 +730,9 @@ function QuoteRevisionApprovalPrepareContent() {
                 <FilePlus2 className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
+                <p className="text-sm font-semibold text-muted">
+                  <RevisionJobIdentity job={model.job} />
+                </p>
                 <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   Ask for a new quote
                 </h1>
@@ -1412,6 +1424,46 @@ function QueueSkeleton() {
   );
 }
 
+function RevisionJobIdentity({
+  job,
+}: {
+  job: {
+    customer_display_name?: string | null;
+    address?: string | null;
+    job_number?: string | null;
+  } | null;
+}) {
+  const { lead, code } = jobLabelParts({
+    customer: job?.customer_display_name,
+    address: job?.address,
+    code: job?.job_number,
+  });
+  return (
+    <span aria-label="Job identity" className="break-words">
+      {lead}
+      {lead && code ? " · " : null}
+      {code ? <span className="whitespace-nowrap">Job {code}</span> : null}
+      {!lead && !code ? "Job details unavailable" : null}
+    </span>
+  );
+}
+
+function sameReviewBinding(
+  left: QuoteRevisionApprovalRequest,
+  right: QuoteRevisionApprovalRequest,
+) {
+  return (
+    left.id === right.id &&
+    left.roof_job_id === right.roof_job_id &&
+    left.source.customer_quote_id === right.source.customer_quote_id &&
+    left.source.quote_version === right.source.quote_version &&
+    left.source.status === right.source.status &&
+    left.source.modified === right.source.modified &&
+    left.target.customer_quote_id === right.target.customer_quote_id &&
+    left.target.quote_version === right.target.quote_version
+  );
+}
+
 function DetailSkeleton() {
   return (
     <section
@@ -1458,6 +1510,8 @@ function messageFor(error: unknown): string {
       return "This review ended before you chose. Start a new review from the quote.";
     case "quote_revision_approval_version_conflict":
       return "This request changed. Load it again before you choose.";
+    case "quote_revision_approval_binding_mismatch":
+      return "The result did not match this review. Load the saved request before you choose again.";
     case "execution_uncertain":
       return "We could not tell if the draft was made. Do not try again. Check the saved result.";
     case "quote_revision_approval_not_pending":

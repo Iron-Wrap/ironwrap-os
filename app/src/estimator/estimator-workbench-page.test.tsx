@@ -85,6 +85,8 @@ function workbenchModel(
       id: "JOB-A",
       roof_job_id: "roof_job_a",
       job_number: "IW-1001",
+      customer_display_name: null,
+      address: null,
       brand: "ironwrap",
       service_type: "Roof replacement",
       status: "Proposal",
@@ -333,6 +335,46 @@ describe("EstimatorWorkbenchPage", () => {
       receipt: null,
     }));
   });
+
+  it.each([
+    [
+      "Synthetic Cedar Household",
+      "118 Example Way NW, Edmonton, AB",
+      "IW-SYNTHETIC-101",
+      "Synthetic Cedar Household · 118 Example Way NW · Job IW-SYNTHETIC-101",
+    ],
+    [
+      "Synthetic Juniper Household",
+      "Unit 4, 216 Example Lane NW, Edmonton, AB",
+      "IW-SYNTHETIC-102",
+      "Synthetic Juniper Household · Unit 4, 216 Example Lane NW · Job IW-SYNTHETIC-102",
+    ],
+    [null, "118 Example Way NW, Edmonton, AB", null, "118 Example Way NW"],
+    ["Synthetic Cedar Household", null, null, "Synthetic Cedar Household"],
+    [null, null, "IW-SYNTHETIC-101", "Job IW-SYNTHETIC-101"],
+    [" ", "\t", " ", "Job details unavailable"],
+    [null, null, null, "Job details unavailable"],
+  ])(
+    "names the workbench from only its returned identity (%s, %s, %s)",
+    async (customer, address, code, expected) => {
+      const model = workbenchModel();
+      vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+        ...model,
+        job: { ...model.job, customer_display_name: customer, address, job_number: code },
+      });
+      renderWorkbench();
+      await screen.findByRole("heading", { name: "Roof and quote review" });
+      const identity = screen.getByLabelText("Job identity");
+      expect(identity).toHaveTextContent(expected);
+      expect(identity).not.toHaveTextContent("JOB-A");
+      expect(identity).not.toHaveTextContent("roof_job_a");
+      expect(identity).not.toHaveTextContent("Edmonton");
+      expect(screen.getByRole("link", { name: "See what needs review" })).toHaveAttribute(
+        "href",
+        "#proposal-readiness-heading",
+      );
+    },
+  );
 
   it("reveals manual recovery when a numberless job is reopened with a receipt link", async () => {
     manualSearch.measurementRequest = "manual-measurement:11111111-1111-4111-8111-111111111111";

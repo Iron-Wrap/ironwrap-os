@@ -6,6 +6,64 @@ const jobId = "JOB-ESTIMATOR-ACCEPTANCE";
 test.describe("Estimator Workbench acceptance", () => {
   test.skip(!estimatorMode, "requires ACCEPTANCE_MODE=estimator");
 
+  test("keeps each job's D5 identity separate and reads older missing identity honestly", async ({
+    page,
+  }) => {
+    const fixtureResponse = await page.request.get(`/api/v1/estimator/jobs/${jobId}`);
+    expect(fixtureResponse.ok()).toBe(true);
+    const fixture = await fixtureResponse.json();
+    const jobs = [
+      {
+        id: jobId,
+        customer_display_name: "Synthetic Cedar Household",
+        address: "Unit 4, 118 Example Way NW, Edmonton, AB",
+        job_number: "IW-SYNTHETIC-101",
+        label: "Synthetic Cedar Household · Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101",
+      },
+      {
+        id: "JOB-SYNTHETIC-OTHER",
+        customer_display_name: "Synthetic Juniper Household",
+        address: "216 Example Lane NW, Edmonton, AB",
+        job_number: "IW-SYNTHETIC-102",
+        label: "Synthetic Juniper Household · 216 Example Lane NW · Job IW-SYNTHETIC-102",
+      },
+      {
+        id: "JOB-SYNTHETIC-OLDER",
+        customer_display_name: undefined,
+        address: undefined,
+        job_number: null,
+        label: "Job details unavailable",
+      },
+    ];
+    await page.route("**/api/v1/estimator/jobs/*", async (route) => {
+      const id = new URL(route.request().url()).pathname.split("/").at(-1);
+      const selected = jobs.find((job) => job.id === id)!;
+      await route.fulfill({
+        json: {
+          ...fixture,
+          job: {
+            ...fixture.job,
+            id,
+            roof_job_id: id,
+            job_number: selected.job_number,
+            customer_display_name: selected.customer_display_name,
+            address: selected.address,
+          },
+        },
+      });
+    });
+    for (const job of jobs) {
+      await page.goto(`/estimator/jobs/${job.id}`);
+      await expect(page.getByRole("heading", { name: "Roof and quote review" })).toBeVisible();
+      await expect(page.getByLabel("Job identity")).toHaveText(job.label);
+      await expect(page.getByLabel("Job identity")).not.toContainText(job.id);
+      await expect(page.getByRole("region", { name: "Next step" }).getByRole("link")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+    }
+  });
+
   for (const [state, action, target] of [
     ["blocked", "See blocked items", "proposal-readiness-heading"],
     ["review_required", "See what needs review", "proposal-readiness-heading"],

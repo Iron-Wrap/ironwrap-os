@@ -1087,15 +1087,16 @@ export async function handleAuthenticatedRoute(
         new Date().toISOString(),
       );
       if (!approval) return privateAppJson({ error: "not_found" }, 404);
-      const job = await readQuoteRevisionOfficeJob(env, auth.session.tenant_id, {
-        roofJobId: approval.roof_job_id,
-        sourceQuoteId: approval.source_customer_quote_id,
-        sourceQuoteVersion: approval.source_quote_version,
-      });
       return privateAppJson(
         quoteRevisionApprovalReadEnvelope(env, auth, {
           approval: quoteRevisionApprovalProjection(approval),
-          job,
+          ...(requestsOfficeJobIdentity(url) ? {
+            job: await readQuoteRevisionOfficeJob(env, auth.session.tenant_id, {
+              roofJobId: approval.roof_job_id,
+              sourceQuoteId: approval.source_customer_quote_id,
+              sourceQuoteVersion: approval.source_quote_version,
+            }),
+          } : {}),
         }),
       );
     } catch {
@@ -1736,7 +1737,9 @@ export async function handleAuthenticatedRoute(
     const jobName = decodedPathSegment(estimatorJobMatch[1]);
     if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
-      const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName);
+      const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName, undefined, {
+        includeJobIdentity: requestsOfficeJobIdentity(url),
+      });
       return model
         ? privateAppJson(model)
         : privateAppJson({ error: "not_found" }, 404);
@@ -2011,7 +2014,9 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "office_role_required" }, 403);
     }
     try {
-      return privateAppJson(await buildProductionRunwayReadModel(env, auth));
+      return privateAppJson(await buildProductionRunwayReadModel(env, auth, {
+        includeJobIdentity: requestsOfficeJobIdentity(url),
+      }));
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
@@ -8100,6 +8105,11 @@ function unavailableAppRoute(): Response {
   const response = appJson({ error: "not_found" }, 404);
   response.headers.set("cache-control", "no-store");
   return response;
+}
+
+function requestsOfficeJobIdentity(url: URL): boolean {
+  const values = url.searchParams.getAll("include_job_identity");
+  return values.length === 1 && values[0] === "1";
 }
 
 function privateAppJson(body: unknown, status = 200): Response {

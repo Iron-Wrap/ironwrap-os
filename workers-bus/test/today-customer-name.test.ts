@@ -19,6 +19,7 @@ import {
   type AuthContext,
 } from "../src/app-types.ts";
 import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
+import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const OTHER_TENANT = "otherco";
@@ -216,7 +217,7 @@ function seedJob(
         `INSERT INTO operating_production_gates
            (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, state, owner_user,
             assigned_at, due_at, blocker_reason, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'ready', 'office@example.invalid', ?, ?, 'No synthetic blocker', 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'blocked', 'office@example.invalid', ?, ?, 'No synthetic blocker', 1, ?, ?)`,
       )
       .run(
         `gate:today:${input.suffix.toLowerCase()}:${gate.toLowerCase()}`,
@@ -230,6 +231,11 @@ function seedJob(
         AT,
       );
   }
+  recordLegacyGateStates(db.raw, {
+    tenantId: input.tenantId,
+    roofJobId,
+    at: AT,
+  });
   return { roofJobId, customerId, customerPhone };
 }
 

@@ -13150,10 +13150,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "Readable native OD-01 default and a separate completion-only quote allow a draft, with no deposit invoice. Synthetic source scenario; no provider or policy activation."
+          "text": "Quote QR-OD01-43 was supplied for sales review."
         }
       },
       "facts": [
@@ -13395,10 +13395,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "Completion-only acceptance under readable OD-01 gets no deposit-invoice handoff; unseen gate state stays unknown. Synthetic source scenario; no provider or policy activation."
+          "text": "Acceptance A-OD01-44 was recorded for contract C-OD01-44."
         }
       },
       "facts": [
@@ -13552,10 +13552,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "Native OD-01 refuses a separately committed nonzero deposit quote without rewriting its terms. Synthetic source scenario; no provider or policy activation."
+          "text": "Quote QR-OD01-CONFLICT was supplied for sales review."
         }
       },
       "facts": [
@@ -13696,10 +13696,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "Policy read fails for a completion-only quote: absence is not the readable native OD-01 default. Synthetic source scenario; no provider or policy activation."
+          "text": "Quote QR-POLICY-UNREADABLE was supplied for sales review."
         }
       },
       "facts": [

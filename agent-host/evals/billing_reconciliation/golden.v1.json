@@ -6535,7 +6535,9 @@
         "od01",
         "pending_record_access",
         "deposit_due",
-        "completion_only"
+        "completion_only",
+        "manual_event_fixture",
+        "pending_deposit_due_trigger"
       ],
       "clock": {
         "season": "fall",
@@ -6544,10 +6546,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "Deposit watch for a separate zero-deposit completion-only contract under native OD-01 creates no invoice. Synthetic source scenario; no provider or policy activation."
+          "text": "Manual accounting review supplied contract C-OD01-48 and acceptance A-OD01-48."
         }
       },
       "facts": [
@@ -6699,10 +6701,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "Readable OD-01 policy without the accepted contract cannot prove Deposit clear or a billing trigger. Synthetic source scenario; no provider or policy activation."
+          "text": "A manual accounting review item was supplied for tenant ironwrap."
         }
       },
       "facts": [
@@ -6797,10 +6799,10 @@
       },
       "signal": {
         "kind": "event",
-        "source": "synthetic_policy_fixture",
+        "source": "synthetic_manual_event",
         "at": "PT0M",
         "content": {
-          "text": "A historical deposit contract and closed window cannot authorize a new deposit invoice when current policy is unreadable. Synthetic source scenario; no provider or policy activation."
+          "text": "An accounting review item references contract C-3352 and acceptance A-3352."
         }
       },
       "facts": [

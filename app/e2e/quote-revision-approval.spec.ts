@@ -98,6 +98,7 @@ async function serveApproval(
   await page.route("**/api/v1/quote-revision-approvals/**", async (route) => {
     const request = route.request();
     if (request.method() === "POST") {
+      expect(new URL(request.url()).search).toBe("");
       expect(request.headers()["x-csrf-token"]).toBe("estimator-acceptance-csrf");
       const action = new URL(request.url()).pathname.split("/").at(-1)!;
       const body = request.postDataJSON();
@@ -150,6 +151,7 @@ async function serveApproval(
       await route.fulfill({ json: { approval: current } });
       return;
     }
+    expect(new URL(request.url()).searchParams.getAll("include_job_identity")).toEqual(["1"]);
     await route.fulfill({
       json: {
         version: 1,
@@ -239,18 +241,24 @@ test.describe("Quote change review acceptance", () => {
   test("names the selected estimator job on the preparation route when that action is granted", async ({
     page,
   }) => {
-    await page.route(`**/api/v1/estimator/jobs/${syntheticJob.id}`, async (route) => {
-      const response = await route.fetch();
-      const model = await response.json();
-      await route.fulfill({
-        response,
-        json: {
-          ...model,
-          allowed_actions: [...model.allowed_actions, "quote_revision_approval.prepare"],
-          job: { ...model.job, ...syntheticJob },
-        },
-      });
-    });
+    await page.route(
+      (url) => url.pathname === `/api/v1/estimator/jobs/${syntheticJob.id}`,
+      async (route) => {
+        expect(new URL(route.request().url()).searchParams.getAll("include_job_identity")).toEqual([
+          "1",
+        ]);
+        const response = await route.fetch();
+        const model = await response.json();
+        await route.fulfill({
+          response,
+          json: {
+            ...model,
+            allowed_actions: [...model.allowed_actions, "quote_revision_approval.prepare"],
+            job: { ...model.job, ...syntheticJob },
+          },
+        });
+      },
+    );
     await page.goto(`/estimator/jobs/${syntheticJob.id}/revision`);
     await expect(page.getByRole("heading", { name: "Ask for a new quote" })).toBeVisible();
     await expect(page.getByLabel("Job identity")).toHaveText(

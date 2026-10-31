@@ -36,6 +36,9 @@ test.describe("Estimator Workbench acceptance", () => {
       },
     ];
     await page.route("**/api/v1/estimator/jobs/*", async (route) => {
+      expect(new URL(route.request().url()).searchParams.getAll("include_job_identity")).toEqual([
+        "1",
+      ]);
       const id = new URL(route.request().url()).pathname.split("/").at(-1);
       const selected = jobs.find((job) => job.id === id)!;
       await route.fulfill({
@@ -71,19 +74,25 @@ test.describe("Estimator Workbench acceptance", () => {
     ["unavailable", "Open saved details", "review-workspace-heading"],
   ] as const) {
     test(`next step opens the saved ${state} evidence by keyboard`, async ({ page }, testInfo) => {
-      await page.route(`**/api/v1/estimator/jobs/${jobId}`, async (route) => {
-        const response = await route.fetch();
-        const model = await response.json();
-        model.job = {
-          ...model.job,
-          customer_display_name: "Synthetic Cedar Household",
-          address: "Unit 4, 118 Example Way NW, Edmonton, AB",
-          job_number: "IW-SYNTHETIC-101",
-        };
-        model.proposal_readiness.state = state;
-        if (state === "ready") model.proposal_readiness.reasons = [];
-        await route.fulfill({ response, json: model });
-      });
+      await page.route(
+        (url) => url.pathname === `/api/v1/estimator/jobs/${jobId}`,
+        async (route) => {
+          expect(
+            new URL(route.request().url()).searchParams.getAll("include_job_identity"),
+          ).toEqual(["1"]);
+          const response = await route.fetch();
+          const model = await response.json();
+          model.job = {
+            ...model.job,
+            customer_display_name: "Synthetic Cedar Household",
+            address: "Unit 4, 118 Example Way NW, Edmonton, AB",
+            job_number: "IW-SYNTHETIC-101",
+          };
+          model.proposal_readiness.state = state;
+          if (state === "ready") model.proposal_readiness.reasons = [];
+          await route.fulfill({ response, json: model });
+        },
+      );
       await page.goto(`/estimator/jobs/${jobId}`);
       const nextStep = page.getByRole("region", { name: "Next step" });
       const link = nextStep.getByRole("link", { name: action });

@@ -18,7 +18,7 @@ import {
 import { messageForLoad } from "../lib/plain-error";
 import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
-import { JobStopBanner, TenantStopBanner } from "./stop-banner";
+import { JobStopBanner, StopStatusUnavailableBanner, TenantStopBanner } from "./stop-banner";
 import { STOP_WORDS, uniqueStops } from "./stop-words";
 import { OfflineReadiness } from "./offline-readiness";
 
@@ -163,7 +163,12 @@ export function TodayPage() {
   const readyOffline = !runSheetNotSaved && savedPacketCount === today.jobs.length;
   const fieldCaptureAllowed =
     session.user.role === "field" && today.allowed_actions.includes("field.checkin.create");
-  const dataLimits = today.stale_fields.filter((field) => field !== "offline.cached_packet");
+  const stopStatusUnavailable =
+    today.stale_fields.includes("jobs.active_stops_unavailable") ||
+    today.jobs.some((job) => job.active_stops == null);
+  const dataLimits = today.stale_fields.filter(
+    (field) => field !== "offline.cached_packet" && field !== "jobs.active_stops_unavailable",
+  );
   const assignmentCount = today.jobs.length + today.work_objects.length;
 
   return (
@@ -195,6 +200,14 @@ export function TodayPage() {
       />
       {session.user.role === "field" ? <SavedWorkRecoveryPanel session={session} /> : null}
       {offline ? <OfflineScheduleNotice date={today.date} dateOptions={dateOptions} /> : null}
+      {stopStatusUnavailable ? (
+        <StopStatusUnavailableBanner
+          officePhone={session.tenant.office_phone}
+          canRetry={navigator.onLine}
+          checking={query.isFetching}
+          onRetry={() => void query.refetch()}
+        />
+      ) : null}
       {dataLimits.length > 0 ? <TodayDataLimits fields={dataLimits} /> : null}
       {assignmentCount === 0 ? (
         <EmptyState
@@ -239,6 +252,7 @@ export function TodayPage() {
                 dateOptions={dateOptions}
                 checkedAt={today.read_model_generated_at}
                 offline={offline}
+                stopStatusUnavailable={stopStatusUnavailable}
                 fieldCaptureAllowed={fieldCaptureAllowed}
                 canRetryPacket={navigator.onLine}
                 onRetryPacket={() => setPacketRefreshCycle((cycle) => cycle + 1)}
@@ -372,6 +386,7 @@ function TodayJobRow({
   dateOptions,
   checkedAt,
   offline,
+  stopStatusUnavailable,
   fieldCaptureAllowed,
   canRetryPacket,
   onRetryPacket,
@@ -381,6 +396,7 @@ function TodayJobRow({
   dateOptions: FieldDateOptions;
   checkedAt: string;
   offline: boolean;
+  stopStatusUnavailable: boolean;
   fieldCaptureAllowed: boolean;
   canRetryPacket: boolean;
   onRetryPacket: () => void;
@@ -390,11 +406,13 @@ function TodayJobRow({
   // office, and a work check on it never reads as the way to restart work.
   const held = (job.active_stops ?? []).length > 0;
   const officePhone = useSession().tenant.office_phone;
-  const actionLabel = blocked
-    ? "Check what blocks work"
-    : fieldCaptureAllowed
-      ? "Open job"
-      : "Review job";
+  const actionLabel = stopStatusUnavailable
+    ? "Review job details"
+    : blocked
+      ? "Check what blocks work"
+      : fieldCaptureAllowed
+        ? "Open job"
+        : "Review job";
   const assignment = assignmentRole(job.assignment);
   const roleLabel = assignmentRoleLabel(useSession().user.role);
   // The card follows its own width, not the window's: the crew shell centres a phone-wide column
@@ -451,7 +469,16 @@ function TodayJobRow({
           ) : null}
           <dl className="mt-4 grid gap-3 text-sm @sm:grid-cols-2">
             <DispatchFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
-            <DispatchFact label="Next step" value={held ? STOP_WORDS.nextStep : job.next_action} />
+            <DispatchFact
+              label="Next step"
+              value={
+                stopStatusUnavailable
+                  ? STOP_WORDS.unavailableNextStep
+                  : held
+                    ? STOP_WORDS.nextStep
+                    : job.next_action
+              }
+            />
           </dl>
           <PacketAvailabilityBadge availability={availability} />
         </div>
@@ -460,7 +487,7 @@ function TodayJobRow({
             asChild
             size="field"
             fullWidth
-            variant={held ? "outline" : blocked ? "default" : "accent"}
+            variant={held || stopStatusUnavailable ? "outline" : blocked ? "default" : "accent"}
           >
             <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
               {actionLabel}

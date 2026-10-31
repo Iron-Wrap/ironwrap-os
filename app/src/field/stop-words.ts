@@ -19,6 +19,10 @@ export const STOP_WORDS = {
   waits: "The office must release the stop. The person who reported it cannot release it.",
   /** The card's next step while a stop holds its job. */
   nextStep: "Wait for the office to release the stop",
+  unavailable: "Safety stops need checking",
+  unavailableDetail:
+    "Stop status could not be checked. Keep work stopped until the office has checked it. A missing status does not mean work is clear.",
+  unavailableNextStep: "Ask the office to check safety stops before starting work",
   /** A work check on a stopped job is its own thing: clearing it never restarts work. */
   separateCheck: (check: string | null) =>
     `${check ? `Work to check: ${check.trim().replace(/\.+$/, "")}. ` : ""}Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.`,

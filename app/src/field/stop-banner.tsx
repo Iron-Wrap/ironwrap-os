@@ -60,6 +60,42 @@ function officeCall(officePhone: string | null | undefined) {
   );
 }
 
+/** A failed stop lookup cannot be presented as a successful read with no stops. */
+export function StopStatusUnavailableBanner({
+  officePhone,
+  canRetry,
+  checking,
+  onRetry,
+}: {
+  officePhone?: string | null;
+  canRetry: boolean;
+  checking: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <Notice
+      tone="danger"
+      title={STOP_WORDS.unavailable}
+      actions={
+        <>
+          {officeCall(officePhone)}
+          <Button
+            type="button"
+            size="field"
+            variant="outline"
+            disabled={!canRetry || checking}
+            onClick={onRetry}
+          >
+            {checking ? "Checking stop status…" : "Check stop status again"}
+          </Button>
+        </>
+      }
+    >
+      <p className="leading-6">{STOP_WORDS.unavailableDetail}</p>
+    </Notice>
+  );
+}
+
 /** A stop nobody could match to a job holds every job: shown once, above the crew's jobs. */
 export function TenantStopBanner({
   stops,

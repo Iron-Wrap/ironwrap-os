@@ -4,6 +4,48 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
+  test("keeps an unavailable stop read held until a successful stop-status retry", async ({
+    page,
+  }) => {
+    let unavailable = true;
+    const stopRead = (today: Record<string, unknown>) => ({
+      ...today,
+      stale_fields: unavailable ? ["jobs.active_stops_unavailable"] : [],
+      jobs: (today.jobs as Array<Record<string, unknown>>).map((job) => ({
+        ...job,
+        blocked_gate_count: 0,
+        next_action: "Open field check-in",
+        active_stops: unavailable ? null : [],
+      })),
+    });
+    await page.route("**/api/v1/field/bootstrap", async (route) => {
+      const response = await route.fetch();
+      const model = await response.json();
+      if (model.today) model.today = stopRead(model.today);
+      await route.fulfill({ response, json: model });
+    });
+    await page.route("**/api/v1/today", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: stopRead(await response.json()) });
+    });
+    await seedPairedFieldDevice(page);
+    await page.reload();
+
+    await expect(page.getByText("Safety stops need checking", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(/keep work stopped until the office has checked it/i),
+    ).toBeVisible();
+    await expect(page.getByText("Open field check-in", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Review job details" })).toBeVisible();
+
+    unavailable = false;
+    await page.getByRole("button", { name: "Check stop status again" }).click();
+
+    await expect(page.getByText("Safety stops need checking", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Open field check-in", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open job" })).toBeVisible();
+  });
+
   test("keeps a job card's facts apart in the crew shell on a desktop and on a phone", async ({
     page,
   }) => {

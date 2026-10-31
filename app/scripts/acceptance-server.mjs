@@ -125,6 +125,7 @@ const fixtureToday = {
       scheduled_start: "2026-07-10T16:00:00.000Z",
       scheduled_end: null,
       blocked_gate_count: 1,
+      active_stops: [],
       next_action: "Delivery confirmation is missing",
       assignment: {
         id: "ASSIGNMENT-ACCEPTANCE",

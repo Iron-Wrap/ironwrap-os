@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,7 @@ import {
   useOutboxActionsSettledByOffice,
 } from "../storage/use-outbox";
 import type { OutboxAction } from "../storage/outbox-types";
-import type { TodayResponse } from "./field-contracts";
+import { todayResponseSchema, type TodayResponse } from "./field-contracts";
 import { loadOperatingIntake } from "../operating-intake/operating-intake-api";
 import { operatingIntakePayload } from "../operating-intake/operating-intake-fixture";
 import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
@@ -166,15 +166,15 @@ function renderToday(
   session: AuthenticatedSession = fieldSession,
 ) {
   vi.mocked(loadToday).mockResolvedValue(model);
-  return render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const result = render(
+    <QueryClientProvider client={queryClient}>
       <SessionProvider session={session} initialToday={initialToday}>
         <TodayPage />
       </SessionProvider>
     </QueryClientProvider>,
   );
+  return { ...result, queryClient };
 }
 
 describe("TodayPage", () => {
@@ -195,6 +195,85 @@ describe("TodayPage", () => {
   afterEach(() => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnline });
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["unavailable lookup", null, ["jobs.active_stops_unavailable"]],
+    ["missing stop projection", undefined, []],
+    ["unavailable marker with an empty list", [], ["jobs.active_stops_unavailable"]],
+  ] as const)("keeps work held when the response has %s", async (_label, stops, staleFields) => {
+    const model = todayResponseSchema.parse({
+      ...todayModel(),
+      stale_fields: [...staleFields],
+      jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: stops })),
+    });
+    renderToday(model);
+
+    expect(await screen.findByText("Safety stops need checking")).toBeVisible();
+    expect(screen.getByText(/keep work stopped until the office has checked it/i)).toBeVisible();
+    expect(
+      screen.getAllByText("Ask the office to check safety stops before starting work"),
+    ).toHaveLength(2);
+    expect(screen.queryByText("Open field check-in")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open job" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /review job details/i })).toHaveLength(2);
+  });
+
+  it("keeps a previously stopped job held through a failed lookup until a successful empty read", async () => {
+    const user = userEvent.setup();
+    const clear = todayModel();
+    const stopped = todayModel({
+      jobs: clear.jobs.map((job) => ({
+        ...job,
+        active_stops: [
+          {
+            occurrence_id: "so_existing_stop",
+            scope: "tenant",
+            reported_at: "2026-07-10T11:00:00.000Z",
+            summary: "Loose sheets on the ridge",
+            raiser_display_name: "Priya Nand",
+          },
+        ],
+      })),
+    });
+    const { queryClient } = renderToday(stopped);
+    await screen.findByText("Work is stopped on every job.");
+    vi.mocked(loadToday).mockResolvedValueOnce(
+      todayResponseSchema.parse({
+        ...clear,
+        stale_fields: ["jobs.active_stops_unavailable"],
+        jobs: clear.jobs.map((job) => ({ ...job, active_stops: null })),
+      }),
+    );
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["today"] });
+    });
+    await screen.findByText("Safety stops need checking");
+    expect(screen.queryByText("Open field check-in")).not.toBeInTheDocument();
+
+    vi.mocked(loadToday).mockResolvedValueOnce(clear);
+    await user.click(screen.getByRole("button", { name: "Check stop status again" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Safety stops need checking")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Open field check-in")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open job" })).toBeVisible();
+  });
+
+  it("keeps the unknown-stop warning and disables its refresh while offline", async () => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    renderToday(
+      todayResponseSchema.parse({
+        ...todayModel(),
+        stale_fields: ["offline.cached_packet", "jobs.active_stops_unavailable"],
+        jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: null })),
+      }),
+    );
+    await screen.findByText("Safety stops need checking");
+    expect(screen.getByRole("button", { name: "Check stop status again" })).toBeDisabled();
+    expect(screen.queryByText("Open field check-in")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
   });
 
   it("makes an assigned Shop Order discoverable from Today through its typed packet route", async () => {

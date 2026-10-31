@@ -305,10 +305,15 @@ function readableStop(value: unknown, index: number): unknown {
 }
 
 const activeStopsSchema = z.preprocess(
-  // A single stop sent without its list is still a stop: only an absent value means none.
+  // Only an explicit empty list confirms no stop. A failed or absent projection is unknown.
+  // A single stop sent without its list still holds work instead of being dropped.
   (value) =>
-    value == null ? [] : Array.isArray(value) ? value.map(readableStop) : [readableStop(value, 0)],
-  z.array(activeStopSchema),
+    value == null
+      ? null
+      : Array.isArray(value)
+        ? value.map(readableStop)
+        : [readableStop(value, 0)],
+  z.array(activeStopSchema).nullable(),
 );
 
 export const todayResponseSchema = envelopeSchema.extend({
@@ -325,7 +330,7 @@ export const todayResponseSchema = envelopeSchema.extend({
       blocked_gate_count: z.number().int().nonnegative(),
       next_action: z.string().min(1),
       assignment: assignmentSchema.nullable(),
-      // Absent on run sheets from before the Worker carried it; empty when no stop holds the job.
+      // Unknown on older/unavailable reads; only [] confirms that no stop holds the job.
       active_stops: activeStopsSchema,
     }),
   ),

@@ -121,15 +121,16 @@ describe("stop words", () => {
         raiser_display_name: null,
       },
     ]);
-    expect(read(null).data?.jobs[0]?.active_stops).toEqual([]);
-    expect(read(undefined).data?.jobs[0]?.active_stops).toEqual([]);
-    expect(read([42]).data?.jobs[0]?.active_stops[0]?.occurrence_id).toBe("unreadable_job_0");
+    expect(read(null).data?.jobs[0]?.active_stops).toBeNull();
+    expect(read(undefined).data?.jobs[0]?.active_stops).toBeNull();
+    expect(read([]).data?.jobs[0]?.active_stops).toEqual([]);
+    expect(read([42]).data?.jobs[0]?.active_stops?.[0]?.occurrence_id).toBe("unreadable_job_0");
     // Unreadable stops keep apart by scope at the same moment, and match across jobs.
     const at = "2026-07-10T16:00:00.000Z";
     const ids = read([
       { scope: "job", reported_at: at },
       { scope: "tenant", reported_at: at },
-    ]).data?.jobs[0]?.active_stops.map((stop) => stop.occurrence_id);
+    ]).data?.jobs[0]?.active_stops?.map((stop) => stop.occurrence_id);
     expect(ids).toEqual([`unreadable_job_${at}`, `unreadable_tenant_${at}`]);
     // A single stop sent without its list is still a stop, never dropped.
     expect(read(good).data?.jobs[0]?.active_stops).toEqual([{ ...good, scope: "job" }]);

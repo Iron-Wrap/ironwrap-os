@@ -9,6 +9,7 @@ import {
   sweepDeadLetterAutoReplay,
 } from "../src/operations.ts";
 import { DEAD_LETTER_SWEEP_APPROVER, markDeadLettersRecovered } from "../src/store.ts";
+import { NEWO_TENANT_BINDING_QUERY, NEWO_TENANT_BINDING_COUNT_KEYS } from "../src/newo-tenant-readiness.ts";
 import { NEWO_CALLBACK_SCHEMA_QUERY } from "../src/newo-callback-schema.ts";
 
 // The readiness double serves installed SQL from actual migrations, never invented guard text.
@@ -78,6 +79,10 @@ function fakeEnv(options: FakeOptions = {}) {
 
   const executeFirst = async (sql: string, args: unknown[]) => {
     sqlCalls.push({ sql, args });
+    if (sql === NEWO_TENANT_BINDING_QUERY) {
+      if (options.d1Throws) throw new Error("d1_unavailable");
+      return Object.fromEntries(NEWO_TENANT_BINDING_COUNT_KEYS.map((key) => [key, 0]));
+    }
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
     if (sql.includes("AS access_role_index_sql")) {
       return {
@@ -339,6 +344,7 @@ function fakeEnv(options: FakeOptions = {}) {
   };
 
   const env = {
+    APP_TENANT_ID: "ironwrap",
     INGEST_TOKEN: "ingest-secret",
     ADMIN_TOKEN: "admin-secret",
     OWNER_ALERT_EMAIL: "owner@example.com",

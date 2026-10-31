@@ -17,7 +17,7 @@ The existing business-number human or voicemail route remains the rollback path 
 
 `NEWO_ENABLED` stays false. A callback request with no delivered alert and no screen is a launch blocker: a D1 record alone does not prove that a person can find and work the callback. Before enablement, prove the missing-alert recovery sweep, operations attention state, people-only resolution, and the operator screen on the deployed candidate. The source sweep retries open callbacks with no confirmed sent marker, even when no later Newo event arrives, and both reconciliation schedules stay degraded until a person closes the callback.
 
-The remaining source gates are session/tenant/status validation for callback inserts; corrected contact details in the durable callback record; and redaction with the owner's three-year inbound retention contract, including age-gated deletion in foreign-key-safe order. Source replay and Worker readiness now check the complete installed callback contract, but deployed D1 readback, recovery proof, provider delivery and owner acceptance remain separate gates.
+The remaining source gates are corrected contact details in the durable callback record and redaction with the owner's three-year inbound retention contract, including age-gated deletion in foreign-key-safe order. Migration `0172` supplies tenant/event admission; its source review and actual predecessor/main integration are separate from installed runtime proof. Source replay and Worker readiness now check the complete installed callback contract, but deployed D1 readback, recovery proof, provider delivery and owner acceptance remain separate gates.
 
 ## 1. Repository gate
 
@@ -66,6 +66,16 @@ npx wrangler r2 bucket lifecycle list ironwrap-bus-raw
 ```
 
 Attach the time-bounded command output or Cloudflare console proof to `config/newo/console-proof.json`. Set `NEWO_R2_LIFECYCLE_PROVEN=true` only in the exact deployment that has that verified rule.
+
+### Tenant/event migration and readiness
+
+Keep `NEWO_ENABLED=false` while integrating `0172`. Merge all actual predecessor migrations, recount all twelve named schema pins and backup/restore bindings, and prove full installed SQL, autoindexes and per-table trigger order for filename order versus deployment order before migration readiness. A stacked source-order pass is provisional until that actual integration proof exists.
+
+Read installed `checks.newo_callback_schema` and `checks.newo_tenant_binding` on the exact candidate, without treating either as provider delivery. The second check requires an explicit `APP_TENANT_ID` and nine zero hold counts in `newo.tenant_binding_holds`; a missing query, incomplete result or unresolved original identity fails closed. Counts contain no caller details. Use the conservative backfill rules in [NEWO-INTEGRATION.md](NEWO-INTEGRATION.md#handoff-and-sms); do not adopt the deployment tenant for historical rows, infer it from a callback label, or let another incoming call resolve a hold. Preserve conflicting history for a separately reviewed owner mapping.
+
+`newo_event_admissions` is the durable business acceptance record. Receipt acknowledgement may be failed after a queue outage even though the callback obligation committed; recovery reuses the admitted fact and original callback. Verify both a late accepted failure after a newer normal report and queue failure/retry without changing the newer session or prior unknown email effects.
+
+This migration is forward-only. Older Workers cannot supply its required admission facts and must not be restored as enabled producers. Keep Newo off during a coordinated Worker/database rollback; retain the existing human or voicemail path. D1 backup/restore admission includes the new table, indexes and guard bindings, but a source comparison is not a restored production database. Corrected-contact and Newo child privacy changes require their own review; the separate signal-erasure migration does not provide this lifecycle.
 
 ## 3. Secrets and non-secret configuration
 

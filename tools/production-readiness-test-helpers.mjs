@@ -358,7 +358,7 @@ export const BASE_REQUIRED_D1_TABLES = [
   "hermes_desktop_devices", "hermes_desktop_envelopes", "hermes_desktop_events",
   "hermes_desktop_pairings", "hermes_desktop_results", "lead_ack_receipts",
   "measurement_deltas", "measurement_intake_receipts", "newo_control_actions",
-  "newo_event_receipts", "newo_reconciliation_runs", "newo_sessions", "newo_slot_reservations",
+  "newo_event_admissions", "newo_event_receipts", "newo_reconciliation_runs", "newo_sessions", "newo_slot_reservations",
   "production_schedule_approval_request_events", "production_schedule_approval_requests",
   "public_estimate_rate_limits", "quickbooks_projection_outbox", "quickbooks_webhook_receipts",
   "quote_revision_approval_request_events", "quote_revision_approval_requests", "replay_requests",
@@ -366,6 +366,10 @@ export const BASE_REQUIRED_D1_TABLES = [
 ];
 
 export const BASE_REQUIRED_D1_INDEX_BINDINGS = [
+  ["idx_newo_sessions_id_tenant", "newo_sessions"],
+  ["idx_newo_sessions_tenant_binding", "newo_sessions"],
+  ["idx_newo_receipts_tenant_session", "newo_event_receipts"],
+  ["idx_newo_admissions_tenant_session", "newo_event_admissions"],
   ["idx_app_action_throttles_expiry", "app_action_throttles"],
   ["idx_app_auth_audit_tenant_created", "app_auth_audit"],
   ["idx_app_auth_throttles_expiry", "app_auth_throttles"],
@@ -470,6 +474,18 @@ export const BASE_REQUIRED_D1_INDEX_BINDINGS = [
 ];
 
 export const BASE_REQUIRED_D1_TRIGGER_BINDINGS = [
+  ["newo_event_admissions_validate_insert", "newo_event_admissions"],
+  ["newo_event_admissions_append_only_update", "newo_event_admissions"],
+  ["newo_event_admissions_append_only_delete", "newo_event_admissions"],
+  ["newo_event_admissions_no_insert_replace", "newo_event_admissions"],
+  ["newo_sessions_validate_insert", "newo_sessions"],
+  ["newo_sessions_validate_update", "newo_sessions"],
+  ["newo_sessions_append_only_delete", "newo_sessions"],
+  ["newo_sessions_no_insert_replace", "newo_sessions"],
+  ["newo_receipts_validate_insert", "newo_event_receipts"],
+  ["newo_receipts_validate_update", "newo_event_receipts"],
+  ["newo_receipts_append_only_delete", "newo_event_receipts"],
+  ["newo_receipts_no_insert_replace", "newo_event_receipts"],
   ["append_approval_request_created_event", "approval_requests"],
   ["append_approval_request_reconciliation_event", "approval_requests"],
   ["append_approval_request_transition_event", "approval_requests"],

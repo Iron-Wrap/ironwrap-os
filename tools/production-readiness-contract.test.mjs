@@ -183,6 +183,23 @@ test("contract mode accepts NEWO_ENABLED=true on the repository's own migrations
   assert.equal(result.checks.find((item) => item.id === "contract.newo.callback_record_gate")?.status, "pass");
 });
 
+test("the Newo contract gate refuses unresolved legacy tenant ownership after0172", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-newo-unbound-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "workers-bus"), { recursive: true });
+  await cp(path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations"), path.join(root, "workers-bus/migrations"), { recursive: true });
+  const wrangler = await readFile(path.join(DEFAULT_REPO_ROOT, "workers-bus/wrangler.jsonc"), "utf8");
+  await writeFile(path.join(root, "workers-bus/wrangler.jsonc"), wrangler.replace('"NEWO_ENABLED": "false"', '"NEWO_ENABLED": "true"'));
+  await writeFile(path.join(root, "workers-bus/migrations/0171_zz_legacy_admission_probe.sql"), `INSERT INTO newo_sessions (
+    session_id, status, structured_json, raw_key, payload_hash, created_at, updated_at
+  ) VALUES ('synthetic-unbound-session', 'active', '{}', 'raw/newo/synthetic-legacy.json',
+    '${"a".repeat(64)}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));`);
+  const result = await validateContract({ repoRoot: root });
+  const gate = result.checks.find((item) => item.id === "contract.newo.callback_record_gate");
+  assert.equal(gate?.status, "fail");
+  assert.match(gate.message, /resolved tenant\/event provenance/);
+});
+
 test("contract mode rejects a flag literal no Worker gate accepts", async (t) => {
   const checkFor = await capabilityFixture(t, (source) =>
     source.replace('"POSTIZ_ENABLED": "false"', '"POSTIZ_ENABLED": "1"'),

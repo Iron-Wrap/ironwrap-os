@@ -1,3 +1,4 @@
+import { newoAdmissionJson, newoProducerTenantCheck } from "./newo-event-admission.ts";
 import {
   classifyIntent,
   newEnvelopeId,
@@ -226,8 +227,17 @@ export async function handleNewoQueueMessage(
 ): Promise<void> {
   const receipt = await getNewoReceipt(env, eventId);
   if (!receipt) throw new Error("newo_receipt_missing");
+  const binding = await newoProducerTenantCheck(env, receipt.session_id);
+  if (!binding.ok || receipt.tenant_id !== binding.tenantId) throw new Error("newo_queue_tenant_unresolved");
   const session = await getNewoSession(env, receipt.session_id);
   if (!session) throw new Error("newo_session_missing");
+  const admission = await env.DB.prepare("SELECT envelope_id FROM newo_event_admissions WHERE event_id = ? AND tenant_id = ? AND session_id = ?")
+    .bind(eventId, binding.tenantId, receipt.session_id).first<{ envelope_id: string | null }>();
+  if (!admission && (receipt.status !== "accepted" || receipt.payload_hash !== session.payload_hash
+    || receipt.raw_key !== session.raw_key || receipt.envelope_id !== session.lead_envelope_id)) {
+    throw new Error("newo_queue_event_provenance_unresolved");
+  }
+  const ownedEnvelopeId = admission ? admission.envelope_id : receipt.envelope_id;
   const now = new Date().toISOString();
   if (deadLetter) {
     await markNewoSessionSync(
@@ -252,7 +262,7 @@ export async function handleNewoQueueMessage(
   }
 
   try {
-    const projection = await projectNewoSessionToNativeCore(env, receipt.envelope_id, session);
+    const projection = await projectNewoSessionToNativeCore(env, ownedEnvelopeId, session);
     await markNewoSessionSync(env, session.session_id, "synced", null, now);
     await store.recordAudit(env, {
       automation: "newo_native_projection",
@@ -577,8 +587,17 @@ async function acceptEvent(
   event: NewoEventV1,
   rawText: string,
 ): Promise<Response> {
+  const binding = await newoProducerTenantCheck(env, event.session_id);
+  if (!binding.ok) return json({ error: binding.error }, binding.status);
   const hash = await sha256Hex(canonicalJson(event));
   const existing = await getNewoReceipt(env, event.event_id);
+  if (existing && existing.tenant_id !== binding.tenantId) {
+    return json({ error: existing.tenant_id ? "newo_receipt_tenant_mismatch" : "newo_receipt_tenant_unresolved" },
+      existing.tenant_id ? 404 : 409);
+  }
+  if (existing?.status === "failed" && existing.admission_json == null) {
+    return json({ error: "newo_receipt_provenance_unresolved" }, 409);
+  }
   if (existing) {
     if (existing.payload_hash !== hash) {
       const conflictKey = rawKeyFor(event, hash.slice(0, 12), "conflicts");
@@ -614,6 +633,10 @@ async function acceptEvent(
       event_type: event.event_type,
       payload_hash: hash,
       raw_key: rawKey,
+      admission_json: newoAdmissionJson({ event_id: event.event_id, session_id: event.session_id,
+        event_type: event.event_type, occurred_at: event.occurred_at,
+        reported_handoff_status: event.outcome.handoff_status, reported_urgency: event.intent.urgency,
+        event_has_contact: event.contact.phone || event.contact.email ? 1 : 0 }),
     }, new Date().toISOString());
     if (claim === "existing") {
       return json({ error: "event_processing", event_id: event.event_id }, 202);
@@ -628,9 +651,9 @@ async function acceptEvent(
     const existingSession = await getNewoSession(env, event.session_id);
     const envelope = await ensureSessionEnvelope(env, event, rawKey, existingSession);
     const appointmentRequestId = appointmentRequestIdFor(event, existingSession);
-    const response = toolReceipt(event, envelope?.envelope_id ?? existingSession?.lead_envelope_id ?? null,
+    let response = toolReceipt(event, envelope?.envelope_id ?? existingSession?.lead_envelope_id ?? null,
       appointmentRequestId, bookingMode(env));
-    await recordNewoSession(env, sessionRecord(
+    const admitted = await recordNewoSession(env, sessionRecord(
       env,
       event,
       rawKey,
@@ -638,7 +661,8 @@ async function acceptEvent(
       envelope?.envelope_id ?? existingSession?.lead_envelope_id ?? null,
       appointmentRequestId,
       existingSession,
-    ), await newoCallbackRecordInput(env, event, existingSession));
+    ), event.event_id, event.handoff_summary);
+    response = toolReceipt(event, admitted.envelope_id, appointmentRequestId, bookingMode(env));
     // The owner alerts go out as soon as the session and its callback record are in D1, before
     // the audit row and the queue sends: a queue that stays down until Newo stops retrying must
     // not keep the alert from ever being attempted.
@@ -979,11 +1003,15 @@ export async function newoCallbackRecordInput(
   const contact = event.contact;
   const phone = bounded(contact.phone ?? existing?.contact_phone, 40);
   const email = bounded(contact.email ?? existing?.contact_email, 254);
-  const handoffStatus = newoHandoffStatus(event, existing);
-  const reason: NewoCallbackReason | null = handoffStatus === "requested"
-    ? "callback_requested"
-    : handoffStatus === "failed"
-      ? "handoff_failed"
+  // Match the immutable admission policy: inherited state alone is not a new obligation.
+  const declared = event.outcome.handoff_status;
+  const emergencyClose = ["session_ended", "session_failed"].includes(event.event_type)
+    && newoUrgency(event, existing) === "emergency"
+    && existing?.handoff_status !== "requested" && declared !== "requested";
+  const reason: NewoCallbackReason | null = declared === "failed" || emergencyClose
+    ? "handoff_failed"
+    : event.event_type === "handoff_requested" || declared === "requested"
+      ? "callback_requested"
       : event.event_type === "session_failed" && (phone || email)
         ? "session_failed"
         : null;

@@ -995,7 +995,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
 
   // Newo stays off unless IronWrap owns a D1 callback record a person works and closes. Recording
   // the newo capability as on is not enough: tools/newo-enablement.mjs applies the migrations and
-  // passes this check only when the schema they build holds newo_callback_records (0168).
+  // passes only when the complete installed contract and resolved tenant/event provenance hold (0172).
   let newoEnabledIn = null;
   try {
     newoEnabledIn = newoEnabledEnvironments(wranglerSource ?? "");
@@ -1009,7 +1009,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check(
     "contract.newo.callback_record_gate",
     newoEnabledIn !== null && newoRefusal === null,
-    "Newo is off, or the D1 callback record it needs exists",
+    "Newo is off, or its full D1 callback schema and tenant/event provenance are ready",
     newoRefusal ?? "workers-bus/wrangler.jsonc is unreadable, so the Newo enablement gate cannot be checked",
   ));
 

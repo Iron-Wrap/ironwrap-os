@@ -1,6 +1,10 @@
+import { trustedNewoTenantId, writeAdmittedNewoLookup, writeAdmittedNewoSession, type NewoBusinessAdmission } from "./newo-event-admission.ts";
+
 export type NewoReceiptStatus = "processing" | "accepted" | "failed" | "dead";
 
 export interface NewoEventReceipt {
+  tenant_id: string | null;
+  admission_json: string | null;
   event_id: string;
   session_id: string;
   event_type: string;
@@ -17,6 +21,11 @@ export interface NewoEventReceipt {
 }
 
 export interface NewoSessionRecord {
+  tenant_id?: string | null;
+  tenant_binding_state?: "bound" | "unbound" | "conflict";
+  tenant_binding_source?: string;
+  tenant_binding_ref?: string | null;
+  last_event_id?: string | null;
   session_id: string;
   project_id: string | null;
   agent_id: string | null;
@@ -68,6 +77,7 @@ export interface NewoSessionRecord {
 }
 
 export interface NewoCallerAssociation {
+  event_id: string;
   session_id: string;
   project_id: string | null;
   agent_id: string | null;
@@ -102,53 +112,9 @@ export interface NewoReconciliationRun {
 }
 
 export async function recordNewoCallerAssociation(
-  env: Env,
-  association: NewoCallerAssociation,
+  env: Env, association: NewoCallerAssociation,
 ): Promise<boolean> {
-  const now = new Date().toISOString();
-  const result = await env.DB.prepare(
-    `INSERT INTO newo_sessions (
-       session_id, project_id, agent_id, channel, direction, status, contact_phone,
-       address_line1, postal_code, matched_customer_id, matched_property_id,
-       matched_roof_job_id, verification_status, structured_json, raw_key, payload_hash,
-       sync_status, created_at, updated_at
-     ) VALUES (?, ?, ?, 'phone', 'inbound', 'caller_lookup', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       'pending', ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET
-       project_id = COALESCE(excluded.project_id, newo_sessions.project_id),
-       agent_id = COALESCE(excluded.agent_id, newo_sessions.agent_id),
-       contact_phone = excluded.contact_phone,
-       address_line1 = excluded.address_line1,
-       postal_code = excluded.postal_code,
-       matched_customer_id = excluded.matched_customer_id,
-       matched_property_id = excluded.matched_property_id,
-       matched_roof_job_id = excluded.matched_roof_job_id,
-       verification_status = excluded.verification_status,
-       structured_json = excluded.structured_json,
-       raw_key = excluded.raw_key,
-       payload_hash = excluded.payload_hash,
-       sync_status = 'pending',
-       last_error = NULL,
-       updated_at = excluded.updated_at
-     WHERE excluded.updated_at >= newo_sessions.updated_at`,
-  ).bind(
-    association.session_id,
-    association.project_id,
-    association.agent_id,
-    association.contact_phone,
-    association.address_line1,
-    association.postal_code,
-    association.matched_customer_id,
-    association.matched_property_id,
-    association.matched_roof_job_id,
-    association.verification_status,
-    association.structured_json,
-    association.raw_key,
-    association.payload_hash,
-    now,
-    association.occurred_at,
-  ).run();
-  return Number(result.meta?.changes ?? 0) === 1;
+  return await writeAdmittedNewoLookup(env, association);
 }
 
 export async function getNewoReceipt(
@@ -162,22 +128,26 @@ export async function getNewoReceipt(
 
 export async function claimNewoReceipt(
   env: Env,
-  input: Pick<NewoEventReceipt, "event_id" | "session_id" | "event_type" | "payload_hash" | "raw_key">,
+  input: Pick<NewoEventReceipt, "event_id" | "session_id" | "event_type" | "payload_hash" | "raw_key" | "admission_json">,
   now: string,
 ): Promise<"claimed" | "existing"> {
   const result = await env.DB.prepare(
-    `INSERT OR IGNORE INTO newo_event_receipts
-      (event_id, session_id, event_type, payload_hash, raw_key, status, response_json,
+    `INSERT INTO newo_event_receipts
+      (event_id, session_id, event_type, payload_hash, raw_key, tenant_id, admission_json, status, response_json,
        attempts, first_seen_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, 'processing', '{}', 1, ?, ?)`,
+     SELECT ?, ?, ?, ?, ?, ?, ?, 'processing', '{}', 1, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM newo_event_receipts existing WHERE existing.event_id = ?)`,
   ).bind(
     input.event_id,
     input.session_id,
     input.event_type,
     input.payload_hash,
     input.raw_key,
+    trustedNewoTenantId(env),
+    input.admission_json,
     now,
     now,
+    input.event_id,
   ).run();
   return Number(result.meta?.changes ?? 0) === 1 ? "claimed" : "existing";
 }
@@ -191,8 +161,8 @@ export async function restartFailedNewoReceipt(
     `UPDATE newo_event_receipts
         SET status = 'processing', attempts = attempts + 1, last_error = NULL,
             last_seen_at = ?, completed_at = NULL
-      WHERE event_id = ? AND status = 'failed'`,
-  ).bind(now, eventId).run();
+      WHERE event_id = ? AND tenant_id = ? AND status = 'failed'`,
+  ).bind(now, eventId, trustedNewoTenantId(env)).run();
   return Number(result.meta?.changes ?? 0) === 1;
 }
 
@@ -202,8 +172,8 @@ export async function touchNewoReceipt(
   now: string,
 ): Promise<void> {
   await env.DB.prepare(
-    "UPDATE newo_event_receipts SET last_seen_at = ? WHERE event_id = ?",
-  ).bind(now, eventId).run();
+    "UPDATE newo_event_receipts SET last_seen_at = ? WHERE event_id = ? AND tenant_id = ?",
+  ).bind(now, eventId, trustedNewoTenantId(env)).run();
 }
 
 export async function completeNewoReceipt(
@@ -217,8 +187,8 @@ export async function completeNewoReceipt(
     `UPDATE newo_event_receipts
         SET status = 'accepted', envelope_id = ?, response_json = ?, last_error = NULL,
             last_seen_at = ?, completed_at = ?
-      WHERE event_id = ? AND status = 'processing'`,
-  ).bind(envelopeId, JSON.stringify(response), now, now, eventId).run();
+      WHERE event_id = ? AND tenant_id = ? AND status = 'processing'`,
+  ).bind(envelopeId, JSON.stringify(response), now, now, eventId, trustedNewoTenantId(env)).run();
 }
 
 export async function failNewoReceipt(
@@ -230,8 +200,8 @@ export async function failNewoReceipt(
   await env.DB.prepare(
     `UPDATE newo_event_receipts
         SET status = 'failed', last_error = ?, last_seen_at = ?, completed_at = ?
-      WHERE event_id = ? AND status = 'processing'`,
-  ).bind(error.slice(0, 500), now, now, eventId).run();
+      WHERE event_id = ? AND tenant_id = ? AND status = 'processing'`,
+  ).bind(error.slice(0, 500), now, now, eventId, trustedNewoTenantId(env)).run();
 }
 
 /**
@@ -293,15 +263,20 @@ export async function listNewoCallbacksForAlert(
             JOIN envelopes envelope ON envelope.envelope_id = failure.envelope_id
              WHERE failure.session_id = callback.session_id
                AND failure.event_type = 'session_failed' AND failure.status = 'accepted'
+               AND failure.tenant_id = callback.tenant_id
                AND failure.envelope_id = session.lead_envelope_id
                AND envelope.tenant_id = callback.tenant_id
           )
+          OR EXISTS (SELECT 1 FROM newo_event_admissions admitted
+            WHERE admitted.session_id = callback.session_id AND admitted.tenant_id = callback.tenant_id
+              AND (admitted.event_type = 'session_failed' OR admitted.callback_reason = 'handoff_failed'))
           THEN 'failure' ELSE 'handoff' END AS alert_kind,
         CASE WHEN 'emergency' IN (callback.urgency, session.urgency) THEN 'emergency'
           WHEN 'urgent' IN (callback.urgency, session.urgency) THEN 'urgent'
           ELSE 'routine' END AS alert_urgency
        FROM newo_callback_records callback
        JOIN newo_sessions session ON session.session_id = callback.session_id
+        AND session.tenant_id = callback.tenant_id AND session.tenant_binding_state = 'bound'
       WHERE callback.tenant_id = ? AND callback.callback_id > ?
         AND NOT EXISTS (
           SELECT 1 FROM newo_handoff_resolutions resolution
@@ -323,42 +298,9 @@ const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, r
  * per session; a later event of the same session adds nothing (never a REPLACE).
  */
 export async function recordNewoSession(
-  env: Env,
-  rec: NewoSessionRecord,
-  callback: NewoCallbackRecordInput | null,
-): Promise<void> {
-  if (!callback) {
-    await upsertNewoSession(env, rec);
-    return;
-  }
-  await env.DB.batch([
-    newoSessionUpsert(env, rec),
-    env.DB.prepare(
-      `INSERT INTO newo_callback_records (${CALLBACK_RECORD_COLUMNS})
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE NOT EXISTS (
-          SELECT 1 FROM newo_callback_records existing
-           WHERE existing.tenant_id = ? AND existing.session_id = ?
-        )`,
-    ).bind(
-      callback.callback_id,
-      callback.tenant_id,
-      callback.session_id,
-      callback.event_id,
-      callback.reason,
-      callback.urgency,
-      callback.handoff_summary,
-      callback.contact_name,
-      callback.contact_phone,
-      callback.contact_email,
-      callback.address_line1,
-      callback.city,
-      callback.province,
-      callback.postal_code,
-      callback.tenant_id,
-      callback.session_id,
-    ),
-  ]);
+  env: Env, rec: NewoSessionRecord, eventId: string, handoffSummary: string | null,
+): Promise<NewoBusinessAdmission> {
+  return await writeAdmittedNewoSession(env, rec, eventId, handoffSummary);
 }
 
 /** The session's callback record for this deployment's tenant, if one was written. */
@@ -369,142 +311,18 @@ export async function getNewoCallbackRecord(
   return await env.DB.prepare(
     `SELECT ${CALLBACK_RECORD_COLUMNS}, recorded_at
        FROM newo_callback_records
-      WHERE tenant_id = ? AND session_id = ?`,
+      WHERE tenant_id = ? AND session_id = ?
+        AND EXISTS (SELECT 1 FROM newo_sessions session WHERE session.session_id = newo_callback_records.session_id
+          AND session.tenant_id = newo_callback_records.tenant_id AND session.tenant_binding_state = 'bound')`,
   ).bind(newoTenantId(env), sessionId).first<NewoCallbackRecord>();
-}
-
-/**
- * Upserts one session snapshot. A session keeps its highest urgency, never the latest one, and
- * its strongest handoff status: failed outranks requested, and no other value clears a requested
- * callback (callback only, owner decisions MD-05 and D-03).
- */
-export async function upsertNewoSession(
-  env: Env,
-  rec: NewoSessionRecord,
-): Promise<void> {
-  await newoSessionUpsert(env, rec).run();
-}
-
-function newoSessionUpsert(env: Env, rec: NewoSessionRecord): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO newo_sessions (
-       session_id, project_id, agent_id, user_actor_id, conversation_id, channel, direction,
-       status, outcome, contact_name, contact_phone, contact_email, address_line1, city, province,
-       postal_code, division, service, urgency, lead_envelope_id, appointment_request_id,
-       handoff_status, booking_status, summary, transcript_ref, recording_ref, ai_disclosed,
-       recording_disclosed, structured_json, raw_key, payload_hash, started_at, ended_at,
-       duration_seconds, report_expected_at, report_received_at, report_event_id,
-       missing_report_detected_at, sync_status, sync_attempts, last_error, sync_updated_at,
-       created_at, updated_at
-     ) VALUES (${Array.from({ length: 44 }, () => "?").join(", ")})
-     ON CONFLICT(session_id) DO UPDATE SET
-       project_id = COALESCE(excluded.project_id, newo_sessions.project_id),
-       agent_id = COALESCE(excluded.agent_id, newo_sessions.agent_id),
-       user_actor_id = COALESCE(excluded.user_actor_id, newo_sessions.user_actor_id),
-       conversation_id = COALESCE(excluded.conversation_id, newo_sessions.conversation_id),
-       channel = excluded.channel,
-       direction = excluded.direction,
-       status = excluded.status,
-       outcome = COALESCE(excluded.outcome, newo_sessions.outcome),
-       contact_name = COALESCE(excluded.contact_name, newo_sessions.contact_name),
-       contact_phone = COALESCE(excluded.contact_phone, newo_sessions.contact_phone),
-       contact_email = COALESCE(excluded.contact_email, newo_sessions.contact_email),
-       address_line1 = COALESCE(excluded.address_line1, newo_sessions.address_line1),
-       city = COALESCE(excluded.city, newo_sessions.city),
-       province = COALESCE(excluded.province, newo_sessions.province),
-       postal_code = COALESCE(excluded.postal_code, newo_sessions.postal_code),
-       division = COALESCE(excluded.division, newo_sessions.division),
-       service = COALESCE(excluded.service, newo_sessions.service),
-       urgency = CASE
-         WHEN 'emergency' IN (excluded.urgency, newo_sessions.urgency) THEN 'emergency'
-         WHEN 'urgent' IN (excluded.urgency, newo_sessions.urgency) THEN 'urgent'
-         ELSE COALESCE(excluded.urgency, newo_sessions.urgency)
-       END,
-       lead_envelope_id = COALESCE(excluded.lead_envelope_id, newo_sessions.lead_envelope_id),
-       appointment_request_id = COALESCE(excluded.appointment_request_id, newo_sessions.appointment_request_id),
-       handoff_status = CASE
-         WHEN 'failed' IN (excluded.handoff_status, newo_sessions.handoff_status) THEN 'failed'
-         WHEN 'requested' IN (excluded.handoff_status, newo_sessions.handoff_status) THEN 'requested'
-         ELSE COALESCE(excluded.handoff_status, newo_sessions.handoff_status)
-       END,
-       booking_status = COALESCE(excluded.booking_status, newo_sessions.booking_status),
-       summary = COALESCE(excluded.summary, newo_sessions.summary),
-       transcript_ref = COALESCE(excluded.transcript_ref, newo_sessions.transcript_ref),
-       recording_ref = COALESCE(excluded.recording_ref, newo_sessions.recording_ref),
-       ai_disclosed = MAX(excluded.ai_disclosed, newo_sessions.ai_disclosed),
-       recording_disclosed = MAX(excluded.recording_disclosed, newo_sessions.recording_disclosed),
-       structured_json = excluded.structured_json,
-       raw_key = excluded.raw_key,
-       payload_hash = excluded.payload_hash,
-       started_at = COALESCE(excluded.started_at, newo_sessions.started_at),
-       ended_at = COALESCE(excluded.ended_at, newo_sessions.ended_at),
-       duration_seconds = COALESCE(excluded.duration_seconds, newo_sessions.duration_seconds),
-       report_expected_at = excluded.report_expected_at,
-       report_received_at = COALESCE(excluded.report_received_at, newo_sessions.report_received_at),
-       report_event_id = COALESCE(excluded.report_event_id, newo_sessions.report_event_id),
-       missing_report_detected_at = CASE
-         WHEN excluded.report_received_at IS NOT NULL THEN NULL
-         ELSE newo_sessions.missing_report_detected_at
-       END,
-       sync_status = 'pending',
-       last_error = NULL,
-       sync_updated_at = excluded.sync_updated_at,
-       updated_at = excluded.updated_at
-     WHERE excluded.updated_at >= newo_sessions.updated_at`,
-  ).bind(
-    rec.session_id,
-    rec.project_id,
-    rec.agent_id,
-    rec.user_actor_id,
-    rec.conversation_id,
-    rec.channel,
-    rec.direction,
-    rec.status,
-    rec.outcome,
-    rec.contact_name,
-    rec.contact_phone,
-    rec.contact_email,
-    rec.address_line1,
-    rec.city,
-    rec.province,
-    rec.postal_code,
-    rec.division,
-    rec.service,
-    rec.urgency,
-    rec.lead_envelope_id,
-    rec.appointment_request_id,
-    rec.handoff_status,
-    rec.booking_status,
-    rec.summary,
-    rec.transcript_ref,
-    rec.recording_ref,
-    rec.ai_disclosed,
-    rec.recording_disclosed,
-    rec.structured_json,
-    rec.raw_key,
-    rec.payload_hash,
-    rec.started_at,
-    rec.ended_at,
-    rec.duration_seconds,
-    rec.report_expected_at,
-    rec.report_received_at,
-    rec.report_event_id,
-    rec.missing_report_detected_at,
-    rec.sync_status,
-    rec.sync_attempts,
-    rec.last_error,
-    rec.sync_updated_at,
-    rec.created_at,
-    rec.updated_at,
-  );
 }
 
 export async function getNewoSession(
   env: Env,
   sessionId: string,
 ): Promise<NewoSessionRecord | null> {
-  return await env.DB.prepare("SELECT * FROM newo_sessions WHERE session_id = ?")
-    .bind(sessionId).first<NewoSessionRecord>();
+  return await env.DB.prepare("SELECT * FROM newo_sessions WHERE session_id = ? AND tenant_id = ? AND tenant_binding_state = 'bound'")
+    .bind(sessionId, newoTenantId(env)).first<NewoSessionRecord>();
 }
 
 export async function listRecentNewoSessions(
@@ -512,8 +330,8 @@ export async function listRecentNewoSessions(
   limit: number,
 ): Promise<NewoSessionRecord[]> {
   const result = await env.DB.prepare(
-    "SELECT * FROM newo_sessions ORDER BY updated_at DESC LIMIT ?",
-  ).bind(limit).all<NewoSessionRecord>();
+    "SELECT * FROM newo_sessions WHERE tenant_id = ? AND tenant_binding_state = 'bound' ORDER BY updated_at DESC LIMIT ?",
+  ).bind(newoTenantId(env), limit).all<NewoSessionRecord>();
   return result.results ?? [];
 }
 
@@ -527,8 +345,8 @@ export async function markNewoSessionSync(
   await env.DB.prepare(
     `UPDATE newo_sessions
         SET sync_status = ?, sync_attempts = sync_attempts + 1, last_error = ?, sync_updated_at = ?
-      WHERE session_id = ?`,
-  ).bind(status, error?.slice(0, 500) ?? null, now, sessionId).run();
+      WHERE session_id = ? AND tenant_id = ? AND tenant_binding_state = 'bound'`,
+  ).bind(status, error?.slice(0, 500) ?? null, now, sessionId, newoTenantId(env)).run();
 }
 
 export async function listRetryableNewoEventIds(
@@ -539,17 +357,19 @@ export async function listRetryableNewoEventIds(
   const result = await env.DB.prepare(
     `SELECT r.event_id
        FROM newo_sessions s
-       JOIN newo_event_receipts r ON r.event_id = (
-         SELECT latest.event_id
-           FROM newo_event_receipts latest
-          WHERE latest.session_id = s.session_id AND latest.status = 'accepted'
-          ORDER BY latest.last_seen_at DESC, latest.event_id DESC
-          LIMIT 1
-       )
-      WHERE s.sync_status IN ('pending','failed') AND COALESCE(s.sync_updated_at, s.updated_at) <= ?
-      ORDER BY COALESCE(s.sync_updated_at, s.updated_at) ASC
-      LIMIT ?`,
-  ).bind(updatedBefore, limit).all<{ event_id: string }>();
+       JOIN newo_event_receipts r ON r.event_id = COALESCE(s.last_event_id, (
+         SELECT latest.event_id FROM newo_event_receipts latest
+          WHERE latest.session_id = s.session_id AND latest.tenant_id = s.tenant_id AND latest.status = 'accepted'
+            AND latest.payload_hash = s.payload_hash AND latest.raw_key = s.raw_key
+            AND latest.envelope_id IS s.lead_envelope_id
+          ORDER BY latest.last_seen_at DESC, latest.event_id DESC LIMIT 1
+       ))
+      WHERE s.tenant_id = ? AND s.tenant_binding_state = 'bound' AND r.tenant_id = s.tenant_id
+        AND (s.last_event_id IS NULL OR EXISTS (SELECT 1 FROM newo_event_admissions admitted
+          WHERE admitted.event_id = r.event_id AND admitted.tenant_id = s.tenant_id AND admitted.session_id = s.session_id))
+        AND s.sync_status IN ('pending','failed') AND COALESCE(s.sync_updated_at, s.updated_at) <= ?
+      ORDER BY COALESCE(s.sync_updated_at, s.updated_at) ASC LIMIT ?`,
+  ).bind(newoTenantId(env), updatedBefore, limit).all<{ event_id: string }>();
   return (result.results ?? []).map((row) => row.event_id);
 }
 
@@ -561,19 +381,21 @@ export async function markNewoMissingReports(
   const candidates = await env.DB.prepare(
     `SELECT session_id, lead_envelope_id, report_expected_at
        FROM newo_sessions
-      WHERE report_expected_at IS NOT NULL AND report_expected_at <= ?
+      WHERE tenant_id = ? AND tenant_binding_state = 'bound'
+        AND report_expected_at IS NOT NULL AND report_expected_at <= ?
         AND report_received_at IS NULL AND missing_report_detected_at IS NULL
       ORDER BY report_expected_at ASC
       LIMIT ?`,
-  ).bind(now, limit).all<Pick<NewoSessionRecord, "session_id" | "lead_envelope_id" | "report_expected_at">>();
+  ).bind(newoTenantId(env), now, limit).all<Pick<NewoSessionRecord, "session_id" | "lead_envelope_id" | "report_expected_at">>();
   const claimed: Array<Pick<NewoSessionRecord, "session_id" | "lead_envelope_id" | "report_expected_at">> = [];
   for (const candidate of candidates.results ?? []) {
     const result = await env.DB.prepare(
       `UPDATE newo_sessions
           SET missing_report_detected_at = ?
         WHERE session_id = ? AND report_received_at IS NULL
-          AND missing_report_detected_at IS NULL AND report_expected_at <= ?`,
-    ).bind(now, candidate.session_id, now).run();
+          AND missing_report_detected_at IS NULL AND report_expected_at <= ?
+          AND tenant_id = ? AND tenant_binding_state = 'bound'`,
+    ).bind(now, candidate.session_id, now, newoTenantId(env)).run();
     if (Number(result.meta?.changes ?? 0) === 1) claimed.push(candidate);
   }
   return claimed;
@@ -629,9 +451,8 @@ export async function countOpenNewoDeadLetters(env: Env): Promise<number> {
 }
 
 /**
- * The tenant whose people resolve this deployment's failed Newo handoffs. A Newo session carries
- * no tenant of its own: one deployment serves one tenant and the app session is bound to it, so
- * only that tenant's resolutions retire a failed handoff.
+ * The deployment tenant used by bounded reads. Producer admission requires an explicit trusted
+ * binding through trustedNewoTenantId; historical fallback here grants no session ownership.
  */
 export function newoTenantId(env: Env): string {
   return (env.APP_TENANT_ID ?? "ironwrap").trim();
@@ -643,10 +464,10 @@ export function newoTenantId(env: Env): string {
  * The reconcile count and the operations list share this one predicate; bind `newoTenantId` to
  * its placeholder.
  */
-export const UNRESOLVED_FAILED_HANDOFF = `handoff_status = 'failed'
+export const UNRESOLVED_FAILED_HANDOFF = `tenant_id = ? AND tenant_binding_state = 'bound' AND handoff_status = 'failed'
          AND NOT EXISTS (
            SELECT 1 FROM newo_handoff_resolutions resolution
-            WHERE resolution.tenant_id = ? AND resolution.session_id = newo_sessions.session_id
+            WHERE resolution.tenant_id = newo_sessions.tenant_id AND resolution.session_id = newo_sessions.session_id
          )`;
 
 /**
@@ -657,6 +478,8 @@ export const UNRESOLVED_FAILED_HANDOFF = `handoff_status = 'failed'
  * `newoTenantId` to the placeholder.
  */
 export const OPEN_CALLBACK = `callback.tenant_id = ?
+         AND EXISTS (SELECT 1 FROM newo_sessions owner WHERE owner.session_id = callback.session_id
+           AND owner.tenant_id = callback.tenant_id AND owner.tenant_binding_state = 'bound')
          AND NOT EXISTS (
            SELECT 1 FROM newo_handoff_resolutions resolution
             WHERE resolution.tenant_id = callback.tenant_id
@@ -664,7 +487,8 @@ export const OPEN_CALLBACK = `callback.tenant_id = ?
          )
          AND NOT EXISTS (
            SELECT 1 FROM newo_sessions failed
-            WHERE failed.session_id = callback.session_id AND failed.handoff_status = 'failed'
+            WHERE failed.session_id = callback.session_id AND failed.tenant_id = callback.tenant_id
+              AND failed.tenant_binding_state = 'bound' AND failed.handoff_status = 'failed'
          )`;
 
 /**
@@ -685,20 +509,21 @@ export async function newoOperationalCounts(env: Env): Promise<{
   last_report_at: string | null;
 }> {
   const row = await env.DB.prepare(
-    `SELECT
-       (SELECT COUNT(*) FROM newo_sessions) AS sessions,
-       (SELECT COUNT(*) FROM newo_sessions WHERE sync_status = 'pending') AS pending_sync,
-       (SELECT COUNT(*) FROM newo_sessions WHERE sync_status IN ('failed','dead')) AS failed_sync,
-       (SELECT COUNT(*) FROM newo_event_receipts WHERE status IN ('failed','dead')) AS failed_events,
-       (SELECT COUNT(*) FROM newo_sessions WHERE missing_report_detected_at IS NOT NULL
-          AND report_received_at IS NULL) AS missing_reports,
-       (SELECT COUNT(*) FROM newo_sessions WHERE ${UNRESOLVED_FAILED_HANDOFF}) AS failed_handoffs,
-       (SELECT COUNT(*) FROM newo_callback_records callback WHERE ${OPEN_CALLBACK}) AS open_callbacks,
-       (SELECT COUNT(*) FROM newo_sessions WHERE booking_status = 'requested') AS pending_bookings,
+    `WITH owned_tenant AS (SELECT ? AS id)
+     SELECT
+       (SELECT COUNT(*) FROM newo_sessions WHERE tenant_id = (SELECT id FROM owned_tenant) AND tenant_binding_state = 'bound') AS sessions,
+       (SELECT COUNT(*) FROM newo_sessions WHERE tenant_id = (SELECT id FROM owned_tenant) AND tenant_binding_state = 'bound' AND sync_status = 'pending') AS pending_sync,
+       (SELECT COUNT(*) FROM newo_sessions WHERE tenant_id = (SELECT id FROM owned_tenant) AND tenant_binding_state = 'bound' AND sync_status IN ('failed','dead')) AS failed_sync,
+       (SELECT COUNT(*) FROM newo_event_receipts WHERE tenant_id = (SELECT id FROM owned_tenant) AND status IN ('failed','dead')) AS failed_events,
+       (SELECT COUNT(*) FROM newo_sessions WHERE tenant_id = (SELECT id FROM owned_tenant) AND tenant_binding_state = 'bound'
+          AND missing_report_detected_at IS NOT NULL AND report_received_at IS NULL) AS missing_reports,
+       (SELECT COUNT(*) FROM newo_sessions WHERE ${UNRESOLVED_FAILED_HANDOFF.replace("?", "(SELECT id FROM owned_tenant)")}) AS failed_handoffs,
+       (SELECT COUNT(*) FROM newo_callback_records callback WHERE ${OPEN_CALLBACK.replace("?", "(SELECT id FROM owned_tenant)")}) AS open_callbacks,
+       (SELECT COUNT(*) FROM newo_sessions WHERE tenant_id = (SELECT id FROM owned_tenant) AND tenant_binding_state = 'bound' AND booking_status = 'requested') AS pending_bookings,
        (SELECT COUNT(*) FROM newo_control_actions WHERE status = 'failed') AS control_failures,
-       (SELECT MAX(last_seen_at) FROM newo_event_receipts) AS last_event_at,
-       (SELECT MAX(report_received_at) FROM newo_sessions) AS last_report_at`,
-  ).bind(newoTenantId(env), newoTenantId(env)).first<Record<string, unknown>>();
+       (SELECT MAX(last_seen_at) FROM newo_event_receipts WHERE tenant_id = (SELECT id FROM owned_tenant)) AS last_event_at,
+       (SELECT MAX(report_received_at) FROM newo_sessions WHERE tenant_id = (SELECT id FROM owned_tenant) AND tenant_binding_state = 'bound') AS last_report_at`,
+  ).bind(newoTenantId(env)).first<Record<string, unknown>>();
   return {
     sessions: Number(row?.sessions ?? 0),
     pending_sync: Number(row?.pending_sync ?? 0),

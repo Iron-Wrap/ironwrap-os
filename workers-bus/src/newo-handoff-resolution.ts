@@ -258,9 +258,9 @@ async function readBody(req: Request): Promise<unknown> {
 
 async function handoffRow(env: AppEnv, sessionId: string): Promise<HandoffRow | null> {
   return await env.DB.prepare(
-    "SELECT session_id, handoff_status, updated_at FROM newo_sessions WHERE session_id = ?",
+    "SELECT session_id, handoff_status, updated_at FROM newo_sessions WHERE session_id = ? AND tenant_id = ? AND tenant_binding_state = 'bound'",
   )
-    .bind(sessionId)
+    .bind(sessionId, newoTenantId(env as Env))
     .first<HandoffRow>();
 }
 

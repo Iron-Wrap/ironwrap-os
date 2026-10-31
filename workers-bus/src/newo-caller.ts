@@ -1,3 +1,4 @@
+import { newoAdmissionJson, newoProducerTenantCheck } from "./newo-event-admission.ts";
 import type { AppEnv } from "./app-types.ts";
 import { normalizePhone } from "./core.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
@@ -76,8 +77,17 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
   const parsed = parseNewoCallerLookup(rawText);
   if (!parsed.ok) return json({ error: "invalid_payload", issues: parsed.issues }, 422);
   const input = parsed.value;
+  const binding = await newoProducerTenantCheck(env, input.session_id);
+  if (!binding.ok) return json({ error: binding.error }, binding.status);
   const hash = await sha256Hex(canonicalJson(input));
   const existing = await getNewoReceipt(env, input.request_id);
+  if (existing && existing.tenant_id !== binding.tenantId) {
+    return json({ error: existing.tenant_id ? "newo_receipt_tenant_mismatch" : "newo_receipt_tenant_unresolved" },
+      existing.tenant_id ? 404 : 409);
+  }
+  if (existing?.status === "failed" && existing.admission_json == null) {
+    return json({ error: "newo_receipt_provenance_unresolved" }, 409);
+  }
   if (existing) {
     if (existing.payload_hash !== hash) {
       const conflictKey = rawKey(input, `-${hash.slice(0, 12)}`, "conflicts/lookups");
@@ -113,6 +123,9 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
       event_type: "caller_lookup",
       payload_hash: hash,
       raw_key: key,
+      admission_json: newoAdmissionJson({ event_id: input.request_id, session_id: input.session_id,
+        event_type: "caller_lookup", occurred_at: input.occurred_at, reported_handoff_status: null,
+        reported_urgency: "routine", event_has_contact: 1 }),
     }, new Date().toISOString());
     if (claim === "existing") return json({ error: "lookup_processing" }, 202);
   }
@@ -121,6 +134,7 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
     const result = await lookupCaller(env as AppEnv, input);
     const response = lookupResponse(input, result);
     const associationWritten = await recordNewoCallerAssociation(env, {
+      event_id: input.request_id,
       session_id: input.session_id,
       project_id: input.provider.project_id,
       agent_id: input.provider.agent_id,

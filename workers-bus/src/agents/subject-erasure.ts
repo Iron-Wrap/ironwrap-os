@@ -3,6 +3,7 @@
 import { sha256Hex, validAppCsrf } from "../app-auth.ts";
 import type { AuthContext } from "../app-types.ts";
 import { controlError, humanGuard, type HumanPrincipal } from "./control.ts";
+import { parseFactId } from "./memory.ts";
 import { canonicalJson } from "./schema.ts";
 import type { AgentDb, BoundStatement, SignalRow } from "./store.ts";
 import {
@@ -181,8 +182,11 @@ export async function assertAgentValueAvailable(db: AgentDb, env: PrivacyEnv, te
         if (key === "run_id") runs.add(child);
         if (key === "step_id" || key === "proposal_id") steps.add(child);
         if (key === "shadow_step_id") shadows.add(child);
-        if ((key === "fact_id" || key === "source") && child.startsWith("signal/")) signals.add(child.slice(7));
-        if ((key === "fact_id" || key === "source") && child.startsWith("lead_proposal/")) steps.add(child.slice(14));
+        if (key === "fact_id" || key === "source") {
+          const fact = parseFactId(child);
+          if (fact?.kind === "signal") signals.add(fact.id);
+          if (fact?.kind === "lead_proposal") steps.add(fact.id);
+        }
       } else collect(child, depth + 1);
     }
     if (signals.size + runs.size + steps.size + shadows.size > 512) return fail("privacy_reference_bounds");

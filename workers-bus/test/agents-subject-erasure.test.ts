@@ -10,7 +10,7 @@ import { leadProposal, openLeadProposals } from "../src/agents/lead-proposals.ts
 import { requestMarkerKey, signalMarkerKey, type SignalErasureMarker } from "../src/agents/privacy-ledger.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import { appendSignal, openRun, type BoundStatement, type SignalRow } from "../src/agents/store.ts";
-import { ERASURE_ARGUMENT_BATCH, ERASURE_MAX_SIGNALS, ERASURE_SIGNAL_BATCH } from "../src/agents/subject-erasure.ts";
+import { assertAgentValueAvailable, ERASURE_ARGUMENT_BATCH, ERASURE_MAX_SIGNALS, ERASURE_SIGNAL_BATCH } from "../src/agents/subject-erasure.ts";
 import type { AuthContext } from "../src/app-types.ts";
 import { MemoryAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 
@@ -54,7 +54,7 @@ class SqliteD1 {
   row(table: string, column: string, id: string) { return this.raw.prepare(`SELECT * FROM ${table} WHERE ${column} = ?`).get(id) as Record<string, any>; }
   count(table: string) { return Number((this.raw.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n); }
 }
-function setup() {
+function setup(options: { withoutPhone?: boolean } = {}) {
   const db = new SqliteD1(), ledger = new MemoryAgentPrivacyLedger();
   let clock = Date.now();
   const now = () => new Date(clock).toISOString();
@@ -64,7 +64,7 @@ function setup() {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(hash("session"), OWNER, TENANT, now(), new Date(clock + 3600000).toISOString(), now(), hash("ip"), hash("ua"));
   db.raw.prepare("INSERT INTO envelopes (envelope_id, source, payload_json, status, ts, created_at, updated_at) VALUES ('privacy_envelope_primary', 'website', '{}', 'received', ?, ?, ?)").run(now(), now(), now());
   db.raw.prepare(`INSERT INTO operating_customers (customer_id, tenant_id, source_envelope_id, display_name, contact_phone, contact_email, created_at, updated_at)
-    VALUES (?, ?, 'privacy_envelope_primary', 'Synthetic Customer', '+15875550142', 'privacy-customer@example.invalid', ?, ?)`).run(CUSTOMER, TENANT, now(), now());
+    VALUES (?, ?, 'privacy_envelope_primary', 'Synthetic Customer', ?, 'privacy-customer@example.invalid', ?, ?)`).run(CUSTOMER, TENANT, options.withoutPhone ? null : "+15875550142", now(), now());
   db.raw.prepare(`INSERT INTO operating_leads (lead_id, tenant_id, source_envelope_id, source, contact_email, created_at, updated_at)
     VALUES (?, ?, 'privacy_envelope_primary', 'website', 'privacy-customer@example.invalid', ?, ?)`).run(LEAD, TENANT, now(), now());
   const auth = { session: { user_id: OWNER, tenant_id: TENANT, role: "owner", session_hash: hash("session"), session_created_at: now(), session_expires_at: new Date(clock + 3600000).toISOString() },
@@ -152,7 +152,7 @@ test("owner erasure records checked identity, exact signal/live/shadow text and 
 test("current owner/session/CSRF and recorded on-file verification fail closed", async (t) => {
   for (const mode of ["ops", "host", "csrf", "stale", "revoked", "deactivated", "demoted", "expired", "foreign_customer", "wrong_version", "missing_contact", "unperformed", "raw_reference", "bad_method", "authority_race", "customer_version_race", "cross_tenant"] as const) {
     await t.test(mode, async () => {
-      const s = setup();
+      const s = setup({ withoutPhone: mode === "missing_contact" });
       try {
         await s.signal(); let input: any = structuredClone(s.input), auth = structuredClone(s.auth), csrf = CSRF;
         if (mode === "ops") auth.session.role = "ops";
@@ -164,7 +164,7 @@ test("current owner/session/CSRF and recorded on-file verification fail closed",
         if (mode === "expired") s.tick(2 * 3600000);
         if (mode === "foreign_customer") input.customer_id = "customer_not_in_tenant";
         if (mode === "wrong_version") input.expected_customer_version = 2;
-        if (mode === "missing_contact") { input.verification.method = "on_file_phone"; s.db.raw.exec("UPDATE operating_customers SET contact_phone = NULL, version = version + 1"); input.expected_customer_version = 2; }
+        if (mode === "missing_contact") input.verification.method = "on_file_phone";
         if (mode === "unperformed") input.verification.on_file_check_completed = false;
         if (mode === "raw_reference") input.verification.evidence_ref = "privacy-customer@example.invalid";
         if (mode === "bad_method") input.verification.method = "text_message";
@@ -303,13 +303,35 @@ test("a later signal cannot admit a run that still cites a held lead proposal in
     s.db.failSql = /UPDATE agent_signals SET content_json/;
     assert.equal((await s.app("POST")).status, 503); s.db.failSql = null;
     assert.equal(JSON.parse(s.db.row("agent_run_steps", "step_id", proposal).args_json).redacted, undefined);
-    const later = await s.signal();
+    const laterText = "Synthetic later inquiry outside the frozen erasure";
+    const later = await s.signal({ content: { ...JSON.parse(s.db.row("agent_signals", "signal_id", original).content_json), excerpt: laterText } });
     const opened = await s.host("POST", "/runs", { signal_id: later, specialist_id: "lead_concierge", host_run_key: "later-held-context" });
     assert.equal(opened.status, 409, JSON.stringify(opened)); assert.equal(opened.body.error, "agent_source_erased");
     assert.equal(Number((s.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_runs WHERE signal_id = ?").get(later) as { n: number }).n), 0);
     assert.equal((await s.app("POST")).status, 200);
     const after = await s.host("POST", "/runs", { signal_id: later, specialist_id: "lead_concierge", host_run_key: "later-cleared-context" });
     assert.equal(after.status, 201, JSON.stringify(after)); assert.ok(!JSON.stringify(after).includes(ORIGINAL));
+    assert.equal(after.body.context.facts.find((fact: any) => fact.fact_id === `signal/${later}`).data.excerpt, laterText);
+    assert.ok(!after.body.context.facts.some((fact: any) => fact.fact_id === `lead_proposal/${proposal}`));
+  } finally { s.db.raw.close(); }
+});
+
+test("privacy reads bind supported pointer citations to the complete underlying signal", async () => {
+  const s = setup();
+  try {
+    const signal = await s.signal(), run = await s.run(signal), proposal = s.proposal(run, signal);
+    const refs = { source: `lead_proposal/${proposal}#/fields/service` };
+    await assert.doesNotReject(() => assertAgentValueAvailable(s.db, s.env, TENANT, refs, s.now()));
+    const step = { action_id: "fact.explain", args: { object: null, explanation: "Synthetic current inquiry." },
+      citations: [{ fact_id: `signal/${signal}#/excerpt`, version: 1 }] };
+    const input = { ...step, step_key: hash(canonicalJson(step)) };
+    const current = await s.host("POST", `/runs/${run}/steps`, input);
+    assert.equal(current.status, 200, JSON.stringify(current)); assert.equal(current.body.decision, "recorded");
+    assert.equal((await s.app("POST")).body.completed, true);
+    await assert.rejects(() => assertAgentValueAvailable(s.db, s.env, TENANT, refs, s.now()), { code: "agent_source_erased" });
+    const erased = await s.host("POST", `/runs/${run}/steps`, input);
+    assert.equal(erased.status, 409, JSON.stringify(erased)); assert.equal(erased.body.error, "agent_source_erased");
+    assert.ok(!JSON.stringify(erased).includes(ORIGINAL));
   } finally { s.db.raw.close(); }
 });
 

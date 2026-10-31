@@ -91,8 +91,15 @@ export const NEWO_TENANT_BINDING_QUERY = `SELECT
       AND admitted.matched_property_id IS session.matched_property_id
       AND admitted.matched_roof_job_id IS session.matched_roof_job_id
       AND admitted.verification_status IS session.verification_status)) AS invalid_projections,
-  (SELECT COUNT(*) FROM newo_sessions session WHERE tenant_binding_state = 'bound' AND last_event_id IS NULL
-    AND handoff_status IN ('requested', 'failed')
+  (SELECT COUNT(*) FROM newo_sessions session WHERE tenant_binding_state = 'bound'
+    AND tenant_binding_source IN ('legacy_envelope', 'legacy_job', 'legacy_envelope_job')
+    AND (session.handoff_status IN ('requested', 'failed')
+      OR (session.status = 'failed' AND (length(trim(COALESCE(session.contact_phone, ''))) > 0
+        OR length(trim(COALESCE(session.contact_email, ''))) > 0))
+      OR EXISTS (SELECT 1 FROM newo_event_admissions admitted
+        WHERE admitted.tenant_id = session.tenant_id AND admitted.session_id = session.session_id
+          AND (admitted.prior_handoff_status IN ('requested', 'failed')
+            OR (admitted.prior_status = 'failed' AND admitted.prior_has_contact = 1))))
     AND NOT EXISTS (SELECT 1 FROM newo_callback_records callback WHERE callback.session_id = session.session_id
       AND callback.tenant_id = session.tenant_id)
     AND NOT EXISTS (SELECT 1 FROM newo_handoff_resolutions resolution WHERE resolution.session_id = session.session_id

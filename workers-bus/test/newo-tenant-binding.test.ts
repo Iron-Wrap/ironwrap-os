@@ -397,6 +397,83 @@ test("tenant-bound readers and queue reconciliation do not return or mutate anot
   assert.deepEqual(DB.sqlite.prepare("SELECT * FROM newo_sessions").get(), before);
 });
 
+for (const channel of ["phone", "email"] as const) {
+  test(`legacy failed session with ${channel} holds readiness until its owed callback is recorded`, async (t) => {
+    const DB = new BindingD1((db) => {
+      legacyOwner(db, event().session_id, TENANT, "legacy-failed-owner");
+      db.prepare(`INSERT INTO newo_sessions (session_id, status, handoff_status, contact_phone, contact_email,
+        structured_json, raw_key, payload_hash, lead_envelope_id, created_at, updated_at)
+        VALUES (?, 'failed', NULL, ?, ?, '{}', 'raw/newo/legacy.json', ?, 'legacy-failed-owner', ?, ?)`)
+        .run(event().session_id, channel === "phone" ? "+17805550147" : null,
+          channel === "email" ? "legacy-callback@example.invalid" : null, "a".repeat(64), at(-60), at(-60));
+      db.prepare(`INSERT INTO newo_event_receipts (event_id, session_id, event_type, payload_hash, raw_key,
+        envelope_id, status, first_seen_at, last_seen_at)
+        VALUES ('legacy-failed-event', ?, 'session_failed', ?, 'raw/newo/legacy.json',
+          'legacy-failed-owner', 'accepted', ?, ?)`)
+        .run(event().session_id, "a".repeat(64), at(-60), at(-60));
+    });
+    t.after(() => DB.sqlite.close());
+    const before = DB.sqlite.prepare("SELECT * FROM newo_sessions").get();
+    assert.equal(before?.tenant_binding_state, "bound");
+    assert.equal(before?.tenant_binding_source, "legacy_envelope");
+    assert.equal(before?.handoff_status, null);
+    assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_callback_records").get()!.n, 0);
+    assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_handoff_resolutions").get()!.n, 0);
+
+    const readiness = await newoTenantBindingReadiness(runtime(DB));
+    assert.equal(readiness.counts?.legacy_owed_without_record, 1);
+    assert.equal(readiness.ready, false);
+    assert.deepEqual(DB.sqlite.prepare("SELECT * FROM newo_sessions").get(), before);
+    assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_callback_records").get()!.n, 0,
+      "a readiness read does not fabricate the missing callback");
+
+    assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 200);
+    assert.equal(DB.sqlite.prepare("SELECT status FROM newo_sessions").get()!.status, "active");
+    const afterOrdinaryEvent = await newoTenantBindingReadiness(runtime(DB));
+    assert.equal(afterOrdinaryEvent.counts?.legacy_owed_without_record, 1,
+      "an ordinary event cannot discharge the original failed-session callback obligation");
+    assert.equal(afterOrdinaryEvent.ready, false);
+    assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_callback_records").get()!.n, 0);
+    assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_handoff_resolutions").get()!.n, 0);
+
+    assert.equal((await post(runtime(DB), "/webhook/newo/handoff", event({
+      event_id: "synthetic-explicit-callback", event_type: "handoff_requested", occurred_at: at(10),
+      handoff_summary: "Synthetic caller requested a callback",
+    }))).status, 200);
+    assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_callback_records").get()!.n, 1);
+    const afterExplicitCallback = await newoTenantBindingReadiness(runtime(DB));
+    assert.equal(afterExplicitCallback.counts?.legacy_owed_without_record, 0);
+    assert.equal(afterExplicitCallback.ready, true);
+  });
+}
+
+test("legacy requested session holds readiness after an ordinary event", async (t) => {
+  const DB = new BindingD1((db) => {
+    legacyOwner(db, event().session_id, TENANT, "legacy-requested-owner");
+    db.prepare(`INSERT INTO newo_sessions (session_id, status, handoff_status, contact_phone,
+      structured_json, raw_key, payload_hash, lead_envelope_id, created_at, updated_at)
+      VALUES (?, 'handoff_requested', 'requested', '+17805550148', '{}', 'raw/newo/legacy.json', ?,
+        'legacy-requested-owner', ?, ?)`)
+      .run(event().session_id, "a".repeat(64), at(-60), at(-60));
+    db.prepare(`INSERT INTO newo_event_receipts (event_id, session_id, event_type, payload_hash, raw_key,
+      envelope_id, status, first_seen_at, last_seen_at)
+      VALUES ('legacy-requested-event', ?, 'handoff_requested', ?, 'raw/newo/legacy.json',
+        'legacy-requested-owner', 'accepted', ?, ?)`)
+      .run(event().session_id, "a".repeat(64), at(-60), at(-60));
+  });
+  t.after(() => DB.sqlite.close());
+  assert.equal((await newoTenantBindingReadiness(runtime(DB))).counts?.legacy_owed_without_record, 1);
+  assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 200);
+  const current = DB.sqlite.prepare("SELECT last_event_id, handoff_status FROM newo_sessions").get()!;
+  assert.equal(current.last_event_id, event().event_id);
+  assert.equal(current.handoff_status, "requested");
+  const readiness = await newoTenantBindingReadiness(runtime(DB));
+  assert.equal(readiness.counts?.legacy_owed_without_record, 1);
+  assert.equal(readiness.ready, false);
+  assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_callback_records").get()!.n, 0);
+  assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_handoff_resolutions").get()!.n, 0);
+});
+
 test("legacy original owned envelope binds identity; later calls never rewrite that evidence", async (t) => {
   const DB = new BindingD1((db) => {
     legacyOwner(db, "synthetic-session-1", TENANT, "legacy-owned-envelope");

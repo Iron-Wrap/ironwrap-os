@@ -197,7 +197,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
           <p aria-label="Job identity" className="text-sm font-bold break-words text-muted">
             {lead}
             {lead && code ? " · " : null}
-            {code ? <span className="whitespace-nowrap">Job {code}</span> : null}
+            {code ? <span className="whitespace-nowrap">{`Job ${code}`}</span> : null}
             {!lead && !code ? "Job details unavailable" : null}
           </p>
           <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">

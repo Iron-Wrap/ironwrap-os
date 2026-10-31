@@ -14,7 +14,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -52,7 +52,12 @@ import type {
 
 type ReconciliationOutcome = "executed" | "not_executed" | "inconclusive";
 
-type RevisionDecisionAction =
+type RevisionReviewScope = {
+  session: { tenantId: string; userId: string };
+  approvalId: string;
+};
+
+type RevisionDecisionAction = (
   | { kind: "approve"; approval: QuoteRevisionApprovalRequest }
   | { kind: "reject"; approval: QuoteRevisionApprovalRequest; reason: string }
   | {
@@ -60,7 +65,18 @@ type RevisionDecisionAction =
       approval: QuoteRevisionApprovalRequest;
       outcome: ReconciliationOutcome;
       evidence: string;
-    };
+    }
+) & { scope: RevisionReviewScope };
+
+const detailKeyFor = (scope: RevisionReviewScope) =>
+  [
+    "quote-revision-approval",
+    scope.session.tenantId,
+    scope.session.userId,
+    scope.approvalId,
+  ] as const;
+const queueKeyFor = (scope: RevisionReviewScope) =>
+  ["quote-revision-approvals", scope.session.tenantId, scope.session.userId] as const;
 
 const statePresentation: Record<
   QuoteRevisionApprovalRequest["state"],
@@ -291,13 +307,23 @@ function QuoteRevisionApprovalDetailContent() {
   const session = useSession();
   const queryClient = useQueryClient();
   const offline = isOfflineSession(session);
-  const queryKey = [
-    "quote-revision-approval",
-    session.tenant.id,
-    session.user.id,
-    approvalId,
-  ] as const;
-  const queueKey = ["quote-revision-approvals", session.tenant.id, session.user.id] as const;
+  // An opaque session identity keeps credentials out of mutation variables and cache keys.
+  const sessionScope = useMemo(
+    () => ({ tenantId: session.tenant.id, userId: session.user.id }),
+    [session],
+  );
+  const scope = useMemo(
+    () => ({ session: sessionScope, approvalId: approvalId ?? "" }),
+    [sessionScope, approvalId],
+  );
+  const visibleScope = useRef<RevisionReviewScope | null>(scope);
+  useLayoutEffect(() => {
+    visibleScope.current = scope;
+    return () => {
+      visibleScope.current = null;
+    };
+  }, [scope]);
+  const queryKey = detailKeyFor(scope);
   const query = useQuery({
     queryKey,
     enabled: Boolean(approvalId),
@@ -314,11 +340,25 @@ function QuoteRevisionApprovalDetailContent() {
   const [actionError, setActionError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [requiresFreshRead, setRequiresFreshRead] = useState(false);
+  const [feedbackScope, setFeedbackScope] = useState(scope);
+  if (feedbackScope !== scope) {
+    setFeedbackScope(scope);
+    setRejecting(false);
+    setRejectionReason("");
+    setReconciling(false);
+    setReconciliationOutcome("inconclusive");
+    setReconciliationEvidence("");
+    setActionError(undefined);
+    setNotice(undefined);
+    setRequiresFreshRead(false);
+  }
 
   async function refreshCurrentRequest() {
     try {
       const result = await query.refetch();
-      if (!result.error && result.data) setRequiresFreshRead(false);
+      if (!result.error && result.data && visibleScope.current === scope) {
+        setRequiresFreshRead(false);
+      }
     } catch {
       // The visible read-state warning remains the source of truth until a current response arrives.
     }
@@ -337,7 +377,12 @@ function QuoteRevisionApprovalDetailContent() {
           action.evidence,
         );
       } else {
-        const keyName = `${action.kind}:${action.approval.id}`;
+        const keyName = JSON.stringify([
+          action.scope.session.tenantId,
+          action.scope.session.userId,
+          action.kind,
+          action.approval.id,
+        ]);
         const idempotencyKey = keys.current.get(keyName) ?? newQuoteRevisionApprovalDecisionKey();
         keys.current.set(keyName, idempotencyKey);
         result =
@@ -366,22 +411,28 @@ function QuoteRevisionApprovalDetailContent() {
       return result;
     },
     onSuccess: (result: QuoteRevisionApprovalMutationResponse, action: RevisionDecisionAction) => {
-      queryClient.setQueryData<QuoteRevisionApprovalDetailResponse>(queryKey, (current) =>
-        // Keep the current identity only with the same immutable request/job/source-quote binding.
-        current && sameReviewBinding(current.approval, result.approval)
-          ? { ...current, approval: result.approval }
-          : current,
+      if (visibleScope.current?.session !== action.scope.session) return;
+      queryClient.setQueryData<QuoteRevisionApprovalDetailResponse>(
+        detailKeyFor(action.scope),
+        (current) =>
+          // Keep the current identity only with the same immutable request/job/source-quote binding.
+          current && sameReviewBinding(current.approval, result.approval)
+            ? { ...current, approval: result.approval }
+            : current,
       );
-      queryClient.setQueryData<QuoteRevisionApprovalListResponse>(queueKey, (current) =>
-        current
-          ? {
-              ...current,
-              approvals: current.approvals.map((approval) =>
-                approval.id === result.approval.id ? result.approval : approval,
-              ),
-            }
-          : current,
+      queryClient.setQueryData<QuoteRevisionApprovalListResponse>(
+        queueKeyFor(action.scope),
+        (current) =>
+          current
+            ? {
+                ...current,
+                approvals: current.approvals.map((approval) =>
+                  approval.id === result.approval.id ? result.approval : approval,
+                ),
+              }
+            : current,
       );
+      if (visibleScope.current !== action.scope) return;
       setActionError(undefined);
       setRejecting(false);
       setRejectionReason("");
@@ -399,14 +450,36 @@ function QuoteRevisionApprovalDetailContent() {
               : "The saved state changed. Check it before you do more.",
       );
     },
-    onError: (error) => {
+    onError: (error, action) => {
+      if (visibleScope.current !== action.scope) return;
       setActionError(messageFor(error));
       setNotice(undefined);
       setRequiresFreshRead(true);
     },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queueKey });
-      void refreshCurrentRequest();
+    onSettled: (_result, _error, action) => {
+      const sameSession = visibleScope.current?.session === action.scope.session;
+      void queryClient.invalidateQueries({
+        queryKey: queueKeyFor(action.scope),
+        refetchType: sameSession ? "active" : "none",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: detailKeyFor(action.scope),
+        exact: true,
+        refetchType: "none",
+      });
+      // Never issue an old session's read using the current session's credentials.
+      if (!sameSession) return;
+      void queryClient
+        .fetchQuery({
+          queryKey: detailKeyFor(action.scope),
+          queryFn: () => loadQuoteRevisionApproval(action.scope.approvalId),
+        })
+        .then(() => {
+          if (visibleScope.current === action.scope) setRequiresFreshRead(false);
+        })
+        .catch(() => {
+          // Retain the originating read/error state until an authoritative read succeeds.
+        });
     },
   });
 
@@ -455,14 +528,14 @@ function QuoteRevisionApprovalDetailContent() {
   function approve() {
     if (!canApprove || pendingAction || approval.state !== "pending") return;
     setActionError(undefined);
-    mutation.mutate({ kind: "approve", approval });
+    mutation.mutate({ kind: "approve", approval, scope });
   }
 
   function reject() {
     const reason = rejectionReason.trim();
     if (!canReject || pendingAction || approval.state !== "pending" || reason.length < 3) return;
     setActionError(undefined);
-    mutation.mutate({ kind: "reject", approval, reason });
+    mutation.mutate({ kind: "reject", approval, reason, scope });
   }
 
   function reconcile() {
@@ -479,6 +552,7 @@ function QuoteRevisionApprovalDetailContent() {
     mutation.mutate({
       kind: "reconcile",
       approval,
+      scope,
       outcome: reconciliationOutcome,
       evidence,
     });
@@ -1442,7 +1516,7 @@ function RevisionJobIdentity({
     <span aria-label="Job identity" className="break-words">
       {lead}
       {lead && code ? " · " : null}
-      {code ? <span className="whitespace-nowrap">Job {code}</span> : null}
+      {code ? <span className="whitespace-nowrap">{`Job ${code}`}</span> : null}
       {!lead && !code ? "Job details unavailable" : null}
     </span>
   );

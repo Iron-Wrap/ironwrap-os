@@ -32,7 +32,7 @@ import {
   recordOperatingJobAssignment,
 } from "../src/operating-job-assignment-store.ts";
 import { recordOperatingWorkObjectAssignment } from "../src/operating-work-object-assignment-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { clearScheduleGatesInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 
 const OFFICE_ASSIGNMENT_ID = (() => {
   const idempotencyHash = sha256("office-native-assignment-0001");
@@ -359,7 +359,14 @@ async function seedOperatingAssignment(appEnv: ReturnType<typeof env>) {
       )
       .run(`gate:native:${gate.toLowerCase()}`, gate, now, now, now);
   }
-  recordLegacyGateStates(sqlite, { tenantId: "ironwrap", roofJobId: "JOB-NATIVE-OFFICE", at: now });
+  // Production, on no crew, clears the five gates a schedule rests on; the schedule binds Crew.
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: "ironwrap",
+    roofJobId: "JOB-NATIVE-OFFICE",
+    ownerUserId: "appu_owner_native",
+    attesterUserId: "appu_production_native",
+    attesterRole: "production",
+  });
   sqlite
     .prepare(
       `INSERT INTO fleet_crews
@@ -385,7 +392,8 @@ async function seedOperatingAssignment(appEnv: ReturnType<typeof env>) {
         crewId: "crew:native:office",
         expectedCrewVersion: 1,
         authorityRequirements: authorityRequirements(),
-        scheduledStart: "2026-08-20T08:00:00.000Z",
+        // Inside the Weather window production attested, which D1 holds to its own clock.
+        scheduledStart: fixtureSchedule(1).start,
         actorUserId: "appu_owner_native",
         idempotencyKey: "office-native-assignment-0001",
       },

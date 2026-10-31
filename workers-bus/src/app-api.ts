@@ -4073,6 +4073,12 @@ async function reconcileProposalPublicationApproval(
   }
 }
 
+/**
+ * `production.schedule`: a person (owner, ops or production) schedules a roof job. A schedule clears
+ * Crew by policy (0159), so it is people-only like every gate write: the CSRF token, then the
+ * person's own cookie session and their live role. Agents, connectors, service tokens and the
+ * effect runtime never schedule.
+ */
 async function createOperatingJobAssignment(
   req: Request,
   env: AppEnv,
@@ -4087,6 +4093,11 @@ async function createOperatingJobAssignment(
   }
   if (!validAppCsrf(req, auth)) {
     return privateAppJson({ error: "csrf_failed" }, 403);
+  }
+  const person = await personCookieSession(env, auth);
+  if (!person) return privateAppJson({ error: "person_session_required" }, 403);
+  if (!["owner", "ops", "production"].includes(person.role)) {
+    return privateAppJson({ error: "production_role_required" }, 403);
   }
   const requestIdempotencyKey = idempotencyKey(req);
   if (!requestIdempotencyKey) {
@@ -4114,7 +4125,7 @@ async function createOperatingJobAssignment(
       scheduledEnd: input.scheduledEnd,
       supersedesAssignmentId: input.supersedesAssignmentId,
       correctionReason: input.correctionReason,
-      actorUserId: auth.session.user_id,
+      actorUserId: person.userId,
       idempotencyKey: requestIdempotencyKey,
     });
     const assignment = result.assignment;
@@ -8007,10 +8018,16 @@ function operatingJobAssignmentErrorResponse(error: unknown): Response {
   if (!code) {
     return privateAppJson({ error: "operating_job_assignment_unavailable" }, 502);
   }
-  if (code === "operating_job_assignment_actor_invalid") {
+  if (
+    code === "operating_job_assignment_actor_invalid" ||
+    code === "operating_job_assignment_seed_identity_refused"
+  ) {
     return privateAppJson({ error: code }, 403);
   }
-  return privateAppJson({ error: code }, 409);
+  // Every other refusal is named, including the gate ledger's own code when a gate moved while
+  // the schedule was written (0159), with the stop to open when a stop names no job or package.
+  const detail = error instanceof OperatingJobAssignmentError ? error.detail : {};
+  return privateAppJson({ ...detail, error: code }, 409);
 }
 
 function operatingWorkObjectAssignmentErrorResponse(error: unknown): Response {

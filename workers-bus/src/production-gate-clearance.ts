@@ -32,6 +32,8 @@
 //       one of them that no release has lifted, or a safety stop whose scope cannot be resolved.
 //       An active stop naming a job the tenant does not have holds Safety on every job: 409
 //       `production_gate_stop_job_unknown` with its `stop_id`, so a person opens the stop.
+//       So does one naming a Work Package the tenant does not have (0159): 409
+//       `production_gate_stop_work_package_unknown` with its `stop_id`.
 //       The answer is the stored entry and the gate after it.
 //   POST /api/v1/production/jobs/{job}/gates/{gate}/waiver-decisions
 //     `{request_id, expected_gate_version, decision: "approve" | "decline", reason}`: a holder of
@@ -57,6 +59,7 @@ import { listAccountingIntents, type AccountingIntentRecord } from "./accounting
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { listJobEvidenceItemsFromD1, r2ObjectStore } from "./field-actions.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 import {
   fieldEvidenceId,
   isAttestableProductionGate,
@@ -194,6 +197,7 @@ const LEDGER_REFUSALS: Readonly<Record<string, number>> = {
   production_gate_material_exception_open: 409,
   production_gate_safety_permit_unknown: 409,
   production_gate_stop_job_unknown: 409,
+  production_gate_stop_work_package_unknown: 409,
   production_gate_safety_stop_active: 409,
   production_gate_competency_required: 403,
   production_gate_forecast_stale: 409,
@@ -869,81 +873,6 @@ async function materialExceptionOpen(
 }
 
 /**
- * The oldest active safety stop that names a job this tenant does not have (0158), or null. It may
- * be a typo for any job, so it holds Safety on every job of the tenant until it is lifted. The
- * refusal names the stop (`stop_id`), and the owner's exception list shows it. A stop is always
- * recorded: nothing refuses it when it is raised.
- */
-async function unknownJobStop(env: AppEnv, tenantId: string): Promise<string | null> {
-  const row = await env.DB.prepare(
-    `SELECT occurrence.occurrence_id
-       FROM safety_occurrences occurrence
-      WHERE occurrence.tenant_id = ?
-        AND occurrence.stop_active = 1
-        AND occurrence.scope_type = 'roof_job'
-        AND NOT EXISTS (
-          SELECT 1 FROM operating_roof_jobs job
-           WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
-        )
-      ORDER BY occurrence.reported_at, occurrence.occurrence_id
-      LIMIT 1`,
-  ).bind(tenantId).first<{ occurrence_id: string }>();
-  return row?.occurrence_id ?? null;
-}
-
-/**
- * A stop that applies to the job, as migration 0158 reads it: an active safety stop on the whole
- * tenant, on the job, or on any Work Package of the job in any status, Superseded included; or a
- * crew's stop_work on any Work Package of the job that no release has lifted (0145). An active
- * safety stop whose scope cannot be resolved applies too: a scope type this rule does not know, or
- * a Work Package that maps to no job. A stop on another job, a shop or a vehicle does not. The job
- * phase's own read of active stops stays as it is: it reports job-scoped stops.
- */
-async function safetyStopActive(
-  env: AppEnv,
-  tenantId: string,
-  roofJobId: string,
-): Promise<boolean> {
-  const jobPackages = `SELECT package.work_package_id FROM work_packages package
-               WHERE package.tenant_id = ? AND package.job_id = ?`;
-  const row = await env.DB.prepare(
-    `SELECT 1 AS found
-       WHERE EXISTS (
-         SELECT 1
-           FROM safety_occurrences occurrence
-          WHERE occurrence.tenant_id = ?
-            AND occurrence.stop_active = 1
-            AND (
-              occurrence.scope_type = 'tenant'
-              OR (occurrence.scope_type = 'roof_job' AND occurrence.scope_id = ?)
-              OR (occurrence.scope_type = 'work_package' AND (
-                occurrence.scope_id IN (${jobPackages})
-                OR NOT EXISTS (
-                  SELECT 1 FROM work_packages package
-                   WHERE package.tenant_id = occurrence.tenant_id
-                     AND package.work_package_id = occurrence.scope_id
-                )
-              ))
-              OR occurrence.scope_type NOT IN ('tenant', 'roof_job', 'work_package', 'shop', 'vehicle')
-            )
-       )
-       OR EXISTS (
-         SELECT 1
-           FROM work_package_events crew_stop
-          WHERE crew_stop.tenant_id = ?
-            AND crew_stop.event_kind = 'stop_work'
-            AND crew_stop.work_package_id IN (${jobPackages})
-            AND NOT EXISTS (
-              SELECT 1 FROM work_package_stop_releases released
-               WHERE released.tenant_id = crew_stop.tenant_id
-                 AND released.stop_event_id = crew_stop.event_id
-            )
-       )`,
-  ).bind(tenantId, roofJobId, tenantId, roofJobId, tenantId, tenantId, roofJobId).first();
-  return row !== null;
-}
-
-/**
  * The person's current internal Worker Competency in site safety (`SITE_SAFETY_AUTHORITY_SCOPE`), as
  * migration 0158 checks it: under any login coordinate they carry, the latest version of its
  * record with no contradicting copy, superseded by no other record, verified by an internal
@@ -1130,6 +1059,10 @@ async function attestGate(
     }
     const unknownJob = await unknownJobStop(env, tenantId);
     if (unknownJob) throw refusal("production_gate_stop_job_unknown", 409, { stop_id: unknownJob });
+    const unknownPackage = await unknownWorkPackageStop(env, tenantId);
+    if (unknownPackage) {
+      throw refusal("production_gate_stop_work_package_unknown", 409, { stop_id: unknownPackage });
+    }
     if (await safetyStopActive(env, tenantId, roofJobId)) {
       throw refusal("production_gate_safety_stop_active", 409);
     }

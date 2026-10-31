@@ -476,13 +476,13 @@ function RunwayJobCard({
         <div className="min-w-0">
           <dt className="font-semibold text-muted">Customer</dt>
           <dd className="mt-0.5 break-words leading-5 [overflow-wrap:anywhere]">
-            {job.customer_display_name ?? "Customer not recorded"}
+            {job.customer_display_name ?? "Customer name not available"}
           </dd>
         </div>
         <div className="min-w-0">
           <dt className="font-semibold text-muted">Job site</dt>
           <dd className="mt-0.5 break-words leading-5 [overflow-wrap:anywhere]">
-            {job.address ?? "Job site not recorded"}
+            {job.address ?? "Site address not available"}
           </dd>
         </div>
       </dl>

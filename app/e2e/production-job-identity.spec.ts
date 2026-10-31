@@ -113,8 +113,8 @@ test.describe("Production job identity representation", () => {
         await expect(page.getByRole("heading", { name: "Production plan" })).toBeVisible();
         await expect(page.getByText("native-job:synthetic-d5", { exact: true })).toBeHidden();
         if (state === "legacy" || state === "unknown") {
-          await expect(page.getByText("Customer not recorded")).toBeVisible();
-          await expect(page.getByText("Job site not recorded")).toBeVisible();
+          await expect(page.getByText("Customer name not available")).toBeVisible();
+          await expect(page.getByText("Site address not available")).toBeVisible();
         } else {
           await expect(
             page.getByText(identity.customer_display_name!, { exact: true }),

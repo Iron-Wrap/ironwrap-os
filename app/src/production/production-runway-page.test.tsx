@@ -211,8 +211,8 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByText("Synthetic Customer One")).toBeVisible();
     expect(screen.getByText("2 - 100 Example Street, Example City, AB")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Job number Not recorded" })).toBeVisible();
-    expect(screen.getByText("Customer not recorded")).toBeVisible();
-    expect(screen.getByText("Job site not recorded")).toBeVisible();
+    expect(screen.getByText("Customer name not available")).toBeVisible();
+    expect(screen.getByText("Site address not available")).toBeVisible();
     expect(screen.getByText("native-job:unknown")).not.toBeVisible();
     expect(screen.getByRole("link", { name: "Open job with no recorded number" })).toHaveAttribute(
       "href",

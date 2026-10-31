@@ -268,9 +268,9 @@ export const proofStreamItemSchema = z.lazy(() =>
 );
 
 /**
- * A work stop that holds a job (Track C's read shape): "job" when it is on this job or one of its
- * plans, "tenant" when its job wasn't found, so it holds every job. An unknown scope reads as
- * "job", so a stop is never dropped.
+ * A work stop that holds an assignment (Track C's read shape): "job" when it is on this work
+ * object or one of its plans, "tenant" when its job wasn't found, so it holds every assignment.
+ * An unknown scope reads as "job", so a stop is never dropped.
  */
 export const activeStopSchema = z.object({
   occurrence_id: z.string(),
@@ -284,7 +284,7 @@ export type ActiveStop = z.infer<typeof activeStopSchema>;
 
 /**
  * A run sheet's stops, read one by one: an entry the app cannot read still shows as a stop on this
- * job (its id kept when it has one), never dropped and never failing the whole run sheet.
+ * assignment (its id kept when it has one), never dropped and never failing the whole run sheet.
  */
 function readableStop(value: unknown, index: number): unknown {
   if (activeStopSchema.safeParse(value).success) return value;
@@ -345,6 +345,8 @@ export const todayResponseSchema = envelopeSchema.extend({
         scheduled_end: nullableText,
         next_action: z.string().min(1),
         assignment: assignmentSchema.nullable(),
+        // The same holding/unknown projection as jobs; a legacy omission never means clear.
+        active_stops: activeStopsSchema,
       }),
     )
     .default([]),

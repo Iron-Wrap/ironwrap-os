@@ -15,13 +15,16 @@ export const STOP_WORDS = {
   /** A stop on this job; the job is named the D5 way after the lead-in. */
   jobLeadIn: "Work is stopped on the job:",
   jobUnnamed: "Work is stopped on this job.",
+  /** A typed assignment has no customer/job identity in Today; do not invent one. */
+  assignment: "Work is stopped on this assignment.",
+  tenantOtherWork: "This stop also holds every other work assignment.",
   /** Nobody restarts work from the phone. */
   waits: "The office must release the stop. The person who reported it cannot release it.",
   /** The card's next step while a stop holds its job. */
   nextStep: "Wait for the office to release the stop",
   unavailable: "Safety stops need checking",
   unavailableDetail:
-    "Stop status could not be checked. Keep work stopped until the office has checked it. A missing status does not mean work is clear.",
+    "Stop status could not be checked. Keep work stopped and ask the office to check it. A missing status does not mean work is clear. Any active stop still needs the office to release it.",
   unavailableNextStep: "Ask the office to check safety stops before starting work",
   /** A work check on a stopped job is its own thing: clearing it never restarts work. */
   separateCheck: (check: string | null) =>

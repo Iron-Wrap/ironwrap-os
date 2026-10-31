@@ -177,6 +177,45 @@ function renderToday(
   return { ...result, queryClient };
 }
 
+const typedStop = {
+  occurrence_id: "so_typed",
+  scope: "job" as const,
+  reported_at: "2026-07-10T16:24:00.000Z",
+  summary: "Loose material near the shop entrance",
+  raiser_display_name: "Priya Nand",
+};
+
+function typedToday(stops: unknown, overrides: Partial<TodayResponse> = {}) {
+  return todayResponseSchema.parse({
+    ...todayModel(),
+    jobs: [],
+    read_model_generated_at: "2026-07-10T16:30:00.000Z",
+    ...overrides,
+    work_objects: [
+      {
+        work_object_type: "Shop Order",
+        work_object_id: "SHOP-001",
+        physical_context_type: "Shop Floor",
+        physical_context_id: "SHOP-FLOOR-1",
+        scheduled_start: "2026-07-10T16:00:00.000Z",
+        scheduled_end: null,
+        next_action: "See job plan",
+        assignment: {
+          id: "ASSIGN-SHOP-1",
+          assignment_id: "assignment_shop_1",
+          type: "Shop",
+          status: "Assigned",
+          crew_profile: null,
+          scheduled_start: "2026-07-10T16:00:00.000Z",
+          scheduled_end: null,
+          blocker_reason: null,
+        },
+        active_stops: stops,
+      },
+    ],
+  });
+}
+
 describe("TodayPage", () => {
   const originalOnline = navigator.onLine;
 
@@ -197,6 +236,183 @@ describe("TodayPage", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows a typed-only tenant stop and holds the Other work card", async () => {
+    renderToday(typedToday([{ ...typedStop, scope: "tenant" }]));
+
+    const notice = (await screen.findByText("Work is stopped on every job.")).closest("section")!;
+    expect(
+      within(notice).getByText("This stop also holds every other work assignment."),
+    ).toBeVisible();
+    expect(within(notice).getByText(/The office must release the stop/)).toBeVisible();
+    expect(within(notice).getByText(/Stop status as of .*10:30\sa\.m\./)).toBeVisible();
+    const card = screen.getByText("SHOP-001").closest("article")!;
+    expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();
+    expect(within(card).queryByText("See job plan")).toBeNull();
+    expect(within(card).getByRole("link", { name: "Review work plan" })).not.toHaveClass(
+      "bg-primary",
+    );
+    expect(screen.queryByRole("link", { name: "Open work plan" })).toBeNull();
+  });
+
+  it("unions and deduplicates tenant stops from job and typed assignments", async () => {
+    const tenantStop = { ...typedStop, scope: "tenant" as const };
+    renderToday(
+      typedToday([tenantStop], {
+        jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
+      }),
+    );
+    expect(await screen.findAllByText("Work is stopped on every job.")).toHaveLength(1);
+    expect(screen.getAllByText(/Priya Nand reported a stop/)).toHaveLength(1);
+    expect(screen.getAllByText(/Reason: Loose material near the shop entrance/)).toHaveLength(1);
+    expect(screen.getAllByText("Wait for the office to release the stop")).toHaveLength(3);
+  });
+
+  it.each(["job", "typed"] as const)(
+    "holds every assignment when a tenant stop is present only in the %s list",
+    async (stopList) => {
+      const tenantStop = { ...typedStop, scope: "tenant" as const };
+      renderToday(
+        typedToday(stopList === "typed" ? [tenantStop] : [], {
+          jobs: todayModel().jobs.map((job) => ({
+            ...job,
+            active_stops: stopList === "job" ? [tenantStop] : [],
+          })),
+        }),
+      );
+      expect(await screen.findByText("Work is stopped on every job.")).toBeVisible();
+      expect(screen.getAllByText("Wait for the office to release the stop")).toHaveLength(3);
+      expect(screen.queryByText("See job plan")).toBeNull();
+      expect(screen.queryByText("Open field check-in")).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    "shows typed local stop identity, authority and snapshot (offline=%s)",
+    async (offline) => {
+      renderToday(
+        typedToday([typedStop], { stale_fields: offline ? ["offline.cached_packet"] : [] }),
+        undefined,
+        { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
+      );
+      const notice = (await screen.findByText("Work is stopped on this assignment.")).closest(
+        "section",
+      )!;
+      expect(
+        within(notice).getByText(/Stopped .*10:24\sa\.m\. by Priya Nand · Reason: Loose material/),
+      ).toBeVisible();
+      expect(
+        within(notice).getByText(
+          "The office must release the stop. The person who reported it cannot release it.",
+        ),
+      ).toBeVisible();
+      expect(
+        within(notice).getByText(
+          offline
+            ? /^Saved stop status as of .*10:30\sa\.m\./
+            : /^Stop status as of .*10:30\sa\.m\./,
+        ),
+      ).toBeVisible();
+      expect(within(notice).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+        "href",
+        "tel:7805550142",
+      );
+      const card = notice.closest("article")!;
+      expect(
+        within(card).getByRole("heading", { name: "Shop Floor · SHOP-FLOOR-1" }),
+      ).toBeVisible();
+      expect(within(card).getByText("Shop crew · Assigned")).toBeVisible();
+      expect(within(card).getByRole("link", { name: "Review work plan" })).toHaveAttribute(
+        "href",
+        "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
+      );
+      expect(within(card).queryByText("See job plan")).toBeNull();
+      expect(screen.queryByText(/^Work is stopped on the job/)).toBeNull();
+    },
+  );
+
+  it("keeps a malformed typed stop holding its assignment without inventing an office number", async () => {
+    renderToday(typedToday([42]));
+    const notice = (await screen.findByText("Work is stopped on this assignment.")).closest(
+      "section",
+    )!;
+    expect(within(notice).getByText(/^Stop status as of .*10:30\sa\.m\./)).toBeVisible();
+    expect(within(notice).getByText("Stopped", { exact: true })).toBeVisible();
+    expect(within(notice).getByText(/The office must release the stop/)).toBeVisible();
+    expect(within(notice).queryByRole("link", { name: "Call the office" })).toBeNull();
+    expect(screen.getByText("Wait for the office to release the stop")).toBeVisible();
+  });
+
+  it.each([
+    ["null typed projection", null, []],
+    ["missing typed projection", undefined, []],
+    ["unavailable marker overriding typed empty list", [], ["jobs.active_stops_unavailable"]],
+  ] as const)("holds typed-only work with %s", async (_label, stops, staleFields) => {
+    renderToday(typedToday(stops, { stale_fields: [...staleFields] }));
+    expect(await screen.findByText("Safety stops need checking")).toBeVisible();
+    expect(
+      screen.getByText("Ask the office to check safety stops before starting work"),
+    ).toBeVisible();
+    expect(screen.queryByText("See job plan")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open work plan" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Review work plan" })).not.toHaveClass("bg-primary");
+  });
+
+  it.each(["job", "typed"] as const)(
+    "holds both assignment lists when the %s projection is unknown",
+    async (unknownList) => {
+      renderToday(
+        typedToday(unknownList === "typed" ? null : [], {
+          jobs: todayModel().jobs.map((job) => ({
+            ...job,
+            active_stops: unknownList === "job" ? null : [],
+          })),
+        }),
+      );
+      expect(await screen.findByText("Safety stops need checking")).toBeVisible();
+      expect(
+        screen.getAllByText("Ask the office to check safety stops before starting work"),
+      ).toHaveLength(3);
+      expect(screen.getAllByRole("link", { name: "Review job details" })).toHaveLength(2);
+      expect(screen.getByRole("link", { name: "Review work plan" })).toBeVisible();
+      expect(screen.queryByText("See job plan")).toBeNull();
+      expect(screen.queryByText("Open field check-in")).toBeNull();
+    },
+  );
+
+  it("keeps typed work held through an unavailable retry until an explicit successful empty read", async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderToday(typedToday([typedStop]));
+    await screen.findByText("Work is stopped on this assignment.");
+    vi.mocked(loadToday).mockResolvedValueOnce(
+      typedToday(null, { stale_fields: ["jobs.active_stops_unavailable"] }),
+    );
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["today"] });
+    });
+    await screen.findByText("Safety stops need checking");
+    expect(screen.queryByText("See job plan")).toBeNull();
+    expect(screen.getByRole("link", { name: "Review work plan" })).toBeVisible();
+    vi.mocked(loadToday).mockResolvedValueOnce(typedToday([]));
+    await user.click(screen.getByRole("button", { name: "Check stop status again" }));
+    await waitFor(() => expect(screen.queryByText("Safety stops need checking")).toBeNull());
+    expect(screen.getByText("See job plan")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open work plan" })).toBeVisible();
+  });
+
+  it.each([fieldSession, officeSession])(
+    "permits clear typed guidance and preserves the reader's assignment role ($user.role)",
+    async (session) => {
+      renderToday(typedToday([]), undefined, session);
+      expect(await screen.findByText("See job plan")).toBeVisible();
+      expect(screen.getByRole("link", { name: "Open work plan" })).toBeVisible();
+      expect(
+        screen.getByText(session.user.role === "field" ? "Your role" : "Crew role"),
+      ).toBeVisible();
+      expect(screen.getByText("Shop crew · Assigned")).toBeVisible();
+      expect(screen.queryByText("Safety stops need checking")).toBeNull();
+    },
+  );
+
   it.each([
     ["unavailable lookup", null, ["jobs.active_stops_unavailable"]],
     ["missing stop projection", undefined, []],
@@ -210,7 +426,8 @@ describe("TodayPage", () => {
     renderToday(model);
 
     expect(await screen.findByText("Safety stops need checking")).toBeVisible();
-    expect(screen.getByText(/keep work stopped until the office has checked it/i)).toBeVisible();
+    expect(screen.getByText(/keep work stopped and ask the office to check it/i)).toBeVisible();
+    expect(screen.getByText(/Any active stop still needs the office to release it/)).toBeVisible();
     expect(
       screen.getAllByText("Ask the office to check safety stops before starting work"),
     ).toHaveLength(2);
@@ -290,6 +507,7 @@ describe("TodayPage", () => {
             scheduled_start: "2026-07-10T16:00:00.000Z",
             scheduled_end: null,
             next_action: "See job plan",
+            active_stops: [],
             assignment: {
               id: "ASSIGN-SHOP-1",
               assignment_id: "assignment_shop_1",

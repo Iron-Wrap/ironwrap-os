@@ -103,6 +103,7 @@ export function TenantStopBanner({
   checkedAt,
   offline,
   officePhone,
+  hasOtherWork = false,
   now,
 }: {
   stops: ActiveStop[];
@@ -110,12 +111,14 @@ export function TenantStopBanner({
   checkedAt: string;
   offline: boolean;
   officePhone?: string | null;
+  hasOtherWork?: boolean;
   now?: Date;
 }) {
   const tenant = stops.filter((stop) => stop.scope === "tenant");
   if (tenant.length === 0) return null;
   return (
     <Notice tone="danger" title={STOP_WORDS.tenant} actions={officeCall(officePhone)}>
+      {hasOtherWork ? <p className="leading-6">{STOP_WORDS.tenantOtherWork}</p> : null}
       <StopLines
         stops={tenant}
         dateOptions={dateOptions}
@@ -123,6 +126,34 @@ export function TenantStopBanner({
         offline={offline}
         now={now}
         unmatched
+      />
+    </Notice>
+  );
+}
+
+/** A stop scoped to a typed assignment, without pretending its context is a roof job. */
+export function AssignmentStopBanner({
+  stops,
+  dateOptions,
+  checkedAt,
+  offline,
+  officePhone,
+}: {
+  stops: ActiveStop[];
+  dateOptions: StopDateOptions;
+  checkedAt: string;
+  offline: boolean;
+  officePhone?: string | null;
+}) {
+  const onAssignment = stops.filter((stop) => stop.scope === "job");
+  if (onAssignment.length === 0) return null;
+  return (
+    <Notice tone="danger" title={STOP_WORDS.assignment} actions={officeCall(officePhone)}>
+      <StopLines
+        stops={onAssignment}
+        dateOptions={dateOptions}
+        checkedAt={checkedAt}
+        offline={offline}
       />
     </Notice>
   );

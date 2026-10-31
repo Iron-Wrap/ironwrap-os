@@ -145,4 +145,64 @@ describe("stop words", () => {
       "Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.",
     );
   });
+
+  it("preserves typed assignment stop projections, including unreadable and absent status", () => {
+    const stop = {
+      occurrence_id: "so_typed",
+      scope: "tenant",
+      reported_at: "2026-07-10T16:24:00.000Z",
+      summary: "Loose material near the shop entrance",
+      raiser_display_name: "Priya Nand",
+    };
+    const assignment = {
+      work_object_type: "Shop Order",
+      work_object_id: "SHOP-001",
+      physical_context_type: "Shop Floor",
+      physical_context_id: "SHOP-FLOOR-1",
+      scheduled_start: null,
+      scheduled_end: null,
+      next_action: "See job plan",
+      assignment: null,
+    };
+    const read = (active_stops: unknown) =>
+      todayResponseSchema.parse({
+        version: 1,
+        source_updated_at: null,
+        read_model_generated_at: "2026-07-10T16:30:00.000Z",
+        stale_fields: [],
+        permissions: [],
+        allowed_actions: [],
+        date: "2026-07-10",
+        jobs: [],
+        work_objects: [{ ...assignment, active_stops }],
+      }).work_objects[0];
+
+    expect(read([stop])).toHaveProperty("active_stops", [stop]);
+    expect(read([])).toHaveProperty("active_stops", []);
+    expect(read(null)).toHaveProperty("active_stops", null);
+    expect(read(undefined)).toHaveProperty("active_stops", null);
+    expect(read(stop)).toHaveProperty("active_stops", [stop]);
+    expect(read([{ occurrence_id: "so_broken", scope: "tenant" }, 42])).toHaveProperty(
+      "active_stops",
+      [
+        {
+          occurrence_id: "so_broken",
+          scope: "tenant",
+          reported_at: "",
+          summary: null,
+          raiser_display_name: null,
+        },
+        {
+          occurrence_id: "unreadable_job_1",
+          scope: "job",
+          reported_at: "",
+          summary: null,
+          raiser_display_name: null,
+        },
+      ],
+    );
+    expect(read([{ ...stop, scope: "unrecognized" }])).toHaveProperty("active_stops", [
+      { ...stop, scope: "job" },
+    ]);
+  });
 });

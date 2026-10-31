@@ -3,7 +3,129 @@ import AxeBuilder from "@axe-core/playwright";
 import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
+function typedStopRead(
+  today: Record<string, unknown>,
+  state: "local" | "tenant" | "unknown" | "clear",
+) {
+  return {
+    ...today,
+    read_model_generated_at: "2026-07-10T16:30:00.000Z",
+    stale_fields: state === "unknown" ? ["jobs.active_stops_unavailable"] : [],
+    jobs: [],
+    work_objects: [
+      {
+        work_object_type: "Shop Order",
+        work_object_id: "SHOP-TEST",
+        physical_context_type: "Shop Floor",
+        physical_context_id: "SHOP-FLOOR-TEST",
+        scheduled_start: "2026-07-10T16:00:00.000Z",
+        scheduled_end: null,
+        next_action: "See job plan",
+        assignment: null,
+        active_stops:
+          state === "unknown"
+            ? null
+            : state === "clear"
+              ? []
+              : [
+                  {
+                    occurrence_id: "so_typed_test",
+                    scope: state === "tenant" ? "tenant" : "job",
+                    reported_at: "2026-07-10T16:24:00.000Z",
+                    summary: "Loose material near the shop entrance",
+                    raiser_display_name: "Priya Nand",
+                  },
+                ],
+      },
+    ],
+  };
+}
+
 test.describe("Field Companion PWA acceptance", () => {
+  test("keeps a typed local stop held through an unavailable read until a successful empty retry", async ({
+    page,
+  }) => {
+    let state: "local" | "unknown" | "clear" = "local";
+    await page.route("**/api/v1/field/bootstrap", async (route) => {
+      const response = await route.fetch();
+      const model = await response.json();
+      if (model.today) model.today = typedStopRead(model.today, state);
+      await route.fulfill({ response, json: model });
+    });
+    await page.route("**/api/v1/today", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: typedStopRead(await response.json(), state) });
+    });
+    await seedPairedFieldDevice(page);
+    await page.reload();
+
+    await expect(
+      page.getByText("Work is stopped on this assignment.", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(/The person who reported it cannot release it/)).toBeVisible();
+    await expect(page.getByText(/^Stop status as of .*10:30/)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Review work plan" })).toHaveAttribute(
+      "href",
+      "/work-objects/Shop%20Order/SHOP-TEST/physical-contexts/Shop%20Floor/SHOP-FLOOR-TEST",
+    );
+    await expect(page.getByRole("link", { name: "Open work plan" })).toHaveCount(0);
+    await expect(page.getByText("See job plan", { exact: true })).toHaveCount(0);
+
+    state = "unknown";
+    await page.reload();
+    await expect(page.getByText("Safety stops need checking", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(/Any active stop still needs the office to release it/),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Review work plan" })).toHaveAttribute(
+      "data-variant",
+      "outline",
+    );
+    await expect(page.getByText("See job plan", { exact: true })).toHaveCount(0);
+
+    state = "clear";
+    await page.getByRole("button", { name: "Check stop status again" }).click();
+    await expect(page.getByText("Safety stops need checking", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("See job plan", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open work plan" })).toHaveAttribute(
+      "data-variant",
+      "accent",
+    );
+  });
+
+  test("presents a typed-only tenant stop above Other work and demotes the held plan action", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/field/bootstrap", async (route) => {
+      const response = await route.fetch();
+      const model = await response.json();
+      if (model.today) model.today = typedStopRead(model.today, "tenant");
+      await route.fulfill({ response, json: model });
+    });
+    await page.route("**/api/v1/today", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: typedStopRead(await response.json(), "tenant") });
+    });
+    await seedPairedFieldDevice(page);
+    await page.reload();
+    await expect(page.getByText("Work is stopped on every job.", { exact: true })).toHaveCount(1);
+    await expect(
+      page.getByText("This stop also holds every other work assignment.", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Wait for the office to release the stop", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Review work plan" })).toHaveAttribute(
+      "data-variant",
+      "outline",
+    );
+    await expect(page.getByText("See job plan", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+  });
+
   test("keeps an unavailable stop read held until a successful stop-status retry", async ({
     page,
   }) => {
@@ -32,8 +154,9 @@ test.describe("Field Companion PWA acceptance", () => {
     await page.reload();
 
     await expect(page.getByText("Safety stops need checking", { exact: true })).toBeVisible();
+    await expect(page.getByText(/keep work stopped and ask the office to check it/i)).toBeVisible();
     await expect(
-      page.getByText(/keep work stopped until the office has checked it/i),
+      page.getByText(/Any active stop still needs the office to release it/),
     ).toBeVisible();
     await expect(page.getByText("Open field check-in", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Review job details" })).toBeVisible();

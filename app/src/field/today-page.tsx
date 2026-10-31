@@ -18,7 +18,12 @@ import {
 import { messageForLoad } from "../lib/plain-error";
 import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
-import { JobStopBanner, StopStatusUnavailableBanner, TenantStopBanner } from "./stop-banner";
+import {
+  AssignmentStopBanner,
+  JobStopBanner,
+  StopStatusUnavailableBanner,
+  TenantStopBanner,
+} from "./stop-banner";
 import { STOP_WORDS, uniqueStops } from "./stop-words";
 import { OfflineReadiness } from "./offline-readiness";
 
@@ -165,7 +170,13 @@ export function TodayPage() {
     session.user.role === "field" && today.allowed_actions.includes("field.checkin.create");
   const stopStatusUnavailable =
     today.stale_fields.includes("jobs.active_stops_unavailable") ||
-    today.jobs.some((job) => job.active_stops == null);
+    today.jobs.some((job) => job.active_stops == null) ||
+    today.work_objects.some((workObject) => workObject.active_stops == null);
+  const assignmentStops = uniqueStops([
+    ...today.jobs.map((job) => job.active_stops ?? []),
+    ...today.work_objects.map((workObject) => workObject.active_stops ?? []),
+  ]);
+  const tenantStopActive = assignmentStops.some((stop) => stop.scope === "tenant");
   const dataLimits = today.stale_fields.filter(
     (field) => field !== "offline.cached_packet" && field !== "jobs.active_stops_unavailable",
   );
@@ -226,11 +237,12 @@ export function TodayPage() {
         <section aria-labelledby="today-run-sheet-heading">
           <div className="mb-4 empty:hidden">
             <TenantStopBanner
-              stops={uniqueStops(today.jobs.map((job) => job.active_stops ?? []))}
+              stops={assignmentStops}
               dateOptions={dateOptions}
               checkedAt={today.read_model_generated_at}
               offline={offline}
               officePhone={session.tenant.office_phone}
+              hasOtherWork={today.work_objects.length > 0}
             />
           </div>
           <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
@@ -253,6 +265,7 @@ export function TodayPage() {
                 checkedAt={today.read_model_generated_at}
                 offline={offline}
                 stopStatusUnavailable={stopStatusUnavailable}
+                tenantStopActive={tenantStopActive}
                 fieldCaptureAllowed={fieldCaptureAllowed}
                 canRetryPacket={navigator.onLine}
                 onRetryPacket={() => setPacketRefreshCycle((cycle) => cycle + 1)}
@@ -268,6 +281,10 @@ export function TodayPage() {
                     key={`${workObject.work_object_type}:${workObject.work_object_id}:${workObject.physical_context_type}:${workObject.physical_context_id}`}
                     workObject={workObject}
                     dateOptions={dateOptions}
+                    checkedAt={today.read_model_generated_at}
+                    offline={offline}
+                    stopStatusUnavailable={stopStatusUnavailable}
+                    tenantStopActive={tenantStopActive}
                   />
                 ))}
               </ol>
@@ -387,6 +404,7 @@ function TodayJobRow({
   checkedAt,
   offline,
   stopStatusUnavailable,
+  tenantStopActive,
   fieldCaptureAllowed,
   canRetryPacket,
   onRetryPacket,
@@ -397,6 +415,7 @@ function TodayJobRow({
   checkedAt: string;
   offline: boolean;
   stopStatusUnavailable: boolean;
+  tenantStopActive: boolean;
   fieldCaptureAllowed: boolean;
   canRetryPacket: boolean;
   onRetryPacket: () => void;
@@ -404,7 +423,7 @@ function TodayJobRow({
   const blocked = job.blocked_gate_count > 0;
   // A work stop holds this job (its own, or one that holds every job): the card waits on the
   // office, and a work check on it never reads as the way to restart work.
-  const held = (job.active_stops ?? []).length > 0;
+  const held = tenantStopActive || (job.active_stops ?? []).length > 0;
   const officePhone = useSession().tenant.office_phone;
   const actionLabel = stopStatusUnavailable
     ? "Review job details"
@@ -508,10 +527,21 @@ function TodayJobRow({
 function TodayWorkObjectRow({
   workObject,
   dateOptions,
+  checkedAt,
+  offline,
+  stopStatusUnavailable,
+  tenantStopActive,
 }: {
   workObject: TodayWorkObject;
   dateOptions: FieldDateOptions;
+  checkedAt: string;
+  offline: boolean;
+  stopStatusUnavailable: boolean;
+  tenantStopActive: boolean;
 }) {
+  const held = tenantStopActive || (workObject.active_stops ?? []).length > 0;
+  const reviewOnly = held || stopStatusUnavailable;
+  const officePhone = useSession().tenant.office_phone;
   const params = {
     workObjectType: workObject.work_object_type,
     workObjectId: workObject.work_object_id,
@@ -542,18 +572,36 @@ function TodayWorkObjectRow({
           <h3 className="mt-1 text-xl font-bold leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
             {workObject.physical_context_type} · {workObject.physical_context_id}
           </h3>
+          <div className="mt-3 empty:hidden">
+            <AssignmentStopBanner
+              stops={workObject.active_stops ?? []}
+              dateOptions={dateOptions}
+              checkedAt={checkedAt}
+              offline={offline}
+              officePhone={officePhone}
+            />
+          </div>
           <dl className="mt-4 grid gap-4 text-sm @sm:grid-cols-2">
             <DispatchFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
-            <DispatchFact label="Next step" value={workObject.next_action} />
+            <DispatchFact
+              label="Next step"
+              value={
+                stopStatusUnavailable
+                  ? STOP_WORDS.unavailableNextStep
+                  : held
+                    ? STOP_WORDS.nextStep
+                    : workObject.next_action
+              }
+            />
           </dl>
         </div>
         <div className="space-y-3 @3xl:pt-1">
-          <Button asChild size="field" fullWidth variant="accent">
+          <Button asChild size="field" fullWidth variant={reviewOnly ? "outline" : "accent"}>
             <Link
               to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId"
               params={params}
             >
-              Open work plan
+              {reviewOnly ? "Review work plan" : "Open work plan"}
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>

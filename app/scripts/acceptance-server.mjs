@@ -141,8 +141,8 @@ const fixtureToday = {
   ],
 };
 
-// ACCEPTANCE_ACTIVE_STOPS=job|tenant|both: the run sheet's job carries active work stops in Track
-// C's active_stops shape, so the crew phone's stop banners can be exercised and captured.
+// job|tenant|both preserve the roof-job scenarios. typed-local|typed-tenant|typed-unknown|
+// typed-clear exercise the same #74 projection on a non-roof physical assignment.
 const acceptanceActiveStops = {
   job: {
     occurrence_id: "so_acceptance_job_stop",
@@ -158,14 +158,44 @@ const acceptanceActiveStops = {
     summary: "Loose sheets on the ridge",
     raiser_display_name: "Priya Nand",
   },
+  typed: {
+    occurrence_id: "so_acceptance_typed_stop",
+    scope: "job",
+    reported_at: "2026-07-10T16:24:00.000Z",
+    summary: "Loose material near the shop entrance",
+    raiser_display_name: "Priya Nand",
+  },
+};
+
+const fixtureTypedAssignment = {
+  work_object_type: "Shop Order",
+  work_object_id: "SHOP-ACCEPTANCE",
+  physical_context_type: "Shop Floor",
+  physical_context_id: "SHOP-FLOOR-ACCEPTANCE",
+  scheduled_start: "2026-07-10T16:00:00.000Z",
+  scheduled_end: null,
+  next_action: "See job plan",
+  assignment: {
+    ...fixtureToday.jobs[0].assignment,
+    id: "ASSIGNMENT-SHOP-ACCEPTANCE",
+    assignment_id: "assignment-shop-acceptance",
+    type: "Shop",
+    blocker_reason: null,
+  },
+  active_stops: [],
 };
 
 function todayWithActiveStops(today) {
   const mode = process.env.ACCEPTANCE_ACTIVE_STOPS;
   if (!mode) return today;
+  const typed = mode.startsWith("typed-");
+  const unknown = mode === "typed-unknown";
   const stops = [
-    ...(mode === "tenant" || mode === "both" ? [acceptanceActiveStops.tenant] : []),
+    ...(mode === "tenant" || mode === "both" || mode === "typed-tenant"
+      ? [acceptanceActiveStops.tenant]
+      : []),
     ...(mode === "job" || mode === "both" ? [acceptanceActiveStops.job] : []),
+    ...(mode === "typed-local" ? [acceptanceActiveStops.typed] : []),
   ];
   // A read that includes a reported stop is built after that report. Keep the synthetic
   // response snapshot separate from the event timestamp, as the Worker's envelope does.
@@ -177,7 +207,13 @@ function todayWithActiveStops(today) {
   return {
     ...today,
     read_model_generated_at: checkedAt,
-    jobs: today.jobs.map((job) => ({ ...job, active_stops: stops })),
+    stale_fields: unknown
+      ? [...today.stale_fields, "jobs.active_stops_unavailable"]
+      : today.stale_fields,
+    jobs: typed ? [] : today.jobs.map((job) => ({ ...job, active_stops: stops })),
+    work_objects: typed
+      ? [{ ...fixtureTypedAssignment, active_stops: unknown ? null : stops }]
+      : (today.work_objects ?? []),
   };
 }
 

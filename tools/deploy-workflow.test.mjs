@@ -694,14 +694,11 @@ function validateProductionWorkflow(workflow) {
 }
 
 function validateReleasePleaseWorkflow(workflow) {
-  const prTitle = section(workflow, "pr-title");
   const releasePr = section(workflow, "release-pr");
   const githubRelease = section(workflow, "github-release");
 
   // No job's GITHUB_TOKEN writes. The two release jobs write through RELEASE_TAG_TOKEN,
   // held only in the `release` environment, so their PR and tag start workflows.
-  assert.match(prTitle, /permissions:\n\s+contents: read/);
-  assert.doesNotMatch(prTitle, /contents: write|pull-requests: write|RELEASE_TAG_TOKEN|environment:/);
   assert.match(releasePr, /environment: release\n\s+permissions:\n\s+contents: read\n\s+steps:/);
   assert.match(githubRelease, /environment: release\n\s+permissions:\n\s+contents: read\n\s+pull-requests: read\n\s+actions: read/);
   assert.equal((workflow.match(/: write/g) ?? []).length, 0);
@@ -711,15 +708,16 @@ function validateReleasePleaseWorkflow(workflow) {
   assert.equal((workflow.match(/GITHUB_TOKEN: \$\{\{ github\.token \}\}/g) ?? []).length, 0);
   assert.equal((workflow.match(/\$\{\{ secrets\.RELEASE_TAG_TOKEN \}\}/g) ?? []).length, 2);
 
-  // Each job answers to exactly one event. `release-pr` on pull_request would open
-  // a release PR for every branch.
-  assert.match(prTitle, /if: github\.event_name == 'pull_request'/);
-  assert.match(releasePr, /if: github\.event_name == 'push'/);
-  assert.doesNotMatch(releasePr, /pull_request/);
+  // Nothing runs per pull request event: release-pr on pull_request would open a
+  // release PR for every branch, and the subject check there was about a fifth of
+  // all Actions runs. release-pr answers to a push to main or a manual dispatch.
+  assert.doesNotMatch(workflow, /^\s*pull_request(_target)?:/m);
+  assert.match(workflow, /\n  workflow_dispatch:\n/);
   assert.match(
-    workflow,
-    /pull_request:\n\s+types: \[opened, edited, reopened, synchronize\]/,
+    releasePr,
+    /if: github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/,
   );
+  assert.doesNotMatch(releasePr, /pull_request/);
 
   // The tag is minted only for the merge commit of the newest merged release PR,
   // on a successful Deploy of this repository's own main.
@@ -755,22 +753,20 @@ function validateReleasePleaseWorkflow(workflow) {
     assert.match(uses, /uses: actions\/(checkout|setup-node)@[0-9a-f]{40}/, uses);
   }
 
-  // The title check reads its inputs from the environment, never from the script.
-  assert.match(prTitle, /PR_TITLE: \$\{\{ github\.event\.pull_request\.title \}\}/);
-  assert.match(prTitle, /node tools\/conventional-pr-title\.mjs/);
-  assert.match(prTitle, /PR_COMMIT_COUNT="\$commit_count" HEAD_COMMIT_SUBJECT="\$head_commit_subject"/);
-  // The title is attacker-controlled text. It may reach the job in exactly one
-  // way: an `env:` assignment. Interpolating `${{ ... .title }}` into the `run:`
-  // script would make a pull request title arbitrary shell.
-  const titleUses = [
-    ...prTitle.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_-]*): \$\{\{ github\.event\.pull_request\.title \}\}$/gm),
+  // The subject check is advisory and push-only. The landed subject is text a
+  // contributor chose: it may reach the job in exactly one way, an `env:`
+  // assignment, never the `run:` script. The step warns and never fails.
+  assert.match(releasePr, /if: github\.event_name == 'push'\n\s+env:\n\s+COMMIT_MESSAGE: \$\{\{ github\.event\.head_commit\.message \}\}/);
+  assert.match(releasePr, /if ! PR_TITLE="\$subject" node tools\/conventional-pr-title\.mjs; then\n\s+echo "::warning /);
+  const subjectUses = [
+    ...workflow.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_-]*): \$\{\{ github\.event\.head_commit\.message \}\}$/gm),
   ];
-  assert.equal(titleUses.length, 1, "the PR title is read exactly once");
-  assert.equal(titleUses[0][1], "PR_TITLE", "and only as an env assignment");
+  assert.equal(subjectUses.length, 1, "the landed commit message is read exactly once");
+  assert.equal(subjectUses[0][1], "COMMIT_MESSAGE", "and only as an env assignment");
   assert.equal(
-    (prTitle.match(/github\.event\.pull_request\.title/g) ?? []).length,
+    (workflow.match(/github\.event\.head_commit\.message/g) ?? []).length,
     1,
-    "the PR title expression appears nowhere else",
+    "the commit message expression appears nowhere else",
   );
 }
 
@@ -985,20 +981,31 @@ test("production workflow validation rejects a mutable or out-of-order promotion
   );
 });
 
-test("the release train checks PR titles, opens one release PR, and tags only the release merge", async () => {
+test("the release train warns on the landed subject, opens one release PR, and tags only the release merge", async () => {
   validateReleasePleaseWorkflow(await readFile(releasePleaseWorkflowUrl, "utf8"));
 });
 
-test("release-please workflow validation rejects a write-capable title check or an ungated tag", async () => {
+test("release-please workflow validation rejects a per-pull-request run, a write token or an ungated tag", async () => {
   const workflow = await readFile(releasePleaseWorkflowUrl, "utf8");
-  // The title check runs on every pull request, including a fork's: it must never
-  // hold a write token.
+  // No job's GITHUB_TOKEN may write.
   assert.throws(() =>
     validateReleasePleaseWorkflow(
       workflow.replace(
         "    permissions:\n      contents: read\n",
         "    permissions:\n      contents: write\n",
       ),
+    ),
+  );
+  // A pull_request trigger would bring the per-event runs back.
+  assert.throws(() =>
+    validateReleasePleaseWorkflow(
+      workflow.replace("on:\n", "on:\n  pull_request:\n    types: [opened, synchronize]\n"),
+    ),
+  );
+  // The landed subject may not be interpolated into the script.
+  assert.throws(() =>
+    validateReleasePleaseWorkflow(
+      workflow.replace('subject="$(printf', 'echo "${{ github.event.head_commit.message }}"\n          subject="$(printf'),
     ),
   );
   // A GITHUB_TOKEN-made release PR or tag starts no workflow; the PAT outside its

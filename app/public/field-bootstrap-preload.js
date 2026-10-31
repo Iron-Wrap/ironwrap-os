@@ -1,6 +1,7 @@
 (() => {
   const DATABASE_NAME = "ironwrap-os";
   const DEVICE_SECRET_KEY = "field-device-secret-v1";
+  const PRINCIPAL_EPOCH_KEY = "field-principal-epoch-v1";
   const DEVICE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
   const BOOTSTRAP_PATH = "/api/v1/field/bootstrap";
   const TIMEOUT_MS = 12_000;
@@ -34,9 +35,27 @@
   // Do not leave a late response for a later refetch to mistake for the initial one.
   if (window.__ironwrapFieldBootstrapPreloadConsumed) return;
 
-  const preload = readStoredDeviceProof().then((deviceProof) => {
-    if (!deviceProof) throw new Error("field_device_proof_unavailable");
-    return fetchBootstrap(deviceProof);
+  // Local provenance for the consuming app, never a Worker field or permission. Capture
+  // before the asynchronous proof read so an intervening auth transition remains visible.
+  try {
+    const key = "ironwrap.principal-read-generation-v1";
+    let generation = window.localStorage.getItem(key);
+    if (!generation) generation = crypto.randomUUID();
+    window.localStorage.setItem(key, generation);
+    window.__ironwrapFieldBootstrapReadGeneration =
+      window.localStorage.getItem(key) === generation ? generation : null;
+  } catch {
+    window.__ironwrapFieldBootstrapReadGeneration = null;
+  }
+
+  const read = readStoredDeviceProof();
+  window.__ironwrapFieldBootstrapReadEpoch = read.then(
+    (value) => value?.epoch ?? null,
+    () => null,
+  );
+  const preload = read.then((read) => {
+    if (!read) throw new Error("field_device_proof_unavailable");
+    return fetchBootstrap(read.deviceProof);
   });
 
   // The React entry consumes this promise as its normal, schema-validated bootstrap
@@ -64,10 +83,27 @@
     const database = await openExistingDatabase();
     try {
       if (!database.objectStoreNames.contains("meta")) return undefined;
-      const transaction = database.transaction("meta", "readonly");
-      const record = await requestResult(transaction.objectStore("meta").get(DEVICE_SECRET_KEY));
+      const transaction = database.transaction("meta", "readwrite");
+      const completed = new Promise((resolve, reject) => {
+        transaction.addEventListener("complete", resolve, { once: true });
+        transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+        transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      });
+      const store = transaction.objectStore("meta");
+      const [record, epochRecord] = await Promise.all([
+        requestResult(store.get(DEVICE_SECRET_KEY)),
+        requestResult(store.get(PRINCIPAL_EPOCH_KEY)),
+      ]);
       const value = typeof record?.value === "string" ? record.value : record?.value?.value;
-      return typeof value === "string" && DEVICE_SECRET_PATTERN.test(value) ? value : undefined;
+      const epoch =
+        typeof epochRecord?.value === "string" ? epochRecord.value : crypto.randomUUID();
+      await requestResult(
+        store.put({ key: PRINCIPAL_EPOCH_KEY, value: epoch, updatedAt: Date.now() }),
+      );
+      await completed;
+      return typeof value === "string" && DEVICE_SECRET_PATTERN.test(value)
+        ? { deviceProof: value, epoch }
+        : undefined;
     } finally {
       database.close();
     }

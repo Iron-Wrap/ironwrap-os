@@ -2,6 +2,12 @@ import type { AuthenticatedSession } from "../auth/session";
 import { getDeviceSecret } from "../auth/device-credential";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { getDatabase } from "../storage/db";
+import { savedPlanBinding, type SavedPlanTarget, type SavedPlanModel } from "./saved-plan-context";
+import {
+  captureSavedPlanReadContext,
+  isSavedPlanContextError,
+  type SavedPlanReadContext,
+} from "./saved-plan-read-context";
 import {
   fieldMeasurementPageSchema,
   jobResponseSchema,
@@ -47,43 +53,143 @@ export async function loadJob(
   session: AuthenticatedSession,
   jobId: string,
   fetcher: typeof fetch = fetch,
+  context?: SavedPlanReadContext,
 ): Promise<JobResponse> {
   const key = cacheKey(session, `job:${jobId}`);
+  const bindingContext = context ?? (await optionalBindingContext(session));
+  const deviceSecret = context
+    ? context.deviceSecret
+    : session.user.role === "field"
+      ? await getDeviceSecret()
+      : undefined;
+  await context?.assertCurrent();
   let model: JobResponse;
   try {
     model = await apiRequest({
       path: `/api/v1/jobs/${encodeURIComponent(jobId)}`,
       schema: jobResponseSchema,
       fetcher,
-      deviceProof: proofFor(session),
+      deviceProof: session.user.role === "field" ? async () => deviceSecret : undefined,
     });
   } catch (error) {
-    return await offlineModel(key, jobResponseSchema, error);
+    await context?.assertCurrent();
+    const cached = await offlineModel(key, jobResponseSchema, error);
+    await context?.assertCurrent();
+    return cached;
   }
+  await context?.assertCurrent();
   await rememberOfficeContact(session, model);
-  return await keepForOffline(key, model);
+  await context?.assertCurrent();
+  return await keepForOffline(
+    key,
+    model,
+    await bindingFor(
+      session,
+      { kind: "job", jobId },
+      model,
+      deviceSecret,
+      bindingContext,
+      context !== undefined,
+    ),
+    bindingContext,
+    context !== undefined,
+  );
 }
 
 export async function loadWorkObject(
   session: AuthenticatedSession,
   scope: WorkObjectResponse["work_object"],
   fetcher: typeof fetch = fetch,
+  context?: SavedPlanReadContext,
 ): Promise<WorkObjectResponse> {
   const key = cacheKey(session, workObjectCacheSuffix(scope));
+  const bindingContext = context ?? (await optionalBindingContext(session));
   const path = workObjectPath(scope);
+  const deviceSecret = context
+    ? context.deviceSecret
+    : session.user.role === "field"
+      ? await getDeviceSecret()
+      : undefined;
+  await context?.assertCurrent();
   let model: WorkObjectResponse;
   try {
     model = await apiRequest({
       path,
       schema: workObjectResponseSchema,
       fetcher,
-      deviceProof: proofFor(session),
+      deviceProof: session.user.role === "field" ? async () => deviceSecret : undefined,
     });
   } catch (error) {
-    return await offlineModel(key, workObjectResponseSchema, error);
+    await context?.assertCurrent();
+    const cached = await offlineModel(key, workObjectResponseSchema, error);
+    await context?.assertCurrent();
+    return cached;
   }
+  await context?.assertCurrent();
   await rememberOfficeContact(session, model);
-  return await keepForOffline(key, model);
+  await context?.assertCurrent();
+  return await keepForOffline(
+    key,
+    model,
+    await bindingFor(
+      session,
+      { kind: "work-object", scope },
+      model,
+      deviceSecret,
+      bindingContext,
+      context !== undefined,
+    ),
+    bindingContext,
+    context !== undefined,
+  );
+}
+
+async function optionalBindingContext(session: AuthenticatedSession) {
+  try {
+    return await captureSavedPlanReadContext(session);
+  } catch {
+    return undefined;
+  }
+}
+
+async function bindingFor(
+  session: AuthenticatedSession,
+  target: SavedPlanTarget,
+  model: SavedPlanModel,
+  deviceSecret: string | undefined,
+  context?: SavedPlanReadContext,
+  strict = true,
+) {
+  if (!context || context.deviceSecret !== deviceSecret) return undefined;
+  try {
+    return await savedPlanBinding(
+      session,
+      target,
+      model,
+      deviceSecret,
+      context?.assertCurrent,
+      context?.observation,
+    );
+  } catch (error) {
+    if (strict && isSavedPlanContextError(error)) throw error;
+    // A browser without the binding capability can still read live job details, but cannot
+    // claim this packet is a bound saved work plan.
+    return undefined;
+  }
+}
+
+async function discardChangedBinding(key: string, binding: unknown): Promise<void> {
+  try {
+    const tx = (await getDatabase()).transaction("field_cache", "readwrite");
+    const record = await tx.store.get(key);
+    if (record && JSON.stringify(record.savedPlanBinding) === JSON.stringify(binding)) {
+      delete record.savedPlanBinding;
+      await tx.store.put(record);
+    }
+    await tx.done;
+  } catch {
+    // No changed-context result is returned; future context checks still refuse its receipt.
+  }
 }
 
 /**
@@ -93,11 +199,25 @@ export async function loadWorkObject(
  */
 async function keepForOffline<
   T extends { source_updated_at: string | null; stale_fields: string[] },
->(key: string, model: T): Promise<T> {
+>(
+  key: string,
+  model: T,
+  binding?: unknown,
+  context?: SavedPlanReadContext,
+  strict = true,
+): Promise<T> {
   try {
-    await cacheFieldModel(key, model, model.source_updated_at);
+    await context?.assertCurrent();
+    await cacheFieldModel(key, model, model.source_updated_at, binding);
+    await context?.assertCurrent();
     return model;
-  } catch {
+  } catch (error) {
+    if (isSavedPlanContextError(error)) {
+      if (binding) await discardChangedBinding(key, binding);
+      if (strict) throw error;
+      return { ...model, stale_fields: [...new Set([...model.stale_fields, NOT_SAVED_ON_DEVICE])] };
+    }
+    await context?.assertCurrent();
     return { ...model, stale_fields: [...new Set([...model.stale_fields, NOT_SAVED_ON_DEVICE])] };
   }
 }
@@ -195,6 +315,7 @@ export async function cacheFieldModel(
   key: string,
   value: unknown,
   sourceUpdatedAt: string | null,
+  binding?: unknown,
 ): Promise<void> {
   await (
     await getDatabase()
@@ -203,6 +324,7 @@ export async function cacheFieldModel(
     value: structuredClone(value),
     sourceUpdatedAt,
     updatedAt: Date.now(),
+    ...(binding ? { savedPlanBinding: binding } : {}),
   });
 }
 

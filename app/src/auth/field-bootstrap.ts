@@ -2,6 +2,12 @@ import { z } from "zod";
 
 import { getDeviceSecret } from "./device-credential";
 import {
+  capturePrincipalReadStart,
+  observePrincipalRead,
+  getSessionReadObservation,
+  type PrincipalReadObservation,
+} from "./principal-context";
+import {
   persistAuthenticatedSession,
   persistOrInvalidateSession,
   recoverOfflineSession,
@@ -38,6 +44,8 @@ export const fieldBootstrapResponseSchema = z
 export interface FieldBootstrap {
   session: SessionResponse;
   today?: TodayResponse;
+  /** Client observation only; never a Worker signature or server grant. */
+  field_read_observation?: PrincipalReadObservation;
 }
 
 export const FIELD_BOOTSTRAP_PRELOAD_TIMEOUT_MS = 2_000;
@@ -48,6 +56,8 @@ let primedFieldBootstrap: Promise<FieldBootstrap> | undefined;
 type FieldBootstrapPreloadWindow = Window & {
   __ironwrapFieldBootstrapResponse?: Promise<Response>;
   __ironwrapFieldBootstrapPreloadConsumed?: boolean;
+  __ironwrapFieldBootstrapReadGeneration?: string | null;
+  __ironwrapFieldBootstrapReadEpoch?: string | null | Promise<string | null>;
 };
 
 /**
@@ -57,57 +67,92 @@ type FieldBootstrapPreloadWindow = Window & {
  */
 export async function fetchFieldBootstrap(fetcher: typeof fetch = fetch): Promise<FieldBootstrap> {
   try {
-    const payload = await loadVerifiedFieldBootstrap(fetcher);
-    if (!payload.session.authenticated) {
+    const read = await loadVerifiedFieldBootstrap(fetcher);
+    const payload = read.payload;
+    if (!payload.session.authenticated)
       return { session: await persistOrInvalidateSession(payload.session) };
-    }
-    // An already-validated run sheet should paint before the IndexedDB snapshot write. The
-    // write stays best-effort and uses the same redacted-CSRF offline-session contract.
+    const observation = await observePrincipalRead(
+      payload.session,
+      read.start,
+      read.deviceProof,
+    ).catch(() => undefined);
     void persistAuthenticatedSession(payload.session).catch((error: unknown) => {
       console.error("Could not persist the verified field session for offline use", error);
     });
-    return { session: payload.session, today: payload.today! };
+    return {
+      session: payload.session,
+      today: payload.today!,
+      ...(observation ? { field_read_observation: observation } : {}),
+    };
   } catch (error) {
-    return { session: await recoverOfflineSession(error) };
+    const session = await recoverOfflineSession(error);
+    return {
+      session,
+      ...(session.authenticated && getSessionReadObservation(session)
+        ? { field_read_observation: getSessionReadObservation(session) }
+        : {}),
+    };
   }
 }
 
 async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
-  const preloadedResponse = takeInitialFieldBootstrapPreload(fetcher);
-  if (preloadedResponse) {
-    const response = await awaitFieldBootstrapPreload(preloadedResponse);
+  const preloaded = takeInitialFieldBootstrapPreload(fetcher);
+  if (preloaded) {
+    const initial = await capturePrincipalReadStart();
+    const deviceProof = await valueBeforeDeadline(
+      getDeviceSecret(),
+      FIELD_BOOTSTRAP_DEVICE_PROOF_TIMEOUT_MS,
+    );
+    const response = await awaitFieldBootstrapPreload(preloaded.response);
     if (response) {
-      return await apiRequest({
+      const start = {
+        ...initial,
+        generation: preloaded.generation,
+        epoch:
+          (await valueBeforeDeadline(
+            Promise.resolve(preloaded.epoch),
+            FIELD_BOOTSTRAP_PRELOAD_TIMEOUT_MS,
+          )) ?? null,
+      };
+      const payload = await apiRequest({
         path: API_PATHS.fieldBootstrap,
         schema: fieldBootstrapResponseSchema,
         fetcher: async () => response,
       });
+      return { payload, start, deviceProof };
     }
   }
-
-  // A stalled IndexedDB operation must not leave a field device on the checking screen.
-  // Without a readable proof, the Worker returns its safe unauthenticated bootstrap payload;
-  // it never returns the run sheet just because the browser had a local storage problem.
+  const start = await capturePrincipalReadStart();
   const deviceProof = await valueBeforeDeadline(
     getDeviceSecret(),
     FIELD_BOOTSTRAP_DEVICE_PROOF_TIMEOUT_MS,
   );
-  return await apiRequest({
+  const payload = await apiRequest({
     path: API_PATHS.fieldBootstrap,
     schema: fieldBootstrapResponseSchema,
     fetcher,
     deviceProof: deviceProof ? async () => deviceProof : undefined,
   });
+  return { payload, start, deviceProof };
 }
 
-function takeInitialFieldBootstrapPreload(fetcher: typeof fetch): Promise<Response> | undefined {
+function takeInitialFieldBootstrapPreload(fetcher: typeof fetch):
+  | {
+      response: Promise<Response>;
+      generation: string | null;
+      epoch: string | null | Promise<string | null>;
+    }
+  | undefined {
   if (fetcher !== fetch || typeof window === "undefined") return undefined;
   const preloadWindow = window as FieldBootstrapPreloadWindow;
-  // Claim the initial read even when the async head script has not arrived yet.
   preloadWindow.__ironwrapFieldBootstrapPreloadConsumed = true;
   const response = preloadWindow.__ironwrapFieldBootstrapResponse;
+  const generation = preloadWindow.__ironwrapFieldBootstrapReadGeneration ?? null;
+  const epoch = preloadWindow.__ironwrapFieldBootstrapReadEpoch ?? null;
   delete preloadWindow.__ironwrapFieldBootstrapResponse;
-  return response;
+  delete preloadWindow.__ironwrapFieldBootstrapReadGeneration;
+  delete preloadWindow.__ironwrapFieldBootstrapReadEpoch;
+  return response ? { response, generation, epoch } : undefined;
 }
 
 /**

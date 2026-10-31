@@ -13,7 +13,8 @@ import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { JobResponse, WorkObjectResponse } from "./field-contracts";
 import { loadJob, loadWorkObject } from "./field-cache";
-import { dialableNumber, JobPage, WorkObjectPage } from "./field-pages";
+import { dialableNumber } from "./dialable-number";
+import { JobPage, WorkObjectPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),

@@ -1,4 +1,6 @@
 import { deleteMeta, getMeta, setMeta } from "../storage/db";
+import { beginPrincipalContextChange } from "./principal-context";
+import { invalidatePrincipalEpoch } from "./principal-epoch";
 
 const DEVICE_SECRET_KEY = "field-device-secret-v1";
 const DEVICE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -33,7 +35,9 @@ export async function storeDeviceSecret(value: string): Promise<void> {
   if (!DEVICE_SECRET_PATTERN.test(value)) {
     throw new Error("The device credential did not meet the required format.");
   }
-  await setMeta(DEVICE_SECRET_KEY, { value, createdAt: Date.now() } satisfies StoredDeviceSecret);
+  await changeCredential(() =>
+    setMeta(DEVICE_SECRET_KEY, { value, createdAt: Date.now() } satisfies StoredDeviceSecret),
+  );
 }
 
 /**
@@ -47,7 +51,7 @@ export async function getDeviceSecret(): Promise<string | undefined> {
 }
 
 export async function clearDeviceSecret(): Promise<void> {
-  await deleteMeta(DEVICE_SECRET_KEY);
+  await changeCredential(() => deleteMeta(DEVICE_SECRET_KEY));
 }
 
 function secureRandomValues(values: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
@@ -61,4 +65,14 @@ function toBase64Url(bytes: Uint8Array<ArrayBuffer>): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+async function changeCredential(write: () => Promise<void>): Promise<void> {
+  const finish = beginPrincipalContextChange();
+  try {
+    await invalidatePrincipalEpoch();
+    await write();
+  } finally {
+    finish();
+  }
 }

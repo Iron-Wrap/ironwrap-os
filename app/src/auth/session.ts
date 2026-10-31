@@ -5,6 +5,14 @@ import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { appRoles } from "../lib/roles";
 import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
+import {
+  capturePrincipalReadStart,
+  observePrincipalRead,
+  getSessionReadObservation,
+  restorePrincipalObservation,
+  type PrincipalReadObservation,
+  sessionReadContextIsCurrent,
+} from "./principal-context";
 
 const userSchema = z.object({
   id: z.string().min(1),
@@ -72,16 +80,24 @@ const OFFICE_SESSION_MARKER = "ironwrap.office-session-expires-at";
 interface OfflineSessionSnapshot {
   session: AuthenticatedSession;
   expiresAt: number;
+  field_read_observation?: PrincipalReadObservation;
 }
 
 export async function fetchSession(fetcher: typeof fetch = fetch): Promise<SessionResponse> {
+  const start = await capturePrincipalReadStart();
+  let pairedProof: string | undefined;
   try {
     const session = await apiRequest({
       path: API_PATHS.session,
       schema: sessionResponseSchema,
       fetcher,
-      deviceProof: getDeviceSecret,
+      deviceProof: async () => {
+        pairedProof = await getDeviceSecret();
+        return pairedProof;
+      },
     });
+    if (session.authenticated)
+      await observePrincipalRead(session, start, pairedProof).catch(() => undefined);
     return await persistOrInvalidateSession(session);
   } catch (error) {
     return await recoverOfflineSession(error);
@@ -113,6 +129,9 @@ export async function persistAuthenticatedSession(session: AuthenticatedSession)
   await setMeta(SNAPSHOT_KEY, {
     session: { ...session, csrf_token: "offline-session-no-csrf" },
     expiresAt,
+    ...(sessionReadContextIsCurrent(session) && getSessionReadObservation(session)
+      ? { field_read_observation: getSessionReadObservation(session) }
+      : {}),
   } satisfies OfflineSessionSnapshot);
 }
 
@@ -133,11 +152,21 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
       cause: parsed.success ? undefined : parsed.error,
     });
   }
-  return {
+  const recovered: AuthenticatedSession = {
     ...parsed.data,
     csrf_token: "offline-session-no-csrf",
     stale_fields: [...new Set([...parsed.data.stale_fields, "session.offline_snapshot"])],
   };
+  try {
+    await restorePrincipalObservation(
+      recovered,
+      snapshot.field_read_observation,
+      await getDeviceSecret(),
+    );
+  } catch {
+    /* ordinary offline session policy is unchanged; field observation stays unverified */
+  }
+  return recovered;
 }
 
 /**

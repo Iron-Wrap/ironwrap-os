@@ -1,12 +1,18 @@
 import type { AuthenticatedSession } from "./session";
+import {
+  capturePrincipalEpoch,
+  principalEpochIsCurrent,
+  principalEpochMatches,
+} from "./principal-epoch";
 
 export const PRINCIPAL_GENERATION_KEY = "ironwrap.principal-read-generation-v1";
 export interface PrincipalReadStart {
   revision: number;
   generation: string | null;
+  epoch: string | null;
 }
 export interface PrincipalReadObservation extends PrincipalReadStart {
-  format: "principal-read-v1";
+  format: "principal-read-v2";
   id: string;
   sessionKey: string;
   deviceHash: string | null;
@@ -39,7 +45,11 @@ export function getPrincipalGeneration(): string | null {
   }
 }
 export function principalReadStart(): PrincipalReadStart {
-  return { revision, generation: getPrincipalGeneration() };
+  return { revision, generation: getPrincipalGeneration(), epoch: null };
+}
+export async function capturePrincipalReadStart(): Promise<PrincipalReadStart> {
+  const start = principalReadStart();
+  return { ...start, epoch: (await capturePrincipalEpoch()) ?? null };
 }
 function storageChanged(event: StorageEvent) {
   if (event.key === PRINCIPAL_GENERATION_KEY) notify(false);
@@ -121,7 +131,7 @@ export async function observePrincipalRead(
   secret: string | undefined,
 ): Promise<PrincipalReadObservation> {
   const observation: PrincipalReadObservation = {
-    format: "principal-read-v1",
+    format: "principal-read-v2",
     id: crypto.randomUUID(),
     ...start,
     sessionKey: principalSessionKey(session),
@@ -154,9 +164,10 @@ export function sessionReadContextIsCurrent(
 ): boolean {
   return Boolean(
     observed &&
-    observed.format === "principal-read-v1" &&
+    observed.format === "principal-read-v2" &&
     observed.generation &&
     observed.generation === getPrincipalGeneration() &&
+    principalEpochIsCurrent(observed.epoch) &&
     observed.revision === revision &&
     observed.sessionKey === principalSessionKey(session) &&
     !principalContextIsChanging() &&
@@ -172,13 +183,14 @@ export async function restorePrincipalObservation(
   const observed = value as Partial<PrincipalReadObservation>;
   const start = principalReadStart();
   if (
-    observed.format !== "principal-read-v1" ||
+    observed.format !== "principal-read-v2" ||
     typeof observed.id !== "string" ||
     !observed.id ||
     !Number.isInteger(observed.revision) ||
     (observed.source !== "live" && observed.source !== "offline") ||
     !observed.generation ||
     observed.generation !== start.generation ||
+    !(await principalEpochMatches(observed.epoch)) ||
     observed.sessionKey !== principalSessionKey(session) ||
     !Number.isFinite(Date.parse(session.session_expires_at)) ||
     Date.parse(session.session_expires_at) <= Date.now() ||
@@ -192,6 +204,7 @@ export async function restorePrincipalObservation(
     return undefined;
   if (session.user.role !== "field" && observed.deviceHash !== null) return undefined;
   if (
+    !(await principalEpochMatches(observed.epoch)) ||
     revision !== start.revision ||
     getPrincipalGeneration() !== start.generation ||
     principalContextIsChanging() ||
@@ -200,12 +213,13 @@ export async function restorePrincipalObservation(
     return undefined;
   const restored: PrincipalReadObservation = {
     ...observed,
-    format: "principal-read-v1",
+    format: "principal-read-v2",
     id: crypto.randomUUID(),
     revision,
     generation: observed.generation,
     sessionKey: observed.sessionKey,
     deviceHash: typeof observed.deviceHash === "string" ? observed.deviceHash : null,
+    epoch: typeof observed.epoch === "string" ? observed.epoch : null,
     source: "offline",
   };
   observations.set(session, restored);

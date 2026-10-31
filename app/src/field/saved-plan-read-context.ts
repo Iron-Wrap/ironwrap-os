@@ -14,6 +14,7 @@ import {
 } from "../auth/principal-context";
 import type { AuthenticatedSession } from "../auth/session";
 import { ApiError } from "../lib/api";
+import { principalEpochMatches } from "../auth/principal-epoch";
 
 export interface SavedPlanReadContext {
   deviceSecret: string | undefined;
@@ -71,6 +72,7 @@ export async function captureSavedPlanReadContext(
       check();
       if (session.user.role === "field" && (await getDeviceSecret()) !== deviceSecret)
         throw savedPlanContextChanged();
+      if (!(await principalEpochMatches(observation?.epoch))) throw savedPlanContextChanged();
       check();
     },
   };

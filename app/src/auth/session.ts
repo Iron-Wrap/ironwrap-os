@@ -6,11 +6,12 @@ import { API_PATHS } from "../lib/api-paths";
 import { appRoles } from "../lib/roles";
 import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
 import {
-  principalReadStart,
+  capturePrincipalReadStart,
   observePrincipalRead,
   getSessionReadObservation,
   restorePrincipalObservation,
   type PrincipalReadObservation,
+  sessionReadContextIsCurrent,
 } from "./principal-context";
 
 const userSchema = z.object({
@@ -83,7 +84,7 @@ interface OfflineSessionSnapshot {
 }
 
 export async function fetchSession(fetcher: typeof fetch = fetch): Promise<SessionResponse> {
-  const start = principalReadStart();
+  const start = await capturePrincipalReadStart();
   let pairedProof: string | undefined;
   try {
     const session = await apiRequest({
@@ -128,7 +129,7 @@ export async function persistAuthenticatedSession(session: AuthenticatedSession)
   await setMeta(SNAPSHOT_KEY, {
     session: { ...session, csrf_token: "offline-session-no-csrf" },
     expiresAt,
-    ...(getSessionReadObservation(session)
+    ...(sessionReadContextIsCurrent(session) && getSessionReadObservation(session)
       ? { field_read_observation: getSessionReadObservation(session) }
       : {}),
   } satisfies OfflineSessionSnapshot);

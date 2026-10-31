@@ -52,6 +52,42 @@ describe("auth observations used by the saved-plan reader", () => {
     });
   });
 
+  it("preserves the ordinary offline DTO but refuses its old field observation after local generation writes recover", async () => {
+    const source = savedPlanSessionFixture();
+    await verifiedSavedPlanSessionFixture(source);
+    const generation = getPrincipalGeneration();
+    const storage = window.localStorage;
+    const readonly = vi.spyOn(window, "localStorage", "get").mockReturnValue({
+      length: storage.length,
+      clear: storage.clear.bind(storage),
+      key: storage.key.bind(storage),
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem() {
+        throw new DOMException("Synthetic read-only storage", "SecurityError");
+      },
+    });
+    await apiCommand({
+      path: API_PATHS.magicLinkConsume,
+      body: { token: "synthetic-token" },
+      fetcher: async () => Response.json({}),
+    });
+    readonly.mockRestore();
+    expect(getPrincipalGeneration()).toBe(generation);
+    const offline = await fetchSession(async () => {
+      throw new TypeError("Synthetic offline");
+    });
+    expect(offline.authenticated).toBe(true);
+    if (!offline.authenticated) throw new Error("Expected unchanged ordinary offline sign-in");
+    expect(offline.user).toEqual(source.user);
+    await expect(captureSavedPlanReadContext(offline)).rejects.toMatchObject({
+      code: "saved_plan_context_changed",
+    });
+    const fresh = await fetchSession(async () => Response.json(source));
+    if (!fresh.authenticated) throw new Error("Expected unchanged ordinary fresh sign-in");
+    await expect(captureSavedPlanReadContext(fresh)).resolves.toBeDefined();
+  });
+
   it.each(["session", "bootstrap"])(
     "observes the implicit no_session cookie expiry on friendly %s responses",
     async (path) => {

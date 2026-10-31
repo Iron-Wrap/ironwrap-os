@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { getDeviceSecret } from "./device-credential";
 import {
-  principalReadStart,
+  capturePrincipalReadStart,
   observePrincipalRead,
   getSessionReadObservation,
   type PrincipalReadObservation,
@@ -57,6 +57,7 @@ type FieldBootstrapPreloadWindow = Window & {
   __ironwrapFieldBootstrapResponse?: Promise<Response>;
   __ironwrapFieldBootstrapPreloadConsumed?: boolean;
   __ironwrapFieldBootstrapReadGeneration?: string | null;
+  __ironwrapFieldBootstrapReadEpoch?: string | null | Promise<string | null>;
 };
 
 /**
@@ -97,13 +98,22 @@ export async function fetchFieldBootstrap(fetcher: typeof fetch = fetch): Promis
 async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
   const preloaded = takeInitialFieldBootstrapPreload(fetcher);
   if (preloaded) {
-    const start = { ...principalReadStart(), generation: preloaded.generation };
+    const initial = await capturePrincipalReadStart();
     const deviceProof = await valueBeforeDeadline(
       getDeviceSecret(),
       FIELD_BOOTSTRAP_DEVICE_PROOF_TIMEOUT_MS,
     );
     const response = await awaitFieldBootstrapPreload(preloaded.response);
     if (response) {
+      const start = {
+        ...initial,
+        generation: preloaded.generation,
+        epoch:
+          (await valueBeforeDeadline(
+            Promise.resolve(preloaded.epoch),
+            FIELD_BOOTSTRAP_PRELOAD_TIMEOUT_MS,
+          )) ?? null,
+      };
       const payload = await apiRequest({
         path: API_PATHS.fieldBootstrap,
         schema: fieldBootstrapResponseSchema,
@@ -112,7 +122,7 @@ async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
       return { payload, start, deviceProof };
     }
   }
-  const start = principalReadStart();
+  const start = await capturePrincipalReadStart();
   const deviceProof = await valueBeforeDeadline(
     getDeviceSecret(),
     FIELD_BOOTSTRAP_DEVICE_PROOF_TIMEOUT_MS,
@@ -126,17 +136,23 @@ async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
   return { payload, start, deviceProof };
 }
 
-function takeInitialFieldBootstrapPreload(
-  fetcher: typeof fetch,
-): { response: Promise<Response>; generation: string | null } | undefined {
+function takeInitialFieldBootstrapPreload(fetcher: typeof fetch):
+  | {
+      response: Promise<Response>;
+      generation: string | null;
+      epoch: string | null | Promise<string | null>;
+    }
+  | undefined {
   if (fetcher !== fetch || typeof window === "undefined") return undefined;
   const preloadWindow = window as FieldBootstrapPreloadWindow;
   preloadWindow.__ironwrapFieldBootstrapPreloadConsumed = true;
   const response = preloadWindow.__ironwrapFieldBootstrapResponse;
   const generation = preloadWindow.__ironwrapFieldBootstrapReadGeneration ?? null;
+  const epoch = preloadWindow.__ironwrapFieldBootstrapReadEpoch ?? null;
   delete preloadWindow.__ironwrapFieldBootstrapResponse;
   delete preloadWindow.__ironwrapFieldBootstrapReadGeneration;
-  return response ? { response, generation } : undefined;
+  delete preloadWindow.__ironwrapFieldBootstrapReadEpoch;
+  return response ? { response, generation, epoch } : undefined;
 }
 
 /**

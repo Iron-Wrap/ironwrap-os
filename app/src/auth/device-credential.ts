@@ -1,5 +1,6 @@
 import { deleteMeta, getMeta, setMeta } from "../storage/db";
 import { beginPrincipalContextChange } from "./principal-context";
+import { invalidatePrincipalEpoch } from "./principal-epoch";
 
 const DEVICE_SECRET_KEY = "field-device-secret-v1";
 const DEVICE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -69,6 +70,7 @@ function toBase64Url(bytes: Uint8Array<ArrayBuffer>): string {
 async function changeCredential(write: () => Promise<void>): Promise<void> {
   const finish = beginPrincipalContextChange();
   try {
+    await invalidatePrincipalEpoch();
     await write();
   } finally {
     finish();

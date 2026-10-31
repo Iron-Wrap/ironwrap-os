@@ -13,6 +13,7 @@ import {
   getSessionReadObservation,
 } from "./principal-context";
 import type { FieldBootstrap } from "./field-bootstrap";
+import { capturePrincipalEpoch, invalidatePrincipalEpoch } from "./principal-epoch";
 import { resetDatabaseForTests } from "../storage/db";
 import {
   useSavedPlanReadContext,
@@ -61,6 +62,7 @@ const preloadWindow = window as Window & {
   __ironwrapFieldBootstrapResponse?: Promise<Response>;
   __ironwrapFieldBootstrapPreloadConsumed?: boolean;
   __ironwrapFieldBootstrapReadGeneration?: string | null;
+  __ironwrapFieldBootstrapReadEpoch?: string | null;
 };
 
 describe("actual AuthBoundary and QueryClient field observation pipeline", () => {
@@ -75,6 +77,7 @@ describe("actual AuthBoundary and QueryClient field observation pipeline", () =>
     delete preloadWindow.__ironwrapFieldBootstrapResponse;
     delete preloadWindow.__ironwrapFieldBootstrapPreloadConsumed;
     delete preloadWindow.__ironwrapFieldBootstrapReadGeneration;
+    delete preloadWindow.__ironwrapFieldBootstrapReadEpoch;
     window.history.replaceState({}, "", "/");
   });
 
@@ -109,7 +112,7 @@ describe("actual AuthBoundary and QueryClient field observation pipeline", () =>
     }
   });
 
-  it.each(["verified", "crossed", "missing"])(
+  it.each(["verified", "crossed", "missing", "missing-epoch", "epoch-crossed"])(
     "keeps the %s head-preload provenance through the actual AuthBoundary query",
     async (mode) => {
       const fetcher = vi.fn<typeof fetch>();
@@ -118,6 +121,9 @@ describe("actual AuthBoundary and QueryClient field observation pipeline", () =>
       delete preloadWindow.__ironwrapFieldBootstrapPreloadConsumed;
       if (mode !== "missing")
         preloadWindow.__ironwrapFieldBootstrapReadGeneration = getPrincipalGeneration();
+      if (mode !== "missing" && mode !== "missing-epoch")
+        preloadWindow.__ironwrapFieldBootstrapReadEpoch = (await capturePrincipalEpoch()) ?? null;
+      if (mode === "epoch-crossed") await invalidatePrincipalEpoch();
       if (mode === "crossed") {
         const changed = beginPrincipalContextChange();
         changed();

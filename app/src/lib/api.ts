@@ -2,6 +2,7 @@ import { z, type ZodType } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
 import { beginPrincipalContextChange } from "../auth/principal-context";
+import { invalidatePrincipalEpoch } from "../auth/principal-epoch";
 import { API_PATHS } from "./api-paths";
 
 export const apiErrorBodySchema = z
@@ -162,7 +163,9 @@ export async function apiRequest<T>(options: ApiRequestOptions<T>): Promise<T> {
       (options.path === API_PATHS.session && model.authenticated === false) ||
       (options.path === API_PATHS.fieldBootstrap && model.session?.authenticated === false)
     ) {
-      beginPrincipalContextChange()();
+      const finish = beginPrincipalContextChange();
+      await invalidatePrincipalEpoch();
+      finish();
     }
   }
   if (!parsed.success) {
@@ -236,6 +239,7 @@ async function executeRequest(
   };
 
   try {
+    if (changesPrincipal) await invalidatePrincipalEpoch();
     const headers = new Headers({ Accept: "application/json" });
     // A multipart body must keep the boundary the browser writes into its own Content-Type.
     const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -267,8 +271,11 @@ async function executeRequest(
         error.status === 401 &&
         error.code === "unauthorized" &&
         options.path.startsWith("/api/v1/")
-      )
-        beginPrincipalContextChange()();
+      ) {
+        const finish = beginPrincipalContextChange();
+        await invalidatePrincipalEpoch();
+        finish();
+      }
       if (options.deviceProof && error.status === 401) await clearDeviceSecret();
       throw error;
     }

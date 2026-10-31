@@ -104,6 +104,7 @@ export async function savedPlanBinding(
   if (
     !plan ||
     !observation?.generation ||
+    !observation.epoch ||
     (session.user.role === "field" && !deviceSecret) ||
     Date.parse(session.session_expires_at) <= Date.now()
   )
@@ -125,8 +126,9 @@ export async function savedPlanBinding(
   );
   await assertCurrent();
   return {
-    format: "saved-plan-context-v3",
+    format: "saved-plan-context-v4",
     authGeneration: observation.generation,
+    authEpoch: observation.epoch,
     tenantId: session.tenant.id,
     userId: session.user.id,
     role: session.user.role,

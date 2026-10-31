@@ -2,6 +2,7 @@ import { consumeDevicePairing } from "../pairing/pairing-api";
 import type { AuthenticatedSession } from "./session";
 import { createDeviceSecret, storeDeviceSecret } from "./device-credential";
 import { beginPrincipalContextChange } from "./principal-context";
+import { invalidatePrincipalEpoch } from "./principal-epoch";
 
 export interface PairDeviceDependencies {
   createDeviceProof?: () => string;
@@ -20,6 +21,7 @@ export async function pairDevice(
 ): Promise<void> {
   const finish = beginPrincipalContextChange();
   try {
+    await invalidatePrincipalEpoch();
     const deviceProof = (dependencies.createDeviceProof ?? createDeviceSecret)();
     const session = await (dependencies.consume ?? consumeDevicePairing)(token, deviceProof);
     if (session.user.role !== "field") {

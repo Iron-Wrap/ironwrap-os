@@ -13,14 +13,7 @@ import { getCompanyProfile } from "./company-setup-store.ts";
 
 import { expireRuns, type AgentDb } from "./agents/store.ts";
 import {
-  ALLOWED_SOURCES,
-  type Source,
   type EnvelopeRecord,
-  newEnvelopeId,
-  normalizeEnvelope,
-  dedupKey,
-  validateInbound,
-  classifyIntent,
   reconcileDiff,
   parseBody,
   validateSourceCount,
@@ -48,7 +41,7 @@ import { ingestLead } from "./lead-intake.ts";
 import { companyLogoResponse } from "./company-profile.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
 import { materializeOperatingCore } from "./operating-core.ts";
-import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
+import { sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import {
   handleMeasurementDeadLetter,
@@ -115,6 +108,7 @@ import {
   handleCustomerPortalAcceptancePreview,
   reconcileCustomerContractAcceptanceAttempts,
 } from "./customer-contract-acceptance.ts";
+import { sweepContractDepositGates } from "./deposit-policy.ts";
 import {
   handleCustomerPortalDecision,
   reconcileCustomerPortalDecisionAttempts,
@@ -145,6 +139,7 @@ import { escalateStaleProposalDeliveries } from "./proposal-delivery-checks.ts";
 import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
+import { markExpiredProposalPublicationApprovalExecutionLeases } from "./proposal-publication-approval-store.ts";
 import {
   handleNewoQueueMessage,
   handleNewoWebhook,
@@ -501,6 +496,13 @@ export default {
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
             log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
           ),
+          // OD-01 (0155): the Deposit gate entry a signed contract calls for, wherever the
+          // acceptance's own append after commit did not land. Idempotent by binding id.
+          sweepContractDepositGates(env as import("./app-types.ts").AppEnv).then((result) => {
+            if (result.candidates > 0) log({ at: "contract_deposit_gate_sweep", ...result });
+          }).catch((error) =>
+            log({ at: "contract_deposit_gate_sweep", error: String(error) }),
+          ),
           reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
             log({ at: "customer_portal_decision_reconcile", error: String(error) }),
           ),
@@ -521,6 +523,22 @@ export default {
           ).catch((error) =>
             log({
               at: "quote_revision_approval_lease_sweep",
+              error: String(error),
+            }),
+          ),
+          // A lost publication broker response requires human reconciliation;
+          // expire only this runtime tenant's claims without dispatching again.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return;
+            await markExpiredProposalPublicationApprovalExecutionLeases(
+              env,
+              new Date().toISOString(),
+              tenantId,
+            );
+          })().catch((error) =>
+            log({
+              at: "proposal_publication_approval_lease_sweep",
               error: String(error),
             }),
           ),

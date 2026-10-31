@@ -1,14 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ironwrap-bus",
-  "account_id": "7ee5775bc1ba46f05c5a65235b60e939",
+  // Production lives in the Mindburn Labs account and is published as ironwrap.mindburn.org
+  // (IRO-221, 2026-10-30). env.qa pins IronWrap's own account explicitly.
+  "account_id": "5023dd227b538fc4238439fd7d52640f",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-28",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "workers_dev": false,
   "routes": [
-    { "pattern": "ironwrap-bus.ironwrapexteriors.com", "custom_domain": true }
+    { "pattern": "ironwrap.mindburn.org", "custom_domain": true }
   ],
 
   // One deployment boundary: the Worker serves the built PWA and runs every dynamic/auth route.
@@ -34,7 +36,7 @@
     {
       "binding": "DB",
       "database_name": "ironwrap-bus",
-      "database_id": "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+      "database_id": "a8fd0116-7af6-4788-98bd-083addbe58bc",
       "migrations_dir": "migrations"
     }
   ],
@@ -153,8 +155,8 @@
       // Required by APP_BFF_ENABLED: appPublicOrigin() returns null unless APP_PUBLIC_ORIGIN
       // is non-empty AND listed in APP_ALLOWED_ORIGINS. Keep both bound to the declared
       // production custom domain so login links and origin checks match the release smoke URL.
-      "APP_PUBLIC_ORIGIN": "https://ironwrap-bus.ironwrapexteriors.com",
-      "APP_ALLOWED_ORIGINS": "https://ironwrap-bus.ironwrapexteriors.com",
+      "APP_PUBLIC_ORIGIN": "https://ironwrap.mindburn.org",
+      "APP_ALLOWED_ORIGINS": "https://ironwrap.mindburn.org",
       "APP_ALLOW_INSECURE_LOCAL": "false",
       "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
       "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
@@ -287,19 +289,21 @@
       // and PUBLIC_ESTIMATE_ENABLED stays false. Other writers fall back to "Administrator".
       "ERPNEXT_INTEGRATION_USER": ""
     },
+    // Empty while production mail runs on the mindburn.org Workspace (2026-10-30): the IronWrap
+    // shared drives are not reachable from that delegation, the same as in env.qa.
     "CFG_SHARED": {
-      "SHARED_DRIVE_ID_JOBS": "0AHqXhIQ3svySUk9PVA",
-      "SHARED_DRIVE_ID_RESTRICTED": "0AMufCVvWaztwUk9PVA",
-      "SHARED_DRIVE_ID_ARCHIVE": "0AFTfvKuo0_6uUk9PVA"
+      "SHARED_DRIVE_ID_JOBS": "",
+      "SHARED_DRIVE_ID_RESTRICTED": "",
+      "SHARED_DRIVE_ID_ARCHIVE": ""
     },
     "CFG_MEASUREMENT": {
       "MEASUREMENT_OCR_ENABLED": "true",
       "MEASUREMENT_OCR_MODEL": "claude-opus-5-5"
     },
     "CFG_CORE": {
-      "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
-      "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
-      "FROM_EMAIL": "sales@ironwrapexteriors.com",
+      "OWNER_ALERT_EMAIL": "sergeyap@mindburn.org",
+      "BACKUP_ALERT_EMAIL": "sergeyap@mindburn.org",
+      "FROM_EMAIL": "sergeyap@mindburn.org",
       "EFFECT_RUNTIME_ENABLED": "true",
       "PIPELINE_AUTOMATION_ENABLED": "false",
       // JobNimbus is a non-source (expired trial, API 401): every queued push is a terminal
@@ -559,6 +563,7 @@
     // R2 ironwrap-bus-qa-raw, six ironwrap-qa-* queues. This is the only environment a push
     // to main deploys; production is a separate tag-triggered release (IRO-264).
     "qa": {
+      "account_id": "7ee5775bc1ba46f05c5a65235b60e939",
       "workers_dev": true,
       "routes": [],
       "d1_databases": [

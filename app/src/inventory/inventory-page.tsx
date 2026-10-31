@@ -10,6 +10,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
 import { scopes } from "../lib/theme";
 import { Notice } from "../components/ui/notice";
@@ -702,9 +703,6 @@ function InventoryDesk({
                   <Button type="submit" variant="accent" busy={commandState.phase === "pending"}>
                     {commandState.phase === "uncertain" ? "Retry same action" : "Record action"}
                   </Button>
-                  <span className="text-sm text-muted">
-                    Inventory command rules, version {overview.policy_version}
-                  </span>
                 </div>
               </form>
             ) : (
@@ -748,9 +746,15 @@ const InventoryReadBack = memo(function InventoryReadBack({
         <IdentityTile
           label="Command policy"
           value="Inventory command rules"
-          detail={`Version ${overview.policy_version}`}
+          detail="Current rules"
         />
       </section>
+      {/* The rules' version stays out of the tile's line; System details keeps it. */}
+      <SystemDetails className="text-sm text-muted">
+        <p>
+          Command policy {overview.policy_ref}, version {overview.policy_version}
+        </p>
+      </SystemDetails>
       {overview.authority.verification_state !== "verified" ? (
         <Notice tone="danger" title="Inventory commands are fail-closed">
           The current inventory authority is{" "}
@@ -1409,7 +1413,7 @@ const InventoryCatalog = memo(function InventoryCatalog({
                 {overview.uom_conversions.slice(0, 8).map((conversion) => (
                   <li key={conversion.conversion_id}>
                     1 {conversion.from_uom_code} = {conversion.numerator}/{conversion.denominator}{" "}
-                    {conversion.to_uom_code} · version {conversion.version}
+                    {conversion.to_uom_code}
                   </li>
                 ))}
               </ul>

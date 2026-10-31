@@ -122,6 +122,50 @@ test("contract mode catches a capability quietly becoming available", async (t) 
   assert.equal(checkFor("contract.capability.facet_native_projection.state")?.status, "fail");
 });
 
+test("contract mode refuses NEWO_ENABLED=true until the D1 callback record exists", async (t) => {
+  const source = await readFile(path.join(DEFAULT_REPO_ROOT, "workers-bus/wrangler.jsonc"), "utf8");
+  // How each case switches Newo on. The Worker reads String(NEWO_ENABLED) === "true", so a JSON
+  // boolean counts as on: in the CFG_NEWO group, and as a flat var, which wins over the group.
+  const enablers = {
+    off: (text) => text,
+    string: (text) => text.replace('"NEWO_ENABLED": "false"', '"NEWO_ENABLED": "true"'),
+    boolean: (text) => text.replace('"NEWO_ENABLED": "false"', '"NEWO_ENABLED": true'),
+    flatBoolean: (text) => text.replace('"CFG_NEWO": {', '"NEWO_ENABLED": true,\n    "CFG_NEWO": {'),
+  };
+  // The marker the callback-record slice adds: only a migration that creates the table counts.
+  const markers = {
+    none: null,
+    selectOne: "SELECT 1;\n",
+    commentOnly: "-- CREATE TABLE newo_callback_records (callback_id TEXT);\nSELECT 1;\n",
+    createsTable: "CREATE TABLE IF NOT EXISTS newo_callback_records (\n  callback_id TEXT PRIMARY KEY\n);\n",
+  };
+  const gate = async (enable, marker) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-newo-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await mkdir(path.join(root, "workers-bus/migrations"), { recursive: true });
+    const wrangler = enablers[enable](source);
+    if (enable !== "off") assert.notEqual(wrangler, source, `${enable} changed nothing`);
+    await writeFile(path.join(root, "workers-bus/wrangler.jsonc"), wrangler);
+    if (markers[marker] !== null) {
+      await writeFile(path.join(root, "workers-bus/migrations/0999_newo_callback_records.sql"), markers[marker]);
+    }
+    const result = await validateContract({ repoRoot: root });
+    return result.checks.find((item) => item.id === "contract.newo.callback_record_gate");
+  };
+  assert.equal((await gate("off", "none"))?.status, "pass");
+  for (const enable of ["string", "boolean", "flatBoolean"]) {
+    for (const marker of ["none", "selectOne", "commentOnly"]) {
+      const refused = await gate(enable, marker);
+      assert.equal(refused?.status, "fail", `${enable} with ${marker}`);
+      assert.match(
+        refused.message,
+        /NEWO_ENABLED=true \(production\) is refused until the D1 callback record exists .*creates the newo_callback_records table/,
+      );
+    }
+    assert.equal((await gate(enable, "createsTable"))?.status, "pass", enable);
+  }
+});
+
 test("contract mode rejects a flag literal no Worker gate accepts", async (t) => {
   const checkFor = await capabilityFixture(t, (source) =>
     source.replace('"POSTIZ_ENABLED": "false"', '"POSTIZ_ENABLED": "1"'),

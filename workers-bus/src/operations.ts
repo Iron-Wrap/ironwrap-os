@@ -48,8 +48,6 @@ interface ExtendedEnv {
   NEWO_KB_SHA256?: string;
   NEWO_PHONE_NUMBER?: string;
   NEWO_ENABLED_CHANNELS?: string;
-  NEWO_TRANSFER_POLICY?: string;
-  NEWO_OWNER_TRANSFER_NUMBER?: string;
   NEWO_R2_LIFECYCLE_PROVEN?: string;
   NEWO_USAGE_LIMIT_MINUTES?: string;
   NEWO_USAGE_ALERT_PERCENT?: string;
@@ -609,8 +607,6 @@ function newoConfigurationDrift(env: AppEnv & ExtendedEnv): string[] {
     ["NEWO_HANDOFF_WEBHOOK_URL", "handoff_webhook_url_missing"],
     ["NEWO_KB_VERSION", "kb_version_missing"],
     ["NEWO_PHONE_NUMBER", "phone_number_missing"],
-    ["NEWO_TRANSFER_POLICY", "transfer_policy_missing"],
-    ["NEWO_OWNER_TRANSFER_NUMBER", "owner_transfer_number_missing"],
     ["NEWO_USAGE_LIMIT_MINUTES", "usage_limit_missing"],
   ];
   for (const [key, reason] of requiredText) if (!nonEmpty(env[key])) reasons.push(reason);
@@ -625,9 +621,6 @@ function newoConfigurationDrift(env: AppEnv & ExtendedEnv): string[] {
     reasons.push("expected_config_version_mismatch");
   }
   if (String(env.NEWO_ENABLED_CHANNELS ?? "") !== "voice") reasons.push("enabled_channels_mismatch");
-  if (String(env.NEWO_TRANSFER_POLICY ?? "") !== "owner_then_voicemail") {
-    reasons.push("transfer_policy_mismatch");
-  }
   if (String(env.NEWO_OUTBOUND_ENABLED ?? "false") !== "false") reasons.push("outbound_launch_state_mismatch");
   if (String(env.NEWO_R2_LIFECYCLE_PROVEN ?? "false") !== "true") {
     reasons.push("r2_newo_lifecycle_unproven");

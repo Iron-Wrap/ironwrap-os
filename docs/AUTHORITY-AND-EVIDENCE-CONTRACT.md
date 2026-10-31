@@ -716,9 +716,13 @@ does.
 
 ### Failed Newo handoffs
 
-A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller who asked for a person
-and was not put through. It stays open until a person records how it ended; there is no lookback
-window, because a window would retire a failure nobody decided.
+A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller's request for a person
+that did not arrive or could not be processed. It stays open until a person records how it ended;
+there is no lookback window, because a window would retire a failure nobody decided. The
+receptionist is callback only and never transfers a call live: a callback it requests is
+recorded as `requested` on its session and is not a failed handoff, while an emergency session
+that closes without a handoff request is recorded as failed
+([`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md#handoff-and-sms)).
 
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
   records `outcome` = `called_back`, `unreachable` or `not_needed` and an optional note, with

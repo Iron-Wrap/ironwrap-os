@@ -39,6 +39,7 @@ import {
 import type { EstimatorGeometry, EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { RoofGraphEvidence } from "./roof-graph-evidence";
 import { ManualMeasurementPanel } from "./manual-measurement-panel";
+import { estimatorWorkbenchQueryKey, officeJobIdentityScope } from "./office-job-identity-query";
 
 export function EstimatorWorkbenchPage() {
   return (
@@ -52,7 +53,7 @@ function EstimatorWorkbenchContent() {
   const { jobId } = useParams({ strict: false }) as { jobId?: string };
   const session = useSession();
   const query = useQuery({
-    queryKey: ["estimator-workbench", session.tenant.id, session.user.id, jobId],
+    queryKey: estimatorWorkbenchQueryKey(officeJobIdentityScope(session), jobId),
     enabled: Boolean(jobId),
     queryFn: () => loadEstimatorWorkbench(jobId!),
   });

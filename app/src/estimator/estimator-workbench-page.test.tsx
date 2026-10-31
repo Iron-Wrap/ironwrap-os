@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,10 @@ import {
 } from "./estimator-api";
 import type { EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { EstimatorWorkbenchPage } from "./estimator-workbench-page";
+import { estimatorWorkbenchQueryKey, officeJobIdentityScope } from "./office-job-identity-query";
 import { loadManualMeasurements } from "./manual-measurement-api";
+
+const workbenchParams = vi.hoisted(() => ({ jobId: "JOB-A" }));
 
 const manualSearch = vi.hoisted(() => ({ measurementRequest: undefined as string | undefined }));
 
@@ -38,7 +41,7 @@ vi.mock("../portal/customer-portal-office-access", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
-  useParams: () => ({ jobId: "JOB-A" }),
+  useParams: () => workbenchParams,
   useSearch: () => manualSearch,
   useNavigate: () => vi.fn(),
 }));
@@ -305,6 +308,7 @@ describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     manualSearch.measurementRequest = undefined;
+    workbenchParams.jobId = "JOB-A";
     // The default is an empty capability list: `facet_launch` is not visible to this role, so
     // every other test in this file sees exactly the behaviour it saw before the signal existed.
     vi.mocked(loadCapabilitySignal).mockResolvedValue(capabilitySignal("owner", []));
@@ -335,6 +339,151 @@ describe("EstimatorWorkbenchPage", () => {
       receipt: null,
     }));
   });
+
+  it.each(["legacy-first", "opt-in-first"] as const)(
+    "separates a preseeded legacy cache and overlapping requests (%s)",
+    async (order) => {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const legacyKey = [
+        "estimator-workbench",
+        ownerSession.tenant.id,
+        ownerSession.user.id,
+        "JOB-A",
+      ];
+      const legacy = workbenchModel({
+        job: {
+          ...workbenchModel().job,
+          customer_display_name: null,
+          address: null,
+          job_number: "IW-LEGACY",
+        },
+      });
+      const expanded = workbenchModel({
+        job: { ...workbenchModel().job, customer_display_name: "Synthetic Current Household" },
+      });
+      client.setQueryData(legacyKey, legacy);
+      let finishLegacy!: (model: EstimatorWorkbenchResponse) => void;
+      const legacyRead = client.fetchQuery({
+        queryKey: legacyKey,
+        queryFn: () =>
+          new Promise<EstimatorWorkbenchResponse>((resolve) => {
+            finishLegacy = resolve;
+          }),
+      });
+      let finishExpanded!: (model: EstimatorWorkbenchResponse) => void;
+      vi.mocked(loadEstimatorWorkbench).mockReturnValue(
+        new Promise((resolve) => {
+          finishExpanded = resolve;
+        }),
+      );
+      render(
+        <QueryClientProvider client={client}>
+          <SessionProvider session={ownerSession}>
+            <EstimatorWorkbenchPage />
+          </SessionProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(loadEstimatorWorkbench).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText(/IW-LEGACY/)).not.toBeInTheDocument();
+      if (order === "legacy-first")
+        await act(async () => {
+          finishLegacy(legacy);
+          await legacyRead;
+        });
+      await act(async () => {
+        finishExpanded(expanded);
+      });
+      await waitFor(() =>
+        expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+          "Synthetic Current Household",
+        ),
+      );
+      if (order === "opt-in-first")
+        await act(async () => {
+          finishLegacy(legacy);
+          await legacyRead;
+        });
+      expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+        "Synthetic Current Household",
+      );
+      expect(client.getQueryData(legacyKey)).toEqual(legacy);
+      expect(
+        client.getQueryData(
+          estimatorWorkbenchQueryKey(officeJobIdentityScope(ownerSession), "JOB-A"),
+        ),
+      ).toEqual(expanded);
+    },
+  );
+
+  it.each(["job", "user", "tenant", "renewed-session", "authority"] as const)(
+    "keeps a pending workbench read under its original %s scope",
+    async (change) => {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const secondSession: AuthenticatedSession =
+        change === "job"
+          ? ownerSession
+          : {
+              ...ownerSession,
+              ...(change === "user"
+                ? { user: { ...ownerSession.user, id: "appu_synthetic_other" } }
+                : {}),
+              ...(change === "tenant"
+                ? { tenant: { ...ownerSession.tenant, id: "synthetic-other" } }
+                : {}),
+              ...(change === "renewed-session" ? { csrf_token: "synthetic-renewed-csrf" } : {}),
+              ...(change === "authority" ? { allowed_actions: [] } : {}),
+            };
+      const secondId = change === "job" ? "JOB-B" : "JOB-A";
+      const first = workbenchModel({
+        job: { ...workbenchModel().job, customer_display_name: "Synthetic Prior Household" },
+      });
+      const second = workbenchModel({
+        job: {
+          ...workbenchModel().job,
+          id: secondId,
+          roof_job_id: secondId,
+          customer_display_name: "Synthetic Current Household",
+        },
+        allowed_actions: [],
+      });
+      let finishFirst!: (model: EstimatorWorkbenchResponse) => void;
+      vi.mocked(loadEstimatorWorkbench)
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            finishFirst = resolve;
+          }),
+        )
+        .mockResolvedValue(second);
+      const tree = (session: AuthenticatedSession) => (
+        <QueryClientProvider client={client}>
+          <SessionProvider session={session}>
+            <EstimatorWorkbenchPage />
+          </SessionProvider>
+        </QueryClientProvider>
+      );
+      const view = render(tree(ownerSession));
+      await waitFor(() => expect(loadEstimatorWorkbench).toHaveBeenCalledTimes(1));
+      workbenchParams.jobId = secondId;
+      view.rerender(tree(secondSession));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+          "Synthetic Current Household",
+        ),
+      );
+      await act(async () => {
+        finishFirst(first);
+      });
+      expect(screen.getByLabelText("Job identity")).toHaveTextContent(
+        "Synthetic Current Household",
+      );
+      expect(screen.queryByText(/Synthetic Prior Household/)).not.toBeInTheDocument();
+      expect(
+        client.getQueryData(
+          estimatorWorkbenchQueryKey(officeJobIdentityScope(secondSession), secondId),
+        ),
+      ).toEqual(second);
+    },
+  );
 
   it.each([
     [

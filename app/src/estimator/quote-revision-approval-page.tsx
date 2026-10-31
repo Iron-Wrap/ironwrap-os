@@ -34,6 +34,12 @@ import { jobLabelParts } from "../lib/job-label";
 import { ApprovalReceipt } from "../owner/approval-receipt";
 import { loadEstimatorWorkbench } from "./estimator-api";
 import {
+  estimatorWorkbenchQueryKey,
+  officeJobIdentityScope,
+  quoteRevisionApprovalDetailQueryKey,
+  type OfficeJobIdentityScope,
+} from "./office-job-identity-query";
+import {
   approveQuoteRevisionApproval,
   loadQuoteRevisionApproval,
   loadQuoteRevisionApprovals,
@@ -53,7 +59,7 @@ import type {
 type ReconciliationOutcome = "executed" | "not_executed" | "inconclusive";
 
 type RevisionReviewScope = {
-  session: { tenantId: string; userId: string };
+  session: OfficeJobIdentityScope;
   approvalId: string;
 };
 
@@ -71,12 +77,7 @@ type RevisionDecisionAction = (
 const decisionMutationKey = ["quote-revision-approval-decision"] as const;
 
 const detailKeyFor = (scope: RevisionReviewScope) =>
-  [
-    "quote-revision-approval",
-    scope.session.tenantId,
-    scope.session.userId,
-    scope.approvalId,
-  ] as const;
+  quoteRevisionApprovalDetailQueryKey(scope.session, scope.approvalId);
 const queueKeyFor = (scope: RevisionReviewScope) =>
   ["quote-revision-approvals", scope.session.tenantId, scope.session.userId] as const;
 
@@ -310,10 +311,7 @@ function QuoteRevisionApprovalDetailContent() {
   const queryClient = useQueryClient();
   const offline = isOfflineSession(session);
   // An opaque session identity keeps credentials out of mutation variables and cache keys.
-  const sessionScope = useMemo(
-    () => ({ tenantId: session.tenant.id, userId: session.user.id }),
-    [session],
-  );
+  const sessionScope = useMemo(() => officeJobIdentityScope(session), [session]);
   const scope = useMemo(
     () => ({ session: sessionScope, approvalId: approvalId ?? "" }),
     [sessionScope, approvalId],
@@ -718,7 +716,7 @@ function QuoteRevisionApprovalPrepareContent() {
   const offline = isOfflineSession(session);
   const navigate = useNavigate();
   const query = useQuery({
-    queryKey: ["estimator-workbench", session.tenant.id, session.user.id, jobId],
+    queryKey: estimatorWorkbenchQueryKey(officeJobIdentityScope(session), jobId),
     enabled: Boolean(jobId),
     queryFn: () => loadEstimatorWorkbench(jobId!),
     retry: false,

@@ -1655,10 +1655,15 @@ owner. The body names `customer_id`, `expected_customer_version` and `verificati
 records the owner's attestation to the completed check; the Worker performs no call or email.
 Only the reference digest is retained, not the contact or the reference text.
 
-The immutable decision freezes same-tenant customer/native lead/job identities and the signal
-sequence frontier. Recorded non-conflicting sender matches also qualify; no name, address or
+The immutable decision freezes same-tenant customer/native lead/job identities, every admitted
+signal ID and original hash, and the sequence frontier. A new signal assigned a low sequence
+after an older restore cannot join that frozen ID cohort. Recorded non-conflicting sender matches also qualify; no name, address or
 new contact matching widens the decision. A scope has at most 64 identities and 100 eligible
-signals; larger requests are refused before acceptance. Each call claims at most ten signals and
+signals. A larger eligible scope is refused with `422 erasure_supported_scope_exceeded`,
+`accepted: false`, `completed: false` and both supported limits, before any decision, marker or
+partial first-hundred scope is accepted. Arbitrary-size customer-history erasure remains an
+explicit unsupported scope; this bounded capability does not establish that full owner goal.
+The caps bound complete final independent-marker readback. Each call claims at most ten signals and
 erases at most one hundred live/shadow proposal rows. An exact retry continues the original
 scope; a changed request conflicts. Readback at `GET /api/v1/agent-team/privacy/erasures/{id}`
 reports remaining signals and arguments, and never calls a partial page completed.
@@ -1684,8 +1689,10 @@ After an older D1 restoration, the owner uses
 `POST /api/v1/agent-team/privacy/erasures/reapply` with `{"cursor":null}` and repeats with each
 returned opaque cursor until it is null. Each bounded page validates the independent request and
 signal commitments, reconstructs the original decision/target and actually erases covered text.
+It then audits D1 targets against the independent ledger before finishing traversal; a vanished
+expected marker cannot be reported as an empty successful restore.
 A page with remaining arguments retains its current signal in the cursor; absent source rows are
-reported separately. `GET /api/v1/agent-team/privacy/erasure-markers` inventories the surviving
+reported separately; a request status with missing original signal IDs stays incomplete. `GET /api/v1/agent-team/privacy/erasure-markers` inventories the surviving
 independent markers. The privacy bucket must remain outside D1/RAW restore and must not be
 rolled back or deleted with those stores. Do not reopen runtime processing while a privacy-ledger
 or replay failure remains unresolved. This is source behavior and synthetic repository proof;

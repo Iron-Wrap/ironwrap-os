@@ -324,7 +324,9 @@ Current source tracing distinguishes implemented modules from reachable producti
   ship before the first reach that age. Owner-verified subject erasure (`agents/subject-erasure.ts`,
   `agents/privacy-ledger.ts`, migration `0208`, `agents-subject-erasure.test.ts`) records a fresh
   owner's session/CSRF decision and completed on-file phone/email check attestation. It freezes
-  exact customer/native identities and the signal frontier, refuses oversized scopes, and progresses
+  exact customer/native identities, signal IDs/original hashes and the frontier, refuses scopes
+  beyond 64 identities or 100 signals with explicit unsupported-scope/accepted-false/completed-false
+  readback before any partial acceptance, and progresses
   in bounded calls. Before younger signal text or the four source-bound `lead_fact.propose` live/shadow
   fields can be erased, create-only request/per-signal commitments must be read back from independent
   `PRIVACY_LEDGER`. Original signal/argument hashes and other columns stay unchanged. Claimed sources

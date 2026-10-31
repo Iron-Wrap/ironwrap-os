@@ -183,7 +183,7 @@ test("current owner/session/CSRF and recorded on-file verification fail closed",
 });
 
 test("independent marker/D1 failures retain partial state without a completed erasure and retry safely", async (t) => {
-  for (const mode of ["missing_bucket", "get_failure", "put_failure", "lost_put_response", "missing_readback", "conflicting_marker", "initial_d1", "after_marker_d1", "owner_revoked_after_marker", "owner_expired_after_marker"] as const) {
+  for (const mode of ["missing_bucket", "get_failure", "put_failure", "lost_put_response", "lost_signal_put_response", "missing_readback", "conflicting_marker", "initial_d1", "after_marker_d1", "owner_revoked_after_marker", "owner_expired_after_marker"] as const) {
     await t.test(mode, async () => {
       const s = setup();
       try {
@@ -192,6 +192,7 @@ test("independent marker/D1 failures retain partial state without a completed er
         if (mode === "get_failure") s.ledger.failGet = true;
         if (mode === "put_failure") s.ledger.failPut = true;
         if (mode === "lost_put_response") s.ledger.losePutResponse = true;
+        if (mode === "lost_signal_put_response") s.ledger.afterPut = () => { if (s.ledger.objects.size === 2) s.ledger.losePutResponse = true; };
         if (mode === "missing_readback") s.ledger.omitReadback = true;
         if (mode === "conflicting_marker") s.ledger.objects.set(signalMarkerKey(TENANT, signal), '{"version":1,"type":"signal"}');
         if (mode === "initial_d1") s.db.failSql = /INSERT INTO agent_subject_erasures/;
@@ -201,8 +202,8 @@ test("independent marker/D1 failures retain partial state without a completed er
         const result = await s.app("POST"); assert.ok(result.status >= 400, JSON.stringify(result)); assert.notEqual(result.body.completed, true);
         assert.equal(JSON.parse(s.db.row("agent_signals", "signal_id", signal).content_json).excerpt, ORIGINAL);
         if (mode === "initial_d1") assert.equal(s.ledger.objects.size, 0);
-        if (["lost_put_response", "after_marker_d1"].includes(mode)) {
-          assert.ok(s.ledger.objects.size > 0); s.ledger.losePutResponse = false; s.db.failSql = null;
+        if (["lost_put_response", "lost_signal_put_response", "after_marker_d1"].includes(mode)) {
+          assert.ok(s.ledger.objects.size > 0); s.ledger.losePutResponse = false; s.ledger.afterPut = null; s.db.failSql = null;
           const retry = await s.app("POST"); assert.equal(retry.status, 200, JSON.stringify(retry)); assert.equal(retry.body.completed, true);
         }
       } finally { s.db.raw.close(); }
@@ -253,6 +254,65 @@ test("signal and argument budgets require explicit progress without widening the
   } finally { s.db.raw.close(); }
 });
 
+test("oversized native scopes refuse the whole decision and publish explicit supported limits", async () => {
+  const s = setup();
+  try {
+    for (let i = 0; i < 63; i++) s.db.raw.prepare(`INSERT INTO operating_roof_jobs
+      (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id, service_type, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'privacy_envelope_primary', 'Synthetic service', ?, ?)`)
+      .run(`job_privacy_limit_${i}`, TENANT, LEAD, CUSTOMER, s.now(), s.now());
+    const refused = await s.app("POST");
+    assert.equal(refused.status, 422, JSON.stringify(refused));
+    assert.equal(refused.body.error, "erasure_supported_scope_exceeded");
+    assert.equal(refused.body.accepted, false); assert.equal(refused.body.completed, false);
+    assert.deepEqual(refused.body.supported_scope, { max_identities: 64, max_signals: ERASURE_MAX_SIGNALS });
+    assert.equal(s.db.count("agent_subject_erasures"), 0); assert.equal(s.db.count("agent_signal_erasures"), 0); assert.equal(s.ledger.objects.size, 0);
+  } finally { s.db.raw.close(); }
+});
+
+test("an old restore assigning low sequences to new signal IDs cannot widen the frozen decision", async () => {
+  const s = setup(), scratch = mkdtempSync(join(tmpdir(), "ironwrap-agent-frontier-"));
+  try {
+    s.db.raw.prepare("VACUUM INTO ?").run(join(scratch, "empty-signals.sqlite"));
+    const originals = [await s.signal(), await s.signal()];
+    const result = await s.app("POST"); assert.equal(result.status, 200, JSON.stringify(result));
+    const frozen = JSON.parse(result.body.decision.scope_json).signals;
+    assert.deepEqual(frozen.map((entry: { signal_id: string }) => entry.signal_id), originals);
+    s.db.raw.close(); copyFileSync(join(scratch, "empty-signals.sqlite"), join(scratch, "restored.sqlite"));
+    s.db.raw = new DatabaseSync(join(scratch, "restored.sqlite")); s.db.raw.exec("PRAGMA foreign_keys=ON");
+    const later = [await s.signal(), await s.signal()];
+    assert.ok(later.every((id) => s.db.row("agent_signals", "signal_id", id).signal_seq <= result.body.decision.signal_seq_ceiling));
+    const retry = await s.app("POST"); assert.equal(retry.status, 202, JSON.stringify(retry));
+    assert.equal(retry.body.erasure_id, result.body.erasure_id); assert.equal(retry.body.completed, false);
+    assert.deepEqual(retry.body.absent_signal_ids, originals); assert.equal(retry.body.eligible_signals, originals.length);
+    assert.equal(s.db.count("agent_signal_erasures"), 0);
+    const absent: string[] = []; let cursor: string | null = null, pages = 0;
+    do { const page = await s.app("POST", "/privacy/erasures/reapply", { cursor }); assert.equal(page.status, 200, JSON.stringify(page));
+      absent.push(...page.body.absent_signal_ids); cursor = page.body.next_cursor; assert.ok(++pages <= 4); } while (cursor);
+    assert.deepEqual(absent.sort(), [...originals].sort());
+    for (const id of later) { assert.equal(JSON.parse(s.db.row("agent_signals", "signal_id", id).content_json).excerpt, ORIGINAL);
+      assert.equal((await s.host("POST", "/runs", { signal_id: id, specialist_id: "lead_concierge", host_run_key: `later:${id}` })).status, 201); }
+    assert.equal(s.db.count("agent_signal_erasures"), 0);
+  } finally { s.db.raw.close(); rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("a later signal cannot admit a run that still cites a held lead proposal in its context", async () => {
+  const s = setup();
+  try {
+    const original = await s.signal(), run = await s.run(original), proposal = s.proposal(run, original);
+    s.db.failSql = /UPDATE agent_signals SET content_json/;
+    assert.equal((await s.app("POST")).status, 503); s.db.failSql = null;
+    assert.equal(JSON.parse(s.db.row("agent_run_steps", "step_id", proposal).args_json).redacted, undefined);
+    const later = await s.signal();
+    const opened = await s.host("POST", "/runs", { signal_id: later, specialist_id: "lead_concierge", host_run_key: "later-held-context" });
+    assert.equal(opened.status, 409, JSON.stringify(opened)); assert.equal(opened.body.error, "agent_source_erased");
+    assert.equal(Number((s.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_runs WHERE signal_id = ?").get(later) as { n: number }).n), 0);
+    assert.equal((await s.app("POST")).status, 200);
+    const after = await s.host("POST", "/runs", { signal_id: later, specialist_id: "lead_concierge", host_run_key: "later-cleared-context" });
+    assert.equal(after.status, 201, JSON.stringify(after)); assert.ok(!JSON.stringify(after).includes(ORIGINAL));
+  } finally { s.db.raw.close(); }
+});
+
 test("marker missing/conflicting/unavailable and malformed pagination never expose restored text or acknowledge replay", async (t) => {
   for (const mode of ["missing_signal", "missing_request", "get_failure", "malformed", "foreign_marker", "hash_conflict", "list_failure", "cursor_cycle", "foreign_list_key", "oversized_marker"] as const) {
     await t.test(mode, async () => {
@@ -277,6 +337,12 @@ test("marker missing/conflicting/unavailable and malformed pagination never expo
           const blocked = await s.host("POST", "/runs", { signal_id: signal, specialist_id: "lead_concierge", host_run_key: "synthetic-marker-run" });
           assert.equal(blocked.status, 503, JSON.stringify(blocked)); assert.ok(!JSON.stringify(blocked).includes(ORIGINAL));
           assert.equal((await s.app("GET", `/privacy/erasures/${result.body.erasure_id}`)).status, 503);
+          if (mode === "missing_signal") {
+            const first = await s.app("POST", "/privacy/erasures/reapply", { cursor: null });
+            assert.equal(first.status, 200); assert.ok(first.body.next_cursor);
+            const audit = await s.app("POST", "/privacy/erasures/reapply", { cursor: first.body.next_cursor });
+            assert.equal(audit.status, 503); assert.equal(audit.body.error, "privacy_marker_missing");
+          }
         }
       } finally { s.db.raw.close(); }
     });
@@ -319,5 +385,66 @@ test("exact exceptions pin every schema column, preserve old bodies and refuse a
     const oldClause = /\n  AND NOT \([\s\S]*?\n  \)/.exec(oldDraft)![0]; assert.ok(draftSql.includes(oldClause));
     assert.ok(oldSignal.includes("'-90 days'"));
     const result = await s.app("POST"); assert.equal(result.status, 200, JSON.stringify(result));
+  } finally { s.db.raw.close(); }
+});
+
+test("each overlapping erasure guard independently needs every immutable column pin", async () => {
+  const s = setup();
+  try {
+    const signal = await s.signal(), run = await s.run(signal), live = s.proposal(run, signal), shadow = s.proposal(run, signal, { shadow: true });
+    s.db.failSql = /UPDATE agent_signals SET content_json/;
+    assert.equal((await s.app("POST")).status, 503); s.db.failSql = null;
+    // Isolate the guard under test from FK and overlapping guards in this synthetic SQLite
+    // transaction. Each mutation is rolled back; no application/storage policy is bypassed.
+    s.db.raw.exec("PRAGMA foreign_keys=OFF");
+    const signalSet = "content_json = json_set(json_remove(content_json, '$.excerpt', '$.form_fields', '$.service'), '$.redacted', json('true'))";
+    const argsSet = "args_json = json_set(args_json, '$.fields.service', NULL, '$.fields.scope', NULL, '$.fields.address', NULL, '$.fields.timing', NULL, '$.redacted', json('true'))";
+    const guards = [
+      { name: "prevent_agent_signal_update", table: "agent_signals", key: "signal_id", id: signal, changed: "content_json", set: signalSet },
+      { name: "prevent_agent_step_proposal_update", table: "agent_run_steps", key: "step_id", id: live, changed: "args_json", set: argsSet },
+      { name: "prevent_decided_agent_step_update", table: "agent_run_steps", key: "step_id", id: live, changed: "args_json", set: argsSet },
+      { name: "agent_run_steps_erasure_update_guard", table: "agent_run_steps", key: "step_id", id: live, changed: "args_json", set: argsSet },
+      { name: "prevent_agent_shadow_step_update", table: "agent_shadow_steps", key: "shadow_step_id", id: shadow, changed: "args_json", set: argsSet },
+    ];
+    const alternate = (key: string, value: any): string | number => {
+      if (key.endsWith("_json")) return key === "sources_json" ? "[]" : '{"synthetic":true}';
+      if (key === "kind") return "handoff";
+      if (key === "outcome") return "failed";
+      if (key === "autonomy") return "A2";
+      if (key === "tenant_id") return "foreign";
+      if (key === "needs_reviewer_role") return "owner";
+      if (key.endsWith("_sha256") || key === "step_key") return hash(`${key}:synthetic-mutant`);
+      if (key.endsWith("_at") && typeof value === "string") return new Date(Date.parse(value) + 1).toISOString();
+      if (typeof value === "number") return value + 1000;
+      return value === null ? "synthetic" : `${value}:synthetic`;
+    };
+    let mutants = 0;
+    for (const guard of guards) {
+      const original = s.db.row(guard.table, guard.key, guard.id);
+      const sql = (s.db.raw.prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?").get(guard.name) as { sql: string }).sql;
+      const columns = s.db.raw.prepare(`PRAGMA table_info(${guard.table})`).all() as Array<{ name: string }>;
+      for (const { name } of columns.filter((column) => column.name !== guard.changed)) {
+        const pin = `    AND NEW.${name} IS OLD.${name}`;
+        const erasureClause = guard.name === "prevent_decided_agent_step_update" ? sql.slice(sql.lastIndexOf(") AND NOT (")) : sql;
+        assert.equal(erasureClause.split(pin).length, 2, `${guard.name}.${name}: complete erasure pin inventory`);
+        const last = sql.lastIndexOf(pin);
+        const mutant = sql.slice(0, last) + sql.slice(last + pin.length);
+        s.db.raw.exec("SAVEPOINT pin_mutant");
+        try {
+          if (guard.table === "agent_run_steps") for (const other of ["prevent_agent_step_proposal_update", "prevent_decided_agent_step_update", "agent_run_steps_erasure_update_guard"]) {
+            if (other !== guard.name) s.db.raw.exec(`DROP TRIGGER ${other}`);
+          }
+          const update = () => s.db.raw.prepare(`UPDATE ${guard.table} SET ${guard.set}, ${name} = ? WHERE ${guard.key} = ?`).run(alternate(name, original[name]), guard.id);
+          assert.throws(update, /agent_/, `${guard.name}.${name}: original guard must refuse`);
+          s.db.raw.exec(`DROP TRIGGER ${guard.name}`); s.db.raw.exec(mutant);
+          assert.doesNotThrow(update, `${guard.name}.${name}: removing this pin must expose the otherwise masked mutation`);
+          mutants++;
+        } finally { s.db.raw.exec("ROLLBACK TO pin_mutant; RELEASE pin_mutant"); }
+      }
+    }
+    console.log(JSON.stringify({ isolated_erasure_pin_mutants_detected: mutants, guards: guards.map((guard) => guard.name) }));
+    assert.ok(mutants > 80);
+    s.db.raw.exec("PRAGMA foreign_keys=ON");
+    assert.equal((await s.app("POST")).status, 200);
   } finally { s.db.raw.close(); }
 });

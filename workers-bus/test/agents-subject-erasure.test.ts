@@ -113,6 +113,8 @@ test("owner erasure records checked identity, exact signal/live/shadow text and 
     const id = await s.signal(), run = await s.run(id), live = s.proposal(run, id), shadow = s.proposal(run, id, { shadow: true });
     const wrongLead = s.proposal(run, id, { lead: "lead_unrelated_0001" }), wrongCitation = s.proposal(run, id, { cite: "sig_unrelated" });
     const confirm = s.proposal(run, id, { action: "lead_fact.confirm" });
+    const unrelatedShadow = [s.proposal(run, id, { shadow: true, lead: "lead_unrelated_0001" }),
+      s.proposal(run, id, { shadow: true, cite: "sig_unrelated" }), s.proposal(run, id, { shadow: true, action: "lead_fact.confirm" })];
     const foreign = await s.signal({ tenant: "foreign" }), unbound = await s.signal({ subject: null });
     const conflicting = await s.signal({ subject: null, content: { excerpt: ORIGINAL, sender: { customer_id: CUSTOMER, matched_on: "email", conflict: true } } });
     const watch = await s.signal({ kind: "watch" });
@@ -133,6 +135,7 @@ test("owner erasure records checked identity, exact signal/live/shadow text and 
       for (const key of Object.keys(original).filter((v) => v !== "args_json")) assert.equal(row[key], original[key], `${table}.${key}`);
     }
     for (const stepId of [wrongLead, wrongCitation, confirm]) assert.equal(JSON.parse(s.db.row("agent_run_steps", "step_id", stepId).args_json).redacted, undefined);
+    for (const stepId of unrelatedShadow) assert.equal(JSON.parse(s.db.row("agent_shadow_steps", "shadow_step_id", stepId).args_json).redacted, undefined);
     for (const signalId of [foreign, unbound, conflicting, watch]) assert.equal(JSON.parse(s.db.row("agent_signals", "signal_id", signalId).content_json).excerpt, ORIGINAL);
     assert.equal(await leadProposal(s.db, TENANT, live), null); assert.deepEqual(await openLeadProposals(s.db, TENANT, LEAD, 10), [wrongCitation]);
     const replay = await s.app("POST"); assert.equal(replay.body.erasure_id, result.body.erasure_id); assert.equal(s.db.count("agent_subject_erasures"), 1);
@@ -332,6 +335,43 @@ test("privacy reads bind supported pointer citations to the complete underlying 
     const erased = await s.host("POST", `/runs/${run}/steps`, input);
     assert.equal(erased.status, 409, JSON.stringify(erased)); assert.equal(erased.body.error, "agent_source_erased");
     assert.ok(!JSON.stringify(erased).includes(ORIGINAL));
+  } finally { s.db.raw.close(); }
+});
+
+test("SQL admission holds whole and pointer signal/proposal references in run contexts and live/shadow sources", async () => {
+  const s = setup();
+  try {
+    const signal = await s.signal(), run = await s.run(signal), live = s.proposal(run, signal), shadow = s.proposal(run, signal, { shadow: true });
+    s.db.failSql = /UPDATE agent_signals SET content_json/;
+    assert.equal((await s.app("POST")).status, 503); s.db.failSql = null;
+    const later = await s.signal();
+    const oldRun = s.db.row("agent_runs", "run_id", run), oldContext = JSON.parse(oldRun.context_json);
+    const safeContext = canonicalJson({ ...oldContext, facts: [] });
+    const safeRun = { ...oldRun, run_id: "run_privacy_pointer_unrelated", signal_id: later, host_run_key: hash("unrelated-pointer"),
+      context_json: safeContext, context_snapshot_hash: hash(safeContext) };
+    const insert = (table: string, row: Record<string, any>) => s.db.raw.prepare(
+      `INSERT INTO ${table} (${Object.keys(row).join(",")}) VALUES (${Object.keys(row).map(() => "?").join(",")})`).run(...Object.values(row));
+    insert("agent_runs", safeRun);
+    const admitted: string[] = [];
+    const refs = [`signal/${signal}`, `signal/${signal}#/excerpt`, `lead_proposal/${live}`, `lead_proposal/${live}#/fields/service`];
+    for (const factId of refs) for (const table of ["agent_runs", "agent_run_steps", "agent_shadow_steps"] as const) {
+      const ref = { fact_id: factId, version: 1, hash: `sha256:${hash(canonicalJson(ORIGINAL))}` };
+      const label = `${table}:${factId}`;
+      s.db.raw.exec("SAVEPOINT pointer_hold");
+      try {
+        if (table === "agent_runs") {
+          const context = canonicalJson({ ...oldContext, facts: [ref] });
+          insert(table, { ...safeRun, run_id: "run_privacy_pointer_held", host_run_key: hash(label), context_json: context, context_snapshot_hash: hash(context) });
+        } else {
+          const id = table === "agent_run_steps" ? live : shadow, key = table === "agent_run_steps" ? "step_id" : "shadow_step_id";
+          insert(table, { ...s.db.row(table, key, id), [key]: `pointer_${crypto.randomUUID()}`, run_id: safeRun.run_id,
+            step_key: hash(label), sources_json: canonicalJson([ref]) });
+        }
+        admitted.push(label);
+      } catch (error) { assert.match(String(error), /agent_source_erased/, label); }
+      finally { s.db.raw.exec("ROLLBACK TO pointer_hold; RELEASE pointer_hold"); }
+    }
+    assert.deepEqual(admitted, [], "no held source may be admitted by spelling its supported pointer");
   } finally { s.db.raw.close(); }
 });
 

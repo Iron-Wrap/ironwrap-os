@@ -322,28 +322,28 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS agent_runs_erasure_insert_guard BEFORE INSERT ON agent_runs WHEN (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = NEW.tenant_id AND e.signal_id = NEW.signal_id)
   OR EXISTS (SELECT 1 FROM json_each(NEW.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(NEW.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/'))
 BEGIN SELECT RAISE(ABORT, 'agent_source_erased'); END;
 CREATE TRIGGER IF NOT EXISTS agent_runs_erasure_update_guard BEFORE UPDATE ON agent_runs WHEN (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = OLD.tenant_id AND e.signal_id = OLD.signal_id)
   OR EXISTS (SELECT 1 FROM json_each(OLD.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = OLD.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = OLD.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(OLD.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = OLD.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = OLD.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/')) OR (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = NEW.tenant_id AND e.signal_id = NEW.signal_id)
   OR EXISTS (SELECT 1 FROM json_each(NEW.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(NEW.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/'))
@@ -351,18 +351,18 @@ BEGIN SELECT RAISE(ABORT, 'agent_source_erased'); END;
 CREATE TRIGGER IF NOT EXISTS agent_run_steps_erasure_insert_guard BEFORE INSERT ON agent_run_steps WHEN (EXISTS (SELECT 1 FROM agent_runs r WHERE r.run_id = NEW.run_id AND r.tenant_id = NEW.tenant_id
     AND (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = r.tenant_id AND e.signal_id = r.signal_id)
       OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/')))
   OR EXISTS (SELECT 1 FROM json_each(NEW.sources_json) f
-    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(NEW.sources_json) f
-    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/'))
@@ -371,35 +371,35 @@ CREATE TRIGGER IF NOT EXISTS agent_run_steps_erasure_update_guard BEFORE UPDATE 
 WHEN ((EXISTS (SELECT 1 FROM agent_runs r WHERE r.run_id = OLD.run_id AND r.tenant_id = OLD.tenant_id
     AND (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = r.tenant_id AND e.signal_id = r.signal_id)
       OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/')))
   OR EXISTS (SELECT 1 FROM json_each(OLD.sources_json) f
-    JOIN agent_signal_erasures e ON e.tenant_id = OLD.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = OLD.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(OLD.sources_json) f
-    JOIN agent_run_steps p ON p.tenant_id = OLD.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = OLD.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/')) OR (EXISTS (SELECT 1 FROM agent_runs r WHERE r.run_id = NEW.run_id AND r.tenant_id = NEW.tenant_id
     AND (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = r.tenant_id AND e.signal_id = r.signal_id)
       OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/')))
   OR EXISTS (SELECT 1 FROM json_each(NEW.sources_json) f
-    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(NEW.sources_json) f
-    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/'))) AND NOT (
@@ -450,18 +450,18 @@ BEGIN SELECT RAISE(ABORT, 'agent_source_erased'); END;
 CREATE TRIGGER IF NOT EXISTS agent_shadow_steps_erasure_insert_guard BEFORE INSERT ON agent_shadow_steps WHEN (EXISTS (SELECT 1 FROM agent_runs r WHERE r.run_id = NEW.run_id AND r.tenant_id = NEW.tenant_id
     AND (EXISTS (SELECT 1 FROM agent_signal_erasures e WHERE e.tenant_id = r.tenant_id AND e.signal_id = r.signal_id)
       OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = r.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(r.context_json, '$.facts') f
-    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = r.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/')))
   OR EXISTS (SELECT 1 FROM json_each(NEW.sources_json) f
-    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8)
+    JOIN agent_signal_erasures e ON e.tenant_id = NEW.tenant_id AND e.signal_id = substr(json_extract(f.value, '$.fact_id'), 8, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 8)
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 7) IS 'signal/')
   OR EXISTS (SELECT 1 FROM json_each(NEW.sources_json) f
-    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15)
+    JOIN agent_run_steps p ON p.tenant_id = NEW.tenant_id AND p.step_id = substr(json_extract(f.value, '$.fact_id'), 15, instr(json_extract(f.value, '$.fact_id') || '#', '#') - 15)
     JOIN agent_runs pr ON pr.tenant_id = p.tenant_id AND pr.run_id = p.run_id
     JOIN agent_signal_erasures e ON e.tenant_id = pr.tenant_id AND e.signal_id = pr.signal_id
     WHERE substr(json_extract(f.value, '$.fact_id'), 1, 14) IS 'lead_proposal/'))

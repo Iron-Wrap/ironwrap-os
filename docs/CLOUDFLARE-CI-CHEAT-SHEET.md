@@ -132,14 +132,17 @@ https://developers.cloudflare.com/api/resources/workers/subresources/scripts/sub
 
 ### Tag path: `deploy-production.yml` — production
 
-**Written, never run.** The workflow has no run (`total_count` 0) and there is no `v*` tag. The
-`production` Environment exists since 2026-10-21 (see Not verified and §4).
+**Source-present workflow.** Check the exact release's workflow runs and production Environment
+before reporting deployment status; the source below does not establish a live production run.
 
-**Account split (2026-10-30, IRO-221).** Production runs in the **Mindburn Labs** account
-`5023dd22…` as `ironwrap.mindburn.org` (zone `mindburn.org`, Workers Paid); qa stays in IronWrap's
-account `7ee5775b…` on Free. `CLOUDFLARE_ACCOUNT_ID` in `deploy-production.yml` and `deploy.yml`
-differ accordingly, `env.qa.account_id` pins qa in `wrangler.jsonc`, and the provider policy (v2)
-carries `account_id` per environment. A qa token therefore cannot reach production at all.
+**Declared account split (IRO-221).** The checked-in configuration targets the **Mindburn Labs**
+account `5023dd22…` for production at `ironwrap.mindburn.org` (zone `mindburn.org`) and IronWrap's
+account `7ee5775b…` for qa. `CLOUDFLARE_ACCOUNT_ID` in `deploy-production.yml` and `deploy.yml`
+differs accordingly, `env.qa.account_id` pins qa in `wrangler.jsonc`, and the provider policy (v2)
+carries `account_id` per environment. These are source targets. Worker creation, resource and
+domain binding, release secret identities, token grants and runtime publication require separate
+provider readback. Distinct account ids alone do not prove that a qa credential lacks production
+access; credential isolation requires readback of its actual grants and bounded access checks.
 
 - Trigger: `workflow_dispatch` only, with required `tag` and `declaration_sha` inputs
   (`deploy-production.yml:21-31`). There is no `push` trigger: a tag alone does not deploy. The

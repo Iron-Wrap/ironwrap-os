@@ -120,9 +120,10 @@
   //   Broker and authority-executor secrets
   //   are Worker-to-private-broker only; never expose either through the PWA or a public
   //   environment variable.
-  // Email/Drive = Google Workspace via service account + domain-wide delegation (live-verified
-  // 2026-07-02). FROM_EMAIL is the impersonated sender: sales@ for now — switch to quote@ once
-  // that mailbox migrates onto the Google Workspace. SMS is JobNimbus Engage's job (no Twilio send).
+  // Email/Drive use Google Workspace via service account + domain-wide delegation.
+  // FROM_EMAIL is the impersonated sender. Production selects the owner-approved temporary
+  // mailbox declared in the tenant sender aliases; activation still requires delegation and
+  // provider readback for that environment. SMS is JobNimbus Engage's job (no Twilio send).
   "vars": {
     "CFG_APP": {
       "APP_DOCUMENT_GENERATION_ENABLED": "false",
@@ -289,8 +290,8 @@
       // and PUBLIC_ESTIMATE_ENABLED stays false. Other writers fall back to "Administrator".
       "ERPNEXT_INTEGRATION_USER": ""
     },
-    // Empty while production mail runs on the mindburn.org Workspace (2026-10-30): the IronWrap
-    // shared drives are not reachable from that delegation, the same as in env.qa.
+    // Empty in the declared Mindburn mail topology. Drive-dependent paths stay disabled until
+    // the intended shared-drive bindings and their provider access have separate readback.
     "CFG_SHARED": {
       "SHARED_DRIVE_ID_JOBS": "",
       "SHARED_DRIVE_ID_RESTRICTED": "",

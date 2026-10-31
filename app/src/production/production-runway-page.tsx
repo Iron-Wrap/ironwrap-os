@@ -403,40 +403,7 @@ function RunwayJobCard({
           </h3>
           <p className="mt-1 text-sm text-muted">{job.service_type ?? "Work type not found"}</p>
         </div>
-        <div className="flex shrink-0 flex-col gap-2">
-          {canOpenJob ? (
-            <Button asChild variant="outline" size="compact">
-              <Link
-                to="/jobs/$jobId"
-                params={{ jobId: job.id }}
-                aria-label={`See job ${job.job_number ?? job.id}`}
-              >
-                See job
-                <ChevronRight aria-hidden="true" />
-              </Link>
-            </Button>
-          ) : null}
-          {canOpenHistory ? (
-            <Button asChild variant="quiet" size="compact">
-              <Link
-                to="/jobs/$jobId/history"
-                params={{ jobId: job.id }}
-                aria-label={`Full job record ${job.job_number ?? job.id}`}
-              >
-                Full job record
-                <ChevronRight aria-hidden="true" />
-              </Link>
-            </Button>
-          ) : null}
-        </div>
       </div>
-      {canOpenJob && canOpenHistory ? (
-        // One line under the pair says what each opens, since the labels alone read alike.
-        <p className="mt-2 text-sm leading-5 text-muted">
-          See job opens the job to work on it. Full job record shows its events, gates, money and
-          approvals, read only.
-        </p>
-      ) : null}
 
       <dl className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/80 py-3 text-sm sm:grid-cols-2">
         <div>
@@ -505,6 +472,39 @@ function RunwayJobCard({
           <MetadataLine label="Saved next step" value={job.next_action} />
         </dl>
       </SystemDetails>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {canOpenJob ? (
+          <Button asChild variant="outline" size="compact">
+            <Link
+              to="/jobs/$jobId"
+              params={{ jobId: job.id }}
+              aria-label={`See job ${job.job_number ?? job.id}`}
+            >
+              See job
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+        ) : null}
+        {canOpenHistory ? (
+          <Button asChild variant="quiet" size="compact">
+            <Link
+              to="/jobs/$jobId/history"
+              params={{ jobId: job.id }}
+              aria-label={`Full job record ${job.job_number ?? job.id}`}
+            >
+              Full job record
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+        ) : null}
+      </div>
+      {canOpenJob && canOpenHistory ? (
+        // One line under the pair says what each opens, since the labels alone read alike.
+        <p className="mt-2 text-sm leading-5 text-muted">
+          See job opens the job to work on it. Full job record shows its events, gates, money and
+          approvals, read only.
+        </p>
+      ) : null}
     </article>
   );
 }

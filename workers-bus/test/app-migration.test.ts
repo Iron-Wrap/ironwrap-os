@@ -2295,9 +2295,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
     // proposal revision checks. 0155 adds the owner's deposit policy (OD-01 payment on completion
     // or MD-13 deposits), which acceptance and the Deposit gate's policy entries follow. 0156 lets
-    // a person record whether an unconfirmed proposal send reached the customer. 0161 records what
-    // people found about a send, and their corrections, without changing it; holds the late-answer
-    // wait in D1 with a window per provider; and names the permit holder of each new publication.
+    // a person record whether an unconfirmed proposal send reached the customer. 0157 adds a
+    // version to a person's access, so role/access changes apply against the version read.
+    // 0161 records what people found about a send, and their corrections, without changing it;
+    // holds the late-answer wait in D1 with a window per provider; and names the permit holder
+    // of each new publication.
     // 0163 keeps the first time a customer's portal link opened a published proposal.
     // 0164 holds a proposal send to one attempt, settles an unknown one only from a person's record,
     // and keeps a conflicting readback from being recorded as not delivered.
@@ -2309,7 +2311,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // touches an object a later-numbered migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
     // 0207 redacts signal text once after ninety days and adds the unredacted-signal index.
-    assert.equal(migrations.length, 144);
+    assert.equal(migrations.length, 145);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),

@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { handleAgentHostApi } from "../src/agents/api.ts";
 import { inboundSignal, type InboundSender } from "../src/agents/inbound.ts";
 import { redactSignalText, SIGNAL_REDACTION_BATCH, SIGNAL_TEXT_RETENTION_DAYS, signalRedactionOn } from "../src/agents/retention.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
@@ -26,6 +27,8 @@ const ago = (days: number, ms = 0) => new Date(Date.now() - days * DAY - ms).toI
 /** Real SQLite with every migration, D1's atomic batch and trigger-inclusive change counts. */
 class SqliteD1 {
   raw = new DatabaseSync(":memory:");
+  beforeRunInsert: (() => Promise<void>) | null = null;
+  afterRunInsert: (() => Promise<void>) | null = null;
   /** Every statement prepared, for its query plan. */
   seen: string[] = [];
   constructor() {
@@ -44,9 +47,21 @@ class SqliteD1 {
           first: async <T>() => (this.raw.prepare(sql).get(...args) ?? null) as T | null,
           all: async <T>() => ({ results: this.raw.prepare(sql).all(...args) as T[] }),
           run: async () => {
+            const runInsert = /^\s*INSERT INTO agent_runs\s/.test(sql);
+            if (runInsert && this.beforeRunInsert) {
+              const beforeInsert = this.beforeRunInsert;
+              this.beforeRunInsert = null;
+              await beforeInsert();
+            }
             const before = this.changes();
             this.raw.prepare(sql).run(...args);
-            return { success: true, meta: { changes: this.changes() - before } };
+            const changes = this.changes() - before;
+            if (runInsert && this.afterRunInsert) {
+              const afterInsert = this.afterRunInsert;
+              this.afterRunInsert = null;
+              await afterInsert();
+            }
+            return { success: true, meta: { changes } };
           },
         };
       },
@@ -303,6 +318,70 @@ test("an inbound event keeps its envelope, channel and sender match and loses wh
     error: "signal_redacted",
     status: 409,
   });
+});
+
+test("run admission and redaction serialize at the actual INSERT, preserving existing run keys", async (t) => {
+  for (const ordering of ["redaction first", "admission first", "same-key winner then redaction"] as const) {
+    await t.test(ordering, async () => {
+      const db = new SqliteD1();
+      try {
+        const excerpt = "Synthetic text erased at admission.";
+        const appended = await appendSignal(db, TENANT, {
+          kind: "event", specialist_id: "lead_concierge", watch_id: "new_inbound", source: "web_form", subject: null,
+          content: { envelope_id: "envelope_synthetic_race", channel: "web_form", excerpt },
+          dedupe_key: "synthetic:redaction-admission",
+        }, ago(SIGNAL_TEXT_RETENTION_DAYS + 1));
+        assert.ok("signal_id" in appended && appended.created);
+        const id = appended.signal_id;
+        const originalHash = db.row(id).content_sha256;
+        const request = async (key = "synthetic-admission", specialist = "lead_concierge") => {
+          const response = await handleAgentHostApi(new Request("https://bus.example.invalid/api/v1/agents/runs", {
+            method: "POST",
+            headers: { authorization: "Bearer synthetic-retention-token", "content-type": "application/json" },
+            body: JSON.stringify({ signal_id: id, specialist_id: specialist, host_run_key: key }),
+          }), { DB: db, AGENT_HOST_TOKEN: "synthetic-retention-token", APP_TENANT_ID: TENANT, AGENT_DATA_CLASS: "synthetic" });
+          return { status: response.status, body: await response.json() as Record<string, any> };
+        };
+        const redact = async () => { assert.equal(await redactSignalText(db, TENANT), 1); };
+        let winnerId: string | null = null;
+        if (ordering === "redaction first") db.beforeRunInsert = redact;
+        else if (ordering === "admission first") db.afterRunInsert = redact;
+        else db.beforeRunInsert = async () => {
+          const winner = await request();
+          assert.equal(winner.status, 201);
+          winnerId = winner.body.run_id;
+          await redact();
+        };
+
+        const opened = await request();
+        assert.equal(db.content(id).redacted, true);
+        assert.equal(Object.hasOwn(db.content(id), "excerpt"), false);
+        assert.equal(db.row(id).content_sha256, originalHash);
+        const count = (table: string) => Number((db.raw.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+        if (ordering === "redaction first") {
+          assert.deepEqual(opened, { status: 409, body: { error: "signal_redacted" } });
+          assert.equal(count("agent_runs"), 0);
+          assert.equal(count("agent_run_events"), 0);
+          assert.equal(JSON.stringify(opened).includes(excerpt), false);
+        } else {
+          assert.equal(opened.status, ordering === "admission first" ? 201 : 200);
+          assert.equal(count("agent_runs"), 1);
+          if (winnerId) assert.equal(opened.body.run_id, winnerId, "the existing same-key run wins before redaction classification");
+          // Admission before redaction is valid; replay retains that run but hydrates the now-redacted row.
+          const replay = await request();
+          assert.equal(replay.status, 200);
+          assert.equal(replay.body.run_id, opened.body.run_id);
+          assert.equal(replay.body.resumed, true);
+          assert.equal(JSON.stringify(replay.body).includes(excerpt), false);
+          assert.equal(replay.body.context.facts.find((fact: { fact_id: string }) => fact.fact_id === `signal/${id}`).hash, `sha256:${originalHash}`);
+          assert.deepEqual(await request("synthetic-admission", "estimator"), { status: 422, body: { error: "run_key_conflict" } });
+        }
+        assert.deepEqual(await request("synthetic-admission-new"), { status: 409, body: { error: "signal_redacted" } });
+      } finally {
+        db.raw.close();
+      }
+    });
+  }
 });
 
 test("a signal is stored only under the time form the redaction's age check compares", async () => {

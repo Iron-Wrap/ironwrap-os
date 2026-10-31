@@ -300,7 +300,8 @@ export async function openRun(
   if (!signal) return { error: "signal_not_found", status: 422 };
   if (signal.specialist_id !== input.specialist_id) return { error: "specialist_mismatch", status: 422 };
   // A signal past its text retention no longer holds what a run would read (retention.ts), so no
-  // run starts on it (409: the host skips it).
+  // run starts on it (409: the host skips it). The INSERT repeats this check atomically after the
+  // awaited context reads, so redaction cannot win admission while this cached row still has text.
   if (redacted(signal)) return { error: "signal_redacted", status: 409 };
 
   const subject = signal.subject_aggregate && signal.subject_id ? { aggregate: signal.subject_aggregate, id: signal.subject_id } : null;
@@ -358,7 +359,9 @@ export async function openRun(
         catalog_version, policy_version, parent_run_id, correlation_id, state, attempt,
         attempt_started_at, started_at, mode)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM agent_runs WHERE tenant_id = ? AND host_run_key = ?)`,
+       WHERE NOT EXISTS (SELECT 1 FROM agent_runs WHERE tenant_id = ? AND host_run_key = ?)
+         AND EXISTS (SELECT 1 FROM agent_signals WHERE tenant_id = ? AND signal_id = ?
+           AND json_type(content_json, '$.redacted') IS NOT 'true')`,
     )
     .bind(
       run.run_id,
@@ -381,14 +384,19 @@ export async function openRun(
       mode,
       tenantId,
       input.host_run_key,
+      tenantId,
+      input.signal_id,
     )
     .run();
   if (changesOf(inserted) >= 1)
     return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
   // Another open for the same key won the insert: that run is the one, so resume it.
   const winner = await runByKey(db, tenantId, input.host_run_key);
-  if (!winner) return { error: "run_unavailable", status: 503 };
-  return await resumeRun(db, tenantId, winner, input, now);
+  if (winner) return await resumeRun(db, tenantId, winner, input, now);
+  const currentSignal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
+    .bind(tenantId, input.signal_id).first<SignalRow>();
+  if (currentSignal && redacted(currentSignal)) return { error: "signal_redacted", status: 409 };
+  return { error: "run_unavailable", status: 503 };
 }
 
 async function runByKey(db: AgentDb, tenantId: string, hostRunKey: string): Promise<RunRow | null> {

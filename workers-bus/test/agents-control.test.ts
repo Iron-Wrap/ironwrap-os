@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -42,6 +43,8 @@ class SqliteD1 {
           "0204_agent_watch_firings.sql",
           "0205_agent_step_pair_index.sql",
           "0206_agent_draft_closing.sql",
+          "0207_agent_signal_redaction.sql",
+          "0208_agent_subject_erasure.sql",
         ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")
@@ -167,7 +170,7 @@ function setup(fullSchema = false, workerVars: Record<string, string> = {}) {
       permissions: [],
     });
   }
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, ...workerVars };
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger(), ...workerVars };
   const parseResponse = async (response: Response) => ({
     status: response.status,
     body: (await response.json()) as any,
@@ -333,7 +336,7 @@ test("only a fresh owner's active session with CSRF can change delegation; agent
       headers: { authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify(setting()),
     }),
-    { DB: s.db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN },
+    { DB: s.db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger() },
   );
   assert.equal(hostRequest.status, 404);
 });
@@ -2520,8 +2523,10 @@ test("migration 0206: the decided-step guard is 0200's plus one exception that o
   const migration = (file: string) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
   const base = /CREATE TRIGGER IF NOT EXISTS prevent_decided_agent_step_update\n[\s\S]*?\nEND/.exec(migration("0200_agent_coordination.sql"))![0];
   const exception = /\n {2}AND NOT \([\s\S]*?\n {2}\)/.exec(migration("0206_agent_draft_closing.sql"))![0];
-  assert.equal(live.sql.split(exception).length, 2, "the exception appears once");
-  assert.equal(live.sql.replace(exception, ""), base.replace("IF NOT EXISTS ", ""));
+  const erasure = /\n  \) AND NOT \([\s\S]*?\n  \)\nBEGIN/.exec(live.sql)![0];
+  const withoutErasure = live.sql.replace(erasure, "\n  )\nBEGIN");
+  assert.equal(withoutErasure.split(exception).length, 2, "the original draft-closing exception appears once");
+  assert.equal(withoutErasure.replace(exception, ""), base.replace("IF NOT EXISTS ", ""));
 
   // The close: the ask clears, one fixed reason code, version +1, decision time from D1's clock.
   const CLOSE =

@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -124,7 +125,7 @@ test("a watch run starts from every object its condition named, and the schedule
 
 test("a completed owner report reaches the owner, and a pipeline report only when a decision waits", async () => {
   const db = new SqliteD1();
-  const env = { DB: db, AGENT_HOST_TOKEN: TOKEN, APP_TENANT_ID: TENANT } as never;
+  const env = { DB: db, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger(), APP_TENANT_ID: TENANT } as never;
   const sent: Array<[string, string]> = [];
   const call = async (method: string, path: string, body?: unknown) => {
     const response = await handleAgentHostApi(
@@ -251,7 +252,7 @@ test("only the scheduler's watch signals are owned and name subjects; others sta
 
 test("report delivery: new inquiries and waiting pipelines are sent, failures are recorded and retried once, nothing else is sent", async () => {
   const db = new SqliteD1();
-  const env = { DB: db, AGENT_HOST_TOKEN: TOKEN, APP_TENANT_ID: TENANT } as never;
+  const env = { DB: db, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger(), APP_TENANT_ID: TENANT } as never;
   const sent: string[] = [];
   let failNext = false;
   const call = async (method: string, path: string, body?: unknown) => {
@@ -305,7 +306,7 @@ test("report delivery: new inquiries and waiting pipelines are sent, failures ar
 const hostCall = (db: SqliteD1, at: string, notify: (subject: string, text: string) => Promise<void>) => async (method: string, path: string, body?: unknown) => {
   const response = await handleAgentHostApi(
     new Request(`https://bus.example.invalid${path}`, { method, headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }),
-    { DB: db, AGENT_HOST_TOKEN: TOKEN, APP_TENANT_ID: TENANT } as never,
+    { DB: db, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger(), APP_TENANT_ID: TENANT } as never,
     () => Date.parse(at),
     notify,
   );

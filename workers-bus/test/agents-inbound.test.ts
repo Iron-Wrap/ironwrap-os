@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 // The inbound producer (src/agents/inbound.ts): every inbound envelope becomes one new_inbound
 // signal for the AI receptionist, from intake's own insert or from the cron's sweep, and a run on
 // it can propose the lead's facts from that signal alone. Synthetic data only (example.invalid).
@@ -103,7 +104,7 @@ function workerEnv(db: SqliteD1, vars: Record<string, string> = { AGENT_INBOUND_
   return {
     DB: db,
     APP_TENANT_ID: TENANT,
-    AGENT_HOST_TOKEN: TOKEN,
+    AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger(),
     DEDUP_WINDOW_HOURS: "72",
     OWNER_ALERT_EMAIL: "owner@example.invalid",
     RAW: { put: async () => {} },

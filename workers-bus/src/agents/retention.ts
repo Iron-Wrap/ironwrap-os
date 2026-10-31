@@ -12,8 +12,8 @@
 // clock with the same ninety days, so this code cannot redact a younger signal. The statement reads
 // D1's clock too: 'now' is stable within one statement, so the rows it picks and the guard agree.
 // The inbound envelope itself is the business record (three years); its redaction is a later slice,
-// as is the owner-only erasure of one customer's signals (AI-TEAM-CONTRACT.md names what neither
-// reaches yet).
+// while owner-verified erasure and source-bound proposal fields are handled separately by
+// subject-erasure.ts and migration 0208. The cron retains its ninety-day floor.
 
 import { changesOf, type AgentDb } from "./store.ts";
 

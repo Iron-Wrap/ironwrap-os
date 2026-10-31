@@ -83,7 +83,7 @@ function validateWorkflow(workflow) {
   // A push to main deploys qa only; production is a separate tag-triggered
   // release (IRO-264). No push-path job may reference a production secret,
   // variable, or D1 id.
-  assert.doesNotMatch(workflow, /RELEASE_PRODUCTION_|8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d/);
+  assert.doesNotMatch(workflow, /RELEASE_PRODUCTION_|a8fd0116-7af6-4788-98bd-083addbe58bc/);
   // Only the completed-CI workflow_run on main reaches admission; the branches
   // filter only narrows workflow_run noise and never becomes a push trigger of
   // its own, so unvalidated code still cannot reach the pipeline directly.

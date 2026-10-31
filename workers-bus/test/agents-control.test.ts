@@ -2582,7 +2582,7 @@ test("migration 0206: the decided-step guard is 0200's plus one exception that o
   const spy = { prepare: (sql: string) => (closes.push(sql), s.db.prepare(sql)) } as unknown as typeof s.db;
   await supersedeDrafts(spy, TENANT, { step_id: "step_x", action_id: "access.prepare_change", args: { person_ref: "person:x", change: "change_role", device_ref: null }, args_sha256: "x" });
   await closeDelegationDrafts(spy, TENANT, args, "asks_first", "appu_test_owner", null);
-  await closeAccessDrafts(spy, TENANT, "appu_x", "sales", "appu_test_owner");
+  await closeAccessDrafts(spy, TENANT, "appu_x", "sales", "appu_test_owner", 2);
   assert.equal(closes.length, 3);
   for (const sql of closes) {
     const plan = (s.db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((row) => row.detail).join("; ");

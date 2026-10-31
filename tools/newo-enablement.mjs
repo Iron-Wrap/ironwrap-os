@@ -2,7 +2,8 @@
 // reaches a person, so NEWO_ENABLED=true is refused unless IronWrap owns a D1 record of it that a
 // person works and closes: the newo_callback_records table (migration 0168). The gate applies
 // every D1 migration, in filename order as D1 does, to an in-memory SQLite and reads sqlite_master
-// for the complete reviewed callback/resolution schema, dependencies and guards. It never parses
+// for the complete reviewed tenant/event/callback schema, dependencies and guards. It also
+// requires every original-ownership and accepted-event hold count to be zero. It never parses
 // migration text: a CREATE TABLE
 // inside a comment, a string or a quoted alias, or one a later statement drops, leaves no table,
 // and a migration that fails to apply opens nothing. tools/validate-newo-config.mjs and the
@@ -14,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
+import { NEWO_TENANT_BINDING_QUERY, newoTenantBindingsReady } from "../workers-bus/src/newo-tenant-readiness.ts";
 import {
   NEWO_CALLBACK_RECORD_COLUMNS,
   NEWO_CALLBACK_SCHEMA_QUERY,
@@ -42,7 +44,8 @@ export async function newoCallbackRecordPresent(root) {
   try {
     database.exec("PRAGMA foreign_keys = ON");
     for (const name of names) database.exec(readFileSync(join(directory, name), "utf8"));
-    return await newoCallbackSchemaMatches(database.prepare(NEWO_CALLBACK_SCHEMA_QUERY).all());
+    return await newoCallbackSchemaMatches(database.prepare(NEWO_CALLBACK_SCHEMA_QUERY).all()) &&
+      newoTenantBindingsReady(database.prepare(NEWO_TENANT_BINDING_QUERY).get());
   } catch {
     return false;
   } finally {
@@ -75,5 +78,5 @@ export function newoEnablementRefusal({ enabledIn, callbackRecordPresent }) {
   if (enabledIn.length === 0 || callbackRecordPresent) return null;
   return `NEWO_ENABLED=true (${enabledIn.join(", ")}) is refused until the D1 callback record exists ` +
     `(the workers-bus/migrations, applied in order, build no ${NEWO_CALLBACK_RECORD_TABLE} table with ` +
-    `the reviewed columns, keys, foreign keys and callback/resolution guards: ${NEWO_CALLBACK_RECORD_COLUMNS.join(", ")})`;
+    `the reviewed columns, keys, foreign keys and callback/resolution guards with resolved tenant/event provenance: ${NEWO_CALLBACK_RECORD_COLUMNS.join(", ")})`;
 }

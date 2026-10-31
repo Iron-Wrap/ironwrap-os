@@ -2308,7 +2308,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // migration touches, so both orders give the same schema.
     // 0168 adds the callback record table and four guards; it re-creates two 0151 guards.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 143);
+    //0172 adds immutable Newo business admission and tenant/event integrity guards.
+    assert.equal(migrations.length, 144);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2468,7 +2469,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence and readback-conflict guards under their names.
     assert.deepEqual(
       { ...counts },
-      { tables: 282, indexes: 382, triggers: 785 },
+      { tables: 283, indexes: 386, triggers: 797 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -2998,6 +2999,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       [
         "newo_callback_records",
         "newo_control_actions",
+        "newo_event_admissions",
         "newo_event_receipts",
         "newo_handoff_resolutions",
         "newo_reconciliation_runs",

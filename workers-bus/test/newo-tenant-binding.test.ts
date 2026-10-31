@@ -4,9 +4,12 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import worker from "../src/index.ts";
-import type { NewoEventV1 } from "../src/newo.ts";
-import { claimNewoReceipt } from "../src/newo-store.ts";
+import { handleNewoQueueMessage, type NewoEventV1 } from "../src/newo.ts";
+import { claimNewoReceipt, getNewoSession, listRecentNewoSessions, listNewoCallbacksForAlert, newoOperationalCounts } from "../src/newo-store.ts";
+import { materializeOperatingCore } from "../src/operating-core.ts";
+import type { EnvelopeRecord } from "../src/core.ts";
 import { newoAdmissionJson } from "../src/newo-event-admission.ts";
+import { newoTenantBindingReadiness } from "../src/newo-tenant-readiness.ts";
 
 const TENANT = "ironwrap";
 const OTHER = "other-tenant";
@@ -16,16 +19,16 @@ const at = (seconds: number) => new Date(START + seconds * 1000).toISOString();
 class BindingD1 {
   readonly sqlite = new DatabaseSync(":memory:");
 
-  constructor(legacy?: (db: DatabaseSync) => void) {
+  constructor(legacy?: (db: DatabaseSync) => void, deferBinding = false) {
     this.sqlite.exec("PRAGMA foreign_keys = ON");
     const directory = new URL("../migrations/", import.meta.url);
     const names = readdirSync(directory).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
-    if (legacy) {
+    if (legacy || deferBinding) {
       for (const name of names.filter((name) => !name.startsWith("0172_"))) {
         this.sqlite.exec(readFileSync(new URL(name, directory), "utf8"));
       }
-      legacy(this.sqlite);
-      for (const name of names.filter((name) => name.startsWith("0172_"))) {
+      legacy?.(this.sqlite);
+      for (const name of names.filter((name) => name.startsWith("0172_") && !deferBinding)) {
         this.sqlite.exec(readFileSync(new URL(name, directory), "utf8"));
       }
     } else {
@@ -113,6 +116,7 @@ test("a new event cannot adopt a session created by another trusted tenant", asy
   assert.ok(result.status === 404 || result.status === 409, JSON.stringify(result));
   assert.deepEqual(DB.sqlite.prepare("SELECT * FROM newo_sessions").get(), before);
   assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM newo_callback_records").get()!.n, 1);
+  assert.equal((await newoTenantBindingReadiness(runtime(DB))).ready, true);
 });
 
 test("caller lookup cannot adopt another tenant's session", async (t) => {
@@ -141,6 +145,9 @@ test("an unlinked legacy session never adopts the tenant of its next caller", as
   const result = await post(runtime(DB), "/webhook/newo", event());
   assert.equal(result.status, 409, JSON.stringify(result));
   assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM envelopes").get()!.n, 0);
+  const readiness = await newoTenantBindingReadiness(runtime(DB));
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.counts?.unbound_sessions, 1);
 });
 
 test("an unrelated accepted event cannot bless a requested-callback insert", async (t) => {
@@ -260,6 +267,136 @@ function legacyOwner(db: DatabaseSync, sessionId: string, tenant: string, envelo
     .run(envelopeId, tenant, JSON.stringify({ provider: "newo", session_id: sessionId }), at(-60), envelopeId, at(-60), at(-60));
 }
 
+function installBinding(DB: BindingD1) {
+  DB.sqlite.exec(readFileSync(new URL("../migrations/0172_newo_tenant_event_admission.sql", import.meta.url), "utf8"));
+}
+
+async function legacyJob(DB: BindingD1, tenant = TENANT) {
+  const id = `synthetic-native-origin-${tenant}`;
+  const payload = JSON.stringify({ address_line1: "1 Synthetic Street", city: "Edmonton", province: "AB",
+    postal_code: "T5J 0N3", service: "Roof repair" });
+  DB.sqlite.prepare(`INSERT INTO envelopes (envelope_id, tenant_id, source, payload_json,
+    raw_key, ts, status, dedup_key, created_at, updated_at, contact_phone)
+    VALUES (?, ?, 'phone', ?, 'raw/synthetic/native.json', ?, 'reconciled', ?, ?, ?, '+15875550101')`)
+    .run(id, tenant, payload, at(-120), id, at(-120), at(-120));
+  const rec = DB.sqlite.prepare("SELECT * FROM envelopes WHERE envelope_id = ?").get(id) as unknown as EnvelopeRecord;
+  await materializeOperatingCore(runtime(DB, tenant), rec);
+  const job = DB.sqlite.prepare(`SELECT job.roof_job_id, job.customer_id, property.property_key
+    FROM operating_roof_jobs job JOIN operating_properties property ON property.property_id = job.property_id
+    WHERE job.source_envelope_id = ? AND job.tenant_id = ?`).get(id, tenant)!;
+  DB.sqlite.prepare(`INSERT INTO newo_sessions (session_id, status, structured_json, raw_key, payload_hash,
+    matched_roof_job_id, matched_customer_id, matched_property_id, verification_status, created_at, updated_at)
+    VALUES (?, 'caller_lookup', '{}', 'raw/newo/legacy-job.json', ?, ?, ?, ?, 'verified', ?, ?)`)
+    .run(event().session_id, "c".repeat(64), job.roof_job_id, job.customer_id, job.property_key, at(-60), at(-60));
+  DB.sqlite.prepare(`INSERT INTO newo_event_receipts (event_id, session_id, event_type, payload_hash, raw_key,
+    status, first_seen_at, last_seen_at) VALUES ('legacy-job-lookup', ?, 'caller_lookup', ?,
+    'raw/newo/legacy-job.json', 'accepted', ?, ?)`).run(event().session_id, "c".repeat(64), at(-60), at(-60));
+  return job;
+}
+
+test("an original verified native job binds legacy identity without adopting its next caller", async (t) => {
+  const DB = new BindingD1(undefined, true);
+  t.after(() => DB.sqlite.close());
+  const job = await legacyJob(DB);
+  installBinding(DB);
+  assert.deepEqual({ ...DB.sqlite.prepare("SELECT tenant_id, tenant_binding_state, tenant_binding_source, tenant_binding_ref FROM newo_sessions").get() },
+    { tenant_id: TENANT, tenant_binding_state: "bound", tenant_binding_source: "legacy_job", tenant_binding_ref: `job:${job.roof_job_id}` });
+  assert.equal(DB.sqlite.prepare("SELECT tenant_id FROM newo_event_receipts").get()!.tenant_id, TENANT);
+  assert.equal((await newoTenantBindingReadiness(runtime(DB))).ready, true);
+  assert.equal((await post(runtime(DB, OTHER), "/webhook/newo", event())).status, 404);
+  assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 200);
+  assert.equal((await newoTenantBindingReadiness(runtime(DB))).ready, true);
+});
+
+test("a mismatched legacy job or wrong-session original envelope stays conflicted", async (t) => {
+  for (const kind of ["job", "envelope"]) await t.test(kind, async (subtest) => {
+    const DB = new BindingD1(undefined, true);
+    subtest.after(() => DB.sqlite.close());
+    if (kind === "job") {
+      await legacyJob(DB);
+      DB.sqlite.exec("UPDATE newo_sessions SET matched_property_id = 'unrelated-property-key'");
+    } else {
+      legacyOwner(DB.sqlite, "another-session", TENANT, "wrong-session-origin");
+      DB.sqlite.prepare(`INSERT INTO newo_sessions (session_id, status, structured_json, raw_key, payload_hash,
+        lead_envelope_id, created_at, updated_at) VALUES (?, 'active', '{}', 'raw/newo/legacy.json', ?, ?, ?, ?)`)
+        .run(event().session_id, "a".repeat(64), "wrong-session-origin", at(-60), at(-60));
+    }
+    installBinding(DB);
+    assert.equal(DB.sqlite.prepare("SELECT tenant_binding_state FROM newo_sessions").get()!.tenant_binding_state, "conflict");
+    assert.equal((await newoTenantBindingReadiness(runtime(DB))).counts?.conflicting_sessions, 1);
+    assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 409);
+  });
+});
+
+test("contradictory legacy callback and resolution tenant labels preserve history and hold readiness", async (t) => {
+  const DB = new BindingD1((db) => {
+    legacyOwner(db, event().session_id, TENANT, "legacy-history-owner");
+    db.prepare(`INSERT INTO newo_sessions (session_id, status, handoff_status, structured_json, raw_key,
+      payload_hash, lead_envelope_id, created_at, updated_at)
+      VALUES (?, 'handoff_requested', 'requested', '{}', 'raw/newo/legacy.json', ?, 'legacy-history-owner', ?, ?)`)
+      .run(event().session_id, "a".repeat(64), at(-60), at(-60));
+    db.prepare(`INSERT INTO newo_event_receipts (event_id, session_id, event_type, payload_hash, raw_key,
+      envelope_id, status, first_seen_at, last_seen_at) VALUES ('legacy-history-event', ?, 'handoff_requested', ?,
+      'raw/newo/legacy.json', 'legacy-history-owner', 'accepted', ?, ?)`)
+      .run(event().session_id, "a".repeat(64), at(-60), at(-60));
+    db.prepare(`INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency)
+      VALUES (?, ?, ?, 'legacy-history-event', 'callback_requested', 'routine')`)
+      .run(`ncb_${"d".repeat(32)}`, OTHER, event().session_id);
+    db.prepare(`INSERT INTO app_users (user_id, tenant_id, email_normalized, display_name, role, access_role,
+      active, created_by, created_at, updated_at) VALUES ('synthetic-foreign-owner', ?, 'foreign@example.invalid',
+      'Synthetic Foreign Owner', 'owner', 'owner', 1, 'synthetic', ?, ?)`)
+      .run(OTHER, at(-120), at(-120));
+    db.prepare(`INSERT INTO newo_handoff_resolutions (resolution_id, tenant_id, idempotency_key, request_sha256,
+      session_id, outcome, note, resolved_by, resolved_by_role, resolved_at)
+      VALUES (?, ?, 'synthetic-legacy-history-key', ?, ?, 'not_needed', 'Synthetic legacy closure', 'synthetic-foreign-owner', 'owner', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`)
+      .run(`nhr_${"e".repeat(32)}`, OTHER, "f".repeat(64), event().session_id);
+  });
+  t.after(() => DB.sqlite.close());
+  assert.equal(DB.sqlite.prepare("SELECT tenant_binding_state FROM newo_sessions").get()!.tenant_binding_state, "conflict");
+  const holds = await newoTenantBindingReadiness(runtime(DB));
+  assert.equal(holds.ready, false);
+  assert.equal(holds.counts?.unproven_callbacks, 1);
+  assert.equal(holds.counts?.conflicting_resolutions, 1);
+  assert.equal(DB.sqlite.prepare("SELECT note FROM newo_handoff_resolutions").get()!.note, "Synthetic legacy closure");
+  assert.equal(DB.sqlite.prepare("SELECT tenant_id, event_id FROM newo_callback_records").get()!.tenant_id, OTHER);
+  assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 409);
+});
+
+test("a queue error does not erase admission, first callback or tenant binding; retry retains them", async (t) => {
+  const DB = new BindingD1();
+  t.after(() => DB.sqlite.close());
+  const env = runtime(DB);
+  let reject = true;
+  env.NEWO_QUEUE.send = async () => { if (reject) throw new Error("synthetic_queue_unavailable"); };
+  const request = event({ event_type: "handoff_requested", handoff_summary: "Synthetic immutable first request" });
+  assert.equal((await post(env, "/webhook/newo/handoff", request)).status, 500);
+  assert.equal(DB.sqlite.prepare("SELECT status FROM newo_event_receipts").get()!.status, "failed");
+  const first = DB.sqlite.prepare("SELECT * FROM newo_callback_records").get();
+  const fact = DB.sqlite.prepare("SELECT * FROM newo_event_admissions").get();
+  assert.equal((await listNewoCallbacksForAlert(env, null, 25)).length, 1);
+  assert.throws(() => DB.sqlite.exec("UPDATE newo_event_receipts SET status = 'accepted'"), /newo_receipt/);
+  reject = false;
+  assert.equal((await post(env, "/webhook/newo/handoff", request)).status, 200);
+  assert.deepEqual(DB.sqlite.prepare("SELECT * FROM newo_callback_records").get(), first);
+  assert.deepEqual(DB.sqlite.prepare("SELECT * FROM newo_event_admissions").get(), fact);
+  assert.equal(DB.sqlite.prepare("SELECT attempts FROM newo_event_receipts").get()!.attempts, 2);
+  assert.equal((await newoTenantBindingReadiness(env)).ready, true);
+});
+
+test("tenant-bound readers and queue reconciliation do not return or mutate another tenant's session", async (t) => {
+  const DB = new BindingD1();
+  t.after(() => DB.sqlite.close());
+  assert.equal((await post(runtime(DB), "/webhook/newo/handoff", event({ event_type: "handoff_requested", handoff_summary: "Synthetic request" }))).status, 200);
+  const before = DB.sqlite.prepare("SELECT * FROM newo_sessions").get();
+  const foreign = runtime(DB, OTHER);
+  assert.equal(await getNewoSession(foreign, event().session_id), null);
+  assert.deepEqual(await listRecentNewoSessions(foreign, 10), []);
+  assert.deepEqual(await listNewoCallbacksForAlert(foreign, null, 25), []);
+  assert.equal((await newoOperationalCounts(foreign)).sessions, 0);
+  await assert.rejects(handleNewoQueueMessage(foreign, event().event_id, false), /newo_.*tenant/);
+  assert.deepEqual(DB.sqlite.prepare("SELECT * FROM newo_sessions").get(), before);
+});
+
 test("legacy original owned envelope binds identity; later calls never rewrite that evidence", async (t) => {
   const DB = new BindingD1((db) => {
     legacyOwner(db, "synthetic-session-1", TENANT, "legacy-owned-envelope");
@@ -273,6 +410,7 @@ test("legacy original owned envelope binds identity; later calls never rewrite t
     tenant_binding_source: "legacy_envelope", tenant_binding_ref: "envelope:legacy-owned-envelope" });
   assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 200);
   assert.deepEqual(DB.sqlite.prepare("SELECT tenant_id, tenant_binding_state, tenant_binding_source, tenant_binding_ref FROM newo_sessions").get(), before);
+  assert.equal((await newoTenantBindingReadiness(runtime(DB))).ready, true);
 });
 
 test("conflicting original envelopes stay explicitly unbound and preserve child history", async (t) => {
@@ -292,4 +430,7 @@ test("conflicting original envelopes stay explicitly unbound and preserve child 
     { tenant_id: null, tenant_binding_state: "conflict" });
   assert.equal((await post(runtime(DB), "/webhook/newo", event())).status, 409);
   assert.equal(DB.sqlite.prepare("SELECT status FROM newo_event_receipts").get()!.status, "accepted");
+  const readiness = await newoTenantBindingReadiness(runtime(DB));
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.counts?.conflicting_sessions, 1);
 });

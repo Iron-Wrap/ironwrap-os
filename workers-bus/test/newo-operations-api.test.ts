@@ -12,7 +12,7 @@ class SqliteD1 {
   constructor() {
     const directory = new URL("../migrations/", import.meta.url);
     for (const migration of readdirSync(directory)
-      .filter((name) => name.endsWith(".sql"))
+      .filter((name) => name.endsWith(".sql") && !name.startsWith("0172_"))
       .sort()) {
       this.raw.exec(readFileSync(new URL(migration, directory), "utf8"));
     }
@@ -82,6 +82,7 @@ function env(db: SqliteD1): Env {
   const queue = { send: async () => {}, sendBatch: async () => {} };
   return {
     DB: db as never,
+    APP_TENANT_ID: "ironwrap",
     RAW: { put: async () => {} } as never,
     JN_QUEUE: queue as never,
     NEWO_QUEUE: queue as never,
@@ -216,6 +217,16 @@ function seedSensitiveOperationsData(db: SqliteD1): void {
       JSON.stringify(["project_id_missing"]),
       JSON.stringify({ provider_detail: "private reconciliation detail" }),
     );
+  // Exercise the compatibility path with an original owned envelope, then install 0172.
+  db.raw.exec(`INSERT INTO envelopes
+    (envelope_id, source, payload_json, raw_key, ts, status, dedup_key, created_at, updated_at, tenant_id)
+    VALUES ('synthetic-sensitive-envelope', 'phone', '{"provider":"newo","session_id":"session-sensitive-1"}',
+      'raw/newo/synthetic-sensitive.json', '2026-07-18T18:00:00.000Z', 'received', 'synthetic-sensitive',
+      '2026-07-18T18:00:00.000Z', '2026-07-18T18:00:00.000Z', 'ironwrap');
+    UPDATE newo_sessions SET lead_envelope_id = 'synthetic-sensitive-envelope';
+    UPDATE newo_event_receipts SET envelope_id = 'synthetic-sensitive-envelope';`);
+  db.raw.exec(readFileSync(new URL("../migrations/0172_newo_tenant_event_admission.sql", import.meta.url), "utf8"));
+
 }
 
 test("Newo operations read is office-only, exception-first, and redacts provider content", async () => {

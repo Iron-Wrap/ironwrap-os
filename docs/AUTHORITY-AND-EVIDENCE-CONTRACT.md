@@ -732,8 +732,8 @@ callback nobody made.
   `session_failed`; D1 refuses any other reason, and a `session_failed` record with neither a phone
   nor an email. It holds the event that wrote it, the urgency then, the receptionist's handoff
   summary, and the caller's contact details as the session knows them. D1 stamps `recorded_at`
-  from its own clock and refuses another time, an event the Worker did not claim for that
-  session, an update, a delete and a replace.
+  from its own clock and refuses another time, an event without matching owned business admission
+  for that session/tenant/reason, an update, a delete and a replace.
 - `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
   records `outcome` = `called_back`, `unreachable` or `not_needed` and a required note, with
   `resolved_by` (the person's user id) and their role. D1 stamps `resolved_at`, and one `audit_log`
@@ -742,9 +742,9 @@ callback nobody made.
   resolution.
 - People-only: a person's own cookie session in the owner or ops role, read from the live session.
   Agents, automations, connectors, service tokens, the effect runtime and MCP actors are refused.
-- `newo_handoff_resolutions` (migration `0151`; `0168` re-creates its insert guard) is append-only
-  and tenant-scoped with at most one resolution per session. D1 re-checks that the session's handoff
-  is `failed` or `requested`, or that it has a callback record; that the resolver is an active
+- `newo_handoff_resolutions` (migration `0151`; `0172` binds its insert guard to owned admission) is append-only
+  and tenant-scoped with at most one resolution per session. D1 re-checks that the session is bound
+  to this tenant and has a callback record or an accepted business obligation; that the resolver is an active
   owner or ops user holding that role; that a note is present; and that `resolved_at` is D1's own
   clock. An exact replay returns the stored record.
 - Each refusal has its own code: `newo_handoff_resolution_tenant_mismatch` (a person of another
@@ -763,6 +763,10 @@ callback nobody made.
   tenant-scoped batches and before landing queue recovery. Each attempt is a new email effect
   that explicitly may repeat an earlier alert; an earlier timed-out effect remains unknown.
   Only confirmed sends write sent markers, and only a person's resolution closes the callback.
+
+Migration `0172` makes the producer's explicit trusted tenant immutable on sessions and event receipts. It records bounded incoming facts and a separate append-only business admission, derives session status and callback reason from those facts plus owned prior context, and guards the projection, callback and human resolution against unrelated sessions, envelopes and tenants. Transport acknowledgement cannot erase accepted callback/failure provenance. An older accepted event can owe a callback while a newer session projection remains unchanged; raw, rejected or merely claimed input cannot create that obligation.
+
+Legacy tenant assignment needs unambiguous original owned envelope/job provenance. Missing or contradictory evidence remains explicitly unbound/conflicted and blocks the shared installed-schema/runtime readiness gate; the next caller, raw tenant label or current deployment cannot choose an owner. Historical callback/resolution rows are preserved. Readiness holds require a separately reviewed correction, not a silent backfill from current state. The first callback contact snapshot stays immutable in this slice. Corrected contact and parent/child disposal/restore remain separate interfaces and reviews.
 
 ## Customer-facing behavior
 

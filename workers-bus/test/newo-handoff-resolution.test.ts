@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { admitNewoFixture } from "./newo-admission-fixture.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
@@ -68,13 +68,13 @@ class TestD1 {
 type TestEnv = AppEnv & { DB: TestD1 };
 
 /** Every migration, the synthetic people, and (unless `seedSessions` is false) three Newo sessions. */
-function testEnv(options: { seedSessions?: boolean } = {}): TestEnv {
+function testEnv(options: { seedSessions?: boolean; before0172?: boolean } = {}): TestEnv {
   const DB = new TestD1();
   DB.sqlite.exec("PRAGMA foreign_keys = ON");
   for (const name of readdirSync(new URL("../migrations/", import.meta.url))
     .filter((value) => /^\d{4}_.+\.sql$/.test(value))
     .sort()) {
-    DB.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+    if (!options.before0172 || !name.startsWith("0172_")) DB.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
   const user = DB.sqlite.prepare(
     `INSERT INTO app_users
@@ -84,15 +84,12 @@ function testEnv(options: { seedSessions?: boolean } = {}): TestEnv {
   );
   for (const person of Object.values(USERS))
     user.run(person.id, TENANT, `${person.id}@example.invalid`, person.id, person.role, person.access, at(-60), at(-60));
-  const session = DB.sqlite.prepare(
-    `INSERT INTO newo_sessions
-      (session_id, status, handoff_status, structured_json, raw_key, payload_hash, created_at, updated_at)
-     VALUES (?, 'completed', ?, '{}', ?, ?, ?, ?)`,
-  );
   if (options.seedSessions !== false) {
-    session.run("newo-session-failed-1", "failed", "raw/newo/1", "a".repeat(64), at(-30), at(-30));
-    session.run("newo-session-failed-2", "failed", "raw/newo/2", "b".repeat(64), at(-20), at(-20));
-    session.run("newo-session-connected", "connected", "raw/newo/3", "c".repeat(64), at(-10), at(-10));
+    for (const [id, failed, minutes] of [
+      ["newo-session-failed-1", true, -30], ["newo-session-failed-2", true, -20],
+      ["newo-session-connected", false, -10],
+    ] as const) admitNewoFixture(DB.sqlite, { sessionId: id, at: at(minutes), eventType: "session_ended",
+      fields: { handoff_status: failed ? "failed" : null } });
   }
   return { APP_TENANT_ID: TENANT, APP_AUTH_PEPPER: PEPPER, DB } as unknown as TestEnv;
 }
@@ -326,25 +323,15 @@ function requestCallback(
   ).get() as { now: string }).now) <= latest) {
     // Spin for at most a millisecond; SQLite's clock has millisecond precision.
   }
-  raw.prepare(
-    `INSERT INTO newo_sessions
-      (session_id, status, handoff_status, urgency, structured_json, raw_key, payload_hash, created_at, updated_at)
-     VALUES (?, 'handoff_requested', ?, ?, '{}', ?, ?, ?, ?)`,
-  ).run(sessionId, options.sessionStatus === undefined ? "requested" : options.sessionStatus, options.urgency ?? "routine",
-    `raw/newo/${sessionId}`, "d".repeat(64), at(-minutes), at(-minutes));
-  raw.prepare(
-    `INSERT INTO newo_event_receipts
-      (event_id, session_id, event_type, payload_hash, raw_key, status, first_seen_at, last_seen_at)
-     VALUES (?, ?, 'handoff_requested', ?, ?, 'accepted', ?, ?)`,
-  ).run(`${sessionId}-event`, sessionId, "e".repeat(64), `raw/newo/${sessionId}`, at(-minutes), at(-minutes));
-  raw.prepare(
-    `INSERT INTO newo_callback_records
-      (callback_id, tenant_id, session_id, event_id, reason, urgency, handoff_summary, contact_name,
-       contact_phone, contact_email, address_line1, city, province, postal_code)
-     VALUES (?, ?, ?, ?, ?, ?, 'Caller asked for a person.', 'Synthetic Caller',
-       '+15875550142', 'caller@example.invalid', '1 Example Street', 'Edmonton', 'AB', 'T5J 0N3')`,
-  ).run(`ncb_${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`, TENANT, sessionId,
-    `${sessionId}-event`, options.reason ?? "callback_requested", options.urgency ?? "routine");
+  if (options.sessionStatus === null) admitNewoFixture(raw, {
+    sessionId, eventId: `${sessionId}-newer`, at: at(-minutes + 1), eventType: "lead_captured",
+    fields: { urgency: options.urgency ?? "routine" },
+  });
+  admitNewoFixture(raw, { sessionId, at: at(-minutes), callback: true,
+    eventType: options.reason === "session_failed" ? "session_failed" : "handoff_requested",
+    fields: { urgency: options.urgency ?? "routine", contact_email: "caller@example.invalid",
+      handoff_status: options.sessionStatus === "failed" ? "failed" : undefined },
+  });
 }
 
 test("a callback closes with an audit row in the same batch, stamped by D1's clock", async () => {
@@ -430,16 +417,15 @@ test("open callbacks list the most urgent first, then the longest waiting, for t
   // The session's urgency rose after the callback was recorded: the higher one counts.
   requestCallback(env, "newo-session-rose", { urgency: "routine" });
   requestCallback(env, "newo-session-urgent-b", { urgency: "urgent" });
-  env.DB.sqlite.prepare("UPDATE newo_sessions SET urgency = 'emergency' WHERE session_id = 'newo-session-rose'").run();
+  admitNewoFixture(env.DB.sqlite, { sessionId: "newo-session-rose", eventId: "newo-session-rose-newer", at: at(0),
+    eventType: "lead_captured", fields: { urgency: "emergency" } });
   const recorded = (env.DB.sqlite.prepare(
     "SELECT recorded_at FROM newo_callback_records ORDER BY rowid",
   ).all() as Array<{ recorded_at: string }>).map((row) => row.recorded_at);
   assert.deepEqual(recorded, [...new Set(recorded)].sort(), "D1 recorded the callbacks in call order, each later");
   // Another tenant's record never shows here.
-  env.DB.sqlite.prepare(
-    `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency)
-     VALUES (?, 'other-tenant', 'newo-session-urgent-b', 'newo-session-urgent-b-event', 'callback_requested', 'emergency')`,
-  ).run(`ncb_${"0".repeat(32)}`);
+  admitNewoFixture(env.DB.sqlite, { sessionId: "other-session", tenant: "other-tenant", at: at(-1),
+    callback: true, fields: { urgency: "emergency" } });
   const model = await buildNewoOperationsReadModel(env as never);
   assert.deepEqual(model.exceptions.open_callbacks.map(({ session_id, urgency }) => [session_id, urgency]), [
     ["newo-session-rose", "emergency"],
@@ -485,15 +471,15 @@ test("D1 keeps the callback record append-only, stamped by its own clock, for a 
     `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency, contact_phone)
      VALUES (?, 'other-tenant', 'newo-session-requested', 'newo-session-requested-event', ?, 'routine', ?)`,
   ).run(id, reason, phone);
-  assert.throws(() => reasoned(`ncb_${"4".repeat(32)}`, "caller_hung_up", "+15875550142"), /CHECK constraint failed/);
-  assert.throws(() => reasoned(`ncb_${"5".repeat(32)}`, "session_failed", null), /CHECK constraint failed/);
+  assert.throws(() => reasoned(`ncb_${"4".repeat(32)}`, "caller_hung_up", "+15875550142"), /newo_callback_record_event_invalid|CHECK constraint failed/);
+  assert.throws(() => reasoned(`ncb_${"5".repeat(32)}`, "session_failed", null), /newo_callback_record_event_invalid|CHECK constraint failed/);
   assert.equal(raw.prepare("SELECT count(*) AS n FROM newo_callback_records").get()?.n, 1);
-  reasoned(`ncb_${"6".repeat(32)}`, "session_failed", "+15875550142");
+  admitNewoFixture(raw, { sessionId: "newo-session-failure-fact", at: at(-1), eventType: "session_failed", callback: true });
   assert.equal(raw.prepare("SELECT count(*) AS n FROM newo_callback_records").get()?.n, 2);
 });
 
 test("0168 re-creates the 0151 guards with only the callback, note and clock changes", () => {
-  const env = testEnv();
+  const env = testEnv({ before0172: true, seedSessions: false });
   const normalize = (sql: string) => sql.replace(/--[^\n]*/g, "").replace(/\s+/g, " ").trim();
   const triggerSql = (source: string, name: string) => {
     const start = source.indexOf(`CREATE TRIGGER ${name}`);
@@ -528,18 +514,13 @@ test("an open callback alone keeps the operations model in attention", () => {
   assert.equal(attention({ ...clear, failed_handoffs: 1 }), true);
 });
 
-test("a requested callback from before the record existed can still be closed", async () => {
-  // A session the Worker marked requested before 0168: no callback record, still a callback owed.
+test("an admitted callback obligation without a record can still be closed", async () => {
   const env = testEnv();
-  env.DB.sqlite.prepare(
-    `INSERT INTO newo_sessions
-      (session_id, status, handoff_status, structured_json, raw_key, payload_hash, created_at, updated_at)
-     VALUES ('newo-session-legacy', 'handoff_requested', 'requested', '{}', 'raw/newo/legacy', ?, ?, ?)`,
-  ).run("f".repeat(64), at(-90), at(-90));
+  admitNewoFixture(env.DB.sqlite, { sessionId: "newo-session-no-record", at: at(-90) });
   const owner = await personAuth(env, USERS.owner.id);
-  const read = await call(env, owner, "newo-session-legacy");
+  const read = await call(env, owner, "newo-session-no-record");
   assert.equal(read.body.callback, null);
-  const closed = await call(env, owner, "newo-session-legacy", { outcome: "called_back", note: "Called back." });
+  const closed = await call(env, owner, "newo-session-no-record", { outcome: "called_back", note: "Called back." });
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
 });
 
@@ -634,7 +615,7 @@ test("a failed session's callback, written by the Worker, is open until a person
 function readyIntegration() {
   return {
     checks: {
-      d1: true, schema: true, newo_callback_schema: true, raw_store_binding: true, newo_enabled: true, newo_webhook_credentials: true,
+      d1: true, schema: true, newo_callback_schema: true, newo_tenant_binding: true, raw_store_binding: true, newo_enabled: true, newo_webhook_credentials: true,
       newo_api_authentication: true, newo_production_actor: true, newo_report_webhook_match: true,
       newo_configuration_drift: true, newo_queue_binding: true, newo_dlq_state: true,
       newo_frappe_readiness: true, newo_jobnimbus_bridge: true, newo_booking_mode: true,

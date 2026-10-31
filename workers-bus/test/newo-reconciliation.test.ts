@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
+import { admitNewoFixture } from "./newo-admission-fixture.ts";
 import { reconcileNewoSessions } from "../src/newo.ts";
 import {
   markNewoSessionSync,
-  upsertNewoSession,
   type NewoSessionRecord,
 } from "../src/newo-store.ts";
 
@@ -14,18 +14,9 @@ class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
 
   constructor() {
-    for (const migration of [
-      "0001_init.sql",
-      "0009_replay_approval_audit.sql",
-      "0023_newo_reception.sql",
-      "0024_newo_caller_association.sql",
-      "0025_newo_control_evidence.sql",
-      "0026_newo_reconciliation.sql",
-      // 0151: the reconcile counts only failed handoffs no person has resolved.
-      "0151_newo_handoff_resolutions.sql",
-      // 0168: the operational counts include the requested callbacks no person has closed.
-      "0168_newo_callback_records.sql",
-    ]) {
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    for (const migration of readdirSync(new URL("../migrations/", import.meta.url))
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort()) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
   }
@@ -123,6 +114,7 @@ test("Newo reconciliation requeues stale syncs and detects a missing report only
   const queued: unknown[] = [];
   const env = {
     DB: db as never,
+    APP_TENANT_ID: "ironwrap",
     NEWO_ENABLED: "true",
     NEWO_PRODUCTION_REQUIRED: "true",
     NEWO_SYNC_RETRY_MINUTES: "5",
@@ -133,21 +125,8 @@ test("Newo reconciliation requeues stale syncs and detects a missing report only
       sendBatch: async (messages: unknown[]) => queued.push(...messages),
     },
   } as never;
-  await upsertNewoSession(env, session());
-  db.raw.prepare(
-    `INSERT INTO newo_event_receipts (
-       event_id, session_id, event_type, payload_hash, raw_key, status,
-       response_json, attempts, first_seen_at, last_seen_at, completed_at
-     ) VALUES (?, ?, 'lead_captured', ?, ?, 'accepted', '{}', 1, ?, ?, ?)`,
-  ).run(
-    "event-1",
-    "session-reconcile-1",
-    "a".repeat(64),
-    "raw/newo/events/2026-07-18/event-1.json",
-    "2026-07-18T18:00:00.000Z",
-    "2026-07-18T18:00:00.000Z",
-    "2026-07-18T18:00:01.000Z",
-  );
+  admitNewoFixture(db.raw, { sessionId: "session-reconcile-1", eventId: "event-1", at: session().updated_at,
+    eventType: "lead_captured", fields: { ...session() } });
 
   const first = await reconcileNewoSessions(env, new Date("2026-07-18T18:35:00.000Z"));
   assert.deepEqual(first, { retryable_syncs_requeued: 1, newly_missing_reports: 1 });
@@ -181,8 +160,9 @@ test("Newo reconciliation requeues stale syncs and detects a missing report only
 
 test("queue sync timestamps cannot suppress a later provider report", async () => {
   const db = new SqliteD1();
-  const env = { DB: db as never } as never;
-  await upsertNewoSession(env, session());
+  const env = { DB: db as never, APP_TENANT_ID: "ironwrap" } as never;
+  admitNewoFixture(db.raw, { sessionId: "session-reconcile-1", eventId: "event-1", at: session().updated_at,
+    eventType: "lead_captured", fields: { ...session() } });
   await markNewoSessionSync(
     env,
     "session-reconcile-1",
@@ -193,7 +173,7 @@ test("queue sync timestamps cannot suppress a later provider report", async () =
   db.raw.prepare(
     "UPDATE newo_sessions SET missing_report_detected_at = ? WHERE session_id = ?",
   ).run("2026-07-18T18:31:00.000Z", "session-reconcile-1");
-  await upsertNewoSession(env, session({
+  const report = session({
     status: "ended",
     outcome: "completed",
     summary: "Session report received.",
@@ -206,7 +186,9 @@ test("queue sync timestamps cannot suppress a later provider report", async () =
     payload_hash: "b".repeat(64),
     sync_updated_at: "2026-07-18T18:11:00.000Z",
     updated_at: "2026-07-18T18:05:00.000Z",
-  }));
+  });
+  admitNewoFixture(db.raw, { sessionId: report.session_id, eventId: "event-report-1", at: report.updated_at,
+    eventType: "session_ended", fields: { ...report } });
 
   const stored = db.raw.prepare(
     `SELECT status, updated_at, sync_updated_at, report_received_at, report_event_id,
@@ -226,15 +208,16 @@ test("queue sync timestamps cannot suppress a later provider report", async () =
 
 test("a stored session keeps its strongest handoff status and its highest urgency", async () => {
   const db = new SqliteD1();
-  const env = { DB: db as never } as never;
+  const env = { DB: db as never, APP_TENANT_ID: "ironwrap" } as never;
   const stored = () => ({
     ...(db.raw.prepare("SELECT handoff_status, urgency FROM newo_sessions WHERE session_id = ?")
       .get("session-reconcile-1") as Record<string, unknown>),
   });
-  const later = (minute: number, overrides: Partial<NewoSessionRecord>) => upsertNewoSession(env, session({
-    updated_at: `2026-07-18T18:${String(minute).padStart(2, "0")}:00.000Z`,
-    ...overrides,
-  }));
+  const later = (minute: number, overrides: Partial<NewoSessionRecord>) => {
+    const rec = session({ updated_at: `2026-07-18T18:${String(minute).padStart(2, "0")}:00.000Z`, ...overrides });
+    admitNewoFixture(db.raw, { sessionId: rec.session_id, eventId: `event-${minute}`, at: rec.updated_at,
+      eventType: "lead_captured", fields: { ...rec } });
+  };
 
   await later(0, { handoff_status: "requested", urgency: "emergency" });
   // A later snapshot with another status (an old "completed"), no status, or a lower urgency

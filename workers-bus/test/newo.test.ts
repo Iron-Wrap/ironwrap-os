@@ -30,6 +30,7 @@ type Row = Record<string, unknown>;
 class NativeNewoD1 {
   readonly raw = new DatabaseSync(":memory:");
   failNextSyncUpdate = false;
+  readonly calls: Array<{ sql: string; args: unknown[] }> = [];
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
@@ -48,6 +49,7 @@ class NativeNewoD1 {
       // The callback record (0168) and the resolution guard it re-creates (0151).
       "0151_newo_handoff_resolutions.sql",
       "0168_newo_callback_records.sql",
+      "0172_newo_tenant_event_admission.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -97,14 +99,17 @@ class NativeNewoStatement {
   }
 
   async first<T>(): Promise<T | null> {
+    this.db.calls.push({ sql: this.sql, args: this.args });
     return (this.db.raw.prepare(this.sql).get(...this.args) ?? null) as T | null;
   }
 
   async all<T>(): Promise<{ results: T[] }> {
+    this.db.calls.push({ sql: this.sql, args: this.args });
     return { results: this.db.raw.prepare(this.sql).all(...this.args) as T[] };
   }
 
   async run(): Promise<{ success: true; meta: { changes: number } }> {
+    this.db.calls.push({ sql: this.sql, args: this.args });
     if (this.db.consumeSyncFailure(this.sql)) throw new Error("simulated_sync_status_loss");
     const result = this.db.raw.prepare(this.sql).run(...this.args);
     return { success: true, meta: { changes: Number(result.changes) } };
@@ -183,162 +188,18 @@ function callerLookup() {
 }
 
 function fakeNewoEnv() {
-  const raw: Array<{ key: string; body: string }> = [];
-  const jnQueue: Array<{ envelope_id: string }> = [];
-  const newoQueue: Array<{ newo_event_id: string }> = [];
-  const calls: Array<{ sql: string; args: unknown[] }> = [];
-  const receipts = new Map<string, Row>();
-  const sessions = new Map<string, Row>();
-  // The 0168 callback records, keyed by tenant and session; a second insert adds nothing.
-  const callbacks = new Map<string, Row>();
-  const envelopes = new Map<string, Row>();
-  const operatingCustomers: Row[] = [];
-  const operatingJobs: Row[] = [];
-  const env = {
-    INGEST_TOKEN: "ingest-token",
-    ADMIN_TOKEN: "admin-token",
-    NEWO_ENABLED: "true",
-    NEWO_WEBHOOK_TOKEN: "newo-webhook-token",
-    NEWO_BOOKING_TOKEN: "newo-booking-token",
-    NEWO_BOOKING_MODE: "request_only",
-    NEWO_BOOKING_HORIZON_DAYS: "30",
-    OWNER_ALERT_EMAIL: "owner@example.com",
-    BACKUP_ALERT_EMAIL: "owner@example.com",
-    FROM_EMAIL: "ops@example.com",
-    JOBNIMBUS_ENABLED: "false",
-    ERPNEXT_ENABLED: "false",
-    DEDUP_WINDOW_HOURS: "72",
-    STUCK_THRESHOLD_MIN: "15",
-    RAW: {
-      put: async (key: string, body: string) => { raw.push({ key, body }); },
-    },
-    JN_QUEUE: {
-      send: async (message: { envelope_id: string }) => { jnQueue.push(message); },
-      sendBatch: async () => {},
-    },
-    NEWO_QUEUE: {
-      send: async (message: { newo_event_id: string }) => { newoQueue.push(message); },
-    },
-    DB: {
-      // D1 runs a batch as one transaction; this fake runs its statements in order.
-      async batch(statements: Array<{ run(): Promise<unknown> }>) {
-        const results = [];
-        for (const statement of statements) results.push(await statement.run());
-        return results;
-      },
-      prepare(sql: string) {
-        return {
-          bind(...args: unknown[]) {
-            return {
-              run: async () => {
-                calls.push({ sql, args });
-                if (sql.includes("INSERT OR IGNORE INTO newo_event_receipts")) {
-                  const eventId = String(args[0]);
-                  if (receipts.has(eventId)) return { success: true, meta: { changes: 0 } };
-                  receipts.set(eventId, {
-                    event_id: args[0], session_id: args[1], event_type: args[2], payload_hash: args[3],
-                    raw_key: args[4], envelope_id: null, status: "processing", response_json: "{}",
-                    attempts: 1, last_error: null, first_seen_at: args[5], last_seen_at: args[6],
-                    completed_at: null,
-                  });
-                  return { success: true, meta: { changes: 1 } };
-                }
-                if (sql.includes("SET status = 'accepted'")) {
-                  const row = receipts.get(String(args[4]));
-                  if (row) Object.assign(row, {
-                    status: "accepted", envelope_id: args[0], response_json: args[1],
-                    last_seen_at: args[2], completed_at: args[3],
-                  });
-                }
-                if (sql.includes("SET status = 'failed'")) {
-                  const row = receipts.get(String(args[3]));
-                  if (row) Object.assign(row, {
-                    status: "failed", last_error: args[0], last_seen_at: args[1], completed_at: args[2],
-                  });
-                }
-                if (sql.includes("SET status = 'processing', attempts")) {
-                  const row = receipts.get(String(args[1]));
-                  if (row?.status === "failed") {
-                    Object.assign(row, { status: "processing", attempts: Number(row.attempts) + 1 });
-                    return { success: true, meta: { changes: 1 } };
-                  }
-                  return { success: true, meta: { changes: 0 } };
-                }
-                if (sql.includes("UPDATE newo_event_receipts SET last_seen_at")) {
-                  const row = receipts.get(String(args[1]));
-                  if (row) row.last_seen_at = args[0];
-                }
-                if (sql.includes("INSERT INTO envelopes")) {
-                  envelopes.set(String(args[0]), {
-                    envelope_id: args[0], source: args[1], contact_name: args[2], contact_phone: args[3],
-                    contact_email: args[4], payload_json: args[6], raw_key: args[7], status: args[9],
-                    dedup_key: args[10], dup_of: args[11], intent_queue: args[17],
-                  });
-                }
-                if (sql.includes("INSERT INTO newo_callback_records")) {
-                  const key = `${String(args[1])}:${String(args[2])}`;
-                  if (callbacks.has(key)) return { success: true, meta: { changes: 0 } };
-                  callbacks.set(key, {
-                    callback_id: args[0], tenant_id: args[1], session_id: args[2], event_id: args[3],
-                    reason: args[4], urgency: args[5], handoff_summary: args[6], contact_name: args[7],
-                    contact_phone: args[8], contact_email: args[9], address_line1: args[10], city: args[11],
-                    province: args[12], postal_code: args[13],
-                  });
-                  return { success: true, meta: { changes: 1 } };
-                }
-                if (sql.includes("INSERT INTO newo_sessions") && sql.includes("verification_status")) {
-                  const previous = sessions.get(String(args[0]));
-                  sessions.set(String(args[0]), {
-                    ...previous,
-                    session_id: args[0], project_id: args[1], agent_id: args[2], channel: "phone",
-                    direction: "inbound", status: previous?.status ?? "caller_lookup", contact_phone: args[3],
-                    address_line1: args[4], postal_code: args[5], matched_customer_id: args[6],
-                    matched_property_id: args[7], matched_roof_job_id: args[8], verification_status: args[9],
-                    structured_json: args[10], raw_key: args[11], payload_hash: args[12],
-                    sync_status: "pending", sync_attempts: previous?.sync_attempts ?? 0,
-                    created_at: previous?.created_at ?? args[13], updated_at: args[14], lead_envelope_id: null,
-                  });
-                } else if (sql.includes("INSERT INTO newo_sessions")) {
-                  const row: Row = {
-                    session_id: args[0], project_id: args[1], agent_id: args[2], user_actor_id: args[3],
-                    conversation_id: args[4], channel: args[5], direction: args[6], status: args[7],
-                    outcome: args[8], contact_name: args[9], contact_phone: args[10], contact_email: args[11],
-                    address_line1: args[12], city: args[13], province: args[14], postal_code: args[15],
-                    division: args[16], service: args[17], urgency: args[18], lead_envelope_id: args[19],
-                    appointment_request_id: args[20], handoff_status: args[21], booking_status: args[22],
-                    summary: args[23], transcript_ref: args[24], recording_ref: args[25], ai_disclosed: args[26],
-                    recording_disclosed: args[27], structured_json: args[28], raw_key: args[29],
-                    payload_hash: args[30], started_at: args[31], ended_at: args[32], duration_seconds: args[33],
-                    report_expected_at: args[34], report_received_at: args[35], report_event_id: args[36],
-                    missing_report_detected_at: args[37], sync_status: args[38], sync_attempts: args[39],
-                    last_error: args[40], sync_updated_at: args[41], created_at: args[42], updated_at: args[43],
-                  };
-                  const previous = sessions.get(String(args[0]));
-                  sessions.set(String(args[0]), previous ? { ...previous, ...row } : row);
-                }
-                return { success: true, meta: { changes: 1 } };
-              },
-              first: async () => {
-                calls.push({ sql, args });
-                if (sql.includes("FROM newo_event_receipts")) return receipts.get(String(args[0])) ?? null;
-                if (sql.includes("FROM newo_sessions")) return sessions.get(String(args[0])) ?? null;
-                if (sql.includes("FROM envelopes")) return envelopes.get(String(args[0])) ?? null;
-                return null;
-              },
-              all: async () => {
-                calls.push({ sql, args });
-                if (sql.includes("FROM operating_customers")) return { results: operatingCustomers };
-                if (sql.includes("FROM operating_roof_jobs")) return { results: operatingJobs };
-                return { results: [] };
-              },
-            };
-          },
-        };
-      },
-    },
-  };
+  // Real SQLite executes the admission transaction and every integrity guard. The collections
+  // below are read-only snapshots for the older route assertions, rather than a SQL-string fake.
+  const state = nativeNewoState();
+  const rows = (table: string, key: string) => new Map(state.db.raw.prepare(`SELECT * FROM ${table}`)
+    .all().map((row) => [String(row[key]), row]));
   return {
-    env, raw, jnQueue, newoQueue, calls, receipts, sessions, callbacks, envelopes, operatingCustomers, operatingJobs,
+    ...state, calls: state.db.calls,
+    env: { ...state.env, INGEST_TOKEN: "ingest-token", ADMIN_TOKEN: "admin-token", ERPNEXT_ENABLED: "false" },
+    get receipts() { return rows("newo_event_receipts", "event_id"); },
+    get sessions() { return rows("newo_sessions", "session_id"); },
+    get callbacks() { return rows("newo_callback_records", "callback_id"); },
+    get envelopes() { return rows("envelopes", "envelope_id"); },
   };
 }
 
@@ -602,15 +463,9 @@ test("verified caller lookup returns only broad state and privately binds the la
     frappeCalls.push(String(input));
     throw new Error(`unexpected fetch ${String(input)}`);
   });
-  state.operatingCustomers.push({ customer_id: "customer:phone:15875557788" });
-  state.operatingJobs.push({
-    roof_job_id: "job:existing-1",
-    job_status: "in_progress",
-    updated_at: "2026-07-18T17:00:00.000Z",
-    property_key: "property:123-main-street-edmonton",
-    address_line1: "123 Main Street",
-    postal_code: "T5J 0N3",
-  });
+  const existing = await seedNativeOperatingJob(state.db, "ironwrap");
+  state.db.raw.prepare("UPDATE operating_roof_jobs SET job_status = 'in_progress', version = version + 1").run();
+  state.calls.length = 0;
   const lookupResponse = await worker.fetch(new Request("https://bus.example/webhook/newo/lookup", {
     method: "POST",
     headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
@@ -643,37 +498,20 @@ test("verified caller lookup returns only broad state and privately binds the la
   );
   assert.equal(capture.status, 200);
   assert.equal(state.jnQueue.length, 0);
-  const envelope = [...state.envelopes.values()][0];
+  const envelope = state.db.raw.prepare("SELECT envelope.* FROM envelopes envelope JOIN newo_sessions session ON session.lead_envelope_id = envelope.envelope_id WHERE session.session_id = ?").get("session-001")!;
   const payload = JSON.parse(String(envelope.payload_json));
   assert.deepEqual(payload.owned_association, {
-    customer_id: "customer:phone:15875557788",
-    property_key: "property:123-main-street-edmonton",
-    roof_job_id: "job:existing-1",
+    customer_id: existing.customer_id,
+    property_key: existing.property_key,
+    roof_job_id: existing.roof_job_id,
     verification_status: "verified",
   });
 });
 
 test("multiple verified jobs fail closed without dispatching a downstream lead", async () => {
   const state = fakeNewoEnv();
-  state.operatingCustomers.push({ customer_id: "customer:phone:15875557788" });
-  state.operatingJobs.push(
-    {
-      roof_job_id: "job:existing-1",
-      job_status: "in_progress",
-      updated_at: "2026-07-18T17:00:00.000Z",
-      property_key: "property:123-main-street-edmonton",
-      address_line1: "123 Main Street",
-      postal_code: "T5J 0N3",
-    },
-    {
-      roof_job_id: "job:existing-2",
-      job_status: "qualified",
-      updated_at: "2026-07-18T16:00:00.000Z",
-      property_key: "property:123-main-street-edmonton-second",
-      address_line1: "123 Main Street",
-      postal_code: "T5J 0N3",
-    },
-  );
+  await seedNativeOperatingJob(state.db, "ironwrap");
+  await seedNativeOperatingJob(state.db, "ironwrap", { suffix: "second" });
 
   const lookup = await worker.fetch(new Request("https://bus.example/webhook/newo/lookup", {
     method: "POST",
@@ -694,7 +532,7 @@ test("multiple verified jobs fail closed without dispatching a downstream lead",
   assert.equal(capture.status, 200);
   assert.equal(state.jnQueue.length, 0);
   assert.equal(state.newoQueue.length, 1);
-  const payload = JSON.parse(String([...state.envelopes.values()][0].payload_json));
+  const payload = JSON.parse(String(state.db.raw.prepare("SELECT envelope.payload_json FROM envelopes envelope JOIN newo_sessions session ON session.lead_envelope_id = envelope.envelope_id WHERE session.session_id = ?").get("session-001")!.payload_json));
   assert.equal(payload.owned_association, undefined);
 });
 
@@ -798,25 +636,18 @@ test("verified Newo association cannot cross the configured tenant boundary", as
   });
   const capture = await worker.fetch(request("/webhook/newo", newoEvent()), state.env as never, ctx as never);
   assert.equal(capture.status, 200);
-  state.db.raw.prepare(
-    `UPDATE newo_sessions
-        SET verification_status = 'verified', matched_customer_id = ?, matched_property_id = ?,
-            matched_roof_job_id = ?
-      WHERE session_id = 'session-001'`,
-  ).run(foreign.customer_id, foreign.property_key, foreign.roof_job_id);
-
-  await assert.rejects(
-    handleNewoQueueMessage(state.env as never, "event-001", false),
-    /newo_native_association_mismatch/,
-  );
+  assert.throws(() => state.db.raw.prepare(
+    `UPDATE newo_sessions SET verification_status = 'verified', matched_customer_id = ?,
+      matched_property_id = ?, matched_roof_job_id = ? WHERE session_id = 'session-001'`,
+  ).run(foreign.customer_id, foreign.property_key, foreign.roof_job_id), /newo_session_event_invalid/);
+  const stored = state.db.raw.prepare("SELECT verification_status, matched_roof_job_id FROM newo_sessions").get()!;
+  assert.equal(stored.matched_roof_job_id, null);
+  await handleNewoQueueMessage(state.env as never, "event-001", false);
   assert.equal(fetches, 0);
-  assert.equal(tenantRows(state.db, "operating_leads"), 0);
-  assert.equal(tenantRows(state.db, "operating_roof_jobs"), 0);
-  const session = state.db.raw.prepare(
-    "SELECT sync_status, last_error FROM newo_sessions WHERE session_id = 'session-001'",
-  ).get() as Row;
-  assert.equal(session.sync_status, "failed");
-  assert.match(String(session.last_error), /newo_native_association_mismatch/);
+  assert.equal(tenantRows(state.db, "operating_leads"), 1);
+  assert.equal(tenantRows(state.db, "operating_roof_jobs"), 1);
+  assert.equal(tenantRows(state.db, "operating_roof_jobs", "other-tenant"), 1);
+
 });
 
 test("out-of-order caller lookups cannot replace or clear a newer verified association", async () => {
@@ -1437,7 +1268,10 @@ test("the recovery alert retains a session's higher urgency and stronger failed-
       const serviceAccount = alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON;
       alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = "";
       assert.equal(await alerting.deliver("/webhook/newo/handoff", handoffEvent()), 200);
-      alerting.db.raw.prepare("UPDATE newo_sessions SET urgency = 'emergency', handoff_status = ?").run(handoffStatus);
+      assert.equal(await alerting.deliver("/webhook/newo", newoEvent({ event_id: "event-stronger-state",
+        occurred_at: "2026-07-18T18:01:00.000Z", intent: { ...newoEvent().intent, urgency: "emergency" },
+        outcome: { ...newoEvent().outcome, handoff_status: handoffStatus },
+      })), 200);
       alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = serviceAccount;
       assert.equal((await sweepNewoCallbackAlerts(alerting.env as never)).sent, 1);
       const expected = handoffStatus === "failed" ? "Urgent Newo callback required" : "Urgent Newo callback requested - emergency";
@@ -1651,13 +1485,13 @@ test("failure provenance requires an accepted receipt for this session and its o
           ) SELECT 'ow_other_synthetic', source, payload_json, raw_key, ts, status,
             'synthetic-other-envelope', created_at, updated_at, tenant_id FROM envelopes WHERE envelope_id = ?`)
           .run(envelopeId);
-        alerting.db.raw.prepare(`INSERT INTO newo_event_receipts (
+        assert.throws(() => alerting.db.raw.prepare(`INSERT INTO newo_event_receipts (
             event_id, session_id, event_type, payload_hash, raw_key, envelope_id, status, first_seen_at, last_seen_at
           ) VALUES ('synthetic-failure-provenance', ?, ?, 'synthetic-hash', 'raw/newo/synthetic.json', ?, ?, ?, ?)`)
           .run("sessionId" in probe ? probe.sessionId : requested.session_id,
             "eventType" in probe ? probe.eventType : "session_failed",
             "envelopeId" in probe ? probe.envelopeId : envelopeId,
-            "status" in probe ? probe.status : "accepted", requested.occurred_at, requested.occurred_at);
+            "status" in probe ? probe.status : "accepted", requested.occurred_at, requested.occurred_at), /newo_receipt/);
         if ("foreignTenant" in probe) {
           alerting.db.raw.prepare("UPDATE envelopes SET tenant_id = 'other-tenant' WHERE envelope_id = ?").run(envelopeId);
         }
@@ -1790,7 +1624,7 @@ test("a failed session nobody can call back gets no callback record, and D1 refu
       `INSERT INTO newo_callback_records (callback_id, tenant_id, session_id, event_id, reason, urgency)
        VALUES (?, 'ironwrap', 'session-001', 'event-failed-001', 'session_failed', 'routine')`,
     ).bind(`ncb_${"a".repeat(32)}`).run(),
-    /CHECK constraint failed/,
+    /newo_callback_record_event_invalid|CHECK constraint failed/,
   );
   assert.deepEqual(alerting.callbackRecords(), []);
 });

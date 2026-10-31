@@ -320,7 +320,7 @@ function readinessChecks(
   report: Awaited<ReturnType<typeof getReadiness>>,
 ): NewoOperationsReadModel["readiness"]["checks"] {
   return [
-    { id: "owned_database", ok: report.checks.d1 && report.checks.schema && report.checks.newo_callback_schema },
+    { id: "owned_database", ok: report.checks.d1 && report.checks.schema && report.checks.newo_callback_schema && report.checks.newo_tenant_binding },
     { id: "raw_store", ok: report.checks.raw_store_binding },
     { id: "enabled", ok: report.checks.newo_enabled },
     { id: "webhook_credentials", ok: report.checks.newo_webhook_credentials },
@@ -342,19 +342,19 @@ async function listSessions(
   limit: number,
 ): Promise<NewoOperationsSession[]> {
   const statements = {
-    recent: `SELECT ${SESSION_COLUMNS} FROM newo_sessions ORDER BY updated_at DESC LIMIT ?`,
+    recent: `SELECT ${SESSION_COLUMNS} FROM newo_sessions WHERE tenant_id = ? AND tenant_binding_state = 'bound' ORDER BY updated_at DESC LIMIT ?`,
     missing_report: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
-      WHERE missing_report_detected_at IS NOT NULL AND report_received_at IS NULL
+      WHERE tenant_id = ? AND tenant_binding_state = 'bound' AND missing_report_detected_at IS NOT NULL AND report_received_at IS NULL
       ORDER BY missing_report_detected_at ASC LIMIT ?`,
     // Only failed handoffs no person has resolved; a resolution, never age, takes one off the list.
     failed_handoff: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
       WHERE ${UNRESOLVED_FAILED_HANDOFF} ORDER BY updated_at DESC LIMIT ?`,
     pending_booking: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
-      WHERE booking_status = 'requested' ORDER BY updated_at ASC LIMIT ?`,
+      WHERE tenant_id = ? AND tenant_binding_state = 'bound' AND booking_status = 'requested' ORDER BY updated_at ASC LIMIT ?`,
     sync_failure: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
-      WHERE sync_status IN ('failed','dead') ORDER BY updated_at ASC LIMIT ?`,
+      WHERE tenant_id = ? AND tenant_binding_state = 'bound' AND sync_status IN ('failed','dead') ORDER BY updated_at ASC LIMIT ?`,
   } satisfies Record<typeof kind, string>;
-  const args = kind === "failed_handoff" ? [newoTenantId(env), limit] : [limit];
+  const args = [newoTenantId(env), limit];
   const result = await env.DB.prepare(statements[kind])
     .bind(...args)
     .all<NewoOperationsSession>();
@@ -383,7 +383,8 @@ async function listOpenCallbacks(env: Env, limit: number): Promise<NewoOperation
     `SELECT callback.callback_id, callback.session_id, callback.reason, ${urgency} AS urgency,
             callback.recorded_at AS requested_at
        FROM newo_callback_records callback
-       LEFT JOIN newo_sessions session ON session.session_id = callback.session_id
+       JOIN newo_sessions session ON session.session_id = callback.session_id
+         AND session.tenant_id = callback.tenant_id AND session.tenant_binding_state = 'bound'
       WHERE ${OPEN_CALLBACK}
       ORDER BY CASE ${urgency} WHEN 'emergency' THEN 0 WHEN 'urgent' THEN 1 ELSE 2 END,
                callback.recorded_at ASC, callback.callback_id ASC
@@ -397,10 +398,10 @@ async function listOpenCallbacks(env: Env, limit: number): Promise<NewoOperation
 async function listFailedEvents(env: Env, limit: number): Promise<NewoOperationsEventFailure[]> {
   const result = await env.DB.prepare(
     `SELECT event_id, session_id, event_type, status, attempts, first_seen_at, last_seen_at
-       FROM newo_event_receipts WHERE status IN ('failed','dead')
+       FROM newo_event_receipts WHERE tenant_id = ? AND status IN ('failed','dead')
       ORDER BY last_seen_at ASC LIMIT ?`,
   )
-    .bind(limit)
+    .bind(newoTenantId(env), limit)
     .all<NewoOperationsEventFailure>();
   return (result.results ?? []).map((row) => ({ ...row, attempts: Number(row.attempts) }));
 }

@@ -11,6 +11,8 @@ import { quickBooksFinalInvoiceOperationalCounts } from "./quickbooks-final-invo
 import { NewoApiClient, newoClientConfigFromEnv, type NewoJson } from "./newo-client.ts";
 import { countOpenNewoDeadLetters, newoOperationalCounts } from "./newo-store.ts";
 import { newoCallbackSchemaReady } from "./newo-callback-schema.ts";
+import { trustedNewoTenantId } from "./newo-event-admission.ts";
+import { newoTenantBindingReadiness, type NewoTenantBindingCounts } from "./newo-tenant-readiness.ts";
 import { listMeasurementIntakeExceptions } from "./measurement-intake-store.ts";
 import { countFailedDeltasSince } from "./measurement-deltas-store.ts";
 import { gmailConfigured, sendGmail } from "./google.ts";
@@ -92,6 +94,7 @@ export interface ReadinessReport {
     public_estimate_configuration: boolean;
     measurement_ocr_configuration: boolean;
     newo_callback_schema: boolean;
+    newo_tenant_binding: boolean;
     newo_enabled: boolean;
     newo_webhook_credentials: boolean;
     newo_api_authentication: boolean;
@@ -129,6 +132,7 @@ const OFFICE_OPERATING_PLANE_CHECKS = [
 ] as const satisfies readonly ReadinessCheckName[];
 
 export interface NewoReadinessDetail {
+  tenant_binding_holds: NewoTenantBindingCounts | null;
   required: boolean;
   enabled: boolean;
   booking_mode: string;
@@ -280,6 +284,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     public_estimate_configuration: publicEstimateConfigured(extended),
     measurement_ocr_configuration: measurementPdfOcrConfigured(env),
     newo_callback_schema: false,
+    newo_tenant_binding: false,
     newo_enabled: true,
     newo_webhook_credentials: true,
     newo_api_authentication: true,
@@ -293,6 +298,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     newo_booking_mode: true,
   };
 
+  let bindingHolds: NewoTenantBindingCounts | null = null;
   if (typeof db?.prepare === "function") {
     try {
       checks.schema = await store.checkDatabaseReadiness(env);
@@ -303,10 +309,15 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     }
     // This provider-independent read proves the installed callback/resolution contract, even
     // when the integration is disabled. It does not change the office plane's schema verdict.
-    checks.newo_callback_schema = await newoCallbackSchemaReady(env);
+    const [schemaReady, bindings] = await Promise.all([newoCallbackSchemaReady(env), newoTenantBindingReadiness(env)]);
+    checks.newo_callback_schema = schemaReady;
+    let tenantConfigured = false;
+    try { trustedNewoTenantId(env); tenantConfigured = true; } catch { /* fail closed */ }
+    checks.newo_tenant_binding = bindings.ready && tenantConfigured;
+    bindingHolds = bindings.counts;
   }
 
-  const newo = await getNewoReadiness(env, checks.d1 && checks.schema, checks.newo_callback_schema);
+  const newo = await getNewoReadiness(env, checks.d1 && checks.schema, checks.newo_callback_schema, checks.newo_tenant_binding, bindingHolds);
   checks.newo_enabled = !newo.required || newo.enabled;
   checks.newo_webhook_credentials = !newo.required || newo.webhook_credentials_configured;
   checks.newo_api_authentication = !newo.required || newo.api_authenticated;
@@ -463,7 +474,7 @@ export async function buildOwnerRuntimeReadModel(
     {
       id: "newo",
       ok: readiness.checks.newo_enabled &&
-        (!readiness.newo.required || readiness.checks.newo_callback_schema) &&
+        (!readiness.newo.required || (readiness.checks.newo_callback_schema && readiness.checks.newo_tenant_binding)) &&
         readiness.checks.newo_webhook_credentials &&
         readiness.checks.newo_api_authentication &&
         readiness.checks.newo_production_actor &&
@@ -510,6 +521,8 @@ async function getNewoReadiness(
   env: Env,
   databaseReady: boolean,
   callbackSchemaReady: boolean,
+  tenantBindingsReady: boolean,
+  bindingHolds: NewoTenantBindingCounts | null,
 ): Promise<NewoReadinessDetail> {
   const runtime = env as AppEnv & ExtendedEnv;
   const enabled = String(runtime.NEWO_ENABLED ?? "false") === "true";
@@ -524,6 +537,9 @@ async function getNewoReadiness(
     (confirmed && String(runtime.NEWO_JOBNIMBUS_BOOKING_PROVEN ?? "false") === "true");
   const driftReasons = required ? newoConfigurationDrift(runtime) : [];
   if (required && !callbackSchemaReady) driftReasons.push("callback_schema_unready");
+  if (required && !tenantBindingsReady) {
+    driftReasons.push("tenant_binding_unresolved");
+  }
   let apiAuthenticated = false;
   let productionActorVerified = false;
   let reportWebhooksVerified = false;
@@ -580,6 +596,7 @@ async function getNewoReadiness(
     counts.control_failures === 0;
 
   return {
+    tenant_binding_holds: bindingHolds,
     required,
     enabled,
     booking_mode: bookingMode,

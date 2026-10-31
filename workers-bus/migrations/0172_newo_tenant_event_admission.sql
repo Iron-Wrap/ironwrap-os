@@ -11,7 +11,8 @@
 -- owner mapping is needed; an incoming event cannot resolve that hold.
 
 ALTER TABLE newo_sessions ADD COLUMN tenant_id TEXT CHECK (
-  tenant_id IS NULL OR (length(tenant_id) BETWEEN 2 AND 64 AND tenant_id NOT GLOB '*[^a-z0-9-]*')
+  tenant_id IS NULL OR (length(tenant_id) BETWEEN 2 AND 64 AND substr(tenant_id, 1, 1) GLOB '[a-z0-9]'
+    AND tenant_id NOT GLOB '*[^a-z0-9-]*')
 );
 ALTER TABLE newo_sessions ADD COLUMN tenant_binding_state TEXT NOT NULL DEFAULT 'unbound'
   CHECK (tenant_binding_state IN ('bound', 'unbound', 'conflict'));
@@ -23,7 +24,8 @@ ALTER TABLE newo_sessions ADD COLUMN tenant_binding_source TEXT NOT NULL DEFAULT
 ALTER TABLE newo_sessions ADD COLUMN tenant_binding_ref TEXT
   CHECK (tenant_binding_ref IS NULL OR length(tenant_binding_ref) BETWEEN 1 AND 512);
 ALTER TABLE newo_event_receipts ADD COLUMN tenant_id TEXT CHECK (
-  tenant_id IS NULL OR (length(tenant_id) BETWEEN 2 AND 64 AND tenant_id NOT GLOB '*[^a-z0-9-]*')
+  tenant_id IS NULL OR (length(tenant_id) BETWEEN 2 AND 64 AND substr(tenant_id, 1, 1) GLOB '[a-z0-9]'
+    AND tenant_id NOT GLOB '*[^a-z0-9-]*')
 );
 ALTER TABLE newo_event_receipts ADD COLUMN admission_json TEXT CHECK (
   admission_json IS NULL OR (length(admission_json) BETWEEN 2 AND 2048 AND json_valid(admission_json))
@@ -143,7 +145,8 @@ ALTER TABLE newo_sessions ADD COLUMN last_event_id TEXT
 
 CREATE TABLE newo_event_admissions (
   event_id TEXT PRIMARY KEY CHECK (length(event_id) BETWEEN 1 AND 128),
-  tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 2 AND 64 AND tenant_id NOT GLOB '*[^a-z0-9-]*'),
+  tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 2 AND 64 AND substr(tenant_id, 1, 1) GLOB '[a-z0-9]'
+    AND tenant_id NOT GLOB '*[^a-z0-9-]*'),
   session_id TEXT NOT NULL CHECK (length(session_id) BETWEEN 1 AND 128),
   event_type TEXT NOT NULL CHECK (event_type IN ('caller_lookup', 'lead_captured', 'handoff_requested',
     'session_ended', 'session_failed', 'missed_call', 'booking_requested', 'booking_cancelled')),
@@ -238,6 +241,11 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM operating_roof_jobs job
       JOIN operating_customers customer ON customer.customer_id = job.customer_id AND customer.tenant_id = job.tenant_id
       JOIN operating_properties property ON property.property_id = job.property_id AND property.tenant_id = job.tenant_id
+      JOIN operating_leads lead ON lead.lead_id = job.lead_id AND lead.tenant_id = job.tenant_id
+      JOIN envelopes job_origin ON job_origin.envelope_id = job.source_envelope_id AND job_origin.tenant_id = job.tenant_id
+      JOIN envelopes customer_origin ON customer_origin.envelope_id = customer.source_envelope_id AND customer_origin.tenant_id = job.tenant_id
+      JOIN envelopes property_origin ON property_origin.envelope_id = property.source_envelope_id AND property_origin.tenant_id = job.tenant_id
+      JOIN envelopes lead_origin ON lead_origin.envelope_id = lead.source_envelope_id AND lead_origin.tenant_id = job.tenant_id
       WHERE job.roof_job_id = NEW.matched_roof_job_id AND job.tenant_id = NEW.tenant_id
         AND customer.customer_id = NEW.matched_customer_id AND property.property_key = NEW.matched_property_id
         AND NEW.verification_status = 'verified');
@@ -307,6 +315,8 @@ BEGIN
     OR EXISTS (SELECT 1 FROM newo_sessions session WHERE session.session_id = NEW.session_id
       AND (session.tenant_binding_state <> 'bound' OR session.tenant_id IS NOT NEW.tenant_id));
   SELECT RAISE(ABORT, 'newo_receipt_input_invalid') WHERE NEW.status <> 'processing'
+    OR NEW.attempts <> 1 OR NEW.response_json <> '{}' OR NEW.envelope_id IS NOT NULL
+    OR NEW.completed_at IS NOT NULL OR NEW.last_error IS NOT NULL
     OR length(NEW.payload_hash) <> 64 OR NEW.payload_hash GLOB '*[^0-9a-f]*'
     OR NEW.admission_json IS NULL OR NOT json_valid(NEW.admission_json)
     OR json_type(NEW.admission_json) <> 'object'

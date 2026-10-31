@@ -227,8 +227,17 @@ export async function handleNewoQueueMessage(
 ): Promise<void> {
   const receipt = await getNewoReceipt(env, eventId);
   if (!receipt) throw new Error("newo_receipt_missing");
+  const binding = await newoProducerTenantCheck(env, receipt.session_id);
+  if (!binding.ok || receipt.tenant_id !== binding.tenantId) throw new Error("newo_queue_tenant_unresolved");
   const session = await getNewoSession(env, receipt.session_id);
   if (!session) throw new Error("newo_session_missing");
+  const admission = await env.DB.prepare("SELECT envelope_id FROM newo_event_admissions WHERE event_id = ? AND tenant_id = ? AND session_id = ?")
+    .bind(eventId, binding.tenantId, receipt.session_id).first<{ envelope_id: string | null }>();
+  if (!admission && (receipt.status !== "accepted" || receipt.payload_hash !== session.payload_hash
+    || receipt.raw_key !== session.raw_key || receipt.envelope_id !== session.lead_envelope_id)) {
+    throw new Error("newo_queue_event_provenance_unresolved");
+  }
+  const ownedEnvelopeId = admission ? admission.envelope_id : receipt.envelope_id;
   const now = new Date().toISOString();
   if (deadLetter) {
     await markNewoSessionSync(
@@ -253,7 +262,7 @@ export async function handleNewoQueueMessage(
   }
 
   try {
-    const projection = await projectNewoSessionToNativeCore(env, receipt.envelope_id, session);
+    const projection = await projectNewoSessionToNativeCore(env, ownedEnvelopeId, session);
     await markNewoSessionSync(env, session.session_id, "synced", null, now);
     await store.recordAudit(env, {
       automation: "newo_native_projection",
@@ -994,11 +1003,15 @@ export async function newoCallbackRecordInput(
   const contact = event.contact;
   const phone = bounded(contact.phone ?? existing?.contact_phone, 40);
   const email = bounded(contact.email ?? existing?.contact_email, 254);
-  const handoffStatus = newoHandoffStatus(event, existing);
-  const reason: NewoCallbackReason | null = handoffStatus === "requested"
-    ? "callback_requested"
-    : handoffStatus === "failed"
-      ? "handoff_failed"
+  // Match the immutable admission policy: inherited state alone is not a new obligation.
+  const declared = event.outcome.handoff_status;
+  const emergencyClose = ["session_ended", "session_failed"].includes(event.event_type)
+    && newoUrgency(event, existing) === "emergency"
+    && existing?.handoff_status !== "requested" && declared !== "requested";
+  const reason: NewoCallbackReason | null = declared === "failed" || emergencyClose
+    ? "handoff_failed"
+    : event.event_type === "handoff_requested" || declared === "requested"
+      ? "callback_requested"
       : event.event_type === "session_failed" && (phone || email)
         ? "session_failed"
         : null;

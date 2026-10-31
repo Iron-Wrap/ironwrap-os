@@ -355,30 +355,41 @@ export async function reportSafetyOccurrence(
   );
   if (existing) return { kind: "duplicate", occurrence: existing };
 
-  const inserted = await env.DB.prepare(
-    `INSERT INTO safety_occurrences
-       (occurrence_id, tenant_id, occurrence_kind, severity, version, state, stop_active,
-        rescue_required, scope_type, scope_id, reported_by_user_id, reported_at, summary,
-        report_fingerprint_sha256, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 1, 'reported', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT DO NOTHING`,
-  )
-    .bind(
-      input.occurrenceId,
-      input.tenantId,
-      input.occurrenceKind,
-      input.severity,
-      input.rescueRequired ? 1 : 0,
-      input.scope.type,
-      input.scope.id,
-      input.reportedByUserId,
-      input.reportedAt,
-      input.summary,
-      fingerprint,
-      input.now,
-      input.now,
+  let inserted: { meta?: { changes?: number } };
+  try {
+    inserted = await env.DB.prepare(
+      `INSERT INTO safety_occurrences
+         (occurrence_id, tenant_id, occurrence_kind, severity, version, state, stop_active,
+          rescue_required, scope_type, scope_id, reported_by_user_id, reported_at, summary,
+          report_fingerprint_sha256, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, 'reported', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
     )
-    .run();
+      .bind(
+        input.occurrenceId,
+        input.tenantId,
+        input.occurrenceKind,
+        input.severity,
+        input.rescueRequired ? 1 : 0,
+        input.scope.type,
+        input.scope.id,
+        input.reportedByUserId,
+        input.reportedAt,
+        input.summary,
+        fingerprint,
+        input.now,
+        input.now,
+      )
+      .run();
+  } catch (error) {
+    // A concurrent identical report may reach 0171's replacement guard before ON CONFLICT.
+    // Read back the exact physical report; never interpret a different occurrence as a replay.
+    if (error instanceof Error && error.message.includes("safety_occurrence_identity_immutable")) {
+      const raced = await occurrenceByFingerprint(env, input.tenantId, fingerprint);
+      if (raced) return { kind: "duplicate", occurrence: raced };
+    }
+    throw error;
+  }
 
   if (d1Changes(inserted) !== 1) {
     const raced = await occurrenceByFingerprint(
@@ -752,7 +763,8 @@ const STOP_CAPTURE_SELECT = `SELECT media.evidence_id, media.checksum_sha256 AS 
         AND capture.status = 'verified'
         AND capture.manifest_key IS NOT NULL
         AND capture.evidence_verification = 'Verified'
-        AND media.r2_stored_at IS NOT NULL`;
+        AND media.r2_stored_at IS NOT NULL
+        AND media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')`;
 
 /**
  * Each cited id as exactly one verified, manifested, stored Work Package capture of this tenant
@@ -854,22 +866,21 @@ export async function stopReleasePhotos(
 ): Promise<SafetyStopPhoto[]> {
   const jobs = await stopPhotoJobs(env, occurrence);
   const rows = await env.DB.prepare(
-    `${STOP_CAPTURE_SELECT}
-        AND julianday(COALESCE(capture.capture_completed_at, capture.created_at))
-          > julianday(?)
+    `WITH verified_photos AS (${STOP_CAPTURE_SELECT}),
+          unique_photos AS (
+            SELECT evidence_id FROM verified_photos GROUP BY evidence_id HAVING COUNT(*) = 1
+          )
+      SELECT * FROM verified_photos capture
+      WHERE capture.evidence_id IN (SELECT evidence_id FROM unique_photos)
+        AND julianday(capture.captured_at) > julianday(?)
         ${jobs ? `AND capture.job_id IN (${jobs.map(() => "?").join(", ")})` : ""}
-      ORDER BY captured_at DESC, media.evidence_id ASC
+      ORDER BY julianday(captured_at) DESC, evidence_id ASC
       LIMIT ?`,
   )
-    .bind(occurrence.tenant_id, occurrence.reported_at, ...(jobs ?? []), Math.max(1, Math.min(200, limit)) * 2)
+    .bind(occurrence.tenant_id, occurrence.reported_at, ...(jobs ?? []), Math.max(1, Math.min(200, limit)))
     .all<SafetyStopPhoto>();
-  // An id stored twice is no single capture (0152 and 0171 refuse to cite it), so it is left out.
-  const counts = new Map<string, number>();
-  for (const row of rows.results) counts.set(row.evidence_id, (counts.get(row.evidence_id) ?? 0) + 1);
-  return rows.results
-    .filter((row) => counts.get(row.evidence_id) === 1)
-    .slice(0, limit)
-    .map((row) => ({ ...row }));
+  // Deduplicate before filtering by time/scope or limiting, as the release command does.
+  return rows.results.map((row) => ({ ...row }));
 }
 
 /**
@@ -3069,6 +3080,9 @@ export async function addToSafetyStop(
     if (message.includes("safety_actor_unknown")) {
       throw new SafetyError("safety_actor_unknown", 403, "This safety actor is not recognized.");
     }
+    if (message.includes("safety_stop_addition_evidence_invalid")) {
+      throw new SafetyError("safety_stop_addition_evidence_invalid", 409, "Each photo must still be a verified photo of this stop's job.");
+    }
     throw error;
   }
   const stored = await additionById(env, input.tenantId, additionId);
@@ -3245,7 +3259,6 @@ export async function rescopeSafetyStop(
       "That job or job plan does not exist in this company.",
     );
   }
-  const now = new Date().toISOString();
   let results: Array<{ meta?: { changes?: number } }>;
   try {
     results = await env.DB.batch([
@@ -3263,19 +3276,13 @@ export async function rescopeSafetyStop(
         occurrence.version, occurrence.version + 1, occurrence.scope_type, occurrence.scope_id,
         input.scope.type, input.scope.id, actor.userId, actor.role, input.reason,
         input.tenantId, input.occurrenceId, occurrence.version),
-      env.DB.prepare(
-        `UPDATE safety_occurrences
-            SET scope_type = ?, scope_id = ?, version = ?, updated_at = ?
-          WHERE tenant_id = ? AND occurrence_id = ? AND version = ?`,
-      ).bind(input.scope.type, input.scope.id, occurrence.version + 1, now, input.tenantId,
-        input.occurrenceId, occurrence.version),
     ]);
   } catch (error) {
     const winner = await rescopeById(env, input.tenantId, rescopeId);
     if (winner) return await replayedRescope(env, input.tenantId, winner, requestSha256);
     throw rescopeRefusal(error);
   }
-  if (d1Changes(results[1] ?? {}) !== 1) {
+  if (d1Changes(results[0] ?? {}) !== 1) {
     throw new SafetyError(
       "safety_occurrence_version_conflict",
       409,
@@ -3635,6 +3642,11 @@ async function advanceOccurrence(
  */
 function guardRefusal(error: unknown): unknown {
   const message = error instanceof Error ? error.message : String(error);
+  for (const code of ["safety_stop_release_evidence_invalid", "safety_stop_release_evidence_before_stop"]) {
+    if (message.includes(code)) {
+      return new SafetyError(code, 409, "Release needs verified photos of this stop taken after it was raised.");
+    }
+  }
   const refusals: Array<[string, string]> = [
     ["safety_stop_release_by_raiser_forbidden", "The person who raised a safety stop can never release it."],
     ["safety_actor_unknown", "This safety actor is not recognized."],

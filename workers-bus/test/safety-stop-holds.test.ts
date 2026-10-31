@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { seedStopPhoto } from "./safety-stop-photo-fixture.ts";
+import { sha256Hex } from "../src/app-auth.ts";
 
 import {
   authorityCurrentPrecondition,
@@ -480,6 +482,13 @@ async function raise(
 
 /** Make safe, investigate, control and release a stop the crew raised, by people who did not. */
 async function lift(env: TestEnv, occurrenceId: string) {
+  const stop = env.DB.sqlite.prepare("SELECT scope_type, scope_id FROM safety_occurrences WHERE occurrence_id = ?").get(occurrenceId) as { scope_type: string; scope_id: string };
+  const packageJob = stop.scope_type === "work_package"
+    ? env.DB.sqlite.prepare("SELECT job_id FROM work_packages WHERE work_package_id = ? LIMIT 1").get(stop.scope_id)?.job_id
+    : null;
+  const photoId = `evi_${(await sha256Hex(occurrenceId)).slice(0, 32)}`;
+  seedStopPhoto(env.DB.sqlite, { userId: USERS.crew.id, evidenceId: photoId, capturedAt: at(240),
+    jobId: typeof packageJob === "string" ? packageJob : stop.scope_type === "roof_job" ? stop.scope_id : "JOB-HOLD-A" });
   await recordMakeSafe(env, {
     tenantId: TENANT, occurrenceId, actorUserId: USERS.crew.id, detail: "Crew off the roof.",
     evidence: null, capturedOffline: false, deviceActionId: null, occurredAt: at(200), now: at(200),
@@ -487,6 +496,7 @@ async function lift(env: TestEnv, occurrenceId: string) {
   for (const command of ["investigation_opened", "controlled", "released"] as const) {
     await recordSafetyResponse(env, {
       tenantId: TENANT, occurrenceId, actorUserId: USERS.ops.id, command,
+      ...(command === "released" ? { evidenceIds: [photoId] } : {}),
       detail: `Recorded ${command}.`, evidence: null, now: new Date().toISOString(),
     });
   }

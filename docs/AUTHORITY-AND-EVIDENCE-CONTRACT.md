@@ -376,6 +376,24 @@ A release also asks the person to sign in again when their session is more than 
 (`recent_session_required`, 403), checked after every other release check and before anything is
 written. That is the existing session-age check; no passkey is claimed.
 
+The release command cites one to ten distinct `evidence_ids`, never browser-provided references or
+checksums. Each must resolve to one verified, manifested, stored field photo of the tenant, within
+the stop's job scope, captured strictly after the report. The Worker reads its checksum from D1;
+migration `0171` repeats provenance, scope, uniqueness and time checks before the release event.
+The detail read returns eligible `release_photos`; no eligible photo gives
+`release_unavailable_reason: "verified_photo_required"`.
+
+An active person may add a note, verified photos, or both with `POST
+/api/v1/safety/occurrences/{occurrence}/additions`, CSRF and an `Idempotency-Key`. The stop stays in
+force. The append-only receipt uses D1's clock, records the actor and appears under `additions` on
+the detail read. Exact retries return the saved receipt; changed requests conflict.
+
+A vehicle stop holds pre-trip inspections, cargo loading or transit on either its vehicle or
+trailer, and custody handed to a person or crew. Migration `0171` guards inserts and updates,
+including replacement attempts. The pre-trip route returns `fleet_vehicle_safety_stop_active`
+(409) with the stop's display facts. Post-trip inspections, defect reports and returns to the yard
+remain available. No shop-run write exists yet; its stop rule remains a contract requirement.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { seedStopPhoto } from "./safety-stop-photo-fixture.ts";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
@@ -24,6 +25,7 @@ const TENANT = "ironwrap";
 const PEPPER = "synthetic-safety-stop-release-pepper-0123456789";
 const BASE = Date.now() - 6 * 60 * 60 * 1_000;
 const at = (minutes: number) => new Date(BASE + minutes * 60_000).toISOString();
+const RELEASE_PHOTO_ID = `evi_${"f".repeat(32)}`;
 const SCOPE = { type: "roof_job" as const, id: "JOB-SAFETY-STOP-1" };
 
 interface FixtureUser {
@@ -110,6 +112,8 @@ function testEnv(users: FixtureUser[] = Object.values(USERS)): TestEnv {
       .run(user.id, TENANT, user.email, user.name, user.role, user.access, user.frappe ?? null,
         "owner@example.invalid", at(-60), at(-60));
   }
+  seedStopPhoto(DB.sqlite, { userId: (users.find((user) => user.id === USERS.crew.id) ?? users[0]!).id,
+    jobId: SCOPE.id, evidenceId: RELEASE_PHOTO_ID, capturedAt: at(200) });
   return { APP_TENANT_ID: TENANT, APP_AUTH_PEPPER: PEPPER, DB } as unknown as TestEnv;
 }
 
@@ -133,6 +137,7 @@ async function respond(
     occurrenceId,
     actorUserId: actor.id,
     command,
+    ...(command === "released" ? { evidenceIds: [RELEASE_PHOTO_ID] } : {}),
     detail,
     evidence: null,
     now: new Date().toISOString(),
@@ -249,10 +254,11 @@ function directLift(
       db.prepare(
         `INSERT INTO safety_occurrence_events
           (event_id, tenant_id, occurrence_id, occurrence_version, event_kind, actor_user_id,
-           actor_role, detail, captured_offline, occurred_at, recorded_at)
-         VALUES (?, ?, ?, ?, 'released', ?, ?, 'Lifted straight in D1.', 0, ?, ?)`,
+           actor_role, detail, captured_offline, occurred_at, recorded_at, evidence_refs_json, evidence_sha256)
+         VALUES (?, ?, ?, ?, 'released', ?, ?, 'Lifted straight in D1.', 0, ?, ?, ?, ?)`,
       ).run(`soe_direct_${occurrenceId}_${eventVersion}`, TENANT, occurrenceId, eventVersion,
-        event.actor.id, event.actor.access, at(90), at(90));
+        event.actor.id, event.actor.access, at(90), at(90),
+        JSON.stringify([{ ref: `field-evidence://${RELEASE_PHOTO_ID}`, sha256: "b".repeat(64) }]), "c".repeat(64));
     }
     db.prepare(
       `UPDATE safety_occurrences
@@ -341,7 +347,7 @@ async function postCommand(
   return { status: response.status, body: (await response.json()) as Record<string, any> };
 }
 
-const release = { command: "released", detail: "Ridge panel refixed and inspected." };
+const release = { command: "released", evidence_ids: [RELEASE_PHOTO_ID], detail: "Ridge panel refixed and inspected." };
 
 function assertRefused(
   result: { status: number; body: Record<string, any> },
@@ -646,7 +652,7 @@ test("a command with a short detail or malformed evidence is refused before anyt
     ["released, two characters", controlled, { ...release, detail: "ok" }, "safety_command_invalid"],
     ["released, only spaces", controlled, { ...release, detail: "     " }, "safety_command_invalid"],
     ["released, not text", controlled, { ...release, detail: 42 }, "safety_command_invalid"],
-    ["released, malformed evidence", controlled, { ...release, ...badEvidence }, "safety_evidence_invalid"],
+    ["released, raw evidence", controlled, { ...release, ...badEvidence }, "safety_command_invalid"],
     ["controlled, two characters", investigating, { command: "controlled", detail: "ok" },
       "safety_command_invalid"],
     ["controlled, malformed evidence", investigating,

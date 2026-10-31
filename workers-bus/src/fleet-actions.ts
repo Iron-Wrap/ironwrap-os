@@ -545,6 +545,9 @@ export function d1FleetActionWriter(env: AppEnv): FleetActionWriter {
       } catch (error) {
         const recovered = await nativeFleetRecord(env, input);
         if (recovered) return recovered;
+        if (error instanceof Error && error.message.includes("fleet_vehicle_safety_stop_active")) {
+          throw vehicleStopRefusal(await vehicleSafetyStops(env, input.tenantId, input.fleetAssetId));
+        }
         throw nativeFleetWriteError(error);
       }
       return {

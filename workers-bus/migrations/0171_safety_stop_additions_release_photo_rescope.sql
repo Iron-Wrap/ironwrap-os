@@ -34,7 +34,7 @@
 --    except for a direct write that is both a lift by the raiser and illegal for 0047, which now
 --    reports 0047's code first.
 --
--- Adds two tables, two indexes and thirteen triggers, and re-creates one trigger.
+-- Adds two tables, two indexes and eighteen triggers, and re-creates one trigger.
 
 -- 1. Additions -------------------------------------------------------------------------------------
 
@@ -123,6 +123,21 @@ BEGIN
                  AND capture.manifest_key IS NOT NULL
                  AND capture.evidence_verification = 'Verified'
                  AND media.r2_stored_at IS NOT NULL
+                 AND media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+                 AND (
+                   SELECT COUNT(*)
+                     FROM field_actions duplicate_capture
+                     JOIN field_action_media duplicate_media
+                       ON duplicate_media.device_action_id = duplicate_capture.device_action_id
+                    WHERE duplicate_capture.tenant_id = NEW.tenant_id
+                      AND duplicate_capture.work_package_id IS NOT NULL
+                      AND duplicate_capture.status = 'verified'
+                      AND duplicate_capture.manifest_key IS NOT NULL
+                      AND duplicate_capture.evidence_verification = 'Verified'
+                      AND duplicate_media.r2_stored_at IS NOT NULL
+                      AND duplicate_media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+                      AND duplicate_media.evidence_id = media.evidence_id
+                 ) = 1
                  AND 'field-evidence://' || media.evidence_id
                    = json_extract(NEW.evidence_refs_json, item.fullkey || '.ref')
                  AND media.checksum_sha256
@@ -184,6 +199,18 @@ END;
 
 -- 2. Release photo ---------------------------------------------------------------------------------
 
+-- REPLACE deletes then inserts and does not run UPDATE guards. In particular, an interrupted
+-- report may have no journal child yet, so FK restrictions alone cannot protect its active stop.
+CREATE TRIGGER safety_occurrences_no_insert_replace
+BEFORE INSERT ON safety_occurrences
+WHEN EXISTS (
+  SELECT 1 FROM safety_occurrences existing
+   WHERE existing.occurrence_id = NEW.occurrence_id
+      OR (existing.tenant_id = NEW.tenant_id
+          AND existing.report_fingerprint_sha256 = NEW.report_fingerprint_sha256)
+)
+BEGIN SELECT RAISE(ABORT, 'safety_occurrence_identity_immutable'); END;
+
 CREATE TRIGGER safety_occurrence_events_release_evidence
 BEFORE INSERT ON safety_occurrence_events
 WHEN NEW.event_kind = 'released'
@@ -219,6 +246,21 @@ BEGIN
                 AND capture.manifest_key IS NOT NULL
                 AND capture.evidence_verification = 'Verified'
                 AND media.r2_stored_at IS NOT NULL
+                 AND media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+                 AND (
+                   SELECT COUNT(*)
+                     FROM field_actions duplicate_capture
+                     JOIN field_action_media duplicate_media
+                       ON duplicate_media.device_action_id = duplicate_capture.device_action_id
+                    WHERE duplicate_capture.tenant_id = NEW.tenant_id
+                      AND duplicate_capture.work_package_id IS NOT NULL
+                      AND duplicate_capture.status = 'verified'
+                      AND duplicate_capture.manifest_key IS NOT NULL
+                      AND duplicate_capture.evidence_verification = 'Verified'
+                      AND duplicate_media.r2_stored_at IS NOT NULL
+                      AND duplicate_media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+                      AND duplicate_media.evidence_id = media.evidence_id
+                 ) = 1
                 AND 'field-evidence://' || media.evidence_id
                   = json_extract(NEW.evidence_refs_json, item.fullkey || '.ref')
                 AND media.checksum_sha256
@@ -306,11 +348,6 @@ END;
 CREATE TRIGGER fleet_cargo_loads_vehicle_stop_update_guard
 BEFORE UPDATE ON fleet_cargo_loads
 WHEN NEW.status IN ('Loaded', 'In Transit')
-  AND (
-    OLD.status NOT IN ('Loaded', 'In Transit')
-    OR NEW.fleet_asset_id IS NOT OLD.fleet_asset_id
-    OR NEW.trailer_asset_id IS NOT OLD.trailer_asset_id
-  )
 BEGIN
   SELECT RAISE(ABORT, 'fleet_vehicle_safety_stop_active')
   WHERE EXISTS (
@@ -319,6 +356,20 @@ BEGIN
        AND occurrence.stop_active = 1
        AND occurrence.scope_type = 'vehicle'
        AND occurrence.scope_id IN (NEW.fleet_asset_id, NEW.trailer_asset_id)
+  );
+END;
+
+CREATE TRIGGER fleet_assets_vehicle_stop_insert_guard
+BEFORE INSERT ON fleet_assets
+WHEN NEW.custody_holder_type IN ('User', 'Crew')
+BEGIN
+  SELECT RAISE(ABORT, 'fleet_vehicle_safety_stop_active')
+  WHERE EXISTS (
+    SELECT 1 FROM safety_occurrences occurrence
+     WHERE occurrence.tenant_id = NEW.tenant_id
+       AND occurrence.stop_active = 1
+       AND occurrence.scope_type = 'vehicle'
+       AND occurrence.scope_id = NEW.fleet_asset_id
   );
 END;
 
@@ -441,6 +492,39 @@ BEGIN
   SELECT RAISE(ABORT, 'safety_stop_rescope_clock_invalid')
   WHERE NEW.moved_at IS NOT strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
 END;
+
+-- The correction and scope move are one D1 statement even for direct writes. A ledger row can
+-- never be committed without its matching move, and an unsuccessful move retains neither.
+CREATE TRIGGER safety_occurrence_rescopes_apply
+AFTER INSERT ON safety_occurrence_rescopes
+BEGIN
+  UPDATE safety_occurrences
+     SET scope_type = NEW.to_scope_type, scope_id = NEW.to_scope_id,
+         version = NEW.to_version, updated_at = NEW.moved_at
+   WHERE tenant_id = NEW.tenant_id AND occurrence_id = NEW.occurrence_id
+     AND version = NEW.from_version;
+END;
+
+-- Retain a corrected job as the historical target. Otherwise deletion and later recreation could
+-- narrow the corrected stop again without a new human decision. Existing job guards prevent
+-- identity updates; the insert guard also covers SQLite REPLACE with recursive triggers off.
+CREATE TRIGGER operating_roof_jobs_rescope_target_no_delete
+BEFORE DELETE ON operating_roof_jobs
+WHEN EXISTS (
+  SELECT 1 FROM safety_occurrence_rescopes correction
+   WHERE correction.tenant_id = OLD.tenant_id
+     AND correction.to_scope_type = 'roof_job' AND correction.to_scope_id = OLD.roof_job_id
+)
+BEGIN SELECT RAISE(ABORT, 'safety_stop_scope_target_retained'); END;
+
+CREATE TRIGGER operating_roof_jobs_rescope_target_no_replace
+BEFORE INSERT ON operating_roof_jobs
+WHEN EXISTS (SELECT 1 FROM operating_roof_jobs WHERE roof_job_id = NEW.roof_job_id)
+ AND EXISTS (
+   SELECT 1 FROM safety_occurrence_rescopes correction
+    WHERE correction.to_scope_type = 'roof_job' AND correction.to_scope_id = NEW.roof_job_id
+ )
+BEGIN SELECT RAISE(ABORT, 'safety_stop_scope_target_retained'); END;
 
 CREATE TRIGGER safety_occurrence_rescopes_no_insert_replace
 BEFORE INSERT ON safety_occurrence_rescopes

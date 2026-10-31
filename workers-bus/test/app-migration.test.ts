@@ -2309,7 +2309,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0153 lands after 0154-0206 on deployed databases; it touches no object a later-numbered
     // migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 143);
+    assert.equal(migrations.length, 144);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2469,10 +2469,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence and readback-conflict guards under their names. 0170 adds the made-safe confirmer
     // column, the keep-decision table, one named index and seven guards (the Work Package stop hold,
     // the made-safe confirmer and event, and the keep record's validation, no-replace and two
-    // append-only guards).
+    // append-only guards). 0171 adds two history tables, two indexes and eighteen guards for
+    // stop additions, release photos, vehicle use and atomic scope corrections.
     assert.deepEqual(
       { ...counts },
-      { tables: 282, indexes: 383, triggers: 788 },
+      { tables: 284, indexes: 385, triggers: 806 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

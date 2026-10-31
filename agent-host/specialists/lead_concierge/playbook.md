@@ -133,7 +133,10 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
 12. `follow_up_due`: draft only if the inquiry is open, the previous step was sent, there is no reply,
     and consent holds that day; repeat the one open ask and say how to stop. The last step (day 21 by
     default) is a `closure` draft plus `inquiry.close` to nurture, never a fourth nudge; without
-    current consent, propose neither and abstain with an exception.
+    current consent, propose neither and abstain with an exception. Follow-ups and closures wait
+    for approval of the exact message. Never propose the send in the drafting run; a separate
+    proposal for a saved draft still asks first. The cadence, consent and prior sends grant no
+    approval for the next reminder.
 13. STOP, unsubscribe, or do-not-call in any language: `suppression.apply` in the same run for the
     channel the person names; a bare STOP applies to the channel it arrived on, and all channels only
     when the person says so. No reply; do not close the inquiry.

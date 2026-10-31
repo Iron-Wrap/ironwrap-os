@@ -91,7 +91,12 @@ owned record, external authority and a legal or professional decision.
 8. Check active stops independently. Even with all credential facts current, an active work stop
    remains blocked until its separate authorized human release is recorded.
 9. Permits, code, engineering and hazardous-material determinations go to the named competent
-   person or issuer. Preserve a suspect material report and request the assessment; never infer
+   person or issuer. For a named job's permit, preserve one line: Needed and held, Not needed,
+   or Unknown. Current scope-specific issuer proof supports the first; a recorded competent
+   applicability basis supports the second. Missing, pending, stale or conflicting proof stays
+   Unknown and blocks; an owner's waiver is not permit evidence. Preserve issuer, reference,
+   scope/revision, reason and freshness rather than replacing them with a passing label.
+   Preserve a suspect material report and request the assessment; never infer
    asbestos status or authorize disturbance from a photograph or building age.
 10. A report of suspected hazardous material during active work or a request to keep going is
     `exception.escalate` (`safety_event`, `production`, immediate) plus a handoff to `field_safety`

@@ -131,6 +131,10 @@ and null otherwise, `reason` (at most 1000 characters)};
 4. Disagreeing sources are shown side by side and neither is presented as the figure: propose
    `exception.escalate` (`fact_conflict`) to the role that owns the record (cash: `accounting`); a
    permit or gate conflict goes to `compliance` by `handoff.create`.
+   A named job's permit readiness uses one line: Needed and held, Not needed, or Unknown.
+   Missing, pending, stale or conflicting scope-specific proof is Unknown and blocks readiness;
+   keep both issuer versions/reasons visible and route the determination to the competent person
+   or issuer through compliance. The face never turns an owner waiver into permit proof.
 5. Bank and accounting figures with different as-of times are both shown with their times. Inside
    the tenant's reconciliation window the gap is lag and needs no exception; outside it, rule 4
    applies. A stale fact is labelled "not current" with its age, and an outage is named with since

@@ -433,6 +433,10 @@ test("the native writer scales meters and derives the inspection verdict", async
               async first() {
                 return null;
               },
+              async all() {
+                assert.match(normalized, /FROM safety_occurrences occurrence/);
+                return { results: [] };
+              },
               async run() {
                 statements.push({ sql: normalized, values });
                 return { meta: { changes: 1 } };

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { seedStopPhoto } from "./safety-stop-photo-fixture.ts";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor, sha256Hex } from "../src/app-auth.ts";
@@ -24,6 +25,7 @@ const TENANT = "ironwrap";
 const PEPPER = "synthetic-safety-stop-route-gaps-pepper-0123456789";
 const BASE = Date.now() - 6 * 60 * 60 * 1_000;
 const at = (minutes: number) => new Date(BASE + minutes * 60_000).toISOString();
+const RELEASE_PHOTO_ID = `evi_${"f".repeat(32)}`;
 const SCOPE = { type: "roof_job" as const, id: "JOB-SAFETY-GAPS-1" };
 
 interface FixtureUser {
@@ -106,6 +108,8 @@ function testEnv(users: FixtureUser[] = Object.values(USERS)): TestEnv {
       .run(user.id, TENANT, user.email, user.name, user.role, user.access, user.frappe ?? null,
         "owner@example.invalid", at(-60), at(-60));
   }
+  seedStopPhoto(DB.sqlite, { userId: (users.find((user) => user.id === USERS.crew.id) ?? users[0]!).id,
+    jobId: SCOPE.id, evidenceId: RELEASE_PHOTO_ID, capturedAt: at(200) });
   return { APP_TENANT_ID: TENANT, APP_AUTH_PEPPER: PEPPER, DB } as unknown as TestEnv;
 }
 
@@ -129,6 +133,7 @@ async function respond(
     occurrenceId,
     actorUserId: actor.id,
     command,
+    ...(command === "released" ? { evidenceIds: [RELEASE_PHOTO_ID] } : {}),
     detail,
     evidence: null,
     now: new Date().toISOString(),
@@ -283,7 +288,7 @@ async function call(
 const occurrencePath = (occurrenceId: string) =>
   `/api/v1/safety/occurrences/${encodeURIComponent(occurrenceId)}`;
 
-const release = { command: "released", detail: "Ice gone; the whole slope checked." };
+const release = { command: "released", evidence_ids: [RELEASE_PHOTO_ID], detail: "Ice gone; the whole slope checked." };
 
 async function detailFor(env: TestEnv, auth: AuthContext, occurrenceId: string) {
   const read = await call(env, auth, occurrencePath(occurrenceId));

@@ -1,4 +1,5 @@
 import type { AppEnv, AuthContext } from "./app-types.ts";
+import { vehicleSafetyStops } from "./safety-lifecycle.ts";
 import {
   FieldActionError,
   r2ObjectStore,
@@ -196,7 +197,7 @@ export async function handleFleetAction(
             5,
           );
     const response = fleetJson(
-      { error: failure.code, message: failure.message },
+      { ...failure.details, error: failure.code, message: failure.message },
       failure.status,
     );
     if (failure.retryAfterSeconds)
@@ -528,6 +529,12 @@ export function d1FleetActionWriter(env: AppEnv): FleetActionWriter {
     async persistAction(input) {
       const replay = await nativeFleetRecord(env, input);
       if (replay) return replay;
+      // An active safety stop on this vehicle holds its use: no pre-trip takes it out (P33). A
+      // post-trip and a defect report stay open. 0171 repeats the rule in D1.
+      if (input.kind === "pre_trip_inspection") {
+        const stops = await vehicleSafetyStops(env, input.tenantId, input.fleetAssetId);
+        if (stops.length > 0) throw vehicleStopRefusal(stops);
+      }
       try {
         const result =
           input.kind === "defect_report"
@@ -538,6 +545,9 @@ export function d1FleetActionWriter(env: AppEnv): FleetActionWriter {
       } catch (error) {
         const recovered = await nativeFleetRecord(env, input);
         if (recovered) return recovered;
+        if (error instanceof Error && error.message.includes("fleet_vehicle_safety_stop_active")) {
+          throw vehicleStopRefusal(await vehicleSafetyStops(env, input.tenantId, input.fleetAssetId));
+        }
         throw nativeFleetWriteError(error);
       }
       return {
@@ -763,9 +773,28 @@ function nextDay(timestamp: string): string {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * A pre-trip inspection on a vehicle an active safety stop holds: 409 `{ error:
+ * "fleet_vehicle_safety_stop_active", message, safety_stops: [{ occurrence_id, scope: "vehicle",
+ * reported_at, summary, raiser_display_name }] }`.
+ */
+function vehicleStopRefusal(stops: Awaited<ReturnType<typeof vehicleSafetyStops>>): FieldActionError {
+  return new FieldActionError(
+    "fleet_vehicle_safety_stop_active",
+    409,
+    "A safety stop holds this vehicle. It stays parked until a person releases the stop.",
+    undefined,
+    false,
+    { safety_stops: stops },
+  );
+}
+
 function nativeFleetWriteError(error: unknown): Error {
   if (error instanceof FieldActionError) return error;
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("fleet_vehicle_safety_stop_active")) {
+    return vehicleStopRefusal([]);
+  }
   if (message.includes("fleet_asset_not_found")) {
     return new FieldActionError(
       "fleet_asset_not_found",

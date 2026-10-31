@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { seedStopPhoto } from "./safety-stop-photo-fixture.ts";
+import { sha256Hex } from "../src/app-auth.ts";
 
 import {
   authorityCurrentPrecondition,
@@ -14,6 +16,9 @@ import { permissionsForRole, type AppEnv, type AuthContext } from "../src/app-ty
 import {
   evaluateSafetyReadiness,
   holdingSafetyStops,
+  addToSafetyStop,
+  rescopeSafetyStop,
+  stopReleasePhotos,
   recordMakeSafe,
   recordSafetyResponse,
   reportSafetyOccurrence,
@@ -137,7 +142,9 @@ function testEnv(options: { beforeStopMigration?: boolean; reverseTriggers?: boo
   for (const name of readdirSync(new URL("../migrations/", import.meta.url))
     .filter((value) => /^\d{4}_.+\.sql$/.test(value))
     .sort()) {
-    if (options.beforeStopMigration && name === "0170_safety_stop_route_gaps.sql") continue;
+    if (options.beforeStopMigration && [
+      "0170_safety_stop_route_gaps.sql", "0171_safety_stop_additions_release_photo_rescope.sql",
+    ].includes(name)) continue;
     DB.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
   if (options.reverseTriggers) {
@@ -488,6 +495,13 @@ async function raise(
 
 /** Make safe, investigate, control and release a stop the crew raised, by people who did not. */
 async function lift(env: TestEnv, occurrenceId: string) {
+  const stop = env.DB.sqlite.prepare("SELECT scope_type, scope_id FROM safety_occurrences WHERE occurrence_id = ?").get(occurrenceId) as { scope_type: string; scope_id: string };
+  const packageJob = stop.scope_type === "work_package"
+    ? env.DB.sqlite.prepare("SELECT job_id FROM work_packages WHERE work_package_id = ? LIMIT 1").get(stop.scope_id)?.job_id
+    : null;
+  const photoId = `evi_${(await sha256Hex(occurrenceId)).slice(0, 32)}`;
+  seedStopPhoto(env.DB.sqlite, { userId: USERS.crew.id, evidenceId: photoId, capturedAt: at(240),
+    jobId: typeof packageJob === "string" ? packageJob : stop.scope_type === "roof_job" ? stop.scope_id : "JOB-HOLD-A" });
   await recordMakeSafe(env, {
     tenantId: TENANT, occurrenceId, actorUserId: USERS.crew.id, detail: "Crew off the roof.",
     evidence: null, capturedOffline: false, deviceActionId: null, occurredAt: at(200), now: at(200),
@@ -495,6 +509,7 @@ async function lift(env: TestEnv, occurrenceId: string) {
   for (const command of ["investigation_opened", "controlled", "released"] as const) {
     await recordSafetyResponse(env, {
       tenantId: TENANT, occurrenceId, actorUserId: USERS.ops.id, command,
+      ...(command === "released" ? { evidenceIds: [photoId] } : {}),
       detail: `Recorded ${command}.`, evidence: null, now: new Date().toISOString(),
     });
   }
@@ -663,6 +678,7 @@ for (const scopeType of ["roof_job", "work_package"] as const) {
     // A resolved stop remains job-scoped when this migration upgrades an existing database.
     const resolved = await raise(env, { type: "roof_job", id: jobB.jobId });
     env.DB.sqlite.exec(readFileSync(new URL("../migrations/0170_safety_stop_route_gaps.sql", import.meta.url), "utf8"));
+    env.DB.sqlite.exec(readFileSync(new URL("../migrations/0171_safety_stop_additions_release_photo_rescope.sql", import.meta.url), "utf8"));
     await issue(env, pending);
     await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "backfilled unresolved scope");
     await lift(env, stop);
@@ -904,4 +920,172 @@ test("a readiness question about a Work Package alone finds the stops on its job
     })).blockers.map((blocker) => blocker.stop?.occurrence_id);
   assert.deepEqual(await ask(jobA), [onA]);
   assert.deepEqual(await ask(jobB), []);
+});
+
+function occurrenceRow(env: TestEnv, id: string) {
+  return env.DB.sqlite.prepare("SELECT * FROM safety_occurrences WHERE occurrence_id = ?").get(id) as
+    Parameters<typeof stopReleasePhotos>[1] & { version: number; stop_active: number; state: string };
+}
+
+async function correctStop(env: TestEnv, id: string, scope: { type: "roof_job" | "work_package"; id: string }) {
+  return rescopeSafetyStop(env, { tenantId: TENANT, occurrenceId: id, actorUserId: USERS.owner.id,
+    occurrenceVersion: occurrenceRow(env, id).version, scope, reason: "Confirmed the synthetic stop target.",
+    idempotencyKey: `scope-confirm-${id}` });
+}
+
+/** A real direct D1 write, rolled back even when admitted, independently of Worker preflight. */
+function photoWriteRefusal(env: TestEnv, id: string, evidenceId: string, kind: "addition" | "release") {
+  const db = env.DB.sqlite;
+  const refs = JSON.stringify([{ ref: `field-evidence://${evidenceId}`, sha256: "b".repeat(64) }]);
+  db.exec("SAVEPOINT photo_probe");
+  try {
+    if (kind === "addition") {
+      db.prepare(`INSERT INTO safety_occurrence_additions
+        (addition_id, tenant_id, idempotency_key, request_sha256, occurrence_id, added_by_user_id,
+         added_by_role, note, evidence_refs_json, added_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'field', NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`)
+        .run(`soa_${"a".repeat(32)}`, TENANT, "photo-probe-addition", "a".repeat(64), id, USERS.crew.id, refs);
+    } else {
+      db.prepare(`INSERT INTO safety_occurrence_events
+        (event_id, tenant_id, occurrence_id, occurrence_version, event_kind, actor_user_id, actor_role,
+         detail, evidence_refs_json, evidence_sha256, captured_offline, occurred_at, recorded_at)
+        VALUES (?, ?, ?, ?, 'released', ?, 'ops', ?, ?, ?, 0, ?, ?)`)
+        .run(`probe-release-${id}`, TENANT, id, occurrenceRow(env, id).version + 1, USERS.ops.id,
+          "Synthetic independent inspection.", refs, "c".repeat(64), at(250), at(250));
+    }
+    return null;
+  } catch (error) {
+    return String(error);
+  } finally {
+    db.exec("ROLLBACK TO photo_probe; RELEASE photo_probe");
+  }
+}
+
+for (const type of ["roof_job", "work_package"] as const) {
+  test(`effective latch: late ${type} creation needs explicit same-target correction`, async () => {
+    const env = testEnv({ reverseTriggers: true });
+    const { jobA, jobB } = await twoJobs(env);
+    const late = definition({ jobId: "JOB-HOLD-LATE-CORRECTION" });
+    const scope = { type, id: type === "roof_job" ? late.jobId : late.workPackageId };
+    const stop = await raise(env, scope);
+    const db = env.DB.sqlite;
+    const latch = db.prepare("SELECT * FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").get(stop);
+    await issue(env, late);
+    await expectHeld(env, jobB, USERS.other, [{ occurrence_id: stop, scope: "tenant" }], "late arrival");
+    const before = occurrenceRow(env, stop);
+    const corrected = await correctStop(env, stop, scope);
+    assert.equal(corrected.occurrence.stop_active, 1);
+    assert.equal(corrected.occurrence.state, before.state);
+    assert.equal(corrected.occurrence.version, before.version + 1);
+    assert.equal(corrected.occurrence.reported_by_user_id, USERS.crew.id);
+    await expectHeld(env, jobA, USERS.mate, [], "unrelated job after human correction");
+    await expectHeld(env, jobB, USERS.other, [], "second unrelated job after human correction");
+    await expectHeld(env, late, USERS.crew, [{ occurrence_id: stop, scope: "job" }], "corrected target still held");
+    assert.deepEqual((await buildJobReadModel(env, fieldAuth(USERS.other), jobB.jobId))?.job.active_stops, []);
+    assert.deepEqual(db.prepare("SELECT * FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").get(stop), latch);
+    assert.throws(() => db.prepare("DELETE FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").run(stop), /safety_stop_unresolved_scope_immutable/);
+    assert.throws(() => db.prepare("UPDATE safety_stop_unresolved_scopes SET latched_at = ? WHERE occurrence_id = ?").run(at(300), stop), /safety_stop_unresolved_scope_immutable/);
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO safety_stop_unresolved_scopes (occurrence_id, tenant_id) VALUES (?, ?)").run(stop, TENANT));
+    const correction = corrected.correction;
+    assert.throws(() => db.prepare("UPDATE safety_occurrence_rescopes SET reason = 'Rewritten correction' WHERE rescope_id = ?").run(correction.rescope_id), /safety_stop_rescope_append_only/);
+    assert.throws(() => db.prepare("DELETE FROM safety_occurrence_rescopes WHERE rescope_id = ?").run(correction.rescope_id), /safety_stop_rescope_retained/);
+    await assert.rejects(rescopeSafetyStop(env, { tenantId: TENANT, occurrenceId: stop, actorUserId: USERS.owner.id,
+      occurrenceVersion: occurrenceRow(env, stop).version, scope, reason: "A second correction is refused.",
+      idempotencyKey: `scope-again-${stop}` }), /safety_stop_scope_resolved|already names/);
+  });
+
+  test(`effective latch: ${type} correction changes hold and photo scope together`, async () => {
+    const env = testEnv();
+    const { jobA, jobB } = await twoJobs(env);
+    const late = definition({ jobId: "JOB-HOLD-LATE-PHOTO" });
+    const scope = { type, id: type === "roof_job" ? late.jobId : late.workPackageId };
+    const stop = await raise(env, scope);
+    await recordMakeSafe(env, { tenantId: TENANT, occurrenceId: stop, actorUserId: USERS.crew.id,
+      detail: "Crew off the roof.", evidence: null, capturedOffline: false, deviceActionId: null,
+      occurredAt: at(200), now: at(200) });
+    for (const command of ["investigation_opened", "controlled"] as const) {
+      await recordSafetyResponse(env, { tenantId: TENANT, occurrenceId: stop, actorUserId: USERS.ops.id,
+        command, detail: "Synthetic correction inspected.", evidence: null, now: at(210) });
+    }
+    const outside = seedStopPhoto(env.DB.sqlite, { userId: USERS.crew.id, jobId: jobB.jobId,
+      evidenceId: `evi_${"d".repeat(32)}`, capturedAt: at(240) });
+    await issue(env, late);
+    const inside = seedStopPhoto(env.DB.sqlite, { userId: USERS.crew.id, jobId: late.jobId,
+      evidenceId: `evi_${"e".repeat(32)}`, capturedAt: at(240) });
+    const before = await stopReleasePhotos(env, occurrenceRow(env, stop));
+    assert.deepEqual(new Set(before.map((row) => row.evidence_id)), new Set([outside, inside]));
+    for (const kind of ["addition", "release"] as const) assert.equal(photoWriteRefusal(env, stop, outside, kind), null, `${kind} while latched`);
+    const history = await addToSafetyStop(env, { tenantId: TENANT, occurrenceId: stop, actorUserId: USERS.crew.id,
+      note: "Synthetic photo while scope is uncertain.", evidenceIds: [outside], idempotencyKey: "photo-before-correction" });
+    await correctStop(env, stop, scope);
+    await expectHeld(env, jobA, USERS.mate, [], "unrelated work is no longer held");
+    await expectHeld(env, late, USERS.crew, [{ occurrence_id: stop, scope: "job" }], "corrected job is still held");
+    assert.deepEqual((await stopReleasePhotos(env, occurrenceRow(env, stop))).map((row) => row.evidence_id), [inside]);
+    for (const kind of ["addition", "release"] as const) {
+      assert.match(String(photoWriteRefusal(env, stop, outside, kind)), /safety_stop_(addition|release)_evidence_invalid/);
+      assert.equal(photoWriteRefusal(env, stop, inside, kind), null, `${kind} corrected scope`);
+    }
+    assert.equal(env.DB.sqlite.prepare("SELECT addition_id FROM safety_occurrence_additions").get()?.addition_id, history.addition.addition_id);
+  });
+
+  test(`effective latch: explicit correction from unknown ${type} scopes only the confirmed target`, async () => {
+    const env = testEnv();
+    const { jobA, jobB } = await twoJobs(env);
+    const stop = await raise(env, { type, id: "MISSING-SYNTHETIC-TARGET" });
+    const scope = { type, id: type === "roof_job" ? jobA.jobId : jobA.workPackageId };
+    await correctStop(env, stop, scope);
+    await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "job" }], "confirmed target");
+    await expectHeld(env, jobB, USERS.other, [], "unrelated target");
+  });
+}
+
+test("effective latch: corrected Work Package targets cannot be replaced or deleted", async () => {
+  const env = testEnv();
+  const { jobA } = await twoJobs(env);
+  const db = env.DB.sqlite;
+  // An interrupted issue can leave a retained definition before its first journal child. Rebuild
+  // that snapshot explicitly so a child FK does not hide the missing parent replacement guard.
+  const deleteGuard = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'work_package_events_append_only_delete'").get()?.sql as string;
+  db.exec("DROP TRIGGER work_package_events_append_only_delete");
+  db.prepare("DELETE FROM work_package_events WHERE work_package_id = ?").run(jobA.workPackageId);
+  db.exec(deleteGuard);
+  const stop = await raise(env, { type: "work_package", id: "MISSING-SYNTHETIC-PACKAGE" });
+  await correctStop(env, stop, { type: "work_package", id: jobA.workPackageId });
+  const target = db.prepare("SELECT * FROM work_packages WHERE work_package_id = ?").get(jobA.workPackageId)!;
+  const columns = Object.keys(target);
+  assert.throws(() => db.prepare(`INSERT OR REPLACE INTO work_packages (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`)
+    .run(...Object.values(target)), /safety_stop_scope_target_retained/);
+  assert.throws(() => db.prepare("DELETE FROM work_packages WHERE work_package_id = ?").run(jobA.workPackageId), /work_packages_retained/);
+  assert.deepEqual(db.prepare("SELECT * FROM work_packages WHERE work_package_id = ?").get(jobA.workPackageId), target);
+});
+
+for (const sameScope of [true, false]) {
+  test(`effective latch: orphan correction needs committed ${sameScope ? "version" : "matching scope"}`, async () => {
+    const env = testEnv();
+    const { jobA, jobB } = await twoJobs(env);
+    const late = definition({ jobId: "JOB-HOLD-ORPHAN" });
+    const stop = await raise(env, { type: "roof_job", id: late.jobId });
+    await issue(env, late);
+    // A deliberately incomplete restored snapshot: retain the validated ledger insert but omit
+    // its apply trigger. Normal writes below still use every hold/history guard under test.
+    env.DB.sqlite.exec("DROP TRIGGER safety_occurrence_rescopes_apply");
+    await correctStop(env, stop, { type: "roof_job", id: sameScope ? late.jobId : jobA.jobId });
+    if (!sameScope) env.DB.sqlite.prepare("UPDATE safety_occurrences SET version = version + 1 WHERE occurrence_id = ?").run(stop);
+    await expectHeld(env, jobB, USERS.other, [{ occurrence_id: stop, scope: "tenant" }], "orphan correction cannot clear uncertainty");
+  });
+}
+
+test("effective latch: photo projection reads current committed scope from a stale caller row", async () => {
+  const env = testEnv();
+  const { jobA } = await twoJobs(env);
+  const late = definition({ jobId: "JOB-HOLD-PHOTO-RACE" });
+  const stop = await raise(env, { type: "roof_job", id: late.jobId });
+  await issue(env, late);
+  const currentPhoto = seedStopPhoto(env.DB.sqlite, { userId: USERS.crew.id, jobId: jobA.jobId,
+    evidenceId: `evi_${"f".repeat(32)}`, capturedAt: at(240) });
+  seedStopPhoto(env.DB.sqlite, { userId: USERS.crew.id, jobId: late.jobId,
+    evidenceId: `evi_${"a".repeat(32)}`, capturedAt: at(240) });
+  const stale = occurrenceRow(env, stop);
+  await correctStop(env, stop, { type: "roof_job", id: jobA.jobId });
+  assert.deepEqual((await stopReleasePhotos(env, stale)).map((photo) => photo.evidence_id), [currentPhoto]);
 });

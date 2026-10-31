@@ -349,10 +349,12 @@ An active safety-occurrence stop holds every job it names, for every crew, not o
 phone. A `tenant` stop holds every job of the tenant, whatever its `scope_id`. A `roof_job` stop
 holds its job, and a `work_package` stop holds the job of every version of that package, Superseded
 included. A stop on a job or Work Package the tenant does not have may be a typo for any of its
-jobs, so it holds every job until a person lifts it. Migration `0170` latches that unresolved scope
+jobs, so it holds every job until an authorized person corrects its scope or lifts it. Migration
+`0170` latches that unresolved scope
 in immutable history, including active stops still unresolved when the migration is applied.
-Creating or restoring the missing job or package never narrows the hold. There is no re-scope
-route in this slice; the existing authorized person release remains required. Shop and vehicle stops hold no job. While a
+Creating or restoring the missing job or package never narrows the hold. Migration `0171` admits
+the explicit person scope correction described below; lifting the stop still requires the existing
+authorized release. Shop and vehicle stops hold no job. While a
 stop holds a job, Work Package acknowledge, start and complete are refused with
 `safety_stop_active` (409), and the refusal names each holding stop: `{ occurrence_id, scope:
 "job" | "tenant", reported_at, summary, raiser_display_name }`. Migration `0170` repeats the rule
@@ -379,6 +381,39 @@ person reviewed, and a reason. It is recorded to the stop's history only
 A release also asks the person to sign in again when their session is more than 5 minutes old
 (`recent_session_required`, 403), checked after every other release check and before anything is
 written. That is the existing session-age check; no passkey is claimed.
+
+The release command cites one to ten distinct `evidence_ids`, never browser-provided references or
+checksums. Each must resolve to one verified, manifested, stored field photo of the tenant, within
+the stop's job scope, captured strictly after the report. The Worker reads its checksum from D1;
+migration `0171` repeats provenance, scope, uniqueness and time checks before the release event
+and when that event is consumed to lift the stop. New release rows name the immediate next
+occurrence version; a retained journal row does not freeze its photo eligibility or the releaser's
+current authority.
+The detail read returns eligible `release_photos`; no eligible photo gives
+`release_unavailable_reason: "verified_photo_required"`.
+
+An owner or ops person may explicitly confirm an unresolved stop's scope with `POST
+/api/v1/safety/occurrences/{occurrence}/scope`, CSRF, an `Idempotency-Key` and the current
+`occurrence_version`. Machine credentials are refused. The target job or Work Package must exist
+in the same tenant; its late arrival may be confirmed under the same scope id. The append-only
+`safety_occurrence_rescopes` receipt and the scope/version move commit in one D1 statement. The
+immutable latch is retained and affects every job until a correction matches this occurrence's
+current scope and committed version. Before correction any tenant job photo may qualify; after
+correction only the confirmed scope's photos qualify. Earlier additions remain history. The stop
+stays active, with the same identity, raiser and state; L06 still refuses its raiser a release.
+Corrected job and package targets cannot be deleted or replaced through any declared unique-key
+conflict to change that decision.
+
+An active person may add a note, verified photos, or both with `POST
+/api/v1/safety/occurrences/{occurrence}/additions`, CSRF and an `Idempotency-Key`. The stop stays in
+force. The append-only receipt uses D1's clock, records the actor and appears under `additions` on
+the detail read. Exact retries return the saved receipt; changed requests conflict.
+
+A vehicle stop holds pre-trip inspections, cargo loading or transit on either its vehicle or
+trailer, and custody handed to a person or crew. Migration `0171` guards inserts and updates,
+including replacement attempts. The pre-trip route returns `fleet_vehicle_safety_stop_active`
+(409) with the stop's display facts. Post-trip inspections, defect reports and returns to the yard
+remain available. No shop-run write exists yet; its stop rule remains a contract requirement.
 
 ## Physical completion
 

@@ -75,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 143,
+      "count": 144,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -896,6 +896,12 @@ stale from before that merge):
   on-site confirmer, in the Worker and in D1, and the journal refuses replacement under either its
   event ID or occurrence/version/kind key. "Keep the stop" is recorded to history only, and a
   release asks for a sign-in no older than 5 minutes. Proof is repository tests only.
+- Safety-stop additions retain notes and verified photos without changing the stop. Release requires
+  distinct stored photos captured after the report, with D1-derived checksums and matching tenant
+  and job scope. Vehicle stops guard pre-trip, cargo movement and custody writes in D1, including
+  replacement attempts; post-trip, defects and yard returns stay open. Migration `0171` and
+  `workers-bus/test/safety-stop-additions.test.ts` provide source and local regression evidence only;
+  independent review, integrated migration ordering, CI, QA and human acceptance are separate gates.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.

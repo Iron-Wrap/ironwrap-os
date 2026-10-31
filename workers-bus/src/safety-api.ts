@@ -13,8 +13,10 @@ import {
   evaluateSafetyReadiness,
   safetyCorrectiveActionProjection,
   getSafetyEquipment,
+  addToSafetyStop,
   issueSafetyEquipment,
   keepSafetyStop,
+  rescopeSafetyStop,
   listSafetyOccurrenceEvents,
   recordEquipmentInspection,
   recordSafetyNotification,
@@ -440,6 +442,19 @@ export async function handleSafetyRoute(
     ) {
       return json({ error: "safety_command_invalid" }, 400);
     }
+    // A release cites photos by id, and the Worker reads their checksums; it never takes refs.
+    const evidenceIds = parsed.value.evidence_ids;
+    if (
+      requested === "released" &&
+      ("evidence_refs_json" in parsed.value ||
+        "evidence_sha256" in parsed.value ||
+        (evidenceIds !== undefined && !Array.isArray(evidenceIds)))
+    ) {
+      return json({ error: "safety_command_invalid" }, 400);
+    }
+    if (requested !== "released" && evidenceIds !== undefined) {
+      return json({ error: "safety_command_invalid" }, 400);
+    }
     try {
       const person = requested === "released" ? await personCookieSession(env, auth) : null;
       if (requested === "released" && !person) {
@@ -457,6 +472,9 @@ export async function handleSafetyRoute(
         detail: stringField(parsed.value.detail) ?? "",
         evidence: evidenceField(parsed.value),
         now,
+        ...(requested === "released"
+          ? { evidenceIds: Array.isArray(evidenceIds) ? (evidenceIds as string[]) : [] }
+          : {}),
         // The existing session-age check, on the live session row's sign-in time.
         ...(person
           ? {
@@ -505,6 +523,90 @@ export async function handleSafetyRoute(
         idempotencyKey,
       });
       return json({ version: 1, keep: result.keep }, result.replayed ? 200 : 201);
+    } catch (error) {
+      return safetyFailure(error);
+    }
+  }
+
+  // Add a note or verified photos to an open stop (P33). The stop stays in force.
+  const addition = url.pathname.match(/^\/api\/v1\/safety\/occurrences\/([^/]+)\/additions$/);
+  if (addition) {
+    const occurrenceId = pathPart(addition[1] ?? "");
+    if (!occurrenceId) return json({ error: "not_found" }, 404);
+    const idempotencyKey = req.headers.get("idempotency-key")?.trim() ?? "";
+    if (!IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      return json({ error: "idempotency_key_required" }, 400);
+    }
+    const note = parsed.value.note;
+    const ids = parsed.value.evidence_ids;
+    if (
+      Object.keys(parsed.value).some((key) => key !== "note" && key !== "evidence_ids") ||
+      (note !== undefined && note !== null && typeof note !== "string") ||
+      (ids !== undefined && !Array.isArray(ids))
+    ) {
+      return json({ error: "safety_stop_addition_invalid" }, 400);
+    }
+    try {
+      if (!(await personCookieSession(env, auth))) {
+        throw new SafetyError(
+          "safety_stop_addition_person_required",
+          403,
+          "Adding to a safety stop needs a person's own signed-in session.",
+        );
+      }
+      const result = await addToSafetyStop(env, {
+        tenantId,
+        occurrenceId,
+        actorUserId: userId,
+        note: typeof note === "string" ? note : null,
+        evidenceIds: Array.isArray(ids) ? (ids as string[]) : [],
+        idempotencyKey,
+      });
+      return json({ version: 1, addition: result.addition }, result.replayed ? 200 : 201);
+    } catch (error) {
+      return safetyFailure(error);
+    }
+  }
+
+  // Put a stop that names a job or job plan that doesn't exist onto the one it meant.
+  const rescope = url.pathname.match(/^\/api\/v1\/safety\/occurrences\/([^/]+)\/scope$/);
+  if (rescope) {
+    const occurrenceId = pathPart(rescope[1] ?? "");
+    if (!occurrenceId) return json({ error: "not_found" }, 404);
+    const idempotencyKey = req.headers.get("idempotency-key")?.trim() ?? "";
+    if (!IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      return json({ error: "idempotency_key_required" }, 400);
+    }
+    if (
+      !exactKeys(parsed.value, ["occurrence_version", "reason", "scope_id", "scope_type"]) ||
+      typeof parsed.value.occurrence_version !== "number" ||
+      typeof parsed.value.reason !== "string" ||
+      typeof parsed.value.scope_id !== "string" ||
+      (parsed.value.scope_type !== "roof_job" && parsed.value.scope_type !== "work_package")
+    ) {
+      return json({ error: "safety_stop_rescope_invalid" }, 400);
+    }
+    try {
+      if (!(await personCookieSession(env, auth))) {
+        throw new SafetyError(
+          "safety_stop_rescope_person_required",
+          403,
+          "Putting a stop on its job needs a person's own signed-in session.",
+        );
+      }
+      const result = await rescopeSafetyStop(env, {
+        tenantId,
+        occurrenceId,
+        actorUserId: userId,
+        occurrenceVersion: parsed.value.occurrence_version,
+        scope: { type: parsed.value.scope_type, id: parsed.value.scope_id },
+        reason: parsed.value.reason,
+        idempotencyKey,
+      });
+      return json(
+        { version: 1, correction: result.correction, occurrence: result.occurrence },
+        result.replayed ? 200 : 201,
+      );
     } catch (error) {
       return safetyFailure(error);
     }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { seedStopPhoto } from "./safety-stop-photo-fixture.ts";
 
 import {
   permissionsForRole,
@@ -45,6 +46,7 @@ import {
 
 const TENANT = "ironwrap";
 const NOW = "2026-08-17T12:00:00.000Z";
+const RELEASE_PHOTO_ID = `evi_${"e".repeat(32)}`;
 const LATER = "2026-08-17T13:00:00.000Z";
 
 test("only canonical resolved upload refs may enter the receipt-enabled safety path", () => {
@@ -239,6 +241,9 @@ function memoryBucket(store: Map<string, StoredObject>) {
 
 function env(db: SqliteD1, objects?: ReturnType<typeof memoryObjects>): AppEnv {
   const bucket = objects ?? memoryObjects();
+  if (!db.raw.prepare("SELECT 1 FROM field_action_media WHERE evidence_id = ?").get(RELEASE_PHOTO_ID)) {
+    seedStopPhoto(db.raw, { userId: USERS.crew.id, jobId: "JOB-A", evidenceId: RELEASE_PHOTO_ID, capturedAt: LATER });
+  }
   return {
     DB: db as never,
     RAW: memoryBucket(bucket.store) as never,
@@ -435,6 +440,7 @@ test("a stop is released only after control and a completed required rescue", as
       occurrenceId: "so_ladder_slip_0001",
       actorUserId: actor,
       command,
+      ...(command === "released" ? { evidenceIds: [RELEASE_PHOTO_ID] } : {}),
       detail: `Recorded ${command}.`,
       evidence: null,
       now: NOW,
@@ -1393,6 +1399,7 @@ test("an occurrence cannot close over an unresolved notification or open action"
       occurrenceId: "so_ladder_slip_0001",
       actorUserId: USERS.supervisor.id,
       command,
+      ...(command === "released" ? { evidenceIds: [RELEASE_PHOTO_ID] } : {}),
       detail: `Recorded ${command}.`,
       evidence: null,
       now: NOW,
@@ -1685,6 +1692,7 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
       occurrenceId,
       actorUserId: actor,
       command: kind,
+      ...(kind === "released" ? { evidenceIds: [RELEASE_PHOTO_ID] } : {}),
       detail: `Drill: ${kind}.`,
       evidence: null,
       now: NOW,

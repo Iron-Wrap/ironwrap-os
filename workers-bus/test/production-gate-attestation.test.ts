@@ -1109,6 +1109,113 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
 });
 
+for (const [detail, expectation] of [
+  ["active", "returns its current tenant stop_id"],
+  ["released", "keeps its refusal without a released or foreign stop_id"],
+  ["unavailable", "keeps its refusal when the stop detail read fails"],
+] as const) {
+  test(`an insert-time unknown-job stop ${expectation}`, async () => {
+    const h = setup();
+    try {
+      const production = await person(h, USERS.production.id);
+      insertCompetency(h.sqlite, USERS.production.id);
+      // An older active unknown-job stop in another tenant must never supply this response's id.
+      h.sqlite.prepare(
+        `INSERT INTO app_users
+           (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active,
+            created_by, created_at, updated_at)
+         VALUES ('appu_foreign_attest_01', 'foreign-tenant', 'foreign-attest@example.invalid',
+                 'Synthetic foreign field', 'field', 'field', 'foreign-attest@example.invalid',
+                 1, 'owner@example.invalid', ?, ?)`,
+      ).run(at(-DAY), at(-DAY));
+      await reportSafetyOccurrence(h.env, {
+        occurrenceId: "occurrence.attest.foreign", tenantId: "foreign-tenant",
+        occurrenceKind: "hazard", severity: "high",
+        scope: { type: "roof_job", id: "job:attest:foreign-unknown" },
+        reportedByUserId: "appu_foreign_attest_01", reportedAt: at(-2 * HOUR),
+        summary: "Synthetic foreign hazard for repository proof only.",
+        rescueRequired: false, evidence: null, capturedOffline: false, deviceActionId: null,
+        now: at(-2 * HOUR),
+      });
+      const gatesBefore = h.sqlite.prepare("SELECT * FROM operating_production_gates ORDER BY gate_id").all();
+      const ledgerBefore = ledgerRows(h.sqlite);
+      const auditBefore = h.sqlite.prepare("SELECT * FROM audit_log ORDER BY rowid").all();
+      const original = h.db.prepare.bind(h.db);
+      let unknownStopReads = 0;
+      let attempted = false;
+      let refusedAtInsert = false;
+      let stopId: string | undefined;
+      h.db.prepare = (sql: string) => ({
+        bind(...values: unknown[]) {
+          const bound = original(sql).bind(...values);
+          return {
+            ...bound,
+            async first<T>() {
+              if (sql.includes("SELECT occurrence.occurrence_id") && sql.includes("FROM safety_occurrences occurrence")) {
+                unknownStopReads += 1;
+                if (refusedAtInsert && detail === "unavailable") {
+                  throw new Error("Synthetic stop-detail read failure");
+                }
+              }
+              return await bound.first<T>();
+            },
+            async run() {
+              if (!sql.includes("INSERT INTO production_gate_clearances") || attempted) return await bound.run();
+              attempted = true;
+              assert.equal(unknownStopReads, 1, "the normal unknown-job precheck has completed");
+              insertSafetyStop(h.sqlite, { id: "job:attest:insert-time-unknown" });
+              stopId = (h.sqlite.prepare(
+                "SELECT occurrence_id FROM safety_occurrences WHERE tenant_id = ? AND scope_id = ?",
+              ).get(TENANT, "job:attest:insert-time-unknown") as { occurrence_id: string }).occurrence_id;
+              try {
+                return await bound.run();
+              } catch (error) {
+                assert.match(String(error), /production_gate_stop_job_unknown/);
+                refusedAtInsert = true;
+                if (detail === "released") {
+                  // The stop can be lifted after the refused INSERT, before the response-detail read.
+                  await recordMakeSafe(h.env, {
+                    tenantId: TENANT, occurrenceId: stopId, actorUserId: USERS.field.id,
+                    detail: "Synthetic area made safe.", evidence: null, capturedOffline: false,
+                    deviceActionId: null, occurredAt: at(-45 * 60_000), now: at(-45 * 60_000),
+                  });
+                  for (const [command, minutesAgo] of [["investigation_opened", 30], ["controlled", 20], ["released", 10]] as const) {
+                    await recordSafetyResponse(h.env, {
+                      tenantId: TENANT, occurrenceId: stopId, actorUserId: USERS.production.id,
+                      command, detail: "Synthetic response for repository proof only.", evidence: null,
+                      now: at(-minutesAgo * 60_000),
+                    });
+                  }
+                }
+                throw error;
+              }
+            },
+          };
+        },
+      });
+      const result = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+      assert.ok(attempted && refusedAtInsert, "the real SQLite INSERT refused the concurrent stop");
+      assert.deepEqual(h.sqlite.prepare("SELECT * FROM operating_production_gates ORDER BY gate_id").all(), gatesBefore);
+      assert.deepEqual(ledgerRows(h.sqlite), ledgerBefore);
+      assert.deepEqual(h.sqlite.prepare("SELECT * FROM audit_log ORDER BY rowid").all(), auditBefore);
+      assert.deepEqual([gateRow(h.sqlite, "Safety").state, gateRow(h.sqlite, "Safety").version], ["blocked", 1]);
+      assert.deepEqual(
+        result,
+        { status: 409, body: detail === "active"
+          ? { error: "production_gate_stop_job_unknown", stop_id: stopId }
+          : { error: "production_gate_stop_job_unknown" } },
+      );
+      assert.equal(unknownStopReads, 2, "detail uses a current read after the insert refusal");
+      assert.equal((h.sqlite.prepare("SELECT stop_active FROM safety_occurrences WHERE occurrence_id = ?")
+        .get(stopId!) as { stop_active: number }).stop_active, detail === "released" ? 0 : 1);
+      assert.equal((h.sqlite.prepare("SELECT stop_active FROM safety_occurrences WHERE occurrence_id = 'occurrence.attest.foreign'")
+        .get() as { stop_active: number }).stop_active, 1);
+    } finally {
+      h.sqlite.close();
+    }
+  });
+}
+
 test("the owner's item for a work stop on a job that doesn't exist names who raised it, or null, and keeps the summary raw", async () => {
   const h = setup();
   // A login whose display name is blank has no name to show.

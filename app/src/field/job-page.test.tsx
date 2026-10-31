@@ -967,9 +967,15 @@ describe("JobPage", () => {
     );
 
     await user.type(
-      await screen.findByLabelText("What changed? (required)"),
+      await screen.findByLabelText("Reason for replacing this plan (required)"),
       "Deck damage changed the scope.",
     );
+    fireEvent.change(screen.getByLabelText("Work scope for the crew (required)"), {
+      target: { value: "North slope and fascia repair." },
+    });
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
     await user.click(screen.getByRole("button", { name: "Issue the corrected job plan" }));
 
     await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
@@ -983,6 +989,7 @@ describe("JobPage", () => {
         version: 4,
         title: "North slope replacement",
         correction_reason: "Deck damage changed the scope.",
+        boundaries: "North slope and fascia repair.",
         steps: [
           {
             instruction: "Inspect anchors before roof access.",
@@ -1005,6 +1012,32 @@ describe("JobPage", () => {
     expect(options?.idempotencyKey).toBe(options?.deviceActionId);
   });
 
+  it("requires expiry after the displayed scheduled work end and keeps one issue stamp", async () => {
+    const model = workPackageModel({
+      allowed_actions: ["job.read", "work_package.issue"],
+      permissions: ["jobs:read:any", "production:read"],
+    });
+    model.assignment = { ...model.assignment!, scheduled_end: "2099-07-11T23:00:00Z" };
+    // An older projection may disagree; every visible issue stamp uses the release event.
+    model.packet.work_package!.issued_at = "2026-07-10T14:45:00Z";
+    renderJob(model, ownerSession);
+    const reason = await screen.findByLabelText("Reason for replacing this plan (required)");
+    fireEvent.change(reason, { target: { value: "Correct the work scope." } });
+    expect(screen.getByText(/Last scheduled work day ends/)).toBeVisible();
+    expect(screen.queryByText("Released", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Issued", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.getByText("Issued to the crew", { selector: "dt" })).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
+    const heading = screen.getByRole("heading", { name: "Issue the corrected job plan" });
+    fireEvent.submit(heading.closest("section")!.querySelector("form")!);
+    expect(
+      await screen.findByText("Choose an expiry after the last scheduled work day ends."),
+    ).toBeVisible();
+    expect(apiCommand).not.toHaveBeenCalled();
+  });
+
   it("shows first-issue authoring only when an office packet grants it", async () => {
     renderJob(
       jobModel({
@@ -1019,7 +1052,16 @@ describe("JobPage", () => {
     expect(
       screen.getByText("Issuing doesn't wait for the gates. The gates hold the firm start."),
     ).toBeVisible();
-    // The expiry reads back beside its picker as a label stamp on the office clock.
+    // Expiry has no arbitrary default; the office chooses it after confirming the work end.
+    expect(screen.getByLabelText("Expires (required)")).toHaveValue("");
+    expect(
+      screen.getByText(
+        "Last scheduled work day is not set. Confirm it with production before choosing expiry.",
+      ),
+    ).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
     expect(
       screen.getByText(/^Expires (Today|[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}) \d\d:\d\d$/),
     ).toBeVisible();
@@ -1037,6 +1079,9 @@ describe("JobPage", () => {
     vi.mocked(loadJob).mockResolvedValue(issued);
 
     const heading = await screen.findByRole("heading", { name: "Issue job plan" });
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
     fireEvent.submit(heading.closest("section")!.querySelector("form")!);
 
     // The refetch swaps the empty state for the plan; the line must survive that swap.
@@ -1082,10 +1127,13 @@ describe("JobPage", () => {
     };
     vi.mocked(loadJob).mockResolvedValue(reviewed);
 
-    fireEvent.change(screen.getByLabelText("What changed? (required)"), {
+    fireEvent.change(screen.getByLabelText("Reason for replacing this plan (required)"), {
       target: { value: "Deck damage changed the scope." },
     });
     const heading = screen.getByRole("heading", { name: "Issue the corrected job plan" });
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
     fireEvent.submit(heading.closest("section")!.querySelector("form")!);
 
     // The office reads its own 24-hour clock in the line and on the badge.
@@ -1162,7 +1210,7 @@ describe("JobPage", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Set it after the last work day. After this time the crew can still use the plan but can't add proof.",
+        "Choose a time after the last work day. After expiry the crew can still read the plan, but cannot add the photos or notes listed under Proof needed.",
       ),
     ).toBeVisible();
     view.unmount();
@@ -1176,7 +1224,7 @@ describe("JobPage", () => {
     const stoppedView = renderJob(stoppedAndExpired, ownerSession);
     expect(
       await screen.findByText(
-        "Expired: the crew can't add proof. Lift the stop, then issue a corrected plan.",
+        "Expired: the crew can't add proof. Review this plan’s stop for release, then issue a corrected plan.",
       ),
     ).toBeVisible();
     stoppedView.unmount();
@@ -1207,6 +1255,9 @@ describe("JobPage", () => {
     expect(
       screen.getByText("Issuing doesn't wait for the gates. The gates hold the firm start."),
     ).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
     fireEvent.submit(heading.closest("section")!.querySelector("form")!);
     expect(
       await screen.findByText(

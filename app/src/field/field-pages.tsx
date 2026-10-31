@@ -63,6 +63,7 @@ import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
+import { WorkPackageStopReleasePanel } from "./work-package-stop-release-panel";
 
 const FIELD_MEDIA_TYPES = new Set([
   "image/jpeg",
@@ -585,7 +586,7 @@ function JobPacketHeader({
           </h1>
         </div>
         <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
-          {offline ? "Saved copy" : "Office update"}
+          {offline ? "Saved copy" : "Latest job details"}
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
@@ -651,7 +652,7 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 }
 
 type WorkPackagePanelModel = {
-  job: Pick<JobResponse["job"], "id">;
+  job: Pick<JobResponse["job"], "id"> & Partial<Pick<JobResponse["job"], "job_number" | "address">>;
   /** When the server made this read: the clock the issue form judges expiry by. */
   read_model_generated_at: string;
   /** The stops holding work on this job, first the one the plan badge reads. */
@@ -1037,6 +1038,28 @@ function WorkPackagePanel({
       className="border-2 border-foreground bg-surface-raised"
       aria-labelledby="work-package-heading"
     >
+      {workPackage.status === "Blocked" ? (
+        <WorkPackageStopReleasePanel
+          key={`${session.tenant.id}:${session.user.id}:${workPackage.id}:${workPackage.version}`}
+          session={session}
+          workPackage={workPackage}
+          jobId={model.job.id}
+          activeStops={model.active_stops}
+          offline={offline}
+          onReleased={async () => {
+            await queryClient.refetchQueries(
+              { queryKey: issuePacketKey, exact: true, type: "active" },
+              { throwOnError: true },
+            );
+            const fresh = queryClient.getQueryData<JobResponse | WorkObjectResponse>(
+              issuePacketKey,
+            );
+            if (!fresh || fresh.stale_fields.includes("offline.cached_packet")) {
+              throw new Error("stop_release_job_readback_unavailable");
+            }
+          }}
+        />
+      ) : null}
       {issueForm}
       <header className="@container border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1057,12 +1080,10 @@ function WorkPackagePanel({
         </div>
         <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
           <JobFact
-            label="Issued"
-            value={formatFieldTimestamp(workPackage.issued_at, dateOptions)}
-          />
-          <JobFact
-            label="Released"
-            value={formatFieldTimestamp(workPackage.released_at, dateOptions)}
+            label="Issued to the crew"
+            value={formatFieldStamp(workPackage.released_at, dateOptions, {
+              clock: session.user.role === "field" ? "12h" : "24h",
+            })}
           />
           <JobFact
             label="Expires"
@@ -1071,12 +1092,22 @@ function WorkPackagePanel({
         </dl>
         <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
           <JobFact
-            label="Work object"
-            value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
+            label={model.scope ? "Work object" : "Job"}
+            value={
+              model.scope
+                ? `${model.scope.work_object_type} · ${model.scope.work_object_id}`
+                : model.job.job_number
+                  ? `Ref ${model.job.job_number}`
+                  : "Job reference is missing"
+            }
           />
           <JobFact
-            label="Work area"
-            value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
+            label={model.scope ? "Work area" : "Site"}
+            value={
+              model.scope
+                ? `${model.scope.physical_context_type} · ${model.scope.physical_context_id}`
+                : (model.job.address ?? "Site address is missing")
+            }
           />
         </dl>
       </header>
@@ -1166,7 +1197,7 @@ function WorkPackagePanel({
                 <p className="mt-2 text-sm leading-6 text-muted">
                   {holdPoint.released
                     ? "The office cleared this check. You still need a live Start work button before you begin."
-                    : `Waiting for ${holdPoint.release_authority}. You can add proof, but this app cannot clear the stop.`}
+                    : `Waiting for ${holdPoint.release_authority}. You can add proof, but this check is separate from a crew stop and cannot be cleared here.`}
                 </p>
                 <p className="mt-1 text-sm leading-6 text-muted">
                   When: {holdPoint.release_phase} · Proof: {holdPoint.required_evidence} · Pass

@@ -86,7 +86,7 @@ export function WorkPackageIssueForm({
     workPackage?.make_safe_procedure ?? "",
   );
   const [correctionReason, setCorrectionReason] = useState("");
-  const [expiresAt, setExpiresAt] = useState(futureLocalDateTime());
+  const [expiresAt, setExpiresAt] = useState("");
   const [steps, setSteps] = useState<StepDraft[]>(
     workPackage?.steps.map((step) => ({
       key: `step-${step.sequence}`,
@@ -120,7 +120,11 @@ export function WorkPackageIssueForm({
     !offline &&
     navigator.onLine &&
     !isOfflineSession(session);
+  const blocked = workPackage?.status === "Blocked";
   const nextVersion = workPackage ? workPackage.version + 1 : 1;
+  const scheduledEnd = assignment?.scheduled_end;
+  const lastWorkDay =
+    scheduledEnd && Number.isFinite(Date.parse(scheduledEnd)) ? scheduledEnd : null;
   const online = connected && !offline && navigator.onLine;
   const issued = issuedVersion !== null;
   const officeDates = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
@@ -174,13 +178,23 @@ export function WorkPackageIssueForm({
       setReloadOffered(true);
       return;
     }
+    if (blocked) {
+      setError(
+        "This plan is stopped. Review this plan’s stop for release before issuing a corrected plan.",
+      );
+      return;
+    }
     if (workPackage && !correctionReason.trim()) {
-      setError("Say what changed before you replace the current job plan.");
+      setError("Give the reason for replacing this job plan.");
       return;
     }
     const expires = new Date(expiresAt);
     if (!Number.isFinite(expires.getTime()) || expires.getTime() <= Date.now()) {
       setError("Choose an expiry after the current time.");
+      return;
+    }
+    if (lastWorkDay && expires.getTime() <= Date.parse(lastWorkDay)) {
+      setError("Choose an expiry after the last scheduled work day ends.");
       return;
     }
     const deviceActionId = crypto.randomUUID();
@@ -255,8 +269,16 @@ export function WorkPackageIssueForm({
           role="status"
         >
           {workPackage?.status === "Blocked"
-            ? "Expired: the crew can't add proof. Lift the stop, then issue a corrected plan."
+            ? "Expired: the crew can't add proof. Review this plan’s stop for release, then issue a corrected plan."
             : "Expired: the crew can't add proof. Issue a corrected plan to set a new time."}
+        </p>
+      ) : null}
+      {blocked ? (
+        <p className="mt-3 font-semibold">
+          <a href="#job-plan-stop-release" className="underline underline-offset-4">
+            Review this plan’s stop for release
+          </a>
+          . Issuing a correction cannot release a stop.
         </p>
       ) : null}
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
@@ -278,6 +300,37 @@ export function WorkPackageIssueForm({
       ) : null}
 
       <form className="mt-5 space-y-6" onSubmit={(event) => void submit(event)}>
+        <div className="space-y-3 border-2 border-info/45 bg-surface p-4">
+          <TextArea
+            id="wp-boundaries"
+            label="Work scope for the crew"
+            value={boundaries}
+            onChange={setBoundaries}
+          />
+          {workPackage ? (
+            <>
+              <p className="text-sm leading-6 text-muted">
+                Edit the work scope here. Keep the other plan fields unless the change also affects
+                their instructions, proof or safety checks.
+              </p>
+              <TextArea
+                id="wp-correction-reason"
+                label="Reason for replacing this plan"
+                value={correctionReason}
+                onChange={setCorrectionReason}
+                maxLength={2000}
+              />
+              <p className="text-sm leading-6 text-muted">
+                The reason goes in the change history. It does not change the crew’s instructions.
+              </p>
+            </>
+          ) : null}
+        </div>
+        <p className="font-semibold">
+          {lastWorkDay
+            ? `Last scheduled work day ends ${formatFieldStamp(lastWorkDay, officeDates)}.`
+            : "Last scheduled work day is not set. Confirm it with production before choosing expiry."}
+        </p>
         <div className="grid gap-4 sm:grid-cols-2">
           <TextField
             id="wp-title"
@@ -293,7 +346,7 @@ export function WorkPackageIssueForm({
             onChange={setExpiresAt}
             type="datetime-local"
             note={expiresLabel}
-            hint="Set it after the last work day. After this time the crew can still use the plan but can't add proof."
+            hint="Choose a time after the last work day. After expiry the crew can still read the plan, but cannot add the photos or notes listed under Proof needed."
           />
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
@@ -303,12 +356,6 @@ export function WorkPackageIssueForm({
             label="Expected result"
             value={expectedResult}
             onChange={setExpectedResult}
-          />
-          <TextArea
-            id="wp-boundaries"
-            label="Boundaries"
-            value={boundaries}
-            onChange={setBoundaries}
           />
           <TextArea
             id="wp-prerequisites"
@@ -329,16 +376,6 @@ export function WorkPackageIssueForm({
             onChange={setMakeSafeProcedure}
           />
         </div>
-
-        {workPackage ? (
-          <TextArea
-            id="wp-correction-reason"
-            label="What changed?"
-            value={correctionReason}
-            onChange={setCorrectionReason}
-            maxLength={2000}
-          />
-        ) : null}
 
         <fieldset className="space-y-3 border border-border p-4">
           <legend className="px-2 font-bold">Ordered steps</legend>
@@ -514,11 +551,11 @@ export function WorkPackageIssueForm({
           </p>
         ) : null}
         {issued ? (
-          <Button type="submit" variant="secondary" busy={saving} disabled={!canSend}>
+          <Button type="submit" variant="secondary" busy={saving} disabled={!canSend || blocked}>
             <Send aria-hidden="true" /> {issueLabel}
           </Button>
         ) : (
-          <Button type="submit" variant="accent" busy={saving} disabled={!canSend}>
+          <Button type="submit" variant="accent" busy={saving} disabled={!canSend || blocked}>
             <Send aria-hidden="true" /> {issueLabel}
           </Button>
         )}
@@ -657,11 +694,4 @@ function updateHold(
   setter((current) =>
     current.map((hold) => (hold.key === key ? { ...hold, [field]: value } : hold)),
   );
-}
-
-function futureLocalDateTime(): string {
-  const future = new Date(Date.now() + 8 * 60 * 60 * 1_000);
-  return new Date(future.getTime() - future.getTimezoneOffset() * 60_000)
-    .toISOString()
-    .slice(0, 16);
 }

@@ -24,21 +24,6 @@
       "purpose": "Preserve marketing source and review notes without granting rights or claiming an external effect"
     },
     {
-      "action_id": "customer_message.draft",
-      "autonomy": "A1",
-      "purpose": "Ask only the canonical customer for portfolio_permission within current contact policy"
-    },
-    {
-      "action_id": "customer_message.send",
-      "autonomy": "A3",
-      "purpose": "Propose sending only my approved portfolio_permission draft through its ask-first gate"
-    },
-    {
-      "action_id": "consent.record",
-      "autonomy": "A3",
-      "purpose": "Propose the exact verified affirmative portfolio authorization for human approval, never infer it"
-    },
-    {
       "action_id": "suppression.apply",
       "autonomy": "A2",
       "purpose": "Protect the recipient immediately after a verified marketing opt-out"
@@ -46,7 +31,7 @@
     {
       "action_id": "content.draft",
       "autonomy": "A1",
-      "purpose": "Prepare a truthful brand and channel revision backed by current approved claims and rights"
+      "purpose": "Prepare truthful company content backed by current approved claims and rights; no customer photos or stories"
     },
     {
       "action_id": "claim.approve",
@@ -56,7 +41,7 @@
     {
       "action_id": "content.publish",
       "autonomy": "A3",
-      "purpose": "Propose publication of the approved exact revision, channel and rights scope; wait for matching readback"
+      "purpose": "Propose publication of the approved exact company-content revision, channel and rights scope with no customer photos or stories; wait for matching readback"
     },
     {
       "action_id": "content.stop",

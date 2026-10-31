@@ -12,7 +12,7 @@ export async function loadEstimatorWorkbench(
   fetcher: typeof fetch = fetch,
 ): Promise<EstimatorWorkbenchResponse> {
   return await apiRequest({
-    path: API_PATHS.estimatorJob(jobId),
+    path: `${API_PATHS.estimatorJob(jobId)}?include_job_identity=1`,
     schema: estimatorWorkbenchResponseSchema,
     fetcher,
   });

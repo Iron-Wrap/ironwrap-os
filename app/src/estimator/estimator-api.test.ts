@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createFacetLaunch, navigateToFacetLaunch, newFacetLaunchKey } from "./estimator-api";
+import {
+  createFacetLaunch,
+  loadEstimatorWorkbench,
+  navigateToFacetLaunch,
+  newFacetLaunchKey,
+} from "./estimator-api";
 import type { FacetLaunchResponse } from "./estimator-contracts";
+import legacyWorkbench from "./estimator-workbench-live-shape.fixture.json";
 
 const TOKEN = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(43)}`;
 const response: FacetLaunchResponse = {
@@ -16,6 +22,22 @@ const response: FacetLaunchResponse = {
     state: "issued",
   },
 };
+
+describe("estimator job identity request", () => {
+  it("opts in only the GET while an old Worker response remains readable and no-store", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(legacyWorkbench));
+    const model = await loadEstimatorWorkbench("SYNTHETIC JOB/1", fetcher);
+    expect(model.job).toMatchObject({ customer_display_name: null, address: null });
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "/api/v1/estimator/jobs/SYNTHETIC%20JOB%2F1?include_job_identity=1",
+    );
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  });
+});
 
 describe("Facet launch API", () => {
   it("sends only an empty command with CSRF and caller-stable idempotency", async () => {

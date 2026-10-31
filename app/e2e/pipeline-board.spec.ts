@@ -366,9 +366,12 @@ test.describe("Pipeline board acceptance", () => {
         path: `${shotDir}/review-overview-${viewport.label}-${testInfo.project.name}.png`,
       });
       if (viewport.width < 640) {
-        await page.getByRole("link", { name: "Open review sections" }).click();
-        await expect(page.locator("#review-workspace-heading")).toBeFocused();
-        const reviewBox = await page.locator("#review-workspace-heading").boundingBox();
+        await page.getByRole("link", { name: "See what needs review" }).click();
+        await expect(page.locator("#proposal-readiness-heading")).toBeFocused();
+        await expect(page.locator('details[aria-labelledby="proposal-heading"]')).toHaveAttribute(
+          "open",
+        );
+        const reviewBox = await page.locator("#proposal-readiness-heading").boundingBox();
         expect(reviewBox!.y).toBeGreaterThanOrEqual(56);
         expect(reviewBox!.y).toBeLessThan(viewport.height / 2);
       }

@@ -96,11 +96,15 @@ describe("quote revision approval API", () => {
 
     expect(list.approvals[0]?.target.customer_quote_id).toBe("CUSTOMER-QUOTE-001-v2");
     expect(detail.approval.id).toBe("quote-revision-approval:test-001");
+    expect(detail.job).toBeNull();
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/quote-revision-approvals");
     expect(fetcher.mock.calls[1]?.[0]).toBe(
-      "/api/v1/quote-revision-approvals/quote-revision-approval%3Atest-001",
+      "/api/v1/quote-revision-approvals/quote-revision-approval%3Atest-001?include_job_identity=1",
     );
     expect(fetcher.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ credentials: "same-origin", cache: "no-store", method: "GET" }),
+    );
+    expect(fetcher.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({ credentials: "same-origin", cache: "no-store", method: "GET" }),
     );
   });

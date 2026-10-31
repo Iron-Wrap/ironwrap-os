@@ -27,7 +27,7 @@ export async function loadQuoteRevisionApproval(
   fetcher: typeof fetch = fetch,
 ): Promise<QuoteRevisionApprovalDetailResponse> {
   return await apiRequest({
-    path: API_PATHS.quoteRevisionApproval(approvalId),
+    path: `${API_PATHS.quoteRevisionApproval(approvalId)}?include_job_identity=1`,
     schema: quoteRevisionApprovalDetailResponseSchema,
     fetcher,
   });

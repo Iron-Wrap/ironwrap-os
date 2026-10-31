@@ -36,4 +36,44 @@ describe("estimatorWorkbenchResponseSchema", () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  it("normalizes identity additions absent from older reads to null", () => {
+    const parsed = estimatorWorkbenchResponseSchema.parse(liveShape);
+    expect(parsed.job).toMatchObject({ customer_display_name: null, address: null });
+  });
+
+  it.each([
+    ["Synthetic Cedar Household", "118 Example Way NW, Edmonton, AB, CA"],
+    ["Synthetic Juniper Household", "Unit 4, 216 Example Lane NW, Edmonton, AB, CA"],
+    [null, "118 Example Way NW, Edmonton, AB, CA"],
+    ["Synthetic Cedar Household", null],
+    [null, null],
+  ])("accepts exact-job customer %s and site %s", (customer, address) => {
+    const parsed = estimatorWorkbenchResponseSchema.parse({
+      ...liveShape,
+      job: { ...liveShape.job, customer_display_name: customer, address },
+    });
+    expect(parsed.job.customer_display_name).toBe(customer);
+    expect(parsed.job.address).toBe(address);
+  });
+
+  it("normalizes blank identity without relaxing the job schema", () => {
+    const job = { ...liveShape.job, customer_display_name: "  ", address: "\t" };
+    expect(estimatorWorkbenchResponseSchema.parse({ ...liveShape, job }).job).toMatchObject({
+      customer_display_name: null,
+      address: null,
+    });
+    expect(
+      estimatorWorkbenchResponseSchema.safeParse({
+        ...liveShape,
+        job: { ...job, customer_email: "synthetic@example.invalid" },
+      }).success,
+    ).toBe(false);
+    expect(
+      estimatorWorkbenchResponseSchema.safeParse({
+        ...liveShape,
+        job: { ...job, customer_display_name: 42 },
+      }).success,
+    ).toBe(false);
+  });
 });

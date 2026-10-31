@@ -385,7 +385,10 @@ written. That is the existing session-age check; no passkey is claimed.
 The release command cites one to ten distinct `evidence_ids`, never browser-provided references or
 checksums. Each must resolve to one verified, manifested, stored field photo of the tenant, within
 the stop's job scope, captured strictly after the report. The Worker reads its checksum from D1;
-migration `0171` repeats provenance, scope, uniqueness and time checks before the release event.
+migration `0171` repeats provenance, scope, uniqueness and time checks before the release event
+and when that event is consumed to lift the stop. New release rows name the immediate next
+occurrence version; a retained journal row does not freeze its photo eligibility or the releaser's
+current authority.
 The detail read returns eligible `release_photos`; no eligible photo gives
 `release_unavailable_reason: "verified_photo_required"`.
 
@@ -398,7 +401,8 @@ immutable latch is retained and affects every job until a correction matches thi
 current scope and committed version. Before correction any tenant job photo may qualify; after
 correction only the confirmed scope's photos qualify. Earlier additions remain history. The stop
 stays active, with the same identity, raiser and state; L06 still refuses its raiser a release.
-Corrected job and package targets cannot be deleted or replaced to change that decision.
+Corrected job and package targets cannot be deleted or replaced through any declared unique-key
+conflict to change that decision.
 
 An active person may add a note, verified photos, or both with `POST
 /api/v1/safety/occurrences/{occurrence}/additions`, CSRF and an `Idempotency-Key`. The stop stays in

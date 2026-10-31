@@ -3706,13 +3706,23 @@ test("0152 re-creates the 0145 stop release insert guards with every clause unch
   assert.ok(forward.indexOf(`CREATE TRIGGER ${validate}`) < forward.indexOf(`CREATE TRIGGER ${replace}`));
 });
 
-test("0145 and 0152 applied after 0202 on a database already through 0146-0202 give the sorted schema", async () => {
+test("0145 and 0152 historical recovery followed by later migrations preserves the sorted schema and trigger order", async () => {
   // qa applied 0146–0202 before 0145 merged, so it receives 0145 and then 0152 after 0202.
+  // Freeze that recorded snapshot from the test-introduction catalog. A later interstitial
+  // migration, including 0170/0171, arrives after this recovery rather than before its predecessors.
+  const snapshot = JSON.parse(await readFile(
+    new URL("./fixtures/0145-0152-historical-migrations.json", import.meta.url), "utf8",
+  )) as { source_commit: string; recorded_boundary: string; migrations: string[] };
+  const historical = new Set(snapshot.migrations);
   const late = [
     "0145_work_package_stop_releases.sql",
     "0152_work_package_stop_release_evidence_order.sql",
   ];
   const migrations = await d1MigrationNames();
+  assert.deepEqual(migrations.filter((name) => historical.has(name)), snapshot.migrations);
+  assert.ok(historical.has(snapshot.recorded_boundary));
+  assert.equal(historical.has("0170_safety_stop_route_gaps.sql"), false);
+  assert.equal(historical.has("0171_safety_stop_additions_release_photo_rescope.sql"), false);
   assert.deepEqual(migrations.filter((name) => late.includes(name)), late);
   assert.ok(migrations.indexOf(late[1]!) < migrations.indexOf("0202_agent_fact_versions.sql"));
   const sorted = new DatabaseSync(":memory:");
@@ -3720,10 +3730,13 @@ test("0145 and 0152 applied after 0202 on a database already through 0146-0202 g
   try {
     for (const db of [sorted, qa]) db.exec("PRAGMA foreign_keys = ON");
     for (const name of migrations) await applyD1Migration(sorted, name);
-    for (const name of migrations.filter((candidate) => !late.includes(candidate))) {
+    for (const name of snapshot.migrations.filter((candidate) => !late.includes(candidate))) {
       await applyD1Migration(qa, name);
     }
     for (const name of late) await applyD1Migration(qa, name);
+    for (const name of migrations.filter((candidate) => !historical.has(candidate))) {
+      await applyD1Migration(qa, name);
+    }
     const schema = (db: DatabaseSync) =>
       db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
         .all()

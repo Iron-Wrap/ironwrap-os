@@ -13,6 +13,7 @@ import {
   addToSafetyStop,
   rescopeSafetyStop,
   stopReleasePhotos,
+  holdingSafetyStops,
   vehicleSafetyStops,
   safetyOccurrenceDetail,
   recordMakeSafe,
@@ -102,12 +103,13 @@ class TestD1 {
 
 type TestEnv = AppEnv & { DB: TestD1 };
 
-function testEnv(users: FixtureUser[] = Object.values(USERS)): TestEnv {
+function testEnv(users: FixtureUser[] = Object.values(USERS), options: { beforeAdditionsMigration?: boolean } = {}): TestEnv {
   const DB = new TestD1();
   DB.sqlite.exec("PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = OFF");
   for (const name of readdirSync(new URL("../migrations/", import.meta.url))
     .filter((value) => /^\d{4}_.+\.sql$/.test(value))
     .sort()) {
+    if (options.beforeAdditionsMigration && name === "0171_safety_stop_additions_release_photo_rescope.sql") continue;
     DB.sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
   for (const user of users) {
@@ -336,11 +338,11 @@ function releaseInput(id: string, ids: string[]) {
 }
 const rejectsCode = (code: string) => (error: unknown) => error instanceof SafetyError && error.code === code;
 
-function directRelease(env: TestEnv, id: string, refs: unknown) {
+function directRelease(env: TestEnv, id: string, refs: unknown, version?: number) {
   const row = occurrence(env, id);
   insertRow(env, 'safety_occurrence_events', {
     event_id: `direct-release-${id}`, tenant_id: TENANT, occurrence_id: id,
-    occurrence_version: row.version + 1, event_kind: 'released', actor_user_id: USERS.ops.id,
+    occurrence_version: version ?? row.version + 1, event_kind: 'released', actor_user_id: USERS.ops.id,
     actor_role: 'ops', detail: 'Correction inspected independently.', evidence_refs_json: refs === null ? null : JSON.stringify(refs),
     evidence_sha256: refs === null ? null : 'c'.repeat(64), captured_offline: 0,
     occurred_at: at(220), recorded_at: at(220), device_action_id: null,
@@ -742,3 +744,162 @@ for (const race of ['authority', 'target'] as const) {
     assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM safety_stop_unresolved_scopes').get()?.n, 1);
   });
 }
+
+function installAdditionsMigration(env: TestEnv) {
+  env.DB.sqlite.exec(readFileSync(new URL('../migrations/0171_safety_stop_additions_release_photo_rescope.sql', import.meta.url), 'utf8'));
+}
+
+function consumeSavedRelease(env: TestEnv, id: string) {
+  return env.DB.sqlite.prepare(`UPDATE safety_occurrences SET version = version + 1, stop_active = 0,
+    released_by_user_id = ?, updated_at = ? WHERE occurrence_id = ?`)
+    .run(USERS.ops.id, new Date().toISOString(), id);
+}
+
+const storedRefs = (evidenceId: string, checksum = 'b'.repeat(64)) =>
+  [{ ref: `field-evidence://${evidenceId}`, sha256: checksum }];
+
+test('retained release: new journal proof must name the immediate next occurrence version', async () => {
+  const env = testEnv();
+  seedJob(env);
+  const id = await raisedStop(env, USERS.crew);
+  const before = occurrence(env, id);
+  const evidenceId = photo(env, 901);
+  assert.throws(() => directRelease(env, id, storedRefs(evidenceId), before.version + 2), /safety_occurrence_version_conflict/);
+  assert.deepEqual(occurrence(env, id), before);
+  assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM safety_occurrence_events WHERE event_kind = 'released'").get()?.n, 0);
+});
+
+test('retained release: legacy future proof is rechecked when consumed after a human scope correction', async () => {
+  const env = testEnv(undefined, { beforeAdditionsMigration: true });
+  seedJob(env, 'JOB-SYNTHETIC-CONFIRMED');
+  const id = await raisedStop(env, USERS.crew);
+  const before = occurrence(env, id);
+  const evidenceId = photo(env, 902, { jobId: 'JOB-SYNTHETIC-UNRELATED' });
+  directRelease(env, id, storedRefs(evidenceId), before.version + 2);
+  const saved = env.DB.sqlite.prepare("SELECT * FROM safety_occurrence_events WHERE event_kind = 'released'").get();
+  installAdditionsMigration(env);
+  await rescopeSafetyStop(env, rescopeInput(env, id, { scope: { type: 'roof_job', id: 'JOB-SYNTHETIC-CONFIRMED' } }));
+  const corrected = occurrence(env, id);
+  assert.equal(corrected.version, before.version + 1);
+  assert.deepEqual(await stopReleasePhotos(env, corrected as any), []);
+  await assert.rejects(recordSafetyResponse(env, releaseInput(id, [evidenceId])), rejectsCode('safety_stop_release_evidence_invalid'));
+  assert.throws(() => consumeSavedRelease(env, id), /safety_stop_release_evidence_invalid/);
+  assert.deepEqual(occurrence(env, id), corrected);
+  assert.deepEqual(env.DB.sqlite.prepare("SELECT * FROM safety_occurrence_events WHERE event_kind = 'released'").get(), saved);
+});
+
+for (const invalid of ['missing_refs', 'missing_manifest', 'unverified', 'wrong_checksum', 'before_stop', 'ambiguous_id', 'non_photo'] as const) {
+  test(`retained release: actual use rejects legacy ${invalid} proof`, async () => {
+    const env = testEnv(undefined, { beforeAdditionsMigration: true });
+    seedJob(env);
+    const id = await raisedStop(env, USERS.crew);
+    const before = occurrence(env, id);
+    const overrides = invalid === 'missing_manifest' ? { manifested: false }
+      : invalid === 'unverified' ? { status: 'r2_stored' }
+      : invalid === 'before_stop' ? { capturedAt: before.reported_at }
+      : invalid === 'non_photo' ? { contentType: 'application/pdf' } : {};
+    const evidenceId = photo(env, 903, overrides);
+    if (invalid === 'ambiguous_id') photo(env, 903, { actionId: 'synthetic-legacy-duplicate' });
+    directRelease(env, id, invalid === 'missing_refs' ? null : storedRefs(evidenceId, (invalid === 'wrong_checksum' ? 'c' : 'b').repeat(64)));
+    installAdditionsMigration(env);
+    const expected = invalid === 'missing_refs' ? /safety_stop_release_evidence_required/
+      : invalid === 'before_stop' ? /safety_stop_release_evidence_before_stop/ : /safety_stop_release_evidence_invalid/;
+    assert.throws(() => consumeSavedRelease(env, id), expected);
+    assert.deepEqual(occurrence(env, id), before);
+    assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM safety_occurrence_events WHERE event_kind = 'released'").get()?.n, 1);
+  });
+}
+
+test('retained release: a photo that becomes ambiguous after insertion cannot lift the stop', async () => {
+  const env = testEnv();
+  seedJob(env);
+  const id = await raisedStop(env, USERS.crew);
+  const before = occurrence(env, id);
+  const evidenceId = photo(env, 904);
+  directRelease(env, id, storedRefs(evidenceId));
+  photo(env, 904, { actionId: 'synthetic-new-duplicate' });
+  assert.throws(() => consumeSavedRelease(env, id), /safety_stop_release_evidence_invalid/);
+  assert.deepEqual(occurrence(env, id), before);
+});
+
+test('retained release: actual use needs current authority and permits a still-authorized promotion', async () => {
+  const env = testEnv();
+  seedJob(env);
+  const id = await raisedStop(env, USERS.crew);
+  const before = occurrence(env, id);
+  directRelease(env, id, storedRefs(photo(env, 905)));
+  env.DB.sqlite.prepare("UPDATE app_users SET access_role = 'sales' WHERE user_id = ?").run(USERS.ops.id);
+  assert.throws(() => consumeSavedRelease(env, id), /safety_actor_unknown/);
+  assert.deepEqual(occurrence(env, id), before);
+  env.DB.sqlite.prepare("UPDATE app_users SET access_role = 'owner' WHERE user_id = ?").run(USERS.ops.id);
+  assert.doesNotThrow(() => consumeSavedRelease(env, id));
+  assert.equal(occurrence(env, id).stop_active, 0);
+});
+
+function interruptedPackage(id: string, job: string, assignment: string) {
+  const row = { work_package_id: id, tenant_id: TENANT, version: 1, job_id: job, assignment_id: assignment,
+    work_object_type: 'Roof Job', work_object_id: job, physical_context_type: 'Roof Site', physical_context_id: job,
+    assignment_authority_user: null, assignment_authority_role: null, status: 'Released', title: 'Synthetic package',
+    objective: 'Synthetic objective', boundaries: 'Synthetic boundaries', prerequisites: 'Synthetic prerequisites',
+    expected_result: 'Synthetic result', stop_conditions: 'Stop for danger', make_safe_procedure: 'Leave synthetic site',
+    issued_at: at(-10), expires_at: at(900), released_at: at(-10), release_attempt_id: `synthetic-attempt-${id}`,
+    supersedes_id: null, correction_reason: null, created_at: at(-10), updated_at: at(-10) };
+  return { ...row, definition_json: JSON.stringify(row) };
+}
+
+for (const recursive of [false, true]) {
+  for (const key of ['primary', 'current_assignment'] as const) {
+    test(`retained target: package ${key} replacement stays closed with recursive triggers ${recursive}`, async () => {
+      const env = testEnv();
+      env.DB.sqlite.exec(`PRAGMA recursive_triggers = ${recursive ? 'ON' : 'OFF'}`);
+      seedJob(env, 'JOB-SYNTHETIC-ORIGINAL');
+      seedJob(env, 'JOB-SYNTHETIC-SUBSTITUTE');
+      const target = interruptedPackage('WP-SYNTHETIC-ORIGINAL', 'JOB-SYNTHETIC-ORIGINAL', 'ASSIGN-SYNTHETIC-ORIGINAL');
+      insertRow(env, 'work_packages', target);
+      const storedTarget = env.DB.sqlite.prepare('SELECT * FROM work_packages WHERE work_package_id = ?').get(target.work_package_id);
+      assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM work_package_events').get()?.n, 0);
+      const id = await raisedStop(env, USERS.crew);
+      await rescopeSafetyStop(env, rescopeInput(env, id, { scope: { type: 'work_package', id: target.work_package_id } }));
+      const before = occurrence(env, id);
+      const replacement = key === 'primary' ? target : interruptedPackage('WP-SYNTHETIC-CONFLICT', target.job_id, target.assignment_id);
+      assert.throws(() => insertRow(env, 'work_packages', replacement, true), /safety_stop_scope_target_retained/);
+      assert.throws(() => insertRow(env, 'work_packages', interruptedPackage(target.work_package_id, 'JOB-SYNTHETIC-SUBSTITUTE', 'ASSIGN-SYNTHETIC-NEW'), true), /safety_stop_scope_target_retained/);
+      assert.deepEqual(env.DB.sqlite.prepare('SELECT * FROM work_packages WHERE work_package_id = ?').get(target.work_package_id), storedTarget);
+      const held = await holdingSafetyStops(env, TENANT, [target.job_id, 'JOB-SYNTHETIC-SUBSTITUTE']);
+      assert.equal(held.get(target.job_id)?.length, 1);
+      assert.deepEqual(held.get('JOB-SYNTHETIC-SUBSTITUTE'), []);
+      assert.deepEqual(occurrence(env, id), before);
+      assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM safety_occurrence_rescopes').get()?.n, 1);
+      assert.doesNotThrow(() => insertRow(env, 'work_packages', interruptedPackage('WP-SYNTHETIC-UNRELATED', 'JOB-SYNTHETIC-SUBSTITUTE', 'ASSIGN-SYNTHETIC-UNRELATED')));
+    });
+  }
+}
+
+for (const tenant of [TENANT, 'otherco']) {
+  test(`retained target: job replacement conflict preserves the protected existing tenant for ${tenant}`, async () => {
+    const env = testEnv();
+    seedJob(env, 'JOB-SYNTHETIC-TARGET');
+    seedJob(env, 'JOB-SYNTHETIC-OTHER', tenant);
+    const id = await raisedStop(env, USERS.crew);
+    await rescopeSafetyStop(env, rescopeInput(env, id));
+    const original = env.DB.sqlite.prepare('SELECT * FROM operating_roof_jobs WHERE roof_job_id = ?').get('JOB-SYNTHETIC-TARGET') as Record<string, string | number | null>;
+    const other = env.DB.sqlite.prepare('SELECT * FROM operating_roof_jobs WHERE roof_job_id = ?').get('JOB-SYNTHETIC-OTHER') as Record<string, string | number | null>;
+    assert.throws(() => insertRow(env, 'operating_roof_jobs', { ...other, roof_job_id: original.roof_job_id }, true), /safety_stop_scope_target_retained/);
+    assert.deepEqual(env.DB.sqlite.prepare('SELECT * FROM operating_roof_jobs WHERE roof_job_id = ?').get(original.roof_job_id), original);
+  });
+}
+
+test('retained target: every declared unique key is inventoried for guard coverage', () => {
+  const env = testEnv();
+  const unique = (table: string) => (env.DB.sqlite.prepare(`PRAGMA index_list('${table}')`).all() as Array<{ name: string; unique: number; partial: number }>)
+    .filter((index) => index.unique === 1).map((index) => ({ partial: index.partial,
+      columns: (env.DB.sqlite.prepare(`PRAGMA index_info('${index.name}')`).all() as Array<{ name: string }>).map((column) => column.name) }))
+    .sort((a, b) => a.columns.join(',').localeCompare(b.columns.join(',')));
+  assert.deepEqual(unique('operating_roof_jobs'), [
+    { partial: 0, columns: ['roof_job_id'] }, { partial: 0, columns: ['roof_job_id', 'tenant_id'] },
+  ]);
+  assert.deepEqual(unique('work_packages'), [
+    { partial: 1, columns: ['tenant_id', 'job_id', 'assignment_id'] },
+    { partial: 0, columns: ['work_package_id', 'tenant_id', 'version'] },
+  ]);
+});

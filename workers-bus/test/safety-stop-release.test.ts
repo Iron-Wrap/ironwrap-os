@@ -569,13 +569,14 @@ test("D1 refuses a lift without the releaser's own released event for that versi
   const occurrenceId = await raisedStop(env, USERS.crew);
   const before = occurrenceRow(env, occurrenceId);
   const journal = events(env, occurrenceId).length;
-  for (const [label, event] of [
-    ["no event", null],
-    ["another person's event", { actor: USERS.ops }],
-    ["an event for another version", { actor: USERS.owner, version: before.version + 2 }],
+  for (const [label, event, refusal] of [
+    ["no event", null, /safety_stop_release_event_required/],
+    ["another person's event", { actor: USERS.ops }, /safety_stop_release_event_required/],
+    // 0171 refuses a new future row at insertion; existing legacy rows are revalidated at use.
+    ["an event for another version", { actor: USERS.owner, version: before.version + 2 }, /safety_occurrence_version_conflict/],
   ] as const) {
     assert.throws(() => directLift(env, occurrenceId, USERS.owner.id, event),
-      /safety_stop_release_event_required/, label);
+      refusal, label);
     unchanged(env, occurrenceId, before, journal, label);
   }
 });

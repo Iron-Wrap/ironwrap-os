@@ -16,8 +16,10 @@
 -- 2. Release photo. A `released` event cites one to ten distinct captures that belong to the stop,
 --    each with its stored checksum and each taken strictly after the stop was raised, compared as
 --    instants. 0165 already lifts a stop only with that event, so no stop lifts without a verified
---    photo taken after it.
+--    photo taken after it. New release rows name the immediate next occurrence version; the
+--    original L06 consumer rechecks current authority and every photo proof when it lifts the stop.
 --
+
 -- 3. Vehicle stops. An active `vehicle` stop holds the vehicle it names: no pre-trip inspection
 --    (the crew app's record of taking a vehicle out), no cargo load that puts it on the road as the
 --    vehicle or the trailer, and no custody handed to a person or crew. A post-trip inspection, a
@@ -35,7 +37,7 @@
 --    except for a direct write that is both a lift by the raiser and illegal for 0047, which now
 --    reports 0047's code first.
 --
--- Adds two tables, two indexes and nineteen triggers, and re-creates two triggers.
+-- Adds two tables, two indexes and nineteen triggers, and re-creates three triggers.
 
 -- 1. Additions -------------------------------------------------------------------------------------
 
@@ -228,6 +230,14 @@ CREATE TRIGGER safety_occurrence_events_release_evidence
 BEFORE INSERT ON safety_occurrence_events
 WHEN NEW.event_kind = 'released'
 BEGIN
+  -- A new release journal row belongs to the immediate next committed occurrence version.
+  SELECT RAISE(ABORT, 'safety_occurrence_version_conflict')
+  WHERE NOT EXISTS (
+    SELECT 1 FROM safety_occurrences occurrence
+     WHERE occurrence.tenant_id = NEW.tenant_id AND occurrence.occurrence_id = NEW.occurrence_id
+       AND occurrence.stop_active = 1 AND NEW.occurrence_version = occurrence.version + 1
+  );
+
   SELECT RAISE(ABORT, 'safety_stop_release_evidence_required')
   WHERE NEW.evidence_refs_json IS NULL;
 
@@ -339,6 +349,238 @@ BEGIN
      )
   );
 END;
+
+-- Recreate 0165 without changing any original clause, then revalidate photo proof at consumption.
+DROP TRIGGER safety_occurrences_stop_release_guard;
+
+CREATE TRIGGER safety_occurrences_stop_release_guard
+BEFORE UPDATE ON safety_occurrences
+BEGIN
+  -- Only a lift names who lifted the stop, and the name never changes afterwards.
+  SELECT RAISE(ABORT, 'safety_stop_releaser_immutable')
+  WHERE NEW.released_by_user_id IS NOT OLD.released_by_user_id
+    AND NOT (OLD.stop_active = 1 AND NEW.stop_active = 0);
+
+  SELECT RAISE(ABORT, 'safety_stop_releaser_required')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND NEW.released_by_user_id IS NULL;
+
+  SELECT RAISE(ABORT, 'safety_actor_unknown')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND NOT EXISTS (
+      SELECT 1
+        FROM app_users releaser
+       WHERE releaser.tenant_id = NEW.tenant_id
+         AND releaser.user_id = NEW.released_by_user_id
+         AND releaser.active = 1
+    );
+
+  -- Never the person who raised the stop, under any identity either of them carries.
+  SELECT RAISE(ABORT, 'safety_stop_release_by_raiser_forbidden')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND EXISTS (
+      SELECT 1
+        FROM app_users releaser
+       WHERE releaser.tenant_id = NEW.tenant_id
+         AND releaser.user_id = NEW.released_by_user_id
+         AND (
+           lower(trim(NEW.reported_by_user_id)) IN (
+             lower(releaser.user_id), releaser.email_normalized, lower(trim(releaser.frappe_user_id))
+           )
+           OR EXISTS (
+             SELECT 1
+               FROM app_users raiser
+              WHERE raiser.tenant_id = NEW.tenant_id
+                AND raiser.user_id = NEW.reported_by_user_id
+                AND (
+                  lower(raiser.user_id) IN (
+                    lower(releaser.user_id), releaser.email_normalized,
+                    lower(trim(releaser.frappe_user_id))
+                  )
+                  OR raiser.email_normalized IN (
+                    lower(releaser.user_id), releaser.email_normalized,
+                    lower(trim(releaser.frappe_user_id))
+                  )
+                  OR lower(trim(raiser.frappe_user_id)) IN (
+                    lower(releaser.user_id), releaser.email_normalized,
+                    lower(trim(releaser.frappe_user_id))
+                  )
+                )
+           )
+         )
+    );
+
+  -- The releaser's own `released` event for the version this lift moves to is already written.
+  SELECT RAISE(ABORT, 'safety_stop_release_event_required')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND NOT EXISTS (
+      SELECT 1
+        FROM safety_occurrence_events event
+       WHERE event.tenant_id = NEW.tenant_id
+         AND event.occurrence_id = NEW.occurrence_id
+         AND event.occurrence_version = NEW.version
+         AND event.event_kind = 'released'
+         AND event.actor_user_id = NEW.released_by_user_id
+    );
+
+  -- 0171 also checks the current actor and immediate version at actual use. A saved journal
+  -- row is historical evidence, never a frozen grant to lift a later scope or changed capture.
+  SELECT RAISE(ABORT, 'safety_actor_unknown')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM app_users releaser
+       WHERE releaser.tenant_id = NEW.tenant_id AND releaser.user_id = NEW.released_by_user_id
+         AND releaser.active = 1
+         AND COALESCE(releaser.access_role, releaser.role) IN ('owner', 'ops', 'production')
+    );
+
+  SELECT RAISE(ABORT, 'safety_occurrence_version_must_advance')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0 AND NEW.version != OLD.version + 1;
+
+  SELECT RAISE(ABORT, 'safety_stop_release_evidence_required')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND EXISTS (
+      SELECT 1 FROM safety_occurrence_events release_event
+       WHERE release_event.tenant_id = NEW.tenant_id
+       AND release_event.occurrence_id = NEW.occurrence_id
+       AND release_event.occurrence_version = NEW.version
+       AND release_event.event_kind = 'released'
+       AND release_event.actor_user_id = NEW.released_by_user_id
+         AND (
+           release_event.evidence_refs_json IS NULL
+         )
+    );
+
+  SELECT RAISE(ABORT, 'safety_stop_release_evidence_invalid')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND EXISTS (
+      SELECT 1 FROM safety_occurrence_events release_event
+       WHERE release_event.tenant_id = NEW.tenant_id
+       AND release_event.occurrence_id = NEW.occurrence_id
+       AND release_event.occurrence_version = NEW.version
+       AND release_event.event_kind = 'released'
+       AND release_event.actor_user_id = NEW.released_by_user_id
+         AND (
+           json_valid(release_event.evidence_refs_json) IS NOT 1
+              OR json_type(release_event.evidence_refs_json) IS NOT 'array'
+              OR json_array_length(release_event.evidence_refs_json) NOT BETWEEN 1 AND 10
+              OR (
+                SELECT COUNT(DISTINCT json_extract(release_event.evidence_refs_json, item.fullkey || '.ref'))
+                  FROM json_each(release_event.evidence_refs_json) item
+              ) != json_array_length(release_event.evidence_refs_json)
+              OR EXISTS (
+                SELECT 1
+                  FROM json_each(release_event.evidence_refs_json) item
+                 WHERE item.type IS NOT 'object'
+                    OR (SELECT COUNT(*) FROM json_each(release_event.evidence_refs_json, item.fullkey)) != 2
+                    OR json_type(release_event.evidence_refs_json, item.fullkey || '.ref') IS NOT 'text'
+                    OR json_type(release_event.evidence_refs_json, item.fullkey || '.sha256') IS NOT 'text'
+                    OR (
+                      SELECT COUNT(*)
+                        FROM field_actions capture
+                        JOIN field_action_media media ON media.device_action_id = capture.device_action_id
+                        JOIN safety_occurrences occurrence
+                          ON occurrence.tenant_id = NEW.tenant_id
+                         AND occurrence.occurrence_id = NEW.occurrence_id
+                       WHERE capture.tenant_id = NEW.tenant_id
+                         AND capture.work_package_id IS NOT NULL
+                         AND capture.status = 'verified'
+                         AND capture.manifest_key IS NOT NULL
+                         AND capture.evidence_verification = 'Verified'
+                         AND media.r2_stored_at IS NOT NULL
+                          AND media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+                          AND (
+                            SELECT COUNT(*)
+                              FROM field_actions duplicate_capture
+                              JOIN field_action_media duplicate_media
+                                ON duplicate_media.device_action_id = duplicate_capture.device_action_id
+                             WHERE duplicate_capture.tenant_id = NEW.tenant_id
+                               AND duplicate_capture.work_package_id IS NOT NULL
+                               AND duplicate_capture.status = 'verified'
+                               AND duplicate_capture.manifest_key IS NOT NULL
+                               AND duplicate_capture.evidence_verification = 'Verified'
+                               AND duplicate_media.r2_stored_at IS NOT NULL
+                               AND duplicate_media.content_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+                               AND duplicate_media.evidence_id = media.evidence_id
+                          ) = 1
+                         AND 'field-evidence://' || media.evidence_id
+                           = json_extract(release_event.evidence_refs_json, item.fullkey || '.ref')
+                         AND media.checksum_sha256
+                           = json_extract(release_event.evidence_refs_json, item.fullkey || '.sha256')
+                         AND (
+                           occurrence.scope_type NOT IN ('roof_job', 'work_package')
+                            OR EXISTS (
+                              SELECT 1 FROM safety_stop_unresolved_scopes latch
+                               WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
+                                 AND NOT EXISTS (
+                                   SELECT 1 FROM safety_occurrence_rescopes correction
+                                    WHERE correction.tenant_id = occurrence.tenant_id
+                                      AND correction.occurrence_id = occurrence.occurrence_id
+                                      AND correction.to_scope_type = occurrence.scope_type
+                                      AND correction.to_scope_id = occurrence.scope_id
+                                      AND correction.to_version <= occurrence.version
+                                 )
+                            )
+                           OR (occurrence.scope_type = 'roof_job' AND (
+                             capture.job_id = occurrence.scope_id
+                             OR NOT EXISTS (
+                               SELECT 1 FROM operating_roof_jobs job
+                                WHERE job.tenant_id = occurrence.tenant_id
+                                  AND job.roof_job_id = occurrence.scope_id
+                             )
+                           ))
+                           OR (occurrence.scope_type = 'work_package' AND (
+                             capture.job_id IN (
+                               SELECT package.job_id FROM work_packages package
+                                WHERE package.tenant_id = occurrence.tenant_id
+                                  AND package.work_package_id = occurrence.scope_id
+                             )
+                             OR NOT EXISTS (
+                               SELECT 1 FROM work_packages package
+                                WHERE package.tenant_id = occurrence.tenant_id
+                                  AND package.work_package_id = occurrence.scope_id
+                             )
+                           ))
+                         )
+                    ) != 1
+              )
+         )
+    );
+
+  SELECT RAISE(ABORT, 'safety_stop_release_evidence_before_stop')
+  WHERE OLD.stop_active = 1 AND NEW.stop_active = 0
+    AND EXISTS (
+      SELECT 1 FROM safety_occurrence_events release_event
+       WHERE release_event.tenant_id = NEW.tenant_id
+       AND release_event.occurrence_id = NEW.occurrence_id
+       AND release_event.occurrence_version = NEW.version
+       AND release_event.event_kind = 'released'
+       AND release_event.actor_user_id = NEW.released_by_user_id
+         AND (
+           EXISTS (
+             SELECT 1
+               FROM json_each(release_event.evidence_refs_json) item
+               JOIN safety_occurrences occurrence
+                 ON occurrence.tenant_id = NEW.tenant_id
+                AND occurrence.occurrence_id = NEW.occurrence_id
+              WHERE NOT EXISTS (
+                SELECT 1
+                  FROM field_actions capture
+                  JOIN field_action_media media ON media.device_action_id = capture.device_action_id
+                 WHERE capture.tenant_id = NEW.tenant_id
+                   AND 'field-evidence://' || media.evidence_id
+                     = json_extract(release_event.evidence_refs_json, item.fullkey || '.ref')
+                   AND media.checksum_sha256
+                     = json_extract(release_event.evidence_refs_json, item.fullkey || '.sha256')
+                   AND julianday(COALESCE(capture.capture_completed_at, capture.created_at))
+                     > julianday(occurrence.reported_at)
+              )
+           )
+         )
+    );
+
+END;
+
 
 -- 3. Vehicle stops ---------------------------------------------------------------------------------
 
@@ -571,18 +813,27 @@ WHEN EXISTS (SELECT 1 FROM operating_roof_jobs WHERE roof_job_id = NEW.roof_job_
  )
 BEGIN SELECT RAISE(ABORT, 'safety_stop_scope_target_retained'); END;
 
--- Work Package definitions are retained too. REPLACE must not bypass the existing DELETE
--- guard when an interrupted issue has no first journal child and recursive triggers are off.
+-- Work Package definitions are retained across both declared unique keys: primary identity
+-- and the partial current-assignment key. Protect the existing victim, even when the incoming
+-- package has another id and an interrupted issue has no first journal child. No DELETE trigger
+-- or recursive-trigger setting is needed for this refusal.
 CREATE TRIGGER work_packages_rescope_target_no_replace
 BEFORE INSERT ON work_packages
 WHEN EXISTS (
   SELECT 1 FROM work_packages existing
-   WHERE existing.tenant_id = NEW.tenant_id AND existing.work_package_id = NEW.work_package_id
-     AND existing.version = NEW.version
-) AND EXISTS (
-  SELECT 1 FROM safety_occurrence_rescopes correction
-   WHERE correction.tenant_id = NEW.tenant_id
-     AND correction.to_scope_type = 'work_package' AND correction.to_scope_id = NEW.work_package_id
+  JOIN safety_occurrence_rescopes correction
+    ON correction.tenant_id = existing.tenant_id
+   AND correction.to_scope_type = 'work_package'
+   AND correction.to_scope_id = existing.work_package_id
+  WHERE (
+    existing.tenant_id = NEW.tenant_id AND existing.work_package_id = NEW.work_package_id
+    AND existing.version = NEW.version
+  ) OR (
+    existing.tenant_id = NEW.tenant_id AND existing.job_id = NEW.job_id
+    AND existing.assignment_id = NEW.assignment_id
+    AND existing.status IN ('Released', 'Acknowledged', 'In Progress')
+    AND NEW.status IN ('Released', 'Acknowledged', 'In Progress')
+  )
 )
 BEGIN SELECT RAISE(ABORT, 'safety_stop_scope_target_retained'); END;
 

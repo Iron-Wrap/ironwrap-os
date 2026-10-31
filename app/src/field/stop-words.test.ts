@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { todayResponseSchema } from "./field-contracts";
-import { crewStopStamp, STOP_WORDS, stopDetail, uniqueStops } from "./stop-words";
+import { crewStopStamp, STOP_WORDS, stopDetail, stopReadStatus, uniqueStops } from "./stop-words";
 
 const zone = { timeZone: "America/Edmonton" };
 
@@ -50,6 +50,28 @@ describe("stop words", () => {
     };
     const b = { ...a, occurrence_id: "b", reported_at: "2026-07-10T15:00:00Z" };
     expect(uniqueStops([[a, b], [a]]).map((stop) => stop.occurrence_id)).toEqual(["b", "a"]);
+  });
+
+  it("keeps the read timestamp independent of the stop event and refuses an invalid read time", () => {
+    const now = new Date("2026-07-10T20:00:00.000Z");
+    const stop = {
+      occurrence_id: "so_read_time",
+      scope: "job" as const,
+      reported_at: "2026-07-10T16:24:00.000Z",
+      summary: null,
+      raiser_display_name: null,
+    };
+    expect(stopReadStatus([stop], "2026-07-10T16:30:00.000Z", false, zone, now)).toMatch(
+      /^Stop status as of Today 10:30\sa\.m\.$/,
+    );
+    for (const checkedAt of ["", "not a time", "2026-07-10T16:23:00.000Z"]) {
+      expect(stopReadStatus([stop], checkedAt, false, zone, now)).toBe(
+        "Stop status needs checking. Keep work stopped and call the office.",
+      );
+    }
+    expect(
+      stopReadStatus([stop], "2026-07-10T16:30:00.000Z", false, { timeZone: "Not/AZone" }, now),
+    ).toBe("Stop status needs checking. Keep work stopped and call the office.");
   });
 
   it("reads every stop on a run sheet, never failing the run sheet for one it cannot read", () => {
@@ -116,10 +138,10 @@ describe("stop words", () => {
 
   it("words a separate work check without a doubled period or a next step as its name", () => {
     expect(STOP_WORDS.separateCheck("Delivery confirmation is missing.")).toBe(
-      "Separate work check: Delivery confirmation is missing. Clearing it doesn't restart work.",
+      "Work to check: Delivery confirmation is missing. Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.",
     );
     expect(STOP_WORDS.separateCheck(null)).toBe(
-      "A separate work check is open. Clearing it doesn't restart work.",
+      "Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.",
     );
   });
 });

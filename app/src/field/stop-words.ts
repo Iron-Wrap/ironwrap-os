@@ -16,16 +16,36 @@ export const STOP_WORDS = {
   jobLeadIn: "Work is stopped on the job:",
   jobUnnamed: "Work is stopped on this job.",
   /** Nobody restarts work from the phone. */
-  waits: "The office releases the stop.",
+  waits: "The office must release the stop. The person who reported it cannot release it.",
   /** The card's next step while a stop holds its job. */
   nextStep: "Wait for the office to release the stop",
   /** A work check on a stopped job is its own thing: clearing it never restarts work. */
   separateCheck: (check: string | null) =>
-    check
-      ? `Separate work check: ${check.trim().replace(/\.+$/, "")}. Clearing it doesn't restart work.`
-      : "A separate work check is open. Clearing it doesn't restart work.",
+    `${check ? `Work to check: ${check.trim().replace(/\.+$/, "")}. ` : ""}Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.`,
   callOffice: "Call the office",
 } as const;
+
+/** A response snapshot time is separate from when its stop was reported. */
+export function stopReadStatus(
+  stops: ActiveStop[],
+  checkedAt: string,
+  offline: boolean,
+  options: { locale?: string; timeZone?: string },
+  now?: Date,
+): string {
+  const checked = Date.parse(checkedAt);
+  const stamp = crewStopStamp(checkedAt, options, now);
+  if (
+    !stamp ||
+    !Number.isFinite(checked) ||
+    stops.some((stop) => Date.parse(stop.reported_at) > checked)
+  ) {
+    return "Stop status needs checking. Keep work stopped and call the office.";
+  }
+  return offline
+    ? `Saved stop status as of ${stamp.replace(/\.$/, "")}. Go online to check for changes; keep work stopped.`
+    : `Stop status as of ${stamp}`;
+}
 
 /** "today at 10:24 a.m.", or "on Thu 9 Jul at 4:05 p.m." on another day; null for an unreadable time. */
 export function crewStopWhen(

@@ -215,6 +215,8 @@ export function TodayPage() {
             <TenantStopBanner
               stops={uniqueStops(today.jobs.map((job) => job.active_stops ?? []))}
               dateOptions={dateOptions}
+              checkedAt={today.read_model_generated_at}
+              offline={offline}
               officePhone={session.tenant.office_phone}
             />
           </div>
@@ -235,6 +237,8 @@ export function TodayPage() {
                 job={job}
                 availability={availabilityFor(job)}
                 dateOptions={dateOptions}
+                checkedAt={today.read_model_generated_at}
+                offline={offline}
                 fieldCaptureAllowed={fieldCaptureAllowed}
                 canRetryPacket={navigator.onLine}
                 onRetryPacket={() => setPacketRefreshCycle((cycle) => cycle + 1)}
@@ -366,6 +370,8 @@ function TodayJobRow({
   job,
   availability,
   dateOptions,
+  checkedAt,
+  offline,
   fieldCaptureAllowed,
   canRetryPacket,
   onRetryPacket,
@@ -373,6 +379,8 @@ function TodayJobRow({
   job: TodayJob;
   availability: PacketAvailability;
   dateOptions: FieldDateOptions;
+  checkedAt: string;
+  offline: boolean;
   fieldCaptureAllowed: boolean;
   canRetryPacket: boolean;
   onRetryPacket: () => void;
@@ -420,6 +428,8 @@ function TodayJobRow({
               stops={job.active_stops ?? []}
               job={{ address: job.address, code: job.job_number }}
               dateOptions={dateOptions}
+              checkedAt={checkedAt}
+              offline={offline}
               officePhone={officePhone}
             />
           </div>

@@ -243,6 +243,7 @@ describe("TodayPage", () => {
     const [blocked, next] = todayModel().jobs;
     renderToday(
       todayModel({
+        read_model_generated_at: "2026-07-10T16:30:00.000Z",
         jobs: [
           {
             ...blocked!,
@@ -267,13 +268,16 @@ describe("TodayPage", () => {
     expect(notice).toHaveTextContent(
       /Stopped on \w{3} 10 Jul at 10:24\sa\.m\. by Tom Lachance · Reason: Ice on the north slope/,
     );
-    expect(notice).toHaveTextContent("The office releases the stop.");
+    expect(notice).toHaveTextContent(
+      "The office must release the stop. The person who reported it cannot release it.",
+    );
+    expect(notice).toHaveTextContent(/Stop status as of \w{3} 10 Jul 10:30\sa\.m\./);
     // The card waits on the office; its work check is separate and its button is no longer primary.
     const card = notice.closest("article")!;
     expect(within(card).getByText("Wait for the office to release the stop")).toBeVisible();
     expect(
       within(card).getByText(
-        "Separate work check: Delivery confirmation is missing. Clearing it doesn't restart work.",
+        "Work to check: Delivery confirmation is missing. Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.",
       ),
     ).toBeVisible();
     expect(within(card).queryByText("1 check blocks work")).toBeNull();
@@ -318,6 +322,59 @@ describe("TodayPage", () => {
     );
   });
 
+  it("labels a cached stop as a saved snapshot and does not claim a fresh stop check", async () => {
+    const [job] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        read_model_generated_at: "2026-07-10T16:30:00.000Z",
+        stale_fields: ["offline.cached_packet"],
+        jobs: [
+          {
+            ...job!,
+            active_stops: [
+              {
+                occurrence_id: "so_saved",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: "Ice",
+                raiser_display_name: "Tom Lachance",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(await screen.findByText(/Saved stop status as of .*10:30\sa\.m/)).toBeVisible();
+    expect(screen.getByText(/Go online to check for changes; keep work stopped/)).toBeVisible();
+    expect(screen.queryByText(/^Stop status as of/)).toBeNull();
+  });
+
+  it("does not present a check older than its stop as a valid freshness receipt", async () => {
+    const [job] = todayModel().jobs;
+    renderToday(
+      todayModel({
+        jobs: [
+          {
+            ...job!,
+            active_stops: [
+              {
+                occurrence_id: "so_later",
+                scope: "job",
+                reported_at: "2026-07-10T16:24:00.000Z",
+                summary: "Ice",
+                raiser_display_name: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(
+      await screen.findByText("Stop status needs checking. Keep work stopped and call the office."),
+    ).toBeVisible();
+    expect(screen.queryByText(/^Stop status as of/)).toBeNull();
+  });
+
   it("never names the run sheet's generic next step as a stopped job's work check", async () => {
     const [blocked] = todayModel().jobs;
     renderToday(
@@ -340,9 +397,11 @@ describe("TodayPage", () => {
       }),
     );
     expect(
-      await screen.findByText("A separate work check is open. Clearing it doesn't restart work."),
+      await screen.findByText(
+        "Open work checks must also be cleared before starting. Clearing them does not release the stop, and releasing the stop does not clear them.",
+      ),
     ).toBeVisible();
-    expect(screen.queryByText(/Separate work check: Open field check-in/)).toBeNull();
+    expect(screen.queryByText(/Work to check: Open field check-in/)).toBeNull();
   });
 
   it("offers the office call on the every-job banner too", async () => {

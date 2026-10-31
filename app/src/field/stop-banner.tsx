@@ -5,7 +5,7 @@ import { Notice } from "../components/ui/notice";
 import { jobLabel } from "../lib/job-label";
 import { dialableNumber } from "./dialable-number";
 import type { ActiveStop } from "./field-contracts";
-import { STOP_WORDS, stopDetail } from "./stop-words";
+import { STOP_WORDS, stopDetail, stopReadStatus } from "./stop-words";
 
 type StopDateOptions = { locale?: string; timeZone?: string };
 
@@ -13,11 +13,15 @@ type StopDateOptions = { locale?: string; timeZone?: string };
 function StopLines({
   stops,
   dateOptions,
+  checkedAt,
+  offline,
   now,
   unmatched = false,
 }: {
   stops: ActiveStop[];
   dateOptions: StopDateOptions;
+  checkedAt: string;
+  offline: boolean;
   now?: Date;
   /** A stop nobody could match to a job first says so, naming who reported it. */
   unmatched?: boolean;
@@ -36,6 +40,7 @@ function StopLines({
           </p>
         </div>
       ))}
+      <p className="leading-6">{stopReadStatus(stops, checkedAt, offline, dateOptions, now)}</p>
       <p className="leading-6">{STOP_WORDS.waits}</p>
     </>
   );
@@ -59,11 +64,15 @@ function officeCall(officePhone: string | null | undefined) {
 export function TenantStopBanner({
   stops,
   dateOptions,
+  checkedAt,
+  offline,
   officePhone,
   now,
 }: {
   stops: ActiveStop[];
   dateOptions: StopDateOptions;
+  checkedAt: string;
+  offline: boolean;
   officePhone?: string | null;
   now?: Date;
 }) {
@@ -71,7 +80,14 @@ export function TenantStopBanner({
   if (tenant.length === 0) return null;
   return (
     <Notice tone="danger" title={STOP_WORDS.tenant} actions={officeCall(officePhone)}>
-      <StopLines stops={tenant} dateOptions={dateOptions} now={now} unmatched />
+      <StopLines
+        stops={tenant}
+        dateOptions={dateOptions}
+        checkedAt={checkedAt}
+        offline={offline}
+        now={now}
+        unmatched
+      />
     </Notice>
   );
 }
@@ -81,12 +97,16 @@ export function JobStopBanner({
   stops,
   job,
   dateOptions,
+  checkedAt,
+  offline,
   officePhone,
   now,
 }: {
   stops: ActiveStop[];
   job: { customer?: string | null; address?: string | null; code?: string | null };
   dateOptions: StopDateOptions;
+  checkedAt: string;
+  offline: boolean;
   officePhone?: string | null;
   now?: Date;
 }) {
@@ -102,7 +122,13 @@ export function JobStopBanner({
       title={named ? `${STOP_WORDS.jobLeadIn} ${named}` : STOP_WORDS.jobUnnamed}
       actions={officeCall(officePhone)}
     >
-      <StopLines stops={onJob} dateOptions={dateOptions} now={now} />
+      <StopLines
+        stops={onJob}
+        dateOptions={dateOptions}
+        checkedAt={checkedAt}
+        offline={offline}
+        now={now}
+      />
     </Notice>
   );
 }

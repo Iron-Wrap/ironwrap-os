@@ -166,7 +166,18 @@ function todayWithActiveStops(today) {
     ...(mode === "tenant" || mode === "both" ? [acceptanceActiveStops.tenant] : []),
     ...(mode === "job" || mode === "both" ? [acceptanceActiveStops.job] : []),
   ];
-  return { ...today, jobs: today.jobs.map((job) => ({ ...job, active_stops: stops })) };
+  // A read that includes a reported stop is built after that report. Keep the synthetic
+  // response snapshot separate from the event timestamp, as the Worker's envelope does.
+  const checkedAt = stops.length
+    ? new Date(
+        Math.max(...stops.map((stop) => Date.parse(stop.reported_at))) + 6 * 60_000,
+      ).toISOString()
+    : today.read_model_generated_at;
+  return {
+    ...today,
+    read_model_generated_at: checkedAt,
+    jobs: today.jobs.map((job) => ({ ...job, active_stops: stops })),
+  };
 }
 
 const fixtureOperatingIntake = {

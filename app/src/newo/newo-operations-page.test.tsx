@@ -211,7 +211,9 @@ describe("NewoOperationsPage", () => {
     const queue = await screen.findByRole("region", { name: "Calls to return" });
     expect(within(queue).getByText("Total reported: 4")).toBeVisible();
     expect(within(queue).getByText(/0 shown here/)).toBeVisible();
-    expect(within(queue).getByText("Call details are not in this list. Try Refresh.")).toBeVisible();
+    expect(
+      within(queue).getByText("Call details are not in this list. Try Refresh."),
+    ).toBeVisible();
     expect(screen.queryByText("No call or booking needs a check.")).toBeNull();
   });
 
@@ -267,7 +269,9 @@ describe("NewoOperationsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh Reception" }));
 
     expect(await screen.findByText("The new list did not load")).toBeVisible();
-    expect(screen.getByText("The last saved list is still shown. Try Refresh again.")).toBeVisible();
+    expect(
+      screen.getByText("The last saved list is still shown. Try Refresh again."),
+    ).toBeVisible();
     expect(screen.getByRole("region", { name: "Calls to return" })).toHaveTextContent(
       "Call back requested",
     );

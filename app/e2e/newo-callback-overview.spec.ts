@@ -178,14 +178,19 @@ async function capture(page: Page, info: TestInfo) {
     path: join(directory, filename),
     animations: "disabled",
   });
-  positions.push({ filename, position: "callback queue supplement", viewport: page.viewportSize() });
+  positions.push({
+    filename,
+    position: "callback queue supplement",
+    viewport: page.viewportSize(),
+  });
   await writeFile(
     join(directory, `${prefix}-capture.json`),
     JSON.stringify(
       {
         source_head: head,
         dist_manifest_sha256: process.env.NEWO_DIST_MANIFEST_SHA256,
-        fixture: "Synthetic owner session; callback-only overview; browser-intercepted GET responses",
+        fixture:
+          "Synthetic owner session; callback-only overview; browser-intercepted GET responses",
         grant: "Owner role through existing app RoleGuard; owner:read; allowed_actions=[]",
         backend_authentication_exercised: false,
         provider_runtime_exercised: false,
@@ -239,7 +244,10 @@ test("callback-only work stays readable in supplied urgency order without identi
 test("total count remains distinct from the full bounded returned subset", async ({ page }) => {
   await openOverview(
     page,
-    overview(31, Array.from({ length: 25 }, (_, index) => callback(index + 1))),
+    overview(
+      31,
+      Array.from({ length: 25 }, (_, index) => callback(index + 1)),
+    ),
   );
   const queue = page.getByRole("region", { name: "Calls to return" });
   await expect(queue.getByText("Total reported: 31")).toBeVisible();
@@ -279,7 +287,9 @@ test("failed Refresh retains the saved callback list", async ({ page }) => {
   reads.failNextRefresh();
   await page.getByRole("button", { name: "Refresh Reception" }).click();
   await expect(page.getByText("The new list did not load")).toBeVisible();
-  await expect(page.getByText("The last saved list is still shown. Try Refresh again.")).toBeVisible();
+  await expect(
+    page.getByText("The last saved list is still shown. Try Refresh again."),
+  ).toBeVisible();
   await expect(queue.getByText("Call back requested")).toBeVisible();
   await expect(page.getByText("No call or booking needs a check.")).toHaveCount(0);
   expect(reads.overviewRequests.every((method) => method === "GET")).toBe(true);

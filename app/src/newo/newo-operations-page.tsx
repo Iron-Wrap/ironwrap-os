@@ -357,7 +357,8 @@ function ExceptionQueues({
     },
   ];
   const visible = queues.filter((queue) => queue.count > 0 || queue.sessions.length > 0);
-  const hasCallbacks = model.counts.open_callbacks > 0 || model.exceptions.open_callbacks.length > 0;
+  const hasCallbacks =
+    model.counts.open_callbacks > 0 || model.exceptions.open_callbacks.length > 0;
 
   if (visible.length === 0 && !hasCallbacks) {
     return (

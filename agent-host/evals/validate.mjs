@@ -568,7 +568,7 @@ const recordableText = (channels) =>
   !channels ? "no consent" : channels.length > 1 ? "no consent, or one for every contact given" : `no consent, or ${channels.join(" and ")} consent`;
 // Packs whose lead and consent facts predate the Worker's read models; they are aligned in a later
 // slice and skip this check until then.
-export const UNALIGNED_RECORD_PACKS = new Set(["customer_care_warranty", "estimator", "independent_auditor", "measurement_design", "orchestrator", "proposal_contract", "scheduler_dispatcher"]);
+export const UNALIGNED_RECORD_PACKS = new Set(["customer_care_warranty", "estimator", "independent_auditor", "measurement_design", "proposal_contract", "scheduler_dispatcher"]);
 const isCaseTime = (value) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 1 && typeof value.$case_time === "string";
 const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const nameUpTo = (value, max) => value === null || (typeof value === "string" && value.trim() !== "" && value.length <= max);

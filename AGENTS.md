@@ -244,8 +244,9 @@ the touched surface warrants them. Report skipped or blocked checks explicitly.
 A push to `main` deploys `qa` only (`.github/workflows/deploy.yml`, IRO-260); production releases
 come from a `v*` tag through `.github/workflows/deploy-production.yml`, which promotes the bytes that
 Deploy already proved on `qa` rather than building its own (IRO-264).
-`.github/workflows/release-please.yml` checks every pull request title, keeps one release pull
-request open, and tags the release commit after Deploy proves it; a person merges that release pull
+`.github/workflows/release-please.yml` keeps one release pull request open, warns (never fails)
+when a commit that landed on `main` is not a conventional commit, and tags the release commit after
+Deploy proves it; it does not run on pull request events. A person merges that release pull
 request. The first Deploy run after that merge fails closed at admission by design.
 
 ## Mutation guardrails

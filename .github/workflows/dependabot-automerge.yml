@@ -1,0 +1,55 @@
+# Arms GitHub auto-merge for Dependabot pull requests whose every update is a
+# semver patch or minor. GitHub then merges once the required `gate` check is
+# green, and a red check keeps the pull request open. Majors and updates with no
+# semver type (digest-only) are left for review.
+#
+# Not a required check: it only turns auto-merge on, and it never fails a pull
+# request on policy.
+#
+# Only GitHub-owned actions are allowed in this organization, so this reads the
+# `update-type:` lines Dependabot writes into its commit message with the
+# preinstalled `gh` CLI instead of using dependabot/fetch-metadata.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Arm auto-merge for patch and minor updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          types="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate \
+            --jq '.[].commit.message' | sed -n 's/^[[:space:]]*update-type:[[:space:]]*//p' | sort -u)"
+          if [[ -z "${types}" ]]; then
+            echo "::notice::no update type in the commit message; left for review"
+            exit 0
+          fi
+          if grep -qvE '^version-update:semver-(patch|minor)$' <<<"${types}"; then
+            echo "::notice::not only patch and minor updates (${types//$'\n'/, }); left for review"
+            exit 0
+          fi
+          # Auto-merge on a branch with no required status check would merge at once.
+          required="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/${BASE}" \
+            --jq '[.[] | select(.type == "required_status_checks")] | length')"
+          if [[ "${required}" -eq 0 ]]; then
+            echo "::warning::${BASE} has no required status check, so auto-merge would merge without CI; not arming it"
+            exit 0
+          fi
+          gh pr merge --auto --squash "${PR_URL}"
+          echo "::notice::auto-merge armed (${types//$'\n'/, })"

@@ -3510,10 +3510,10 @@ async function nativeProductionGates(
        LEFT JOIN production_gate_clearances entry
          ON entry.tenant_id = gate.tenant_id AND entry.clearance_id = gate.clearance_decision_id
       WHERE gate.tenant_id = ?
-        AND gate.roof_job_id IN (${selected.map(() => "?").join(", ")})
+        AND gate.roof_job_id IN (SELECT value FROM json_each(?))
         ${state ? "AND gate.state = ?" : ""}
       ORDER BY gate.roof_job_id ASC, gate.gate ASC, gate.updated_at DESC, gate.gate_id ASC`,
-    [tenantId, ...selected, ...(state ? [state] : [])],
+    [tenantId, JSON.stringify(selected), ...(state ? [state] : [])],
     limit,
   );
 }
@@ -3567,10 +3567,10 @@ async function nativeMaterialExceptions(
        FROM inventory_exceptions
       WHERE tenant_id = ?
         AND aggregate_type = 'roof_job'
-        AND aggregate_id IN (${selected.map(() => "?").join(", ")})
+        AND aggregate_id IN (SELECT value FROM json_each(?))
         AND status IN ('open', 'contained')
       ORDER BY updated_at DESC, exception_id ASC`,
-    [tenantId, ...selected],
+    [tenantId, JSON.stringify(selected)],
     limit,
   );
 }

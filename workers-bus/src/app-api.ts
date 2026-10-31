@@ -46,11 +46,13 @@ import {
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
+  accessConflictBody,
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
   closeRoleDrafts,
   createUserInvite,
+  type AccessConflict,
   listAppUsersForOffice,
   listUserInvitesForOffice,
   resendUserInviteForOffice,
@@ -275,6 +277,7 @@ import {
 } from "./commercial-deposit.ts";
 import { readAccountingIntent } from "./accounting-intents.ts";
 import { readCommercialJobPhase } from "./commercial-job-phase.ts";
+import { depositTermsRefusal, handleTenantDepositPolicy } from "./deposit-policy.ts";
 import { readCommercialContext } from "./commercial-context.ts";
 import {
   OperatingJobAssignmentError,
@@ -453,18 +456,59 @@ export async function handleAdminAppUserProvision(
   );
   const authority = authorizeAppUserMutation(auth, target, validated.value.role);
   if (authority) return appJson({ error: authority.error }, authority.status);
+  // A change to an existing person names the access version it was decided on; a new person has
+  // none yet (0157).
+  const { expected_access_version: expectedAccessVersion, ...provision } = validated.value;
+  if (target && expectedAccessVersion === null) {
+    return appJson({ error: "expected_access_version_required" }, 400);
+  }
+  if (
+    (target && Number(target.access_version ?? 1) !== expectedAccessVersion) ||
+    (!target && expectedAccessVersion !== null)
+  ) {
+    return appJson({
+      error: "access_version_conflict",
+      conflict: await accessConflictBody(appEnv, auth, target, expectedAccessVersion ?? 0),
+    }, 409);
+  }
   const user = await provisionAppUser(appEnv, {
-    ...validated.value,
+    ...provision,
     provisioned_by: auth.session.email_normalized,
   }, req, {
     actorUserId: auth.session.user_id,
     actorRole: auth.session.role,
     expectedTarget: target,
   });
-  if (!user) return appJson({ error: "app_user_state_changed" }, 409);
-  // An existing person's new role answers the AI team's open role-change drafts for them.
-  if (target && target.role !== user.role)
-    await closeRoleDrafts(appEnv, req, user.tenant_id, user.user_id, user.role, auth.session.user_id);
+  if (!user) {
+    const current = await appAuthStore.findAppUserByEmail(
+      appEnv,
+      provision.tenant_id,
+      provision.email_normalized,
+    );
+    const moved = target
+      ? Number(current?.access_version ?? 1) !== expectedAccessVersion
+      : current !== null;
+    return moved
+      ? appJson({
+        error: "access_version_conflict",
+        conflict: await accessConflictBody(appEnv, auth, current, expectedAccessVersion ?? 0),
+      }, 409)
+      : appJson({ error: "app_user_state_changed" }, 409);
+  }
+  // An existing person's new role answers the AI team's role-change drafts for them that were
+  // prepared against an older access version. The close names what this request wrote, not the row
+  // read back after it: the write held only at `expectedAccessVersion`, so it produced the next one.
+  if (target && expectedAccessVersion !== null && target.role !== provision.role) {
+    await closeRoleDrafts(
+      appEnv,
+      req,
+      user.tenant_id,
+      user.user_id,
+      provision.role,
+      auth.session.user_id,
+      expectedAccessVersion + 1,
+    );
+  }
   return appJson({
     user: {
       user_id: user.user_id,
@@ -474,7 +518,14 @@ export async function handleAdminAppUserProvision(
       role: user.role,
       frappe_user_id: user.frappe_user_id,
       active: user.active === 1,
+      access_version: Number(user.access_version ?? 1),
       updated_at: user.updated_at,
+      // Whether removing their access unpaired a crew phone; never which one (0157).
+      crew_phone_unpaired: (await appAuthStore.usersWithCrewPhoneUnpairedByRemoval(
+        appEnv,
+        user.tenant_id,
+        user.user_id,
+      )).has(user.user_id),
     },
   });
 }
@@ -632,7 +683,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserRole(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   const appUserAccessMatch = url.pathname.match(
     /^\/api\/v1\/admin\/app-users\/([^/]+)\/access$/,
@@ -643,7 +694,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserAccess(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   if (url.pathname === "/api/v1/admin/user-invites") {
     if (req.method === "GET") {
@@ -1875,6 +1926,10 @@ export async function handleAuthenticatedRoute(
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
+  }
+  // The owner's deposit policy (0155): payment on completion (OD-01) or a deposit (MD-13).
+  if (url.pathname === "/api/v1/owner/deposit-policy") {
+    return await handleTenantDepositPolicy(req, env, auth);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/owner/now") {
     if (auth.session.role !== "owner" && auth.session.role !== "ops") {
@@ -4552,6 +4607,12 @@ async function createCommercialQuoteRevision(
         200,
       );
     }
+    // An approved quote can reach the customer, so it carries only terms the tenant's deposit
+    // policy allows (0155); acceptance would refuse anything else.
+    if (input.status === "approved") {
+      const refusal = await depositTermsRefusal(env, auth.session.tenant_id, input.terms);
+      if (refusal) return privateAppJson(refusal, 409);
+    }
     const binding = await readCommercialJobBinding(
       env,
       auth.session.tenant_id,
@@ -4887,7 +4948,8 @@ async function prepareCommercialProposalPublication(
     const proposal = await env.DB.prepare(
       `SELECT proposal.proposal_revision_id, proposal.proposal_pack_id,
               proposal.quote_revision_id, proposal.roof_job_id, proposal.customer_id,
-              proposal.terms_hash, quote.customer_quote_id, quote.status AS quote_status,
+              proposal.terms_hash, proposal.terms_json,
+              quote.customer_quote_id, quote.status AS quote_status,
               quote.revision_number AS quote_revision_number,
               quote.supersedes_quote_revision_id,
               job.version AS job_version, customer.version AS customer_version,
@@ -4963,6 +5025,12 @@ async function prepareCommercialProposalPublication(
         !(proposal.lead_status === "converted" && proposalCorrection))
     ) {
       return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
+    }
+    // Publishing is what puts terms in front of the customer: only terms the tenant's deposit
+    // policy allows (0155). Withdrawal is always allowed, and a replay keeps its original permit.
+    if (input.state === "published" && !replayedPermit) {
+      const refusal = await depositTermsRefusal(env, auth.session.tenant_id, proposal.terms_json);
+      if (refusal) return privateAppJson(refusal, 409);
     }
     const sourceFacts = {
       schema_version: "ironwrap.commercial-publication-source.v1",
@@ -5188,6 +5256,10 @@ async function createCommercialProposalRevision(
         200,
       );
     }
+    // A proposal is what the customer reads and accepts: its terms must be ones the tenant's
+    // deposit policy allows (0155).
+    const refusal = await depositTermsRefusal(env, auth.session.tenant_id, input.terms);
+    if (refusal) return privateAppJson(refusal, 409);
     const binding = await readCommercialJobBinding(
       env,
       auth.session.tenant_id,
@@ -7777,6 +7849,7 @@ interface CommercialPublicationFacts {
   roof_job_id: string;
   customer_id: string;
   terms_hash: string;
+  terms_json: string;
   customer_quote_id: string;
   quote_revision_number: number;
   supersedes_quote_revision_id: string | null;
@@ -7971,6 +8044,15 @@ function decodedPathSegment(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A refused role or access change; a version conflict also says what moved (0157). */
+function accessChangeFailureBody(
+  failure: { error: string; conflict?: AccessConflict | null },
+): Record<string, unknown> {
+  return failure.conflict === undefined
+    ? { error: failure.error }
+    : { error: failure.error, conflict: failure.conflict };
 }
 
 function decodeWorkObjectScope(

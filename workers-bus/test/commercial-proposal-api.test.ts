@@ -16,6 +16,7 @@ import { runExternalEffect } from "../src/effect-runtime.ts";
 import worker from "../src/index.ts";
 import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
 const NOW = new Date("2026-08-20T12:00:00.000Z");
@@ -911,10 +912,12 @@ function seedOperatingCore(db: DatabaseSync): void {
   const now = NOW.toISOString();
   db.prepare(
     `INSERT INTO app_users
-     (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+     (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
       active, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, 'test-seed', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, 'owner', ?, 1, 'test-seed', ?, ?)`,
   ).run(OWNER_ID, TENANT, "owner@example.com", "Owner", "owner", "owner@example.com", now, now);
+  // These contracts carry a deposit: the tenant takes deposits (MD-13), since 0155's default is OD-01.
+  recordDepositPolicy(db, { tenantId: TENANT, ownerUserId: OWNER_ID, at: now });
   db.prepare(
     `INSERT INTO app_users
      (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
@@ -2826,4 +2829,137 @@ test("0161 only adds objects: it re-creates or drops nothing an earlier migratio
     "proposal_delivery_late_answer_windows_append_only_update",
     "proposal_delivery_late_answer_windows_no_insert_replace",
   ]);
+});
+
+test("under OD-01 the quote, proposal and publication routes refuse deposit terms by name, and withdrawal stays open", async () => {
+  const { db, env, prepare, prepareBody } = await publicationReady("od01-terms");
+  try {
+    const permits = (action: string) =>
+      Number((db.raw.prepare(
+        "SELECT COUNT(*) AS count FROM commercial_authority_permits WHERE action = ?",
+      ).get(action) as { count: number }).count);
+    // Published while the tenant took deposits (MD-13).
+    const first = await prepare("od01-refused-prepare-1");
+    assert.equal(first.status, 201, await first.clone().text());
+    const { permit } = await first.json() as { permit: Permit };
+    await runSend(env, permit, "effect:od01-terms:publish", "success");
+    const settled = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications", {
+        proposal_revision_id: REVISION,
+        proposal_pack_id: PACK,
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        permit_id: permit.permit_id,
+        external_effect_id: "effect:od01-terms:publish",
+      }, "od01-refused-settle-1"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(settled.status, 201, await settled.clone().text());
+
+    // The owner turns deposits off: payment on completion (OD-01).
+    recordDepositPolicy(db.raw, {
+      tenantId: TENANT,
+      ownerUserId: OWNER_ID,
+      policy: "od01_payment_on_completion",
+    });
+    const refusal = {
+      error: "deposit_terms_not_allowed_by_policy",
+      policy: "od01_payment_on_completion",
+      field: "terms.deposit_percent",
+    };
+    const quotes = permits("quote.revision.record");
+    const proposals = permits("proposal.revision.record");
+
+    // Withdrawing the deposit contract stays open.
+    const withdraw = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        ...prepareBody(),
+        publication_version: 2,
+        previous_state: "published",
+        state: "withdrawn",
+      }, "od01-refused-withdraw"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(withdraw.status, 201, await withdraw.clone().text());
+    // Publishing it again does not.
+    const republish = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        ...prepareBody(),
+        publication_version: 2,
+      }, "od01-refused-republish"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(republish.status, 409);
+    assert.deepEqual(await republish.json(), refusal);
+
+    // An approved quote with a deposit, and a proposal with one, are refused before any authority.
+    const quote = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/quote-revisions", {
+        ...quoteBody(new Date().toISOString()),
+        quote_revision_id: "quote-revision:commercial:api:od01",
+        customer_quote_id: "customer-quote:commercial:api:od01",
+      }, "od01-refused-quote"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(quote.status, 409);
+    assert.deepEqual(await quote.json(), refusal);
+    const proposal = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-revisions", {
+        ...proposalBody(new Date().toISOString()),
+        proposal_revision_id: "proposal-revision:commercial:api:od01",
+        proposal_pack_id: "proposal-pack:commercial:api:od01",
+      }, "od01-refused-proposal"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(proposal.status, 409);
+    assert.deepEqual(await proposal.json(), refusal);
+    // No deposit, but a schedule that still asks for one: the schedule is the term to change.
+    const schedule = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/quote-revisions", {
+        ...quoteBody(new Date().toISOString()),
+        quote_revision_id: "quote-revision:commercial:api:od01-schedule",
+        customer_quote_id: "customer-quote:commercial:api:od01-schedule",
+        terms: { ...TERMS, deposit_percent: 0 },
+      }, "od01-refused-schedule"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(schedule.status, 409);
+    assert.deepEqual(await schedule.json(), { ...refusal, field: "terms.payment_schedule" });
+    assert.equal(permits("quote.revision.record"), quotes);
+    assert.equal(permits("proposal.revision.record"), proposals);
+
+    // A draft may still carry them while the terms are being settled; the payment-on-completion
+    // terms are accepted at approval.
+    const draft = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/quote-revisions", {
+        ...quoteBody(new Date().toISOString()),
+        quote_revision_id: "quote-revision:commercial:api:od01-draft",
+        customer_quote_id: "customer-quote:commercial:api:od01-draft",
+        status: "draft",
+      }, "od01-refused-draft"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(draft.status, 201, await draft.clone().text());
+    const onCompletion = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/quote-revisions", {
+        ...quoteBody(new Date().toISOString()),
+        quote_revision_id: "quote-revision:commercial:api:od01-ok",
+        customer_quote_id: "customer-quote:commercial:api:od01-ok",
+        terms: { ...TERMS, deposit_percent: 0, payment_schedule: ["completion"] },
+      }, "od01-refused-on-completion"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(onCompletion.status, 201, await onCompletion.clone().text());
+  } finally {
+    db.close();
+  }
 });

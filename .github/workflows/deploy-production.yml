@@ -48,12 +48,12 @@ env:
   RELEASE_RULESET_ID: 20652124
   RELEASE_DECLARATION_REPOSITORY: Iron-Wrap/iron-wrap-infra
   RELEASE_DECLARATION_PATH: environments/production/stand.yml
-  CLOUDFLARE_ACCOUNT_ID: 7ee5775bc1ba46f05c5a65235b60e939
-  RELEASE_PRODUCTION_D1_ID: 8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d
-  RELEASE_PRODUCTION_DOMAIN_HOSTNAME: ironwrap-bus.ironwrapexteriors.com
+  CLOUDFLARE_ACCOUNT_ID: 5023dd227b538fc4238439fd7d52640f
+  RELEASE_PRODUCTION_D1_ID: a8fd0116-7af6-4788-98bd-083addbe58bc
+  RELEASE_PRODUCTION_DOMAIN_HOSTNAME: ironwrap.mindburn.org
   RELEASE_PRODUCTION_DOMAIN_SERVICE: ironwrap-bus
   RELEASE_PRODUCTION_ZONE_ID: ${{ vars.RELEASE_PRODUCTION_ZONE_ID }}
-  RELEASE_PRODUCTION_BASE_URL: https://ironwrap-bus.ironwrapexteriors.com
+  RELEASE_PRODUCTION_BASE_URL: https://ironwrap.mindburn.org
   RELEASE_ISSUER_IDENTITY: release-admission@ironwrapexteriors.com
   # Releases are admitted by automated checks only: CI, isolated qa with smoke,
   # restore and rollback drills, then production smoke with automatic rollback.

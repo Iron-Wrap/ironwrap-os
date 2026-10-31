@@ -285,7 +285,7 @@ describe("NewoOperationsPage", () => {
     expect(screen.queryByText("No call or booking needs a check.")).toBeNull();
     expect(screen.getByRole("heading", { name: "Reception needs a check" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Reception is ready" })).toBeNull();
-    const hero = screen.getByRole("heading", { name: "Reception", exact: true }).parentElement!;
+    const hero = screen.getByRole("heading", { name: "Reception" }).parentElement!;
     expect(within(hero).getByText("Check")).toBeVisible();
     expect(within(hero).queryByText("Ready")).toBeNull();
     const readiness = screen.getByRole("heading", { name: "System checks" }).parentElement!;

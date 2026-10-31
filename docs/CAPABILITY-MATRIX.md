@@ -436,11 +436,13 @@ requirements.
 
 - the shared code must run as separate IronWrap and Facet deployments with product-scoped keys,
   receipts, policy ledgers, and promotion authority;
-- Ivan owns business approval and GitHub merge authority; Sergey owns provider, Cloudflare, DNS,
-  and the Frappe adapter host; the independent reviewer role is now AI review (Sonnet) under Ivan's sign-off, as Andrei has
-  left; Ilya, the customer, holds permit signing, the policy ledger, and business counter-approval;
-- the people named may participate in the repository and business process, but participation grants no
-  protected credential by implication;
+- Ivan owns business approval, release sign-off and GitHub merge authority. Development, source
+  reviews and data checks stay with AI assistants and Ivan; the independent reviewer is separate
+  from the builder, and Ivan runs the AI-prepared production pre-flight queries;
+- Sergey owns devops: provider accounts, Cloudflare, DNS, hosts, deploy infrastructure and production
+  secret custody. Sergey and Kirill receive no development, review or data-check assignments;
+  Andrei has left, and Ilya is the customer, not a team member. Participation grants no protected
+  credential by implication;
 - the issuer runs in a separately controlled Cloudflare account outside the product account, while
   the Frappe adapter runs on the Frappe VPS under a dedicated OS/service identity; and
 - IRO-219's implemented v2 trigger accepts only the exact canonical request freshness window

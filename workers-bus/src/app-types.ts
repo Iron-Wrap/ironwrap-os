@@ -272,6 +272,20 @@ export interface AppTenantPublic {
 }
 
 /**
+ * The tenant as a session carries it: the deployment's public identity plus the office line a
+ * crew phone dials from its emergency line. `office_phone` is null on a signed-out session.
+ */
+export interface AppSessionTenant extends AppTenantPublic {
+  office_phone: string | null;
+}
+
+/**
+ * The company profile's own phone check, applied to the trimmed value when an owner saves it
+ * (`company-profile.ts`) and again before a session hands the stored value to a crew phone.
+ */
+export const COMPANY_PHONE_PATTERN = /^[0-9 ()+.\-]{7,32}$/;
+
+/**
  * The money-plane permissions (IRO-52 slice S8, contract section 8.1).
  *
  * `accounting:compensate` is granted to the accountant as well as the owner because section 6

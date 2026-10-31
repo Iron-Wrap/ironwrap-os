@@ -204,7 +204,10 @@ import { handleEvidenceContentRead, handleEvidenceUpload } from "./evidence-uplo
 import { handlePrivacyEvidenceAuditRoute } from "./privacy-evidence-audit.ts";
 import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-disposition.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
-import { handleProductionGateClearance } from "./production-gate-clearance.ts";
+import {
+  handleProductionGateClearance,
+  handleProductionGateWaiverDecision,
+} from "./production-gate-clearance.ts";
 import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
@@ -274,6 +277,7 @@ import {
 } from "./commercial-deposit.ts";
 import { readAccountingIntent } from "./accounting-intents.ts";
 import { readCommercialJobPhase } from "./commercial-job-phase.ts";
+import { depositTermsRefusal, handleTenantDepositPolicy } from "./deposit-policy.ts";
 import { readCommercialContext } from "./commercial-context.ts";
 import {
   OperatingJobAssignmentError,
@@ -807,7 +811,7 @@ export async function handleAuthenticatedRoute(
   const recipientResponse = await handleAutomationRecipientRoute(req, env, auth);
   if (recipientResponse) return recipientResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
-    const response = appJson(sessionPayload(auth, env));
+    const response = appJson(await sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");
     return response;
   }
@@ -825,7 +829,7 @@ export async function handleAuthenticatedRoute(
     try {
       return privateAppJson({
         version: APP_API_VERSION,
-        session: sessionPayload(auth, env),
+        session: await sessionPayload(auth, env),
         // A field device gets one call before it goes offline, so the capability signal rides
         // with it rather than costing a second round trip on a bad connection. It stays a hint:
         // the server re-derives and re-enforces on every write, and a cached state never admits
@@ -1923,6 +1927,10 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  // The owner's deposit policy (0155): payment on completion (OD-01) or a deposit (MD-13).
+  if (url.pathname === "/api/v1/owner/deposit-policy") {
+    return await handleTenantDepositPolicy(req, env, auth);
+  }
   if (req.method === "GET" && url.pathname === "/api/v1/owner/now") {
     if (auth.session.role !== "owner" && auth.session.role !== "ops") {
       return appJson({ error: "forbidden" }, 403);
@@ -2028,17 +2036,19 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "newo_operations_unavailable" }, 502);
     }
   }
-  // The producers the six scheduling gates never had (ELEC-122). Nested under the
-  // job on purpose: a gate has no identity apart from the job it locks, and the
-  // path says which job's schedule is being unlocked.
-  const productionGateClearanceMatch = url.pathname.match(
-    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/clearance$/,
+  // A production gate moves only by an entry in its ledger (migration 0153). Nested
+  // under the job on purpose: a gate has no identity apart from the job it locks, and
+  // the path says which job's schedule is being unlocked.
+  const productionGateLedgerMatch = url.pathname.match(
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions)$/,
   );
-  if (req.method === "POST" && productionGateClearanceMatch) {
-    const roofJobId = decodedPathSegment(productionGateClearanceMatch[1]);
-    const gate = decodedPathSegment(productionGateClearanceMatch[2]);
+  if (req.method === "POST" && productionGateLedgerMatch) {
+    const roofJobId = decodedPathSegment(productionGateLedgerMatch[1]);
+    const gate = decodedPathSegment(productionGateLedgerMatch[2]);
     if (!roofJobId || !gate) return privateAppJson({ error: "not_found" }, 404);
-    return await handleProductionGateClearance(req, env, auth, roofJobId, gate);
+    return productionGateLedgerMatch[3] === "clearance"
+      ? await handleProductionGateClearance(req, env, auth, roofJobId, gate)
+      : await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
     if (!hasPermission(auth, "production:read")) {
@@ -4597,6 +4607,12 @@ async function createCommercialQuoteRevision(
         200,
       );
     }
+    // An approved quote can reach the customer, so it carries only terms the tenant's deposit
+    // policy allows (0155); acceptance would refuse anything else.
+    if (input.status === "approved") {
+      const refusal = await depositTermsRefusal(env, auth.session.tenant_id, input.terms);
+      if (refusal) return privateAppJson(refusal, 409);
+    }
     const binding = await readCommercialJobBinding(
       env,
       auth.session.tenant_id,
@@ -4618,7 +4634,6 @@ async function createCommercialQuoteRevision(
     ) {
       return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
     }
-    const nowIso = now.toISOString();
     const sourceFacts = {
       schema_version: "ironwrap.commercial-job-binding.v1",
       tenant_id: auth.session.tenant_id,
@@ -4933,7 +4948,8 @@ async function prepareCommercialProposalPublication(
     const proposal = await env.DB.prepare(
       `SELECT proposal.proposal_revision_id, proposal.proposal_pack_id,
               proposal.quote_revision_id, proposal.roof_job_id, proposal.customer_id,
-              proposal.terms_hash, quote.customer_quote_id, quote.status AS quote_status,
+              proposal.terms_hash, proposal.terms_json,
+              quote.customer_quote_id, quote.status AS quote_status,
               quote.revision_number AS quote_revision_number,
               quote.supersedes_quote_revision_id,
               job.version AS job_version, customer.version AS customer_version,
@@ -5009,6 +5025,12 @@ async function prepareCommercialProposalPublication(
         !(proposal.lead_status === "converted" && proposalCorrection))
     ) {
       return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
+    }
+    // Publishing is what puts terms in front of the customer: only terms the tenant's deposit
+    // policy allows (0155). Withdrawal is always allowed, and a replay keeps its original permit.
+    if (input.state === "published" && !replayedPermit) {
+      const refusal = await depositTermsRefusal(env, auth.session.tenant_id, proposal.terms_json);
+      if (refusal) return privateAppJson(refusal, 409);
     }
     const sourceFacts = {
       schema_version: "ironwrap.commercial-publication-source.v1",
@@ -5234,6 +5256,10 @@ async function createCommercialProposalRevision(
         200,
       );
     }
+    // A proposal is what the customer reads and accepts: its terms must be ones the tenant's
+    // deposit policy allows (0155).
+    const refusal = await depositTermsRefusal(env, auth.session.tenant_id, input.terms);
+    if (refusal) return privateAppJson(refusal, 409);
     const binding = await readCommercialJobBinding(
       env,
       auth.session.tenant_id,
@@ -5777,63 +5803,6 @@ function canReadJobs(auth: AuthContext): boolean {
     hasPermission(auth, "jobs:read:assigned");
 }
 
-async function validateProductionSchedulePreparation(
-  env: AppEnv,
-  auth: AuthContext,
-  input: NonNullable<ReturnType<typeof parseProductionScheduleApprovalPreparation>>,
-): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
-  try {
-    const runway = await buildProductionRunwayReadModel(env, auth);
-    const job = runway.jobs.find((candidate) => candidate.id === input.roofJobId);
-    if (
-      !runway.allowed_actions.includes("production_schedule_approval.prepare") ||
-      !job ||
-      !job.scheduling_preparation_allowed
-    ) {
-      return {
-        ok: false,
-        error: "production_schedule_not_eligible",
-        status: 409,
-      };
-    }
-    if (!runway.crews.some((crew) => crew.id === input.crewProfileId)) {
-      return {
-        ok: false,
-        error: "active_crew_profile_required",
-        status: 409,
-      };
-    }
-    if (job.assignment) {
-      if (
-        input.supersedesAssignmentId !== job.assignment.id ||
-        input.correctionReason === null
-      ) {
-        return {
-          ok: false,
-          error: "production_schedule_supersede_required",
-          status: 409,
-        };
-      }
-    } else if (
-      input.supersedesAssignmentId !== null ||
-      input.correctionReason !== null
-    ) {
-      return {
-        ok: false,
-        error: "production_schedule_supersede_invalid",
-        status: 409,
-      };
-    }
-    return { ok: true };
-  } catch {
-    return {
-      ok: false,
-      error: "production_schedule_preparation_unavailable",
-      status: 502,
-    };
-  }
-}
-
 function quoteRevisionApprovalBrokerDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
@@ -6220,64 +6189,6 @@ function proposalPublicationRequestText(proposalEvidencePackId: string): string 
   return `Publish the reviewed Draft Proposal Evidence Pack ${proposalEvidencePackId} to the private customer portal. No customer message, portal link, signature, or quote change.`;
 }
 
-function parseProductionScheduleApprovalPreparation(value: unknown): {
-  roofJobId: string;
-  crewProfileId: string;
-  scheduledStart: string;
-  scheduledEnd: string | null;
-  supersedesAssignmentId: string | null;
-  correctionReason: string | null;
-} | null {
-  const requiredKeys = [
-    "roof_job_id",
-    "crew_profile_id",
-    "scheduled_start",
-    "scheduled_end",
-    "supersedes_assignment_id",
-    "correction_reason",
-  ];
-  if (
-    !isRecord(value) ||
-    !onlyKeys(value, requiredKeys) ||
-    !requiredKeys.every((key) => Object.hasOwn(value, key))
-  ) {
-    return null;
-  }
-  const roofJobId = idText(value.roof_job_id, 1, 140);
-  const crewProfileId = idText(value.crew_profile_id, 1, 140);
-  const scheduledStart = normalizedIso(value.scheduled_start);
-  const scheduledEnd =
-    value.scheduled_end === null ? null : normalizedIso(value.scheduled_end);
-  const supersedesAssignmentId =
-    value.supersedes_assignment_id === null
-      ? null
-      : idText(value.supersedes_assignment_id, 1, 140);
-  const correctionReason =
-    value.correction_reason === null
-      ? null
-      : boundedText(value.correction_reason, 1, 2_000);
-  if (
-    !roofJobId ||
-    !crewProfileId ||
-    !scheduledStart ||
-    (value.scheduled_end !== null && !scheduledEnd) ||
-    (value.supersedes_assignment_id !== null && !supersedesAssignmentId) ||
-    (value.correction_reason !== null && !correctionReason) ||
-    (scheduledEnd !== null && Date.parse(scheduledEnd) <= Date.parse(scheduledStart)) ||
-    (supersedesAssignmentId === null) !== (correctionReason === null)
-  ) {
-    return null;
-  }
-  return {
-    roofJobId,
-    crewProfileId,
-    scheduledStart,
-    scheduledEnd,
-    supersedesAssignmentId,
-    correctionReason,
-  };
-}
-
 function parseOperatingJobAssignment(value: unknown): {
   expectedRoofJobVersion: number;
   crewId: string;
@@ -6430,17 +6341,6 @@ function parseOperatingWorkObjectAssignment(value: unknown): {
     supersedesAssignmentId,
     correctionReason,
   };
-}
-
-function productionScheduleRequestText(
-  input: NonNullable<ReturnType<typeof parseProductionScheduleApprovalPreparation>>,
-): string {
-  const timing = input.scheduledEnd
-    ? `${input.scheduledStart} to ${input.scheduledEnd}`
-    : `starting ${input.scheduledStart}`;
-  return input.supersedesAssignmentId
-    ? `Prepare an append-only Production Job Assignment correction for ${input.crewProfileId} ${timing}. Reason: ${input.correctionReason}`
-    : `Prepare an append-only Production Job Assignment for ${input.crewProfileId} ${timing}.`;
 }
 
 function parseExpectedVersion(value: unknown): number | null {
@@ -7949,6 +7849,7 @@ interface CommercialPublicationFacts {
   roof_job_id: string;
   customer_id: string;
   terms_hash: string;
+  terms_json: string;
   customer_quote_id: string;
   quote_revision_number: number;
   supersedes_quote_revision_id: string | null;

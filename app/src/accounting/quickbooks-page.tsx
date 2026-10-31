@@ -1173,14 +1173,8 @@ function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse;
         </div>
       </div>
       <dl className="mt-5 grid gap-4 border-t border-border pt-5 text-sm sm:grid-cols-2">
-        <Fact
-          label="Completion"
-          value={`Verified record · version ${intent.basis.completion_version}`}
-        />
-        <Fact
-          label="Accepted quote"
-          value={`Accepted record · version ${intent.basis.quote_version}`}
-        />
+        <Fact label="Completion" value="Verified record" />
+        <Fact label="Accepted quote" value="Accepted record" />
         <Fact
           label="Invoice date"
           value={dateFormatter.format(new Date(`${intent.invoice_date}T00:00:00.000Z`))}

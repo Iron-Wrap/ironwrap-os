@@ -230,7 +230,7 @@ async function previewProductionSchedule(body, config, invokeMcp, now) {
   const parsed = parsePreviewInput(body, config);
   const input = {
     ...parsed,
-    authorityRequirements: await loadCrewAuthorityRequirements(parsed, config, invokeMcp),
+    authorityRequirements: await loadCrewAuthorityRequirements(parsed, invokeMcp),
   };
   const current = await loadProductionSchedulePreview(input, config, invokeMcp, now);
   const writeArgs = writeArgsFromInput(input, config);
@@ -486,7 +486,7 @@ async function parseExecutionInput(body, config, now, invokeMcp) {
   // a refusal.
   const input = {
     ...parsed,
-    authorityRequirements: await loadCrewAuthorityRequirements(parsed, config, invokeMcp),
+    authorityRequirements: await loadCrewAuthorityRequirements(parsed, invokeMcp),
   };
   const targetName = idText(record.target_name, "broker_production_schedule_execution_target_name_invalid");
   const expiresAt = requiredFutureIso(record.expires_at, now, "broker_production_schedule_execution_expired");
@@ -643,7 +643,7 @@ export function compileCrewAuthorityRequirements(roster, roofJobId) {
  * putting the compiled list inside the args is what brings roster drift under it,
  * with no second mechanism to keep in step.
  */
-async function loadCrewAuthorityRequirements(input, config, invokeMcp) {
+async function loadCrewAuthorityRequirements(input, invokeMcp) {
   let payload;
   try {
     payload = parseToolPayload(await invokeMcp(PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL, {

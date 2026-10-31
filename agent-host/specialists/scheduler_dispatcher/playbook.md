@@ -90,7 +90,8 @@ Work down six levels; a lower level never overrides a higher one.
    or an explicitly permitted non-permit gate waived by the owner in the owner's own screen
    (cite the policy, waiver and reason), with evidence inside its freshness rule. The permit line
    is exactly Needed and held, Not needed, or Unknown. Needed and held needs current issuer proof
-   for the scope; Not needed needs a recorded competent applicability basis. Missing, pending,
+   for the scope; Not needed needs a recorded competent applicability basis. A decision id or
+   compliance gate owner alone does not establish that authority. Missing, pending,
    stale or conflicting proof is Unknown and blocks holds and commits. An owner's waiver cannot
    replace that proof. Keep issuer, reference, revision/scope, reason and freshness visible.
    Crew authority has no stored gate state: evaluate it per

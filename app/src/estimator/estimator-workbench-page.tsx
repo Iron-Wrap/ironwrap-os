@@ -223,14 +223,11 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
           {decision.title}
         </p>
         <p className="mt-2 text-sm leading-6 text-muted sm:mt-3">{decision.detail}</p>
-        <div className="mt-3 flex flex-wrap items-center gap-3 sm:mt-5">
-          <StatusChip label={decision.label} tone={decision.tone} />
-          <span className="sr-only text-xs font-semibold text-muted sm:not-sr-only">
-            Review before acting
-          </span>
-        </div>
-        <Button asChild variant="outline" className="mt-3 w-full sm:hidden">
-          <a href="#review-workspace-heading">Open review sections</a>
+        <p className="mt-3 text-xs font-semibold text-muted sm:mt-5">Status: {decision.label}</p>
+        <Button asChild variant="outline" className="mt-3 w-full">
+          <a href={`#${decision.targetId}`} onClick={() => revealReviewTarget(decision.targetId)}>
+            {decision.action}
+          </a>
         </Button>
       </section>
     </header>
@@ -250,16 +247,18 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
   title: string;
   detail: string;
   label: string;
-  tone: string;
+  action: string;
+  targetId: string;
   surface: string;
   titleTone: string;
 } {
   if (model.proposal_readiness.state === "blocked") {
     return {
       title: "Fix the blocked items",
-      detail: "Fix the marked items before you review the proposal. The reason is shown below.",
+      detail: "Open the proposal check to see what is blocking this job before you act.",
       label: "Work is blocked",
-      tone: "bg-warning-soft text-warning",
+      action: "See blocked items",
+      targetId: "proposal-readiness-heading",
       surface: "bg-warning-soft/35",
       titleTone: "text-warning",
     };
@@ -267,9 +266,11 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
   if (model.proposal_readiness.state === "review_required") {
     return {
       title: "Review the roof and quote",
-      detail: "Check the marked items before the proposal can move on.",
+      detail:
+        "Open the proposal check to see what needs attention. Use the sections below to inspect the saved details.",
       label: "Review needed",
-      tone: "bg-warning-soft text-warning",
+      action: "See what needs review",
+      targetId: "proposal-readiness-heading",
       surface: "bg-warning-soft/28",
       titleTone: "text-foreground",
     };
@@ -279,7 +280,8 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
       title: "Review the proposal",
       detail: "No system check is stopping this job. A person must still make the final choice.",
       label: "Ready for review",
-      tone: "bg-ok-soft text-ok",
+      action: "Open proposal details",
+      targetId: "proposal-heading",
       surface: "bg-ok-soft/28",
       titleTone: "text-foreground",
     };
@@ -288,10 +290,24 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
     title: "Use the saved details only",
     detail: "Some details are missing. A blank field does not mean no record exists.",
     label: "Some details are missing",
-    tone: "bg-surface-muted text-muted",
+    action: "Open saved details",
+    targetId: "review-workspace-heading",
     surface: "bg-surface-muted/55",
     titleTone: "text-foreground",
   };
+}
+
+function revealReviewTarget(id: string) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  for (
+    let details = target.closest("details");
+    details;
+    details = details.parentElement?.closest("details") ?? null
+  ) {
+    details.open = true;
+  }
+  target.focus({ preventScroll: true });
 }
 
 function CommercialSnapshot({
@@ -1347,12 +1363,7 @@ function CommercialRecord({
               </span>
             ) : null}
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border px-5 pb-5">
           {!quote ? (
@@ -1377,7 +1388,11 @@ function CommercialRecord({
       <details className="group border-t border-border" aria-labelledby="proposal-heading">
         <summary className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <h3 id="proposal-heading" className="text-base font-bold tracking-[-0.02em]">
+            <h3
+              id="proposal-heading"
+              tabIndex={-1}
+              className="scroll-mt-24 text-base font-bold tracking-[-0.02em]"
+            >
               Proposal
             </h3>
             <span className="mt-2 flex flex-wrap gap-2">
@@ -1406,12 +1421,7 @@ function CommercialRecord({
               />
             </span>
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border px-5 pb-5">
           {!proposal ? (
@@ -1458,12 +1468,7 @@ function CommercialRecord({
                 : "Finish review first"}
             </span>
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border bg-surface-raised/35">
           <ProposalPublicationAction
@@ -1486,12 +1491,7 @@ function CommercialRecord({
               {model.scope_clauses.length} clauses · {model.scope_changes.length} changes
             </span>
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border px-5 pb-5">
           <ScopeClauses clauses={model.scope_clauses} locale={locale} />
@@ -1984,7 +1984,11 @@ function ProposalReadiness({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 id="proposal-readiness-heading" className="text-sm font-bold text-foreground">
+          <h3
+            id="proposal-readiness-heading"
+            tabIndex={-1}
+            className="scroll-mt-24 text-sm font-bold text-foreground"
+          >
             Proposal check
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
@@ -2074,6 +2078,19 @@ function AssumptionLedger({
   );
 }
 
+function DisclosureCue() {
+  return (
+    <span className="flex shrink-0 items-center gap-2 text-xs font-bold text-accent">
+      <span className="group-open:hidden">Show details</span>
+      <span className="hidden group-open:inline">Hide details</span>
+      <ChevronDown
+        className="size-4 transition-transform group-open:rotate-180"
+        aria-hidden="true"
+      />
+    </span>
+  );
+}
+
 function ReviewGroup({
   title,
   description,
@@ -2104,10 +2121,7 @@ function ReviewGroup({
         </span>
         <span className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
           <StatusChip label={status} tone={tone} />
-          <ChevronDown
-            className="size-5 text-muted transition-transform group-open:rotate-180"
-            aria-hidden="true"
-          />
+          <DisclosureCue />
         </span>
       </summary>
       <div className="space-y-6 border-t border-border bg-surface-muted/30 p-3 sm:p-4">

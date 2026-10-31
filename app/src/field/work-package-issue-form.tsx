@@ -10,6 +10,7 @@ import {
 import type { AuthenticatedSession } from "../auth/session";
 import { isOfflineSession } from "../auth/session";
 import { Button } from "../components/ui/button";
+import { Dialog } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { apiCommand } from "../lib/api";
@@ -76,6 +77,7 @@ export function WorkPackageIssueForm({
   /** Reads the job again: the page's own refetch of this packet. */
   onReload: () => Promise<void>;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [title, setTitle] = useState(workPackage?.title ?? "");
   const [objective, setObjective] = useState(workPackage?.objective ?? "");
   const [boundaries, setBoundaries] = useState(workPackage?.boundaries ?? "");
@@ -126,7 +128,7 @@ export function WorkPackageIssueForm({
   const lastWorkDay =
     scheduledEnd && Number.isFinite(Date.parse(scheduledEnd)) ? scheduledEnd : null;
   const online = connected && !offline && navigator.onLine;
-  const issued = issuedVersion !== null;
+  const issued = issuedVersion !== null && workPackage?.version === issuedVersion;
   const officeDates = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
   // A crew phone sending I reviewed this plan turns the plan Acknowledged, and Start keeps that
   // review on record. Only for the plan this person issued, and only then, may the line say so.
@@ -248,12 +250,19 @@ export function WorkPackageIssueForm({
     }
   }
 
-  return (
+  const content = (
     <section
       className="border-2 border-info/45 bg-info-soft p-4 sm:p-5"
       aria-labelledby="work-package-issue-heading"
     >
-      <p className="text-sm font-semibold text-info">Production authority</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-info">Production authority</p>
+        {!expanded ? (
+          <Button type="button" variant="outline" size="compact" onClick={() => setExpanded(true)}>
+            Expand plan editor
+          </Button>
+        ) : null}
+      </div>
       <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
         {workPackage ? "Issue the corrected job plan" : "Issue job plan"}
       </h2>
@@ -275,7 +284,11 @@ export function WorkPackageIssueForm({
       ) : null}
       {blocked ? (
         <p className="mt-3 font-semibold">
-          <a href="#job-plan-stop-release" className="underline underline-offset-4">
+          <a
+            href="#job-plan-stop-release"
+            onClick={() => setExpanded(false)}
+            className="underline underline-offset-4"
+          >
             Review this plan’s stop for release
           </a>
           . Issuing a correction cannot release a stop.
@@ -331,14 +344,7 @@ export function WorkPackageIssueForm({
             ? `Last scheduled work day ends ${formatFieldStamp(lastWorkDay, officeDates)}.`
             : "Last scheduled work day is not set. Confirm it with production before choosing expiry."}
         </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <TextField
-            id="wp-title"
-            label="Title"
-            value={title}
-            onChange={setTitle}
-            maxLength={200}
-          />
+        <div>
           <TextField
             id="wp-expires"
             label="Expires"
@@ -349,164 +355,187 @@ export function WorkPackageIssueForm({
             hint="Choose a time after the last work day. After expiry the crew can still read the plan, but cannot add the photos or notes listed under Proof needed."
           />
         </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <TextArea id="wp-objective" label="Objective" value={objective} onChange={setObjective} />
-          <TextArea
-            id="wp-expected-result"
-            label="Expected result"
-            value={expectedResult}
-            onChange={setExpectedResult}
-          />
-          <TextArea
-            id="wp-prerequisites"
-            label="Prerequisites"
-            value={prerequisites}
-            onChange={setPrerequisites}
-          />
-          <TextArea
-            id="wp-stop-conditions"
-            label="Stop conditions"
-            value={stopConditions}
-            onChange={setStopConditions}
-          />
-          <TextArea
-            id="wp-make-safe"
-            label="Make-safe procedure"
-            value={makeSafeProcedure}
-            onChange={setMakeSafeProcedure}
-          />
-        </div>
+        <details open={!workPackage} className="border border-border p-4">
+          <summary className="cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-offset-4">
+            Other plan fields, steps and hold points
+          </summary>
+          <div className="mt-4 space-y-6">
+            <TextField
+              id="wp-title"
+              label="Title"
+              value={title}
+              onChange={setTitle}
+              maxLength={200}
+            />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <TextArea
+                id="wp-objective"
+                label="Objective"
+                value={objective}
+                onChange={setObjective}
+              />
+              <TextArea
+                id="wp-expected-result"
+                label="Expected result"
+                value={expectedResult}
+                onChange={setExpectedResult}
+              />
+              <TextArea
+                id="wp-prerequisites"
+                label="Prerequisites"
+                value={prerequisites}
+                onChange={setPrerequisites}
+              />
+              <TextArea
+                id="wp-stop-conditions"
+                label="Stop conditions"
+                value={stopConditions}
+                onChange={setStopConditions}
+              />
+              <TextArea
+                id="wp-make-safe"
+                label="Make-safe procedure"
+                value={makeSafeProcedure}
+                onChange={setMakeSafeProcedure}
+              />
+            </div>
 
-        <fieldset className="space-y-3 border border-border p-4">
-          <legend className="px-2 font-bold">Ordered steps</legend>
-          {steps.map((step, index) => (
-            <div
-              key={step.key}
-              className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-3"
-            >
-              <TextArea
-                id={`wp-step-${index + 1}-instruction`}
-                label={`Step ${index + 1}`}
-                value={step.instruction}
-                onChange={(value) => updateStep(setSteps, step.key, "instruction", value)}
-              />
-              <TextArea
-                id={`wp-step-${index + 1}-evidence`}
-                label="Required evidence"
-                value={step.requiredEvidence}
-                onChange={(value) => updateStep(setSteps, step.key, "requiredEvidence", value)}
-              />
-              <div>
-                <TextArea
-                  id={`wp-step-${index + 1}-acceptance`}
-                  label="Acceptance criteria"
-                  value={step.acceptanceCriteria}
-                  onChange={(value) => updateStep(setSteps, step.key, "acceptanceCriteria", value)}
-                />
-                {steps.length > 1 ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="compact"
-                    className="mt-2"
-                    onClick={() =>
-                      setSteps((current) => current.filter((item) => item.key !== step.key))
+            <fieldset className="space-y-3 border border-border p-4">
+              <legend className="px-2 font-bold">Ordered steps</legend>
+              {steps.map((step, index) => (
+                <div
+                  key={step.key}
+                  className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-3"
+                >
+                  <TextArea
+                    id={`wp-step-${index + 1}-instruction`}
+                    label={`Step ${index + 1}`}
+                    value={step.instruction}
+                    onChange={(value) => updateStep(setSteps, step.key, "instruction", value)}
+                  />
+                  <TextArea
+                    id={`wp-step-${index + 1}-evidence`}
+                    label="Required evidence"
+                    value={step.requiredEvidence}
+                    onChange={(value) => updateStep(setSteps, step.key, "requiredEvidence", value)}
+                  />
+                  <div>
+                    <TextArea
+                      id={`wp-step-${index + 1}-acceptance`}
+                      label="Acceptance criteria"
+                      value={step.acceptanceCriteria}
+                      onChange={(value) =>
+                        updateStep(setSteps, step.key, "acceptanceCriteria", value)
+                      }
+                    />
+                    {steps.length > 1 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="compact"
+                        className="mt-2"
+                        onClick={() =>
+                          setSteps((current) => current.filter((item) => item.key !== step.key))
+                        }
+                      >
+                        <Trash2 aria-hidden="true" /> Remove step
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="compact"
+                onClick={() => setSteps((current) => [...current, blankStep()])}
+              >
+                <Plus aria-hidden="true" /> Add step
+              </Button>
+            </fieldset>
+
+            <fieldset className="space-y-3 border border-border p-4">
+              <legend className="px-2 font-bold">Hold points</legend>
+              {holds.map((hold, index) => (
+                <div
+                  key={hold.key}
+                  className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-2"
+                >
+                  <TextArea
+                    id={`wp-hold-${index + 1}-name`}
+                    label={`Hold ${index + 1}`}
+                    value={hold.holdPoint}
+                    onChange={(value) => updateHold(setHolds, hold.key, "holdPoint", value)}
+                  />
+                  <div>
+                    <label htmlFor={`wp-hold-${index + 1}-phase`} className="text-sm font-bold">
+                      Release phase
+                    </label>
+                    <select
+                      id={`wp-hold-${index + 1}-phase`}
+                      className="mt-2 min-h-12 w-full border bg-surface px-3"
+                      value={hold.releasePhase}
+                      onChange={(event) =>
+                        updateHold(
+                          setHolds,
+                          hold.key,
+                          "releasePhase",
+                          event.target.value as HoldDraft["releasePhase"],
+                        )
+                      }
+                    >
+                      <option>Pre-start</option>
+                      <option>In-process</option>
+                      <option>Completion</option>
+                    </select>
+                  </div>
+                  <TextField
+                    id={`wp-hold-${index + 1}-authority`}
+                    label="Release authority"
+                    value={hold.releaseAuthority}
+                    onChange={(value) => updateHold(setHolds, hold.key, "releaseAuthority", value)}
+                    maxLength={140}
+                  />
+                  <TextArea
+                    id={`wp-hold-${index + 1}-evidence`}
+                    label="Required evidence"
+                    value={hold.requiredEvidence}
+                    onChange={(value) => updateHold(setHolds, hold.key, "requiredEvidence", value)}
+                  />
+                  <TextArea
+                    id={`wp-hold-${index + 1}-acceptance`}
+                    label="Acceptance criteria"
+                    value={hold.acceptanceCriteria}
+                    onChange={(value) =>
+                      updateHold(setHolds, hold.key, "acceptanceCriteria", value)
                     }
-                  >
-                    <Trash2 aria-hidden="true" /> Remove step
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          ))}
-          <Button
-            type="button"
-            variant="outline"
-            size="compact"
-            onClick={() => setSteps((current) => [...current, blankStep()])}
-          >
-            <Plus aria-hidden="true" /> Add step
-          </Button>
-        </fieldset>
-
-        <fieldset className="space-y-3 border border-border p-4">
-          <legend className="px-2 font-bold">Hold points</legend>
-          {holds.map((hold, index) => (
-            <div
-              key={hold.key}
-              className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-2"
-            >
-              <TextArea
-                id={`wp-hold-${index + 1}-name`}
-                label={`Hold ${index + 1}`}
-                value={hold.holdPoint}
-                onChange={(value) => updateHold(setHolds, hold.key, "holdPoint", value)}
-              />
-              <div>
-                <label htmlFor={`wp-hold-${index + 1}-phase`} className="text-sm font-bold">
-                  Release phase
-                </label>
-                <select
-                  id={`wp-hold-${index + 1}-phase`}
-                  className="mt-2 min-h-12 w-full border bg-surface px-3"
-                  value={hold.releasePhase}
-                  onChange={(event) =>
-                    updateHold(
-                      setHolds,
-                      hold.key,
-                      "releasePhase",
-                      event.target.value as HoldDraft["releasePhase"],
-                    )
-                  }
-                >
-                  <option>Pre-start</option>
-                  <option>In-process</option>
-                  <option>Completion</option>
-                </select>
-              </div>
-              <TextField
-                id={`wp-hold-${index + 1}-authority`}
-                label="Release authority"
-                value={hold.releaseAuthority}
-                onChange={(value) => updateHold(setHolds, hold.key, "releaseAuthority", value)}
-                maxLength={140}
-              />
-              <TextArea
-                id={`wp-hold-${index + 1}-evidence`}
-                label="Required evidence"
-                value={hold.requiredEvidence}
-                onChange={(value) => updateHold(setHolds, hold.key, "requiredEvidence", value)}
-              />
-              <TextArea
-                id={`wp-hold-${index + 1}-acceptance`}
-                label="Acceptance criteria"
-                value={hold.acceptanceCriteria}
-                onChange={(value) => updateHold(setHolds, hold.key, "acceptanceCriteria", value)}
-              />
-              {holds.length > 1 ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="compact"
-                  className="self-end"
-                  onClick={() =>
-                    setHolds((current) => current.filter((item) => item.key !== hold.key))
-                  }
-                >
-                  <Trash2 aria-hidden="true" /> Remove hold
-                </Button>
-              ) : null}
-            </div>
-          ))}
-          <Button
-            type="button"
-            variant="outline"
-            size="compact"
-            onClick={() => setHolds((current) => [...current, blankHold()])}
-          >
-            <Plus aria-hidden="true" /> Add hold point
-          </Button>
-        </fieldset>
+                  />
+                  {holds.length > 1 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="compact"
+                      className="self-end"
+                      onClick={() =>
+                        setHolds((current) => current.filter((item) => item.key !== hold.key))
+                      }
+                    >
+                      <Trash2 aria-hidden="true" /> Remove hold
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="compact"
+                onClick={() => setHolds((current) => [...current, blankHold()])}
+              >
+                <Plus aria-hidden="true" /> Add hold point
+              </Button>
+            </fieldset>
+          </div>
+        </details>
 
         {errorText ? (
           <div className="flex flex-wrap items-center gap-3">
@@ -561,6 +590,18 @@ export function WorkPackageIssueForm({
         )}
       </form>
     </section>
+  );
+  return expanded ? (
+    <Dialog
+      open
+      onClose={() => setExpanded(false)}
+      title="Job plan editor"
+      className="w-[min(74rem,calc(100vw-2rem))]"
+    >
+      {content}
+    </Dialog>
+  ) : (
+    content
   );
 }
 

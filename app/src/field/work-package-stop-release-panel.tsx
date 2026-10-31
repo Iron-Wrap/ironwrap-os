@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { Button } from "../components/ui/button";
+import { Dialog } from "../components/ui/dialog";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError, apiRequest } from "../lib/api";
 import { deleteMeta, getMeta, setMeta } from "../storage/db";
@@ -75,6 +76,7 @@ export function WorkPackageStopReleasePanel({
   const online = connected && !offline && !isOfflineSession(session);
   const authorizedRole = ["owner", "ops", "production"].includes(session.user.role);
   const [opened, setOpened] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [reason, setReason] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [pending, setPending] = useState<Intent | null>(null);
@@ -271,12 +273,17 @@ export function WorkPackageStopReleasePanel({
   }
 
   if (!authorizedRole) return null;
-  return (
+  const content = (
     <section
       id="job-plan-stop-release"
       aria-labelledby="job-plan-stop-release-heading"
       className="scroll-mt-4 space-y-3 border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
     >
+      {!expanded ? (
+        <Button type="button" variant="outline" size="compact" onClick={() => setExpanded(true)}>
+          Expand stop review
+        </Button>
+      ) : null}
       <h2 id="job-plan-stop-release-heading" className="text-xl font-bold">
         Release this plan’s stop
       </h2>
@@ -430,6 +437,18 @@ export function WorkPackageStopReleasePanel({
         </p>
       ) : null}
     </section>
+  );
+  return expanded ? (
+    <Dialog
+      open
+      onClose={() => setExpanded(false)}
+      title="Stop release review"
+      className="w-[min(64rem,calc(100vw-2rem))]"
+    >
+      {content}
+    </Dialog>
+  ) : (
+    content
   );
 }
 

@@ -64,6 +64,7 @@ import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
 import { WorkPackageStopReleasePanel } from "./work-package-stop-release-panel";
+import { JobPlanDetailsDialog } from "./job-plan-details-dialog";
 
 const FIELD_MEDIA_TYPES = new Set([
   "image/jpeg",
@@ -180,8 +181,15 @@ const BLOCKER_CATEGORIES = [
   "Other",
 ];
 
+type IssuedPlanState = { packet: string; version: number } | null;
+type IssueReceiptProps = {
+  issuedPlan: IssuedPlanState;
+  setIssuedPlan: (value: IssuedPlanState) => void;
+};
+
 export function JobPage() {
   const session = useSession();
+  const [issuedPlan, setIssuedPlan] = useState<IssuedPlanState>(null);
   const { jobId } = useParams({ strict: false }) as { jobId?: string };
   // Keep the capture and its receipt above the versioned plan. A job readback can replace the
   // plan after sending without discarding the saved action the person is still reviewing.
@@ -215,6 +223,8 @@ export function JobPage() {
     <JobSurface
       key={query.data.read_model_generated_at}
       model={query.data}
+      issuedPlan={issuedPlan}
+      setIssuedPlan={setIssuedPlan}
       offline={query.data.stale_fields.includes("offline.cached_packet")}
       onPhotosCaptured={(photos) => setQuickCapture({ jobId, photos })}
       savingOffline={query.isFetching}
@@ -225,6 +235,7 @@ export function JobPage() {
 
 export function WorkObjectPage() {
   const session = useSession();
+  const [issuedPlan, setIssuedPlan] = useState<IssuedPlanState>(null);
   const params = useParams({ strict: false }) as {
     workObjectType?: string;
     workObjectId?: string;
@@ -271,13 +282,20 @@ export function WorkObjectPage() {
   return (
     <WorkObjectSurface
       key={query.data.read_model_generated_at}
+      issuedPlan={issuedPlan}
+      setIssuedPlan={setIssuedPlan}
       model={query.data}
       offline={query.data.stale_fields.includes("offline.cached_packet")}
     />
   );
 }
 
-function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offline: boolean }) {
+function WorkObjectSurface({
+  model,
+  offline,
+  issuedPlan,
+  setIssuedPlan,
+}: { model: WorkObjectResponse; offline: boolean } & IssueReceiptProps) {
   const session = useSession();
   const workPackage = model.work_package;
   const panelModel: WorkPackagePanelModel = {
@@ -317,6 +335,8 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
         />
         <WorkPackagePanel
           model={panelModel}
+          issuedPlan={issuedPlan}
+          setIssuedPlan={setIssuedPlan}
           offline={offline}
           dateOptions={workObjectDates}
           captureAllowed={captureAllowed}
@@ -383,13 +403,15 @@ function JobSurface({
   onPhotosCaptured,
   savingOffline,
   onRetryOffline,
+  issuedPlan,
+  setIssuedPlan,
 }: {
   model: JobResponse;
   offline: boolean;
   onPhotosCaptured: (photos: File[]) => void;
   savingOffline: boolean;
   onRetryOffline: () => void;
-}) {
+} & IssueReceiptProps) {
   const session = useSession();
   const [quickPhotoError, setQuickPhotoError] = useState<string | null>(null);
   const [proof, setProof] = useState<ProofStreamItem[]>(model.proof_stream);
@@ -486,6 +508,8 @@ function JobSurface({
         ) : null}
         <WorkPackagePanel
           model={model}
+          issuedPlan={issuedPlan}
+          setIssuedPlan={setIssuedPlan}
           offline={offline}
           dateOptions={dateOptions}
           captureAllowed={fieldCaptureAllowed}
@@ -730,12 +754,14 @@ function WorkPackagePanel({
   offline,
   dateOptions,
   captureAllowed,
+  issuedPlan,
+  setIssuedPlan,
 }: {
   model: WorkPackagePanelModel;
   offline: boolean;
   dateOptions: FieldDateOptions;
   captureAllowed: boolean;
-}) {
+} & IssueReceiptProps) {
   const session = useSession();
   const queryClient = useQueryClient();
   const workPackage = model.packet.work_package;
@@ -750,11 +776,7 @@ function WorkPackagePanel({
   const [stopInstructionActive, setStopInstructionActive] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
   const [completingWork, setCompletingWork] = useState(false);
-  /**
-   * The job plan version this person issued here, kept by the panel: a first issue swaps the
-   * empty state for the plan, which remounts the issue form, and its "issued" line must stay.
-   */
-  const [issuedPlan, setIssuedPlan] = useState<{ packet: string; version: number } | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   /** Set before any await, so a second tap in the same moment sends nothing. */
   const commandInFlight = useRef(false);
   /** The automatic resend while the office is still processing the same Start or Finish. */
@@ -1038,6 +1060,24 @@ function WorkPackagePanel({
       className="border-2 border-foreground bg-surface-raised"
       aria-labelledby="work-package-heading"
     >
+      <div className="border-b border-border p-4">
+        <Button type="button" variant="outline" onClick={() => setDetailsOpen(true)}>
+          See plan and proof
+        </Button>
+      </div>
+      <JobPlanDetailsDialog
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        plan={workPackage}
+        activeStops={model.active_stops}
+        dateOptions={dateOptions}
+        clock={session.user.role === "field" ? "12h" : "24h"}
+        jobLabel={
+          model.scope
+            ? `${model.scope.work_object_type} · ${model.scope.work_object_id}`
+            : `${model.job.address ?? "Site address is missing"} · Ref ${model.job.job_number ?? "missing"}`
+        }
+      />
       {workPackage.status === "Blocked" ? (
         <WorkPackageStopReleasePanel
           key={`${session.tenant.id}:${session.user.id}:${workPackage.id}:${workPackage.version}`}

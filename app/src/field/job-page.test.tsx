@@ -375,15 +375,17 @@ function queuedWorkPackageAction(
 
 function renderJob(model = jobModel(), session: AuthenticatedSession = fieldSession) {
   vi.mocked(loadJob).mockResolvedValue(model);
-  return render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
-      <SessionProvider session={session}>
-        <JobPage />
-      </SessionProvider>
-    </QueryClientProvider>,
-  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider session={session}>
+          <JobPage />
+        </SessionProvider>
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  };
 }
 
 function workObjectModel(): WorkObjectResponse {
@@ -1074,7 +1076,10 @@ describe("JobPage", () => {
       allowed_actions: ["job.read", "work_package.issue"],
     };
     renderJob(jobModel(office), ownerSession);
-    const issued = workPackageModel(office);
+    const issued = workPackageModel({
+      ...office,
+      read_model_generated_at: "2026-07-10T15:45:00.000Z",
+    });
     issued.packet.work_package = { ...issued.packet.work_package!, version: 1 };
     vi.mocked(loadJob).mockResolvedValue(issued);
 
@@ -1110,7 +1115,10 @@ describe("JobPage", () => {
         "It replaces the plan the crew has now. The crew sees the new one the next time their phone loads the job.",
       ),
     ).toBeVisible();
-    const reviewed = workPackageModel(office);
+    const reviewed = workPackageModel({
+      ...office,
+      read_model_generated_at: "2026-07-10T15:45:00.000Z",
+    });
     const plan = reviewed.packet.work_package!;
     reviewed.packet.work_package = {
       ...plan,
@@ -1141,6 +1149,167 @@ describe("JobPage", () => {
       await screen.findByText("Reviewed by the crew · Fri 10 Jul 09:40. Nothing more to send."),
     ).toBeVisible();
     expect(screen.getByText("Reviewed by the crew · Fri 10 Jul 09:40")).toBeVisible();
+  });
+
+  it.each(["tenant", "person", "job", "version"] as const)(
+    "does not carry an issued receipt into another %s",
+    async (boundary) => {
+      vi.mocked(apiCommand).mockResolvedValue(undefined);
+      const office = {
+        permissions: ["jobs:read:any", "production:read"],
+        allowed_actions: ["job.read", "work_package.issue"],
+      };
+      const initial = workPackageModel(office);
+      const rendered = renderJob(initial, ownerSession);
+      const issued = structuredClone(initial);
+      issued.read_model_generated_at = new Date(
+        Date.parse(initial.read_model_generated_at) + 1_000,
+      ).toISOString();
+      issued.packet.work_package!.version += 1;
+      vi.mocked(loadJob).mockResolvedValue(issued);
+      fireEvent.change(await screen.findByLabelText("Reason for replacing this plan (required)"), {
+        target: { value: "Correct the work scope." },
+      });
+      fireEvent.change(screen.getByLabelText("Expires (required)"), {
+        target: { value: "2099-07-10T19:00" },
+      });
+      fireEvent.submit(
+        screen
+          .getByRole("heading", { name: "Issue the corrected job plan" })
+          .closest("section")!
+          .querySelector("form")!,
+      );
+      expect(
+        await screen.findByText(/Job plan issued\. The crew hasn't reviewed it yet/),
+      ).toBeVisible();
+
+      const session = structuredClone(ownerSession);
+      const changed = structuredClone(issued);
+      changed.read_model_generated_at = new Date(
+        Date.parse(issued.read_model_generated_at) + 1_000,
+      ).toISOString();
+      if (boundary === "tenant") session.tenant.id = "another-tenant";
+      if (boundary === "person") session.user.id = "another-person";
+      if (boundary === "job") {
+        routeParams = { jobId: "JOB-2" };
+        changed.job.id = "JOB-2";
+        changed.packet.work_package!.work_object_id = "JOB-2";
+        changed.packet.work_package!.physical_context_id = "JOB-2";
+      }
+      if (boundary === "version") changed.packet.work_package!.version += 1;
+      vi.mocked(loadJob).mockResolvedValue(changed);
+      act(() =>
+        rendered.queryClient.setQueryData(
+          ["job", session.tenant.id, session.user.id, routeParams.jobId],
+          changed,
+        ),
+      );
+      rendered.rerender(
+        <QueryClientProvider client={rendered.queryClient}>
+          <SessionProvider session={session}>
+            <JobPage />
+          </SessionProvider>
+        </QueryClientProvider>,
+      );
+      expect(
+        await screen.findByRole("button", { name: "Issue the corrected job plan" }),
+      ).toHaveAttribute("data-variant", "accent");
+      expect(screen.queryByText(/Nothing more to send/)).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps a work-object issue receipt through a new read but isolates another physical scope", async () => {
+    vi.mocked(apiCommand).mockResolvedValue(undefined);
+    const model = workObjectModel();
+    model.allowed_actions = ["work_package.issue"];
+    routeParams = { ...model.work_object };
+    vi.mocked(loadWorkObject).mockResolvedValue(model);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = () => (
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider session={ownerSession}>
+          <WorkObjectPage />
+        </SessionProvider>
+      </QueryClientProvider>
+    );
+    const rendered = render(tree());
+    const issued = structuredClone(model);
+    issued.read_model_generated_at = new Date(
+      Date.parse(model.read_model_generated_at) + 1_000,
+    ).toISOString();
+    issued.work_package!.version += 1;
+    vi.mocked(loadWorkObject).mockResolvedValue(issued);
+    fireEvent.change(await screen.findByLabelText("Reason for replacing this plan (required)"), {
+      target: { value: "Correct the fabrication scope." },
+    });
+    fireEvent.change(screen.getByLabelText("Expires (required)"), {
+      target: { value: "2099-07-10T19:00" },
+    });
+    fireEvent.submit(
+      screen
+        .getByRole("heading", { name: "Issue the corrected job plan" })
+        .closest("section")!
+        .querySelector("form")!,
+    );
+    expect(
+      await screen.findByText(/Job plan issued\. The crew hasn't reviewed it yet/),
+    ).toBeVisible();
+    const changed = structuredClone(issued);
+    changed.read_model_generated_at = new Date(
+      Date.parse(issued.read_model_generated_at) + 1_000,
+    ).toISOString();
+    changed.work_object.physicalContextId = "SHOP-FLOOR-2";
+    changed.work_package!.physical_context_id = "SHOP-FLOOR-2";
+    routeParams = { ...changed.work_object };
+    vi.mocked(loadWorkObject).mockResolvedValue(changed);
+    rendered.rerender(tree());
+    expect(
+      await screen.findByRole("button", { name: "Issue the corrected job plan" }),
+    ).toHaveAttribute("data-variant", "accent");
+    expect(screen.queryByText(/Nothing more to send/)).not.toBeInTheDocument();
+  });
+
+  it("keeps correction values while expanding and closing the real editor", async () => {
+    renderJob(
+      workPackageModel({ allowed_actions: ["job.read", "work_package.issue"] }),
+      ownerSession,
+    );
+    fireEvent.change(await screen.findByLabelText("Work scope for the crew (required)"), {
+      target: { value: "North slope plus fascia." },
+    });
+    fireEvent.change(screen.getByLabelText("Reason for replacing this plan (required)"), {
+      target: { value: "Approved fascia correction." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Expand plan editor" }));
+    const dialog = await screen.findByRole("dialog", { name: "Job plan editor" });
+    expect(within(dialog).getByLabelText("Work scope for the crew (required)")).toHaveValue(
+      "North slope plus fascia.",
+    );
+    expect(within(dialog).getByLabelText("Reason for replacing this plan (required)")).toHaveValue(
+      "Approved fascia correction.",
+    );
+    fireEvent.change(within(dialog).getByLabelText("Work scope for the crew (required)"), {
+      target: { value: "North slope plus approved fascia." },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Work scope for the crew (required)")).toHaveValue(
+      "North slope plus approved fascia.",
+    );
+  });
+
+  it("opens the complete plan proof requirements in the real details dialog", async () => {
+    renderJob(workPackageModel());
+    fireEvent.click(await screen.findByRole("button", { name: "See plan and proof" }));
+    const dialog = await screen.findByRole("dialog", { name: "Plan and proof" });
+    const proof = within(dialog).getByRole("region", { name: "Complete proof requirements" });
+    expect(within(proof).getByRole("heading", { name: "Proof needed" })).toBeVisible();
+    expect(within(proof).getByText("Step 1 · Anchor inspection photo.")).toBeVisible();
+    expect(within(proof).getByText("Check 1 · Deck condition review")).toBeVisible();
+    expect(within(proof).getByText("Proof: Deck condition photo.")).toBeVisible();
+    expect(
+      within(proof).getByText(/Pass when: Production manager independently releases the hold/),
+    ).toBeVisible();
   });
 
   it("stamps the plan badge with the moment each status began, when the read carries it", async () => {

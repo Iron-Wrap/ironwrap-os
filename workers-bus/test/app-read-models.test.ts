@@ -748,8 +748,11 @@ function env(
                   };
                 }
                 if (sql.includes("FROM operating_production_gates")) {
+                  const selectedIds = sql.includes("json_each(?)")
+                    ? JSON.parse(String(ids[1])) as unknown[]
+                    : ids;
                   const jobIds = new Set(
-                    ids.filter(
+                    selectedIds.filter(
                       (value): value is string =>
                         typeof value === "string" &&
                         nativeRows.jobs.some(

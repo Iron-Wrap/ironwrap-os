@@ -275,6 +275,9 @@ export const todayResponseSchema = envelopeSchema.extend({
       job_number: nullableText,
       brand: nullableText,
       status: nullableText,
+      // The job page's contact name for the same job. Optional so a run sheet cached before the
+      // server sent it still reads.
+      customer_display_name: nullableText.optional(),
       address: nullableText,
       scheduled_start: nullableText,
       scheduled_end: nullableText,

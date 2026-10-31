@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 import type { AuthenticatedSession } from "../src/auth/session";
+import { capabilitySignal, officeCapability } from "../src/capabilities/capability-test-fixture";
 import type {
   NewoOperationsOpenCallback,
   NewoOperationsResponse,
@@ -11,8 +12,9 @@ import type {
 import { newoOperationsFixture } from "../src/newo/newo-operations-test-fixture";
 
 // Synthetic browser proof only. The real overview parser and /newo role guard run, but browser
-// interception supplies the owner session and GET response. This does not exercise Worker cookie
-// authentication, D1, provider state, person-write grants, or a callback resolution route.
+// interception supplies the owner session, capability signal and overview GET responses. This does
+// not exercise Worker cookie authentication, D1, provider state, person-write grants, or a callback
+// resolution route.
 const syntheticOwner: AuthenticatedSession = {
   version: 1,
   authenticated: true,
@@ -39,6 +41,12 @@ const syntheticOwner: AuthenticatedSession = {
   read_model_generated_at: "2026-07-18T18:00:00.000Z",
   stale_fields: [],
 };
+
+const syntheticCapabilities = capabilitySignal(
+  syntheticOwner.user.role,
+  [officeCapability("newo", "Newo voice reception", { flag_binding: "NEWO_ENABLED" })],
+  { tenant_id: syntheticOwner.tenant.id },
+);
 
 function callback(
   index: number,
@@ -92,6 +100,10 @@ async function openOverview(page: Page, model: NewoOperationsResponse) {
   await page.route("**/api/v1/session", async (route) => {
     expect(route.request().method()).toBe("GET");
     await route.fulfill({ json: syntheticOwner });
+  });
+  await page.route("**/api/v1/capabilities", async (route) => {
+    expect(route.request().method()).toBe("GET");
+    await route.fulfill({ json: syntheticCapabilities });
   });
   await page.route("**/api/v1/newo/operations", async (route) => {
     overviewRequests.push(route.request().method());
@@ -195,6 +207,11 @@ async function capture(page: Page, info: TestInfo, model: NewoOperationsResponse
       {
         synthetic: true,
         session: { method: "GET", path: "/api/v1/session", response: syntheticOwner },
+        capabilities: {
+          method: "GET",
+          path: "/api/v1/capabilities",
+          response: syntheticCapabilities,
+        },
         overview: { method: "GET", path: "/api/v1/newo/operations", response: model },
         mechanism: "Browser route.fulfill; real browser parser and app role guard; no Worker read",
       },
@@ -210,7 +227,7 @@ async function capture(page: Page, info: TestInfo, model: NewoOperationsResponse
         dist_manifest_sha256: process.env.NEWO_DIST_MANIFEST_SHA256,
         capture_policy: "Uncropped native viewport PNGs; full_page=false; top/fully_scrolled only",
         fixture:
-          "Synthetic owner session; callback-only overview; browser-intercepted GET responses",
+          "Synthetic owner session and off capability; callback-only overview; intercepted GET responses",
         grant: "Owner role through existing app RoleGuard; owner:read; allowed_actions=[]",
         backend_authentication_exercised: false,
         provider_runtime_exercised: false,

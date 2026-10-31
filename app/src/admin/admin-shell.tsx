@@ -31,7 +31,7 @@ export function AdminPageHeader({
           className="-ml-1 inline-flex min-h-11 items-center gap-1 rounded-md pr-2 text-sm font-bold text-muted transition-colors hover:text-foreground"
         >
           <ChevronLeft className="size-4" aria-hidden="true" />
-          Setup
+          Settings
         </Link>
       }
     />

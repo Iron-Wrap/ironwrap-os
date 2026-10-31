@@ -29,8 +29,8 @@
 -- The Worker appends the Deposit entry after an acceptance commits, never inside it, so a failed
 -- entry never fails an acceptance; the five-minute sweep appends any entry that is missing.
 --
--- This file may apply after higher-numbered migrations already on a database (0156 and 0200-0204
--- on qa and production). It creates its own table and four triggers and re-creates 0116's enqueue
+-- This file may apply after higher-numbered migrations already on a database (0156-0167 and
+-- 0200-0206 on qa). It creates its own table and four triggers and re-creates 0116's enqueue
 -- trigger and two 0153 guards; no higher-numbered migration touches any of them.
 
 CREATE TABLE IF NOT EXISTS tenant_deposit_policy_revisions (

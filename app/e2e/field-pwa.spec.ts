@@ -4,6 +4,32 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
+  test("keeps a job card's facts apart in the crew shell on a desktop and on a phone", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    // The crew shell centres a phone-wide column on a desktop; the card follows that column, so
+    // window breakpoints never squeeze three columns and two facts into it (Track C, #55 capture).
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/today");
+      const card = page.locator("li article").first();
+      const facts = card.locator("dl");
+      await expect(facts).toBeVisible();
+      // Squeezed, the labels and values spill past their cells ("Your role" ran into "Next step").
+      const cells = await facts.locator("dt, dd").all();
+      expect(cells.length).toBe(4);
+      for (const cell of [card, ...cells])
+        expect(
+          await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          `${await cell.textContent()} spills at ${viewport.width}px`,
+        ).toBe(true);
+    }
+  });
+
   test("keeps the full crew name, the sun and night switch, and thumb actions usable on narrow phones", async ({
     page,
   }) => {
@@ -481,6 +507,56 @@ test.describe("Field Companion PWA acceptance", () => {
     await expect(page.getByRole("heading", { name: "Pair this crew phone" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Today's work" })).toHaveCount(0);
     expect(bootstrapRequests).toEqual([{ deviceProof: undefined }]);
+  });
+
+  test("keeps the job page's facts and safety cards whole in the crew shell on a desktop", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    // The crew shell is a phone-wide column on a desktop too; the job header, the work plan and
+    // the safety cards follow their own width, never the window's.
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/jobs/JOB-ACCEPTANCE");
+      await expect(page.getByRole("heading", { name: "Safety and site" })).toBeVisible();
+      // The emergency line dials 911 and the office's own number from the company profile.
+      await expect(page.getByRole("link", { name: "Call 911" })).toHaveAttribute("href", "tel:911");
+      await expect(page.getByRole("link", { name: "Call the office" })).toHaveAttribute(
+        "href",
+        "tel:7805550142",
+      );
+      const cells = await page
+        .locator(
+          "header dl > div > :is(dt, dd), section[aria-labelledby='safety-access-heading'] article",
+        )
+        .all();
+      // The plan's scope is one fact ("Applies to the job"), not "Work object" and "Work area".
+      expect(cells.length).toBe(16);
+      for (const cell of cells)
+        expect(
+          await cell.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          `${(await cell.textContent())?.slice(0, 40)} spills at ${viewport.width}px`,
+        ).toBe(true);
+      // Squeezed three across, the facts only wrapped, so the column counts are what fail.
+      const grids = {
+        "job facts": page.locator("header dl").first(),
+        "work plan dates": page
+          .locator("section[aria-labelledby='work-package-heading'] header dl")
+          .first(),
+        "safety cards": page
+          .locator("section[aria-labelledby='safety-access-heading'] > div.grid")
+          .first(),
+      };
+      for (const [name, grid] of Object.entries(grids)) {
+        const columns = await grid.evaluate(
+          (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+        );
+        expect(columns, `${name} side by side at ${viewport.width}px`).toBe(1);
+      }
+    }
   });
 });
 

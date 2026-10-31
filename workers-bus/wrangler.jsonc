@@ -1,14 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ironwrap-bus",
-  "account_id": "7ee5775bc1ba46f05c5a65235b60e939",
+  // Production lives in the Mindburn Labs account and is published as ironwrap.mindburn.org
+  // (IRO-221, 2026-10-30). env.qa pins IronWrap's own account explicitly.
+  "account_id": "5023dd227b538fc4238439fd7d52640f",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-28",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "workers_dev": false,
   "routes": [
-    { "pattern": "ironwrap-bus.ironwrapexteriors.com", "custom_domain": true }
+    { "pattern": "ironwrap.mindburn.org", "custom_domain": true }
   ],
 
   // One deployment boundary: the Worker serves the built PWA and runs every dynamic/auth route.
@@ -34,7 +36,7 @@
     {
       "binding": "DB",
       "database_name": "ironwrap-bus",
-      "database_id": "f0674848-13df-4422-9896-8ba2719663b8",
+      "database_id": "a8fd0116-7af6-4788-98bd-083addbe58bc",
       "migrations_dir": "migrations"
     }
   ],
@@ -136,6 +138,9 @@
       "APP_CUSTOMER_PORTAL_ENABLED": "true",
       "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
       "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
+      // Off until the owner approves the portal privacy notice that says the first open of a
+      // proposal is recorded and kept for at most 3 years (0163).
+      "APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED": "false",
       "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
       "APP_PROPOSAL_PUBLICATION_ENABLED": "false",
       "APP_FACET_LAUNCH_ENABLED": "true",
@@ -150,8 +155,8 @@
       // Required by APP_BFF_ENABLED: appPublicOrigin() returns null unless APP_PUBLIC_ORIGIN
       // is non-empty AND listed in APP_ALLOWED_ORIGINS. Keep both bound to the declared
       // production custom domain so login links and origin checks match the release smoke URL.
-      "APP_PUBLIC_ORIGIN": "https://ironwrap-bus.ironwrapexteriors.com",
-      "APP_ALLOWED_ORIGINS": "https://ironwrap-bus.ironwrapexteriors.com",
+      "APP_PUBLIC_ORIGIN": "https://ironwrap.mindburn.org",
+      "APP_ALLOWED_ORIGINS": "https://ironwrap.mindburn.org",
       "APP_ALLOW_INSECURE_LOCAL": "false",
       "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
       "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
@@ -284,19 +289,21 @@
       // and PUBLIC_ESTIMATE_ENABLED stays false. Other writers fall back to "Administrator".
       "ERPNEXT_INTEGRATION_USER": ""
     },
+    // Empty while production mail runs on the mindburn.org Workspace (2026-10-30): the IronWrap
+    // shared drives are not reachable from that delegation, the same as in env.qa.
     "CFG_SHARED": {
-      "SHARED_DRIVE_ID_JOBS": "0AHqXhIQ3svySUk9PVA",
-      "SHARED_DRIVE_ID_RESTRICTED": "0AMufCVvWaztwUk9PVA",
-      "SHARED_DRIVE_ID_ARCHIVE": "0AFTfvKuo0_6uUk9PVA"
+      "SHARED_DRIVE_ID_JOBS": "",
+      "SHARED_DRIVE_ID_RESTRICTED": "",
+      "SHARED_DRIVE_ID_ARCHIVE": ""
     },
     "CFG_MEASUREMENT": {
       "MEASUREMENT_OCR_ENABLED": "true",
       "MEASUREMENT_OCR_MODEL": "claude-opus-5-5"
     },
     "CFG_CORE": {
-      "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
-      "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
-      "FROM_EMAIL": "sales@ironwrapexteriors.com",
+      "OWNER_ALERT_EMAIL": "sergeyap@mindburn.org",
+      "BACKUP_ALERT_EMAIL": "sergeyap@mindburn.org",
+      "FROM_EMAIL": "sergeyap@mindburn.org",
       "EFFECT_RUNTIME_ENABLED": "true",
       "PIPELINE_AUTOMATION_ENABLED": "false",
       // JobNimbus is a non-source (expired trial, API 401): every queued push is a terminal
@@ -310,11 +317,19 @@
       "PROPOSAL_TEMPLATE_DOC_ID": "",
       "DEDUP_WINDOW_HOURS": "72",
       "STUCK_THRESHOLD_MIN": "15",
-      "COMMERCIAL_AUTHORITY_POLICY_JSON": "",
+      "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
+    },
+    // The AI team's vars: two share the AGENT_ token, so they are their own group
+    // (tools/wrangler-vars.mjs groupWranglerVars).
+    "CFG_AGENT": {
       // What data this Worker holds, for the AI team: business data here, so a run closes as a
       // live or shadow run on a qualified route, and a synthetic run (a QA or dev agent host) is
       // refused. Only a Worker on seed data says "synthetic".
-      "AGENT_DATA_CLASS": "business"
+      "AGENT_DATA_CLASS": "business",
+      // The instant from which inbound envelopes become AI team signals (src/agents/inbound.ts);
+      // blank keeps the producer off. Production stays off until agent signals have retention and
+      // erasure (a test pins it blank), then until the owner decides to go live.
+      "AGENT_INBOUND_FROM": ""
     }
   },
 
@@ -379,6 +394,7 @@
           "APP_CUSTOMER_PORTAL_ENABLED": "true",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
           "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
+          "APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED": "false",
           "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
           "APP_PROPOSAL_PUBLICATION_ENABLED": "true",
           "APP_FACET_LAUNCH_ENABLED": "true",
@@ -532,9 +548,13 @@
           "PROPOSAL_TEMPLATE_DOC_ID": "",
           "DEDUP_WINDOW_HOURS": "72",
           "STUCK_THRESHOLD_MIN": "15",
-          "COMMERCIAL_AUTHORITY_POLICY_JSON": "",
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
+        },
+        "CFG_AGENT": {
           // The local stack holds throwaway seed data, so a dev agent host's synthetic runs close here.
-          "AGENT_DATA_CLASS": "synthetic"
+          "AGENT_DATA_CLASS": "synthetic",
+          // Seed data only, so inbound envelopes become AI team signals here, as in qa.
+          "AGENT_INBOUND_FROM": "2026-10-20T15:52:43Z"
         }
       }
     },
@@ -543,6 +563,7 @@
     // R2 ironwrap-bus-qa-raw, six ironwrap-qa-* queues. This is the only environment a push
     // to main deploys; production is a separate tag-triggered release (IRO-264).
     "qa": {
+      "account_id": "7ee5775bc1ba46f05c5a65235b60e939",
       "workers_dev": true,
       "routes": [],
       "d1_databases": [
@@ -611,6 +632,7 @@
           "APP_CUSTOMER_PORTAL_ENABLED": "true",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
           "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
+          "APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED": "false",
           "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
           "APP_PROPOSAL_PUBLICATION_ENABLED": "false",
           "APP_FACET_LAUNCH_ENABLED": "true",
@@ -786,10 +808,15 @@
           // 10000000 cents, owner and worker (staff) actors, never agents. production and local
           // carry "" and keep the commercial write path closed. When the window lapses the QA seed
           // stops with policy_expired; renewal is that event's one-line edit of valid_from/valid_until.
-          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}",
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}"
+        },
+        "CFG_AGENT": {
           // qa holds synthetic data only, and the QA agent host runs as a synthetic host
           // (AGENT_HOST_DATA_CLASS=synthetic), so its synthetic runs close here.
-          "AGENT_DATA_CLASS": "synthetic"
+          "AGENT_DATA_CLASS": "synthetic",
+          // The inbound producer is on in qa: envelopes recorded from this instant on become AI
+          // team signals; earlier ones never do.
+          "AGENT_INBOUND_FROM": "2026-10-20T15:52:43Z"
         }
       }
     }

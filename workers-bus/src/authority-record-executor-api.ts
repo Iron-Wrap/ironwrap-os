@@ -20,7 +20,6 @@ const TENANT_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,139}$/;
 const USER_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{2,139}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const ACTION_OPERATIONS = new Set<AuthorityRecordOperation>([
   "record",
   "verify",

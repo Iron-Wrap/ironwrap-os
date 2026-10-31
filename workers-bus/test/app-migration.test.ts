@@ -126,6 +126,19 @@ test("document generation stays disabled in production and local, and is on in q
   assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
 });
 
+test("the proposal first-open record stays off until the owner approves its privacy notice", async () => {
+  // 3 years is the maximum retention of a first-open row (0163). Deletion exists: D1 lets a row go
+  // only once it is older than 3 years, and the daily cron deletes those rows. The flag still stays
+  // off in every environment until the owner approves the portal privacy notice that says so.
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
+  for (const environment of [config, config.env.local, config.env.qa]) {
+    assert.equal(environment.vars.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED, "false");
+  }
+});
+
 test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
   const source = await readFile(
     new URL("../wrangler.jsonc", import.meta.url),
@@ -2282,15 +2295,26 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
     // proposal revision checks. 0155 adds the owner's deposit policy (OD-01 payment on completion
     // or MD-13 deposits), which acceptance and the Deposit gate's policy entries follow. 0156 lets
-    // a person record whether an unconfirmed proposal send reached the customer. 0158 lets a
-    // person attest Materials, Safety, Access and Weather and reverse a gate entry, all through the
-    // gate ledger.
+    // a person record whether an unconfirmed proposal send reached the customer. 0157 adds a
+    // version to a person's access, so role/access changes apply against the version read.
+    // 0161 records what people found about a send, and their corrections, without changing it;
+    // holds the late-answer wait in D1 with a window per provider; and names the permit holder
+    // of each new publication.
+    // 0163 keeps the first time a customer's portal link opened a published proposal.
+    // 0164 holds a proposal send to one attempt, settles an unknown one only from a person's record,
+    // and keeps a conflicting readback from being recorded as not delivered.
+    // 0165 names who lifted a safety-occurrence stop and refuses a lift by the person who raised it
+    // (L06) or one without its own `released` event.
+    // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
+    // readback be recorded as not delivered only by citing a complete-scan "not found" check.
+    // 0153 lands after 0154-0206 on deployed databases, and 0155 after 0153 and 0156-0206; neither
+    // touches an object a later-numbered migration touches, so both orders give the same schema.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 138);
+    assert.equal(migrations.length, 145);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0205_agent_step_pair_index.sql",
+      "0206_agent_draft_closing.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2430,7 +2454,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
-    // action.
+    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
     // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
@@ -2438,11 +2462,18 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (validate, audit, two append-only), and re-creates 0116's enqueue trigger and two 0153 guards
     // under their names. 0156 adds the proposal delivery confirmation ledger, one named
     // index, four guards and the proposal publish single-flight guard, and re-creates the external
-    // effect binding guard under its name. 0158 re-creates the gate ledger's validate and replace
-    // guards under their names, so counts are unchanged.
+    // effect binding guard under its name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
+    // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
+    // portal first-open table, one named index and four validation, update, age-gated delete and
+    // no-replace guards. 0164 adds three outside-send guards (retry limit, no retry, settle
+    // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
+    // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
+    // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
+    // evidence and readback-conflict guards under their names.
+    // 0158 re-creates the ledger validate and replace guards; object counts stay unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 277, indexes: 379, triggers: 760 },
+      { tables: 282, indexes: 382, triggers: 785 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3780,9 +3811,9 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155 and 0158 applied after 0156 and 0200-0205 on a database already through them give the sorted schema", async () => {
-  // qa and production applied 0156 and 0200-0205 first, so they receive 0155 and then 0158 after
-  // them. 0158 re-creates the validate guard 0155 re-creates, so it must land after 0155.
+test("0155 and 0158 applied after higher main migrations give the sorted schema", async () => {
+  // Existing databases receive 0155 and then 0158 after higher-numbered main migrations.
+  // 0158 re-creates the validate guard from 0155, so it follows that migration.
   const late = ["0155_od01_deposit_policy.sql", "0158_production_gate_attestations.sql"];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));

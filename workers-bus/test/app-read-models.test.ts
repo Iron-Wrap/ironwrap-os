@@ -1920,6 +1920,18 @@ test("typed Shop Order packet is served through the universal BFF route without 
       body.allowed_actions.includes("work_package.acknowledge"),
       true,
     );
+    // With no blocker, the crew's Today row names the job plan as the next step.
+    const today = await buildTodayReadModel(
+      env({ typedAssignments: [nativeTypedAssignment()] }),
+      auth("field", "crew@example.com"),
+    );
+    assert.deepEqual(
+      today.work_objects.map(({ work_object_id, next_action }) => ({
+        work_object_id,
+        next_action,
+      })),
+      [{ work_object_id: "SHOP-001", next_action: "See job plan" }],
+    );
     const degradedEnv = env({
       typedAssignments: [nativeTypedAssignment()],
       workPackages: [shopPackage],

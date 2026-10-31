@@ -108,7 +108,7 @@ export function FleetPage() {
   return (
     <section className="mx-auto max-w-3xl space-y-6 pb-4">
       <header className="border-b pb-5">
-        <p className="text-sm font-semibold text-muted">Field Companion</p>
+        <p className="text-sm font-semibold text-muted">Crew phone app</p>
         <h1 className="mt-1 text-3xl font-bold tracking-[-0.03em]">Vehicle</h1>
         <p className="mt-2 leading-6 text-muted">
           Record a pre-trip, a post-trip, or a fault on the vehicle or equipment you hold. These

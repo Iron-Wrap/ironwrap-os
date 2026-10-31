@@ -183,7 +183,7 @@ export function JobSpinePanel({ jobId }: { jobId: string }) {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <h3 className="font-semibold">
                         {approval.kind === "quote_revision"
-                          ? `Quote correction draft v${approval.target.quote_version}`
+                          ? "Quote correction draft"
                           : "Proposal publication"}
                       </h3>
                       <Status
@@ -199,7 +199,10 @@ export function JobSpinePanel({ jobId }: { jobId: string }) {
                       </Status>
                     </div>
                     <p className="text-sm leading-6">{approval.request_text}</p>
-                    <p className="text-sm text-muted">Current request v{approval.version}</p>
+                    {/* Two requests are told apart by when they were asked, never by a version. */}
+                    <p className="text-sm text-muted">
+                      Requested {formatOwnerDate(approval.created_at, locale)}
+                    </p>
                     <ApprovalReceipt approval={approval} locale={locale} />
                     <a
                       className="inline-flex min-h-11 items-center justify-self-start text-sm font-semibold underline underline-offset-4"

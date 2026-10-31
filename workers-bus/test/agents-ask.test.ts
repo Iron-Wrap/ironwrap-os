@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -211,7 +212,7 @@ function setup(startAtMs = Date.parse(AT)) {
     } as unknown as AuthContext);
   }
   seedJob(db.raw);
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN };
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger() };
   const app = async (who: Person, method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = {}) => {
     const response = await handleAgentTeamAppRoute(
       new Request(`https://bus.example.invalid/api/v1/agent-team${path}`, {

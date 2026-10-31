@@ -9,6 +9,8 @@
 import { validAppCsrf } from "../app-auth.ts";
 import { canonicalJson, validate } from "./schema.ts";
 import { CEILING_SCHEMA } from "./registry.ts";
+import { agentPrivacyResponse, assertAgentValueAvailable, handleSubjectErasureRoute } from "./subject-erasure.ts";
+import { AgentPrivacyError } from "./privacy-ledger.ts";
 import { CATALOG } from "./catalog.ts";
 import {
   setDelegation,
@@ -50,6 +52,8 @@ import {
 
 export interface AgentEnv {
   DB: unknown;
+  /** Independent agent-erasure commitments, outside D1 and RAW restore scope. */
+  PRIVACY_LEDGER?: R2Bucket;
   AGENT_HOST_TOKEN?: string;
   APP_TENANT_ID?: string;
   /** What data this Worker holds: `business` (the default) or `synthetic` (a QA or dev Worker on seed data). */
@@ -68,6 +72,21 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const STEP_KEY = /^[0-9a-f]{64}$/;
 
 export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () => Date.now(), notify: Notify | null = null): Promise<Response> {
+  try {
+    // Authentication remains ahead of any privacy lookup or D1 write.
+    if (env.AGENT_HOST_TOKEN && await tokenMatches(req, env.AGENT_HOST_TOKEN)) {
+      const tenantId = operatingTenantId(env.APP_TENANT_ID);
+      if (tenantId && agentDataClass(env.AGENT_DATA_CLASS)) await checkRequestPrivacy(req, env, tenantId, now);
+    }
+    const result = await handleAgentHostApiInner(req, env, now, notify);
+    const tenantId = operatingTenantId(env.APP_TENANT_ID);
+    // The list applies its per-row gate and safe stub below, preserving the host's cursor.
+    if (req.method === "GET" && new URL(req.url).pathname === "/api/v1/agents/signals") return result;
+    return tenantId ? await checkResponsePrivacy(result, env, tenantId, now) : result;
+  } catch (error) { const refusal = agentPrivacyResponse(error); if (refusal) return refusal; throw error; }
+}
+
+async function handleAgentHostApiInner(req: Request, env: AgentEnv, now: () => number, notify: Notify | null): Promise<Response> {
   if (!env.AGENT_HOST_TOKEN) return reply({ error: "not_found" }, 404);
   if (!(await tokenMatches(req, env.AGENT_HOST_TOKEN))) return reply({ error: "unauthorized" }, 401);
   const tenantId = operatingTenantId(env.APP_TENANT_ID);
@@ -86,7 +105,16 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     if ((after !== null && !/^\d{1,15}$/.test(after)) || !Number.isInteger(limit) || limit < 1 || limit > 200) {
       return reply({ error: "invalid_query" }, 400);
     }
-    return reply(await listSignals(db, tenantId, Number(after ?? "0"), limit));
+    const listed = await listSignals(db, tenantId, Number(after ?? "0"), limit);
+    const privacyAudit = {};
+    for (const signal of listed.signals) {
+      try { await assertAgentValueAvailable(db, env, tenantId, { signal_id: signal.signal_id }, iso(), privacyAudit); }
+      catch (error) {
+        if (!(error instanceof AgentPrivacyError) || error.code !== "agent_source_erased") throw error;
+        signal.content = { redacted: true };
+      }
+    }
+    return reply(listed);
   }
 
   if (req.method === "POST" && path === "/api/v1/agents/runs") {
@@ -175,6 +203,43 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
 
 /** People use their authenticated app session; the host bearer never reaches these writes. */
 export async function handleAgentTeamAppRoute(
+  req: Request, env: AgentEnv, auth: AuthContext, clock = () => Date.now(),
+): Promise<Response> {
+  try {
+    const erasure = await handleSubjectErasureRoute(req, env, auth, clock);
+    if (erasure) return erasure;
+    await checkRequestPrivacy(req, env, auth.session.tenant_id, clock);
+    return await checkResponsePrivacy(await handleAgentTeamAppRouteInner(req, env, auth, clock), env, auth.session.tenant_id, clock);
+  } catch (error) {
+    const refusal = agentPrivacyResponse(error);
+    if (refusal) return refusal;
+    if (new URL(req.url).pathname.startsWith("/api/v1/agent-team/privacy/")) return reply({ error: "privacy_erasure_unavailable" }, 503);
+    throw error;
+  }
+}
+
+async function checkRequestPrivacy(req: Request, env: AgentEnv, tenantId: string, clock: () => number): Promise<void> {
+  const path = new URL(req.url).pathname;
+  const run = path.match(/^\/api\/v1\/agents\/runs\/([^/]+)\//);
+  const step = path.match(/^\/api\/v1\/agent-team\/steps\/([A-Za-z0-9._:-]+)(?:\/decision)?$/);
+  const ask = path.match(/^\/api\/v1\/agent-team\/ask\/([A-Za-z0-9._:-]+)$/);
+  const refs: Record<string, unknown> = { ...(run ? { run_id: safeDecode(run[1]) } : {}),
+    ...(step ? { step_id: step[1] } : {}), ...(ask ? { ask_id: ask[1] } : {}) };
+  if (req.method === "POST") {
+    const body = await readJson(req.clone());
+    if (isRecord(body)) refs.body = body;
+  }
+  await assertAgentValueAvailable(env.DB as AgentDb, env, tenantId, refs, new Date(clock()).toISOString());
+}
+
+async function checkResponsePrivacy(result: Response, env: AgentEnv, tenantId: string, clock: () => number): Promise<Response> {
+  if (result.status < 400 && result.status !== 204 && result.headers.get("content-type")?.includes("application/json")) {
+    await assertAgentValueAvailable(env.DB as AgentDb, env, tenantId, await result.clone().json(), new Date(clock()).toISOString());
+  }
+  return result;
+}
+
+async function handleAgentTeamAppRouteInner(
   req: Request,
   env: AgentEnv,
   auth: AuthContext,

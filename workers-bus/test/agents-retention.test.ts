@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 // Signal text retention (src/agents/retention.ts, migration 0207): ninety days after a signal was
 // received its free text is redacted in place, once, and nothing else about it moves. The guard
 // reads the age on D1's clock, so these tests date their signals from the real clock. Synthetic
@@ -31,12 +32,12 @@ class SqliteD1 {
   afterRunInsert: (() => Promise<void>) | null = null;
   /** Every statement prepared, for its query plan. */
   seen: string[] = [];
-  constructor() {
+  constructor(beforeOwnerErasure = false) {
     this.raw.exec("PRAGMA foreign_keys=ON");
     const files = readdirSync(new URL("../migrations/", import.meta.url))
       .filter((file) => /^\d{4}_.+\.sql$/.test(file))
       .sort();
-    for (const file of files) this.raw.exec(migration(file));
+    for (const file of files) if (!beforeOwnerErasure || file < "0208_") this.raw.exec(migration(file));
   }
   prepare(sql: string) {
     this.seen.push(sql);
@@ -170,7 +171,7 @@ const REDACTED = `CASE kind
 const update = (db: SqliteD1, id: string, set: string) => () => db.raw.prepare(`UPDATE agent_signals SET ${set} WHERE signal_id = ?`).run(id);
 
 test("migration 0207: the signal guard is 0200's plus one exception, at the code's ninety days", () => {
-  const db = new SqliteD1();
+  const db = new SqliteD1(true);
   const live = db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_agent_signal_update'").get() as { sql: string };
   const base = /CREATE TRIGGER IF NOT EXISTS prevent_agent_signal_update\n[\s\S]*?\nEND/.exec(migration("0200_agent_coordination.sql"))![0];
   const exception = /\nWHEN NOT \([\s\S]*?\n {2}\)/.exec(migration("0207_agent_signal_redaction.sql"))![0];
@@ -339,7 +340,7 @@ test("run admission and redaction serialize at the actual INSERT, preserving exi
             method: "POST",
             headers: { authorization: "Bearer synthetic-retention-token", "content-type": "application/json" },
             body: JSON.stringify({ signal_id: id, specialist_id: specialist, host_run_key: key }),
-          }), { DB: db, AGENT_HOST_TOKEN: "synthetic-retention-token", APP_TENANT_ID: TENANT, AGENT_DATA_CLASS: "synthetic" });
+          }), { DB: db, AGENT_HOST_TOKEN: "synthetic-retention-token", PRIVACY_LEDGER: emptyAgentPrivacyLedger(), APP_TENANT_ID: TENANT, AGENT_DATA_CLASS: "synthetic" });
           return { status: response.status, body: await response.json() as Record<string, any> };
         };
         const redact = async () => { assert.equal(await redactSignalText(db, TENANT), 1); };
@@ -437,11 +438,11 @@ test("the daily cron redacts only while AGENT_SIGNAL_REDACTION is on", async (t)
   assert.deepEqual(db.content(id), { context: ASK.context, asker_role: "sales", redacted: true });
 });
 
-test("only retention.ts updates a signal, and nothing hashes a signal's content again", () => {
+test("only the two erasure paths update a signal, and nothing hashes a signal's content again", () => {
   const src = new URL("../src/", import.meta.url);
   const files = (readdirSync(src, { recursive: true }) as string[]).filter((file) => file.endsWith(".ts")).sort();
   const read = (file: string) => readFileSync(new URL(file, src), "utf8");
-  assert.deepEqual(files.filter((file) => /UPDATE\s+(OR\s+\w+\s+)?agent_signals/i.test(read(file))), ["agents/retention.ts"]);
+  assert.deepEqual(files.filter((file) => /UPDATE\s+(OR\s+\w+\s+)?agent_signals/i.test(read(file))), ["agents/retention.ts", "agents/subject-erasure.ts"]);
   // The stored content_sha256 is the hash of what was received; a receipt that cites a signal
   // names it (store.ts signalFact, ask.ts). Only the two inserts hash content, before it is stored,
   // and nothing hashes a stored row's content_json in its place.

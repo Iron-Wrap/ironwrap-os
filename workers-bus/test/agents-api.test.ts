@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -44,7 +45,7 @@ class SqliteD1 {
       );
       this.raw.exec(readFileSync(new URL("../migrations/0201_agent_delegation.sql", import.meta.url), "utf8"));
       // The operating core that shared-memory subjects resolve against, and the fact-version ledger.
-      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql", "0204_agent_watch_firings.sql", "0205_agent_step_pair_index.sql", "0206_agent_draft_closing.sql", "0207_agent_signal_redaction.sql"])
+      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql", "0204_agent_watch_firings.sql", "0205_agent_step_pair_index.sql", "0206_agent_draft_closing.sql", "0207_agent_signal_redaction.sql", "0208_agent_subject_erasure.sql"])
         this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     const user = this.raw.prepare(
@@ -127,7 +128,7 @@ class SqliteD1 {
 
 function setup(token: string | undefined = TOKEN, fullSchema = false) {
   const db = new SqliteD1(fullSchema);
-  const env: AgentEnv = { DB: db, AGENT_HOST_TOKEN: token, APP_TENANT_ID: TENANT };
+  const env: AgentEnv = { DB: db, AGENT_HOST_TOKEN: token, PRIVACY_LEDGER: emptyAgentPrivacyLedger(), APP_TENANT_ID: TENANT };
   let clock = Date.parse("2026-01-01T00:00:00Z");
   const call = async (method: string, path: string, body?: unknown, auth = `Bearer ${TOKEN}`) => {
     const response = await handleAgentHostApi(
@@ -303,7 +304,7 @@ test("closing records the result; an abstention always leaves a receipt that nam
   const abstained = (await call("POST", "/api/v1/agents/runs", { signal_id: down, specialist_id: "lead_concierge", host_run_key: "a".repeat(40) })).body;
   const closed = await call("POST", `/api/v1/agents/runs/${abstained.run_id}/close`, close({ status: "abstained", reason: "credential_missing", detail: "codex sign-in missing", output: null, model: null, hashes: null, tool_calls: [] }));
   assert.equal(closed.body.terminal, "abstained");
-  const lane = await handleAgentTeamAppRoute(new Request("https://bus.example.invalid/api/v1/agent-team/receipts?view=needs_you"), { DB: db, APP_TENANT_ID: TENANT }, owner());
+  const lane = await handleAgentTeamAppRoute(new Request("https://bus.example.invalid/api/v1/agent-team/receipts?view=needs_you"), { DB: db, APP_TENANT_ID: TENANT, PRIVACY_LEDGER: emptyAgentPrivacyLedger() }, owner());
   const receipts = (await lane.json()) as { receipts: Array<{ receipt: { run_id: string; action_id: string; outcome: string; policy: { reason_codes: string[] }; needs_from_you: { reviewer_role: string } } }> };
   const receipt = receipts.receipts.find((entry) => entry.receipt.run_id === abstained.run_id)?.receipt;
   assert.equal(receipt?.action_id, "exception.escalate");
@@ -366,7 +367,7 @@ test("heartbeats are stored for the owner's view; people other than owner and op
   };
   assert.equal((await call("POST", "/api/v1/agents/host/heartbeat", beat)).status, 204);
   assert.equal((await call("POST", "/api/v1/agents/host/heartbeat", { ...beat, alerts: ["Not An Alert"] })).status, 422);
-  const hosts = await handleAgentTeamAppRoute(new Request("https://bus.example.invalid/api/v1/agent-team/hosts"), { DB: db, APP_TENANT_ID: TENANT }, owner());
+  const hosts = await handleAgentTeamAppRoute(new Request("https://bus.example.invalid/api/v1/agent-team/hosts"), { DB: db, APP_TENANT_ID: TENANT, PRIVACY_LEDGER: emptyAgentPrivacyLedger() }, owner());
   const body = (await hosts.json()) as { hosts: Array<{ host_id: string; alerts: string[]; ready: boolean }> };
   assert.deepEqual(body.hosts.map((host) => [host.host_id, host.ready, host.alerts]), [["broker-host-1", false, ["codex_signin_not_refreshing"]]]);
   const field = await handleAgentTeamAppRoute(new Request("https://bus.example.invalid/api/v1/agent-team/hosts"), { DB: db, APP_TENANT_ID: TENANT }, owner("field"));

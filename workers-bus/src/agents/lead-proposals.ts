@@ -30,7 +30,7 @@ interface ProposalRow {
 }
 
 const PROPOSALS = `FROM agent_run_steps WHERE tenant_id = ? AND specialist_id = 'lead_concierge' AND action_id = 'lead_fact.propose'
-  AND outcome = 'succeeded'`;
+  AND outcome = 'succeeded' AND json_type(args_json, '$.redacted') IS NOT 'true'`;
 const COLUMNS = "step_id, rowid AS row, args_json, sources_json, created_at";
 /** The newest proposals of a lead read for its open ones. */
 const LEAD_WINDOW = 50;

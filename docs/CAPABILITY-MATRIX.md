@@ -75,8 +75,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 145,
-      "latest": "0207_agent_signal_redaction.sql"
+      "count": 146,
+      "latest": "0208_agent_subject_erasure.sql"
     }
   },
   "test_observation_policy": {
@@ -321,14 +321,22 @@ Current source tracing distinguishes implemented modules from reachable producti
   `AGENT_SIGNAL_REDACTION` switches it: "on" in qa and local, blank in production until this slice
   is merged and independently reviewed, then one config change on the production go-live list.
   Envelopes are the business record, kept three years; redacting them is a later slice that must
-  ship before the first reach that age. Named gap: copies this redaction does not reach, namely
-  a step's and a shadowed step's `args_json` (`lead_fact.propose` copies service, scope, address
-  and timing), a run's
-  `close_json`, `agent_exceptions.summary`, the agent host's `rejected-signals.jsonl`, D1 backups
-  (7 to 365 days) and model-provider copies. Not built yet: the owner-only erasure of one
-  customer's data after verifying them (call to the number or email from the address on file,
-  every erasure recorded), the `lead_fact.propose` arguments exception and a privacy-ledger restore
-  marker, which are the next slice.
+  ship before the first reach that age. Owner-verified subject erasure (`agents/subject-erasure.ts`,
+  `agents/privacy-ledger.ts`, migration `0208`, `agents-subject-erasure.test.ts`) records a fresh
+  owner's session/CSRF decision and completed on-file phone/email check attestation. It freezes
+  exact customer/native identities, signal IDs/original hashes and the frontier, refuses scopes
+  beyond 64 identities or 100 signals with explicit unsupported-scope/accepted-false/completed-false
+  readback before any partial acceptance, and progresses
+  in bounded calls. Before younger signal text or the four source-bound `lead_fact.propose` live/shadow
+  fields can be erased, create-only request/per-signal commitments must be read back from independent
+  `PRIVACY_LEDGER`. Original signal/argument hashes and other columns stay unchanged. Claimed sources
+  cannot continue owned runtime writes; independent checks hold signal/run/API disclosure after an
+  older D1 restore. The owner-only paged replay route reconstructs original committed decisions and
+  actually re-erases restored covered rows. No whole-customer or provider erasure is claimed.
+  Named gaps: envelope disposal, native/customer and confirmed facts, other action arguments,
+  run trigger/goal/context/close copies, step policy/readback, exception summaries, host logs/process
+  memory, archived backup bytes and model-provider copies. The ninety-day cron still reaches only
+  signal rows; proposal-field erasure requires the separate owner decision.
   Repository tests only; no deploy has run it yet. Not built yet: email, SMS, WhatsApp and social
   inbound do not exist in the Worker, and WhatsApp, a first-class channel for the owner, is a named
   gap; `newo_call` is built but no Newo call makes an envelope while `NEWO_ENABLED` is false; a

@@ -1649,15 +1649,76 @@ The owner's rulings, final:
 - Only the owner may erase one customer's data from signals, after verifying the customer by a call
   to the number on file or an email from the address on file, and every erasure is recorded.
 
-Not built yet, a named gap: this redaction reaches the signal row only. Copies of the same text it
-does not reach are a step's `args_json` and a shadowed step's (`agent_shadow_steps.args_json`):
-`lead_fact.propose` copies the service, scope, address and timing from the inbound it cites; a
-run's `close_json` (its answer and reasons may quote a
-signal), `agent_exceptions.summary`, the agent host's `rejected-signals.jsonl`, D1 backups (kept 7
-to 365 days) and the copies the model providers keep under their own retention
-(`COMPLIANCE-REGISTER.md`). The next slice is the owner-only erasure route, an exception that lets
-it clear `lead_fact.propose` arguments, and a privacy-ledger marker that a restore from backup
-reapplies.
+The owner-verified erasure route is `POST /api/v1/agent-team/privacy/erasures` (migration
+`0208`, `agents/subject-erasure.ts`). It requires a current owner, a session created within five
+minutes, CSRF and an idempotency key. Every write batch rechecks the live session and current
+owner. The body names `customer_id`, `expected_customer_version` and `verification` with
+`method` (`on_file_phone` or `on_file_email`), `on_file_check_completed: true` and an opaque
+`evidence_ref` beginning `ver_`. The selected contact must exist on the owned customer row. This
+records the owner's attestation to the completed check; the Worker performs no call or email.
+Only the reference digest is retained, not the contact or the reference text.
+
+The immutable decision freezes same-tenant customer/native lead/job identities, every admitted
+signal ID and original hash, and the sequence frontier. A new signal assigned a low sequence
+after an older restore cannot join that frozen ID cohort. Recorded non-conflicting sender matches also qualify; no name, address or
+new contact matching widens the decision. A scope has at most 64 identities and 100 eligible
+signals. A larger eligible scope is refused with `422 erasure_supported_scope_exceeded`,
+`accepted: false`, `completed: false` and both supported limits, before any decision, marker or
+partial first-hundred scope is accepted. Arbitrary-size customer-history erasure remains an
+explicit unsupported scope; this bounded capability does not establish that full owner goal.
+The caps bound complete final independent-marker readback. Each call claims at most ten signals and
+erases at most one hundred live/shadow proposal rows. An exact retry continues the original
+scope; a changed request conflicts. Readback at `GET /api/v1/agent-team/privacy/erasures/{id}`
+reports remaining signals and arguments, and never calls a partial page completed.
+
+Independent `PRIVACY_LEDGER` keys live under `agent-subject-erasures/v1/{tenant}/requests/` and
+`signals/`. The request decision commits first in D1; create-only request and exact per-signal
+markers must then be read back before text changes. Markers hold opaque record identities,
+original hashes and decision/verification commitments, without contacts or erased text. A target
+claim holds new/resumed runs, live/shadow steps and settlement. Signal/run/API responses consult
+the independent ledger, including after D1 is restored to a point before those claims existed.
+Missing expected, malformed, foreign, unavailable or conflicting commitments fail closed.
+When the signal marker and restored D1 target are both absent, runtime admission also checks
+the surviving independent request inventory for that exact frozen signal ID. A matching request
+restores only its original decision metadata and refuses the read with `privacy_marker_missing`;
+it neither erases text nor claims later signals. The absence check scans at most ten pages of ten
+requests. An incomplete or cyclic inventory fails closed (`privacy_reconciliation_incomplete`
+for the page bound), rather than treating an unfinished scan as proof of absence. A larger
+inventory needs a separately implemented bounded independent lookup before runtime admission.
+
+A confirmed decision admits exactly the existing kind-specific signal transformation before
+ninety days. For a same-tenant inbound signal whose lead and citation agree with its run, only
+`lead_fact.propose` may additionally set `fields.service`, `fields.scope`, `fields.address` and
+`fields.timing` to JSON null and add `redacted: true`. Live and shadow rows keep the original
+`args_sha256` and every other column. Both overlapping live guards and the shadow guard admit
+only that exception; the original prepared-draft closing exception stays. Redacted proposals
+are neither open nor confirmable through the proposal reader. Other actions, including
+`lead_fact.confirm`, gain no text-edit exception.
+
+After an older D1 restoration, the owner uses
+`POST /api/v1/agent-team/privacy/erasures/reapply` with `{"cursor":null}` and repeats with each
+returned opaque cursor until it is null. Signal pages validate the independent request and
+signal commitments, reconstruct the original decision/target and actually erase covered text.
+A request-inventory phase then audits each surviving request's complete frozen cohort (at most
+one hundred exact IDs/hashes per request page), reconstructing intact targets even when the
+signal inventory omitted their keys. A missing committed signal marker refuses replay. The final
+phase audits D1 targets against the independent ledger before finishing traversal; a vanished
+expected marker cannot be reported as an empty successful restore.
+A page with remaining arguments retains its current signal in the cursor; absent source rows are
+reported separately on each page, so signal and request phases can name the same absent ID.
+Request status can reconstruct its decision from the independent request;
+missing original signal IDs or `missing_marker_signal_ids` keep it incomplete. `GET /api/v1/agent-team/privacy/erasure-markers` inventories the surviving
+independent markers. The privacy bucket must remain outside D1/RAW restore and must not be
+rolled back or deleted with those stores. Do not reopen runtime processing while a privacy-ledger
+or replay failure remains unresolved. This is source behavior and synthetic repository proof;
+deployment and owner runtime acceptance remain separate gates.
+
+Named gaps remain: three-year envelope disposal; customer/contact/operating and confirmed lead
+facts; other action arguments; run trigger, goal, context and close copies; step policy/readback;
+exception summaries; host logs and already-delivered process memory; archived backup bytes; and
+model-provider copies (`COMPLIANCE-REGISTER.md`). Independent markers protect covered rows after
+a restore; they do not rewrite archived backups or recall previously delivered copies. The
+ninety-day cron reaches signal rows only. No whole-customer or provider erasure is claimed.
 
 ### Owner reports
 

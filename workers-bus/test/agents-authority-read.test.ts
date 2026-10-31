@@ -1,3 +1,4 @@
+import { emptyAgentPrivacyLedger } from "./agents-privacy-fixtures.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -192,7 +193,7 @@ function dump(raw: DatabaseSync): Map<string, string> {
 test("authority.evaluate reads the authority records as the desk and the work fence do, and writes nothing", async () => {
   const db = new SqliteD1();
   const assignmentId = await seed(db);
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN };
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger() };
   const host = async (path: string, body: unknown) => {
     const response = await handleAgentHostApi(
       new Request(`https://bus.example.invalid${path}`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(body) }),
@@ -258,7 +259,7 @@ test("authority.evaluate reads the authority records as the desk and the work fe
 
 /** A compliance run on a synthetic watch, and a proposer of authority.evaluate steps on it. */
 async function complianceRun(db: SqliteD1) {
-  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN };
+  const env = { DB: db, APP_TENANT_ID: TENANT, AGENT_HOST_TOKEN: TOKEN, PRIVACY_LEDGER: emptyAgentPrivacyLedger() };
   const host = async (path: string, body: unknown) => {
     const response = await handleAgentHostApi(
       new Request(`https://bus.example.invalid${path}`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(body) }),

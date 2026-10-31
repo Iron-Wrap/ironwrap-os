@@ -44,6 +44,7 @@ import {
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { jobLabel } from "../lib/job-label";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -59,6 +60,7 @@ import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
 import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
 import { GateChip } from "./gate-chip";
+import { JobLabelText } from "./job-label-text";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
 
@@ -630,10 +632,11 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 }
 
 type WorkPackagePanelModel = {
-  job: Pick<JobResponse["job"], "id">;
+  job: Pick<JobResponse["job"], "id"> & Partial<Pick<JobResponse["job"], "job_number" | "address">>;
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
-  packet: Pick<JobResponse["packet"], "work_package">;
+  packet: Pick<JobResponse["packet"], "work_package"> &
+    Partial<Pick<JobResponse["packet"], "contact">>;
   scope?: TypedWorkObjectScope | null;
 };
 
@@ -661,6 +664,51 @@ function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObje
     physical_context_type: workPackage.physical_context_type,
     physical_context_id: workPackage.physical_context_id,
   };
+}
+
+/** The read's word for a scope id it did not get (field-contracts.ts); never shown to a crew. */
+const MISSING_SCOPE_ID = "unknown";
+
+/**
+ * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by
+ * its ruled label, "{customer} · {street} · {code}" (D5), never by record ids or a placeholder
+ * (gate e-crew-version-copy: "Roof Job · unknown"); a bare code read as a site id (e-plan-scope).
+ * Any other scope keeps its type and id, and leaves out an id the read did not get.
+ */
+function planScopeFacts(
+  workPackage: FieldWorkPackage,
+  job: WorkPackagePanelModel["job"],
+  customer: string | null | undefined,
+): Array<{ label: string; value: ReactNode }> {
+  const known = (id: string) => (id && id !== MISSING_SCOPE_ID ? id : null);
+  const objectId = known(workPackage.work_object_id);
+  const areaId = known(workPackage.physical_context_id);
+  const thisJob = (id: string | null) => !id || id === job.id;
+  if (
+    workPackage.work_object_type === "Roof Job" &&
+    thisJob(objectId) &&
+    workPackage.physical_context_type === "Roof Site" &&
+    thisJob(areaId)
+  ) {
+    const named = jobLabel({ customer, address: job.address, code: job.job_number });
+    const value = named ? (
+      <JobLabelText customer={customer} address={job.address} code={job.job_number} />
+    ) : (
+      "This job"
+    );
+    return [{ label: "Applies to the job", value }];
+  }
+  return [
+    {
+      label: "Work object",
+      value: joinKnown([workPackage.work_object_type, objectId]) ?? workPackage.work_object_type,
+    },
+    {
+      label: "Work area",
+      value:
+        joinKnown([workPackage.physical_context_type, areaId]) ?? workPackage.physical_context_type,
+    },
+  ];
 }
 
 function workPackageActionPayload(
@@ -836,6 +884,7 @@ function WorkPackagePanel({
     model.allowed_actions.includes("work_package.start");
   const completionAllowed = model.allowed_actions.includes("work_package.complete");
   const canComplete = completionAllowed && !offline && canAttemptSync;
+  const scopeFacts = planScopeFacts(workPackage, model.job, model.packet.contact?.display_name);
 
   function showActionFailure(error: unknown, copy?: PlainErrorCopy) {
     setActionError({ text: messageFor(error, copy), error });
@@ -1028,15 +1077,12 @@ function WorkPackagePanel({
             value={formatFieldTimestamp(workPackage.expires_at, dateOptions)}
           />
         </dl>
-        <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
-          <JobFact
-            label="Work object"
-            value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
-          />
-          <JobFact
-            label="Work area"
-            value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
-          />
+        <dl
+          className={`mt-4 grid gap-4 border-t border-border pt-4 text-sm ${scopeFacts.length > 1 ? "sm:grid-cols-2" : ""}`}
+        >
+          {scopeFacts.map((fact) => (
+            <JobFact key={fact.label} label={fact.label} value={fact.value} />
+          ))}
         </dl>
       </header>
 
@@ -2010,7 +2056,7 @@ export function dialableNumber(text: string | null | undefined): string | null {
   return local ? digits : null;
 }
 
-function JobFact({ label, value }: { label: string; value: string }) {
+function JobFact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <dt className="text-xs font-bold text-muted">{label}</dt>

@@ -109,6 +109,7 @@ import {
   handleCustomerPortalAcceptancePreview,
   reconcileCustomerContractAcceptanceAttempts,
 } from "./customer-contract-acceptance.ts";
+import { sweepContractDepositGates } from "./deposit-policy.ts";
 import {
   handleCustomerPortalDecision,
   reconcileCustomerPortalDecisionAttempts,
@@ -506,6 +507,13 @@ export default {
           ),
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
             log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
+          ),
+          // OD-01 (0155): the Deposit gate entry a signed contract calls for, wherever the
+          // acceptance's own append after commit did not land. Idempotent by binding id.
+          sweepContractDepositGates(env as import("./app-types.ts").AppEnv).then((result) => {
+            if (result.candidates > 0) log({ at: "contract_deposit_gate_sweep", ...result });
+          }).catch((error) =>
+            log({ at: "contract_deposit_gate_sweep", error: String(error) }),
           ),
           reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
             log({ at: "customer_portal_decision_reconcile", error: String(error) }),

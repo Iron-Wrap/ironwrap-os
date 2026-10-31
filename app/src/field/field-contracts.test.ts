@@ -85,6 +85,38 @@ beforeEach(async () => {
 });
 
 describe("field response validation", () => {
+  it("keeps legacy gate availability unknown and admits only the narrow current gate projection", () => {
+    const row = {
+      id: "job:synthetic:gates",
+      job_number: null,
+      brand: null,
+      status: null,
+      address: null,
+      scheduled_start: null,
+      scheduled_end: null,
+      blocked_gate_count: 1,
+      next_action: "Open field check-in",
+      assignment: null,
+    };
+    const parse = (jobs: unknown[]) =>
+      contracts.todayResponseSchema.parse({
+        ...envelope,
+        date: "synthetic-run",
+        jobs,
+      });
+    expect(parse([row]).jobs[0]?.open_gates).toBeNull();
+    expect(parse([{ ...row, open_gates: [] }]).jobs[0]?.open_gates).toEqual([]);
+    const gate = { gate: "Safety", label: "Safety check", clearer_display_name: "The office" };
+    expect(parse([{ ...row, open_gates: [gate] }]).jobs[0]?.open_gates).toEqual([gate]);
+    for (const invalid of [
+      [{ ...gate, user_id: "private-staff-id" }],
+      [gate, gate],
+      [{ ...gate, gate: "Completion" }],
+    ]) {
+      expect(() => parse([{ ...row, open_gates: invalid }])).toThrow();
+    }
+  });
+
   it("does not construct packet validators for Today and constructs them once when needed", () => {
     const hasField = (field: string) => constructedShapes.some((shape) => shape.includes(field));
     expect(hasField("stop_conditions")).toBe(false);

@@ -109,6 +109,7 @@ import {
   type NativePropertyRecord,
 } from "./native-job-packet-read.ts";
 import { readNativeEstimatorSources } from "./estimator-native.ts";
+import { readOfficeJobIdentitySources } from "./office-job-identity-read.ts";
 
 /** A missing or damaged optional measurement panel must not hide the live work packet. */
 async function embeddedFieldMeasurements(
@@ -446,6 +447,8 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
   jobs: Array<{
     id: string;
     job_number: string | null;
+    customer_display_name: string | null;
+    address: string | null;
     brand: string | null;
     service_type: string | null;
     status: string | null;
@@ -832,6 +835,8 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     id: string;
     roof_job_id: string | null;
     job_number: string | null;
+    customer_display_name: string | null;
+    address: string | null;
     brand: string | null;
     service_type: string | null;
     status: string | null;
@@ -1476,9 +1481,10 @@ export async function buildProductionRunwayReadModel(
   const jobs = jobSource.rows.map(nativeOperatingJobRow);
   const assignments = nativeAssignmentsSource.map(nativeOperatingAssignmentRow);
   const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
-  const [gateSource, materialSource] = await Promise.all([
+  const [gateSource, materialSource, identitySources] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, jobIds),
     nativeMaterialExceptions(env, auth.session.tenant_id, jobIds),
+    readOfficeJobIdentitySources(env, auth.session.tenant_id, jobIds),
   ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const materialExceptions = materialSource.rows.map(
@@ -1625,6 +1631,8 @@ export async function buildProductionRunwayReadModel(
         {
           id,
           job_number: text(job.job_number),
+          customer_display_name: identitySources.get(id)?.job.customer_display_name ?? null,
+          address: identitySources.get(id)?.job.address ?? null,
           brand: text(job.brand),
           service_type: text(job.service_type),
           status: text(job.job_status),
@@ -1660,6 +1668,7 @@ export async function buildProductionRunwayReadModel(
       auth,
       [
         ...jobs,
+        ...[...identitySources.values()].map((source) => ({ modified: source.modified })),
         ...assignments,
         ...gates,
         ...materialExceptions,
@@ -2952,7 +2961,7 @@ export async function buildEstimatorWorkbenchReadModel(
     throw new Error("office_scope_required");
   if (!validJobName(jobName)) return null;
   const readModelGeneratedAt = asOf.toISOString();
-  const [nativeSources, nativeCommercial] = await Promise.all([
+  const [nativeSources, nativeCommercial, identitySources] = await Promise.all([
     readNativeEstimatorSources(env, auth.session.tenant_id, jobName, asOf),
     readNativeCommercialJobPacket(
       env,
@@ -2960,6 +2969,7 @@ export async function buildEstimatorWorkbenchReadModel(
       jobName,
       ESTIMATOR_SOURCE_LIMIT,
     ),
+    readOfficeJobIdentitySources(env, auth.session.tenant_id, [jobName]),
   ]);
   if (!nativeSources) return null;
   const job = nativeSources.job;
@@ -3228,6 +3238,7 @@ export async function buildEstimatorWorkbenchReadModel(
     auth,
     [
       job,
+      ...[...identitySources.values()].map((source) => ({ modified: source.modified })),
       ...measurementRows,
       ...visualModelRows,
       ...roofAreaRows,
@@ -3288,6 +3299,8 @@ export async function buildEstimatorWorkbenchReadModel(
       id: jobId,
       roof_job_id: text(job.roof_job_id),
       job_number: text(job.job_number),
+      customer_display_name: identitySources.get(jobId)?.job.customer_display_name ?? null,
+      address: identitySources.get(jobId)?.job.address ?? null,
       brand: text(job.brand),
       service_type: text(job.service_type),
       status: text(job.job_status),

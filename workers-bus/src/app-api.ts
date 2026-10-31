@@ -1,3 +1,4 @@
+import { readQuoteRevisionOfficeJob } from "./office-job-identity-read.ts";
 import { handlePricingCatalog } from "./pricing-catalog-api.ts";
 import { PricingCatalogError } from "./pricing-catalog.ts";
 import { handleJobMeasurementReports } from "./job-measurement-report-api.ts";
@@ -1085,13 +1086,18 @@ export async function handleAuthenticatedRoute(
         requestId,
         new Date().toISOString(),
       );
-      return approval
-        ? privateAppJson(
-            quoteRevisionApprovalReadEnvelope(env, auth, {
-              approval: quoteRevisionApprovalProjection(approval),
-            }),
-          )
-        : privateAppJson({ error: "not_found" }, 404);
+      if (!approval) return privateAppJson({ error: "not_found" }, 404);
+      const job = await readQuoteRevisionOfficeJob(env, auth.session.tenant_id, {
+        roofJobId: approval.roof_job_id,
+        sourceQuoteId: approval.source_customer_quote_id,
+        sourceQuoteVersion: approval.source_quote_version,
+      });
+      return privateAppJson(
+        quoteRevisionApprovalReadEnvelope(env, auth, {
+          approval: quoteRevisionApprovalProjection(approval),
+          job,
+        }),
+      );
     } catch {
       return privateAppJson(
         { error: "quote_revision_approval_store_unavailable" },

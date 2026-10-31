@@ -148,6 +148,14 @@ export interface RunTool {
 export type StoreError = { error: string; status: number };
 
 const SIGNAL_KINDS = new Set(["event", "watch", "owner_request", "handoff"]);
+/** A signal's time as toISOString writes it: migration 0207's age check compares this form as text. */
+const STORED_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** The time a signal is stored under; any other form is a bug in its writer, so it throws. */
+function signalTime(now: string): string {
+  if (!STORED_INSTANT.test(now)) throw new Error("invalid_signal_time");
+  return now;
+}
 
 export async function appendSignal(
   db: AgentDb,
@@ -200,7 +208,7 @@ export async function appendSignal(
       input.dedupe_key,
       input.parent_run_id ?? null,
       input.handoff_depth ?? 0,
-      now,
+      signalTime(now),
       tenantId,
       input.dedupe_key,
       ...(admission?.values ?? []),
@@ -291,6 +299,10 @@ export async function openRun(
     .first<SignalRow>();
   if (!signal) return { error: "signal_not_found", status: 422 };
   if (signal.specialist_id !== input.specialist_id) return { error: "specialist_mismatch", status: 422 };
+  // A signal past its text retention no longer holds what a run would read (retention.ts), so no
+  // run starts on it (409: the host skips it). The INSERT repeats this check atomically after the
+  // awaited context reads, so redaction cannot win admission while this cached row still has text.
+  if (redacted(signal)) return { error: "signal_redacted", status: 409 };
 
   const subject = signal.subject_aggregate && signal.subject_id ? { aggregate: signal.subject_aggregate, id: signal.subject_id } : null;
   // The face answering a person's ask reads as that person's role at ask time (face.ts). An ask
@@ -347,7 +359,9 @@ export async function openRun(
         catalog_version, policy_version, parent_run_id, correlation_id, state, attempt,
         attempt_started_at, started_at, mode)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM agent_runs WHERE tenant_id = ? AND host_run_key = ?)`,
+       WHERE NOT EXISTS (SELECT 1 FROM agent_runs WHERE tenant_id = ? AND host_run_key = ?)
+         AND EXISTS (SELECT 1 FROM agent_signals WHERE tenant_id = ? AND signal_id = ?
+           AND json_type(content_json, '$.redacted') IS NOT 'true')`,
     )
     .bind(
       run.run_id,
@@ -370,14 +384,27 @@ export async function openRun(
       mode,
       tenantId,
       input.host_run_key,
+      tenantId,
+      input.signal_id,
     )
     .run();
-  if (changesOf(inserted) >= 1)
-    return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
+  if (changesOf(inserted) >= 1) {
+    // Admission checks the triggering row atomically, but a handoff also copied its root ask.
+    // Re-read every canonical signal value after that boundary, just as resume does. Retention
+    // keeps the trigger's original hash and can change a root fact's hash; hydrate then supplies
+    // reduced content or a stale/null fact, never the plaintext cached before the INSERT.
+    const admittedSignals = await hydrate(facts.filter((fact) => fact.kind === "signal").map(refOf), runFactReader(db, tenantId, run, now));
+    const signalsById = new Map(admittedSignals.map((fact) => [fact.fact_id, fact]));
+    const admittedFacts = facts.map((fact) => fact.kind === "signal" ? signalsById.get(fact.fact_id)! : fact);
+    return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts: admittedFacts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
+  }
   // Another open for the same key won the insert: that run is the one, so resume it.
   const winner = await runByKey(db, tenantId, input.host_run_key);
-  if (!winner) return { error: "run_unavailable", status: 503 };
-  return await resumeRun(db, tenantId, winner, input, now);
+  if (winner) return await resumeRun(db, tenantId, winner, input, now);
+  const currentSignal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
+    .bind(tenantId, input.signal_id).first<SignalRow>();
+  if (currentSignal && redacted(currentSignal)) return { error: "signal_redacted", status: 409 };
+  return { error: "run_unavailable", status: 503 };
 }
 
 async function runByKey(db: AgentDb, tenantId: string, hostRunKey: string): Promise<RunRow | null> {
@@ -580,6 +607,12 @@ export function runTools(run: RunRow): RunTool[] {
   return JSON.parse(run.tool_manifest_json);
 }
 
+/** Whether a signal's text was redacted at the end of its retention (migration 0207). */
+function redacted(signal: SignalRow): boolean {
+  const content: unknown = JSON.parse(signal.content_json);
+  return typeof content === "object" && content !== null && (content as { redacted?: unknown }).redacted === true;
+}
+
 /** The objects a scheduler watch's condition named, or null for any other signal. */
 function watchSubjects(signal: SignalRow): Array<{ aggregate: string; id: string }> | null {
   if (signal.kind !== "watch" || signal.source !== WATCH_SIGNAL_SOURCE) return null;
@@ -592,8 +625,9 @@ function watchSubjects(signal: SignalRow): Array<{ aggregate: string; id: string
 }
 
 /**
- * The signal itself is the first fact of every run: immutable. Its text is untrusted, except a
- * watch the Worker's scheduler wrote from its own records.
+ * The signal itself is the first fact of every run, under the hash of what was received, which
+ * redaction keeps (retention.ts). Its text is untrusted, except a watch the Worker's scheduler wrote
+ * from its own records.
  */
 function signalFact(signal: SignalRow): ContextFact {
   return {
@@ -1236,7 +1270,7 @@ async function handoffSignalInsert(
       `handoff:${run.run_id}:${stepKey}`,
       run.run_id,
       depth,
-      now,
+      signalTime(now),
       stepId,
       tenantId,
       `handoff:${run.run_id}:${stepKey}`,

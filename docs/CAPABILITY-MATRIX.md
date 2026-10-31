@@ -75,8 +75,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 144,
-      "latest": "0206_agent_draft_closing.sql"
+      "count": 145,
+      "latest": "0207_agent_signal_redaction.sql"
     }
   },
   "test_observation_policy": {
@@ -306,10 +306,29 @@ Current source tracing distinguishes implemented modules from reachable producti
   `untrusted_text` inside its run and reach no watch digest or owner report snapshot, since no
   watch condition reads an inbound signal and a report run reads only its own watch signal and the
   objects that signal names.
-  `AGENT_INBOUND_FROM` switches the producer: blank in production, pinned by a test, until agent
-  signals have a retention and erasure path aligned with envelope retention and then the owner's
-  go-live decision; 2026-10-20T15:52:43Z in qa and local (synthetic data), so on from that
-  instant there.
+  `AGENT_INBOUND_FROM` switches the producer: blank in production, pinned by a test, until the
+  signal text redaction below runs in production and then the owner's go-live decision;
+  2026-10-20T15:52:43Z in qa and local (synthetic data), so on from that instant there.
+  Signal text retention (`workers-bus/src/agents/retention.ts`, migration `0207`,
+  `test/agents-retention.test.ts`; contract "Signal text retention"): the daily cron redacts a
+  signal's free text in place, once, ninety days after it was received (the owner's final
+  ruling): an inbound event's `excerpt`, `form_fields` and `service`, an ask's `question`, a
+  handoff's `reason`; a watch is never redacted. The row keeps its ids, roles, envelope, channel,
+  objects and its original `content_sha256`, and gains `"redacted": true`. `0207` adds one
+  exception to the signal's append-only guard, with the age on D1's clock and every other column
+  pinned, and a partial index of unredacted signals; a run redacts at most 500, oldest first, and
+  no run opens on a redacted signal (`409 signal_redacted`).
+  `AGENT_SIGNAL_REDACTION` switches it: "on" in qa and local, blank in production until this slice
+  is merged and independently reviewed, then one config change on the production go-live list.
+  Envelopes are the business record, kept three years; redacting them is a later slice that must
+  ship before the first reach that age. Named gap: copies this redaction does not reach, namely
+  a step's and a shadowed step's `args_json` (`lead_fact.propose` copies service, scope, address
+  and timing), a run's
+  `close_json`, `agent_exceptions.summary`, the agent host's `rejected-signals.jsonl`, D1 backups
+  (7 to 365 days) and model-provider copies. Not built yet: the owner-only erasure of one
+  customer's data after verifying them (call to the number or email from the address on file,
+  every erasure recorded), the `lead_fact.propose` arguments exception and a privacy-ledger restore
+  marker, which are the next slice.
   Repository tests only; no deploy has run it yet. Not built yet: email, SMS, WhatsApp and social
   inbound do not exist in the Worker, and WhatsApp, a first-class channel for the owner, is a named
   gap; `newo_call` is built but no Newo call makes an envelope while `NEWO_ENABLED` is false; a

@@ -1149,7 +1149,7 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     // durable office intake receipts, manual measurement history, the safety stop release guard,
     // the 0153 gate ledger, the 0155 tenant deposit policy and the 0205 step pair index.
     assert.match(contract, /REQUIRED_TABLE_COUNT=282/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=395/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=396/);
     assert.match(contract, /REQUIRED_TRIGGER_COUNT=785/);
   }
 });

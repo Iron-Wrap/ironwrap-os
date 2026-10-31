@@ -446,7 +446,8 @@ function refUnder(byId: Map<string, FactRef>, citation: string): { ref: FactRef;
 }
 
 /**
- * Reads a fact's value again; the signal's value comes from its immutable signal row. `all` reads
+ * Reads a fact's value again; the signal's value comes from its signal row, whose hash never changes
+ * (its text alone is redacted at ninety days, retention.ts). `all` reads
  * many at once, as a resume does.
  */
 export type FactReader = ((ref: FactRef) => Promise<ContextFact | null>) & { all?: (refs: FactRef[]) => Promise<Array<ContextFact | null>> };
@@ -511,9 +512,9 @@ export async function hydrate(refs: FactRef[], read: FactReader): Promise<Array<
 /**
  * Snapshot entries and current versions for a step's citations, read again now. A pointer
  * citation exists only where the pointer resolves in the value at the cited version; it gets its
- * own entry carrying the enclosing fact's version and the hash of the cited value. A fact reports
- * its current ledger version, so a changed value is a newer version (stale) and an unreadable one
- * is null (unverifiable), never the old version.
+ * own entry carrying the enclosing fact's version and the hash of the cited value. A newer
+ * version is stale. An unreadable identity or same-version hash change is unverifiable; a
+ * special canonical fact can retain its numeric version while its derived value changes.
  */
 export async function citedFacts(
   citations: Citation[],
@@ -526,7 +527,7 @@ export async function citedFacts(
   for (const citation of citations) {
     const under = refUnder(byId, citation.fact_id);
     const fresh = under ? await read(under.ref) : null;
-    if (!under || !fresh) {
+    if (!under || !fresh || fresh.fact_id !== under.ref.fact_id) {
       currentVersions.set(citation.fact_id, null);
       continue;
     }
@@ -534,7 +535,11 @@ export async function citedFacts(
       currentVersions.set(citation.fact_id, fresh.version);
       continue;
     }
-    // One version names one value, so the value read now is the value the run was given.
+    if (fresh.hash !== under.ref.hash) {
+      currentVersions.set(citation.fact_id, null);
+      continue;
+    }
+    // Only the exact snapshot identity/version/hash may supply a current value or pointer.
     const value = resolvePointer(fresh.data, under.rest);
     if (value === undefined) {
       currentVersions.set(citation.fact_id, null);

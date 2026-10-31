@@ -210,7 +210,7 @@ export async function readCurrentFacts(db: AgentDb, tenantId: string, actor: Hum
   return { facts, unreadable };
 }
 
-/** An ask's question as its run read it: the immutable signal, version 1, by its content hash. */
+/** An ask's question as its run read it: the signal, version 1, by the hash of what was asked (kept after redaction). */
 async function askFact(db: AgentDb, tenantId: string, actor: HumanPrincipal, askId: string): Promise<AnswerSource | null> {
   const signal = await askFor(db, tenantId, actor, askId);
   return signal ? { fact_id: `signal/${askId}`, version: 1, hash: `sha256:${signal.content_sha256}` } : null;

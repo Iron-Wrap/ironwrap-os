@@ -16,8 +16,9 @@ import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.t
 import { CATALOG_SHA256 } from "../src/agents/contract-catalog.ts";
 import { changeSpecialistControl, setDelegation } from "../src/agents/control.ts";
 import { VIEW_SCHEMA } from "../src/agents/face.ts";
+import { redactSignalText } from "../src/agents/retention.ts";
 import { assertStrictSchema, canonicalJson } from "../src/agents/schema.ts";
-import { appendSignal, peopleOnlyFor, toolsFor, type BoundStatement } from "../src/agents/store.ts";
+import { appendSignal, peopleOnlyFor, runFactReader, toolsFor, type BoundStatement, type RunRow } from "../src/agents/store.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
 import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
@@ -30,6 +31,8 @@ const hex = (text: string) => createHash("sha256").update(text).digest("hex");
 /** Real SQLite with every migration, D1's one-transaction batch and trigger-inclusive change counts. */
 class SqliteD1 {
   raw = new DatabaseSync(":memory:");
+  beforeRunInsert: (() => Promise<void>) | null = null;
+  afterRunInsert: (() => Promise<void>) | null = null;
   private held: { count: number; waiting: Array<() => void> } | null = null;
   /** Holds the next `count` step inserts until all of them wait, so they race on the run's ceiling. */
   holdStepInserts(count: number) {
@@ -56,10 +59,22 @@ class SqliteD1 {
                 this.held = null;
                 for (const go of held.waiting) go();
               });
+            const runInsert = /^\s*INSERT INTO agent_runs\s/.test(sql);
+            if (runInsert && this.beforeRunInsert) {
+              const hook = this.beforeRunInsert;
+              this.beforeRunInsert = null;
+              await hook();
+            }
             const count = () => Number((this.raw.prepare("SELECT total_changes() AS n").get() as { n: number }).n);
             const before = count();
             this.raw.prepare(sql).run(...args);
-            return { meta: { changes: count() - before } };
+            const changes = count() - before;
+            if (runInsert && this.afterRunInsert) {
+              const hook = this.afterRunInsert;
+              this.afterRunInsert = null;
+              await hook();
+            }
+            return { meta: { changes } };
           },
         };
       },
@@ -169,9 +184,10 @@ function seedJob(raw: DatabaseSync) {
   raw.prepare(`INSERT INTO accounting_intents (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).run(...(columns.map((column) => intent[column]) as never[]));
 }
 
-function setup() {
+function setup(startAtMs = Date.parse(AT)) {
   const db = new SqliteD1();
-  let clock = Date.parse(AT) + 60_000;
+  let clock = startAtMs + 60_000;
+  const createdAt = new Date(startAtMs).toISOString();
   const auths = new Map<Person, AuthContext>();
   for (const [name, [userId, role]] of Object.entries(PEOPLE) as Array<[Person, readonly [string, AppRole]]>) {
     // The legacy `role` column knows three roles; `access_role` is the one in force (0038).
@@ -180,15 +196,15 @@ function setup() {
         `INSERT INTO app_users (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active, created_by, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'seed', ?, ?)`,
       )
-      .run(userId, TENANT, `${name}@example.invalid`, `Synthetic ${name}`, ["owner", "ops", "field"].includes(role) ? role : "ops", role, `${name}@example.invalid`, AT, AT);
+      .run(userId, TENANT, `${name}@example.invalid`, `Synthetic ${name}`, ["owner", "ops", "field"].includes(role) ? role : "ops", role, `${name}@example.invalid`, createdAt, createdAt);
     db.raw
       .prepare(
         `INSERT INTO app_sessions (session_hash, user_id, tenant_id, created_at, expires_at, last_seen_at, created_ip_hash, created_user_agent_hash)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(hex(name), userId, TENANT, AT, "2026-01-01T12:00:00.000Z", AT, hex("ip"), hex("ua"));
+      .run(hex(name), userId, TENANT, createdAt, new Date(startAtMs + 12 * 3_600_000).toISOString(), createdAt, hex("ip"), hex("ua"));
     auths.set(name, {
-      session: { user_id: userId, tenant_id: TENANT, role, session_hash: hex(name), session_created_at: AT, email_normalized: `${name}@example.invalid` },
+      session: { user_id: userId, tenant_id: TENANT, role, session_hash: hex(name), session_created_at: createdAt, email_normalized: `${name}@example.invalid` },
       rawSessionToken: "synthetic-person-session",
       csrfToken: "synthetic-csrf",
       permissions: [],
@@ -393,6 +409,24 @@ test("only the person who asked, or the owner, reads an ask; anyone else gets no
 
   const run = await openFace(t, askId);
   assert.deepEqual((await t.app("sales", "GET", `/ask/${askId}`)).body, { ...pending, run_id: run.run_id });
+});
+
+test("an ask past its text retention keeps who asked and from where, and a replay of its key conflicts", async () => {
+  const t = setup();
+  // This file's clock starts long over ninety days before the real one, which the redaction reads.
+  const askId = await ask(t, "sales", "ask-retained-0001");
+  const press = () => t.app("sales", "POST", "/requests", { action_id: "quote.draft_revision", target: { aggregate: "job", id: JOB }, ask_id: askId }, { "idempotency-key": "press-retained-0001" });
+  const requestId = (await press()).body.signal_id as string;
+  assert.equal(await redactSignalText(t.db, TENANT), 2);
+  const content = (id: string) => JSON.parse((t.db.raw.prepare("SELECT content_json FROM agent_signals WHERE signal_id = ?").get(id) as { content_json: string }).content_json);
+  assert.deepEqual(content(askId), { asker_role: "sales", context: { route: `/jobs/${JOB}`, object: { aggregate: "job", id: JOB } }, redacted: true });
+  assert.deepEqual(content(requestId), { expected_action_id: "quote.draft_revision", target: { aggregate: "job", id: JOB }, ask_id: askId, requester_role: "sales", redacted: true });
+  // Still the sales person's ask, for them and the owner.
+  assert.equal((await t.app("sales", "GET", `/ask/${askId}`)).body.ask_id, askId);
+  assert.equal((await t.app("owner", "GET", `/ask/${askId}`)).body.ask_id, askId);
+  // Its question is gone, so the same key no longer replays it; a request held no text and still does.
+  assert.deepEqual((await t.app("sales", "POST", "/ask", askBody(), { "idempotency-key": "ask-retained-0001" })).body, { error: "idempotency_conflict" });
+  assert.equal((await press()).body.signal_id, requestId);
 });
 
 test("a sales asker's face run reads as sales: no owner-only fact on open, resume or citation", async () => {
@@ -1379,6 +1413,91 @@ test("a handoff run reads the person's ask at the root of its chain, and its wor
   assert.deepEqual(signalFacts(fromEvent).map((fact) => fact.fact_id), [`signal/${fromEvent.signal_id}`]);
   // Nor can another chain's ask be read into a run by citing it.
   assert.deepEqual((await step(t, fromEvent.run_id, "fact.explain", { object: null, explanation: "Synthetic" }, [{ fact_id: `signal/${askId}`, version: 1 }])).reason_codes, ["citation_unverifiable"]);
+});
+
+test("handoff admission rehydrates canonical root text after retention while preserving supported ordering and keys", async (t) => {
+  for (const ordering of ["root redaction first", "child admission first", "same-key winner", "root already redacted", "metadata-only child", "foreign retention"] as const) {
+    await t.test(ordering, async () => {
+      const wallClock = Date.now();
+      const rootClock = wallClock - 90 * 86_400_000 - 60_000;
+      const s = setup(rootClock - 60_000);
+      try {
+        const question = "Synthetic root question removed at child admission.";
+        const askId = await ask(s, "ops", "ask-retention-root", askBody(question, null));
+        const face = await openFace(s, askId);
+        const originalHash = (s.db.raw.prepare("SELECT content_sha256 FROM agent_signals WHERE signal_id = ?").get(askId) as { content_sha256: string }).content_sha256;
+        // Both handoffs are made by the actual supported policy/action path while the parent is
+        // live; only the final delivery waits across the root's ninety-day boundary.
+        s.tick(120_000);
+        const from = ordering === "metadata-only child" ? face : await handOff(s, face, cite(factOf(face, `signal/${askId}`)), "person:appu_field_0001");
+        const specialist = ordering === "metadata-only child" ? "compliance" : "orchestrator";
+        const args = { to_specialist_id: specialist, object: { aggregate: "user_access", id: "person:appu_field_0001", version: 1 },
+          reason: "Synthetic supported return handoff.", expected_action_id: "access.prepare_change" };
+        const made = await step(s, from.run_id, "handoff.create", args, [cite(factOf(from, `signal/${askId}`))]);
+        assert.equal(made.decision, "recorded", JSON.stringify(made));
+        const childId = (s.db.raw.prepare("SELECT signal_id FROM agent_signals WHERE kind = 'handoff' AND parent_run_id = ?").get(from.run_id) as { signal_id: string }).signal_id;
+        s.tick(wallClock - s.clock());
+        const openChild = (selected = specialist) => s.host("POST", "/api/v1/agents/runs", { signal_id: childId, specialist_id: selected, host_run_key: `run:${childId}` });
+        const redact = async () => { assert.equal(await redactSignalText(s.db, TENANT), 1); };
+        const eventsBefore = Number((s.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_run_events").get() as { n: number }).n);
+        let winnerId: string | null = null;
+        if (ordering === "root already redacted") await redact();
+        else if (ordering === "child admission first") s.db.afterRunInsert = redact;
+        else if (ordering === "same-key winner") s.db.beforeRunInsert = async () => {
+          const winner = await openChild(); assert.equal(winner.status, 201, JSON.stringify(winner)); winnerId = winner.body.run_id;
+          await redact();
+        };
+        else if (ordering === "foreign retention") s.db.beforeRunInsert = async () => { assert.equal(await redactSignalText(s.db, "foreign"), 0); };
+        else s.db.beforeRunInsert = redact;
+        const opened = await openChild();
+        assert.equal(opened.status, ordering === "same-key winner" ? 200 : 201, JSON.stringify(opened));
+        if (winnerId) assert.equal(opened.body.run_id, winnerId);
+        const root = s.db.raw.prepare("SELECT * FROM agent_signals WHERE signal_id = ?").get(askId) as { content_json: string; content_sha256: string };
+        const child = s.db.raw.prepare("SELECT content_json FROM agent_signals WHERE signal_id = ?").get(childId) as { content_json: string };
+        const rootFact = opened.body.context.facts.find((fact: { fact_id: string }) => fact.fact_id === `signal/${askId}`);
+        assert.ok(rootFact);
+        assert.equal(root.content_sha256, originalHash); assert.equal(JSON.parse(child.content_json).redacted, undefined);
+        assert.equal(Number((s.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_runs WHERE signal_id = ?").get(childId) as { n: number }).n), 1);
+        assert.equal(Number((s.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_run_events WHERE event_type = 'opened' AND run_id = ?").get(opened.body.run_id) as { n: number }).n), 1);
+        assert.ok(Number((s.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_run_events").get() as { n: number }).n) > eventsBefore);
+        if (ordering === "foreign retention") { assert.equal(JSON.parse(root.content_json).question, question); assert.equal(rootFact.data.content.question, question); }
+        else {
+          assert.equal(JSON.parse(root.content_json).redacted, true); assert.equal(Object.hasOwn(JSON.parse(root.content_json), "question"), false);
+          assert.equal(JSON.stringify(opened.body).includes(question), false);
+          if (ordering === "metadata-only child") { assert.equal(rootFact.data.content, undefined); assert.equal(rootFact.data.actor.role, "ops"); assert.equal(rootFact.trust, "owned"); }
+          else if (ordering === "root already redacted") { assert.equal(rootFact.data.content.redacted, true); assert.equal(rootFact.current, undefined); }
+          else { assert.equal(rootFact.data, null); assert.equal(rootFact.current, false); }
+        }
+        const currentChild = await step(s, opened.body.run_id, "fact.explain", { object: null, explanation: "Synthetic current child evidence." }, [{ fact_id: `signal/${childId}`, version: 1 }]);
+        assert.equal(currentChild.decision, "recorded", JSON.stringify(currentChild));
+        const storedRun = s.db.raw.prepare("SELECT * FROM agent_runs WHERE run_id = ?").get(opened.body.run_id) as unknown as RunRow;
+        const currentRoot = await runFactReader(s.db, TENANT, storedRun, new Date(s.clock()).toISOString())(rootFact);
+        assert.ok(currentRoot); assert.equal(currentRoot.version, rootFact.version);
+        const staleRoot = rootFact.current === false;
+        assert.equal(currentRoot.hash === rootFact.hash, !staleRoot);
+        const rootCitation = [cite(rootFact)];
+        const rootRead = await step(s, opened.body.run_id, "fact.explain", { object: null, explanation: "Synthetic root evidence." }, rootCitation);
+        const suppliedFormerText = await step(s, opened.body.run_id, "fact.explain", { object: null, explanation: question }, rootCitation);
+        const preparation = await step(s, opened.body.run_id, "access.prepare_change", pairing(rootFact.fact_id), rootCitation);
+        for (const result of [rootRead, suppliedFormerText, preparation]) {
+          const fresh = result.receipt.policy.checks.find((check: { check: string }) => check.check === "fresh")?.passed;
+          if (staleRoot) {
+            assert.equal(result.decision, "abstained", JSON.stringify(result));
+            assert.ok(result.reason_codes.includes("citation_unverifiable"), JSON.stringify(result));
+            assert.notEqual(fresh, true);
+          } else assert.equal(fresh, true, JSON.stringify(result));
+        }
+        if (!staleRoot) {
+          assert.equal(rootRead.decision, "recorded"); assert.equal(suppliedFormerText.decision, "recorded");
+          assert.equal(preparation.decision, "drafted", JSON.stringify(preparation));
+          assert.equal(preparation.receipt.policy.checks.find((check: { check: string }) => check.check === "requester")?.passed, true);
+        }
+        const replay = await openChild(); assert.equal(replay.status, 200); assert.equal(replay.body.run_id, opened.body.run_id);
+        if (ordering !== "foreign retention") assert.equal(JSON.stringify(replay.body).includes(question), false);
+        assert.deepEqual(await openChild(specialist === "orchestrator" ? "compliance" : "orchestrator"), { status: 422, body: { error: "run_key_conflict" } });
+      } finally { s.db.raw.close(); }
+    });
+  }
 });
 
 test("a handoff chain that loops, or runs past the depth ceiling, has no root ask: nothing is read and the step abstains", async () => {

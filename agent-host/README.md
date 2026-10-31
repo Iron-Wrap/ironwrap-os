@@ -8,9 +8,10 @@ coordination loop in [`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHIT
 
 This package holds the provider gateway (`src/gateway/`), the host service (`src/host/`) and the
 replay and qualification runner (`src/replay/`). The Worker-side coordination record, signal
-transport, policy decisions and receipts live in `workers-bus/src/agents/`. Shared-memory read
-models and standing-watch scheduling remain later slices. `specialists/` and `evals/` are owned by
-the specialist track.
+transport, policy decisions, receipts, shared-memory read models and standing-watch scheduling
+live in `workers-bus/src/agents/`. Only watches with a registered deterministic condition fire;
+the current coverage is recorded in [`docs/CAPABILITY-MATRIX.md`](../docs/CAPABILITY-MATRIX.md).
+`specialists/` and `evals/` hold the runtime instructions and their evaluation cases.
 
 ## Provider gateway
 
@@ -228,14 +229,16 @@ by name (`passEnv`), never placed on a command line. Output must match a strict 
 
 ## Host service
 
-`src/host/main.ts` is the long-running process. Each pass it:
+`src/host/main.ts` is the long-running process. Each work-loop pass it:
 
-1. retries run closes that failed earlier (`<state>/pending-closes.jsonl`);
+1. retries run closes that failed earlier (`<state>/pending-closes/`);
 2. pulls signals from the Worker after the persisted cursor (`<state>/signal-cursor`);
 3. runs each signal as one coordination run, with bounded concurrency;
 4. advances the cursor only when the whole batch is handled, so a crash re-delivers at most one
-   batch, and runs are idempotent by `host_run_key` (derived from the signal and specialist);
-5. sends a heartbeat with the gateway's readiness and alerts to the Worker.
+   batch, and runs are idempotent by `host_run_key` (derived from the signal and specialist).
+
+A separate heartbeat loop sends the gateway's readiness and alerts to the Worker while work is
+in flight.
 
 One run: the Worker opens it and returns the goal, the context snapshot and the run's tool list;
 the host loads the specialist (`COMMON.md`, `playbook.md`, `allowlist.json`, failing closed on a
@@ -265,7 +268,8 @@ null` and `current: false`. Contact values, payee details, provider payloads and
 stay out of facts; names and references typed at intake are kept as identity fields.
 
 `GET /health` always answers with the full state and alerts; `GET /ready` answers 503 until every
-routed provider is usable and the Worker answered a recent poll. Both bind to loopback.
+routed provider is usable, the Worker answered a recent request, and the last work batch has no
+error. Both bind to loopback by default.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -567,8 +571,9 @@ platform binaries (`npm ci`) and a signed-in credential.
 Locally-validated: `npm test` and `npm run typecheck` in this package, and
 `node --test tools/start-local-runtime.test.mjs` for the local launch. The Worker agent API is source-present and its authenticated host-client integration is tested
 against SQLite with D1 transaction semantics. Unbound actions abstain with `policy_missing`; the
-contract catalog alone does not implement their effects. Shared-memory read models and
-standing-watch scheduling remain open. The replay and qualification runner is tested with injected
+contract catalog alone does not implement their effects. Shared-memory readers and registered
+cadence-watch conditions have Worker tests (`agents-memory.test.ts`, `agents-watches.test.ts`);
+unregistered watches remain inactive. The replay and qualification runner is tested with injected
 fakes only; no qualification stage has run on a provider. Gateway config v3 (registry, declared
 failover, the qualification gate, provider terms per run class) is tested with fake providers only;
 until the owner records qualifications, which the Worker sends with each run and checks at close,

@@ -1,18 +1,4 @@
-import { lazy, Suspense } from "react";
-
-import { ErrorState, LoadingState } from "../components/ui/state-panel";
-
-const DevicePairingSettings = lazy(async () => ({
-  default: (await import("../pairing/device-pairing-settings")).DevicePairingSettings,
-}));
-
-export function SettingsPage() {
-  return (
-    <Suspense fallback={<LoadingState label="Loading device setup…" />}>
-      <DevicePairingSettings />
-    </Suspense>
-  );
-}
+import { ErrorState } from "../components/ui/state-panel";
 
 export function NotFoundPage() {
   return (

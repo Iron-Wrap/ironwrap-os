@@ -61,8 +61,6 @@ export interface ApiRequestOptions<T> {
   schema: ZodType<T>;
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
-  /** What this call asks for; JSON unless it is fetching a file. */
-  accept?: string;
   csrfToken?: string;
   idempotencyKey?: string;
   deviceActionId?: string;
@@ -121,24 +119,6 @@ export function isRetryableApiError(error: unknown): boolean {
   );
 }
 
-/**
- * Whether a change may or may not have happened. Callers keep the exact attempt (its identity and
- * idempotency key) and read back before offering anything new; a refusal can start afresh.
- */
-export function isUncertainApiError(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    error.code !== "aborted" &&
-    (error.status === 0 ||
-      error.status === 408 ||
-      error.status >= 500 ||
-      isAnswerLost(error) ||
-      // Readable, but not the agreed answer: a change may still have taken effect. Not retryable
-      // for a read, which must surface the broken contract rather than fall back to a cache.
-      (error.status >= 200 && error.status < 300 && error.code === "invalid_response"))
-  );
-}
-
 export async function apiRequest<T>(options: ApiRequestOptions<T>): Promise<T> {
   // The timeout and the caller's abort stay armed until the whole body has been read: an answer
   // whose headers arrive but whose body stalls must end, not leave the screen waiting for ever.
@@ -190,28 +170,6 @@ export async function apiCommand(options: ApiCommandOptions): Promise<void> {
   await executeRequest({ ...options, method: "POST" });
 }
 
-export type ApiBlobOptions = Pick<
-  ApiRequestOptions<unknown>,
-  "path" | "deviceProof" | "signal" | "timeoutMs" | "fetcher" | "credentials"
->;
-
-/**
- * A file read through the same authenticated path as every other call, so a paired field device
- * sends its proof header (a plain link would not) and a refusal arrives as the same `ApiError`.
- */
-export async function apiBlob(options: ApiBlobOptions): Promise<Blob> {
-  // The timeout and the caller's abort stay armed until the last byte has arrived: a download that
-  // stalls halfway must end with an answer, not hang for ever.
-  const { response, release, failure } = await executeRequest({ ...options, accept: "*/*" }, true);
-  try {
-    return await response.blob();
-  } catch (error) {
-    throw failure(error);
-  } finally {
-    release();
-  }
-}
-
 interface Exchange {
   response: Response;
   /** Disarms the timeout and the abort forwarding. Called by whoever reads the body last. */
@@ -260,7 +218,7 @@ async function executeRequest(
   };
 
   try {
-    const headers = new Headers({ Accept: options.accept ?? "application/json" });
+    const headers = new Headers({ Accept: "application/json" });
     // A multipart body must keep the boundary the browser writes into its own Content-Type.
     const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
     if (options.body !== undefined && !multipart) headers.set("Content-Type", "application/json");

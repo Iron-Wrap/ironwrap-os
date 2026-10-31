@@ -178,8 +178,7 @@ export function SafetyEquipmentPage({ equipmentId }: { equipmentId?: string }) {
               </div>
             </dl>
             <p className="break-all text-sm text-muted">
-              Record {equipment.equipment_id}, revision {equipment.version}. Updated{" "}
-              {equipment.updated_at}.
+              Record {equipment.equipment_id}. Updated {equipment.updated_at}.
             </p>
             <Button
               variant="outline"
@@ -275,16 +274,15 @@ export function SafetyEquipmentPage({ equipmentId }: { equipmentId?: string }) {
                 </p>
                 {draftStale ? (
                   <Notice tone="warning" title="This record changed while you were writing">
-                    You started these findings against revision {draftVersion}; the record is now
-                    revision {equipment.version}. Read the current condition above, then decide
-                    again. Your findings are kept.
+                    The record changed since you started these findings. Read the current condition
+                    above, then decide again. Your findings are kept.
                     <div className="mt-3">
                       <Button
                         type="button"
                         variant="outline"
                         onClick={() => setDraftVersion(equipment.version)}
                       >
-                        I have read revision {equipment.version}, decide again
+                        I have read the current record, decide again
                       </Button>
                     </div>
                   </Notice>

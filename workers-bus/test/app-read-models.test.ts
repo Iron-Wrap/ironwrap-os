@@ -1757,6 +1757,9 @@ test("field Today uses direct and active crew membership assignments, never gene
     );
     assert.equal(model.jobs[0]?.assignment?.id, "ASSIGN-A");
     assert.equal(model.jobs[1]?.assignment?.crew_profile, "CREW-1");
+    // An incomplete stored gate set is unknown, never evidence that all gates cleared.
+    assert.equal(model.jobs[0]?.open_gates, null);
+    assert.ok(model.stale_fields.includes("open_gates.incomplete"));
     assert.equal(
       mock.requests.some((request) =>
         request.filters.some(

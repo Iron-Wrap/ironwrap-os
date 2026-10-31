@@ -1,3 +1,4 @@
+import { crewOpenGatesForJob, type CrewOpenGate } from "./crew-open-gates.ts";
 import {
   pricingCatalogEnabled,
   resolveFrozenCatalogPricing,
@@ -429,6 +430,7 @@ export interface TodayReadModel extends ReadModelEnvelope {
     scheduled_start: string | null;
     scheduled_end: string | null;
     blocked_gate_count: number;
+    open_gates: CrewOpenGate[] | null;
     next_action: string;
     assignment: AssignmentReadModel | null;
   }>;
@@ -516,6 +518,7 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
 }
 
 export interface JobReadModel extends ReadModelEnvelope {
+  open_gates: CrewOpenGate[] | null;
   field_measurements: FieldMeasurementReadItem[];
   field_measurements_more: boolean;
   /** Owner-saved public company contact; never a staff or customer identity. */
@@ -1415,10 +1418,23 @@ export async function buildTodayReadModel(
     .map((row) => text(row.roofing_property))
     .filter(notNull);
   const [gateSource, propertySource] = await Promise.all([
-    nativeProductionGates(env, auth.session.tenant_id, jobIds, "blocked"),
+    nativeProductionGates(env, auth.session.tenant_id, jobIds).catch(
+      () => ({ rows: [], partial: true, unavailable: true }),
+    ),
     nativeProperties(env, auth.session.tenant_id, propertyIds),
   ]);
-  const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const blockedGates = gateSource.rows
+    .filter((row) => row.state === "blocked")
+    .map(nativeProductionGateFrappeRow);
+  const openGateReads = new Map(
+    await Promise.all(jobIds.map(async (id) => [
+      id,
+      await crewOpenGatesForJob(env, auth.session.tenant_id, id, {
+        ...gateSource,
+        rows: gateSource.rows.filter((row) => row.roof_job_id === id),
+      }),
+    ] as const)),
+  );
   const properties = propertySource.rows
     .map(nativePropertyFrappeRow)
     .filter((row): row is FrappeRow => row !== null);
@@ -1441,6 +1457,7 @@ export async function buildTodayReadModel(
           scheduled_start: assignment?.scheduled_start ?? null,
           scheduled_end: assignment?.scheduled_end ?? null,
           blocked_gate_count: blocked.length,
+          open_gates: openGateReads.get(id)?.open_gates ?? null,
           next_action:
             assignment?.blocker_reason ??
             text(blocked[0]?.blocker_reason) ??
@@ -1476,6 +1493,7 @@ export async function buildTodayReadModel(
         left.physical_context_id.localeCompare(right.physical_context_id),
     );
   const stale: string[] = [];
+  stale.push(...new Set([...openGateReads.values()].flatMap((value) => value.stale_fields)));
   if (jobSource.partial) stale.push("jobs.partial_source");
   if (gateSource.partial) stale.push("jobs.blocked_gates_partial");
   if (propertySource.partial) stale.push("jobs.address_partial");
@@ -1766,7 +1784,9 @@ export async function buildJobReadModel(
   const propertyId = text(job.roofing_property);
   const [gateSource, workPackage, measurementRows, fieldMeasurements, officeContact] =
     await Promise.all([
-      nativeProductionGates(env, auth.session.tenant_id, [jobName]),
+      nativeProductionGates(env, auth.session.tenant_id, [jobName]).catch(
+        () => ({ rows: [], partial: true, unavailable: true }),
+      ),
       assignmentRow
         ? nativeFieldWorkPackageForAssignment(
             env,
@@ -1790,6 +1810,7 @@ export async function buildJobReadModel(
       officeContactForRead(env, auth.session.tenant_id),
     ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const openGates = await crewOpenGatesForJob(env, auth.session.tenant_id, jobName, gateSource);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
   const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
   const nativeWorkPackageEvidence =
@@ -1846,6 +1867,7 @@ export async function buildJobReadModel(
     },
   );
   const stale = [
+    ...openGates.stale_fields,
     "packet.contact.access_instructions",
     "packet.scope_clauses.native_unavailable",
     ...(measurementRows === null ? ["packet.measurements.native_unavailable"] : []),
@@ -1887,6 +1909,7 @@ export async function buildJobReadModel(
   );
   return {
     ...readEnvelope,
+    open_gates: openGates.open_gates,
     office_contact: officeContact.contact,
     field_measurements: fieldMeasurementReadItems(
       fieldMeasurements?.items ?? [],

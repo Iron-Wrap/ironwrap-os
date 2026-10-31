@@ -939,6 +939,43 @@ describe("a people-only draft that left Needs you", () => {
     expect(time.parentElement?.textContent).toBe("Changed by hand · Mon 14:05");
   });
 
+  it("says the value is what the draft proposed when the applied record says so", () => {
+    const changed = {
+      ...draft("applied_by_person"),
+      do_it_myself: {
+        surface: null,
+        context: {
+          applied: { field: "role", value: "sales", by: "person_dana", as_proposed: true },
+        },
+      },
+    };
+    render(<Receipt receipt={changed} display={closed} />);
+    expect(
+      within(screen.getByRole("article")).getByText(
+        "Dana Whitford changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Sales. That is what this draft proposed.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps the old words when the applied record's flag is false or malformed", () => {
+    for (const as_proposed of [false, "true"]) {
+      const changed = {
+        ...draft("applied_by_person"),
+        do_it_myself: {
+          surface: null,
+          context: { applied: { field: "role", value: "sales", by: "person_dana", as_proposed } },
+        },
+      };
+      const { unmount } = render(<Receipt receipt={changed} display={closed} />);
+      expect(
+        within(screen.getByRole("article")).getByText(
+          "Dana Whitford changed Grace Obi's role by hand yesterday at 16:20, so this draft is closed. Grace Obi's role is now Sales.",
+        ),
+      ).toBeVisible();
+      unmount();
+    }
+  });
+
   it("never prints the id of a person in the applied record it cannot name", () => {
     const changed = {
       ...draft("applied_by_person"),

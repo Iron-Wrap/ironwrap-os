@@ -17,10 +17,6 @@ export const API_PATHS = {
   inventoryCommands: "/api/v1/inventory/commands",
   // One selected file at a time, scoped to the stock, service or safety action it supports.
   evidenceUploads: "/api/v1/evidence-uploads",
-  // The bytes of one attached file, readable only through the stock, service or safety record
-  // that linked it, and only by someone whose access still matches their sign-in.
-  evidenceContent: (receiptId: string) =>
-    `/api/v1/evidence-uploads/${encodeURIComponent(receiptId)}/content`,
   inventoryCommand: (commandId: string) =>
     `/api/v1/inventory/commands/${encodeURIComponent(commandId)}`,
   now: "/api/v1/now",
@@ -97,7 +93,6 @@ export const API_PATHS = {
     `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}`,
   adminSchemaFieldRevisions: (fieldId: string) =>
     `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}/revisions`,
-  companyLogo: "/public/company-logo",
   manualMeasurements: (jobId: string) =>
     `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}/manual-measurements`,
   salesLeads: "/api/v1/sales/leads",

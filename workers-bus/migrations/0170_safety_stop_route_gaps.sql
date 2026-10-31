@@ -11,6 +11,11 @@
 -- - a `roof_job` stop holds its job, and every job when `operating_roof_jobs` has no such job;
 -- - a `work_package` stop holds the job of every version of that package, Superseded included,
 --   and every job when `work_packages` has no such package.
+-- An unresolved scope is latched in immutable history. Creating its missing job/package never
+-- narrows the hold; only the existing authorized person release lifts it. Backfill currently
+-- unresolved active stops on upgrade. A job insert also latches an unresolved stop before the
+-- lookup changes, covering a job that was removed and later restored. Work Packages already
+-- prohibit deletion and scope changes. No re-scope authority or route is added here.
 --
 -- Only an active stop holds (`stop_active = 1`). Shop and vehicle stops hold no job. Stopping work
 -- (`stop_work`) is never refused, and nor is any capture: a person may always stop work, and the
@@ -29,7 +34,95 @@
 -- takes its time from D1's clock. Its keeper holds owner, ops or production at that moment and
 -- shares no identity with the raiser.
 --
--- Adds one column, one table, one index and seven triggers.
+-- Adds one column, two tables, one index and fourteen triggers.
+
+CREATE TABLE safety_stop_unresolved_scopes (
+  occurrence_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  latched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  FOREIGN KEY (occurrence_id, tenant_id)
+    REFERENCES safety_occurrences(occurrence_id, tenant_id) ON DELETE RESTRICT
+);
+
+CREATE TRIGGER safety_stop_unresolved_scopes_validate_insert
+BEFORE INSERT ON safety_stop_unresolved_scopes
+BEGIN
+  SELECT RAISE(ABORT, 'safety_stop_scope_not_unresolved')
+  WHERE NOT EXISTS (
+    SELECT 1 FROM safety_occurrences occurrence
+     WHERE occurrence.occurrence_id = NEW.occurrence_id
+       AND occurrence.tenant_id = NEW.tenant_id
+       AND occurrence.stop_active = 1
+       AND (
+         (occurrence.scope_type = 'roof_job' AND NOT EXISTS (
+           SELECT 1 FROM operating_roof_jobs job
+            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+         ))
+         OR (occurrence.scope_type = 'work_package' AND NOT EXISTS (
+           SELECT 1 FROM work_packages package
+            WHERE package.tenant_id = occurrence.tenant_id AND package.work_package_id = occurrence.scope_id
+         ))
+       )
+  );
+END;
+
+CREATE TRIGGER safety_stop_unresolved_scopes_no_replace
+BEFORE INSERT ON safety_stop_unresolved_scopes
+WHEN EXISTS (SELECT 1 FROM safety_stop_unresolved_scopes WHERE occurrence_id = NEW.occurrence_id)
+BEGIN SELECT RAISE(ABORT, 'safety_stop_unresolved_scope_immutable'); END;
+
+CREATE TRIGGER safety_stop_unresolved_scopes_no_update
+BEFORE UPDATE ON safety_stop_unresolved_scopes
+BEGIN SELECT RAISE(ABORT, 'safety_stop_unresolved_scope_immutable'); END;
+
+CREATE TRIGGER safety_stop_unresolved_scopes_no_delete
+BEFORE DELETE ON safety_stop_unresolved_scopes
+BEGIN SELECT RAISE(ABORT, 'safety_stop_unresolved_scope_immutable'); END;
+
+INSERT INTO safety_stop_unresolved_scopes (occurrence_id, tenant_id)
+SELECT occurrence.occurrence_id, occurrence.tenant_id FROM safety_occurrences occurrence
+ WHERE occurrence.stop_active = 1
+   AND (
+     (occurrence.scope_type = 'roof_job' AND NOT EXISTS (
+       SELECT 1 FROM operating_roof_jobs job
+        WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+     ))
+     OR (occurrence.scope_type = 'work_package' AND NOT EXISTS (
+       SELECT 1 FROM work_packages package
+        WHERE package.tenant_id = occurrence.tenant_id AND package.work_package_id = occurrence.scope_id
+     ))
+   );
+
+CREATE TRIGGER safety_occurrences_latch_unresolved_scope
+AFTER INSERT ON safety_occurrences
+WHEN NEW.stop_active = 1 AND (
+  (NEW.scope_type = 'roof_job' AND NOT EXISTS (
+    SELECT 1 FROM operating_roof_jobs WHERE tenant_id = NEW.tenant_id AND roof_job_id = NEW.scope_id
+  ))
+  OR (NEW.scope_type = 'work_package' AND NOT EXISTS (
+    SELECT 1 FROM work_packages WHERE tenant_id = NEW.tenant_id AND work_package_id = NEW.scope_id
+  ))
+)
+BEGIN
+  INSERT INTO safety_stop_unresolved_scopes (occurrence_id, tenant_id)
+  SELECT NEW.occurrence_id, NEW.tenant_id
+   WHERE NOT EXISTS (SELECT 1 FROM safety_stop_unresolved_scopes WHERE occurrence_id = NEW.occurrence_id);
+END;
+
+CREATE TRIGGER operating_roof_jobs_latch_unresolved_stops
+BEFORE INSERT ON operating_roof_jobs
+WHEN NOT EXISTS (
+  SELECT 1 FROM operating_roof_jobs WHERE tenant_id = NEW.tenant_id AND roof_job_id = NEW.roof_job_id
+)
+BEGIN
+  INSERT INTO safety_stop_unresolved_scopes (occurrence_id, tenant_id)
+  SELECT occurrence.occurrence_id, occurrence.tenant_id FROM safety_occurrences occurrence
+   WHERE occurrence.tenant_id = NEW.tenant_id AND occurrence.stop_active = 1
+     AND occurrence.scope_type = 'roof_job' AND occurrence.scope_id = NEW.roof_job_id
+     AND NOT EXISTS (
+       SELECT 1 FROM safety_stop_unresolved_scopes latch WHERE latch.occurrence_id = occurrence.occurrence_id
+     );
+END;
 
 CREATE TRIGGER work_package_events_safety_stop_guard
 BEFORE INSERT ON work_package_events
@@ -43,6 +136,10 @@ BEGIN
        AND occurrence.stop_active = 1
        AND (
          occurrence.scope_type = 'tenant'
+         OR EXISTS (
+           SELECT 1 FROM safety_stop_unresolved_scopes latch
+            WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
+         )
          OR (occurrence.scope_type = 'roof_job' AND (
            occurrence.scope_id = NEW.job_id
            OR NOT EXISTS (
@@ -72,6 +169,18 @@ BEGIN
 END;
 
 ALTER TABLE safety_occurrence_events ADD COLUMN confirmed_by_user_id TEXT;
+
+-- SQLite REPLACE does not run delete triggers unless recursive_triggers is enabled. Protect
+-- both conflict keys before insertion so the original confirmer and evidence cannot be replaced.
+CREATE TRIGGER safety_occurrence_events_no_replace
+BEFORE INSERT ON safety_occurrence_events
+WHEN EXISTS (
+  SELECT 1 FROM safety_occurrence_events event
+   WHERE event.event_id = NEW.event_id
+      OR (event.tenant_id = NEW.tenant_id AND event.occurrence_id = NEW.occurrence_id
+          AND event.occurrence_version = NEW.occurrence_version AND event.event_kind = NEW.event_kind)
+)
+BEGIN SELECT RAISE(ABORT, 'safety_occurrence_events_append_only'); END;
 
 CREATE TRIGGER safety_occurrence_events_make_safe_confirmer
 BEFORE INSERT ON safety_occurrence_events

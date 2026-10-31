@@ -595,6 +595,31 @@ async function makeSafe(env: TestEnv, actor: FixtureUser, occurrenceId: string, 
 const refusedWith = (code: string) => (error: unknown) =>
   error instanceof SafetyError && error.code === code;
 
+for (const conflict of ["event ID", "occurrence version and kind"] as const) {
+  test(`D1 preserves the made-safe journal against replacement by ${conflict}`, async () => {
+    const env = testEnv();
+    const occurrenceId = await raisedStop(env, USERS.crew, { upTo: "reported" });
+    await makeSafe(env, USERS.ops, occurrenceId, USERS.crew.id);
+    const sqlite = env.DB.sqlite;
+    const original = sqlite.prepare(
+      "SELECT * FROM safety_occurrence_events WHERE occurrence_id = ? AND event_kind = 'make_safe'",
+    ).get(occurrenceId) as Record<string, unknown>;
+    const columns = Object.keys(original);
+    const replacement = {
+      ...original,
+      event_id: conflict === "event ID" ? original.event_id : "soe_replacement_probe_0001",
+      occurrence_version: conflict === "event ID" ? Number(original.occurrence_version) + 1 : original.occurrence_version,
+      detail: "Synthetic changed journal evidence.",
+      confirmed_by_user_id: USERS.mate.id,
+    } as Record<string, unknown>;
+    assert.throws(() => sqlite.prepare(
+      `INSERT OR REPLACE INTO safety_occurrence_events (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+    ).run(...columns.map((column) => replacement[column] as never)), /safety_occurrence_events_append_only/);
+    assert.deepEqual(sqlite.prepare("SELECT * FROM safety_occurrence_events WHERE event_id = ?").get(original.event_id as string), original);
+    assert.equal(eventCount(env, occurrenceId), 2);
+  });
+}
+
 test("the office records made safe only with a named on-site confirmer who is someone else", async () => {
   const env = testEnv();
   const occurrenceId = await raisedStop(env, USERS.crew, { upTo: "reported" });

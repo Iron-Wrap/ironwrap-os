@@ -382,6 +382,7 @@ function RunwayJobCard({
   canOpenHistory: boolean;
   canClearGates: boolean;
 }) {
+  const jobNumber = job.job_number?.trim() || null;
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
   const gateCoverage =
     job.gate_coverage === "complete"
@@ -395,11 +396,11 @@ function RunwayJobCard({
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold text-muted">{job.brand ?? "Unbranded job"}</p>
-          <h3
-            className="mt-1 truncate text-lg font-bold tracking-[-0.02em]"
-            title={job.job_number ?? job.id}
-          >
-            {job.job_number ?? job.id}
+          <h3 className="mt-1 break-words text-lg font-bold tracking-[-0.02em] [overflow-wrap:anywhere]">
+            <span className="block text-xs font-semibold tracking-normal text-muted">
+              Job number
+            </span>
+            <span>{jobNumber ?? "Not recorded"}</span>
           </h3>
           <p className="mt-1 text-sm text-muted">{job.service_type ?? "Work type not found"}</p>
         </div>
@@ -409,7 +410,7 @@ function RunwayJobCard({
               <Link
                 to="/jobs/$jobId"
                 params={{ jobId: job.id }}
-                aria-label={`Open ${job.job_number ?? job.id}`}
+                aria-label={jobNumber ? `Open ${jobNumber}` : "Open job with no recorded number"}
               >
                 Open job
                 <ChevronRight aria-hidden="true" />
@@ -421,7 +422,9 @@ function RunwayJobCard({
               <Link
                 to="/jobs/$jobId/history"
                 params={{ jobId: job.id }}
-                aria-label={`History of ${job.job_number ?? job.id}`}
+                aria-label={
+                  jobNumber ? `History of ${jobNumber}` : "History of job with no recorded number"
+                }
               >
                 Job record
                 <ChevronRight aria-hidden="true" />
@@ -430,6 +433,21 @@ function RunwayJobCard({
           ) : null}
         </div>
       </div>
+
+      <dl className="mt-3 space-y-2 text-sm">
+        <div className="min-w-0">
+          <dt className="font-semibold text-muted">Customer</dt>
+          <dd className="mt-0.5 break-words leading-5 [overflow-wrap:anywhere]">
+            {job.customer_display_name ?? "Customer not recorded"}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="font-semibold text-muted">Job site</dt>
+          <dd className="mt-0.5 break-words leading-5 [overflow-wrap:anywhere]">
+            {job.address ?? "Job site not recorded"}
+          </dd>
+        </div>
+      </dl>
 
       <dl className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/80 py-3 text-sm sm:grid-cols-2">
         <div>

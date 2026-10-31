@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const nullableText = z.string().min(1).nullable();
+const optionalIdentityText = z
+  .string()
+  .trim()
+  .nullish()
+  .transform((value) => value || null);
 
 const readModelEnvelopeSchema = z
   .object({
@@ -68,6 +73,8 @@ const productionJobSchema = z
   .object({
     id: z.string().min(1),
     job_number: nullableText,
+    customer_display_name: optionalIdentityText,
+    address: optionalIdentityText,
     brand: nullableText,
     service_type: nullableText,
     status: nullableText,

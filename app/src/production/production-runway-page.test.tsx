@@ -90,6 +90,8 @@ function job(
   return {
     id,
     job_number: number,
+    customer_display_name: `Synthetic Customer ${id}`,
+    address: "2 - 100 Example Street, Example City",
     brand: "IronWrap Exteriors",
     service_type: "Roofing",
     status: "In Production",
@@ -160,21 +162,63 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
   };
 }
 
-function renderRunway(session: AuthenticatedSession = ownerSession) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+function renderRunway(
+  session: AuthenticatedSession = ownerSession,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
+  const content = (current: AuthenticatedSession) => (
     <QueryClientProvider client={client}>
-      <SessionProvider session={session}>
+      <SessionProvider session={current}>
         <ProductionRunwayPage />
       </SessionProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(content(session));
+  return {
+    ...view,
+    client,
+    changeSession: (next: AuthenticatedSession) => view.rerender(content(next)),
+  };
 }
 
 describe("ProductionRunwayPage", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(loadProductionRunway).mockResolvedValue(model());
+  });
+
+  it("labels the recorded job number, customer and site without exposing the internal ID as a number", async () => {
+    vi.mocked(loadProductionRunway).mockResolvedValue(
+      model({
+        jobs: [
+          {
+            ...job("native-job:synth-identity", "IW-SYNTH-01", "blocked"),
+            customer_display_name: "Synthetic Customer One",
+            address: "2 - 100 Example Street, Example City, AB",
+          },
+          {
+            ...job("native-job:unknown", "", "blocked"),
+            job_number: null,
+            customer_display_name: null,
+            address: null,
+          },
+        ],
+      }),
+    );
+    renderRunway();
+
+    expect(await screen.findByRole("heading", { name: "Job number IW-SYNTH-01" })).toBeVisible();
+    expect(screen.getByText("Synthetic Customer One")).toBeVisible();
+    expect(screen.getByText("2 - 100 Example Street, Example City, AB")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Job number Not recorded" })).toBeVisible();
+    expect(screen.getByText("Customer not recorded")).toBeVisible();
+    expect(screen.getByText("Job site not recorded")).toBeVisible();
+    expect(screen.getByText("native-job:unknown")).not.toBeVisible();
+    expect(screen.getByRole("link", { name: "Open job with no recorded number" })).toHaveAttribute(
+      "href",
+      "/jobs/native-job:unknown",
+    );
+    expect(screen.queryByRole("button", { name: /schedule|dispatch/i })).not.toBeInTheDocument();
   });
 
   it("admits the dedicated production role and rejects other least-privilege roles", async () => {

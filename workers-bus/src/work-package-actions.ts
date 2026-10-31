@@ -13,7 +13,7 @@ import {
 import type { FrappeRow } from "./frappe-read.ts";
 import type { AuthorityCurrentPrecondition } from "./authority-records.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
-import type { SafetyBlocker } from "./safety-lifecycle.ts";
+import { holdingSafetyStops, type SafetyBlocker, type SafetyHoldingStop } from "./safety-lifecycle.ts";
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
@@ -547,6 +547,14 @@ export function nativeWorkPackageWriter(env: AppEnv): WorkPackageCommandWriter {
           manifestKey: input.manifestKey,
         });
       } catch (error) {
+        // D1 found a stop holding this job after the Worker's own gate passed (0170).
+        if (error instanceof Error && error.message === "safety_stop_active") {
+          throw safetyStopRefusal(
+            await holdingSafetyStops(env, env.APP_TENANT_ID ?? "ironwrap", [input.jobId])
+              .then((byJob) => byJob.get(input.jobId) ?? [])
+              .catch(() => []),
+          );
+        }
         if (
           error instanceof Error &&
           error.message === "work_package_authority_precondition_stale"
@@ -649,6 +657,9 @@ async function assertCurrentActionAllowed(
       },
     ).allowedActions.includes(capability[submission.kind])
   ) {
+    // An active stop that holds this job is named with the facts a crew screen shows.
+    const stops = safetyBlockers.flatMap((blocker) => (blocker.stop ? [blocker.stop] : []));
+    if (stops.length > 0) throw safetyStopRefusal(stops);
     throw new FieldActionError(
       safetyBlockers.length > 0
         ? "safety_release_blocked"
@@ -1066,6 +1077,22 @@ function workPackageJson(value: unknown, status = 200): Response {
   });
 }
 
+/**
+ * Acknowledge, start and complete are refused while an active safety stop holds the job. The body
+ * names each holding stop: `{ error: "safety_stop_active", message, safety_stops: [{ occurrence_id,
+ * scope: "job" | "tenant", raised_at, raiser_display_name }] }`. Stopping work is never refused.
+ */
+function safetyStopRefusal(stops: SafetyHoldingStop[]): FieldActionError {
+  return new FieldActionError(
+    "safety_stop_active",
+    409,
+    "A safety stop holds this job. Work stays stopped until a person releases it.",
+    undefined,
+    undefined,
+    { safety_stops: stops },
+  );
+}
+
 function workPackageFailureResponse(error: unknown): Response {
   const failure =
     error instanceof FieldActionError
@@ -1077,7 +1104,7 @@ function workPackageFailureResponse(error: unknown): Response {
           5,
         );
   const response = workPackageJson(
-    { error: failure.code, message: failure.message },
+    { ...failure.details, error: failure.code, message: failure.message },
     failure.status,
   );
   if (failure.retryAfterSeconds)

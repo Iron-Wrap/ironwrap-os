@@ -295,6 +295,8 @@ export class FieldActionError extends Error {
   readonly status: number;
   readonly retryAfterSeconds: number | undefined;
   readonly retryable: boolean;
+  /** Extra refusal facts a route adds to its error body, beside `error` and `message`. */
+  readonly details: Record<string, unknown> | undefined;
 
   constructor(
     code: string,
@@ -302,6 +304,7 @@ export class FieldActionError extends Error {
     message: string,
     retryAfterSeconds?: number,
     retryable?: boolean,
+    details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "FieldActionError";
@@ -310,6 +313,7 @@ export class FieldActionError extends Error {
     this.retryAfterSeconds = retryAfterSeconds;
     this.retryable =
       retryable ?? (status >= 500 || status === 408 || status === 429);
+    this.details = details;
   }
 }
 

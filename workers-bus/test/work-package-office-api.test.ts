@@ -21,6 +21,7 @@ import {
   type NativeWorkPackageDefinition,
 } from "../src/work-package-store.ts";
 import { handleWorkPackageAction } from "../src/work-package-actions.ts";
+import { reportSafetyOccurrence } from "../src/safety-lifecycle.ts";
 import {
   currentWorkPackageAuthorityResolution,
   currentWorkPackageAuthorityDenials,
@@ -1048,6 +1049,129 @@ test("typed office issue freezes the governed physical assignment authority", as
       .get().count,
     1,
   );
+});
+
+/** An active safety stop the crew member raised on `scope`. */
+async function raiseSafetyStop(
+  appEnv: ReturnType<typeof env>,
+  occurrenceId: string,
+  scope: { type: "roof_job" | "work_package" | "tenant"; id: string },
+  reportedAt: string,
+) {
+  await reportSafetyOccurrence(appEnv, {
+    occurrenceId,
+    tenantId: "ironwrap",
+    occurrenceKind: "hazard",
+    severity: "high",
+    scope,
+    reportedByUserId: "appu_crew_native",
+    reportedAt,
+    summary: "Ice on the north slope.",
+    rescueRequired: false,
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    now: reportedAt,
+  });
+}
+
+test("an active safety stop that holds the job refuses acknowledge with the stop's facts; stopping stays open", async () => {
+  const appEnv = env();
+  const packet = definition();
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  const assignment = { name: packet.assignmentId };
+  // A stop on a job this tenant does not have holds every job, this one included.
+  const reportedAt = new Date(Date.now() - 60_000).toISOString();
+  await raiseSafetyStop(appEnv, "so_office_hold_typo_0001", { type: "roof_job", id: "JOB-TYPO" }, reportedAt);
+  const refused = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", "field-hold-ack-0001"),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "acknowledge",
+  );
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), {
+    error: "safety_stop_active",
+    message: "A safety stop holds this job. Work stays stopped until a person releases it.",
+    safety_stops: [
+      {
+        occurrence_id: "so_office_hold_typo_0001",
+        scope: "tenant",
+        reported_at: reportedAt,
+        summary: "Ice on the north slope.",
+        raiser_display_name: "Native Crew",
+      },
+    ],
+  });
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM work_package_events WHERE event_kind = 'acknowledged'")
+      .get().count,
+    0,
+  );
+  // A person may always stop work.
+  const stopped = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "stop_work", "field-hold-stop-0001"),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "stop_work",
+  );
+  assert.equal(stopped.status, 200, await stopped.clone().text());
+});
+
+test("a stop raised after the Worker's gate passed meets the same named refusal from D1", async () => {
+  const appEnv = env();
+  const packet = definition();
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  const reportedAt = new Date(Date.now() - 60_000).toISOString();
+  // Raised on this very job between the Worker's readiness gate and its event write.
+  appEnv.DB.beforeEventInsertOnce("field-hold-ack-0002", async () => {
+    await raiseSafetyStop(appEnv, "so_office_hold_race_0001", { type: "roof_job", id: packet.jobId }, reportedAt);
+  });
+  // D1 reports a trigger refusal inside a longer message, as Cloudflare D1 does.
+  const d1Style = {
+    ...appEnv,
+    DB: {
+      prepare(sql: string) {
+        const statement = appEnv.DB.prepare(sql);
+        return {
+          bind(...values: unknown[]) {
+            const bound = statement.bind(...values);
+            return {
+              ...bound,
+              async run() {
+                try {
+                  return await bound.run();
+                } catch (error) {
+                  throw new Error(`D1_ERROR: ${(error as Error).message}: SQLITE_CONSTRAINT`);
+                }
+              },
+            };
+          },
+        };
+      },
+      batch: appEnv.DB.batch.bind(appEnv.DB),
+    },
+  } as unknown as typeof appEnv;
+  const refused = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", "field-hold-ack-0002"),
+    d1Style,
+    auth("field"),
+    packet.jobId,
+    { name: packet.assignmentId },
+    "acknowledge",
+  );
+  assert.equal(refused.status, 409);
+  const body = (await refused.json()) as { error: string; safety_stops: Array<{ occurrence_id: string; scope: string }> };
+  assert.equal(body.error, "safety_stop_active");
+  assert.deepEqual(body.safety_stops.map((stop) => [stop.occurrence_id, stop.scope]),
+    [["so_office_hold_race_0001", "job"]]);
 });
 
 test("native field actions re-evaluate current authority while exact replay and stop stay safe", async () => {

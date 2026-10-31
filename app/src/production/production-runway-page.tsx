@@ -12,7 +12,7 @@ import {
   Warehouse,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
@@ -23,6 +23,7 @@ import { Card } from "../components/ui/card";
 import { ErrorState } from "../components/ui/state-panel";
 import { SystemDetails } from "../components/ui/system-details";
 import { GateChip } from "../field/gate-chip";
+import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
 import { scopes } from "../lib/theme";
@@ -95,11 +96,37 @@ export function ProductionRunwayPage() {
 
 function ProductionRunwayContent() {
   const session = useSession();
+  const authority = JSON.stringify([
+    session.user.role,
+    [...session.permissions].sort(),
+    [...session.allowed_actions].sort(),
+  ]);
+  // The session has no public session ID. Keep its CSRF token out of query keys;
+  // a local opaque scope rotates when this mounted view's sign-in or grants change.
+  const sessionScope = useMemo(
+    () => ({
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      csrfToken: session.csrf_token,
+      expiresAt: session.session_expires_at,
+      authority,
+      cacheScope: crypto.randomUUID(),
+    }),
+    [session.tenant.id, session.user.id, session.csrf_token, session.session_expires_at, authority],
+  );
   const query = useQuery({
-    queryKey: ["production-runway", session.tenant.id, session.user.id],
-    queryFn: () => loadProductionRunway(),
+    queryKey: [
+      "production-runway",
+      session.tenant.id,
+      session.user.id,
+      sessionScope.cacheScope,
+      "job-identity-v1",
+    ],
+    queryFn: ({ signal }) => loadProductionRunway(fetch, signal),
   });
-  const model = query.data;
+  const authorityRefused =
+    query.error instanceof ApiError && [401, 403].includes(query.error.status);
+  const model = authorityRefused ? undefined : query.data;
 
   if (!model && query.isPending) return <ProductionRunwaySkeleton />;
   if (!model && query.isError)

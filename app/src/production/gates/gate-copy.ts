@@ -56,6 +56,8 @@ export const gateCopy = {
     backToList: "Back to the gate list",
     loading: "Loading the gates…",
     loadFailed: "The gates did not load. Nothing was changed.",
+    readbackFailed:
+      "The latest gates could not be checked. A change may already be saved. Reload the gates before making another change.",
     retry: "Load the gates again",
     notFound: "This job has no gates to show. Open it again from the production plan.",
     noAccess: "Only an owner, ops or production can see a job's gates.",
@@ -67,6 +69,7 @@ export const gateCopy = {
     historyTitle: "What happened on this gate",
     historyIncomplete: "Only the newest changes are shown.",
     offline: "You're offline. A gate changes only online.",
+    offlineWrite: "Nothing was sent. Reconnect, then choose the action again.",
   },
 
   /** Frame 1, and frame 12 once the window has ended. */
@@ -169,6 +172,8 @@ export const gateCopy = {
 
   /** The window's value in the overview row and on the Materials step (frames 1 and 2). */
   window: {
+    withStart: (stamp: string, deadline: string) => `Signed copy received ${stamp}. ${deadline}`,
+    withUnknownStart: (deadline: string) => `Signed-copy receipt time is unavailable. ${deadline}`,
     openRow: (deadline: string) =>
       `Open until the end of ${deadline}. Plan now; ordering, purchase orders and a firm start wait until then.`,
     openRowExact: (stamp: string) =>
@@ -362,7 +367,7 @@ export const gateCopy = {
         : `All ${count} gates are cleared and the cancellation window has ended.`,
     clearedLine: (stamp: string, crew: string, start: string | null, windowDay: string | null) =>
       `Cleared ${stamp}: ${crew} scheduled${start ? ` for ${start}` : ""}${
-        windowDay ? ` (the window ended at the end of ${windowDay})` : ""
+        windowDay ? ` (the cancellation window ended at the end of ${windowDay})` : ""
       }`,
     crewFallback: "the crew",
     endBeforeStart: "The end has to come after the start.",
@@ -572,6 +577,7 @@ export const gateCopy = {
     empty: "Every signed job has its signed-copy time. Nothing to add.",
     partial: (shown: number) => `Showing the oldest ${shown}. Record these and the rest appear.`,
     loadFailed: "The list did not load. Nothing was changed.",
+    readbackFailed: "The latest list could not be checked. Reload it before choosing a job.",
     retry: "Load the list again",
     loading: "Loading the list…",
     noAccess: "Only the Owner or Operations can see this list.",

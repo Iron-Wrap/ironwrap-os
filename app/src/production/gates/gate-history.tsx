@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useGateMutation } from "./gate-mutation";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
@@ -73,8 +73,7 @@ export function ReversalPanel({ screen, gate }: { screen: GateScreen; gate: JobG
   const entry = entryInForce(gate);
   const [reason, setReason] = useState("");
   const [failure, setFailure] = useState<{ text: string; error: unknown }>();
-  const mutation = useMutation({
-    retry: false,
+  const mutation = useGateMutation(screen, {
     mutationFn: async (input: { reason: string; reversesId: string }) =>
       await reverseGate(
         screen.session,

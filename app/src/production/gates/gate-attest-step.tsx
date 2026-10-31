@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useGateMutation } from "./gate-mutation";
 import { Link } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 
@@ -57,8 +57,7 @@ export function AttestStep({
   const [form, setForm] = useState<FormState>(emptyForm);
   const [refusal, setRefusal] = useState<GateRefusal | null>(null);
   const focusRef = useRef<HTMLElement | null>(null);
-  const mutation = useMutation({
-    retry: false,
+  const mutation = useGateMutation(screen, {
     mutationFn: async (attestation: GateAttestation) =>
       await attestGate(
         screen.session,

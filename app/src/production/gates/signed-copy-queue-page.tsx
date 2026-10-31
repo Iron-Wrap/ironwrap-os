@@ -45,12 +45,12 @@ function SignedCopyQueueContent({ role }: { role: AppRole }) {
     queryKey: signedCopyQueueQueryKey(session.tenant.id, session.user.id),
     queryFn: () => loadSignedCopyQueue(),
   });
-  if (!query.data) {
+  if (query.isError || !query.data) {
     if (query.isError) {
       return (
         <section className="mx-auto max-w-3xl">
           <ErrorState
-            title={gateCopy.queue.loadFailed}
+            title={query.data ? gateCopy.queue.readbackFailed : gateCopy.queue.loadFailed}
             message={messageForLoad(query.error)}
             error={query.error}
             action={

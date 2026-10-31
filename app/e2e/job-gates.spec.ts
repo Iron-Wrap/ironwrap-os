@@ -117,6 +117,7 @@ const history = {
 
 interface Office {
   gates: JobGatesResponse;
+  readFailure?: number;
   posts: Array<{ path: string; body: unknown }>;
   answer: (path: string, body: unknown) => { status: number; json: unknown };
 }
@@ -150,7 +151,11 @@ async function office(
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (request.method() === "GET" && path.endsWith("/gates")) {
-      await route.fulfill({ json: state.gates });
+      await route.fulfill(
+        state.readFailure
+          ? { status: state.readFailure, json: { error: "unavailable" } }
+          : { json: state.gates },
+      );
       return;
     }
     const body = request.postDataJSON() as unknown;
@@ -314,6 +319,44 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await expect(page.getByLabel("Signed copy received")).toHaveCount(0);
   });
 
+  test("a successful save with a failed readback requires a reload without sending the save again", async ({
+    page,
+  }) => {
+    const state = await office(page, {
+      role: "owner",
+      gates: model("unknown"),
+      now: OPEN_NOW,
+      answer: () => {
+        state.gates = model("open");
+        state.readFailure = 503;
+        return {
+          status: 201,
+          json: {
+            cancellation_window: windowState("open"),
+            recorded: true,
+            receipt_id: "pcw_synthetic",
+            replayed: false,
+          },
+        };
+      },
+    });
+    await page.goto(gatesUrl("window"));
+    await page.getByLabel("Signed copy received").fill("2026-10-20T18:26");
+    await page.getByLabel("Why are you recording it?").fill("The email was delivered.");
+    await page.getByLabel("Evidence reference").fill("synthetic-email-reference");
+    await page.getByRole("button", { name: "Record when Elena Marchetti received it" }).click();
+    await expect(page.getByText(/The latest gates could not be checked/)).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByRole("button", { name: /Record when/ })).toHaveCount(0);
+    await expect(page.getByText(/Nothing was changed/)).toHaveCount(0);
+    state.readFailure = undefined;
+    await page.getByRole("button", { name: "Load the gates again" }).click();
+    await expect(page.getByLabel("New time")).toBeVisible();
+    expect(state.posts).toHaveLength(1);
+    await expectAccessible(page);
+  });
+
   test("production asks the owner to waive Materials and waits on the answer", async ({ page }) => {
     const state = await office(page, {
       role: "production",
@@ -353,6 +396,105 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await expect(page.getByRole("heading", { name: "Cancellation window" })).toBeVisible();
     await expect(page.getByText(/and you’re in Operations\./)).toBeVisible();
   });
+
+  for (const decision of ["approve", "decline"] as const) {
+    test(`the owner opens a pending Deposit waiver from the list and can ${decision} it or use settlement`, async ({
+      page,
+    }) => {
+      const pending = request({ is_own_request: false });
+      const reason =
+        decision === "approve"
+          ? "The owner approved payment at completion."
+          : "The deposit must settle before scheduling.";
+      const after = decision === "approve" ? "waived" : "blocked";
+      const state = await office(page, {
+        role: "owner",
+        gates: model("ended", {
+          Deposit: gate("Deposit", { open_waiver_requests: [pending] }),
+        }),
+        now: ENDED_NOW,
+        answer: () => {
+          state.gates = model("ended", {
+            Deposit: gate("Deposit", {
+              state: after,
+              version: 2,
+              entries: [
+                entry({
+                  id: "pgc_synthetic_decision",
+                  from_gate_version: 1,
+                  kind: "waiver_decision",
+                  basis: "office_waiver",
+                  to_state: after,
+                  actor_role: "owner",
+                  request_id: pending.request_id,
+                  reason,
+                  created_at: ENDED_NOW.toISOString(),
+                }),
+              ],
+            }),
+          });
+          return {
+            status: 200,
+            json: {
+              decision: {
+                clearance_id: "pgc_synthetic_decision",
+                request_id: pending.request_id,
+                decision,
+                requested_by: "appu_production_synthetic",
+                decided_by: "appu_owner_synthetic",
+                actor_role: "owner",
+                self_approval: false,
+                self_approval_basis: null,
+                reason,
+                created_at: ENDED_NOW.toISOString(),
+              },
+              gate: {
+                name: "gate:deposit",
+                gate: "Deposit",
+                roof_job: JOB_ID,
+                state: after,
+                version: 2,
+              },
+              replayed: false,
+            },
+          };
+        },
+      });
+      await page.goto(gatesUrl());
+      await page.getByRole("link", { name: /Deposit.*Waiting on you: decide the waiver/ }).click();
+      await expect(page.getByRole("heading", { name: "Deposit" })).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Clear Deposit on the settled payment" }),
+      ).toBeVisible();
+      await page.getByLabel("Your reason (needed to approve or to decline)").fill(reason);
+      await page
+        .getByRole("button", {
+          name:
+            decision === "approve"
+              ? "Approve the waiver with this reason"
+              : "Decline with this reason",
+        })
+        .click();
+      if (decision === "approve") {
+        await expect(page.getByText("Deposit waived")).toBeVisible();
+      } else {
+        await expect(page.getByText("Blocked: no settled deposit yet")).toBeVisible();
+        await expect(page.getByText("Today 10:45 · Waiver declined")).toBeVisible();
+      }
+      await expect(page.getByText(`Owner: ${reason}`, { exact: true })).toBeVisible();
+      expect(state.posts).toHaveLength(1);
+      expect(state.posts[0]?.path).toBe(
+        `/api/v1/production/jobs/${JOB_ID}/gates/Deposit/waiver-decisions`,
+      );
+      expect(state.posts[0]?.body).toEqual({
+        request_id: pending.request_id,
+        expected_gate_version: 1,
+        decision,
+        reason,
+      });
+      await expectAccessible(page);
+    });
+  }
 
   test("a reversal keeps the clearance in the history and sends Materials back to blocked", async ({
     page,
@@ -686,6 +828,53 @@ test.describe("Job gates acceptance (PR-C)", () => {
         "I checked the shingles at the yard this morning. The supplier sends the reference this afternoon.",
       );
     await capture("09-waiver-decide", "1322:5253", "9 · Owner decides the waiver");
+    await visit(
+      endedBlocked({
+        Deposit: gate("Deposit", { open_waiver_requests: [request({ is_own_request: false })] }),
+      }),
+      "deposit",
+      "owner",
+      ENDED_NOW,
+    );
+    await capture(
+      "deposit-waiver-pending",
+      "app:deposit-waiver-pending",
+      "Deposit · Pending waiver decision and settlement alternative",
+    );
+    for (const decision of ["approve", "decline"] as const) {
+      const after = decision === "approve" ? "waived" : "blocked";
+      await visit(
+        endedBlocked({
+          Deposit: gate("Deposit", {
+            state: after,
+            version: 2,
+            entries: [
+              entry({
+                from_gate_version: 1,
+                kind: "waiver_decision",
+                basis: "office_waiver",
+                to_state: after,
+                actor_role: "owner",
+                request_id: request().request_id,
+                reason:
+                  decision === "approve"
+                    ? "The owner approved payment at completion."
+                    : "The deposit must settle before scheduling.",
+                created_at: ENDED_NOW.toISOString(),
+              }),
+            ],
+          }),
+        }),
+        "deposit",
+        "owner",
+        ENDED_NOW,
+      );
+      await capture(
+        `deposit-waiver-${decision}`,
+        `app:deposit-waiver-${decision}`,
+        `Deposit · Waiver ${decision === "approve" ? "approved" : "declined"}`,
+      );
+    }
     // 10 and 10b · The only owner approves their own item.
     {
       const state = await visit(model("open"), "waive-access", "owner", OPEN_NOW, () => {
@@ -928,6 +1117,38 @@ test.describe("Job gates acceptance (PR-C)", () => {
     await page.goto("/production/signed-copy-missing");
     await expect(page.getByText("Jobs that need a signed-copy time: 3")).toBeVisible();
     await capture("q1-signed-copy-missing", "1446:1900", "Q1 · Jobs missing a signed-copy time");
+    {
+      const state = await visit(model("unknown"), "window", "owner", OPEN_NOW, () => {
+        state.gates = model("open");
+        state.readFailure = 503;
+        return {
+          status: 201,
+          json: {
+            cancellation_window: windowState("open"),
+            recorded: true,
+            receipt_id: "pcw_synthetic",
+            replayed: false,
+          },
+        };
+      });
+      await fillRecord("2026-10-20T18:26");
+      await page.getByRole("button", { name: "Record when Elena Marchetti received it" }).click();
+      await expect(page.getByText(/The latest gates could not be checked/)).toBeVisible({
+        timeout: 15_000,
+      });
+      await capture(
+        "readback-failed",
+        "app:gate-readback-failed",
+        "Saved response · Readback unavailable",
+      );
+    }
+    await visit(model("unknown"), "window", "owner", OPEN_NOW);
+    await page.context().setOffline(true);
+    await expect(
+      page.getByRole("button", { name: "Record when Elena Marchetti received it" }),
+    ).toBeDisabled();
+    await capture("record-offline", "app:gate-offline", "Signed-copy receipt · Offline");
+    await page.context().setOffline(false);
     // N1 and N1b · the owner's items.
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await office(page, {

@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useGateMutation } from "./gate-mutation";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
@@ -52,8 +52,7 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
   const when = (value: string) =>
     proseTime(value, { timeZone: screen.timeZone, now: screen.now }) ?? "";
 
-  const ask = useMutation({
-    retry: false,
+  const ask = useGateMutation(screen, {
     mutationFn: async (input: { reason: string }) =>
       await clearProductionGate(
         screen.session,
@@ -85,8 +84,7 @@ export function WaiverStep({ screen, gate }: { screen: GateScreen; gate: JobGate
     },
   });
 
-  const decide = useMutation({
-    retry: false,
+  const decide = useGateMutation(screen, {
     mutationFn: async (input: {
       decision: "approve" | "decline";
       requestId: string;

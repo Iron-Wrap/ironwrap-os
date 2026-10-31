@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useGateMutation } from "./gate-mutation";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
@@ -28,6 +28,7 @@ import {
 import { gateErrorWords } from "./gate-refusals";
 import { heldScheduleLabel, stampOf, type GateScreen } from "./gate-screen";
 import { dayLabel, instantFromLocal } from "./gate-time";
+import { WaiverStep } from "./gate-waiver-step";
 import {
   ActionRow,
   BackToList,
@@ -52,8 +53,7 @@ export function CrewStep({ screen, gate }: { screen: GateScreen; gate: JobGate }
   const [end, setEnd] = useState("");
   const [correction, setCorrection] = useState("");
   const [failure, setFailure] = useState<{ text: string; error: unknown }>();
-  const mutation = useMutation({
-    retry: false,
+  const mutation = useGateMutation(screen, {
     mutationFn: async () => {
       const crew = screen.crews.find((candidate) => candidate.id === crewId);
       const startAt = instantFromLocal(start, screen.timeZone);
@@ -222,8 +222,7 @@ export function CrewStep({ screen, gate }: { screen: GateScreen; gate: JobGate }
  */
 export function DepositStep({ screen, gate }: { screen: GateScreen; gate: JobGate }) {
   const [failure, setFailure] = useState<{ text: string; error: unknown }>();
-  const mutation = useMutation({
-    retry: false,
+  const mutation = useGateMutation(screen, {
     mutationFn: async () =>
       await clearProductionGate(
         screen.session,
@@ -254,6 +253,9 @@ export function DepositStep({ screen, gate }: { screen: GateScreen; gate: JobGat
   if (gate.state !== "blocked") {
     return (
       <div className="grid gap-4">
+        <InfoBanner>
+          {gateCopy.strip.gate("Deposit", gate.state === "waived" ? "waived" : "cleared")}
+        </InfoBanner>
         {canReverse(gate, screen.role) ? (
           <ReversalPanel screen={screen} gate={gate} />
         ) : (
@@ -276,14 +278,17 @@ export function DepositStep({ screen, gate }: { screen: GateScreen; gate: JobGat
       </div>
     );
   }
+  const pendingWaiver = stage.kind === "decide" || stage.kind === "waiting";
   return (
     <div className="grid gap-4">
-      <GateField label="Deposit" value={gateCopy.row.depositBlocked} required />
+      {pendingWaiver ? <WaiverStep screen={screen} gate={gate} /> : null}
+      <GateField label="Deposit" value={gateCopy.row.depositBlocked} />
       <p className="text-sm leading-6 text-muted">{gateCopy.deposit.settlementHelp}</p>
       {failure ? <ErrorBanner error={failure.error}>{failure.text}</ErrorBanner> : null}
       <ActionRow>
         <Button
           type="button"
+          variant={pendingWaiver ? "secondary" : "primary"}
           busy={mutation.isPending}
           disabled={screen.offline}
           onClick={() => mutation.mutate()}
@@ -299,6 +304,7 @@ export function DepositStep({ screen, gate }: { screen: GateScreen; gate: JobGat
           <HeldButton label={heldScheduleLabel(screen.model) ?? ""} />
         ) : null}
       </ActionRow>
+      <GateHistory screen={screen} gate={gate} />
     </div>
   );
 }

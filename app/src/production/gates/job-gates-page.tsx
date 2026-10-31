@@ -8,6 +8,7 @@ import { useSession } from "../../auth/session-context";
 import { RoleGuard } from "../../components/role-guard";
 import { Button } from "../../components/ui/button";
 import { ErrorState } from "../../components/ui/state-panel";
+import { useOnlineStatus } from "../../hooks/use-online-status";
 import { ApiError, apiRequest } from "../../lib/api";
 import { messageForLoad } from "../../lib/plain-error";
 import { jobHistoryPath, jobHistoryResponseSchema } from "../../jobs/job-history-contracts";
@@ -91,13 +92,19 @@ function JobGatesContent({ jobId, step }: { jobId: string; step?: GateStep }) {
     ]);
   }, [queryClient, gatesKey]);
 
-  if (!gates.data) {
+  if (gates.isError || !gates.data) {
     if (gates.isError) {
       const notFound = gates.error instanceof ApiError && gates.error.status === 404;
       return (
         <section className="mx-auto max-w-3xl">
           <ErrorState
-            title={notFound ? gateCopy.page.notFound : gateCopy.page.loadFailed}
+            title={
+              gates.data
+                ? gateCopy.page.readbackFailed
+                : notFound
+                  ? gateCopy.page.notFound
+                  : gateCopy.page.loadFailed
+            }
             message={messageForLoad(gates.error)}
             error={gates.error}
             action={
@@ -137,7 +144,15 @@ function JobGatesContent({ jobId, step }: { jobId: string; step?: GateStep }) {
   return <GatesScreen screen={screen} step={step} />;
 }
 
-export function GatesScreen({ screen, step }: { screen: GateScreen; step?: GateStep }) {
+export function GatesScreen({
+  screen: loadedScreen,
+  step,
+}: {
+  screen: GateScreen;
+  step?: GateStep;
+}) {
+  const online = useOnlineStatus();
+  const screen = { ...loadedScreen, offline: loadedScreen.offline || !online };
   const gateName = step ? gateForStep(step) : null;
   const gate = gateName ? gateByName(screen.model, gateName) : null;
   const title = !step

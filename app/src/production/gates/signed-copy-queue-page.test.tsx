@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,13 +35,14 @@ afterEach(() => vi.unstubAllGlobals());
 
 function page(role: AppRole) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <SessionProvider session={session(role)}>
         <SignedCopyQueuePage />
       </SessionProvider>
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 describe("Q1, jobs that need a signed-copy time", () => {
@@ -140,5 +142,33 @@ describe("Q1, jobs that need a signed-copy time", () => {
     page("production");
     expect(screen.getByText("Only the Owner or Operations can see this list.")).toBeVisible();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("marks a cached list unavailable after a failed refresh and lets the person reload it", async () => {
+    let fails = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify(fails ? { error: "unavailable" } : queue), {
+            status: fails ? 503 : 200,
+          }),
+      ),
+    );
+    const { client } = page("ops");
+    expect(await screen.findByText("Jobs that need a signed-copy time: 3")).toBeVisible();
+    fails = true;
+    await act(() => client.invalidateQueries({ queryKey: ["production-signed-copy-missing"] }));
+    expect(
+      await screen.findByText(
+        "The latest list could not be checked. Reload it before choosing a job.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: /Add the signed-copy time/ }),
+    ).not.toBeInTheDocument();
+    fails = false;
+    await userEvent.setup().click(screen.getByRole("button", { name: "Load the list again" }));
+    expect(await screen.findByText("Jobs that need a signed-copy time: 3")).toBeVisible();
   });
 });

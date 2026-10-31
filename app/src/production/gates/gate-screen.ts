@@ -46,19 +46,33 @@ export function deadlineOf(window: CancellationWindow, now: Date) {
   return windowDeadline(window, now);
 }
 
+/** Every displayed legal deadline names the received-copy time that starts it. */
+function withWindowStart(screen: GateScreen, deadline: string): string {
+  const received = windowStampOf(screen, screen.model.cancellation_window.starts_at);
+  return received
+    ? gateCopy.window.withStart(received, deadline)
+    : gateCopy.window.withUnknownStart(deadline);
+}
+
 /** The window's line in the overview row (frames 1 and 19). */
 export function windowRowText(screen: GateScreen): string {
   const window = screen.model.cancellation_window;
   const deadline = deadlineOf(window, screen.now);
   if (window.state === "unknown") return gateCopy.window.unknownRow(window.unknown_reason);
   if (window.state === "open") {
-    return deadline.kind === "exact"
-      ? gateCopy.window.openRowExact(deadline.label)
-      : gateCopy.window.openRow(deadline.kind === "day" ? deadline.label : "");
+    return withWindowStart(
+      screen,
+      deadline.kind === "exact"
+        ? gateCopy.window.openRowExact(deadline.label)
+        : gateCopy.window.openRow(deadline.kind === "day" ? deadline.label : ""),
+    );
   }
-  return deadline.kind === "exact"
-    ? gateCopy.window.endedRowExact(deadline.label)
-    : gateCopy.window.endedRow(deadline.kind === "day" ? deadline.label : "");
+  return withWindowStart(
+    screen,
+    deadline.kind === "exact"
+      ? gateCopy.window.endedRowExact(deadline.label)
+      : gateCopy.window.endedRow(deadline.kind === "day" ? deadline.label : ""),
+  );
 }
 
 /** The window's line in the Materials hold field (frame 2). */
@@ -66,9 +80,12 @@ export function windowHoldText(screen: GateScreen): string {
   const window = screen.model.cancellation_window;
   if (window.state === "unknown") return gateCopy.window.holdsUnknown(window.unknown_reason);
   const deadline = deadlineOf(window, screen.now);
-  return deadline.kind === "exact"
-    ? gateCopy.window.holdsOpenExact(deadline.label)
-    : gateCopy.window.holdsOpen(deadline.kind === "day" ? deadline.label : "");
+  return withWindowStart(
+    screen,
+    deadline.kind === "exact"
+      ? gateCopy.window.holdsOpenExact(deadline.label)
+      : gateCopy.window.holdsOpen(deadline.kind === "day" ? deadline.label : ""),
+  );
 }
 
 /** The status lines under a step's title: the window, then every counted gate. */
@@ -80,12 +97,13 @@ export function statusStrip(screen: GateScreen): { window: string; gates: string
       const view = gateViewFor(gate, screen.role);
       return gateCopy.strip.gate(gate.gate, view === "not_a_gate" ? "cleared" : view);
     });
+  const windowStatus = gateCopy.strip.window(
+    window.state,
+    deadlineOf(window, screen.now),
+    window.unknown_reason,
+  );
   return {
-    window: gateCopy.strip.window(
-      window.state,
-      deadlineOf(window, screen.now),
-      window.unknown_reason,
-    ),
+    window: window.state === "unknown" ? windowStatus : withWindowStart(screen, windowStatus),
     gates: words.join(" · "),
   };
 }

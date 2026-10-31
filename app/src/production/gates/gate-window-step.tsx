@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useGateMutation } from "./gate-mutation";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
@@ -58,8 +58,7 @@ export function WindowStep({ screen }: { screen: GateScreen }) {
   const [recorded, setRecorded] = useState<SignedCopyRecordResponse | null>(null);
   const [unchanged, setUnchanged] = useState(false);
 
-  const mutation = useMutation({
-    retry: false,
+  const mutation = useGateMutation(screen, {
     mutationFn: async (input: { receivedAt: string; reason: string; evidenceRef: string }) =>
       await recordSignedCopy(
         screen.session,

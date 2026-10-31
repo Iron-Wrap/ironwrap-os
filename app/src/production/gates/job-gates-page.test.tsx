@@ -105,7 +105,7 @@ describe("the gate overview", () => {
     expect(screen.getByText("Cancellation window · not a gate")).toBeVisible();
     expect(
       screen.getByText(
-        "Open until the end of Fri 30 Oct. Plan now; ordering, purchase orders and a firm start wait until then.",
+        "Signed copy received Tue 20 Oct 18:26. Open until the end of Fri 30 Oct. Plan now; ordering, purchase orders and a firm start wait until then.",
       ),
     ).toBeVisible();
     expect(screen.getByText("Deposit · not a gate")).toBeVisible();
@@ -234,7 +234,9 @@ describe("the gate overview", () => {
 
   it("an ended window with every gate clear but Crew turns Schedule the crew on", () => {
     show(readyToSchedule());
-    expect(screen.getByText("Ended at the end of Fri 30 Oct.")).toBeVisible();
+    expect(
+      screen.getByText("Signed copy received Tue 20 Oct 18:26. Ended at the end of Fri 30 Oct."),
+    ).toBeVisible();
     expect(link("Schedule the crew")).toHaveAttribute(
       "href",
       `/production/jobs/${JOB_ID}/gates?step=crew`,
@@ -246,7 +248,7 @@ describe("the gate overview", () => {
     show(model("open", {}, { ends_on_calendar_day: false, ends_at: "2026-11-01T08:00:00.000Z" }));
     expect(
       screen.getByText(
-        "Open until Sun 1 Nov 02:00. Plan now; ordering, purchase orders and a firm start wait until then.",
+        "Signed copy received Tue 20 Oct 18:26. Open until Sun 1 Nov 02:00. Plan now; ordering, purchase orders and a firm start wait until then.",
       ),
     ).toBeVisible();
   });
@@ -256,7 +258,9 @@ describe("Materials", () => {
   it("frame 2: held by the window, with the held clear and the way back", () => {
     show(model("open"), "materials");
     expect(
-      screen.getByText("Cancellation window · open until the end of Fri 30 Oct"),
+      screen.getByText(
+        "Signed copy received Tue 20 Oct 18:26. Cancellation window · open until the end of Fri 30 Oct",
+      ),
     ).toBeVisible();
     expect(
       screen.getByText(
@@ -270,7 +274,7 @@ describe("Materials", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Open until the end of Fri 30 Oct. It holds ordering, a firm start and any purchase order moving to ordered or sent. It can’t be waived.",
+        "Signed copy received Tue 20 Oct 18:26. Open until the end of Fri 30 Oct. It holds ordering, a firm start and any purchase order moving to ordered or sent. It can’t be waived.",
       ),
     ).toBeVisible();
     expect(button("Clear Materials with this proof · after the window ends")).toBeDisabled();
@@ -714,7 +718,7 @@ describe("Crew", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Cleared Today 10:05: Sam Keewatin’s crew scheduled for Tue 3 Nov 07:00 (the window ended at the end of Fri 30 Oct)",
+        "Cleared Today 10:05: Sam Keewatin’s crew scheduled for Tue 3 Nov 07:00 (the cancellation window ended at the end of Fri 30 Oct)",
       ),
     ).toBeVisible();
     expect(link("Issue job plan")).toHaveAttribute("href", `/jobs/${JOB_ID}`);

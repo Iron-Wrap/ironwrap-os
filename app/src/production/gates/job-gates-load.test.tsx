@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -70,13 +71,14 @@ function page(answers: Record<string, { status: number; body: unknown }>) {
     }),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <SessionProvider session={session("production")}>
         <JobGatesPage jobId={JOB_ID} />
       </SessionProvider>
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 describe("loading a job's gates", () => {
@@ -125,5 +127,28 @@ describe("loading a job's gates", () => {
       },
     });
     expect(await screen.findByText("The gates did not load. Nothing was changed.")).toBeVisible();
+  });
+
+  it("blocks actions after a cached gate read fails and reloads the current state", async () => {
+    const path = `/api/v1/production/jobs/${JOB_ID}/gates`;
+    const answers = {
+      [path]: { status: 200, body: model("open") as unknown },
+      "/api/v1/production": { status: 200, body: runway },
+      [`/api/v1/jobs/${JOB_ID}/history`]: { status: 200, body: history },
+    };
+    const { client } = page(answers);
+    expect(await screen.findByRole("link", { name: "Clear Safety" })).toBeVisible();
+    answers[path] = { status: 503, body: { error: "unavailable" } };
+    await act(() => client.invalidateQueries({ queryKey: ["production-job-gates"] }));
+    expect(
+      await screen.findByText(
+        "The latest gates could not be checked. A change may already be saved. Reload the gates before making another change.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Clear Safety" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing was changed/)).not.toBeInTheDocument();
+    answers[path] = { status: 200, body: model("ended") };
+    await userEvent.setup().click(screen.getByRole("button", { name: "Load the gates again" }));
+    expect(await screen.findByRole("link", { name: "Clear Materials" })).toBeVisible();
   });
 });

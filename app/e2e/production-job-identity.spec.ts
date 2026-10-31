@@ -151,7 +151,9 @@ test.describe("Production job identity representation", () => {
           path: join(captureDir, `${state}-top-${testInfo.project.name}.png`),
         });
         if (state !== "malformed") {
-          await page.getByRole("heading", { level: 3 }).scrollIntoViewIfNeeded();
+          await page.getByRole("heading", { level: 3 }).evaluate((heading) => {
+            window.scrollTo({ top: heading.getBoundingClientRect().top + window.scrollY - 96 });
+          });
           await page.screenshot({
             path: join(captureDir, `${state}-card-${testInfo.project.name}.png`),
           });

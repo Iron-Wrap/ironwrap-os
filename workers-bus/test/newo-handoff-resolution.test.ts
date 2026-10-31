@@ -634,7 +634,7 @@ test("a failed session's callback, written by the Worker, is open until a person
 function readyIntegration() {
   return {
     checks: {
-      d1: true, schema: true, raw_store_binding: true, newo_enabled: true, newo_webhook_credentials: true,
+      d1: true, schema: true, newo_callback_schema: true, raw_store_binding: true, newo_enabled: true, newo_webhook_credentials: true,
       newo_api_authentication: true, newo_production_actor: true, newo_report_webhook_match: true,
       newo_configuration_drift: true, newo_queue_binding: true, newo_dlq_state: true,
       newo_frappe_readiness: true, newo_jobnimbus_bridge: true, newo_booking_mode: true,

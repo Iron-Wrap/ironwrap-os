@@ -10,6 +10,7 @@ import type { AppEnv } from "./app-types.ts";
 import { quickBooksFinalInvoiceOperationalCounts } from "./quickbooks-final-invoice.ts";
 import { NewoApiClient, newoClientConfigFromEnv, type NewoJson } from "./newo-client.ts";
 import { countOpenNewoDeadLetters, newoOperationalCounts } from "./newo-store.ts";
+import { newoCallbackSchemaReady } from "./newo-callback-schema.ts";
 import { listMeasurementIntakeExceptions } from "./measurement-intake-store.ts";
 import { countFailedDeltasSince } from "./measurement-deltas-store.ts";
 import { gmailConfigured, sendGmail } from "./google.ts";
@@ -90,6 +91,7 @@ export interface ReadinessReport {
     rail_credential_isolation: boolean;
     public_estimate_configuration: boolean;
     measurement_ocr_configuration: boolean;
+    newo_callback_schema: boolean;
     newo_enabled: boolean;
     newo_webhook_credentials: boolean;
     newo_api_authentication: boolean;
@@ -277,6 +279,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     rail_credential_isolation: railCredentialIsolationConfigured(extended),
     public_estimate_configuration: publicEstimateConfigured(extended),
     measurement_ocr_configuration: measurementPdfOcrConfigured(env),
+    newo_callback_schema: false,
     newo_enabled: true,
     newo_webhook_credentials: true,
     newo_api_authentication: true,
@@ -298,9 +301,12 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
       checks.d1 = false;
       checks.schema = false;
     }
+    // This provider-independent read proves the installed callback/resolution contract, even
+    // when the integration is disabled. It does not change the office plane's schema verdict.
+    checks.newo_callback_schema = await newoCallbackSchemaReady(env);
   }
 
-  const newo = await getNewoReadiness(env, checks.d1 && checks.schema);
+  const newo = await getNewoReadiness(env, checks.d1 && checks.schema, checks.newo_callback_schema);
   checks.newo_enabled = !newo.required || newo.enabled;
   checks.newo_webhook_credentials = !newo.required || newo.webhook_credentials_configured;
   checks.newo_api_authentication = !newo.required || newo.api_authenticated;
@@ -457,6 +463,7 @@ export async function buildOwnerRuntimeReadModel(
     {
       id: "newo",
       ok: readiness.checks.newo_enabled &&
+        (!readiness.newo.required || readiness.checks.newo_callback_schema) &&
         readiness.checks.newo_webhook_credentials &&
         readiness.checks.newo_api_authentication &&
         readiness.checks.newo_production_actor &&
@@ -499,7 +506,11 @@ export async function buildOwnerRuntimeReadModel(
   };
 }
 
-async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoReadinessDetail> {
+async function getNewoReadiness(
+  env: Env,
+  databaseReady: boolean,
+  callbackSchemaReady: boolean,
+): Promise<NewoReadinessDetail> {
   const runtime = env as AppEnv & ExtendedEnv;
   const enabled = String(runtime.NEWO_ENABLED ?? "false") === "true";
   const required = String(runtime.NEWO_PRODUCTION_REQUIRED ?? "false") === "true" || enabled;
@@ -512,6 +523,7 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
   const bookingModeReady = bookingMode === "request_only" ||
     (confirmed && String(runtime.NEWO_JOBNIMBUS_BOOKING_PROVEN ?? "false") === "true");
   const driftReasons = required ? newoConfigurationDrift(runtime) : [];
+  if (required && !callbackSchemaReady) driftReasons.push("callback_schema_unready");
   let apiAuthenticated = false;
   let productionActorVerified = false;
   let reportWebhooksVerified = false;
@@ -551,7 +563,7 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
     const frappe = await checkFrappeReachability(runtime);
     frappeReachable = frappe.ok;
     frappeError = frappe.error;
-    if (databaseReady) {
+    if (databaseReady && callbackSchemaReady) {
       try {
         [counts, openDeadLetters] = await Promise.all([
           newoOperationalCounts(env),

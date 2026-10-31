@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index.ts";
 import {
   BULK_REPLAY_CONFIRMATION,
@@ -7,6 +9,16 @@ import {
   sweepDeadLetterAutoReplay,
 } from "../src/operations.ts";
 import { DEAD_LETTER_SWEEP_APPROVER, markDeadLettersRecovered } from "../src/store.ts";
+import { NEWO_CALLBACK_SCHEMA_QUERY } from "../src/newo-callback-schema.ts";
+
+// The readiness double serves installed SQL from actual migrations, never invented guard text.
+const newoSchemaDatabase = new DatabaseSync(":memory:");
+for (const name of readdirSync(new URL("../migrations/", import.meta.url))
+  .filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort()) {
+  newoSchemaDatabase.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+}
+const newoSchemaRows = newoSchemaDatabase.prepare(NEWO_CALLBACK_SCHEMA_QUERY).all();
+newoSchemaDatabase.close();
 
 const A = "ow_11111111-1111-4111-8111-111111111111";
 const B = "ow_22222222-2222-4222-8222-222222222222";
@@ -146,6 +158,7 @@ function fakeEnv(options: FakeOptions = {}) {
 
   const executeAll = async (sql: string, args: unknown[]) => {
     sqlCalls.push({ sql, args });
+    if (sql === NEWO_CALLBACK_SCHEMA_QUERY) return { results: newoSchemaRows };
     // The sweep's own candidate query. Checked before the shared replayable-dead query below,
     // which it would otherwise match on "FROM dead_letter d".
     if (sql.includes("AS dead_since")) {

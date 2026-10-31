@@ -1004,7 +1004,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   }
   const newoRefusal = newoEnabledIn === null ? null : newoEnablementRefusal({
     enabledIn: newoEnabledIn,
-    callbackRecordPresent: newoCallbackRecordPresent(repoRoot),
+    callbackRecordPresent: await newoCallbackRecordPresent(repoRoot),
   });
   checks.push(check(
     "contract.newo.callback_record_gate",

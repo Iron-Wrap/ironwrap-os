@@ -320,7 +320,7 @@ function readinessChecks(
   report: Awaited<ReturnType<typeof getReadiness>>,
 ): NewoOperationsReadModel["readiness"]["checks"] {
   return [
-    { id: "owned_database", ok: report.checks.d1 && report.checks.schema },
+    { id: "owned_database", ok: report.checks.d1 && report.checks.schema && report.checks.newo_callback_schema },
     { id: "raw_store", ok: report.checks.raw_store_binding },
     { id: "enabled", ok: report.checks.newo_enabled },
     { id: "webhook_credentials", ok: report.checks.newo_webhook_credentials },

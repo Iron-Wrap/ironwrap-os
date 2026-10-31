@@ -229,6 +229,7 @@ const NOT_A_CALLBACK_RECORD_TABLE = [
   ["a different table", CALLBACK_RECORD_TABLE_SQL.replace("newo_callback_records", "newo_callback_records_draft")],
   ["a view under the table's name", "CREATE VIEW newo_callback_records AS SELECT 1 AS callback_id;\n"],
   ["a table without the contact column", CALLBACK_RECORD_TABLE_SQL.replace(" contact_phone TEXT,", "")],
+  ["only the former seven-column marker", CALLBACK_RECORD_TABLE_SQL],
   ["the table in a migration that fails to apply", `${CALLBACK_RECORD_TABLE_SQL}SELECT * FROM no_such_table;\n`],
 ];
 
@@ -285,11 +286,11 @@ test("NEWO_ENABLED=true is refused while no D1 callback record exists", async (t
       refusedWithoutRecord,
     ]),
   ]);
-  // A real table with the record's columns opens the gate, whatever the file is called.
+  // Only the complete installed contract opens the gate; a seven-column placeholder cannot.
   for (const turnOn of [enable, enableFlatBoolean]) {
     const opened = validateCopy(t, (copy) => {
       turnOn(copy);
-      writeMarker(copy, CALLBACK_RECORD_TABLE_SQL, "0001_any_name.sql");
+      copyMigrations(copy);
     });
     assert.equal(opened.status, 0, opened.stderr);
     assert.match(opened.stdout, /ok Newo staging config validated/);

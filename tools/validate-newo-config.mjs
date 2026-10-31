@@ -112,7 +112,7 @@ assert.deepEqual(
 );
 // Newo stays off unless the D1 callback record exists (migration 0168); tools/newo-enablement.mjs
 // applies the migrations and reads the schema they build.
-const callbackRecordPresent = newoCallbackRecordPresent(root);
+const callbackRecordPresent = await newoCallbackRecordPresent(root);
 const enablementRefusal = newoEnablementRefusal({
   enabledIn: [
     ...newoEnabledEnvironments(wrangler),

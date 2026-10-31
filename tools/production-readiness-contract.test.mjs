@@ -158,7 +158,7 @@ test("contract mode refuses NEWO_ENABLED=true unless the migrations build the D1
   };
   assert.equal((await gate("off", "none"))?.status, "pass");
   for (const enable of ["string", "boolean", "flatBoolean"]) {
-    for (const marker of ["none", "selectOne", "commentOnly", "quotedAlias", "createThenDrop"]) {
+    for (const marker of ["none", "selectOne", "commentOnly", "quotedAlias", "createThenDrop", "createsTable"]) {
       const refused = await gate(enable, marker);
       assert.equal(refused?.status, "fail", `${enable} with ${marker}`);
       assert.match(
@@ -166,7 +166,6 @@ test("contract mode refuses NEWO_ENABLED=true unless the migrations build the D1
         /NEWO_ENABLED=true \(production\) is refused until the D1 callback record exists .*build no newo_callback_records table/,
       );
     }
-    assert.equal((await gate(enable, "createsTable"))?.status, "pass", enable);
   }
 });
 

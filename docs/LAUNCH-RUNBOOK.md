@@ -222,15 +222,34 @@ is GitOps (owner decision, 2026-10-21). The version it runs is declared in
 production gate, and that repository's `promote-production.yml` is the only caller of this
 workflow. The contract is `docs/PRODUCTION-PROMOTION.md` in `iron-wrap-infra`.
 
-Production and qa live in different Cloudflare accounts (decision of 2026-10-30, IRO-221).
-Production — the Worker `ironwrap-bus`, D1 `ironwrap-bus` (`a8fd0116-7af6-4788-98bd-083addbe58bc`),
-R2 `ironwrap-bus-raw` / `ironwrap-bus-privacy` and the six `ironwrap-*` queues — is in the Mindburn
-Labs account `5023dd227b538fc4238439fd7d52640f` and is published as `ironwrap.mindburn.org` (zone
-`mindburn.org`). qa stays in IronWrap's account `7ee5775bc1ba46f05c5a65235b60e939`;
+Source-present topology (IRO-221): the checked-in production configuration targets the Worker
+`ironwrap-bus`, D1 `ironwrap-bus` (`a8fd0116-7af6-4788-98bd-083addbe58bc`), R2
+`ironwrap-bus-raw` / `ironwrap-bus-privacy` and the six `ironwrap-*` queues in the Mindburn Labs
+account `5023dd227b538fc4238439fd7d52640f`, with host `ironwrap.mindburn.org` in zone
+`mindburn.org`. The qa source target is IronWrap's account `7ee5775bc1ba46f05c5a65235b60e939`;
 `workers-bus/wrangler.jsonc` pins it in `env.qa.account_id`, and
-`deploy/release-provider-policy.json` (schema v2) records the account per environment. Production
-mail runs on the mindburn.org Workspace, like qa: sender `sergeyap@mindburn.org`, the shared-drive
-ids empty.
+`deploy/release-provider-policy.json` (schema v2) records the account per environment. These
+declarations do not prove resource creation, deployment, domain binding or credential isolation.
+Before activation, retain the exact release secret identities and provider grants, account and
+resource readback, DNS/domain binding, deployed artifact identity and authenticated runtime proof
+for the named environment. Check the qa credential's actual grants before claiming it cannot
+access production.
+
+The owner-approved temporary outbound sender is Sergey's `sergeyap@mindburn.org` mailbox.
+Production `FROM_EMAIL` selects it, and `config/tenants/ironwrap.json` declares that exact address
+as a temporary sender alias while retaining the branded sender declarations. The same
+`FROM_EMAIL` supplies Gmail impersonation and the message From header for customer
+acknowledgements and operator alerts; the source has no separate personal-alert and customer
+sender. A dedicated customer sender remains a follow-up, not an identity provisioned by this
+exception. Sender admission in tenant configuration does not activate mail or prove Workspace
+delegation, provider acceptance or delivery. Capture those readbacks under the production
+activation gate. QA's synthetic-mailbox constraint remains separate and is not satisfied by this
+production source check.
+
+The production shared-drive ids are empty, leaving Drive-dependent paths disabled. A replacement
+Drive/archive binding and its readback remain prerequisites for claiming those workflows ready.
+`tools/validate-tenant-runtime.test.mjs` checks the actual flattened production variables from
+`wrangler.jsonc`; a passing local check establishes source consistency only.
 
 `validateMergePolicy` requires `allow_merge_commit: false` with `allow_squash_merge` and
 `allow_rebase_merge` `true` on `main`, and the repository is set that way (owner change of

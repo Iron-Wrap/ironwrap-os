@@ -299,296 +299,319 @@ export function WorkPackageIssueForm({
         </p>
       ) : null}
 
-      <form className="mt-5 space-y-6" onSubmit={(event) => void submit(event)}>
-        <div className="space-y-3 border-2 border-info/45 bg-surface p-4">
-          <TextArea
-            id="wp-boundaries"
-            label="Work scope for the crew"
-            value={boundaries}
-            onChange={setBoundaries}
-          />
-          {workPackage ? (
-            <>
-              <p className="text-sm leading-6 text-muted">
-                Edit the work scope here. Keep the other plan fields unless the change also affects
-                their instructions, proof or safety checks.
-              </p>
-              <TextArea
-                id="wp-correction-reason"
-                label="Reason for replacing this plan"
-                value={correctionReason}
-                onChange={setCorrectionReason}
-                maxLength={2000}
-              />
-              <p className="text-sm leading-6 text-muted">
-                The reason goes in the change history. It does not change the crew’s instructions.
-              </p>
-            </>
-          ) : null}
+      {blocked ? (
+        <div className="mt-5 space-y-4">
+          <p id="blocked-correction-message" className="font-semibold">
+            An independent office person must release this plan’s stop before you can edit and issue
+            a correction.
+          </p>
+          <Button
+            type="button"
+            variant="accent"
+            disabled
+            aria-describedby="blocked-correction-message"
+          >
+            <Send aria-hidden="true" /> Issue the corrected job plan
+          </Button>
         </div>
-        <p className="font-semibold">
-          {lastWorkDay
-            ? `Last scheduled work day ends ${formatFieldStamp(lastWorkDay, officeDates)}.`
-            : "Last scheduled work day is not set. Confirm it with production before choosing expiry."}
-        </p>
-        <div>
-          <TextField
-            id="wp-expires"
-            label="Expires"
-            value={expiresAt}
-            onChange={setExpiresAt}
-            type="datetime-local"
-            note={expiresLabel}
-            hint="Choose a time after the last work day. After expiry the crew can still read the plan, but cannot add the photos or notes listed under Proof needed."
-          />
-        </div>
-        <details open={!workPackage} className="border border-border p-4">
-          <summary className="cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-offset-4">
-            Other plan fields, steps and hold points
-          </summary>
-          <div className="mt-4 space-y-6">
-            <p className="max-w-3xl text-sm leading-6 text-muted">
-              When you issue, the job's crew, assignment and scope lock in. This form adds the
-              steps, hold points and the proof the crew must add.
-            </p>
-            <TextField
-              id="wp-title"
-              label="Title"
-              value={title}
-              onChange={setTitle}
-              maxLength={200}
+      ) : (
+        <form className="mt-5 space-y-6" onSubmit={(event) => void submit(event)}>
+          <div className="space-y-3 border-2 border-info/45 bg-surface p-4">
+            <TextArea
+              id="wp-boundaries"
+              label="Work scope for the crew"
+              value={boundaries}
+              onChange={setBoundaries}
             />
-            <div className="grid gap-4 lg:grid-cols-2">
-              <TextArea
-                id="wp-objective"
-                label="Objective"
-                value={objective}
-                onChange={setObjective}
+            {workPackage ? (
+              <>
+                <p className="text-sm leading-6 text-muted">
+                  Edit the work scope here. Keep the other plan fields unless the change also
+                  affects their instructions, proof or safety checks.
+                </p>
+                <TextArea
+                  id="wp-correction-reason"
+                  label="Reason for replacing this plan"
+                  value={correctionReason}
+                  onChange={setCorrectionReason}
+                  maxLength={2000}
+                />
+                <p className="text-sm leading-6 text-muted">
+                  The reason goes in the change history. It does not change the crew’s instructions.
+                </p>
+              </>
+            ) : null}
+          </div>
+          <p className="font-semibold">
+            {lastWorkDay
+              ? `Last scheduled work day ends ${formatFieldStamp(lastWorkDay, officeDates)}.`
+              : "Last scheduled work day is not set. Confirm it with production before choosing expiry."}
+          </p>
+          <div>
+            <TextField
+              id="wp-expires"
+              label="Expires"
+              value={expiresAt}
+              onChange={setExpiresAt}
+              type="datetime-local"
+              note={expiresLabel}
+              hint="Choose a time after the last work day. After expiry the crew can still read the plan, but cannot add the photos or notes listed under Proof needed."
+            />
+          </div>
+          <details open={!workPackage} className="border border-border p-4">
+            <summary className="cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-offset-4">
+              Other plan fields, steps and hold points
+            </summary>
+            <div className="mt-4 space-y-6">
+              <p className="max-w-3xl text-sm leading-6 text-muted">
+                When you issue, the job's crew, assignment and scope lock in. This form adds the
+                steps, hold points and the proof the crew must add.
+              </p>
+              <TextField
+                id="wp-title"
+                label="Title"
+                value={title}
+                onChange={setTitle}
+                maxLength={200}
               />
-              <TextArea
-                id="wp-expected-result"
-                label="Expected result"
-                value={expectedResult}
-                onChange={setExpectedResult}
-              />
-              <TextArea
-                id="wp-prerequisites"
-                label="Prerequisites"
-                value={prerequisites}
-                onChange={setPrerequisites}
-              />
-              <TextArea
-                id="wp-stop-conditions"
-                label="Stop conditions"
-                value={stopConditions}
-                onChange={setStopConditions}
-              />
-              <TextArea
-                id="wp-make-safe"
-                label="Make-safe procedure"
-                value={makeSafeProcedure}
-                onChange={setMakeSafeProcedure}
-              />
-            </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <TextArea
+                  id="wp-objective"
+                  label="Objective"
+                  value={objective}
+                  onChange={setObjective}
+                />
+                <TextArea
+                  id="wp-expected-result"
+                  label="Expected result"
+                  value={expectedResult}
+                  onChange={setExpectedResult}
+                />
+                <TextArea
+                  id="wp-prerequisites"
+                  label="Prerequisites"
+                  value={prerequisites}
+                  onChange={setPrerequisites}
+                />
+                <TextArea
+                  id="wp-stop-conditions"
+                  label="Stop conditions"
+                  value={stopConditions}
+                  onChange={setStopConditions}
+                />
+                <TextArea
+                  id="wp-make-safe"
+                  label="Make-safe procedure"
+                  value={makeSafeProcedure}
+                  onChange={setMakeSafeProcedure}
+                />
+              </div>
 
-            <fieldset className="space-y-3 border border-border p-4">
-              <legend className="px-2 font-bold">Ordered steps</legend>
-              {steps.map((step, index) => (
-                <div
-                  key={step.key}
-                  className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-3"
-                >
-                  <TextArea
-                    id={`wp-step-${index + 1}-instruction`}
-                    label={`Step ${index + 1}`}
-                    value={step.instruction}
-                    onChange={(value) => updateStep(setSteps, step.key, "instruction", value)}
-                  />
-                  <TextArea
-                    id={`wp-step-${index + 1}-evidence`}
-                    label="Required evidence"
-                    value={step.requiredEvidence}
-                    onChange={(value) => updateStep(setSteps, step.key, "requiredEvidence", value)}
-                  />
-                  <div>
+              <fieldset className="space-y-3 border border-border p-4">
+                <legend className="px-2 font-bold">Ordered steps</legend>
+                {steps.map((step, index) => (
+                  <div
+                    key={step.key}
+                    className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-3"
+                  >
                     <TextArea
-                      id={`wp-step-${index + 1}-acceptance`}
-                      label="Acceptance criteria"
-                      value={step.acceptanceCriteria}
+                      id={`wp-step-${index + 1}-instruction`}
+                      label={`Step ${index + 1}`}
+                      value={step.instruction}
+                      onChange={(value) => updateStep(setSteps, step.key, "instruction", value)}
+                    />
+                    <TextArea
+                      id={`wp-step-${index + 1}-evidence`}
+                      label="Required evidence"
+                      value={step.requiredEvidence}
                       onChange={(value) =>
-                        updateStep(setSteps, step.key, "acceptanceCriteria", value)
+                        updateStep(setSteps, step.key, "requiredEvidence", value)
                       }
                     />
-                    {steps.length > 1 ? (
+                    <div>
+                      <TextArea
+                        id={`wp-step-${index + 1}-acceptance`}
+                        label="Acceptance criteria"
+                        value={step.acceptanceCriteria}
+                        onChange={(value) =>
+                          updateStep(setSteps, step.key, "acceptanceCriteria", value)
+                        }
+                      />
+                      {steps.length > 1 ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="compact"
+                          className="mt-2"
+                          onClick={() =>
+                            setSteps((current) => current.filter((item) => item.key !== step.key))
+                          }
+                        >
+                          <Trash2 aria-hidden="true" /> Remove step
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="compact"
+                  onClick={() => setSteps((current) => [...current, blankStep()])}
+                >
+                  <Plus aria-hidden="true" /> Add step
+                </Button>
+              </fieldset>
+
+              <fieldset className="space-y-3 border border-border p-4">
+                <legend className="px-2 font-bold">Hold points</legend>
+                {holds.map((hold, index) => (
+                  <div
+                    key={hold.key}
+                    className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-2"
+                  >
+                    <TextArea
+                      id={`wp-hold-${index + 1}-name`}
+                      label={`Hold ${index + 1}`}
+                      value={hold.holdPoint}
+                      onChange={(value) => updateHold(setHolds, hold.key, "holdPoint", value)}
+                    />
+                    <div>
+                      <label htmlFor={`wp-hold-${index + 1}-phase`} className="text-sm font-bold">
+                        Release phase
+                      </label>
+                      <select
+                        id={`wp-hold-${index + 1}-phase`}
+                        className="mt-2 min-h-12 w-full border bg-surface px-3"
+                        value={hold.releasePhase}
+                        onChange={(event) =>
+                          updateHold(
+                            setHolds,
+                            hold.key,
+                            "releasePhase",
+                            event.target.value as HoldDraft["releasePhase"],
+                          )
+                        }
+                      >
+                        <option>Pre-start</option>
+                        <option>In-process</option>
+                        <option>Completion</option>
+                      </select>
+                    </div>
+                    <TextField
+                      id={`wp-hold-${index + 1}-authority`}
+                      label="Release authority"
+                      value={hold.releaseAuthority}
+                      onChange={(value) =>
+                        updateHold(setHolds, hold.key, "releaseAuthority", value)
+                      }
+                      maxLength={140}
+                    />
+                    <TextArea
+                      id={`wp-hold-${index + 1}-evidence`}
+                      label="Required evidence"
+                      value={hold.requiredEvidence}
+                      onChange={(value) =>
+                        updateHold(setHolds, hold.key, "requiredEvidence", value)
+                      }
+                    />
+                    <TextArea
+                      id={`wp-hold-${index + 1}-acceptance`}
+                      label="Acceptance criteria"
+                      value={hold.acceptanceCriteria}
+                      onChange={(value) =>
+                        updateHold(setHolds, hold.key, "acceptanceCriteria", value)
+                      }
+                    />
+                    {holds.length > 1 ? (
                       <Button
                         type="button"
                         variant="ghost"
                         size="compact"
-                        className="mt-2"
+                        className="self-end"
                         onClick={() =>
-                          setSteps((current) => current.filter((item) => item.key !== step.key))
+                          setHolds((current) => current.filter((item) => item.key !== hold.key))
                         }
                       >
-                        <Trash2 aria-hidden="true" /> Remove step
+                        <Trash2 aria-hidden="true" /> Remove hold
                       </Button>
                     ) : null}
                   </div>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="compact"
-                onClick={() => setSteps((current) => [...current, blankStep()])}
-              >
-                <Plus aria-hidden="true" /> Add step
-              </Button>
-            </fieldset>
-
-            <fieldset className="space-y-3 border border-border p-4">
-              <legend className="px-2 font-bold">Hold points</legend>
-              {holds.map((hold, index) => (
-                <div
-                  key={hold.key}
-                  className="grid gap-3 border-b border-border pb-4 last:border-0 last:pb-0 lg:grid-cols-2"
-                >
-                  <TextArea
-                    id={`wp-hold-${index + 1}-name`}
-                    label={`Hold ${index + 1}`}
-                    value={hold.holdPoint}
-                    onChange={(value) => updateHold(setHolds, hold.key, "holdPoint", value)}
-                  />
-                  <div>
-                    <label htmlFor={`wp-hold-${index + 1}-phase`} className="text-sm font-bold">
-                      Release phase
-                    </label>
-                    <select
-                      id={`wp-hold-${index + 1}-phase`}
-                      className="mt-2 min-h-12 w-full border bg-surface px-3"
-                      value={hold.releasePhase}
-                      onChange={(event) =>
-                        updateHold(
-                          setHolds,
-                          hold.key,
-                          "releasePhase",
-                          event.target.value as HoldDraft["releasePhase"],
-                        )
-                      }
-                    >
-                      <option>Pre-start</option>
-                      <option>In-process</option>
-                      <option>Completion</option>
-                    </select>
-                  </div>
-                  <TextField
-                    id={`wp-hold-${index + 1}-authority`}
-                    label="Release authority"
-                    value={hold.releaseAuthority}
-                    onChange={(value) => updateHold(setHolds, hold.key, "releaseAuthority", value)}
-                    maxLength={140}
-                  />
-                  <TextArea
-                    id={`wp-hold-${index + 1}-evidence`}
-                    label="Required evidence"
-                    value={hold.requiredEvidence}
-                    onChange={(value) => updateHold(setHolds, hold.key, "requiredEvidence", value)}
-                  />
-                  <TextArea
-                    id={`wp-hold-${index + 1}-acceptance`}
-                    label="Acceptance criteria"
-                    value={hold.acceptanceCriteria}
-                    onChange={(value) =>
-                      updateHold(setHolds, hold.key, "acceptanceCriteria", value)
-                    }
-                  />
-                  {holds.length > 1 ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="compact"
-                      className="self-end"
-                      onClick={() =>
-                        setHolds((current) => current.filter((item) => item.key !== hold.key))
-                      }
-                    >
-                      <Trash2 aria-hidden="true" /> Remove hold
-                    </Button>
-                  ) : null}
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="compact"
-                onClick={() => setHolds((current) => [...current, blankHold()])}
-              >
-                <Plus aria-hidden="true" /> Add hold point
-              </Button>
-            </fieldset>
-          </div>
-        </details>
-
-        {errorText ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="font-semibold text-danger" role="alert">
-              {errorText}
-            </p>
-            {reloadOffered ? (
-              // Offline, a reload cannot reach the office: the control stays off, as the app's
-              // other online-only controls do, and says why beside it.
-              <>
+                ))}
                 <Button
                   type="button"
-                  variant="secondary"
+                  variant="outline"
                   size="compact"
-                  busy={reloading}
-                  disabled={!online}
-                  onClick={() => void reload()}
+                  onClick={() => setHolds((current) => [...current, blankHold()])}
                 >
-                  <RefreshCw aria-hidden="true" /> Reload job
+                  <Plus aria-hidden="true" /> Add hold point
                 </Button>
-                {!online ? (
-                  <span className="text-sm text-muted">
-                    Reload job works once you're back online.
-                  </span>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        ) : null}
-        {issued ? (
-          <p className="font-semibold text-ok" role="status">
-            {crewReviewed
-              ? reviewedAt
-                ? `Reviewed by the crew · ${formatFieldStamp(reviewedAt, officeDates)}. Nothing more to send.`
-                : "Reviewed by the crew. Nothing more to send."
-              : "Job plan issued. The crew hasn't reviewed it yet. It shows on their Today screen the next time their phone loads the job. Nothing more to send."}
+              </fieldset>
+            </div>
+          </details>
+
+          {errorText ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="font-semibold text-danger" role="alert">
+                {errorText}
+              </p>
+              {reloadOffered ? (
+                // Offline, a reload cannot reach the office: the control stays off, as the app's
+                // other online-only controls do, and says why beside it.
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="compact"
+                    busy={reloading}
+                    disabled={!online}
+                    onClick={() => void reload()}
+                  >
+                    <RefreshCw aria-hidden="true" /> Reload job
+                  </Button>
+                  {!online ? (
+                    <span className="text-sm text-muted">
+                      Reload job works once you're back online.
+                    </span>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {issued ? (
+            <p className="font-semibold text-ok" role="status">
+              {crewReviewed
+                ? reviewedAt
+                  ? `Reviewed by the crew · ${formatFieldStamp(reviewedAt, officeDates)}. Nothing more to send.`
+                  : "Reviewed by the crew. Nothing more to send."
+                : "Job plan issued. The crew hasn't reviewed it yet. It shows on their Today screen the next time their phone loads the job. Nothing more to send."}
+            </p>
+          ) : null}
+          {!canSend ? (
+            <p className="text-sm leading-6 text-warning" role="status">
+              You need to be online, with the job's latest crew assignment loaded, to issue.
+            </p>
+          ) : null}
+          {workPackage ? (
+            <p className="max-w-3xl font-semibold leading-6">
+              It replaces the plan the crew has now. The crew sees the new one the next time their
+              phone loads the job.
+            </p>
+          ) : null}
+          <p className="max-w-3xl text-sm leading-6 text-muted">
+            Issuing doesn't wait for the gates. The gates hold the firm start.
           </p>
-        ) : null}
-        {!canSend ? (
-          <p className="text-sm leading-6 text-warning" role="status">
-            You need to be online, with the job's latest crew assignment loaded, to issue.
-          </p>
-        ) : null}
-        {workPackage ? (
-          <p className="max-w-3xl font-semibold leading-6">
-            It replaces the plan the crew has now. The crew sees the new one the next time their
-            phone loads the job.
-          </p>
-        ) : null}
-        <p className="max-w-3xl text-sm leading-6 text-muted">
-          Issuing doesn't wait for the gates. The gates hold the firm start.
-        </p>
-        {issued ? (
-          <Button type="submit" variant="secondary" busy={saving} disabled={!canSend || blocked}>
-            <Send aria-hidden="true" /> {issueLabel}
-          </Button>
-        ) : (
-          <Button type="submit" variant="accent" busy={saving} disabled={!canSend || blocked}>
-            <Send aria-hidden="true" /> {issueLabel}
-          </Button>
-        )}
-      </form>
+          {issued ? (
+            <Button type="submit" variant="secondary" busy={saving} disabled={!canSend || blocked}>
+              <Send aria-hidden="true" /> {issueLabel}
+            </Button>
+          ) : (
+            <Button type="submit" variant="accent" busy={saving} disabled={!canSend || blocked}>
+              <Send aria-hidden="true" /> {issueLabel}
+            </Button>
+          )}
+        </form>
+      )}
     </section>
   );
   return expanded ? (

@@ -1416,6 +1416,26 @@ describe("JobPage", () => {
     expect(await screen.findByText("Expired: the crew can't add proof.")).toBeVisible();
     expect(screen.getByRole("link", { name: "Review this plan’s stop for release" })).toBeVisible();
     expect(screen.getByText(/Issuing a correction cannot release a stop/)).toBeVisible();
+    expect(screen.queryByLabelText("Work scope for the crew (required)")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Reason for replacing this plan (required)"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Issue the corrected job plan" })).toBeDisabled();
+
+    const released = structuredClone(stoppedAndExpired);
+    released.read_model_generated_at = new Date(
+      Date.parse(released.read_model_generated_at) + 1_000,
+    ).toISOString();
+    released.packet.work_package!.status = "Released";
+    act(() =>
+      stoppedView.queryClient.setQueryData(
+        ["job", ownerSession.tenant.id, ownerSession.user.id, "JOB-1"],
+        released,
+      ),
+    );
+    expect(await screen.findByLabelText("Work scope for the crew (required)")).toBeVisible();
+    expect(screen.getByLabelText("Reason for replacing this plan (required)")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Issue the corrected job plan" })).toBeEnabled();
     stoppedView.unmount();
 
     // Before the expiry at the read, there is no expired line.

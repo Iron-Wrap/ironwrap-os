@@ -35,17 +35,22 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await seedPairedFieldDevice(page);
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    await expect(page.getByText("v3 · Released")).toBeVisible();
+    await expect(
+      page.getByText("Issued to the crew · Fri 10 Jul 9:00 a.m.", { exact: true }),
+    ).toBeVisible();
 
     // 1. Review -- requires the review checkbox first, matching the real UI gate.
     await page.getByRole("checkbox").check();
     await page.getByRole("button", { name: "I reviewed this plan" }).click();
-    await expect(page.getByText(/You reviewed this work plan/i)).toBeVisible();
-    await expect(page.getByText("v3 · Reviewed")).toBeVisible();
+    await expect(page.getByText(/You reviewed this job plan/i)).toBeVisible();
+    // Stamped with the review this phone just sent, in the company's zone.
+    await expect(
+      page.getByText(/^Reviewed by the crew · Today \d{1,2}:\d\d [ap]\.m\.$/),
+    ).toBeVisible();
 
     // 2. Start -- online-only direct command, not the offline outbox.
     await page.getByRole("button", { name: "Start work" }).click();
-    await expect(page.getByText("v3 · In Progress")).toBeVisible();
+    await expect(page.getByText("Work started", { exact: true })).toBeVisible();
     await expect(page.getByText(/No proof added yet/i).first()).toBeVisible();
 
     // 3. Capture evidence into the step:1 slot via the real check-in flow (multipart upload).
@@ -76,7 +81,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // In Progress, so a completed package reads back as no current package at all --
     // that is the state read-back that proves completion actually landed server-side.
     await page.getByRole("button", { name: "Finish work" }).click();
-    await expect(page.getByRole("heading", { name: "No work plan is ready" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No job plan is ready" })).toBeVisible();
   });
 
   test("safety: open the panel, submit a rescue call, see it reflected after reconnect", async ({

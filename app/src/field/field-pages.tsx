@@ -40,10 +40,13 @@ import {
 } from "./field-contracts";
 import {
   formatFieldSchedule,
+  formatFieldStamp,
   formatFieldTimestamp,
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { jobPlanBadge, type StampClock } from "./job-plan-status";
+import { HoldingStopNotice } from "./holding-stop-notice";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -61,6 +64,8 @@ import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
+import { WorkPackageStopReleasePanel } from "./work-package-stop-release-panel";
+import { JobPlanDetailsDialog } from "./job-plan-details-dialog";
 
 const FIELD_MEDIA_TYPES = new Set([
   "image/jpeg",
@@ -146,11 +151,11 @@ const workPlanRefusals: PlainErrorCopy = {
     not_found: jobNotOnList,
     work_package_not_available: jobNotOnList,
     work_package_actor_not_assigned:
-      "You are not on the crew for this work plan. Ask the office to add you to it.",
+      "You are not on the crew for this job plan. Ask the office to add you to it.",
     work_package_version_conflict:
-      "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+      "The job plan changed after this phone opened it. Open the job again to see the new plan.",
     work_package_release_attempt_conflict:
-      "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+      "The job plan changed after this phone opened it. Open the job again to see the new plan.",
     idempotency_conflict:
       "The office already holds a different request from this phone for this plan. Check the plan, then press the button again.",
   },
@@ -177,8 +182,15 @@ const BLOCKER_CATEGORIES = [
   "Other",
 ];
 
+type IssuedPlanState = { packet: string; assignmentId: string; version: number } | null;
+type IssueReceiptProps = {
+  issuedPlan: IssuedPlanState;
+  setIssuedPlan: (value: IssuedPlanState) => void;
+};
+
 export function JobPage() {
   const session = useSession();
+  const [issuedPlan, setIssuedPlan] = useState<IssuedPlanState>(null);
   const { jobId } = useParams({ strict: false }) as { jobId?: string };
   // Keep the capture and its receipt above the versioned plan. A job readback can replace the
   // plan after sending without discarding the saved action the person is still reviewing.
@@ -212,6 +224,8 @@ export function JobPage() {
     <JobSurface
       key={query.data.read_model_generated_at}
       model={query.data}
+      issuedPlan={issuedPlan}
+      setIssuedPlan={setIssuedPlan}
       offline={query.data.stale_fields.includes("offline.cached_packet")}
       onPhotosCaptured={(photos) => setQuickCapture({ jobId, photos })}
       savingOffline={query.isFetching}
@@ -222,6 +236,7 @@ export function JobPage() {
 
 export function WorkObjectPage() {
   const session = useSession();
+  const [issuedPlan, setIssuedPlan] = useState<IssuedPlanState>(null);
   const params = useParams({ strict: false }) as {
     workObjectType?: string;
     workObjectId?: string;
@@ -256,7 +271,7 @@ export function WorkObjectPage() {
     queryFn: () => loadWorkObject(session, scope!),
   });
   if (!scope) return <ErrorState message="This work link is incomplete." />;
-  if (query.isPending) return <LoadingState label="Loading work plan…" />;
+  if (query.isPending) return <LoadingState label="Loading job plan…" />;
   if (query.isError)
     return (
       <ErrorState
@@ -268,17 +283,27 @@ export function WorkObjectPage() {
   return (
     <WorkObjectSurface
       key={query.data.read_model_generated_at}
+      issuedPlan={issuedPlan}
+      setIssuedPlan={setIssuedPlan}
       model={query.data}
       offline={query.data.stale_fields.includes("offline.cached_packet")}
     />
   );
 }
 
-function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offline: boolean }) {
+function WorkObjectSurface({
+  model,
+  offline,
+  issuedPlan,
+  setIssuedPlan,
+}: { model: WorkObjectResponse; offline: boolean } & IssueReceiptProps) {
   const session = useSession();
   const workPackage = model.work_package;
   const panelModel: WorkPackagePanelModel = {
-    job: { id: model.work_object.workObjectId },
+    job: { id: model.work_object.workObjectId, active_stops: model.active_stops },
+    read_model_generated_at: model.read_model_generated_at,
+    // A typed root is a generic holding list. It cannot identify this plan's crew event.
+    active_stops: [],
     assignment: model.assignment,
     allowed_actions: model.allowed_actions,
     packet: { work_package: workPackage },
@@ -291,6 +316,10 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
   };
   const captureAllowed =
     session.user.role === "field" && model.allowed_actions.includes("field.checkin.create");
+  const workObjectDates: FieldDateOptions = {
+    locale: session.tenant.locale,
+    timeZone: session.tenant.time_zone,
+  };
   return (
     <RoleGuard surface="job">
       <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
@@ -300,11 +329,23 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
             Today
           </Link>
         </Button>
-        <WorkObjectPacketHeader model={model} offline={offline} />
+        <HoldingStopNotice
+          stops={model.active_stops}
+          unavailable={model.stale_fields.includes("work_object.active_stops_unavailable")}
+          offline={offline}
+        />
+        <WorkObjectPacketHeader
+          model={model}
+          offline={offline}
+          dateOptions={workObjectDates}
+          clock={session.user.role === "field" ? "12h" : "24h"}
+        />
         <WorkPackagePanel
           model={panelModel}
+          issuedPlan={issuedPlan}
+          setIssuedPlan={setIssuedPlan}
           offline={offline}
-          dateOptions={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
+          dateOptions={workObjectDates}
           captureAllowed={captureAllowed}
         />
         <CaptureProofPanel
@@ -322,9 +363,13 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
 function WorkObjectPacketHeader({
   model,
   offline,
+  dateOptions,
+  clock,
 }: {
   model: WorkObjectResponse;
   offline: boolean;
+  dateOptions: FieldDateOptions;
+  clock: StampClock;
 }) {
   const assignment = assignmentRole(model.assignment);
   const roleLabel = assignmentRoleLabel(useSession().user.role);
@@ -347,8 +392,12 @@ function WorkObjectPacketHeader({
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
         <JobFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
         <JobFact
-          label="Work plan"
-          value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
+          label="Job plan"
+          value={
+            model.work_package
+              ? `Issued to the crew · ${formatFieldStamp(model.work_package.released_at, dateOptions, { clock })}`
+              : "Not ready"
+          }
         />
       </dl>
     </header>
@@ -361,13 +410,15 @@ function JobSurface({
   onPhotosCaptured,
   savingOffline,
   onRetryOffline,
+  issuedPlan,
+  setIssuedPlan,
 }: {
   model: JobResponse;
   offline: boolean;
   onPhotosCaptured: (photos: File[]) => void;
   savingOffline: boolean;
   onRetryOffline: () => void;
-}) {
+} & IssueReceiptProps) {
   const session = useSession();
   const [quickPhotoError, setQuickPhotoError] = useState<string | null>(null);
   const [proof, setProof] = useState<ProofStreamItem[]>(model.proof_stream);
@@ -427,6 +478,11 @@ function JobSurface({
             </Link>
           )}
         </Button>
+        <HoldingStopNotice
+          stops={model.job.active_stops ?? null}
+          unavailable={model.stale_fields.includes("job.active_stops_unavailable")}
+          offline={offline}
+        />
         <OfflineReadiness
           ready={!model.stale_fields.includes(NOT_SAVED_ON_DEVICE)}
           saving={savingOffline}
@@ -464,6 +520,8 @@ function JobSurface({
         ) : null}
         <WorkPackagePanel
           model={model}
+          issuedPlan={issuedPlan}
+          setIssuedPlan={setIssuedPlan}
           offline={offline}
           dateOptions={dateOptions}
           captureAllowed={fieldCaptureAllowed}
@@ -564,7 +622,7 @@ function JobPacketHeader({
           </h1>
         </div>
         <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
-          {offline ? "Saved copy" : "Office update"}
+          {offline ? "Saved copy" : "Latest job details"}
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
@@ -630,7 +688,12 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 }
 
 type WorkPackagePanelModel = {
-  job: Pick<JobResponse["job"], "id">;
+  job: Pick<JobResponse["job"], "id" | "active_stops"> &
+    Partial<Pick<JobResponse["job"], "job_number" | "address">>;
+  /** When the server made this read: the clock the issue form judges expiry by. */
+  read_model_generated_at: string;
+  /** Legacy exact crew-event projection for the current plan, never the generic holding list. */
+  active_stops: JobResponse["active_stops"];
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
   packet: Pick<JobResponse["packet"], "work_package">;
@@ -704,12 +767,14 @@ function WorkPackagePanel({
   offline,
   dateOptions,
   captureAllowed,
+  issuedPlan,
+  setIssuedPlan,
 }: {
   model: WorkPackagePanelModel;
   offline: boolean;
   dateOptions: FieldDateOptions;
   captureAllowed: boolean;
-}) {
+} & IssueReceiptProps) {
   const session = useSession();
   const queryClient = useQueryClient();
   const workPackage = model.packet.work_package;
@@ -724,6 +789,7 @@ function WorkPackagePanel({
   const [stopInstructionActive, setStopInstructionActive] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
   const [completingWork, setCompletingWork] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   /** Set before any await, so a second tap in the same moment sends nothing. */
   const commandInFlight = useRef(false);
   /** The automatic resend while the office is still processing the same Start or Finish. */
@@ -771,6 +837,11 @@ function WorkPackagePanel({
   }, [session.tenant.id, session.user.id, startPath, finishPath, plan]);
 
   const issueScope = model.scope ?? (workPackage ? workObjectScopeForPackage(workPackage) : null);
+  const issuePacketKey = fieldPacketQueryKey(session, model.job.id, issueScope);
+  const issuePacket = JSON.stringify(issuePacketKey);
+  const reloadIssuePacket = async () => {
+    await queryClient.invalidateQueries({ queryKey: issuePacketKey });
+  };
   const issueForm = (
     <WorkPackageIssueForm
       session={session}
@@ -779,11 +850,21 @@ function WorkPackagePanel({
       endpoint={workPackageEndpointBase(model.job.id, issueScope)}
       allowed={model.allowed_actions.includes("work_package.issue")}
       offline={offline}
-      onIssued={async () => {
-        await queryClient.invalidateQueries({
-          queryKey: fieldPacketQueryKey(session, model.job.id, issueScope),
-        });
-      }}
+      readAt={model.read_model_generated_at}
+      issuedVersion={
+        issuedPlan?.packet === issuePacket && issuedPlan.assignmentId === model.assignment?.id
+          ? issuedPlan.version
+          : null
+      }
+      onIssuedVersionChange={(version) =>
+        setIssuedPlan(
+          version !== null && model.assignment
+            ? { packet: issuePacket, assignmentId: model.assignment.id, version }
+            : null,
+        )
+      }
+      onIssued={reloadIssuePacket}
+      onReload={reloadIssuePacket}
     />
   );
 
@@ -795,9 +876,9 @@ function WorkPackagePanel({
           className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
           aria-labelledby="work-package-heading"
         >
-          <p className="text-sm font-semibold text-warning">Work plan</p>
+          <p className="text-sm font-semibold text-warning">Job plan</p>
           <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-            No work plan is ready
+            No job plan is ready
           </h2>
           <p className="mt-2 leading-6 text-muted">
             Do not start, resume, release a hold point, or change scope. Go online for the latest
@@ -896,7 +977,7 @@ function WorkPackagePanel({
 
   function saveAcknowledgement() {
     if (!acknowledgementConfirmed) {
-      setActionError({ text: "Check the box to show that you read this work plan." });
+      setActionError({ text: "Check the box to show that you read this job plan." });
       return;
     }
     void saveWorkPackageAction("work_package_acknowledgement");
@@ -1000,28 +1081,70 @@ function WorkPackagePanel({
       className="border-2 border-foreground bg-surface-raised"
       aria-labelledby="work-package-heading"
     >
+      <div className="border-b border-border p-4">
+        <Button type="button" variant="outline" onClick={() => setDetailsOpen(true)}>
+          See plan and proof
+        </Button>
+      </div>
+      <JobPlanDetailsDialog
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        plan={workPackage}
+        crewStops={model.active_stops}
+        dateOptions={dateOptions}
+        clock={session.user.role === "field" ? "12h" : "24h"}
+        jobLabel={
+          model.scope
+            ? `${model.scope.work_object_type} · ${model.scope.work_object_id}`
+            : `${model.job.address ?? "Site address is missing"} · Ref ${model.job.job_number ?? "missing"}`
+        }
+      />
+      {workPackage.status === "Blocked" ? (
+        <WorkPackageStopReleasePanel
+          key={`${session.tenant.id}:${session.user.id}:${workPackage.id}:${workPackage.version}`}
+          session={session}
+          workPackage={workPackage}
+          jobId={model.job.id}
+          holdingStops={model.job.active_stops ?? null}
+          offline={offline}
+          onReleased={async () => {
+            await queryClient.refetchQueries(
+              { queryKey: issuePacketKey, exact: true, type: "active" },
+              { throwOnError: true },
+            );
+            const fresh = queryClient.getQueryData<JobResponse | WorkObjectResponse>(
+              issuePacketKey,
+            );
+            if (!fresh || fresh.stale_fields.includes("offline.cached_packet")) {
+              throw new Error("stop_release_job_readback_unavailable");
+            }
+          }}
+        />
+      ) : null}
       {issueForm}
       <header className="@container border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-muted">Work plan</p>
+            <p className="text-sm font-semibold text-muted">Job plan</p>
             <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
               {workPackage.title}
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            v{workPackage.version} ·{" "}
-            {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
+            {jobPlanBadge(
+              workPackage,
+              model.active_stops,
+              dateOptions,
+              session.user.role === "field" ? "12h" : "24h",
+            )}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
           <JobFact
-            label="Issued"
-            value={formatFieldTimestamp(workPackage.issued_at, dateOptions)}
-          />
-          <JobFact
-            label="Released"
-            value={formatFieldTimestamp(workPackage.released_at, dateOptions)}
+            label="Issued to the crew"
+            value={formatFieldStamp(workPackage.released_at, dateOptions, {
+              clock: session.user.role === "field" ? "12h" : "24h",
+            })}
           />
           <JobFact
             label="Expires"
@@ -1030,12 +1153,22 @@ function WorkPackagePanel({
         </dl>
         <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
           <JobFact
-            label="Work object"
-            value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
+            label={model.scope ? "Work object" : "Job"}
+            value={
+              model.scope
+                ? `${model.scope.work_object_type} · ${model.scope.work_object_id}`
+                : model.job.job_number
+                  ? `Ref ${model.job.job_number}`
+                  : "Job reference is missing"
+            }
           />
           <JobFact
-            label="Work area"
-            value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
+            label={model.scope ? "Work area" : "Site"}
+            value={
+              model.scope
+                ? `${model.scope.physical_context_type} · ${model.scope.physical_context_id}`
+                : (model.job.address ?? "Site address is missing")
+            }
           />
         </dl>
       </header>
@@ -1125,7 +1258,7 @@ function WorkPackagePanel({
                 <p className="mt-2 text-sm leading-6 text-muted">
                   {holdPoint.released
                     ? "The office cleared this check. You still need a live Start work button before you begin."
-                    : `Waiting for ${holdPoint.release_authority}. You can add proof, but this app cannot clear the stop.`}
+                    : `Waiting for ${holdPoint.release_authority}. You can add proof, but this check is separate from a crew stop and cannot be cleared here.`}
                 </p>
                 <p className="mt-1 text-sm leading-6 text-muted">
                   When: {holdPoint.release_phase} · Proof: {holdPoint.required_evidence} · Pass
@@ -1333,7 +1466,7 @@ function WorkPackagePanel({
           </h3>
           {workPackage.acknowledgement.current_user_acknowledged ? (
             <p className="mt-2 text-sm leading-6 text-ok">
-              You reviewed this work plan
+              You reviewed this job plan
               {workPackage.acknowledgement.acknowledged_at
                 ? ` at ${formatFieldTimestamp(workPackage.acknowledgement.acknowledged_at, dateOptions)}`
                 : ""}
@@ -1405,7 +1538,7 @@ function WorkPackagePanel({
             aria-labelledby="work-package-completion-heading"
           >
             <h3 id="work-package-completion-heading" className="font-bold text-ok">
-              Finish this work plan
+              Finish this job plan
             </h3>
             {canComplete ? (
               <>
@@ -1491,7 +1624,7 @@ function WorkPackagePanel({
         {savedAction ? <WorkPackageActionState action={savedAction} /> : null}
         {!offline && !canAttemptSync ? (
           <p className="text-sm leading-6 text-warning" role="status">
-            Sign in online before this phone can send the saved work plan update.
+            Sign in online before this phone can send the saved job plan update.
           </p>
         ) : null}
       </div>
@@ -1933,7 +2066,7 @@ function PacketDetail({
             office before you rely on it.
           </p>
         ) : (
-          <p className="text-sm leading-6 text-muted">No items are in this work plan.</p>
+          <p className="text-sm leading-6 text-muted">No items are in this job plan.</p>
         )}
       </div>
     </details>
@@ -2119,10 +2252,10 @@ export function CheckInPage() {
       <RoleGuard surface="field">
         <EmptyState
           title="Choose an assigned job"
-          message="Open Today, then open a job. Each check-in is tied to that job."
+          message="Pick a job on Today. Each check-in is tied to that job."
           action={
             <Button asChild size="field" variant="accent">
-              <Link to="/today">Open Today</Link>
+              <Link to="/today">Back to Today</Link>
             </Button>
           }
         />
@@ -2164,6 +2297,7 @@ function toCheckInJobResponse(model: WorkObjectResponse): JobResponse {
     version: model.version,
     source_updated_at: model.source_updated_at,
     read_model_generated_at: model.read_model_generated_at,
+    active_stops: [],
     stale_fields: model.stale_fields,
     permissions: model.permissions,
     allowed_actions: model.allowed_actions,
@@ -2176,6 +2310,7 @@ function toCheckInJobResponse(model: WorkObjectResponse): JobResponse {
       status: model.work_package?.status ?? null,
       address: `${model.work_object.physicalContextType} · ${model.work_object.physicalContextId}`,
       current_gate_state: null,
+      active_stops: model.active_stops,
     },
     assignment: model.assignment,
     gates: [],

@@ -778,7 +778,7 @@ function productionCard(
     detail: job.next_action,
     action: navigateAction(
       citationId,
-      "Open job",
+      "See job",
       "/production",
       job.next_action,
       [citationId],

@@ -85,7 +85,7 @@ function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"
     make_safe_procedure: "Clear the drop zone and tie off.",
     issued_at: "2026-07-10T13:00:00.000Z",
     expires_at: "2026-07-11T13:00:00.000Z",
-    released_at: "2026-07-10T13:05:00.000Z",
+    released_at: "2026-07-10T13:00:00.000Z",
     work_object_type: "Roof Job",
     work_object_id: "roof-job-1",
     physical_context_type: "Roof Site",
@@ -104,6 +104,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
     version: 1,
     source_updated_at: "2026-07-10T12:00:00.000Z",
     read_model_generated_at: "2026-07-10T12:00:00.000Z",
+    active_stops: [],
     stale_fields: [],
     permissions: ["jobs:read:assigned"],
     allowed_actions: ["field.checkin.create"],
@@ -116,6 +117,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
       status: "In Production",
       address: "123 Example Avenue, Calgary, AB",
       current_gate_state: "Ready",
+      active_stops: [],
     },
     assignment: {
       id: "ASSIGN-1",
@@ -350,10 +352,10 @@ describe("CheckInPage", () => {
     expect(screen.queryByText("Waiting")).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Production has not issued a work plan for this job, so files cannot be filed to it.",
+        "Production has not issued a job plan for this job, so files cannot be filed to it.",
       ),
     ).toBeVisible();
-    expect(screen.getByText(/Ask production to issue the work plan/i)).toBeVisible();
+    expect(screen.getByText(/Ask production to issue the job plan/i)).toBeVisible();
     const stopped = await getOutboxActionsNeedingAttention(principal);
     expect(stopped).toHaveLength(1);
     expect(stopped[0]?.lastError).toMatchObject({

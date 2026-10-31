@@ -601,6 +601,8 @@ export interface JobReadModel extends ReadModelEnvelope {
   };
   proof_stream: ProofStreamItem[];
   proof_page: { next_cursor: string | null; page_size: number };
+  /** The stops holding work on this job, first the one the crew reads; empty means no stop. */
+  active_stops: CrewStop[];
   required_proof: Array<{
     id: string;
     slot: string;
@@ -1349,6 +1351,12 @@ export async function buildUniversalWorkPackageReadModel(
     work_object: scope,
     assignment: assignmentModel(assignment),
     work_package: projection.work_package,
+    active_stops: await activeCrewStops(
+      env,
+      auth.session.tenant_id,
+      scope.workObjectId,
+      projection.work_package,
+    ),
     allowed_actions: [...new Set(allowedActions)],
   };
 }
@@ -1408,7 +1416,7 @@ export async function buildTodayReadModel(
           next_action:
             assignment?.blocker_reason ??
             text(blocked[0]?.blocker_reason) ??
-            (assignment ? "Open field check-in" : "Assign field work"),
+            (assignment ? "Add job proof" : "Assign field work"),
           assignment,
         },
       ];
@@ -1808,6 +1816,12 @@ export async function buildJobReadModel(
       authorityDenials: workPackageAuthorityDenials,
     },
   );
+  const activeStops = await activeCrewStops(
+    env,
+    auth.session.tenant_id,
+    jobName,
+    workPackagePacket.work_package,
+  );
   const stale = [
     "packet.contact.access_instructions",
     "packet.scope_clauses.native_unavailable",
@@ -1922,6 +1936,7 @@ export async function buildJobReadModel(
           : null,
       page_size: FIELD_PACKET_PROOF_PAGE_SIZE,
     },
+    active_stops: activeStops,
     required_proof: gates.flatMap((row) => {
       const id = text(row.gate_id) ?? text(row.name);
       const slot = text(row.gate);
@@ -3498,6 +3513,53 @@ async function nativeMaterialExceptions(
     [tenantId, ...selected],
     limit,
   );
+}
+
+/**
+ * One stop holding work, in the shape every crew read shares: a job-scoped crew stop here, and the
+ * tenant-wide safety stops the 0170 slice adds. Only these fields leave the Worker; null means the
+ * read does not know the value.
+ */
+interface CrewStop {
+  occurrence_id: string;
+  scope: "job" | "tenant";
+  reported_at: string;
+  summary: string | null;
+  raiser_display_name: string | null;
+}
+
+/**
+ * The job-scoped stops on a crew read: the crew Stop Work that set this job plan Blocked, read
+ * through the same query Owner Now uses and scoped to this tenant and this job. The occurrence is
+ * the stop event. That read carries no raiser, so the raiser's name is null. A read that fails
+ * leaves the list empty rather than failing the whole job read.
+ */
+async function activeCrewStops(
+  env: AppEnv,
+  tenantId: string,
+  jobId: string,
+  workPackage: { id: string; version: number; status: string } | null,
+): Promise<CrewStop[]> {
+  if (!workPackage || workPackage.status !== "Blocked") return [];
+  const blockers = await nativeOwnerFieldBlockers(env, tenantId, [jobId]).catch(() => null);
+  const stop = blockers?.rows.find(
+    (row) =>
+      row.work_package_id === workPackage.id &&
+      Number(row.version) === workPackage.version &&
+      String(row.job_id) === jobId,
+  );
+  const occurrenceId = text(stop?.stop_event_id);
+  const reportedAt = text(stop?.occurred_at);
+  if (!stop || !occurrenceId || !reportedAt) return [];
+  return [
+    {
+      occurrence_id: occurrenceId,
+      scope: "job",
+      reported_at: reportedAt,
+      summary: text(stop.blocker_reason),
+      raiser_display_name: null,
+    },
+  ];
 }
 
 async function nativeOwnerFieldBlockers(

@@ -56,7 +56,7 @@
     "machine-name": 2
   },
   "src/field/field-pages.tsx": {
-    "banned-term": 2,
+    "banned-term": 1,
     "unlabelled-code": 3
   },
   "src/field/fleet-page.tsx": {
@@ -67,9 +67,6 @@
   },
   "src/field/today-page.tsx": {
     "unlabelled-code": 3
-  },
-  "src/field/work-package-issue-form.tsx": {
-    "banned-term": 5
   },
   "src/integrations/integration-readiness-page.tsx": {
     "banned-term": 15
@@ -83,7 +80,7 @@
     "machine-name": 3
   },
   "src/inventory/inventory-page.tsx": {
-    "banned-term": 23,
+    "banned-term": 21,
     "unlabelled-code": 17,
     "machine-name": 2
   },

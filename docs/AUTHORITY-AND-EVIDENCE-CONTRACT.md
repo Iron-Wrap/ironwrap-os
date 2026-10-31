@@ -317,6 +317,13 @@ re-checks those facts, the capture order included (migration `0152`), then write
 returns the version to the status the stop interrupted in one statement, beside an immutable
 office-action manifest. An exact replay returns the original record, and a changed intent under the
 same key conflicts. `GET` on the same route returns the stop holding the version and every release.
+The PWA job-page consumer (`app/src/field/work-package-stop-release-panel.tsx`, checked by its
+adjacent test file) binds its review to that exact version and stop, cites only qualifying existing
+plan proof, and persists the same request and key when its outcome is unknown. It confirms a
+returned release in fresh release history and rereads the job; a historical release does not clear
+a later stop or another safety hold. The Worker remains responsible for personal-session and
+actor/reporter identity independence. This is a narrow source consumer, not a completed P33
+workflow, new proof acquisition, a real-device drill, or runtime acceptance.
 Only a release of the stop that holds that exact version lets the `0143` guards admit a status
 change away from Blocked or a supersession; a release of another version, or of an earlier stop on
 the same version, unlocks nothing. Refusals are distinct:

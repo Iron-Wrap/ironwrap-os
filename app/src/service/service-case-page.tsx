@@ -380,7 +380,7 @@ function DiagnosisPanel({ caseId, offline, onError, onDone }: StepProps) {
       />
       <Field
         id="diagnosis-work-package"
-        label="Work plan ID"
+        label="Job plan ID"
         value={workPackageRef}
         onChange={setWorkPackageRef}
       />

@@ -30,6 +30,52 @@ export function formatFieldTimestamp(value: string, options: FieldDateOptions): 
   return formatWithLocale(new Date(parsed), options, { dateStyle: "medium", timeStyle: "short" });
 }
 
+/**
+ * A moment in label form, the way the time ruling writes stamps on badges and labels: "Today 14:05",
+ * otherwise "Fri 10 Jul 09:15", in the company's zone and never with a year. The office reads a
+ * 24-hour clock; the crew phone reads a.m. and p.m. ("Today 2:05 p.m.", "Fri 10 Jul 9:15 a.m.").
+ * Prose says "today at 14:05"; this is only for labels.
+ */
+export function formatFieldStamp(
+  value: string,
+  options: FieldDateOptions,
+  { now = Date.now(), clock = "24h" }: { now?: number; clock?: "24h" | "12h" } = {},
+): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "time unavailable";
+  const instant = new Date(parsed);
+  const parts = (date: Date, format: Intl.DateTimeFormatOptions) => {
+    let list: Intl.DateTimeFormatPart[];
+    try {
+      list = dateTimeFormatter(options.locale ?? "en-CA", {
+        ...format,
+        timeZone: options.timeZone,
+      }).formatToParts(date);
+    } catch {
+      list = dateTimeFormatter("en-CA", format).formatToParts(date);
+    }
+    return (type: Intl.DateTimeFormatPartTypes) =>
+      list.find((part) => part.type === type)?.value ?? "";
+  };
+  const calendarDay = (date: Date) => {
+    const part = parts(date, { year: "numeric", month: "2-digit", day: "2-digit" });
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  };
+  const time =
+    clock === "12h"
+      ? (() => {
+          const part = parts(instant, { hour: "numeric", minute: "2-digit", hour12: true });
+          return `${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
+        })()
+      : (() => {
+          const part = parts(instant, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+          return `${part("hour")}:${part("minute")}`;
+        })();
+  if (calendarDay(instant) === calendarDay(new Date(now))) return `Today ${time}`;
+  const day = parts(instant, { weekday: "short", day: "numeric", month: "short" });
+  return `${day("weekday")} ${day("day")} ${day("month")} ${time}`;
+}
+
 export function formatFieldSchedule(value: string | null, options: FieldDateOptions): string {
   if (!value) return "Not scheduled";
   const floating = value.match(
@@ -102,7 +148,7 @@ const fieldNames: Readonly<Record<string, string>> = {
   "packet.materials.supplier_orders.native_unavailable": "Supplier orders",
   "packet.change_orders.native_unavailable": "Change orders",
   "packet.safety_plan.native_unavailable": "Safety plan",
-  "packet.work_package.native_unavailable": "Work plan",
+  "packet.work_package.native_unavailable": "Job plan",
   "proof_stream.native_scope_unavailable": "Photos and notes",
   "proof_stream.unavailable": "Photos and notes",
 };

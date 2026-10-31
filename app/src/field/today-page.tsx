@@ -369,7 +369,7 @@ function TodayJobRow({
   const actionLabel = blocked
     ? "Check what blocks work"
     : fieldCaptureAllowed
-      ? "Open job"
+      ? "See job"
       : "Review job";
   const assignment = assignmentRole(job.assignment);
   const roleLabel = assignmentRoleLabel(useSession().user.role);
@@ -480,7 +480,7 @@ function TodayWorkObjectRow({
               to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId"
               params={params}
             >
-              Open work plan
+              See job plan
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>

@@ -273,7 +273,7 @@ function nativeWorkPackageRow(
     definition_json: JSON.stringify(definition),
     issued_at: "2026-07-10T07:00:00.000Z",
     expires_at: "2026-07-11T07:00:00.000Z",
-    released_at: "2026-07-10T07:05:00.000Z",
+    released_at: "2026-07-10T07:00:00.000Z",
     release_attempt_id: "attempt-a",
     supersedes_id: null,
     correction_reason: null,
@@ -936,10 +936,12 @@ function env(
                               row.tenant_id === ids[0] &&
                               row.job_id === ids[1] &&
                               row.assignment_id === ids[2] &&
+                              // The same current statuses the Worker's query reads.
                               [
                                 "Released",
                                 "Acknowledged",
                                 "In Progress",
+                                "Blocked",
                               ].includes(String(row.status)),
                           )
                           .sort(
@@ -1694,7 +1696,7 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
         make_safe_procedure: "Secure the work area and notify the supervisor.",
         issued_at: "2026-07-10T07:00:00.000Z",
         expires_at: "2026-07-11T07:00:00.000Z",
-        released_at: "2026-07-10T07:05:00.000Z",
+        released_at: "2026-07-10T07:00:00.000Z",
         release_attempt_id: null,
         supersedes: null,
         correction_reason: null,
@@ -2038,6 +2040,77 @@ test("crew job keeps customer and public office contact separate", async () => {
   }
 });
 
+test("a stopped plan lists its own crew stop, never another job's or another tenant's", async () => {
+  const stop = (overrides: Partial<Record<string, unknown>>) =>
+    nativeWorkPackageEvent("stop_work", {
+      event_id: "wpe_stop_job_a",
+      occurred_at: "2026-07-10T13:40:00.000Z",
+      payload_json: JSON.stringify({ blocker_reason: "Ice on the north slope" }),
+      ...overrides,
+    });
+  const appEnv = env({
+    workPackages: [
+      nativeWorkPackageRow({ status: "Blocked" }),
+      nativeWorkPackageRow({
+        work_package_id: "work_package_b",
+        job_id: "JOB-B",
+        roof_job: "JOB-B",
+        status: "Blocked",
+      }),
+    ],
+    workPackageEvents: [
+      stop({}),
+      // Later stops on another job and in another tenant must never surface on JOB-A.
+      stop({
+        event_id: "wpe_stop_job_b",
+        work_package_id: "work_package_b",
+        job_id: "JOB-B",
+        occurred_at: "2026-07-10T14:10:00.000Z",
+        payload_json: JSON.stringify({ blocker_reason: "Another job's stop" }),
+      }),
+      stop({
+        event_id: "wpe_stop_other_tenant",
+        tenant_id: "other-tenant",
+        occurred_at: "2026-07-10T14:20:00.000Z",
+        payload_json: JSON.stringify({ blocker_reason: "Another tenant's stop" }),
+      }),
+    ],
+  });
+  const model = await buildJobReadModel(appEnv, auth("field", "crew@example.com"), "JOB-A");
+  assert.equal(model?.packet.work_package?.status, "Blocked");
+  // One job-scoped entry: the stop that blocked this plan. The Owner Now read carries no raiser.
+  assert.deepEqual(model?.active_stops, [
+    {
+      occurrence_id: "wpe_stop_job_a",
+      scope: "job",
+      reported_at: "2026-07-10T13:40:00.000Z",
+      summary: "Ice on the north slope",
+      raiser_display_name: null,
+    },
+  ]);
+
+  const onlyForeign = env({
+    workPackages: [nativeWorkPackageRow({ status: "Blocked" })],
+    workPackageEvents: [
+      stop({
+        event_id: "wpe_stop_other_tenant",
+        tenant_id: "other-tenant",
+        payload_json: JSON.stringify({ blocker_reason: "Another tenant's stop" }),
+      }),
+    ],
+  });
+  const unstated = await buildJobReadModel(onlyForeign, auth("field", "crew@example.com"), "JOB-A");
+  assert.equal(unstated?.packet.work_package?.status, "Blocked");
+  assert.deepEqual(unstated?.active_stops, []);
+
+  const released = await buildJobReadModel(
+    env({ workPackages: [nativeWorkPackageRow()], workPackageEvents: [stop({})] }),
+    auth("field", "crew@example.com"),
+    "JOB-A",
+  );
+  assert.deepEqual(released?.active_stops, []);
+});
+
 test("field read model fails closed on corrupt or unavailable current authority", async (t) => {
   await t.test("corrupt frozen requirements", async () => {
     const definition = JSON.parse(
@@ -2240,6 +2313,42 @@ test("typed completion capability requires the immutable assignment authority an
       ),
       true,
     );
+    assert.deepEqual(authority?.active_stops, [], "a plan in progress lists no stop");
+    // A stopped typed plan lists its own stop, never another tenant's later one.
+    const stopped = await buildUniversalWorkPackageReadModel(
+      env({
+        ...nativeSource,
+        workPackages: [{ ...shopPackage, status: "Blocked" }],
+        workPackageEvents: [
+          ...nativeSource.workPackageEvents,
+          nativeWorkPackageEvent("stop_work", {
+            ...eventScope,
+            event_id: "wpe_stop_shop_1",
+            occurred_at: "2026-07-10T07:45:00.000Z",
+            payload_json: JSON.stringify({ blocker_reason: "Saw guard missing" }),
+          }),
+          nativeWorkPackageEvent("stop_work", {
+            ...eventScope,
+            tenant_id: "other-tenant",
+            event_id: "wpe_stop_shop_other_tenant",
+            occurred_at: "2026-07-10T07:50:00.000Z",
+            payload_json: JSON.stringify({ blocker_reason: "Another tenant's stop" }),
+          }),
+        ],
+        typedAssignments: [nativeTypedAssignment()],
+      }),
+      auth("owner", "authority@example.com"),
+      scope,
+    );
+    assert.deepEqual(stopped?.active_stops, [
+      {
+        occurrence_id: "wpe_stop_shop_1",
+        scope: "job",
+        reported_at: "2026-07-10T07:45:00.000Z",
+        summary: "Saw guard missing",
+        raiser_display_name: null,
+      },
+    ]);
     const dispatcher = auth("owner", "dispatcher@example.com");
     dispatcher.session.user_id = "appu_dispatcher";
     const assigningAuthority = await buildUniversalWorkPackageReadModel(
@@ -3878,7 +3987,7 @@ test("field packet contains job-safe contact details and excludes email, financi
       make_safe_procedure: "Secure the work area and notify the supervisor.",
       issued_at: "2026-07-10T07:00:00.000Z",
       expires_at: "2026-07-11T07:00:00.000Z",
-      released_at: "2026-07-10T07:05:00.000Z",
+      released_at: "2026-07-10T07:00:00.000Z",
       // No safety occurrence, unserviceable PPE, outstanding notification, or
       // overdue high-risk action applies to this package.
       safety_blockers: [],

@@ -7,6 +7,7 @@ import {
   Clock3,
   Database,
   Headphones,
+  PhoneCall,
   RefreshCw,
   ServerCog,
   ShieldAlert,
@@ -18,16 +19,18 @@ import type { ReactNode } from "react";
 
 import { useSession } from "../auth/session-context";
 import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
-import { useCapability } from "../capabilities/capability-signal";
+import { capabilityCopy } from "../capabilities/capability-copy";
+import { useCapability, type CapabilityRead } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
-import { ErrorState } from "../components/ui/state-panel";
+import { ErrorState, OffState } from "../components/ui/state-panel";
 import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { loadNewoOperations } from "./newo-operations-api";
 import type {
+  NewoOperationsOpenCallback,
   NewoOperationsReconciliation,
   NewoOperationsResponse,
   NewoOperationsSession,
@@ -69,7 +72,7 @@ function NewoOperationsContent() {
   return (
     <NewoOperationsScreen
       model={query.data}
-      capability={<CapabilityUnavailable read={newo} />}
+      capability={<ReceptionAvailability read={newo} role={session.user.role} />}
       capabilityKnown={newo.status === "known"}
       locale={session.tenant.locale}
       timeZone={session.tenant.time_zone}
@@ -78,6 +81,24 @@ function NewoOperationsContent() {
       onRefresh={() => void query.refetch()}
     />
   );
+}
+
+function ReceptionAvailability({ read, role }: { read: CapabilityRead; role: string }) {
+  if (read.status === "known" && read.capability.state === "off") {
+    const copy = capabilityCopy(read.capability, role);
+    if (copy) {
+      return (
+        <OffState
+          stateLabel={copy.stateLabel}
+          title={copy.title}
+          message="Reception is turned off. Saved calls can still need a check. Use the lists below."
+          nextAction={copy.nextAction}
+          personPath={copy.personPath}
+        />
+      );
+    }
+  }
+  return <CapabilityUnavailable read={read} />;
 }
 
 function NewoOperationsScreen({
@@ -101,6 +122,10 @@ function NewoOperationsScreen({
 }) {
   const format = (value: string | null) => formatDateTime(value, locale, timeZone);
   const generatedAt = format(model.read_model_generated_at);
+  const receptionReady =
+    model.status === "ready" &&
+    model.counts.open_callbacks === 0 &&
+    model.exceptions.open_callbacks.length === 0;
 
   return (
     <section className="mx-auto max-w-6xl space-y-6 pb-4">
@@ -116,7 +141,7 @@ function NewoOperationsScreen({
                   <h1 className="text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                     Reception
                   </h1>
-                  <StateLabel ready={model.status === "ready"} />
+                  <StateLabel ready={receptionReady} />
                 </div>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
                   Watch calls, booking requests, and calls sent to staff. This page does not call or
@@ -168,7 +193,7 @@ function NewoOperationsScreen({
         </Notice>
       ) : null}
 
-      <OperationsStatus model={model} />
+      <OperationsStatus model={model} ready={receptionReady} />
       <SignalStrip model={model} />
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
@@ -206,7 +231,7 @@ function StateLabel({ ready }: { ready: boolean }) {
   );
 }
 
-function OperationsStatus({ model }: { model: NewoOperationsResponse }) {
+function OperationsStatus({ model, ready }: { model: NewoOperationsResponse; ready: boolean }) {
   const incidentText =
     model.counts.unresolved_incidents === null
       ? "Issue count not found"
@@ -215,19 +240,19 @@ function OperationsStatus({ model }: { model: NewoOperationsResponse }) {
     <Card
       className={cn(
         "px-4 py-4 sm:px-5",
-        model.status === "ready" ? "border-ok/30 bg-ok-soft" : "border-warning/35 bg-warning-soft",
+        ready ? "border-ok/30 bg-ok-soft" : "border-warning/35 bg-warning-soft",
       )}
       aria-labelledby="newo-operating-state"
     >
       <div className="flex items-start gap-3">
-        {model.status === "ready" ? (
+        {ready ? (
           <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         ) : (
           <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
         )}
         <div>
           <h2 id="newo-operating-state" className="font-bold">
-            {model.status === "ready" ? "Reception is ready" : "Reception needs a check"}
+            {ready ? "Reception is ready" : "Reception needs a check"}
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
             {incidentText} · Booking: {humanize(model.readiness.booking_mode)} · Calls out:{" "}
@@ -259,6 +284,12 @@ function SignalStrip({ model }: { model: NewoOperationsResponse }) {
       dot: "bg-warning",
     },
     {
+      label: "Calls to return",
+      value: model.counts.open_callbacks,
+      tone: "text-warning",
+      dot: "bg-warning",
+    },
+    {
       label: "Bookings to check",
       value: model.counts.pending_bookings,
       tone: "text-info",
@@ -273,7 +304,7 @@ function SignalStrip({ model }: { model: NewoOperationsResponse }) {
   ];
   return (
     <Card className="overflow-hidden">
-      <dl className="grid grid-cols-2 sm:grid-cols-4" aria-label="Reception counts">
+      <dl className="grid grid-cols-2 sm:grid-cols-5" aria-label="Reception counts">
         {signals.map((signal, index) => (
           <div
             key={signal.label}
@@ -282,6 +313,7 @@ function SignalStrip({ model }: { model: NewoOperationsResponse }) {
               index % 2 === 1 && "border-l border-border",
               index >= 2 && "border-t border-border sm:border-t-0",
               index > 0 && "sm:border-l sm:border-border",
+              index === signals.length - 1 && "col-span-2 sm:col-span-1",
             )}
           >
             <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
@@ -348,8 +380,10 @@ function ExceptionQueues({
     },
   ];
   const visible = queues.filter((queue) => queue.count > 0 || queue.sessions.length > 0);
+  const hasCallbacks =
+    model.counts.open_callbacks > 0 || model.exceptions.open_callbacks.length > 0;
 
-  if (visible.length === 0) {
+  if (visible.length === 0 && !hasCallbacks) {
     return (
       <Card className="p-5 sm:p-6" aria-labelledby="new-call-exceptions">
         <h2 id="new-call-exceptions" className="text-xl font-bold sm:text-2xl">
@@ -366,12 +400,100 @@ function ExceptionQueues({
         <h2 id="new-call-exceptions" className="text-xl font-bold sm:text-2xl">
           Calls to check
         </h2>
-        <p className="mt-2 text-sm leading-6 text-muted">Open the oldest problem first.</p>
+        <p className="mt-2 text-sm leading-6 text-muted">Check the lists below.</p>
       </header>
+      {hasCallbacks ? (
+        <CallbackQueue
+          count={model.counts.open_callbacks}
+          callbacks={model.exceptions.open_callbacks}
+          format={format}
+        />
+      ) : null}
       {visible.map((queue) => (
         <SessionQueue key={queue.id} {...queue} format={format} />
       ))}
     </section>
+  );
+}
+
+function CallbackQueue({
+  count,
+  callbacks,
+  format,
+}: {
+  count: number;
+  callbacks: NewoOperationsOpenCallback[];
+  format: (value: string | null) => string | null;
+}) {
+  const reasons: Record<NewoOperationsOpenCallback["reason"], string> = {
+    callback_requested: "Call back requested",
+    session_failed: "Call failed",
+  };
+  const urgencyLabels: Record<NewoOperationsOpenCallback["urgency"], string> = {
+    routine: "Routine",
+    urgent: "Urgent",
+    emergency: "Emergency",
+  };
+  const urgencyClasses: Record<NewoOperationsOpenCallback["urgency"], string> = {
+    routine: "bg-info-soft text-info",
+    urgent: "bg-warning-soft text-warning",
+    emergency: "bg-danger-soft text-danger",
+  };
+
+  return (
+    <Card role="region" className="overflow-hidden" aria-labelledby="open-callbacks-heading">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-9 shrink-0 place-items-center rounded-md bg-warning-soft text-warning">
+            <PhoneCall className="size-4" aria-hidden="true" />
+          </span>
+          <h3 id="open-callbacks-heading" className="font-bold sm:text-lg">
+            Calls to return
+          </h3>
+        </div>
+        <span className="text-sm font-bold text-muted">Total reported: {count}</span>
+      </header>
+      <p className="px-5 py-3 text-sm leading-6 text-muted sm:px-6">
+        {callbacks.length} shown here. Most urgent first, then oldest request.
+      </p>
+      {callbacks.length === 0 ? (
+        <p className="border-t border-border px-5 py-4 text-sm leading-6 text-muted sm:px-6">
+          Call details are not in this list. Try Refresh.
+        </p>
+      ) : (
+        <ol className="divide-y divide-border border-t border-border">
+          {callbacks.map((callback) => (
+            <li key={callback.callback_id} className="px-5 py-4 sm:px-6">
+              <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <p className="font-bold tracking-[-0.01em]">{reasons[callback.reason]}</p>
+                  <span
+                    className={cn(
+                      "mt-2 inline-block rounded-md px-2 py-1 text-xs font-semibold",
+                      urgencyClasses[callback.urgency],
+                    )}
+                  >
+                    {urgencyLabels[callback.urgency]}
+                  </span>
+                </div>
+                <p className="text-sm text-muted sm:text-right">
+                  Requested
+                  <br />
+                  <span className="font-semibold text-foreground">
+                    {format(callback.requested_at) ?? "Request time not found"}
+                  </span>
+                </p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {callbacks.length > count ? (
+        <p className="border-t border-border px-5 py-3 text-sm leading-6 text-warning sm:px-6">
+          The total and list differ. Try Refresh.
+        </p>
+      ) : null}
+    </Card>
   );
 }
 

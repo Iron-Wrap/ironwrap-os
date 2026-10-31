@@ -1,5 +1,9 @@
 import type { AuthenticatedSession } from "../auth/session";
 import type { JobResponse, TodayResponse, WorkObjectResponse } from "./field-contracts";
+import {
+  getSessionReadObservation,
+  type PrincipalReadObservation,
+} from "../auth/principal-context";
 
 export type SavedPlanTarget =
   | { kind: "job"; jobId: string }
@@ -92,35 +96,52 @@ export async function savedPlanBinding(
   target: SavedPlanTarget,
   model: SavedPlanModel,
   deviceSecret: string | undefined,
+  assertCurrent: () => Promise<void> = async () => {},
+  observation: PrincipalReadObservation | undefined = getSessionReadObservation(session),
 ) {
+  await assertCurrent();
   const plan = workPlanForTarget(target, model);
-  if (!plan || (session.user.role === "field" && !deviceSecret)) return undefined;
+  if (
+    !plan ||
+    !observation?.generation ||
+    (session.user.role === "field" && !deviceSecret) ||
+    Date.parse(session.session_expires_at) <= Date.now()
+  )
+    return undefined;
   const read = {
     ...model,
     stale_fields: model.stale_fields.filter((field) => field !== "offline.cached_packet"),
   };
+  const pairedDevice = session.user.role === "field" ? await digest(deviceSecret!) : null;
+  await assertCurrent();
+  const readDigest = await digest(
+    JSON.stringify(read, (_key, value: unknown) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+          )
+        : value,
+    ),
+  );
+  await assertCurrent();
   return {
-    format: "saved-plan-context-v1",
+    format: "saved-plan-context-v3",
+    authGeneration: observation.generation,
     tenantId: session.tenant.id,
     userId: session.user.id,
     role: session.user.role,
     workerIdentity: session.user.frappe_user_id,
-    pairedDevice: session.user.role === "field" ? await digest(deviceSecret!) : null,
+    pairedDevice,
+    sessionExpiresAt: session.session_expires_at,
+    sessionGeneratedAt: session.read_model_generated_at,
+    sessionSourceUpdatedAt: session.source_updated_at,
     target: savedPlanTargetKey(target),
     assignmentId: model.assignment!.id,
     packageId: plan.id,
     packageVersion: plan.version,
     releaseAttemptId: plan.release_attempt_id,
     generatedAt: model.read_model_generated_at,
-    readDigest: await digest(
-      JSON.stringify(read, (_key, value: unknown) =>
-        value && typeof value === "object" && !Array.isArray(value)
-          ? Object.fromEntries(
-              Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
-            )
-          : value,
-      ),
-    ),
+    readDigest,
   };
 }
 

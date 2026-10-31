@@ -14,6 +14,7 @@ import { MagicLinkForm } from "./magic-link-form";
 import { fetchSession, isOfflineSession } from "./session";
 import { SessionProvider } from "./session-context";
 import { sessionQueryKey } from "./session-query";
+import { getSessionReadObservation } from "./principal-context";
 
 export function AuthBoundary({ children }: { children: ReactNode }) {
   const primaryFieldEntry = isPrimaryFieldEntry();
@@ -105,14 +106,24 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
     );
   }
   return (
-    <SessionProvider session={session} initialToday={today}>
+    <SessionProvider
+      session={session}
+      initialToday={today}
+      readObservation={verified.field_read_observation}
+    >
       {children}
     </SessionProvider>
   );
 }
 
 async function fetchSessionOnly(): Promise<FieldBootstrap> {
-  return { session: await fetchSession() };
+  const session = await fetchSession();
+  return {
+    session,
+    ...(session.authenticated && getSessionReadObservation(session)
+      ? { field_read_observation: getSessionReadObservation(session) }
+      : {}),
+  };
 }
 
 async function fetchUnifiedEntry(): Promise<FieldBootstrap> {

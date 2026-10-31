@@ -1,6 +1,8 @@
 import { z, type ZodType } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
+import { beginPrincipalContextChange } from "../auth/principal-context";
+import { API_PATHS } from "./api-paths";
 
 export const apiErrorBodySchema = z
   .object({
@@ -154,6 +156,15 @@ export async function apiRequest<T>(options: ApiRequestOptions<T>): Promise<T> {
   }
 
   const parsed = options.schema.safeParse(payload);
+  if (payload && typeof payload === "object") {
+    const model = payload as { authenticated?: unknown; session?: { authenticated?: unknown } };
+    if (
+      (options.path === API_PATHS.session && model.authenticated === false) ||
+      (options.path === API_PATHS.fieldBootstrap && model.session?.authenticated === false)
+    ) {
+      beginPrincipalContextChange()();
+    }
+  }
   if (!parsed.success) {
     throw new ApiError({
       status: response.status,
@@ -185,6 +196,12 @@ async function executeRequest(
   readBodyLater = false,
 ): Promise<Exchange> {
   assertApiPath(options.path);
+  const changesPrincipal =
+    (options.method ?? "GET") === "POST" &&
+    [API_PATHS.magicLinkConsume, API_PATHS.devicePairingConsume, API_PATHS.logout].some(
+      (path) => path === options.path,
+    );
+  const finishPrincipalChange = changesPrincipal ? beginPrincipalContextChange() : undefined;
   const fetcher = options.fetcher ?? fetch;
   const controller = new AbortController();
   const timeout = window.setTimeout(
@@ -194,6 +211,7 @@ async function executeRequest(
   const forwardAbort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
   const release = () => {
+    finishPrincipalChange?.();
     window.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", forwardAbort);
   };
@@ -243,6 +261,14 @@ async function executeRequest(
     });
     if (!response.ok) {
       const error = await responseError(response);
+      // The protected app router expires a missing/revoked cookie for this exact refusal.
+      // device_proof_required is deliberately distinct and does not expire the cookie.
+      if (
+        error.status === 401 &&
+        error.code === "unauthorized" &&
+        options.path.startsWith("/api/v1/")
+      )
+        beginPrincipalContextChange()();
       if (options.deviceProof && error.status === 401) await clearDeviceSecret();
       throw error;
     }

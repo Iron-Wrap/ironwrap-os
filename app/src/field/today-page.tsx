@@ -8,6 +8,7 @@ import { Button } from "../components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { cacheToday, loadToday } from "./field-cache";
 import { hasSavedPlan, prefetchSavedPlans } from "./saved-plan";
+import { captureSavedPlanReadContext, useSavedPlanReadContext } from "./saved-plan-read-context";
 import {
   assignedPlanTargets,
   savedPlanTargetKey,
@@ -45,6 +46,12 @@ type TodayWorkObject = TodayResponse["work_objects"][number];
 
 export function TodayPage() {
   const session = useSession();
+  const {
+    id: contextId,
+    blocked: contextBlocked,
+    isCurrent: contextIsCurrent,
+    observation: readObservation,
+  } = useSavedPlanReadContext(session);
   const initialToday = useInitialToday();
   const queryClient = useQueryClient();
   const [packetAvailability, setPacketAvailability] = useState<Record<string, PacketAvailability>>(
@@ -53,8 +60,18 @@ export function TodayPage() {
   const [packetRefreshCycle, setPacketRefreshCycle] = useState(0);
   const [bootstrapSaving, setBootstrapSaving] = useState(Boolean(initialToday));
   const query = useQuery({
-    queryKey: ["today", session.tenant.id, session.user.id],
-    queryFn: () => loadToday(session),
+    queryKey: ["today", session.tenant.id, session.user.id, contextId],
+    enabled: !contextBlocked,
+    queryFn: async () => {
+      const readContext = await captureSavedPlanReadContext(
+        session,
+        contextIsCurrent,
+        readObservation,
+      );
+      const model = await loadToday(session);
+      await readContext.assertCurrent();
+      return model;
+    },
     ...(initialToday
       ? {
           initialData: initialToday,
@@ -65,12 +82,12 @@ export function TodayPage() {
   const today = query.data;
 
   useEffect(() => {
-    if (!initialToday) return;
+    if (!initialToday || contextBlocked) return;
     let active = true;
     void cacheToday(session, initialToday)
       .catch(() => {
         queryClient.setQueryData<TodayResponse>(
-          ["today", session.tenant.id, session.user.id],
+          ["today", session.tenant.id, session.user.id, contextId],
           (current) =>
             current === initialToday
               ? {
@@ -86,7 +103,7 @@ export function TodayPage() {
     return () => {
       active = false;
     };
-  }, [initialToday, queryClient, session]);
+  }, [initialToday, queryClient, session, contextBlocked, contextId]);
 
   useEffect(() => {
     const retryPacketPreparation = () => {
@@ -104,7 +121,7 @@ export function TodayPage() {
   }, []);
 
   useEffect(() => {
-    if (!today) return;
+    if (!today || contextBlocked) return;
     let active = true;
     const online = navigator.onLine;
     const targets = assignedPlanTargets(today);
@@ -116,12 +133,12 @@ export function TodayPage() {
               [savedPlanTargetKey(target), await hasSavedPlan(session, target)] as const,
           ),
         );
-        if (!active) return;
+        if (!active || !contextIsCurrent()) return;
         setPacketAvailability((current) => ({
           ...current,
           ...Object.fromEntries(
             cached.map(([key, exists]) => [
-              key,
+              `${contextId}:${key}`,
               online ? "saving" : exists ? "saved" : "not_saved",
             ]),
           ),
@@ -129,35 +146,22 @@ export function TodayPage() {
         if (!online) return;
         await prefetchSavedPlans(session, today, {
           concurrency: 3,
-          onPacket(target, saved, model) {
-            if (!active) return;
+          isCurrent: contextIsCurrent,
+          observation: readObservation,
+          onPacket(target, saved) {
+            if (!active || !contextIsCurrent()) return;
             setPacketAvailability((current) => ({
               ...current,
-              [savedPlanTargetKey(target)]: saved ? "saved" : "not_saved",
+              [`${contextId}:${savedPlanTargetKey(target)}`]: saved ? "saved" : "not_saved",
             }));
-            if (model) {
-              const key =
-                target.kind === "job"
-                  ? ["job", session.tenant.id, session.user.id, target.jobId]
-                  : [
-                      "work-object",
-                      session.tenant.id,
-                      session.user.id,
-                      target.scope.workObjectType,
-                      target.scope.workObjectId,
-                      target.scope.physicalContextType,
-                      target.scope.physicalContextId,
-                    ];
-              queryClient.setQueryData(key, model);
-            }
           },
         });
       } catch {
-        if (!active) return;
+        if (!active || !contextIsCurrent()) return;
         setPacketAvailability((current) => ({
           ...current,
           ...Object.fromEntries(
-            targets.map((target) => [savedPlanTargetKey(target), "unavailable"]),
+            targets.map((target) => [`${contextId}:${savedPlanTargetKey(target)}`, "unavailable"]),
           ),
         }));
       }
@@ -165,8 +169,24 @@ export function TodayPage() {
     return () => {
       active = false;
     };
-  }, [packetRefreshCycle, queryClient, session, today]);
+  }, [
+    packetRefreshCycle,
+    session,
+    today,
+    contextBlocked,
+    contextId,
+    contextIsCurrent,
+    readObservation,
+  ]);
 
+  if (contextBlocked)
+    return (
+      <ErrorState
+        title="Work list unavailable"
+        message="Your sign-in or paired device changed or expired. Keep work stopped. Go online and reload to verify the current work list and saved plans."
+        onRetry={() => window.location.reload()}
+      />
+    );
   if (query.isPending) return <LoadingState label="Loading assigned work…" />;
   if (query.isError) {
     return (
@@ -182,7 +202,7 @@ export function TodayPage() {
   const dateOptions = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
   const targets = assignedPlanTargets(today);
   const availabilityFor = (target: SavedPlanTarget): PacketAvailability =>
-    packetAvailability[savedPlanTargetKey(target)] ?? "checking";
+    packetAvailability[`${contextId}:${savedPlanTargetKey(target)}`] ?? "checking";
   const savedPacketCount = targets.filter((target) => availabilityFor(target) === "saved").length;
   const hasCheckingPackets = targets.some((target) => availabilityFor(target) === "checking");
   const hasSavingPackets = targets.some((target) => availabilityFor(target) === "saving");

@@ -6,14 +6,17 @@ import type { ReactNode } from "react";
 import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { messageForLoad } from "../lib/plain-error";
 import { formatFieldTimestamp } from "./field-formatting";
 import { loadSavedPlan } from "./saved-plan";
 import { savedPlanTargetKey, type SavedPlanTarget } from "./saved-plan-context";
+import { useSavedPlanReadContext } from "./saved-plan-read-context";
 
 /** An actual, read-only destination: no lifecycle component, acknowledgement, outbox or marker. */
 export function SavedPlanPage() {
   const session = useSession();
+  const context = useSavedPlanReadContext(session);
   const params = useParams({ strict: false }) as {
     jobId?: string;
     workObjectType?: string;
@@ -42,10 +45,12 @@ export function SavedPlanPage() {
       "saved-plan",
       session.tenant.id,
       session.user.id,
+      context.id,
       target ? savedPlanTargetKey(target) : "missing",
     ],
-    enabled: target !== null,
-    queryFn: () => loadSavedPlan(session, target!),
+    enabled: target !== null && !context.blocked,
+    queryFn: () =>
+      loadSavedPlan(session, target!, undefined, context.isCurrent, context.observation),
     // A first visit without signal must run the IndexedDB fallback instead of pausing this read.
     networkMode: "always",
     retry: false,
@@ -59,6 +64,17 @@ export function SavedPlanPage() {
     </Button>
   );
   if (!target) return <ErrorState message="This work-plan link is incomplete." />;
+  if (context.blocked)
+    return (
+      <section className="mx-auto max-w-5xl space-y-5">
+        {back}
+        <ErrorState
+          title="Plan unavailable"
+          message="Your sign-in or paired device changed or expired. Keep work stopped. Go online and reload to verify the current work list and plan."
+          onRetry={() => window.location.reload()}
+        />
+      </section>
+    );
   if (query.isPending) return <LoadingState label="Opening work and safety plan…" />;
   if (query.isError) {
     return (
@@ -70,6 +86,8 @@ export function SavedPlanPage() {
             byCode: {
               saved_plan_unavailable:
                 "A complete plan for this work could not be verified on this phone. Keep work stopped. Go online and ask the office for the current work and safety plan.",
+              saved_plan_context_changed:
+                "Your sign-in or paired device changed or expired. Keep work stopped. Go online and reload to verify the current work list and plan.",
               offline_packet_unavailable:
                 "This phone has no saved plan for this work. Keep work stopped. Go online and ask the office for the current work and safety plan.",
             },
@@ -97,17 +115,24 @@ export function SavedPlanPage() {
               : "Current copy · not saved on this phone"}
         </p>
         <h1 className="text-3xl font-bold tracking-[-0.03em]">{plan.title}</h1>
-        <p className="font-bold">
-          Version {plan.version} · {plan.status}
-        </p>
+        <p className="font-bold">Work and safety instructions</p>
         <p className="text-sm leading-6 text-muted">
           {job
             ? `${job.job_number ?? job.id} · ${job.address ?? "Address unavailable"}`
             : `${plan.work_object_type} · ${plan.work_object_id} · ${plan.physical_context_type} · ${plan.physical_context_id}`}
         </p>
         <p className="text-sm leading-6 text-muted">
-          Plan {plan.id} · Copy received {stamp(model.read_model_generated_at)}
+          Copy received {stamp(model.read_model_generated_at)}
         </p>
+        <SystemDetails>
+          <div className="space-y-2 text-sm">
+            <p>
+              Version {plan.version} · {plan.status}
+            </p>
+            <p>Work plan reference {plan.id}</p>
+            {plan.supersession ? <p>Replaces plan reference {plan.supersession.prior_id}</p> : null}
+          </div>
+        </SystemDetails>
       </header>
       <div className="space-y-2 border-2 border-warning/45 bg-warning-soft p-4" role="status">
         {offline ? (
@@ -142,9 +167,7 @@ export function SavedPlanPage() {
           <h2 id="saved-plan-changes" className="text-xl font-bold">
             Plan changed
           </h2>
-          <p>
-            This plan replaces {plan.supersession.prior_id}. {plan.supersession.reason}
-          </p>
+          <p>This plan replaces an earlier plan. {plan.supersession.reason}</p>
           <p className="text-sm">
             Changed steps: {plan.supersession.changed_steps.join(", ") || "none"} · Changed checks:{" "}
             {plan.supersession.changed_hold_points.join(", ") || "none"}
@@ -181,10 +204,13 @@ export function SavedPlanPage() {
         {job ? (
           safety ? (
             <div className="space-y-3 border border-border p-4">
-              <h3 className="font-bold">
-                Site safety plan{safety.version ? ` · Version ${safety.version}` : ""}
-              </h3>
-              <p>{safety.status}</p>
+              <h3 className="font-bold">Site safety plan</h3>
+              <SystemDetails>
+                <p>
+                  Version {safety.version ?? "unavailable"} ·{" "}
+                  {safety.status ?? "Status unavailable"}
+                </p>
+              </SystemDetails>
               <dl className="grid gap-4 sm:grid-cols-2">
                 <PlanFact label="Hazards" value={safety.hazard_summary} />
                 <PlanFact label="Controls" value={safety.controls} />

@@ -5,6 +5,14 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../auth/session-context";
+import { storeDeviceSecret } from "../auth/device-credential";
+import { fetchSession } from "../auth/session";
+import {
+  getSessionReadObservation,
+  principalSessionKey,
+  type PrincipalReadObservation,
+} from "../auth/principal-context";
+import { resetDatabaseForTests } from "../storage/db";
 import type { AuthenticatedSession } from "../auth/session";
 import {
   useOutboxActionsNeedingAttention,
@@ -83,7 +91,7 @@ const fieldSession = {
   permissions: ["jobs:read:assigned"],
   allowed_actions: ["field.checkin.create"],
   csrf_token: "csrf",
-  session_expires_at: "2026-07-11T12:00:00.000Z",
+  session_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
   source_updated_at: "2026-07-10T12:00:00.000Z",
   read_model_generated_at: "2026-07-10T12:00:00.000Z",
   stale_fields: [],
@@ -101,6 +109,7 @@ const officeSession = {
     frappe_user_id: "ops@example.invalid",
   },
 } satisfies AuthenticatedSession;
+const fixtureObservations = new Map<string, PrincipalReadObservation>();
 
 function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
   return {
@@ -171,7 +180,11 @@ function renderToday(
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <SessionProvider session={session} initialToday={initialToday}>
+      <SessionProvider
+        session={structuredClone(session)}
+        initialToday={initialToday}
+        readObservation={fixtureObservations.get(principalSessionKey(session))}
+      >
         <TodayPage />
       </SessionProvider>
     </QueryClientProvider>,
@@ -221,7 +234,14 @@ function typedToday(stops: unknown, overrides: Partial<TodayResponse> = {}) {
 describe("TodayPage", () => {
   const originalOnline = navigator.onLine;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await storeDeviceSecret("a".repeat(43));
+    fixtureObservations.clear();
+    for (const fixture of [fieldSession, officeSession]) {
+      const verified = await fetchSession(async () => Response.json(fixture));
+      if (!verified.authenticated) throw new Error("Expected the synthetic authenticated fixture");
+      fixtureObservations.set(principalSessionKey(verified), getSessionReadObservation(verified)!);
+    }
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(hasSavedPlan).mockResolvedValue(true);
     vi.mocked(prefetchSavedPlans).mockImplementation(async (_session, model, options) => {
@@ -235,7 +255,8 @@ describe("TodayPage", () => {
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload({ leads: [] }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetDatabaseForTests();
     Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnline });
     vi.restoreAllMocks();
   });

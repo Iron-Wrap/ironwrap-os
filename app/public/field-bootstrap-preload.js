@@ -34,6 +34,19 @@
   // Do not leave a late response for a later refetch to mistake for the initial one.
   if (window.__ironwrapFieldBootstrapPreloadConsumed) return;
 
+  // Local provenance for the consuming app, never a Worker field or permission. Capture
+  // before the asynchronous proof read so an intervening auth transition remains visible.
+  try {
+    const key = "ironwrap.principal-read-generation-v1";
+    let generation = window.localStorage.getItem(key);
+    if (!generation) generation = crypto.randomUUID();
+    window.localStorage.setItem(key, generation);
+    window.__ironwrapFieldBootstrapReadGeneration =
+      window.localStorage.getItem(key) === generation ? generation : null;
+  } catch {
+    window.__ironwrapFieldBootstrapReadGeneration = null;
+  }
+
   const preload = readStoredDeviceProof().then((deviceProof) => {
     if (!deviceProof) throw new Error("field_device_proof_unavailable");
     return fetchBootstrap(deviceProof);

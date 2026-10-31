@@ -1075,7 +1075,7 @@ describe("JobPage", () => {
       permissions: ["jobs:read:any", "production:read"],
       allowed_actions: ["job.read", "work_package.issue"],
     };
-    renderJob(jobModel(office), ownerSession);
+    const rendered = renderJob(jobModel(office), ownerSession);
     const issued = workPackageModel({
       ...office,
       read_model_generated_at: "2026-07-10T15:45:00.000Z",
@@ -1101,6 +1101,28 @@ describe("JobPage", () => {
       "data-variant",
       "secondary",
     );
+
+    // A different assignment can start again at version1 on this same job and scope.
+    const reassigned = structuredClone(issued);
+    reassigned.read_model_generated_at = new Date(
+      Date.parse(issued.read_model_generated_at) + 1_000,
+    ).toISOString();
+    reassigned.assignment = {
+      ...reassigned.assignment!,
+      id: "ASSIGN-2",
+      assignment_id: "assignment-2",
+    };
+    reassigned.packet.work_package = { ...reassigned.packet.work_package!, id: "WP-2", version: 1 };
+    act(() =>
+      rendered.queryClient.setQueryData(
+        ["job", ownerSession.tenant.id, ownerSession.user.id, "JOB-1"],
+        reassigned,
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Issue the corrected job plan" }),
+    ).toHaveAttribute("data-variant", "accent");
+    expect(screen.queryByText(/Nothing more to send/)).not.toBeInTheDocument();
   });
 
   it("says the crew has the issued plan only once a crew phone reported it", async () => {

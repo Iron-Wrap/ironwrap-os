@@ -181,7 +181,7 @@ const BLOCKER_CATEGORIES = [
   "Other",
 ];
 
-type IssuedPlanState = { packet: string; version: number } | null;
+type IssuedPlanState = { packet: string; assignmentId: string; version: number } | null;
 type IssueReceiptProps = {
   issuedPlan: IssuedPlanState;
   setIssuedPlan: (value: IssuedPlanState) => void;
@@ -838,9 +838,17 @@ function WorkPackagePanel({
       allowed={model.allowed_actions.includes("work_package.issue")}
       offline={offline}
       readAt={model.read_model_generated_at}
-      issuedVersion={issuedPlan?.packet === issuePacket ? issuedPlan.version : null}
+      issuedVersion={
+        issuedPlan?.packet === issuePacket && issuedPlan.assignmentId === model.assignment?.id
+          ? issuedPlan.version
+          : null
+      }
       onIssuedVersionChange={(version) =>
-        setIssuedPlan(version === null ? null : { packet: issuePacket, version })
+        setIssuedPlan(
+          version !== null && model.assignment
+            ? { packet: issuePacket, assignmentId: model.assignment.id, version }
+            : null,
+        )
       }
       onIssued={reloadIssuePacket}
       onReload={reloadIssuePacket}

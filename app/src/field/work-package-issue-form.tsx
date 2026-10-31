@@ -266,12 +266,6 @@ export function WorkPackageIssueForm({
       <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
         {workPackage ? "Issue the corrected job plan" : "Issue job plan"}
       </h2>
-      {workPackage ? (
-        <p className="mt-2 max-w-3xl font-semibold leading-6">
-          It replaces the plan the crew has now. The crew sees the new one the next time their phone
-          loads the job.
-        </p>
-      ) : null}
       {expired ? (
         <p
           className="mt-3 max-w-3xl border border-warning/45 bg-warning-soft p-3 font-semibold text-warning"
@@ -294,13 +288,6 @@ export function WorkPackageIssueForm({
           . Issuing a correction cannot release a stop.
         </p>
       ) : null}
-      <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
-        When you issue, the job's crew, assignment and scope lock in. This form adds the steps, hold
-        points and the proof the crew must add.
-      </p>
-      <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-        Issuing doesn't wait for the gates. The gates hold the firm start.
-      </p>
 
       {!assignmentModified ? (
         <p
@@ -360,6 +347,10 @@ export function WorkPackageIssueForm({
             Other plan fields, steps and hold points
           </summary>
           <div className="mt-4 space-y-6">
+            <p className="max-w-3xl text-sm leading-6 text-muted">
+              When you issue, the job's crew, assignment and scope lock in. This form adds the
+              steps, hold points and the proof the crew must add.
+            </p>
             <TextField
               id="wp-title"
               label="Title"
@@ -579,6 +570,15 @@ export function WorkPackageIssueForm({
             You need to be online, with the job's latest crew assignment loaded, to issue.
           </p>
         ) : null}
+        {workPackage ? (
+          <p className="max-w-3xl font-semibold leading-6">
+            It replaces the plan the crew has now. The crew sees the new one the next time their
+            phone loads the job.
+          </p>
+        ) : null}
+        <p className="max-w-3xl text-sm leading-6 text-muted">
+          Issuing doesn't wait for the gates. The gates hold the firm start.
+        </p>
         {issued ? (
           <Button type="submit" variant="secondary" busy={saving} disabled={!canSend || blocked}>
             <Send aria-hidden="true" /> {issueLabel}
@@ -596,7 +596,7 @@ export function WorkPackageIssueForm({
       open
       onClose={() => setExpanded(false)}
       title="Job plan editor"
-      className="w-[min(74rem,calc(100vw-2rem))]"
+      className="max-h-[calc(100dvh-1rem)] w-[min(74rem,calc(100vw-1rem))] [&>div]:px-4"
     >
       {content}
     </Dialog>

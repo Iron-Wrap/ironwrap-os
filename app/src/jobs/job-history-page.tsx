@@ -13,6 +13,8 @@ import { Status } from "../components/ui/status";
 import { Timeline } from "../components/ui/timeline";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { GateChip } from "../field/gate-chip";
+import { JobLabelText } from "../field/job-label-text";
+import { jobLabelParts } from "../lib/job-label";
 import { messageForLoad } from "../lib/plain-error";
 import type { ProofStreamItem } from "../field/field-contracts";
 import { formatOwnerDate } from "../owner/owner-now-utils";
@@ -95,7 +97,12 @@ function JobHistorySurface({
   const { items, cursor } = loadedProof;
   const [loadingMore, setLoadingMore] = useState(false);
   const [olderError, setOlderError] = useState<string>();
-  const title = model.job.job_number?.trim() || model.job.id;
+  const identity = {
+    customer: model.customer?.display_name,
+    address: model.job.address,
+    code: model.job.job_number,
+  };
+  const { lead, code } = jobLabelParts(identity);
   const locale = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
 
   async function loadOlder() {
@@ -124,7 +131,20 @@ function JobHistorySurface({
   return (
     <section className="mx-auto max-w-5xl space-y-7 pb-8 [overflow-wrap:anywhere] lg:pb-4">
       <PageHeader
-        title={title}
+        title={
+          lead ? (
+            <>
+              Job record for: <JobLabelText {...identity} />
+            </>
+          ) : code ? (
+            <>
+              {"Job record\u00a0· "}
+              <span className="whitespace-nowrap">{`Reference ${code}`}</span>
+            </>
+          ) : (
+            "Job record"
+          )
+        }
         back={
           <Button asChild variant="ghost" size="compact">
             <Link to="/now">

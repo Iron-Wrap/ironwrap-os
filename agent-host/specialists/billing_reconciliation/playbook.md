@@ -15,7 +15,8 @@ Payee changes, refunds, credits, write-offs, and filings are people only: you ex
 
 ## Watches
 
-- `deposit_due`, `milestone_reached`: a deposit, progress, or final trigger may hold → `invoice.commit_intent`.
+- `deposit_due`, `milestone_reached`: check the actual policy and contract trigger before an
+  invoice intent. OD-01 acceptance creates no deposit invoice; MD-13 remains conditional.
 - `payment_received`: a payment or bank line arrives → `reconciliation.resolve` or `money.flag`.
 - `readback_mismatch`, `readback_unknown`: a money effect differs or has no readback → `exception.escalate`.
 - `invoice_overdue`: a balance passes a reminder point in the case's collections policy → `payment_reminder`.
@@ -37,6 +38,11 @@ Facts arrive in the ContextSnapshot; you never fetch them. You rely on:
   cancellation state, accepted change orders (amounts before tax), accepted completion packet;
 - company profile (legal name, address, GST number) and tenant policy facts: prompt-payment and
   lien points, collections cadence, margin floor and threshold, cash floor;
+- `deposit_policy/<authenticated tenant>`: owned, observed now, exactly `policy`, domain
+  `version`, `revision_id`, `set_at`. Native OD-01/version 0/null/null means no local revision;
+  an unreadable, omitted, stale, or different-tenant policy is unknown, never that default.
+  The context citation version is separate from the policy's domain revision. Sales/accounting
+  access supplies this tuple, not permission to change it or evidence of MD-13 activation;
 - accounting intents; QuickBooks observations and verdicts, fresh only inside `fresh_until`; a
   webhook, processor event, screenshot, or staff claim is a trigger, never settlement;
 - bank lines, PO lines, receipt lines, bills, recorded three-way matches, statements, vendor
@@ -91,6 +97,20 @@ the same amount is an identity conflict for `accounting`, never a match.
    publication and, for a prepaid contract, the cancellation window closed with none received;
    progress, certified progress for the period; final, an accepted completion packet. A cancelled
    job gets no invoice, and any refund it triggers is people only. Otherwise abstain (`fact_missing`).
+   A new deposit intent additionally needs a readable current MD-13 policy and that exact
+   contract's deposit terms and trigger; MD-13 is conditional and all accounting approvals stay.
+   Under readable OD-01 and an actual completion-only contract with `deposit_percent: 0`, no
+   acceptance-time deposit invoice is proposed, including from `deposit_due`. A conflicting
+   nonzero new term stops (`fact_conflict`, `deposit_terms_not_allowed_by_policy`); never fix it
+   by editing the contract. A missing policy or contract is `fact_missing`, not zero deposit.
+   The policy tuple alone neither clears Deposit nor proves a contract readable: the accounting
+   job view does not supply every commercial acceptance field. Say "No deposit under this
+   contract" only when the current contract-bound native evidence supports it; otherwise name
+   what is missing. It is a system state, never paid, waived, or an AI gate decision.
+   Current policy is prospective evidence, not authority to erase or recalculate a historical
+   contract, posted QuickBooks deposit, reconciled payment, credit, cancellation, or refund.
+   Progress/final billing still preserves standing prior invoices and its contractual trigger;
+   any historical-policy conflict goes to `accounting`, never silent correction.
 4. Where prompt payment applies, the intent carries the company legal name and address, GST number,
    invoice date, contract reference, period, description and value of work, holdback, amount
    payable, payment contact, and a statement that it is intended as a proper invoice. A contract
@@ -246,9 +266,13 @@ the same amount is an identity conflict for `accounting`, never a match.
 
 ## Receipt
 
-- `invoice.commit_intent`: did "Proposed a deposit invoice intent: 25% of 18,000.00 = 4,500.00 + GST
+- `invoice.commit_intent`, conditional MD-13 example: did "Proposed a deposit invoice intent:
+  25% of 18,000.00 = 4,500.00 + GST
   225.00 = 4,725.00, from the cited contract; cancellation window closed." doing "Waiting for
   accounting; QuickBooks posts it and is read back." needs_from_you approval; undo `manual`.
+- OD-01 acceptance: "No deposit invoice proposed: the cited current contract is completion-only
+  with zero deposit." Do not call a gate cleared without its contract-bound readback, or a final
+  invoice posted before completion, approval, and QuickBooks readback.
 - `money.flag`: both values and the signed difference; needs_from_you the one fact or decision.
 - `exception.escalate`: reason code, figures, person; outcome `abstained` for a stop.
 - `payee.freeze`, `inbound.quarantine`: what was held and why, at most one short excerpt marked

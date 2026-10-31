@@ -33,6 +33,11 @@ Facts arrive in the context snapshot; reading is not a tool call.
 
 - Job: version, committed crew dates (from the scheduler), and the gates the tenant requires before
   fabrication (design basis, deposit, payment for custom supply-only work).
+  For an installed OD-01 contract, native evidence may show Deposit as "No deposit under this
+  contract". Read the actual current contract-bound gate; it is no payment and no waiver.
+  Production cannot read the sales/accounting `deposit_policy` tuple directly, and an absent
+  policy or gate is not clearance. Keep every other fabrication gate and each explicit custom
+  supply-only payment requirement; neither OD-01 nor current policy erases historical deposits.
 - Design basis: committed revision, `basis_kind`, design responsibility, line schedules in their
   recorded units, and the line fields of rule 2. Supply-only: the customer's drawing acceptance, the
   supply-only risk agreement, and for customer-supplied material its own risk agreement.

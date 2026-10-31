@@ -86,7 +86,10 @@ function callbackFixture(
   };
 }
 
-function callbackOverview(count: number, callbacks: NewoOperationsOpenCallback[]) {
+function callbackOverview(
+  count: number,
+  callbacks: NewoOperationsOpenCallback[],
+): NewoOperationsResponse {
   const model = newoOperationsFixture();
   return newoOperationsFixture({
     counts: {
@@ -103,9 +106,16 @@ function callbackOverview(count: number, callbacks: NewoOperationsOpenCallback[]
       dlq_items: 0,
       unresolved_incidents: 0,
     },
-    exceptions: Object.fromEntries(
-      Object.keys(model.exceptions).map((key) => [key, key === "open_callbacks" ? callbacks : []]),
-    ) as NewoOperationsResponse["exceptions"],
+    exceptions: {
+      missing_reports: [],
+      failed_handoffs: [],
+      open_callbacks: callbacks,
+      pending_bookings: [],
+      sync_failures: [],
+      failed_events: [],
+      dlq_items: [],
+      control_failures: [],
+    },
     recent_sessions: [],
   });
 }
@@ -248,7 +258,7 @@ describe("NewoOperationsPage", () => {
         callback.reason === "callback_requested" ? "Call back requested" : "Call failed",
       );
       expect(rows[index]).toHaveTextContent(
-        callback.urgency[0].toUpperCase() + callback.urgency.slice(1),
+        callback.urgency.charAt(0).toUpperCase() + callback.urgency.slice(1),
       );
       expect(rows[index]).toHaveTextContent(
         new Intl.DateTimeFormat("en-CA", {

@@ -1,6 +1,10 @@
+import { trustedNewoTenantId, writeAdmittedNewoLookup, writeAdmittedNewoSession, type NewoBusinessAdmission } from "./newo-event-admission.ts";
+
 export type NewoReceiptStatus = "processing" | "accepted" | "failed" | "dead";
 
 export interface NewoEventReceipt {
+  tenant_id: string | null;
+  admission_json: string | null;
   event_id: string;
   session_id: string;
   event_type: string;
@@ -17,6 +21,11 @@ export interface NewoEventReceipt {
 }
 
 export interface NewoSessionRecord {
+  tenant_id?: string | null;
+  tenant_binding_state?: "bound" | "unbound" | "conflict";
+  tenant_binding_source?: string;
+  tenant_binding_ref?: string | null;
+  last_event_id?: string | null;
   session_id: string;
   project_id: string | null;
   agent_id: string | null;
@@ -68,6 +77,7 @@ export interface NewoSessionRecord {
 }
 
 export interface NewoCallerAssociation {
+  event_id: string;
   session_id: string;
   project_id: string | null;
   agent_id: string | null;
@@ -102,53 +112,9 @@ export interface NewoReconciliationRun {
 }
 
 export async function recordNewoCallerAssociation(
-  env: Env,
-  association: NewoCallerAssociation,
+  env: Env, association: NewoCallerAssociation,
 ): Promise<boolean> {
-  const now = new Date().toISOString();
-  const result = await env.DB.prepare(
-    `INSERT INTO newo_sessions (
-       session_id, project_id, agent_id, channel, direction, status, contact_phone,
-       address_line1, postal_code, matched_customer_id, matched_property_id,
-       matched_roof_job_id, verification_status, structured_json, raw_key, payload_hash,
-       sync_status, created_at, updated_at
-     ) VALUES (?, ?, ?, 'phone', 'inbound', 'caller_lookup', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       'pending', ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET
-       project_id = COALESCE(excluded.project_id, newo_sessions.project_id),
-       agent_id = COALESCE(excluded.agent_id, newo_sessions.agent_id),
-       contact_phone = excluded.contact_phone,
-       address_line1 = excluded.address_line1,
-       postal_code = excluded.postal_code,
-       matched_customer_id = excluded.matched_customer_id,
-       matched_property_id = excluded.matched_property_id,
-       matched_roof_job_id = excluded.matched_roof_job_id,
-       verification_status = excluded.verification_status,
-       structured_json = excluded.structured_json,
-       raw_key = excluded.raw_key,
-       payload_hash = excluded.payload_hash,
-       sync_status = 'pending',
-       last_error = NULL,
-       updated_at = excluded.updated_at
-     WHERE excluded.updated_at >= newo_sessions.updated_at`,
-  ).bind(
-    association.session_id,
-    association.project_id,
-    association.agent_id,
-    association.contact_phone,
-    association.address_line1,
-    association.postal_code,
-    association.matched_customer_id,
-    association.matched_property_id,
-    association.matched_roof_job_id,
-    association.verification_status,
-    association.structured_json,
-    association.raw_key,
-    association.payload_hash,
-    now,
-    association.occurred_at,
-  ).run();
-  return Number(result.meta?.changes ?? 0) === 1;
+  return await writeAdmittedNewoLookup(env, association);
 }
 
 export async function getNewoReceipt(
@@ -162,22 +128,26 @@ export async function getNewoReceipt(
 
 export async function claimNewoReceipt(
   env: Env,
-  input: Pick<NewoEventReceipt, "event_id" | "session_id" | "event_type" | "payload_hash" | "raw_key">,
+  input: Pick<NewoEventReceipt, "event_id" | "session_id" | "event_type" | "payload_hash" | "raw_key" | "admission_json">,
   now: string,
 ): Promise<"claimed" | "existing"> {
   const result = await env.DB.prepare(
-    `INSERT OR IGNORE INTO newo_event_receipts
-      (event_id, session_id, event_type, payload_hash, raw_key, status, response_json,
+    `INSERT INTO newo_event_receipts
+      (event_id, session_id, event_type, payload_hash, raw_key, tenant_id, admission_json, status, response_json,
        attempts, first_seen_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, 'processing', '{}', 1, ?, ?)`,
+     SELECT ?, ?, ?, ?, ?, ?, ?, 'processing', '{}', 1, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM newo_event_receipts existing WHERE existing.event_id = ?)`,
   ).bind(
     input.event_id,
     input.session_id,
     input.event_type,
     input.payload_hash,
     input.raw_key,
+    trustedNewoTenantId(env),
+    input.admission_json,
     now,
     now,
+    input.event_id,
   ).run();
   return Number(result.meta?.changes ?? 0) === 1 ? "claimed" : "existing";
 }
@@ -323,42 +293,9 @@ const CALLBACK_RECORD_COLUMNS = `callback_id, tenant_id, session_id, event_id, r
  * per session; a later event of the same session adds nothing (never a REPLACE).
  */
 export async function recordNewoSession(
-  env: Env,
-  rec: NewoSessionRecord,
-  callback: NewoCallbackRecordInput | null,
-): Promise<void> {
-  if (!callback) {
-    await upsertNewoSession(env, rec);
-    return;
-  }
-  await env.DB.batch([
-    newoSessionUpsert(env, rec),
-    env.DB.prepare(
-      `INSERT INTO newo_callback_records (${CALLBACK_RECORD_COLUMNS})
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE NOT EXISTS (
-          SELECT 1 FROM newo_callback_records existing
-           WHERE existing.tenant_id = ? AND existing.session_id = ?
-        )`,
-    ).bind(
-      callback.callback_id,
-      callback.tenant_id,
-      callback.session_id,
-      callback.event_id,
-      callback.reason,
-      callback.urgency,
-      callback.handoff_summary,
-      callback.contact_name,
-      callback.contact_phone,
-      callback.contact_email,
-      callback.address_line1,
-      callback.city,
-      callback.province,
-      callback.postal_code,
-      callback.tenant_id,
-      callback.session_id,
-    ),
-  ]);
+  env: Env, rec: NewoSessionRecord, eventId: string, handoffSummary: string | null,
+): Promise<NewoBusinessAdmission> {
+  return await writeAdmittedNewoSession(env, rec, eventId, handoffSummary);
 }
 
 /** The session's callback record for this deployment's tenant, if one was written. */
@@ -371,132 +308,6 @@ export async function getNewoCallbackRecord(
        FROM newo_callback_records
       WHERE tenant_id = ? AND session_id = ?`,
   ).bind(newoTenantId(env), sessionId).first<NewoCallbackRecord>();
-}
-
-/**
- * Upserts one session snapshot. A session keeps its highest urgency, never the latest one, and
- * its strongest handoff status: failed outranks requested, and no other value clears a requested
- * callback (callback only, owner decisions MD-05 and D-03).
- */
-export async function upsertNewoSession(
-  env: Env,
-  rec: NewoSessionRecord,
-): Promise<void> {
-  await newoSessionUpsert(env, rec).run();
-}
-
-function newoSessionUpsert(env: Env, rec: NewoSessionRecord): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO newo_sessions (
-       session_id, project_id, agent_id, user_actor_id, conversation_id, channel, direction,
-       status, outcome, contact_name, contact_phone, contact_email, address_line1, city, province,
-       postal_code, division, service, urgency, lead_envelope_id, appointment_request_id,
-       handoff_status, booking_status, summary, transcript_ref, recording_ref, ai_disclosed,
-       recording_disclosed, structured_json, raw_key, payload_hash, started_at, ended_at,
-       duration_seconds, report_expected_at, report_received_at, report_event_id,
-       missing_report_detected_at, sync_status, sync_attempts, last_error, sync_updated_at,
-       created_at, updated_at
-     ) VALUES (${Array.from({ length: 44 }, () => "?").join(", ")})
-     ON CONFLICT(session_id) DO UPDATE SET
-       project_id = COALESCE(excluded.project_id, newo_sessions.project_id),
-       agent_id = COALESCE(excluded.agent_id, newo_sessions.agent_id),
-       user_actor_id = COALESCE(excluded.user_actor_id, newo_sessions.user_actor_id),
-       conversation_id = COALESCE(excluded.conversation_id, newo_sessions.conversation_id),
-       channel = excluded.channel,
-       direction = excluded.direction,
-       status = excluded.status,
-       outcome = COALESCE(excluded.outcome, newo_sessions.outcome),
-       contact_name = COALESCE(excluded.contact_name, newo_sessions.contact_name),
-       contact_phone = COALESCE(excluded.contact_phone, newo_sessions.contact_phone),
-       contact_email = COALESCE(excluded.contact_email, newo_sessions.contact_email),
-       address_line1 = COALESCE(excluded.address_line1, newo_sessions.address_line1),
-       city = COALESCE(excluded.city, newo_sessions.city),
-       province = COALESCE(excluded.province, newo_sessions.province),
-       postal_code = COALESCE(excluded.postal_code, newo_sessions.postal_code),
-       division = COALESCE(excluded.division, newo_sessions.division),
-       service = COALESCE(excluded.service, newo_sessions.service),
-       urgency = CASE
-         WHEN 'emergency' IN (excluded.urgency, newo_sessions.urgency) THEN 'emergency'
-         WHEN 'urgent' IN (excluded.urgency, newo_sessions.urgency) THEN 'urgent'
-         ELSE COALESCE(excluded.urgency, newo_sessions.urgency)
-       END,
-       lead_envelope_id = COALESCE(excluded.lead_envelope_id, newo_sessions.lead_envelope_id),
-       appointment_request_id = COALESCE(excluded.appointment_request_id, newo_sessions.appointment_request_id),
-       handoff_status = CASE
-         WHEN 'failed' IN (excluded.handoff_status, newo_sessions.handoff_status) THEN 'failed'
-         WHEN 'requested' IN (excluded.handoff_status, newo_sessions.handoff_status) THEN 'requested'
-         ELSE COALESCE(excluded.handoff_status, newo_sessions.handoff_status)
-       END,
-       booking_status = COALESCE(excluded.booking_status, newo_sessions.booking_status),
-       summary = COALESCE(excluded.summary, newo_sessions.summary),
-       transcript_ref = COALESCE(excluded.transcript_ref, newo_sessions.transcript_ref),
-       recording_ref = COALESCE(excluded.recording_ref, newo_sessions.recording_ref),
-       ai_disclosed = MAX(excluded.ai_disclosed, newo_sessions.ai_disclosed),
-       recording_disclosed = MAX(excluded.recording_disclosed, newo_sessions.recording_disclosed),
-       structured_json = excluded.structured_json,
-       raw_key = excluded.raw_key,
-       payload_hash = excluded.payload_hash,
-       started_at = COALESCE(excluded.started_at, newo_sessions.started_at),
-       ended_at = COALESCE(excluded.ended_at, newo_sessions.ended_at),
-       duration_seconds = COALESCE(excluded.duration_seconds, newo_sessions.duration_seconds),
-       report_expected_at = excluded.report_expected_at,
-       report_received_at = COALESCE(excluded.report_received_at, newo_sessions.report_received_at),
-       report_event_id = COALESCE(excluded.report_event_id, newo_sessions.report_event_id),
-       missing_report_detected_at = CASE
-         WHEN excluded.report_received_at IS NOT NULL THEN NULL
-         ELSE newo_sessions.missing_report_detected_at
-       END,
-       sync_status = 'pending',
-       last_error = NULL,
-       sync_updated_at = excluded.sync_updated_at,
-       updated_at = excluded.updated_at
-     WHERE excluded.updated_at >= newo_sessions.updated_at`,
-  ).bind(
-    rec.session_id,
-    rec.project_id,
-    rec.agent_id,
-    rec.user_actor_id,
-    rec.conversation_id,
-    rec.channel,
-    rec.direction,
-    rec.status,
-    rec.outcome,
-    rec.contact_name,
-    rec.contact_phone,
-    rec.contact_email,
-    rec.address_line1,
-    rec.city,
-    rec.province,
-    rec.postal_code,
-    rec.division,
-    rec.service,
-    rec.urgency,
-    rec.lead_envelope_id,
-    rec.appointment_request_id,
-    rec.handoff_status,
-    rec.booking_status,
-    rec.summary,
-    rec.transcript_ref,
-    rec.recording_ref,
-    rec.ai_disclosed,
-    rec.recording_disclosed,
-    rec.structured_json,
-    rec.raw_key,
-    rec.payload_hash,
-    rec.started_at,
-    rec.ended_at,
-    rec.duration_seconds,
-    rec.report_expected_at,
-    rec.report_received_at,
-    rec.report_event_id,
-    rec.missing_report_detected_at,
-    rec.sync_status,
-    rec.sync_attempts,
-    rec.last_error,
-    rec.sync_updated_at,
-    rec.created_at,
-    rec.updated_at,
-  );
 }
 
 export async function getNewoSession(

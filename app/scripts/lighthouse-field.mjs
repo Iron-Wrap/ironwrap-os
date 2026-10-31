@@ -21,6 +21,10 @@ const { certificateSpkiFingerprint } = await import("./acceptance-certificate.mj
 
 export { median };
 
+export function describeLighthouseTool() {
+  return `lighthouse@${require("lighthouse/package.json").version}`;
+}
+
 export function evaluateAssertions(results, assertions, runnerNormalization) {
   const failures = [];
   const aggregate = {};
@@ -236,7 +240,7 @@ export async function measure({
       outputDir,
       evidence: {
         version: 3,
-        tool: "lighthouse@13.4.1",
+        tool: describeLighthouseTool(),
         url: profile.url,
         protocol: profile.protocol,
         runs: profile.numberOfRuns,

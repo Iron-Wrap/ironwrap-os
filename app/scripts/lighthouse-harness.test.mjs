@@ -9,11 +9,29 @@ import {
   missingComparableAudits,
   summarizeProtocolAb,
 } from "./lighthouse-protocol-ab.mjs";
-import { describeRunner, evaluateAssertions, normalizeRunnerValue } from "./lighthouse-field.mjs";
+import {
+  describeLighthouseTool,
+  describeRunner,
+  evaluateAssertions,
+  normalizeRunnerValue,
+} from "./lighthouse-field.mjs";
 import { median } from "./lighthouse-statistics.mjs";
 
 const require = createRequire(import.meta.url);
 const config = require("../lighthouserc.cjs");
+
+describe("Lighthouse evidence identity", () => {
+  it("follows an installed engine upgrade without changing a report constant", () => {
+    const installed = require("lighthouse/package.json");
+    const version = installed.version;
+    try {
+      installed.version = "99.88.77";
+      expect(describeLighthouseTool()).toBe("lighthouse@99.88.77");
+    } finally {
+      installed.version = version;
+    }
+  });
+});
 
 describe("paired-device gate profile", () => {
   // The bars, the run count and the throttle profile are the product rule; the harness

@@ -117,7 +117,7 @@ function signed(value) {
 export async function main({ rounds = Number(process.env.LIGHTHOUSE_AB_ROUNDS ?? "2") } = {}) {
   // Imported here rather than at module scope so the pure helpers above stay unit-testable:
   // a static import would pull Lighthouse, Puppeteer and a Chrome launcher into the suite.
-  const { measure } = await import("./lighthouse-field.mjs");
+  const { measure, describeLighthouseTool } = await import("./lighthouse-field.mjs");
   const plan = legPlan(rounds);
   const legs = [];
 
@@ -144,7 +144,7 @@ export async function main({ rounds = Number(process.env.LIGHTHOUSE_AB_ROUNDS ??
   const summary = summarizeProtocolAb(legs);
   const evidence = {
     version: 2,
-    tool: "lighthouse@13.4.1",
+    tool: describeLighthouseTool(),
     url: config.url,
     gateProtocol: config.GATE_PROTOCOL,
     runsPerLeg: config.numberOfRuns,

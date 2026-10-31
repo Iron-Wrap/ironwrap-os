@@ -8,7 +8,7 @@ import {
   sessionHashFor,
   sha256Hex,
 } from "../src/app-auth.ts";
-import { replaceDevicePairing, upsertAppUser } from "../src/app-auth-store.ts";
+import { replaceDevicePairing } from "../src/app-auth-store.ts";
 import { seedAppUser } from "./app-user-seed.ts";
 import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
 
@@ -1841,7 +1841,7 @@ test("a pairing issued for another tenant is refused before it binds a device or
   db.companyProfiles.set("ironwrap", { phone: "780-555-0142" });
   db.companyProfiles.set("other-tenant", { phone: "780-555-0199" });
   const env = baseEnv(db);
-  const foreignCrew = await upsertAppUser(env, {
+  const foreignCrew = await seedAppUser(env, {
     tenant_id: "other-tenant",
     email_normalized: "crew@other-tenant.example.invalid",
     display_name: "Other Crew",

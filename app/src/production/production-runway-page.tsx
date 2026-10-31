@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -96,6 +96,7 @@ export function ProductionRunwayPage() {
 
 function ProductionRunwayContent() {
   const session = useSession();
+  const queryClient = useQueryClient();
   const authority = JSON.stringify([
     session.user.role,
     [...session.permissions].sort(),
@@ -114,19 +115,29 @@ function ProductionRunwayContent() {
     }),
     [session.tenant.id, session.user.id, session.csrf_token, session.session_expires_at, authority],
   );
-  const query = useQuery({
-    queryKey: [
-      "production-runway",
-      session.tenant.id,
-      session.user.id,
-      sessionScope.cacheScope,
-      "job-identity-v1",
-    ],
-    queryFn: ({ signal }) => loadProductionRunway(fetch, signal),
+  const queryKey = [
+    "production-runway",
+    session.tenant.id,
+    session.user.id,
+    sessionScope.cacheScope,
+    "job-identity-v1",
+  ];
+  const query = useQuery<ProductionRunwayResponse | null>({
+    queryKey,
+    queryFn: async ({ signal }) => {
+      try {
+        return await loadProductionRunway(fetch, signal);
+      } catch (error) {
+        if (error instanceof ApiError && [401, 403].includes(error.status)) {
+          // Retire only this session scope's payload. Later unsuccessful retries
+          // must not revive its old identity or grants from retained query data.
+          queryClient.setQueryData(queryKey, null);
+        }
+        throw error;
+      }
+    },
   });
-  const authorityRefused =
-    query.error instanceof ApiError && [401, 403].includes(query.error.status);
-  const model = authorityRefused ? undefined : query.data;
+  const model = query.data;
 
   if (!model && query.isPending) return <ProductionRunwaySkeleton />;
   if (!model && query.isError)

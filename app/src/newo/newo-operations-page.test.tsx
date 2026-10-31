@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { useCapability } from "../capabilities/capability-signal";
+import { officeCapability } from "../capabilities/capability-test-fixture";
 import { loadNewoOperations } from "./newo-operations-api";
 import type {
   NewoOperationsOpenCallback,
@@ -14,6 +16,7 @@ import { NewoOperationsPage } from "./newo-operations-page";
 import { newoOperationsFixture } from "./newo-operations-test-fixture";
 
 vi.mock("./newo-operations-api", () => ({ loadNewoOperations: vi.fn() }));
+vi.mock("../capabilities/capability-signal", () => ({ useCapability: vi.fn() }));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
     <a href={to} {...props}>
@@ -122,6 +125,7 @@ function callbackOverview(
 
 describe("NewoOperationsPage", () => {
   beforeEach(() => {
+    vi.mocked(useCapability).mockReturnValue({ status: "unreadable", offline: false });
     vi.mocked(loadNewoOperations).mockResolvedValue(newoOperationsFixture());
   });
 
@@ -193,6 +197,40 @@ describe("NewoOperationsPage", () => {
     expect(screen.queryByText(callback.session_id)).toBeNull();
   });
 
+  it("keeps known-off guidance truthful while failed calls still need a return call", async () => {
+    vi.mocked(useCapability).mockReturnValue({
+      status: "known",
+      capability: officeCapability("newo", "Reception"),
+    });
+    vi.mocked(loadNewoOperations).mockResolvedValue(
+      callbackOverview(1, [callbackFixture(1, { reason: "session_failed" })]),
+    );
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Reception is turned off" })).toBeVisible();
+    expect(screen.getByText("Turned off")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Reception is turned off. Saved calls can still need a check. Use the lists below.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Whoever deploys IronWrap for your company has to make it/),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Ask whoever administers this IronWrap deployment. No one can make this change from inside the app.",
+      ),
+    ).toBeVisible();
+    const queue = screen.getByRole("region", { name: "Calls to return" });
+    expect(within(queue).getByText("Call failed")).toBeVisible();
+    expect(within(queue).getByText("Total reported: 1")).toBeVisible();
+    expect(screen.queryByText(/Nothing here has failed/)).toBeNull();
+    expect(screen.queryByText("No call or booking needs a check.")).toBeNull();
+    expect(within(queue).queryByRole("button")).toBeNull();
+    expect(within(queue).queryByRole("link")).toBeNull();
+  });
+
   it("keeps all-clear for an empty callback total and list with no other queued calls", async () => {
     vi.mocked(loadNewoOperations).mockResolvedValue(callbackOverview(0, []));
     renderPage();
@@ -227,15 +265,31 @@ describe("NewoOperationsPage", () => {
     expect(screen.queryByText("No call or booking needs a check.")).toBeNull();
   });
 
-  it("keeps returned callbacks visible when a separate total read says zero", async () => {
-    vi.mocked(loadNewoOperations).mockResolvedValue(callbackOverview(0, [callbackFixture(1)]));
+  it("keeps returned callbacks and attention visible when separate total/status reads say ready", async () => {
+    const model = callbackOverview(0, [callbackFixture(1, { reason: "session_failed" })]);
+    model.status = "ready";
+    model.readiness = {
+      ...model.readiness,
+      status: "ready",
+      enabled: true,
+      checks: model.readiness.checks.map((check) => ({ ...check, ok: true })),
+      drift_reasons: [],
+    };
+    vi.mocked(loadNewoOperations).mockResolvedValue(model);
     renderPage();
 
     const queue = await screen.findByRole("region", { name: "Calls to return" });
     expect(within(queue).getByText("Total reported: 0")).toBeVisible();
-    expect(within(queue).getByText("Call back requested")).toBeVisible();
+    expect(within(queue).getByText("Call failed")).toBeVisible();
     expect(within(queue).getByText("The total and list differ. Try Refresh.")).toBeVisible();
     expect(screen.queryByText("No call or booking needs a check.")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Reception needs a check" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Reception is ready" })).toBeNull();
+    const hero = screen.getByRole("heading", { name: "Reception", exact: true }).parentElement!;
+    expect(within(hero).getByText("Check")).toBeVisible();
+    expect(within(hero).queryByText("Ready")).toBeNull();
+    const readiness = screen.getByRole("heading", { name: "System checks" }).parentElement!;
+    expect(within(readiness).getByText("Ready")).toBeVisible();
   });
 
   it("renders both reasons and every urgency in supplied order without sorting across urgency", async () => {

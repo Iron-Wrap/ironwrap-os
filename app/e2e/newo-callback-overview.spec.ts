@@ -147,42 +147,48 @@ async function capture(page: Page, info: TestInfo, model: NewoOperationsResponse
   if (!directory) return;
   const head = process.env.NEWO_SOURCE_HEAD;
   if (!head || !/^[0-9a-f]{40}$/.test(head)) throw new Error("Exact source head is required");
+  const ordinaryViewport = page.viewportSize();
+  if (!ordinaryViewport) throw new Error("Native viewport is required");
   await mkdir(directory, { recursive: true });
+  await page.waitForLoadState("networkidle");
+  await page.evaluate(() => document.fonts.ready);
   const prefix = info.project.name;
   const positions: Record<string, unknown>[] = [];
-  for (const [number, position] of ["top", "fully_scrolled"].entries()) {
-    const scroll = await page.evaluate((position) => {
-      const elements = [document.scrollingElement, ...document.querySelectorAll("*")].filter(
-        (element): element is Element => element !== null,
-      );
-      const scrollable = elements.filter(
-        (element) => element.scrollHeight > element.clientHeight + 1,
-      );
-      for (const element of scrollable) {
+  const viewports = [
+    { kind: "ordinary", viewport: ordinaryViewport },
+    {
+      kind: "tall_supplement",
+      viewport: {
+        width: ordinaryViewport.width,
+        height: ordinaryViewport.width < 640 ? 2400 : 1800,
+      },
+    },
+  ];
+  for (const { kind, viewport } of viewports) {
+    await page.setViewportSize(viewport);
+    for (const [number, position] of ["top", "fully_scrolled"].entries()) {
+      const scroll = await page.evaluate((position) => {
+        const element = document.scrollingElement ?? document.documentElement;
         element.scrollTop = position === "top" ? 0 : element.scrollHeight;
-      }
-      return scrollable.map((element) => ({
-        tag: element.tagName,
-        scrollTop: element.scrollTop,
-        scrollHeight: element.scrollHeight,
-        clientHeight: element.clientHeight,
-      }));
-    }, position);
-    const filename = `${prefix}-${number + 1}-${position}.png`;
-    await page.screenshot({ path: join(directory, filename), animations: "disabled" });
-    positions.push({ filename, position, viewport: page.viewportSize(), scroll });
+        return {
+          scrollTop: element.scrollTop,
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          devicePixelRatio: window.devicePixelRatio,
+        };
+      }, position);
+      const filename = `${prefix}-${kind}-${viewport.width}x${viewport.height}-${number + 1}-${position}.png`;
+      await page.screenshot({
+        path: join(directory, filename),
+        fullPage: false,
+        animations: "disabled",
+      });
+      positions.push({ filename, kind, position, viewport, full_page: false, scroll });
+    }
   }
-  // This extra tall image shows the queue between the ordinary top and bottom viewports.
-  const filename = `${prefix}-3-callback-queue-supplement.png`;
-  await page.getByRole("region", { name: "Calls to return" }).screenshot({
-    path: join(directory, filename),
-    animations: "disabled",
-  });
-  positions.push({
-    filename,
-    position: "callback queue supplement",
-    viewport: page.viewportSize(),
-  });
+  await page.setViewportSize(ordinaryViewport);
   await writeFile(
     join(directory, `${prefix}-fixture.json`),
     JSON.stringify(
@@ -202,6 +208,7 @@ async function capture(page: Page, info: TestInfo, model: NewoOperationsResponse
       {
         source_head: head,
         dist_manifest_sha256: process.env.NEWO_DIST_MANIFEST_SHA256,
+        capture_policy: "Uncropped native viewport PNGs; full_page=false; top/fully_scrolled only",
         fixture:
           "Synthetic owner session; callback-only overview; browser-intercepted GET responses",
         grant: "Owner role through existing app RoleGuard; owner:read; allowed_actions=[]",
@@ -236,6 +243,19 @@ test("callback-only work stays readable in supplied urgency order without identi
   const reads = await openOverview(page, model);
   const queue = page.getByRole("region", { name: "Calls to return" });
   await expect(queue).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Newo voice reception is turned off" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Reception is turned off. Saved calls can still need a check. Use the lists below.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/Nothing here has failed/)).toHaveCount(0);
+  await expect(
+    page.getByText(/Whoever deploys IronWrap for your company has to make it/),
+  ).toBeVisible();
+  await expect(page.getByText(/Ask whoever administers this IronWrap deployment/)).toBeVisible();
   await expect(queue.getByText("Total reported: 3")).toBeVisible();
   await expect(queue.getByRole("listitem")).toHaveCount(3);
   for (const [index, urgency] of ["Emergency", "Urgent", "Routine"].entries()) {
@@ -279,11 +299,29 @@ test("a positive total with no returned rows keeps work and Refresh visible", as
   await expect(page.getByRole("button", { name: "Refresh Reception" })).toBeVisible();
 });
 
-test("returned rows survive a separate zero total", async ({ page }) => {
-  await openOverview(page, overview(0, [callback(1)]));
+test("returned rows require attention even when separate status/total reads say ready", async ({
+  page,
+}) => {
+  const model = overview(0, [callback(1, { reason: "session_failed" })]);
+  model.status = "ready";
+  model.readiness = {
+    ...model.readiness,
+    status: "ready",
+    enabled: true,
+    checks: model.readiness.checks.map((check) => ({ ...check, ok: true })),
+    drift_reasons: [],
+  };
+  await openOverview(page, model);
   const queue = page.getByRole("region", { name: "Calls to return" });
   await expect(queue.getByText("Total reported: 0")).toBeVisible();
-  await expect(queue.getByText("Call back requested")).toBeVisible();
+  await expect(queue.getByText("Call failed")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reception needs a check" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reception is ready" })).toHaveCount(0);
+  const hero = page.getByRole("heading", { name: "Reception", exact: true }).locator("..");
+  await expect(hero.getByText("Check", { exact: true })).toBeVisible();
+  await expect(hero.getByText("Ready", { exact: true })).toHaveCount(0);
+  const readiness = page.getByRole("heading", { name: "System checks" }).locator("..");
+  await expect(readiness.getByText("Ready", { exact: true })).toBeVisible();
   await expect(queue.getByText("The total and list differ. Try Refresh.")).toBeVisible();
   await expect(page.getByText("No call or booking needs a check.")).toHaveCount(0);
 });

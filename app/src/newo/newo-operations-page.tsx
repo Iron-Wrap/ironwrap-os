@@ -19,12 +19,13 @@ import type { ReactNode } from "react";
 
 import { useSession } from "../auth/session-context";
 import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
-import { useCapability } from "../capabilities/capability-signal";
+import { capabilityCopy } from "../capabilities/capability-copy";
+import { useCapability, type CapabilityRead } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
-import { ErrorState } from "../components/ui/state-panel";
+import { ErrorState, OffState } from "../components/ui/state-panel";
 import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { loadNewoOperations } from "./newo-operations-api";
@@ -71,7 +72,7 @@ function NewoOperationsContent() {
   return (
     <NewoOperationsScreen
       model={query.data}
-      capability={<CapabilityUnavailable read={newo} />}
+      capability={<ReceptionAvailability read={newo} role={session.user.role} />}
       capabilityKnown={newo.status === "known"}
       locale={session.tenant.locale}
       timeZone={session.tenant.time_zone}
@@ -80,6 +81,24 @@ function NewoOperationsContent() {
       onRefresh={() => void query.refetch()}
     />
   );
+}
+
+function ReceptionAvailability({ read, role }: { read: CapabilityRead; role: string }) {
+  if (read.status === "known" && read.capability.state === "off") {
+    const copy = capabilityCopy(read.capability, role);
+    if (copy) {
+      return (
+        <OffState
+          stateLabel={copy.stateLabel}
+          title={copy.title}
+          message="Reception is turned off. Saved calls can still need a check. Use the lists below."
+          nextAction={copy.nextAction}
+          personPath={copy.personPath}
+        />
+      );
+    }
+  }
+  return <CapabilityUnavailable read={read} />;
 }
 
 function NewoOperationsScreen({
@@ -103,6 +122,10 @@ function NewoOperationsScreen({
 }) {
   const format = (value: string | null) => formatDateTime(value, locale, timeZone);
   const generatedAt = format(model.read_model_generated_at);
+  const receptionReady =
+    model.status === "ready" &&
+    model.counts.open_callbacks === 0 &&
+    model.exceptions.open_callbacks.length === 0;
 
   return (
     <section className="mx-auto max-w-6xl space-y-6 pb-4">
@@ -118,7 +141,7 @@ function NewoOperationsScreen({
                   <h1 className="text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                     Reception
                   </h1>
-                  <StateLabel ready={model.status === "ready"} />
+                  <StateLabel ready={receptionReady} />
                 </div>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
                   Watch calls, booking requests, and calls sent to staff. This page does not call or
@@ -170,7 +193,7 @@ function NewoOperationsScreen({
         </Notice>
       ) : null}
 
-      <OperationsStatus model={model} />
+      <OperationsStatus model={model} ready={receptionReady} />
       <SignalStrip model={model} />
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
@@ -208,7 +231,7 @@ function StateLabel({ ready }: { ready: boolean }) {
   );
 }
 
-function OperationsStatus({ model }: { model: NewoOperationsResponse }) {
+function OperationsStatus({ model, ready }: { model: NewoOperationsResponse; ready: boolean }) {
   const incidentText =
     model.counts.unresolved_incidents === null
       ? "Issue count not found"
@@ -217,19 +240,19 @@ function OperationsStatus({ model }: { model: NewoOperationsResponse }) {
     <Card
       className={cn(
         "px-4 py-4 sm:px-5",
-        model.status === "ready" ? "border-ok/30 bg-ok-soft" : "border-warning/35 bg-warning-soft",
+        ready ? "border-ok/30 bg-ok-soft" : "border-warning/35 bg-warning-soft",
       )}
       aria-labelledby="newo-operating-state"
     >
       <div className="flex items-start gap-3">
-        {model.status === "ready" ? (
+        {ready ? (
           <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         ) : (
           <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
         )}
         <div>
           <h2 id="newo-operating-state" className="font-bold">
-            {model.status === "ready" ? "Reception is ready" : "Reception needs a check"}
+            {ready ? "Reception is ready" : "Reception needs a check"}
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
             {incidentText} · Booking: {humanize(model.readiness.booking_mode)} · Calls out:{" "}

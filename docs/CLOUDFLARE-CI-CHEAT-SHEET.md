@@ -469,8 +469,7 @@ on Free once both are registered; the live count is Not verified.
   mid-run could leave `d1 migrations apply` half-applied, and migrations are forward-only.
 - **release-please, as implemented.** The organisation permits GitHub-owned actions only, so it
   runs through `npx release-please@17.11.2` (`release-please.yml:33`, `:105`, `:169`), not an
-  action. Three jobs: `pr-title` (`:36-78`), `release-pr` (`:80-110`) and `github-release`
-  (`:112-174`). Flags: `--config-file release-please-config.json` (the file has no leading dot) and
+  action. Two jobs: `release-pr` and `github-release`. Flags: `--config-file release-please-config.json` (the file has no leading dot) and
   `--manifest-file .release-please-manifest.json`. `"release-type": "simple"` and
   `"include-v-in-tag": true` (`release-please-config.json:2`, `:4`) give `vX.Y.Z` tags, matching
   `deploy-production.yml:92`. The manifest is `{".": "0.1.0"}`. Writes go through
@@ -478,15 +477,14 @@ on Free once both are registered; the live count is Not verified.
   `:165`) under `permissions: {}` (`:30`). Release PR #323 changes
   `.release-please-manifest.json` and `CHANGELOG.md` only. No `v*` tag exists — 20 tags, none
   matching — and there is no GitHub release.
-- **PR-title check.** With squash merges the PR title becomes the commit subject, so the
-  conventional-commit gate belongs on the title. It is implemented: the `pr-title` job
-  (`release-please.yml:36-78`) runs `tools/conventional-pr-title.mjs` on
-  `pull_request: types: [opened, edited, reopened, synchronize]` (`:21-22`). The title reaches the
-  script through `env` (`:59-78`), never through the shell. One case differs
-  (`:66-69`): a single-commit PR lands its commit subject, not its title, so the job checks that
-  subject too. The job's name in a real run is `Conventional commit subject release-please can
-  parse`. It is **not** a required check: ruleset 20652163 requires exactly `gate`. The owner would
-  have to add it to the ruleset; no agent token can write a ruleset.
+- **Conventional-commit warning.** release-please silently drops a commit whose subject it cannot
+  parse, and with squash merges the PR title (or the single commit's subject) becomes that
+  subject. The `release-pr` job therefore runs `tools/conventional-pr-title.mjs` on the subject of
+  the commit that landed, on push to `main` only, and emits a warning annotation when it is not
+  conventional. The commit message reaches the script through `env`, never through the shell, and
+  the step never fails. Nothing runs on `pull_request` events: the earlier per-PR `pr-title` job
+  was about a fifth of all Actions runs. It was never a required check (ruleset 20652163 requires
+  exactly `gate`).
 - **Untrusted interpolation.** An audit of every `${{ }}` inside a `run:` block on `6a1318a1`
   finds only step outputs (`deploy.yml:514`, `:566`, `deploy-production.yml:627`) and matrix or
   workflow `env` values (`ci.yml:164`, `:243`, `:277`). Nothing attacker-controlled is

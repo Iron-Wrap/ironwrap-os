@@ -1813,7 +1813,11 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
   );
   assert.equal(qaRoutes[0].destination_tenant_id, qa.APP_TENANT_ID);
   assert.equal(qaRoutes[0].source_tenant_id, qa.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
-  assert.equal(new URL(qaRoutes[0].destination_url).origin, qa.APP_PUBLIC_ORIGIN);
+  // Facet delivers straight to the Worker's own workers.dev host: behind the qa-iwrap proxy the
+  // Worker sees that URL, and delivery verification signs the destination it receives.
+  const destinationOrigin = new URL(qaRoutes[0].destination_url).origin;
+  assert.match(new URL(destinationOrigin).hostname, /^ironwrap-bus-qa\.[a-z0-9-]+\.workers\.dev$/);
+  assert.ok(qa.APP_ALLOWED_ORIGINS.split(",").includes(destinationOrigin));
   assert.equal(new URL(qaRoutes[0].destination_url).pathname, "/ingest/facet-design");
   assert.equal(qa.APP_FACET_LAUNCH_BASE_URL, "https://facet.mindburn.org");
   for (const url of [qaRoutes[0].destination_url, qa.APP_FACET_LAUNCH_BASE_URL]) {

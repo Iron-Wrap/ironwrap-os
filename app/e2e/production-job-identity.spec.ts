@@ -101,6 +101,42 @@ test.describe("Production job identity representation", () => {
 test.describe("Current production job finder", () => {
   test.skip(process.env.ACCEPTANCE_MODE !== "estimator", "requires the synthetic office session");
 
+  test("switches the selected current row after reading a disclosure", async ({ page }) => {
+    const production = productionIdentityFixture("known");
+    production.jobs.push({
+      ...production.jobs[0]!,
+      id: "native-job:synthetic-d5-second",
+      job_number: "IW-SYNTH-SECOND",
+      customer_display_name: "Synthetic Second Customer",
+      address: "200 Second Example Street, Example City, AB",
+    });
+    production.summary.active_jobs = 2;
+    production.summary.blocked = 2;
+    await page.route(
+      (url) => url.pathname === "/api/v1/production",
+      (route) => route.fulfill({ status: 200, json: production }),
+    );
+    await page.goto("/production");
+    await page.getByRole("button", { name: "Find a job" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: /IW-SYNTH-D5 / }).click();
+    await dialog.locator("summary").click();
+    await expect(dialog.getByText(syntheticNativeJobId, { exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "Choose another job" }).click();
+    await dialog.getByRole("button", { name: /IW-SYNTH-SECOND/ }).click();
+    await expect(dialog.getByRole("heading", { name: "Job number IW-SYNTH-SECOND" })).toBeFocused();
+    await expect(dialog.getByText("Synthetic Second Customer", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Synthetic Customer One", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByText(syntheticNativeJobId, { exact: true })).toHaveCount(0);
+    await expect(dialog.locator("details")).not.toHaveAttribute("open");
+    await expect(dialog.getByRole("link", { name: "Open IW-SYNTH-SECOND" })).toHaveAttribute(
+      "href",
+      "/jobs/native-job%3Asynthetic-d5-second",
+    );
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("button", { name: "Find a job" })).toBeFocused();
+  });
+
   for (const state of states) {
     test(`reads ${state} through the real chooser, disclosure and same-native routes`, async ({
       page,
@@ -148,10 +184,20 @@ test.describe("Current production job finder", () => {
       const frontDoor = page.getByRole("button", { name: "Find a job" });
       await expect(frontDoor).toBeInViewport({ ratio: 1 });
       await frontDoor.click();
-      await page.keyboard.press("Shift+Tab");
+      const chooser = page.getByRole("dialog", { name: "Choose a job" });
+      await expect.poll(() => chooser.evaluate((dialog) => dialog.matches(":modal"))).toBe(true);
+      await expect(chooser.getByRole("button", { name: "Close" })).toBeFocused();
+      await page.keyboard.press("Tab");
       expect(await page.evaluate(() => !!document.activeElement?.closest("dialog[open]"))).toBe(
         true,
       );
+      await page.keyboard.press("Shift+Tab");
+      await expect(chooser.getByRole("button", { name: "Close" })).toBeFocused();
+      await chooser.getByRole("button", { name: "Close" }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(frontDoor).toBeFocused();
+      await frontDoor.click();
+      await expect.poll(() => chooser.evaluate((dialog) => dialog.matches(":modal"))).toBe(true);
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(frontDoor).toBeFocused();

@@ -298,11 +298,10 @@ describe("ProductionRunwayPage", () => {
       await view.client.invalidateQueries({ queryKey: ["production-runway"] });
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Find a job" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Find a job" })).not.toBeInTheDocument();
     vi.mocked(loadProductionRunway).mockResolvedValueOnce(model());
     await userEvent.click(screen.getByRole("button", { name: "Load again" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Find a job" })).toBeEnabled());
-    await userEvent.click(screen.getByRole("button", { name: "Find a job" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Find a job" }));
     expect(screen.getByRole("dialog", { name: "Choose a job" })).toBeVisible();
   });
 

@@ -129,9 +129,13 @@ function ProductionRunwayContent() {
       try {
         return await loadProductionRunway(fetch, signal);
       } catch (error) {
-        if (error instanceof ApiError && [401, 403].includes(error.status)) {
-          // Retire only this session scope's payload. Later unsuccessful retries
-          // must not revive its old identity or grants from retained query data.
+        if (
+          error instanceof ApiError &&
+          ([401, 403].includes(error.status) || error.code === "invalid_response")
+        ) {
+          // Retire only this session scope's payload after authority or schema loss.
+          // Unsuccessful retries cannot revive old identity or grants; only a fresh
+          // accepted read may replace it. Ordinary transport failures keep their warning.
           queryClient.setQueryData(queryKey, null);
         }
         throw error;
@@ -152,9 +156,6 @@ function ProductionRunwayContent() {
       timeZone={session.tenant.time_zone}
       role={session.user.role}
       refreshFailed={query.isError}
-      identityReadFailed={
-        query.error instanceof ApiError && query.error.code === "invalid_response"
-      }
       onRetry={() => void query.refetch()}
     />
   );
@@ -166,7 +167,6 @@ function ProductionRunwayScreen({
   timeZone,
   role,
   refreshFailed,
-  identityReadFailed,
   onRetry,
 }: {
   model: ProductionRunwayResponse;
@@ -174,7 +174,6 @@ function ProductionRunwayScreen({
   timeZone: string;
   role: AppRole;
   refreshFailed: boolean;
-  identityReadFailed: boolean;
   onRetry: () => void;
 }) {
   const lanes = laneOrder.map((lane) => ({
@@ -202,17 +201,13 @@ function ProductionRunwayScreen({
         title="Production plan"
         description="Check crews, start dates, safety steps, and material needs. This page does not change a job."
         actions={
-          identityReadFailed ? (
-            <Button disabled>Find a job</Button>
-          ) : (
-            <ProductionJobFinder
-              model={model}
-              canOpenJob={canOpenJob}
-              canOpenHistory={canOpenHistory}
-              refreshFailed={refreshFailed}
-              onRetry={onRetry}
-            />
-          )
+          <ProductionJobFinder
+            model={model}
+            canOpenJob={canOpenJob}
+            canOpenHistory={canOpenHistory}
+            refreshFailed={refreshFailed}
+            onRetry={onRetry}
+          />
         }
         aside={
           <>

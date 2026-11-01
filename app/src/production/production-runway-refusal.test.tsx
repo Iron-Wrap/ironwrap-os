@@ -108,6 +108,88 @@ describe("Production authority refusal remains effective through unsuccessful re
     vi.unstubAllGlobals();
   });
 
+  it("keeps malformed identity retired through failed retries until a fresh accepted parse", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(model()));
+    vi.stubGlobal("fetch", fetcher);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const unrelated = ["production-runway", "unrelated-tenant", "unrelated-user"];
+    client.setQueryData(unrelated, { sentinel: true });
+    render(
+      <QueryClientProvider client={client}>
+        <SessionProvider session={session}>
+          <ProductionRunwayPage />
+        </SessionProvider>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Find a job" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: /IW-SYNTH-REFUSAL/ }),
+    );
+    fetcher.mockResolvedValueOnce(
+      Response.json({ ...model(), jobs: [{ ...model().jobs[0], address: 42 }] }),
+    );
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["production-runway", session.tenant.id] });
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const current = () =>
+      client
+        .getQueryCache()
+        .getAll()
+        .find((query) => query.queryKey.at(-1) === "job-identity-v1")!;
+    let rejectPending!: (reason: unknown) => void;
+    fetcher.mockImplementationOnce(
+      () =>
+        new Promise<Response>((_resolve, reject) => {
+          rejectPending = reject;
+        }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Load again" }));
+    await waitFor(() => expect(current().state.fetchStatus).toBe("fetching"));
+    await flushObserver();
+    expect(current().state.data).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find a job" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => {
+      rejectPending(new TypeError("Synthetic offline retry"));
+    });
+    await waitFor(() => expect((current().state.error as ApiError)?.code).toBe("network_error"));
+    await flushObserver();
+    const retired = () => {
+      expect(screen.queryByRole("button", { name: "Find a job" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText("Previously Authorized Customer")).not.toBeInTheDocument();
+      expect(screen.queryByText("100 Synthetic Example Street")).not.toBeInTheDocument();
+      expect(screen.queryByText("1 lock still blocks this schedule")).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Open IW-SYNTH-REFUSAL" })).not.toBeInTheDocument();
+      expect(current().state.data).toBeNull();
+    };
+    retired();
+    for (const [code, response] of [
+      ["server_unavailable", Response.json({ error: "server_unavailable" }, { status: 503 })],
+      ["invalid_response", Response.json({ version: 1, unexpected: true })],
+    ] as const) {
+      fetcher.mockResolvedValueOnce(response);
+      await userEvent.click(screen.getByRole("button", { name: "Load again" }));
+      await waitFor(() => expect((current().state.error as ApiError)?.code).toBe(code));
+      await flushObserver();
+      retired();
+    }
+    fetcher.mockResolvedValueOnce(Response.json(model("Fresh Parsed Customer", false)));
+    await userEvent.click(screen.getByRole("button", { name: "Load again" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Find a job" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: /IW-SYNTH-REFUSAL/ }),
+    );
+    expect(within(screen.getByRole("dialog")).getByText("Fresh Parsed Customer")).toBeVisible();
+    expect(screen.queryByText("Previously Authorized Customer")).not.toBeInTheDocument();
+    expect(screen.queryByText("1 lock still blocks this schedule")).not.toBeInTheDocument();
+    expect(client.getQueryData(unrelated)).toEqual({ sentinel: true });
+    expect(fetcher.mock.calls.map(([path]) => path)).toEqual(
+      Array(6).fill("/api/v1/production?include_job_identity=1"),
+    );
+  });
+
   it.each([401, 403])(
     "requires a fresh successful read after %s before showing identity or grants again",
     async (status) => {

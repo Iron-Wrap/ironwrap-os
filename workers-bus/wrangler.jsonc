@@ -752,7 +752,7 @@
           "FACET_DESIGN_INGEST_ENABLED": "false",
           "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
           "FACET_V2_INGEST_ENABLED": "true",
-          "FACET_V2_ROUTES_JSON": "[{\"version\":1,\"issuer\":\"facet\",\"source_product\":\"facet\",\"source_environment\":\"qa\",\"source_tenant_id\":\"2b9502a6-aa2a-40ff-8aff-c93a791f4fa5\",\"destination_tenant_id\":\"ironwrap\",\"destination_url\":\"https://ironwrap-bus-qa.yellow-rain-7498.workers.dev/ingest/facet-design\"}]",
+          "FACET_V2_ROUTES_JSON": "[{\"version\":1,\"issuer\":\"facet\",\"source_product\":\"facet\",\"source_environment\":\"qa-arm\",\"source_tenant_id\":\"2b9502a6-aa2a-40ff-8aff-c93a791f4fa5\",\"destination_tenant_id\":\"ironwrap\",\"destination_url\":\"https://ironwrap-bus-qa.yellow-rain-7498.workers.dev/ingest/facet-design\"}]",
           "FACET_V2_NATIVE_PROJECTION_ENABLED": "true",
           "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false"
         },

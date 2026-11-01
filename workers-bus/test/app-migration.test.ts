@@ -4,6 +4,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
 import { flattenEnv } from "../src/env-bindings.ts";
+import { facetV2StaticRoutes } from "../src/facet-design-ingest.ts";
+import { facetLaunchConfigured } from "../src/facet-launch.ts";
 
 // IRO-268: wrangler.jsonc groups vars into CFG_* JSON bindings. Flatten each parsed environment's
 // `vars` in place, the same way flattenEnv restores them at the Worker's entry points, so the
@@ -1797,7 +1799,18 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
   const qa = config.env.qa.vars;
   const qaRoutes = JSON.parse(qa.FACET_V2_ROUTES_JSON);
   assert.equal(qaRoutes.length, 1);
-  assert.equal(qaRoutes[0].source_environment, "qa");
+  // Identifiers need at least three characters, so the QA Facet's environment is `qa-arm`, not `qa`.
+  assert.equal(qaRoutes[0].source_environment, "qa-arm");
+  // Shape checks alone let a route the real parser rejects reach qa once (`qa` was too short):
+  // the configured route must pass the parser, and launch must resolve with any well-formed key.
+  assert.ok(
+    facetV2StaticRoutes({ FACET_V2_ROUTES_JSON: qa.FACET_V2_ROUTES_JSON }),
+    "the qa route must pass facetV2StaticRoutes",
+  );
+  assert.equal(
+    facetLaunchConfigured({ ...qa, FACET_LAUNCH_HMAC_KEY: "A".repeat(43) }, qa.APP_TENANT_ID),
+    true,
+  );
   assert.equal(qaRoutes[0].destination_tenant_id, qa.APP_TENANT_ID);
   assert.equal(qaRoutes[0].source_tenant_id, qa.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
   assert.equal(new URL(qaRoutes[0].destination_url).origin, qa.APP_PUBLIC_ORIGIN);

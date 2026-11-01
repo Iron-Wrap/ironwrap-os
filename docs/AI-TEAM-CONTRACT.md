@@ -1355,6 +1355,16 @@ evidence.
   fell back, practice and whether it stopped, the counted window and the bar (see "Delegation"),
   the qualification it relies on, the decision history, failed readbacks, and the most proposals in
   any hour, day or week. Its version moves with every proposal of the pair.
+- The tenant's deposit policy is the owned fact `deposit_policy/<tenant>`, readable at
+  `sales:read` or `accounting:read` (owner, ops, sales and accounting). Its data is exactly
+  `{policy, version, revision_id, set_at}` from the canonical latest owner-policy revision; its
+  reason and actor identity are not included. With no local revision it is
+  `od01_payment_on_completion`, version `0`, with null revision id and set time. A different
+  tenant id is unreadable, and a failed policy query is unreadable rather than a default. Jobs,
+  leads, customers and money items link this fact first, within the existing snapshot limits. The context
+  envelope version comes from the fact ledger and is separate from the policy's data.version.
+  This read does not change the policy, enable MD-13, clear a contract's Deposit gate or approve
+  an invoice or customer message; those keep their own contract, evidence and approval rules.
 - An open lead proposal is the fact `lead_proposal/<step_id>`, readable at `sales:read` (the owner,
   ops and sales) and owned: the `lead_id`, the proposed `fields`, `proposed_at`, and the `source` it
   was cited to (`signal/<id>`). Its fields carry customer details, so only runs and screens with

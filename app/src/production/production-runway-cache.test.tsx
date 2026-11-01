@@ -327,20 +327,18 @@ describe("Production runway cache and session isolation", () => {
       await waitFor(() => expect(reads.at(-1)).not.toBe(superseded));
       expect(superseded.signal.aborted).toBe(true);
       await act(async () => {
-        reads
-          .at(-1)!
-          .resolve(
-            Response.json(
-              model({
-                jobs: [
-                  {
-                    ...job("current-job", "IW-CURRENT", "blocked"),
-                    customer_display_name: "Current Parsed Customer",
-                  },
-                ],
-              }),
-            ),
-          );
+        reads.at(-1)!.resolve(
+          Response.json(
+            model({
+              jobs: [
+                {
+                  ...job("current-job", "IW-CURRENT", "blocked"),
+                  customer_display_name: "Current Parsed Customer",
+                },
+              ],
+            }),
+          ),
+        );
       });
       await userEvent.click(await screen.findByRole("button", { name: "Find a job" }));
       await userEvent.click(

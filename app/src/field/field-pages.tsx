@@ -671,7 +671,7 @@ const MISSING_SCOPE_ID = "unknown";
 
 /**
  * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by
- * its ruled label, "{customer} · {street} · {code}" (D5), never by record ids or a placeholder
+ * its ruled label, "{customer} · {street} · Ref {code}" (D5), never by record ids or a placeholder
  * (gate e-crew-version-copy: "Roof Job · unknown"); a bare code read as a site id (e-plan-scope).
  * Any other scope keeps its type and id, and leaves out an id the read did not get.
  */
@@ -2880,7 +2880,23 @@ function CheckInHeader({ model }: { model: JobResponse }) {
     <header>
       <h1 className="text-2xl font-bold tracking-[-0.03em] sm:text-3xl">Add job proof</h1>
       <p className="mt-1 text-base font-semibold leading-6 text-muted">
-        {model.job.job_number ?? "Assigned job"} · {model.job.address ?? "Address unavailable"}
+        {/* Where the proof is kept, with the job named the ruled way (D5), never code first. */}
+        {jobLabel({
+          customer: model.packet.contact?.display_name,
+          address: model.job.address,
+          code: model.job.job_number,
+        }) ? (
+          <>
+            Saving to the job:{" "}
+            <JobLabelText
+              customer={model.packet.contact?.display_name}
+              address={model.job.address}
+              code={model.job.job_number}
+            />
+          </>
+        ) : (
+          "Saving to this job"
+        )}
       </p>
     </header>
   );

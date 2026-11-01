@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -1097,68 +1098,80 @@ function dependencyMessages(types) {
 }
 
 function runDependencyClassification(options = {}) {
+  const located = spawnSync("/bin/bash", ["-c", "command -v jq"], { env: { PATH: process.env.PATH, LANG: "C", LC_ALL: "C" }, encoding: "utf8" });
+  assert.equal(located.status, 0, "the classifier tests require the real preinstalled jq");
+  const jq = located.stdout.trim();
+  const version = spawnSync(jq, ["--version"], { encoding: "utf8" });
+  assert.equal(version.status, 0);
+  assert.match(version.stdout, /^jq-/);
   const directory = mkdtempSync(join(tmpdir(), "ironwrap-dependency-review-"));
   try {
     const trace = join(directory, "gh-calls.jsonl");
-    const messages = join(directory, "messages.txt");
-    writeFileSync(messages, options.messages ?? dependencyMessages(["version-update:semver-patch"]));
+    const configPath = join(directory, "raw-api-fixture.json");
+    const config = options.config ?? {
+      pages: options.pages ?? [[{ commit: { message: options.messages ?? dependencyMessages(["version-update:semver-patch"]) } }]],
+      rules: options.rules ?? [{
+        type: "required_status_checks",
+        parameters: { required_status_checks: [{ context: "gate", integration_id: 15368 }], strict_required_status_checks_policy: true },
+      }],
+      fail_commits: options.failCommits ?? false,
+      fail_rules: options.failRules ?? false,
+    };
+    const raw = `${JSON.stringify(config, null, 2)}\n`;
+    writeFileSync(configPath, raw);
     const stub = String.raw`
 const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.OFFLINE_GH_TRACE, JSON.stringify(args) + "\n");
-if (process.env.GH_TOKEN !== "offline-test-token" || process.env.GITHUB_TOKEN !== "offline-test-token") {
-  process.stderr.write("The fixture refuses real credentials.\n");
-  process.exit(95);
-}
-let method = args.includes("-f") || args.includes("-F") || args.includes("--field") || args.includes("--raw-field") ? "POST" : "GET";
+if (process.env.GH_TOKEN !== "offline-test-token" || process.env.GITHUB_TOKEN !== "offline-test-token") process.exit(95);
+let method = args.some((value) => ["-f", "-F", "--field", "--raw-field"].includes(value)) ? "POST" : "GET";
 const methodIndex = args.findIndex((value) => value === "--method" || value === "-X");
 if (methodIndex >= 0) method = args[methodIndex + 1];
-const endpoint = args.find((value) => value.startsWith("repos/"));
-if (args[0] !== "api" || method !== "GET") {
-  process.stderr.write("Mutation or unexpected command refused by offline gh: " + JSON.stringify(args) + "\n");
+if (args[0] !== "api" || method !== "GET" || args.some((value) => ["-f", "-F", "--field", "--raw-field"].includes(value))) {
+  process.stderr.write("Mutation refused by offline gh: " + JSON.stringify(args) + "\n");
   process.exit(97);
 }
-if (endpoint === "repos/example/synthetic/pulls/123/commits") {
-  if (process.env.OFFLINE_FAIL_COMMITS === "1") process.exit(42);
-  process.stdout.write(fs.readFileSync(process.env.OFFLINE_MESSAGES_PATH, "utf8"));
-} else if (endpoint === "repos/example/synthetic/rules/branches/main") {
-  if (process.env.OFFLINE_FAIL_RULES === "1") process.exit(43);
-  process.stdout.write(process.env.OFFLINE_RULES_RESULT + "\n");
-} else {
-  process.stderr.write("Unexpected API read refused: " + String(endpoint) + "\n");
-  process.exit(98);
+const endpoint = args.find((value) => value.startsWith("repos/"));
+const expressionIndex = args.indexOf("--jq");
+const expression = expressionIndex >= 0 ? args[expressionIndex + 1] : null;
+const config = JSON.parse(fs.readFileSync(process.env.OFFLINE_CONFIG_PATH, "utf8"));
+function response(value) {
+  if (expression === null) {
+    process.stdout.write(JSON.stringify(value) + "\n");
+    return;
+  }
+  const result = spawnSync(process.env.OFFLINE_REAL_JQ, ["-r", expression], { input: JSON.stringify(value), encoding: "utf8", env: process.env });
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  if (result.status !== 0) process.exit(result.status ?? 99);
 }
+if (endpoint === "repos/example/synthetic/pulls/123/commits") {
+  if (config.fail_commits) process.exit(42);
+  if (!args.includes("--paginate")) process.exit(98);
+  for (const page of config.pages) response(page);
+} else if (endpoint === "repos/example/synthetic/rules/branches/main") {
+  if (config.fail_rules) process.exit(43);
+  response(config.rules);
+} else process.exit(98);
 `;
     writeFileSync(join(directory, "gh"), `#!${process.execPath}\n${stub}`, { mode: 0o755 });
     const env = {
-      ...process.env,
-      PATH: `${directory}:${dirname(process.execPath)}:/usr/bin:/bin`,
-      GH_TOKEN: "offline-test-token",
-      GITHUB_TOKEN: "offline-test-token",
-      GH_ENTERPRISE_TOKEN: "",
-      GITHUB_ENTERPRISE_TOKEN: "",
-      GH_HOST: "offline.invalid",
-      GITHUB_REPOSITORY: "example/synthetic",
-      PR_NUMBER: "123",
-      PR_URL: "https://example.invalid/pull/123",
-      BASE: "main",
-      OFFLINE_GH_TRACE: trace,
-      OFFLINE_MESSAGES_PATH: messages,
-      OFFLINE_FAIL_COMMITS: options.failCommits ? "1" : "0",
-      OFFLINE_FAIL_RULES: options.failRules ? "1" : "0",
-      OFFLINE_RULES_RESULT: options.rules ?? "1",
+      PATH: `${directory}:${dirname(jq)}:${dirname(process.execPath)}:/usr/bin:/bin`,
+      LANG: "C", LC_ALL: "C",
+      GH_TOKEN: "offline-test-token", GITHUB_TOKEN: "offline-test-token", GH_HOST: "offline.invalid",
+      GITHUB_REPOSITORY: "example/synthetic", PR_NUMBER: "123", PR_URL: "https://example.invalid/pull/123", BASE: "main",
+      OFFLINE_GH_TRACE: trace, OFFLINE_CONFIG_PATH: configPath, OFFLINE_REAL_JQ: jq,
     };
-    const selected = spawnSync("/bin/bash", ["-c", "command -v gh"], { env, encoding: "utf8" });
-    assert.equal(selected.status, 0);
-    assert.equal(selected.stdout.trim(), join(directory, "gh"), "only the offline gh stub is executable here");
-    const result = spawnSync("/bin/bash", ["-c", dependencyWorkflowRun(readFileSync(dependencyWorkflowUrl, "utf8"))], {
-      cwd: directory,
-      env,
-      encoding: "utf8",
-    });
+    for (const [command, expected] of [["gh", join(directory, "gh")], ["jq", jq]]) {
+      const selected = spawnSync("/bin/bash", ["-c", `command -v ${command}`], { env, encoding: "utf8" });
+      assert.equal(selected.status, 0);
+      assert.equal(selected.stdout.trim(), expected, "only the offline gh stub and real jq are selected");
+    }
+    const result = spawnSync("/bin/bash", ["-c", dependencyWorkflowRun(readFileSync(dependencyWorkflowUrl, "utf8"))], { cwd: directory, env, encoding: "utf8" });
     assert.equal(result.error, undefined);
     const calls = readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls, fixtureSha256: createHash("sha256").update(raw).digest("hex"), jqVersion: version.stdout.trim() };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1206,7 +1219,7 @@ for (const [name, types, classification] of [
 }
 
 test("dependency bot reports missing required checks without mutation", () => {
-  const result = runDependencyClassification({ rules: "0" });
+  const result = runDependencyClassification({ rules: [] });
   assertReadOnlyDependencyCalls(result);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /dependency_classification=checks_missing/);
@@ -1224,5 +1237,219 @@ for (const [name, options, classification, count] of [
     assert.notEqual(result.status, 0);
     assert.match(result.stdout, new RegExp(`dependency_classification=${classification}`));
     assert.equal(result.calls.length, count);
+  });
+}
+
+
+// Root counterexample data, hashes and expected outcomes are retained unchanged.
+const rootDependencyCounterexamples = [
+  {
+    "id": "duplicate-type-balances-missing-dependency",
+    "inputSha256": "959f4bf8e1f38595a1fc1f5fde0bf063e1cfdd21bd25a8a9e8c04f4905c611a2",
+    "config": {
+      "pages": [
+        [
+          {
+            "commit": {
+              "message": "Bump synthetic dependencies\n---\nupdated-dependencies:\n- dependency-name: synthetic-a\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  update-type: version-update:semver-patch\n- dependency-name: synthetic-b\n  dependency-type: direct:production\n...\n"
+            }
+          }
+        ]
+      ],
+      "rules": [
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "required_status_checks": [
+              {
+                "context": "gate",
+                "integration_id": 15368
+              }
+            ],
+            "strict_required_status_checks_policy": true
+          }
+        }
+      ],
+      "fail_commits": false,
+      "fail_rules": false
+    },
+    "expectedClassifications": [
+      "metadata_missing",
+      "review_required"
+    ],
+    "expectedStatus": 0
+  },
+  {
+    "id": "cross-commit-metadata-cancellation",
+    "inputSha256": "a58e5d677f76c2157be1fe132573e313c74245429078d1f69b7fe4a5ff64e86d",
+    "config": {
+      "pages": [
+        [
+          {
+            "commit": {
+              "message": "Bump synthetic dependencies\n---\nupdated-dependencies:\n- dependency-name: synthetic-a\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  update-type: version-update:semver-patch\n...\n"
+            }
+          },
+          {
+            "commit": {
+              "message": "Bump synthetic dependencies\n---\nupdated-dependencies:\n- dependency-name: synthetic-b\n  dependency-type: direct:production\n...\n"
+            }
+          }
+        ]
+      ],
+      "rules": [
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "required_status_checks": [
+              {
+                "context": "gate",
+                "integration_id": 15368
+              }
+            ],
+            "strict_required_status_checks_policy": true
+          }
+        }
+      ],
+      "fail_commits": false,
+      "fail_rules": false
+    },
+    "expectedClassifications": [
+      "metadata_missing",
+      "review_required"
+    ],
+    "expectedStatus": 0
+  },
+  {
+    "id": "empty-required-check-list",
+    "inputSha256": "c48cf5443f5f78cf2ab33da9e07d68b2d44810062c496f3b12d3cca95c61fdb9",
+    "config": {
+      "pages": [
+        [
+          {
+            "commit": {
+              "message": "Bump synthetic dependencies\n---\nupdated-dependencies:\n- dependency-name: synthetic-a\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n"
+            }
+          }
+        ]
+      ],
+      "rules": [
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "required_status_checks": [],
+            "strict_required_status_checks_policy": true
+          }
+        }
+      ],
+      "fail_commits": false,
+      "fail_rules": false
+    },
+    "expectedClassifications": [
+      "checks_missing"
+    ],
+    "expectedStatus": 0
+  },
+  {
+    "id": "missing-check-parameters",
+    "inputSha256": "6584c75ff196f6e7798be0d6b4d53bb4a383b1fabef949fce09d38091ec6db88",
+    "config": {
+      "pages": [
+        [
+          {
+            "commit": {
+              "message": "Bump synthetic dependencies\n---\nupdated-dependencies:\n- dependency-name: synthetic-a\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n"
+            }
+          }
+        ]
+      ],
+      "rules": [
+        {
+          "type": "required_status_checks"
+        }
+      ],
+      "fail_commits": false,
+      "fail_rules": false
+    },
+    "expectedClassifications": [
+      "checks_unavailable",
+      "checks_missing"
+    ],
+    "expectedStatus": "nonzero_or_zero"
+  }
+];
+
+for (const fixture of rootDependencyCounterexamples) {
+  test(`dependency bot rejects root counterexample ${fixture.id}`, () => {
+    const result = runDependencyClassification({ config: fixture.config });
+    assert.equal(result.fixtureSha256, fixture.inputSha256, "root raw API fixture bytes are unchanged");
+    assertReadOnlyDependencyCalls(result);
+    if (typeof fixture.expectedStatus === "number") assert.equal(result.status, fixture.expectedStatus, result.stderr);
+    const classes = [...result.stdout.matchAll(/dependency_classification=([a-z_]+)/g)].map((match) => match[1]);
+    assert.ok(fixture.expectedClassifications.includes(classes.at(-1)), JSON.stringify({ classes, stdout: result.stdout, stderr: result.stderr }));
+    assert.ok(!classes.includes("eligible_for_serial_review"));
+  });
+}
+
+
+const dependencyPatchMessage = dependencyMessages(["version-update:semver-patch"]);
+for (const [name, messages] of [
+  ["duplicate dependency record", dependencyMessages(["version-update:semver-patch", "version-update:semver-minor"]).replace("synthetic-1", "synthetic-0")],
+  ["duplicate non-type key", dependencyPatchMessage.replace("  dependency-type:", "  dependency-type: direct:production\n  dependency-type:")],
+  ["missing document end", dependencyPatchMessage.replace("\n...\n", "\n")],
+  ["missing document boundary", dependencyPatchMessage.replace("\n---\n", "\n")],
+  ["orphan update type", dependencyPatchMessage.replace("updated-dependencies:\n", "updated-dependencies:\n  update-type: version-update:semver-patch\n")],
+  ["duplicate metadata document", dependencyPatchMessage + dependencyPatchMessage],
+]) {
+  test(`dependency bot rejects malformed ${name} without mutation`, () => {
+    const result = runDependencyClassification({ messages });
+    assertReadOnlyDependencyCalls(result);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /dependency_classification=metadata_missing/);
+    assert.equal(result.calls.length, 1);
+  });
+}
+
+for (const [name, pages, expected] of [
+  ["valid paginated commits", [[{ commit: { message: dependencyPatchMessage } }], [{ commit: { message: dependencyMessages(["version-update:semver-minor"]) } }]], "eligible_for_serial_review"],
+  ["commit without metadata beside valid commit", [[{ commit: { message: dependencyPatchMessage } }, { commit: { message: "Synthetic note without dependency metadata" } }]], "metadata_missing"],
+]) {
+  test(`dependency bot preserves ${name} boundaries`, () => {
+    const result = runDependencyClassification({ pages });
+    assertReadOnlyDependencyCalls(result);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`dependency_classification=${expected}`));
+  });
+}
+
+function dependencyCheckRules(checks) {
+  return [{ type: "required_status_checks", parameters: { required_status_checks: checks } }];
+}
+
+for (const [name, rules, expected, status] of [
+  ["empty check context", dependencyCheckRules([{ context: "" }]), "checks_unavailable", 1],
+  ["whitespace check context", dependencyCheckRules([{ context: " \t " }]), "checks_unavailable", 1],
+  ["unicode whitespace check context", dependencyCheckRules([{ context: "\u2003\u00a0" }]), "checks_unavailable", 1],
+  ["nonstring check context", dependencyCheckRules([{ context: 42 }]), "checks_unavailable", 1],
+  ["missing check context", dependencyCheckRules([{}]), "checks_unavailable", 1],
+  ["control character in context", dependencyCheckRules([{ context: "gate\nother" }]), "checks_unavailable", 1],
+  ["bad check alongside valid context", dependencyCheckRules([{ context: "gate" }, {}]), "checks_unavailable", 1],
+  ["nonarray check configuration", dependencyCheckRules({ context: "gate" }), "checks_unavailable", 1],
+  ["null parameters", [{ type: "required_status_checks", parameters: null }], "checks_unavailable", 1],
+  ["missing required-check property", [{ type: "required_status_checks", parameters: {} }], "checks_unavailable", 1],
+  ["empty rule alongside valid rule", [...dependencyCheckRules([]), ...dependencyCheckRules([{ context: "gate" }])], "checks_missing", 0],
+  ["malformed rule array entry", ["required_status_checks"], "checks_unavailable", 1],
+  ["invalid integration identifier", dependencyCheckRules([{ context: "gate", integration_id: "invalid" }]), "checks_unavailable", 1],
+  ["fractional integration identifier", dependencyCheckRules([{ context: "gate", integration_id: 1.5 }]), "checks_unavailable", 1],
+  ["malformed strict policy", [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "gate" }], strict_required_status_checks_policy: "yes" } }], "checks_unavailable", 1],
+  ["malformed creation policy", [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "gate" }], do_not_enforce_on_create: "no" } }], "checks_unavailable", 1],
+  ["valid null integration", dependencyCheckRules([{ context: "gate", integration_id: null }]), "eligible_for_serial_review", 0],
+  ["valid context with optional integration", dependencyCheckRules([{ context: "gate" }]), "eligible_for_serial_review", 0],
+]) {
+  test(`dependency bot validates real ${name} configuration`, () => {
+    const result = runDependencyClassification({ rules });
+    assertReadOnlyDependencyCalls(result);
+    assert.equal(result.status, status, result.stderr);
+    assert.match(result.stdout, new RegExp(`dependency_classification=${expected}`));
   });
 }

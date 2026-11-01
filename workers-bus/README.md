@@ -1013,6 +1013,7 @@ shapes are:
     "job_number": "IW-1042",
     "brand": "IronWrap",
     "status": "In Production",
+    "customer_display_name": "Example Customer",
     "address": "123 Example Ave, Calgary AB T2P 1J9, Canada",
     "scheduled_start": null,
     "scheduled_end": null,
@@ -1021,6 +1022,10 @@ shapes are:
   }]
 }
 ```
+
+`customer_display_name` is the name the job read shows as `packet.contact.display_name` for the
+same job, through the same helper, and `null` when the job has no customer name. Today reads it in
+one tenant-scoped batch for the jobs it already lists, so a crew sees only its own jobs' customers.
 
 ```json
 {

@@ -83,9 +83,13 @@ export function productionIdentifiers(config) {
   const routeHostname = config.routes?.[0]?.pattern ?? null;
   let workersDevHostname = null;
   for (const envConfig of Object.values(config.env ?? {})) {
-    // IRO-268 groups vars into `CFG_*` objects; read them flat, as the Worker does.
-    const origin = flattenWranglerVars(envConfig?.vars ?? {}).APP_PUBLIC_ORIGIN;
-    if (typeof origin !== "string" || !origin.includes(".workers.dev")) continue;
+    // IRO-268 groups vars into `CFG_*` objects; read them flat, as the Worker does. qa is served on a
+    // proxy hostname (ironwrap-tracker#71), so its workers.dev origin may only be in the allowlist.
+    const vars = flattenWranglerVars(envConfig?.vars ?? {});
+    const origin = [vars.APP_PUBLIC_ORIGIN, ...String(vars.APP_ALLOWED_ORIGINS ?? "").split(",")]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .find((value) => value.includes(".workers.dev"));
+    if (!origin) continue;
     try {
       const hostname = new URL(origin).hostname;
       const accountSubdomain = hostname.split(".").slice(1).join(".");

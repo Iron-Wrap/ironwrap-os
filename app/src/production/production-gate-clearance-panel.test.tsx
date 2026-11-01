@@ -50,6 +50,8 @@ function job(blocked: readonly string[] = ["Deposit", "Weather"]): ProductionRun
   return {
     id: "job:elec122",
     job_number: "IW-122",
+    customer_display_name: null,
+    address: null,
     brand: "IronWrap Exteriors",
     service_type: "Roofing",
     status: "Won",

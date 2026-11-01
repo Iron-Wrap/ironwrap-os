@@ -33,9 +33,25 @@ describe("Production runway API client", () => {
     await loadProductionRunway(fetcher);
 
     expect(fetcher).toHaveBeenCalledWith(
-      API_PATHS.production,
+      `${API_PATHS.production}?include_job_identity=1`,
       expect.objectContaining({ method: "GET", credentials: "same-origin", cache: "no-store" }),
     );
+    const headers = fetcher.mock.calls[0]?.[1]?.headers as Headers;
+    expect(headers.has("X-CSRF-Token")).toBe(false);
+  });
+
+  it("passes cancellation through to an in-flight identity read", async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_path, init) => {
+      controller.abort();
+      expect(init?.signal?.aborted).toBe(true);
+      throw new DOMException("Aborted", "AbortError");
+    });
+
+    await expect(loadProductionRunway(fetcher, controller.signal)).rejects.toMatchObject({
+      code: "aborted",
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it("rejects an incomplete response instead of rendering an inferred runway", async () => {

@@ -12,7 +12,7 @@ import {
   Warehouse,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
@@ -20,6 +20,7 @@ import { useShopReading } from "../components/shop-reading";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Dialog } from "../components/ui/dialog";
 import { ErrorState } from "../components/ui/state-panel";
 import { SystemDetails } from "../components/ui/system-details";
 import { GateChip } from "../field/gate-chip";
@@ -151,6 +152,9 @@ function ProductionRunwayContent() {
       timeZone={session.tenant.time_zone}
       role={session.user.role}
       refreshFailed={query.isError}
+      identityReadFailed={
+        query.error instanceof ApiError && query.error.code === "invalid_response"
+      }
       onRetry={() => void query.refetch()}
     />
   );
@@ -162,6 +166,7 @@ function ProductionRunwayScreen({
   timeZone,
   role,
   refreshFailed,
+  identityReadFailed,
   onRetry,
 }: {
   model: ProductionRunwayResponse;
@@ -169,6 +174,7 @@ function ProductionRunwayScreen({
   timeZone: string;
   role: AppRole;
   refreshFailed: boolean;
+  identityReadFailed: boolean;
   onRetry: () => void;
 }) {
   const lanes = laneOrder.map((lane) => ({
@@ -195,6 +201,19 @@ function ProductionRunwayScreen({
         icon={<CalendarClock aria-hidden="true" />}
         title="Production plan"
         description="Check crews, start dates, safety steps, and material needs. This page does not change a job."
+        actions={
+          identityReadFailed ? (
+            <Button disabled>Find a job</Button>
+          ) : (
+            <ProductionJobFinder
+              model={model}
+              canOpenJob={canOpenJob}
+              canOpenHistory={canOpenHistory}
+              refreshFailed={refreshFailed}
+              onRetry={onRetry}
+            />
+          )
+        }
         aside={
           <>
             <p className="text-sm font-bold text-muted">Today</p>
@@ -240,6 +259,165 @@ function ProductionRunwayScreen({
           />
         ))}
       </div>
+    </section>
+  );
+}
+
+function ProductionJobFinder({
+  model,
+  canOpenJob,
+  canOpenHistory,
+  refreshFailed,
+  onRetry,
+}: {
+  model: ProductionRunwayResponse;
+  canOpenJob: boolean;
+  canOpenHistory: boolean;
+  refreshFailed: boolean;
+  onRetry: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Hold only the choice. Every field and link follows the current authorized model.
+  const selected = model.jobs.find((job) => job.id === selectedId);
+  const bounded =
+    model.source_updated_at === null ||
+    model.partial_sources.length > 0 ||
+    model.stale_fields.length > 0;
+  const close = () => {
+    setOpen(false);
+    setSelectedId(null);
+  };
+  const number = selected?.job_number?.trim();
+
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Find a job</Button>
+      <Dialog
+        open={open}
+        onClose={close}
+        side="end"
+        title={selected ? "Job information" : "Choose a job"}
+        description="Read only. This does not send a crew."
+        footer={
+          open && selected ? (
+            <>
+              {canOpenJob ? (
+                <Button asChild variant="outline" size="compact">
+                  <Link
+                    to="/jobs/$jobId"
+                    params={{ jobId: selected.id }}
+                    aria-label={number ? `Open ${number}` : "Open job with no recorded number"}
+                  >
+                    Open job <ChevronRight aria-hidden="true" />
+                  </Link>
+                </Button>
+              ) : null}
+              {canOpenHistory ? (
+                <Button asChild variant="quiet" size="compact">
+                  <Link
+                    to="/jobs/$jobId/history"
+                    params={{ jobId: selected.id }}
+                    aria-label={
+                      number ? `History of ${number}` : "History of job with no recorded number"
+                    }
+                  >
+                    Job record <ChevronRight aria-hidden="true" />
+                  </Link>
+                </Button>
+              ) : null}
+            </>
+          ) : undefined
+        }
+      >
+        {open ? (
+          <>
+            {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
+            {bounded ? <DataBoundary model={model} /> : null}
+            {selected ? (
+              <>
+                <Button variant="quiet" size="compact" onClick={() => setSelectedId(null)}>
+                  Choose another job
+                </Button>
+                <ProductionJobInformation key={selected.id} job={selected} />
+              </>
+            ) : (
+              <>
+                {selectedId ? (
+                  <p className="text-sm leading-6">
+                    That job is no longer in this list. Choose a current job.
+                  </p>
+                ) : null}
+                {model.jobs.length === 0 ? (
+                  <p className="text-sm leading-6">No active jobs are in this list.</p>
+                ) : (
+                  <ul className="grid gap-3" aria-label="Current production jobs">
+                    {model.jobs.map((job) => (
+                      <li key={job.id}>
+                        <Button
+                          variant="outline"
+                          className="h-auto w-full min-w-0 justify-between whitespace-normal text-left"
+                          onClick={() => setSelectedId(job.id)}
+                        >
+                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                            <span className="block font-bold">
+                              {job.job_number?.trim() || "Job number not recorded"}
+                            </span>
+                            <span className="mt-1 block text-sm font-normal">
+                              {job.customer_display_name ?? "Customer name not available"}
+                            </span>
+                          </span>
+                          <ChevronRight className="shrink-0" aria-hidden="true" />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </>
+        ) : null}
+      </Dialog>
+    </>
+  );
+}
+
+function ProductionJobInformation({ job }: { job: ProductionRunwayJob }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
+
+  return (
+    <section className="min-w-0 text-foreground [overflow-wrap:anywhere]" aria-label="Selected job">
+      <h3 ref={heading} tabIndex={-1} className="break-words text-lg font-bold">
+        <span className="block text-sm font-semibold text-muted">Job number</span>
+        <span>{job.job_number?.trim() || "Not recorded"}</span>
+      </h3>
+      <dl className="mt-4 grid gap-4 text-sm">
+        <div>
+          <dt className="font-semibold text-muted">Customer</dt>
+          <dd className="mt-1 break-words leading-6">
+            {job.customer_display_name ?? "Customer name not available"}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-semibold text-muted">Job site</dt>
+          <dd className="mt-1 break-words leading-6">
+            {job.address ?? "Site address not available"}
+          </dd>
+        </div>
+      </dl>
+      <SystemDetails className="mt-4 rounded-lg border border-border" summaryClassName="px-4">
+        <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted">
+          <MetadataLine label="Job ID" value={job.id} />
+          <MetadataLine label="Job state" value={job.status ?? "Not found"} />
+          <MetadataLine label="Crew record" value={job.assignment?.id ?? "Not found"} />
+          <MetadataLine label="Crew state" value={job.assignment?.status ?? "Not found"} />
+          <MetadataLine label="Step data" value={job.gate_coverage} />
+          <MetadataLine label="Saved next step" value={job.next_action} />
+        </dl>
+      </SystemDetails>
     </section>
   );
 }

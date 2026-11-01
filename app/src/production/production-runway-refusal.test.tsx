@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -125,6 +125,13 @@ describe("Production authority refusal remains effective through unsuccessful re
       );
       expect(await screen.findByText("Previously Authorized Customer")).toBeVisible();
       expect(screen.getByText("1 lock still blocks this schedule")).toBeVisible();
+      await userEvent.click(screen.getByRole("button", { name: "Find a job" }));
+      await userEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /IW-SYNTH-REFUSAL/ }),
+      );
+      expect(
+        within(screen.getByRole("dialog")).getByText("Previously Authorized Customer"),
+      ).toBeVisible();
 
       fetcher.mockResolvedValueOnce(Response.json({ error: "forbidden" }, { status }));
       await act(async () => {
@@ -134,6 +141,7 @@ describe("Production authority refusal remains effective through unsuccessful re
       await flushObserver();
 
       const hidden = () => {
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
         expect(screen.queryByText("Previously Authorized Customer")).not.toBeInTheDocument();
         expect(screen.queryByText("100 Synthetic Example Street")).not.toBeInTheDocument();
         expect(screen.queryByText("1 lock still blocks this schedule")).not.toBeInTheDocument();

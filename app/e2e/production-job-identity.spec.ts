@@ -3,49 +3,16 @@ import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-const captureDir = process.env.PRODUCTION_D5_CAPTURE_DIR;
-const gateNames = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"];
-const fixture = {
-  version: 1,
-  source_updated_at: "2026-07-16T12:00:00.000Z",
-  read_model_generated_at: "2026-07-16T12:00:01.000Z",
-  stale_fields: [],
-  permissions: ["jobs:read:any"],
-  allowed_actions: ["job.read", "production.read"],
-  partial_sources: [],
-  summary: {
-    active_jobs: 1,
-    blocked: 1,
-    scheduled: 0,
-    needs_assignment: 0,
-    ready_for_review: 0,
-    needs_verification: 0,
-  },
-  jobs: [
-    {
-      id: "native-job:synthetic-d5",
-      job_number: "IW-SYNTH-D5",
-      brand: "IronWrap Exteriors",
-      service_type: "Roofing",
-      status: "In Production",
-      version: 1,
-      assignment: null,
-      scheduling_preparation_allowed: false,
-      lane: "blocked",
-      next_action: "Review the source-backed condition",
-      gate_coverage: "complete",
-      gate_summary: { expected: 6, blocked: 1, ready: 5, waived: 0, done: 0 },
-      scheduling_gates: gateNames.map((name) => ({
-        name,
-        state: name === "Materials" ? "Blocked" : "Ready",
-      })),
-      material_attention: [{ status: "Shortage", requested_delivery_date: null }],
-    },
-  ],
-  crews: [],
-};
+import {
+  identityStates,
+  malformedProductionIdentityFixture,
+  nativeJobIdentityFixtures,
+  productionIdentityFixture,
+  syntheticNativeJobId,
+} from "./fixtures/production-identity";
 
-const states = ["known", "unknown", "legacy", "long", "malformed"] as const;
+const captureDir = process.env.PRODUCTION_D5_CAPTURE_DIR;
+const states = identityStates;
 
 test.describe("Production job identity representation", () => {
   test.skip(process.env.ACCEPTANCE_MODE !== "estimator", "requires the synthetic office session");
@@ -54,41 +21,9 @@ test.describe("Production job identity representation", () => {
     test(`renders the ${state} identity without inferred data or authority`, async ({
       page,
     }, testInfo) => {
-      const recordedJob = fixture.jobs[0]!;
-      const identity =
-        state === "legacy"
-          ? {}
-          : {
-              customer_display_name:
-                state === "unknown"
-                  ? null
-                  : state === "long"
-                    ? "Synthetic Customer With A Deliberately Long Recorded Organization Name For Wrapping"
-                    : "Synthetic Customer One",
-              address:
-                state === "unknown"
-                  ? null
-                  : state === "malformed"
-                    ? 42
-                    : state === "long"
-                      ? "Unit 200 - 100 Very Long Synthetic Example Street, Example Municipality, Alberta, Canada"
-                      : "2 - 100 Example Street, Example City, AB",
-            };
-      const body = {
-        ...fixture,
-        jobs: [
-          {
-            ...recordedJob,
-            ...identity,
-            job_number:
-              state === "unknown"
-                ? null
-                : state === "long"
-                  ? "IW-SYNTHETIC-JOB-NUMBER-WITH-A-LONG-RECORDED-SUFFIX-0001"
-                  : recordedJob.job_number,
-          },
-        ],
-      };
+      const valid = productionIdentityFixture(state === "malformed" ? "known" : state);
+      const identity = valid.jobs[0]!;
+      const body = state === "malformed" ? malformedProductionIdentityFixture() : valid;
       const reads: string[] = [];
       await page.route(
         (url) => url.pathname === "/api/v1/production",
@@ -151,14 +86,124 @@ test.describe("Production job identity representation", () => {
           path: join(captureDir, `${state}-top-${testInfo.project.name}.png`),
         });
         if (state !== "malformed") {
-          await page.getByRole("heading", { level: 3 }).evaluate((heading) => {
-            window.scrollTo({ top: heading.getBoundingClientRect().top + window.scrollY - 96 });
-          });
+          await page.evaluate(() =>
+            window.scrollTo({ top: document.documentElement.scrollHeight }),
+          );
           await page.screenshot({
-            path: join(captureDir, `${state}-card-${testInfo.project.name}.png`),
+            path: join(captureDir, `${state}-bottom-${testInfo.project.name}.png`),
           });
         }
       }
+    });
+  }
+});
+
+test.describe("Current production job finder", () => {
+  test.skip(process.env.ACCEPTANCE_MODE !== "estimator", "requires the synthetic office session");
+
+  for (const state of states) {
+    test(`reads ${state} through the real chooser, disclosure and same-native routes`, async ({
+      page,
+    }, testInfo) => {
+      const device =
+        testInfo.project.name === "mobile-chromium"
+          ? { width: 390, height: 844 }
+          : { width: 1280, height: 720 };
+      await page.setViewportSize(device);
+      let malformed = state === "malformed";
+      const validState = state === "malformed" ? "known" : state;
+      const production = productionIdentityFixture(validState);
+      const native = nativeJobIdentityFixtures(validState);
+      const routeRequests: string[] = [];
+      await page.route(
+        (url) => url.pathname === "/api/v1/production",
+        (route) =>
+          route.fulfill({
+            status: 200,
+            json: malformed ? malformedProductionIdentityFixture() : production,
+            headers: { "Cache-Control": "private, no-store" },
+          }),
+      );
+      await page.route(
+        (url) =>
+          decodeURIComponent(url.pathname) === `/api/v1/jobs/${syntheticNativeJobId}` ||
+          decodeURIComponent(url.pathname) === `/api/v1/jobs/${syntheticNativeJobId}/history`,
+        async (route) => {
+          const path = decodeURIComponent(new URL(route.request().url()).pathname);
+          routeRequests.push(path);
+          await route.fulfill({
+            status: 200,
+            json: path.endsWith("/history") ? native.history : native.plan,
+            headers: { "Cache-Control": "private, no-store" },
+          });
+        },
+      );
+      await page.goto("/production");
+      if (malformed) {
+        await expect(page.getByRole("heading", { name: "Job plan could not load" })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Find a job" })).toHaveCount(0);
+        malformed = false;
+        await page.getByRole("button", { name: "Load again" }).click();
+      }
+      const frontDoor = page.getByRole("button", { name: "Find a job" });
+      await expect(frontDoor).toBeInViewport({ ratio: 1 });
+      await frontDoor.click();
+      await page.keyboard.press("Shift+Tab");
+      expect(await page.evaluate(() => !!document.activeElement?.closest("dialog[open]"))).toBe(
+        true,
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(frontDoor).toBeFocused();
+
+      const choose = async () => {
+        await page.getByRole("button", { name: "Find a job" }).click();
+        const picker = page.getByRole("dialog", { name: "Choose a job" });
+        await picker.getByRole("button", { name: /IW-SYNTH|Job number not recorded/ }).click();
+        return page.getByRole("dialog", { name: "Job information" });
+      };
+      const dialog = await choose();
+      await expect(dialog.getByRole("heading", { name: /^Job number/ })).toBeFocused();
+      await expect(
+        dialog.getByText(
+          state === "legacy" || state === "unknown"
+            ? "Customer name not available"
+            : production.jobs[0]!.customer_display_name!,
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(
+        dialog.getByText(
+          state === "legacy" || state === "unknown"
+            ? "Site address not available"
+            : production.jobs[0]!.address!,
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(dialog.getByText(syntheticNativeJobId, { exact: true })).toBeHidden();
+      await dialog.locator("summary").click();
+      await expect(dialog.getByText(syntheticNativeJobId, { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("link", { name: /^Open / })).toHaveAttribute(
+        "href",
+        "/jobs/native-job%3Asynthetic-d5",
+      );
+      await expect(dialog.getByRole("link", { name: /^History of / })).toHaveAttribute(
+        "href",
+        "/jobs/native-job%3Asynthetic-d5/history",
+      );
+      await dialog.getByRole("link", { name: /^Open / }).click();
+      await expect(page.getByRole("heading", { name: "Job details", exact: true })).toBeVisible();
+      await expect(page.locator("main h1")).toContainText(native.plan.job.address ?? "Job plan");
+      await page.goBack();
+      const restored = await choose();
+      await restored.getByRole("link", { name: /^History of / }).click();
+      await expect(page.locator("main h1")).toHaveText(
+        native.history.job.job_number ?? syntheticNativeJobId,
+      );
+      expect(routeRequests).toEqual([
+        `/api/v1/jobs/${syntheticNativeJobId}`,
+        `/api/v1/jobs/${syntheticNativeJobId}/history`,
+      ]);
     });
   }
 });

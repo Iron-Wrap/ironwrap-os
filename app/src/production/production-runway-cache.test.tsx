@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { StrictMode, type ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
@@ -147,14 +148,17 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
 function renderRunway(
   session: AuthenticatedSession = ownerSession,
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  strict = false,
 ) {
-  const content = (current: AuthenticatedSession) => (
+  const tree = (current: AuthenticatedSession) => (
     <QueryClientProvider client={client}>
       <SessionProvider session={current}>
         <ProductionRunwayPage />
       </SessionProvider>
     </QueryClientProvider>
   );
+  const content = (current: AuthenticatedSession) =>
+    strict ? <StrictMode>{tree(current)}</StrictMode> : tree(current);
   const view = render(content(session));
   return {
     ...view,
@@ -172,6 +176,7 @@ function deferred<T>() {
 }
 
 describe("Production runway cache and session isolation", () => {
+  afterEach(() => vi.unstubAllGlobals());
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(loadProductionRunway).mockResolvedValue(model());
@@ -278,6 +283,93 @@ describe("Production runway cache and session isolation", () => {
       expect(await screen.findByRole("heading", { name: "Job plan could not load" })).toBeVisible();
       expect(screen.queryByText("Synthetic Customer JOB-A")).not.toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "Open IW-1001" })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([401, 403])(
+    "keeps a newer parsed modal after a superseded %s read with abort-aware transport in StrictMode",
+    async (status) => {
+      const actual = await vi.importActual<typeof import("./production-api")>("./production-api");
+      vi.mocked(loadProductionRunway).mockImplementation(actual.loadProductionRunway);
+      const reads: { path: string; signal: AbortSignal; resolve: (response: Response) => void }[] =
+        [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (_path: string, init: RequestInit) =>
+            new Promise<Response>((resolve, reject) => {
+              const signal = init.signal!;
+              signal.addEventListener(
+                "abort",
+                () =>
+                  reject(new DOMException("Synthetic conforming transport abort", "AbortError")),
+                { once: true },
+              );
+              reads.push({ path: _path, signal, resolve });
+            }),
+        ),
+      );
+      const view = renderRunway(ownerSession, undefined, true);
+      await waitFor(() => expect(reads.some((read) => !read.signal.aborted)).toBe(true));
+      await act(async () => {
+        reads.at(-1)!.resolve(Response.json(model()));
+      });
+      await userEvent.click(await screen.findByRole("button", { name: "Find a job" }));
+      await userEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /IW-1001/ }),
+      );
+
+      const before = reads.length;
+      void view.client.invalidateQueries({ queryKey: ["production-runway"] });
+      await waitFor(() => expect(reads.length).toBeGreaterThan(before));
+      const superseded = reads.at(-1)!;
+      view.changeSession({ ...ownerSession, csrf_token: "synthetic-new-sign-in" });
+      await waitFor(() => expect(reads.at(-1)).not.toBe(superseded));
+      expect(superseded.signal.aborted).toBe(true);
+      await act(async () => {
+        reads
+          .at(-1)!
+          .resolve(
+            Response.json(
+              model({
+                jobs: [
+                  {
+                    ...job("current-job", "IW-CURRENT", "blocked"),
+                    customer_display_name: "Current Parsed Customer",
+                  },
+                ],
+              }),
+            ),
+          );
+      });
+      await userEvent.click(await screen.findByRole("button", { name: "Find a job" }));
+      await userEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /IW-CURRENT/ }),
+      );
+      await act(async () => {
+        superseded.resolve(Response.json({ error: "forbidden" }, { status }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(within(screen.getByRole("dialog")).getByText("Current Parsed Customer")).toBeVisible();
+      expect(screen.queryByText("Synthetic Customer JOB-A")).not.toBeInTheDocument();
+      expect(reads.every((read) => read.path === "/api/v1/production?include_job_identity=1")).toBe(
+        true,
+      );
+      expect(
+        JSON.stringify(
+          view.client
+            .getQueryCache()
+            .getAll()
+            .map((query) => query.queryKey),
+        ),
+      ).not.toContain("synthetic-new-sign-in");
+
+      const finalCount = reads.length;
+      void view.client.invalidateQueries({ queryKey: ["production-runway"] });
+      await waitFor(() => expect(reads.length).toBeGreaterThan(finalCount));
+      const unmounted = reads.at(-1)!;
+      view.unmount();
+      expect(unmounted.signal.aborted).toBe(true);
     },
   );
 });

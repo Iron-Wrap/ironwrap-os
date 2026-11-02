@@ -15,7 +15,6 @@ export const newoReadinessCheckIds = [
   "configuration",
   "queue",
   "dlq",
-  "frappe",
   "jobnimbus",
   "booking_mode",
 ] as const;

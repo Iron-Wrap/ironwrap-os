@@ -1479,9 +1479,9 @@ export async function buildTodayReadModel(
         return scope ? [scope] : [];
       })),
   ]);
-  const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const blockedGates = gateSource.rows.map(nativeProductionGateDocumentRow);
   const properties = propertySource.rows
-    .map(nativePropertyFrappeRow)
+    .map(nativePropertyDocumentRow)
     .filter((row): row is DocumentRow => row !== null);
   const propertyById = new Map(properties.map((row) => [text(row.name), row]));
   const blockedByJob = groupBy(blockedGates, "roof_job");
@@ -1583,9 +1583,9 @@ export async function buildProductionRunwayReadModel(
     nativeProductionGates(env, auth.session.tenant_id, jobIds),
     nativeMaterialExceptions(env, auth.session.tenant_id, jobIds),
   ]);
-  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const gates = gateSource.rows.map(nativeProductionGateDocumentRow);
   const materialExceptions = materialSource.rows.map(
-    nativeMaterialExceptionFrappeRow,
+    nativeMaterialExceptionDocumentRow,
   );
 
   const partialSources: string[] = [];
@@ -1766,7 +1766,7 @@ export async function buildProductionRunwayReadModel(
         ...assignments,
         ...gates,
         ...materialExceptions,
-        ...crewSource.rows.map(nativeProductionCrewFrappeRow),
+        ...crewSource.rows.map(nativeProductionCrewDocumentRow),
       ],
       stale,
     ),
@@ -1856,9 +1856,9 @@ export async function buildJobReadModel(
       officeContactForRead(env, auth.session.tenant_id),
       holdingStopsForRead(env, auth.session.tenant_id, [jobName]),
     ]);
-  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
-  const property = nativePropertyFrappeRow(nativeJobCore.property);
-  const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
+  const gates = gateSource.rows.map(nativeProductionGateDocumentRow);
+  const property = nativePropertyDocumentRow(nativeJobCore.property);
+  const customer = nativeCustomerDocumentRow(nativeJobCore.customer);
   const nativeWorkPackageEvidence =
     assignmentRow && workPackage
       ? await nativeWorkPackageProofRows(
@@ -2238,8 +2238,8 @@ export async function buildJobHistoryReadModel(
   );
   if (!nativeJobCore) return null;
   const job = nativeOperatingJobRow(nativeJobCore.job);
-  const property = nativePropertyFrappeRow(nativeJobCore.property);
-  const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
+  const property = nativePropertyDocumentRow(nativeJobCore.property);
+  const customer = nativeCustomerDocumentRow(nativeJobCore.customer);
   const [gateSource, evidence, fieldMeasurements] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, [jobName]),
     listJobEvidenceFromD1(env, {
@@ -2253,7 +2253,7 @@ export async function buildJobHistoryReadModel(
       jobId: jobName,
     }),
   ]);
-  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const gates = gateSource.rows.map(nativeProductionGateDocumentRow);
   const evidenceRows = (evidence?.rows ?? []).map(nativeWorkPackageEvidenceRow);
   const readEnvelope = envelope(
     auth,
@@ -2365,16 +2365,16 @@ export async function buildOwnerNowReadModel(
   ]);
 
   const fieldBlockers = fieldBlockerSource.rows.map(
-    nativeOwnerFieldBlockerFrappeRow,
+    nativeOwnerFieldBlockerDocumentRow,
   );
-  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const gates = gateSource.rows.map(nativeProductionGateDocumentRow);
   const incidents = incidentSource.rows.map(
-    nativeOwnerEffectExceptionFrappeRow,
+    nativeOwnerEffectExceptionDocumentRow,
   );
   const materialExceptions = materialExceptionSource.rows.map(
-    nativeMaterialExceptionFrappeRow,
+    nativeMaterialExceptionDocumentRow,
   );
-  const untriagedLeads = untriagedLeadSource.rows.map(nativeOwnerLeadFrappeRow);
+  const untriagedLeads = untriagedLeadSource.rows.map(nativeOwnerLeadDocumentRow);
   const unknownTriageLeads: DocumentRow[] = [];
 
   const reconciliationByIntent = new Map<
@@ -2571,7 +2571,7 @@ export async function buildOwnerNowReadModel(
     const quoteCandidates = currentQuotesByJob.get(jobId) ?? [];
     const selectedQuotes =
       !quoteSource.partial && quoteCandidates.length === 1
-        ? quoteCandidates.map(nativeOwnerQuoteFrappeRow)
+        ? quoteCandidates.map(nativeOwnerQuoteDocumentRow)
         : [];
     const projection = buildJobEconomicsProjection({
       tenantId: auth.session.tenant_id,
@@ -2829,7 +2829,7 @@ export async function buildOwnerNowReadModel(
         ...payments,
         ...leadRows,
         ...materialExceptions,
-        ...quoteSource.rows.map(nativeOwnerQuoteFrappeRow),
+        ...quoteSource.rows.map(nativeOwnerQuoteDocumentRow),
         ...accountingRows,
         ...economicsReconciliations,
       ],
@@ -4001,7 +4001,7 @@ function nativeOperatingWorkObjectAssignmentRow(
   };
 }
 
-function nativeProductionGateFrappeRow(
+function nativeProductionGateDocumentRow(
   row: NativeProductionGateRow,
 ): DocumentRow {
   return {
@@ -4019,7 +4019,7 @@ function nativeProductionGateFrappeRow(
   };
 }
 
-function nativeMaterialExceptionFrappeRow(
+function nativeMaterialExceptionDocumentRow(
   row: NativeMaterialExceptionRow,
 ): DocumentRow {
   return {
@@ -4033,7 +4033,7 @@ function nativeMaterialExceptionFrappeRow(
   };
 }
 
-function nativeOwnerFieldBlockerFrappeRow(
+function nativeOwnerFieldBlockerDocumentRow(
   row: NativeOwnerFieldBlockerRow,
 ): DocumentRow {
   return {
@@ -4047,7 +4047,7 @@ function nativeOwnerFieldBlockerFrappeRow(
   };
 }
 
-function nativeOwnerEffectExceptionFrappeRow(
+function nativeOwnerEffectExceptionDocumentRow(
   row: NativeOwnerEffectExceptionRow,
 ): DocumentRow {
   return {
@@ -4062,7 +4062,7 @@ function nativeOwnerEffectExceptionFrappeRow(
   };
 }
 
-function nativeOwnerLeadFrappeRow(row: OperatingSalesLeadRecord): DocumentRow {
+function nativeOwnerLeadDocumentRow(row: OperatingSalesLeadRecord): DocumentRow {
   return {
     name: row.lead_id,
     envelope_id: row.source_envelope_id,
@@ -4075,7 +4075,7 @@ function nativeOwnerLeadFrappeRow(row: OperatingSalesLeadRecord): DocumentRow {
   };
 }
 
-function nativeOwnerQuoteFrappeRow(row: CommercialQuoteRecord): DocumentRow {
+function nativeOwnerQuoteDocumentRow(row: CommercialQuoteRecord): DocumentRow {
   return {
     name: row.quote_revision_id,
     customer_quote_id: row.customer_quote_id,
@@ -4123,7 +4123,7 @@ function nativeOwnerAccountingMagnitude(
   return magnitude;
 }
 
-function nativeProductionCrewFrappeRow(
+function nativeProductionCrewDocumentRow(
   row: NativeProductionCrewRow,
 ): DocumentRow {
   return {
@@ -4397,7 +4397,7 @@ function nativeWorkPackageEvidenceRow(
   };
 }
 
-function nativeCustomerFrappeRow(
+function nativeCustomerDocumentRow(
   row: NativeCustomerRecord | null | undefined,
 ): DocumentRow | null {
   if (!row) return null;
@@ -4409,7 +4409,7 @@ function nativeCustomerFrappeRow(
   };
 }
 
-function nativePropertyFrappeRow(
+function nativePropertyDocumentRow(
   row: NativePropertyRecord | null | undefined,
 ): DocumentRow | null {
   if (!row) return null;

@@ -100,7 +100,6 @@ export interface ReadinessReport {
     newo_configuration_drift: boolean;
     newo_queue_binding: boolean;
     newo_dlq_state: boolean;
-    newo_frappe_readiness: boolean;
     newo_jobnimbus_bridge: boolean;
     newo_booking_mode: boolean;
   };
@@ -142,7 +141,6 @@ export interface NewoReadinessDetail {
   api_authenticated: boolean;
   production_actor_verified: boolean;
   report_webhooks_verified: boolean;
-  frappe_reachable: boolean;
   owned_failures: {
     failed_events: number;
     failed_sync: number;
@@ -152,7 +150,6 @@ export interface NewoReadinessDetail {
   } | null;
   drift_reasons: string[];
   api_error: string | null;
-  frappe_error: string | null;
 }
 
 export interface OperationalStatus {
@@ -287,7 +284,6 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     newo_configuration_drift: true,
     newo_queue_binding: true,
     newo_dlq_state: true,
-    newo_frappe_readiness: true,
     newo_jobnimbus_bridge: true,
     newo_booking_mode: true,
   };
@@ -311,7 +307,6 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   checks.newo_configuration_drift = !newo.required || newo.drift_reasons.length === 0;
   checks.newo_queue_binding = !newo.required || newo.queue_binding_ready;
   checks.newo_dlq_state = !newo.required || newo.dlq_clear;
-  checks.newo_frappe_readiness = !newo.required || newo.frappe_reachable;
   checks.newo_jobnimbus_bridge = !newo.required || newo.jobnimbus_bridge_ready;
   checks.newo_booking_mode = !newo.required || newo.booking_mode_ready;
 
@@ -337,7 +332,7 @@ export function readinessVerdicts(
     core_ok: ownedCoreOk,
     owned_core_ok: ownedCoreOk,
     office_operating_plane_ok: officeOperatingPlaneOk,
-    projection_rails_ok: ownedCoreOk && frappeProjectionReady && checks.newo_frappe_readiness,
+    projection_rails_ok: ownedCoreOk && frappeProjectionReady,
   };
 }
 
@@ -518,8 +513,6 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
   let productionActorVerified = false;
   let reportWebhooksVerified = false;
   let apiError: string | null = null;
-  let frappeReachable = false;
-  let frappeError: string | null = null;
   let counts: Awaited<ReturnType<typeof newoOperationalCounts>> | null = null;
   let openDeadLetters: number | null = null;
 
@@ -549,20 +542,15 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
     }
   }
 
-  if (required) {
-    const frappe = await checkFrappeReachability(runtime);
-    frappeReachable = frappe.ok;
-    frappeError = frappe.error;
-    if (databaseReady) {
-      try {
-        [counts, openDeadLetters] = await Promise.all([
-          newoOperationalCounts(env),
-          countOpenNewoDeadLetters(env),
-        ]);
-      } catch {
-        counts = null;
-        openDeadLetters = null;
-      }
+  if (required && databaseReady) {
+    try {
+      [counts, openDeadLetters] = await Promise.all([
+        newoOperationalCounts(env),
+        countOpenNewoDeadLetters(env),
+      ]);
+    } catch {
+      counts = null;
+      openDeadLetters = null;
     }
   }
   const dlqClear = counts !== null && openDeadLetters !== null && openDeadLetters === 0 &&
@@ -583,7 +571,6 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
     api_authenticated: apiAuthenticated,
     production_actor_verified: productionActorVerified,
     report_webhooks_verified: reportWebhooksVerified,
-    frappe_reachable: frappeReachable,
     owned_failures: counts ? {
       failed_events: counts.failed_events,
       failed_sync: counts.failed_sync,
@@ -593,7 +580,6 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
     } : null,
     drift_reasons: driftReasons,
     api_error: apiError,
-    frappe_error: frappeError,
   };
 }
 
@@ -640,85 +626,6 @@ function newoConfigurationDrift(env: AppEnv & ExtendedEnv): string[] {
   }
   if (!nonEmpty(env.NEWO_CONTROL_SIGNING_SECRET)) reasons.push("control_signing_secret_missing");
   return [...new Set(reasons)];
-}
-
-async function checkFrappeReachability(env: AppEnv & ExtendedEnv): Promise<{ ok: boolean; error: string | null }> {
-  if (String(env.ERPNEXT_ENABLED ?? "false") !== "true" || !nonEmpty(env.ERPNEXT_BASE_URL) ||
-    !nonEmpty(env.ERPNEXT_API_KEY) || !nonEmpty(env.ERPNEXT_API_SECRET)) {
-    return { ok: false, error: "frappe_disabled_or_unconfigured" };
-  }
-  let base: URL;
-  try {
-    base = new URL(String(env.ERPNEXT_BASE_URL));
-  } catch {
-    return { ok: false, error: "frappe_base_url_invalid" };
-  }
-  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
-    return { ok: false, error: "frappe_base_url_invalid" };
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3_000);
-  try {
-    const response = await fetch(`${base.toString().replace(/\/+$/, "")}/api/method/ping`, {
-      method: "GET",
-      redirect: "error",
-      signal: controller.signal,
-      headers: {
-        accept: "application/json",
-        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
-      },
-    });
-    return response.ok ? { ok: true, error: null } : { ok: false, error: `frappe_http_${response.status}` };
-  } catch {
-    return { ok: false, error: controller.signal.aborted ? "frappe_timeout" : "frappe_unreachable" };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-export async function getNewoOpenIncidentCount(env: Env): Promise<number | null> {
-  const runtime = env as AppEnv & ExtendedEnv;
-  if (String(runtime.ERPNEXT_ENABLED ?? "false") !== "true" || !nonEmpty(runtime.ERPNEXT_BASE_URL) ||
-    !nonEmpty(runtime.ERPNEXT_API_KEY) || !nonEmpty(runtime.ERPNEXT_API_SECRET)) return null;
-  let base: URL;
-  try {
-    base = new URL(String(runtime.ERPNEXT_BASE_URL));
-  } catch {
-    return null;
-  }
-  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) return null;
-  const query = new URLSearchParams({
-    fields: JSON.stringify(["name"]),
-    filters: JSON.stringify([
-      ["Automation Incident", "source_system", "=", "Newo"],
-      ["Automation Incident", "status", "in", ["Open", "Acknowledged"]],
-    ]),
-    limit_page_length: "501",
-  });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3_000);
-  try {
-    const response = await fetch(
-      `${base.toString().replace(/\/+$/, "")}/api/resource/Automation%20Incident?${query}`,
-      {
-        method: "GET",
-        redirect: "error",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json",
-          authorization: `token ${runtime.ERPNEXT_API_KEY}:${runtime.ERPNEXT_API_SECRET}`,
-        },
-      },
-    );
-    if (!response.ok) return null;
-    const body = await response.json() as { data?: unknown };
-    if (!Array.isArray(body.data) || body.data.length > 500) return null;
-    return body.data.length;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function newoArray(value: NewoJson): Array<Record<string, NewoJson>> {

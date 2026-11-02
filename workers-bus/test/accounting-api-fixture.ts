@@ -221,9 +221,9 @@ export function knownJobs(
   };
 }
 
-/** An operating core the Worker cannot reach - the shape `frappe-read.ts` throws in. */
+/** An operating core the Worker cannot reach: the job directory throws instead of answering. */
 export const unreachableJobDirectory: MoneyIntentJobDirectory = async () => {
-  throw new Error("frappe_read_http_502");
+  throw new Error("operating_core_unreachable");
 };
 
 export interface CallOptions {

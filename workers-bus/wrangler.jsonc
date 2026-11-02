@@ -160,7 +160,6 @@
       "APP_ALLOW_INSECURE_LOCAL": "false",
       "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
       "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-      "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
       "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
       "APP_APPROVAL_BROKER_URL": "",
       "APP_APPROVAL_BROKER_KEY_ID": "",
@@ -276,9 +275,8 @@
       // ERPNEXT_BASE_URL is empty: the Frappe host it pointed at, on ironwrap-prod, is
       // decommissioned (IRO-280). While ERPNEXT_ENABLED and
       // FACET_DESIGN_FRAPPE_PROJECTION_ENABLED are "false", the guards in erpnext.ts,
-      // operations.ts and facet-design-frappe-projection.ts return before they read the URL,
-      // and the frappe-read.ts list helpers have no caller in workers-bus/src. The one reader
-      // that ignores the flags is the projection verdict: /ready?scope=projection
+      // operations.ts and facet-design-frappe-projection.ts return before they read the URL.
+      // The one reader that ignores the flags is the projection verdict: /ready?scope=projection
       // (projection_rails_ok) needs a non-empty URL and the API key pair, so it answers 503
       // until a Frappe host exists. The default, core, office and ops scopes do not use it.
       // Set the URL together with ERPNEXT_ENABLED when a Frappe host exists (IRO-240).
@@ -411,7 +409,6 @@
           "APP_ALLOW_INSECURE_LOCAL": "true",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-          "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
           "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
           "APP_APPROVAL_BROKER_URL": "",
           "APP_APPROVAL_BROKER_KEY_ID": "",
@@ -649,7 +646,6 @@
           "APP_ALLOW_INSECURE_LOCAL": "false",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-          "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
           "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
           "APP_APPROVAL_BROKER_URL": "",
           "APP_APPROVAL_BROKER_KEY_ID": "",

@@ -615,7 +615,6 @@ const readinessLabels: Record<NewoReadinessCheckId, string> = {
   configuration: "Setup match",
   queue: "Call list",
   dlq: "Failed saves",
-  frappe: "Main office save",
   jobnimbus: "JobNimbus link",
   booking_mode: "Booking rule",
 };

@@ -72,7 +72,7 @@ npx wrangler secret put NEWO_BOOKING_TOKEN --env=""
 npx wrangler secret put NEWO_CONTROL_SIGNING_SECRET --env=""
 ```
 
-Production also requires the existing Frappe and notification secrets. `/ready` cannot pass with `NEWO_WEBHOOK_TOKEN` absent or Frappe disabled/unreachable.
+Production also requires the existing notification secrets. Newo readiness makes no Frappe call. Default `/ready` is the office operating plane and contains no Newo check: a missing `NEWO_WEBHOOK_TOKEN` shows as `newo_webhook_credentials: false` in the admin diagnostic map and as a failed check on `/newo`.
 
 Fill the reviewed non-secret values in `wrangler.jsonc` and `config/newo/production.expected.json`:
 
@@ -126,16 +126,16 @@ Required failure evidence includes wrong job verification, prompt injection, exa
 Prove before forwarding:
 
 1. Wrong credentials create no R2/D1 business record.
-2. A valid controlled call creates an R2 object, event receipt, session, Frappe record, downstream outcome, and readable operator state.
+2. A valid controlled call creates an R2 object, event receipt, session, D1 operating-core record, downstream outcome, and readable operator state.
 3. A missing report becomes one visible reconciliation exception.
-4. A failed transfer creates an urgent callback incident and owner alert.
+4. A failed transfer sends the urgent callback owner alert and shows as an open callback issue on `/newo`.
 5. Transfer, voicemail fallback, and forwarding rollback work from the real number.
 
 ## 7. Booking gate
 
 Keep request-only mode unless JobNimbus exposes a supported appointment contract. Controlled proof must cover create, read, collision, update, cancel, retry, timezone, and session-bound idempotency with 100 percent correctness.
 
-If supported, return opaque short-lived slot tokens, recheck the slot on booking, and mirror the confirmed appointment to Frappe. Only then set:
+If supported, return opaque short-lived slot tokens and recheck the slot on booking. Only then set:
 
 ```text
 NEWO_JOBNIMBUS_BOOKING_PROVEN=true
@@ -162,7 +162,7 @@ Use the admin bearer for diagnostic readiness. The unauthenticated route intenti
 curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" https://<worker-origin>/ready
 ```
 
-The five-minute cron retries Newo landing and detects missing reports. The daily cron checks actor/webhook/config drift, Frappe callback incidents, downstream failures, and records that call-minute usage is unavailable from the documented API. Provider-console usage alerts remain required evidence.
+The five-minute cron retries Newo landing and detects missing reports. The daily cron checks actor/webhook/config drift, failed handoffs (the open callback issues counted in D1), downstream failures, and records that call-minute usage is unavailable from the documented API. Provider-console usage alerts remain required evidence.
 
 ## 10. Rollback
 

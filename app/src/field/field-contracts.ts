@@ -267,6 +267,21 @@ export const proofStreamItemSchema = z.lazy(() =>
   }),
 );
 
+export const crewOpenGatesSchema = z
+  .array(
+    z
+      .object({
+        gate: z.enum(["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]),
+        label: z.string().min(1).max(120),
+        clearer_display_name: z.string().min(1).max(244),
+      })
+      .strict(),
+  )
+  .max(6)
+  .refine((items) => new Set(items.map((item) => item.gate)).size === items.length);
+// Older cached packets have no gate projection. Absence means unknown, never cleared.
+const optionalOpenGatesSchema = crewOpenGatesSchema.nullable().default(null);
+
 export const todayResponseSchema = envelopeSchema.extend({
   date: z.string().min(1),
   jobs: z.array(
@@ -279,6 +294,7 @@ export const todayResponseSchema = envelopeSchema.extend({
       scheduled_start: nullableText,
       scheduled_end: nullableText,
       blocked_gate_count: z.number().int().nonnegative(),
+      open_gates: optionalOpenGatesSchema,
       next_action: z.string().min(1),
       assignment: assignmentSchema.nullable(),
     }),
@@ -321,6 +337,7 @@ export const workObjectResponseSchema = z.lazy(() =>
 export const jobResponseSchema = z.lazy(() =>
   envelopeSchema
     .extend({
+      open_gates: optionalOpenGatesSchema,
       field_measurements: z.unknown().optional(),
       field_measurements_more: z.unknown().optional(),
       office_contact: z.unknown().optional(),
@@ -442,9 +459,18 @@ export const fieldMeasurementPageSchema = z.lazy(() =>
   }),
 );
 
-export type TodayResponse = z.infer<typeof todayResponseSchema>;
+// In-memory and cached legacy packets may predate this read contract. Parsed network values
+// default to null; both absent and null must remain unknown to future UI consumers.
+type ParsedTodayResponse = z.infer<typeof todayResponseSchema>;
+type ParsedTodayJob = ParsedTodayResponse["jobs"][number];
+export type TodayResponse = Omit<ParsedTodayResponse, "jobs"> & {
+  jobs: Array<Omit<ParsedTodayJob, "open_gates"> & { open_gates?: ParsedTodayJob["open_gates"] }>;
+};
 export type WorkObjectResponse = z.infer<typeof workObjectResponseSchema>;
-export type JobResponse = z.infer<typeof jobResponseSchema>;
+type ParsedJobResponse = z.infer<typeof jobResponseSchema>;
+export type JobResponse = Omit<ParsedJobResponse, "open_gates"> & {
+  open_gates?: ParsedJobResponse["open_gates"];
+};
 export type ProofStreamItem = z.infer<typeof proofStreamItemSchema>;
 export type ProofPageResponse = z.infer<typeof proofPageResponseSchema>;
 export type FieldMeasurementCapture = z.infer<typeof fieldMeasurementCaptureSchema>;

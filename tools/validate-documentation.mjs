@@ -57,6 +57,7 @@ const forbiddenAuthorityClaims = [
   /one tenant \+ one Frappe site \+ one Worker deployment/i,
   /one canonical implementation owner across Facet and Home Config 3D/i,
   /Home Config 3D repository \| Separate predecessor\/lineage product/i,
+  /Home Config 3D\s+(?:is|was)\s+(?:retired\s+)?draft\s+lineage/i,
   /archive\/freeze requires a separate owner decision/i,
   /leftover Frappe\s+adapter receipts are optional sentinels, not a release gate/i,
 ];
@@ -317,7 +318,7 @@ function repositoryArchitectureFacts() {
     product_topology: {
       active_products: ["ironwrap_os", "facet"],
       facet_repository: "Iron-Wrap/facet",
-      home_config_3d: "retired_draft_lineage_absorbed_into_facet",
+      home_config_3d: "separate_product_read_only",
       home_config_3d_execution_lane: false,
     },
     maturity: {

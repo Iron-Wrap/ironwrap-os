@@ -1544,9 +1544,9 @@ The program has exactly two product lanes:
 | IronWrap OS | lead/job/customer/property, commercial transitions, production, field, safety, inventory/shop, providers, accounting intent/reconciliation, operating AI | Facet project/design truth |
 | Facet | tenant project, attributable measurement/design, 3D/configuration, visual estimate, customer design-decision evidence, signed evidence delivery | IronWrap quote/publication/contract/deposit/schedule/invoice/accounting truth |
 
-Home Config 3D is retired draft lineage already absorbed into Facet. It has no third workstream,
-repository disposition, parity burden, release, deployment, or proof gate. Any useful historical
-idea becomes an ordinary Facet backlog input.
+Home Config 3D is a separate product, read-only for this program. It has no third workstream,
+repository disposition, parity burden, release, deployment, or proof gate here. Any useful idea
+from it becomes an ordinary Facet backlog input.
 
 ### Program outcome and pre-customer ceiling
 
@@ -1658,7 +1658,7 @@ pre-customer sandbox/reference proof.
 | Core technical design | one writer per fact; versioned schemas/policies; no direct provider or store bypass; invariant and migration checks fail closed | IRO-38, IRO-218–223, IRO-41, IRO-58, IRO-61 |
 | Lead/job/field foundation | native lead/customer/job activation, derived phase, multi-worker offline packages, corrections, evidence slots, authority freshness, and real-device reference drill | IRO-208, IRO-42, IRO-43, IRO-209 |
 | Safety/evidence/accounting controls | current strong source controls survive deployed stop/release, ambiguous effect, mismatch, recovery, fraud/anomaly, and accountant-reviewed sandbox cases | IRO-38, IRO-44, IRO-52, IRO-58 |
-| Repository/migration coherence | two products only; Facet owns absorbed draft lineage; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
+| Repository/migration coherence | two products only; Home Config 3D is separate and read-only; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
 | Configured capability | every required action has a fresh readiness verdict, exact provider/tenant identity, scoped secret, authenticated readback, TTL, fallback, and rollback | IRO-210, IRO-215, IRO-28, IRO-30 |
 | End-to-end commercial closure | no-seed Facet design evidence reaches an IronWrap job and the native quote/publication/acceptance/deposit/work/final-invoice path reconciles without test-only writers | IRO-212, IRO-36, IRO-208, IRO-47, IRO-48, IRO-52 |
 | Production/customer proof | exact deployed technical reference EvidencePack is reproducible; `customer_validated` remains false until later genuine use and acceptance | IRO-30, IRO-31; future Gate 9 |
@@ -1675,13 +1675,13 @@ range, release artifact, or unresolved contract. Do not create all agents first.
 - implementation versus live proof vocabulary;
 - policy, transition, evidence, and human work-package schemas;
 - canonical Job/Facet Project vocabulary and a staged portability contract;
-- exactly two active products, with Facet as the canonical owner of all accepted Home Config 3D
-  draft lineage and no third execution or parity lane;
+- exactly two active products, with Home Config 3D a separate read-only product and no third
+  execution or parity lane;
 - ordered migration manifests, reserved-range handling, authority cutovers, and rollback ownership;
 - map coverage for every open target gap and native blocker edges before implementation claims.
 
 Exit: documentation validation passes in both repositories; IRO-1/IRO-2 contain every active leaf;
-no current document assigns work to retired lineage or promotes a proof class.
+no current document assigns work to Home Config 3D or promotes a proof class.
 
 ### Gate 1: work package and evidence
 

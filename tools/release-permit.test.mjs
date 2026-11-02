@@ -113,7 +113,7 @@ function productionRecovery() {
   return {
     schema: "ironwrap_d1_recovery_point_v1",
     environment: "production",
-    database_id: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+    database_id: "a8fd0116-7af6-4788-98bd-083addbe58bc",
     bookmark: "bookmark-20260816-production-0001",
     provider_readback_digest: sha("production-d1-bookmark-readback"),
     status: "matched",
@@ -659,8 +659,8 @@ test("Cloudflare D1 boundary uses the existing atomic dedup ledger and never log
   const calls = [];
   const token = "cloudflare-token-that-must-not-leak-0123456789";
   const boundary = createCloudflareD1ReplayBoundary({
-    accountId: "7ee5775bc1ba46f05c5a65235b60e939",
-    databaseId: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+    accountId: "5023dd227b538fc4238439fd7d52640f",
+    databaseId: "a8fd0116-7af6-4788-98bd-083addbe58bc",
     apiToken: token,
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -679,8 +679,8 @@ test("Cloudflare D1 boundary uses the existing atomic dedup ledger and never log
 test("Cloudflare D1 policy state advances only from the exact durable predecessor", async () => {
   const rows = new Map([["release-policy:Iron-Wrap/ironwrap-os", JSON.stringify({ generation: 4, policy_hash: PREVIOUS_POLICY })]]);
   const boundary = createCloudflareD1ReplayBoundary({
-    accountId: "7ee5775bc1ba46f05c5a65235b60e939",
-    databaseId: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+    accountId: "5023dd227b538fc4238439fd7d52640f",
+    databaseId: "a8fd0116-7af6-4788-98bd-083addbe58bc",
     apiToken: "cloudflare-token-that-must-not-leak-0123456789",
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
@@ -721,8 +721,8 @@ test("Cloudflare D1 policy genesis is atomic, deterministic, and fail-closed on 
   const key = "release-policy:Iron-Wrap/ironwrap-os";
   const genesis = { generation: 0, policy_hash: POLICY };
   const boundary = createCloudflareD1ReplayBoundary({
-    accountId: "7ee5775bc1ba46f05c5a65235b60e939",
-    databaseId: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+    accountId: "5023dd227b538fc4238439fd7d52640f",
+    databaseId: "a8fd0116-7af6-4788-98bd-083addbe58bc",
     apiToken: "cloudflare-token-that-must-not-leak-0123456789",
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
@@ -748,8 +748,8 @@ test("Cloudflare D1 policy genesis is atomic, deterministic, and fail-closed on 
 test("Cloudflare D1 outcome receipts are immutable, source-addressed, and read back exactly", async () => {
   const rows = new Map();
   const boundary = createCloudflareD1ReplayBoundary({
-    accountId: "7ee5775bc1ba46f05c5a65235b60e939",
-    databaseId: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+    accountId: "5023dd227b538fc4238439fd7d52640f",
+    databaseId: "a8fd0116-7af6-4788-98bd-083addbe58bc",
     apiToken: "cloudflare-token-that-must-not-leak-0123456789",
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
@@ -782,8 +782,8 @@ test("Cloudflare D1 outcome receipts are immutable, source-addressed, and read b
 test("generation advance requires the same durable permit claim", async () => {
   const rows = new Map();
   const boundary = createCloudflareD1ReplayBoundary({
-    accountId: "7ee5775bc1ba46f05c5a65235b60e939",
-    databaseId: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d",
+    accountId: "5023dd227b538fc4238439fd7d52640f",
+    databaseId: "a8fd0116-7af6-4788-98bd-083addbe58bc",
     apiToken: "cloudflare-token-that-must-not-leak-0123456789",
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
@@ -1074,7 +1074,7 @@ test("provider version identity is bound to the upload message and full readback
   const expectedManifest = [
     { name: "ASSETS", type: "assets" },
     { name: "CFG_APP", type: "json", value_digest: sha(canonicalJson({ APP_LOCALE: "en-US", APP_TENANT_ID: "ironwrap" })) },
-    { name: "DB", type: "d1", resource_id: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d" },
+    { name: "DB", type: "d1", resource_id: "a8fd0116-7af6-4788-98bd-083addbe58bc" },
     { name: "FEATURE_ENABLED", type: "plain_text", value_digest: sha("true") },
     { name: "INGEST_TOKEN", type: "secret_text" },
     { name: "JN_QUEUE", type: "queue", resource_name: "ironwrap-jn-push" },
@@ -1092,7 +1092,7 @@ test("provider version identity is bound to the upload message and full readback
       bindings: [
         { name: "ASSETS", type: "assets" },
         { name: "CFG_APP", type: "json", json: { APP_TENANT_ID: "ironwrap", APP_LOCALE: "en-US" } },
-        { name: "DB", type: "d1", id: "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d" },
+        { name: "DB", type: "d1", id: "a8fd0116-7af6-4788-98bd-083addbe58bc" },
         { name: "FEATURE_ENABLED", type: "plain_text", text: "true" },
         { name: "INGEST_TOKEN", type: "secret_text" },
         { name: "JN_QUEUE", type: "queue", queue_name: "ironwrap-jn-push" },
@@ -1569,7 +1569,7 @@ test("generation-N provider policy rejects candidate account and resource substi
   assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" })).status, "matched");
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('  "workers_dev": false,\n', ""));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
-  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace("ironwrap-bus.ironwrapexteriors.com", "unreviewed.ironwrapexteriors.com"));
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"pattern": "ironwrap.mindburn.org"', '"pattern": "unreviewed.mindburn.org"'));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"compatibility_date": "2026-06-28"', '"build": { "command": "node malicious.js" },\n  "compatibility_date": "2026-06-28"'));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_custom_build_forbidden/);
@@ -1596,10 +1596,23 @@ test("generation-N provider policy rejects candidate account and resource substi
     await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"compatibility_date": "2026-06-28"', `${binding}\n  "compatibility_date": "2026-06-28"`));
     await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_unallowlisted_config/);
   }
-  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace("0339cebc-d252-4d67-b78b-58c8b4703c6e", "8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d"));
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace("0339cebc-d252-4d67-b78b-58c8b4703c6e", "a8fd0116-7af6-4788-98bd-083addbe58bc"));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" }), /release_permit_provider_target_policy_drift/);
-  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"account_id": "7ee5775bc1ba46f05c5a65235b60e939"', '"account_id": "00000000000000000000000000000000"'));
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"account_id": "5023dd227b538fc4238439fd7d52640f"', '"account_id": "00000000000000000000000000000000"'));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
+  // qa and production live in different Cloudflare accounts (IRO-221): each is pinned on its own.
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"account_id": "7ee5775bc1ba46f05c5a65235b60e939"', '"account_id": "5023dd227b538fc4238439fd7d52640f"'));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" }), /release_permit_provider_target_policy_drift/);
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('      "account_id": "7ee5775bc1ba46f05c5a65235b60e939",\n', ""));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" }), /release_permit_provider_target_policy_drift/);
+  // A v1 policy with one account for both environments is no longer accepted.
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config);
+  const v1 = JSON.parse(policy);
+  v1.schema = "ironwrap_release_provider_policy_v1";
+  v1.account_id = v1.environments.qa.account_id;
+  for (const environment of Object.values(v1.environments)) delete environment.account_id;
+  await writeFile(path.join(policyRoot, "deploy", "release-provider-policy.json"), JSON.stringify(v1));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_shape_invalid/);
 });
 
 test("source evidence binds a pristine checkout's commit, tree, and binary diff", async (t) => {

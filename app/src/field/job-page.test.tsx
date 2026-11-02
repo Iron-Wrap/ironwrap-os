@@ -485,6 +485,8 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
+    expect(screen.getByText("Shop Order · SHOP-001")).toBeVisible();
+    expect(screen.queryByText("Applies to the job")).toBeNull();
     expect(screen.getByText("Your role")).toBeVisible();
     expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
@@ -1037,6 +1039,87 @@ describe("JobPage", () => {
 
     expect(await screen.findByText(/This is a saved copy from/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
+  });
+
+  it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
+    const first = renderJob(workPackageModel());
+    expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
+    expect(screen.getByText("Applies to the job").parentElement).toHaveTextContent(
+      "Applies to the jobJamie Homeowner · 123 Example Avenue · IW-1042",
+    );
+    // The code never breaks across lines.
+    expect(screen.getByText("IW-1042", { selector: "span" })).toHaveClass("whitespace-nowrap");
+    expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
+    expect(screen.queryByText("Work object")).toBeNull();
+    first.unmount();
+
+    // A plan whose read had no scope ids (the read fills in "unknown") still names this job.
+    const model = workPackageModel();
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...releasedWorkPackage(),
+          work_object_id: "unknown",
+          physical_context_id: "unknown",
+        },
+      },
+    });
+    expect((await screen.findByText("Applies to the job")).parentElement).toHaveTextContent(
+      "Jamie Homeowner · 123 Example Avenue · IW-1042",
+    );
+    expect(screen.queryByText(/unknown/)).toBeNull();
+  });
+
+  it("keeps the record's own scope when a plan is not for this job's roof", async () => {
+    const withPackage = (
+      overrides: Partial<NonNullable<JobResponse["packet"]["work_package"]>>,
+    ): JobResponse => {
+      const model = workPackageModel();
+      return {
+        ...model,
+        packet: { ...model.packet, work_package: { ...releasedWorkPackage(), ...overrides } },
+      };
+    };
+    // A roof job plan that names another job never claims this one.
+    const other = renderJob(
+      withPackage({ work_object_id: "OTHER-JOB", physical_context_id: "OTHER-JOB" }),
+    );
+    expect(await screen.findByText("Roof Job · OTHER-JOB")).toBeVisible();
+    expect(screen.getByText("Roof Site · OTHER-JOB")).toBeVisible();
+    expect(screen.queryByText("Applies to the job")).toBeNull();
+    other.unmount();
+
+    // Another scope leaves out an id the read did not get, and never shows "unknown".
+    renderJob(
+      withPackage({
+        work_object_type: "Shop Order",
+        work_object_id: "unknown",
+        physical_context_type: "Shop Floor",
+        physical_context_id: "unknown",
+      }),
+    );
+    expect(await screen.findByText("Work object")).toBeVisible();
+    expect(screen.getByText("Shop Order")).toBeVisible();
+    expect(screen.getByText("Shop Floor")).toBeVisible();
+    expect(screen.queryByText(/unknown/)).toBeNull();
+  });
+
+  it("leaves out a part of the job's name the read does not have", async () => {
+    const model = workPackageModel();
+    const first = renderJob({ ...model, job: { ...model.job, job_number: null, address: null } });
+    const named = (await screen.findByText("Applies to the job")).parentElement!;
+    expect(within(named).getByText("Jamie Homeowner")).toBeVisible();
+    first.unmount();
+
+    renderJob({
+      ...model,
+      job: { ...model.job, job_number: null, address: null },
+      packet: { ...model.packet, contact: null },
+    });
+    expect(await screen.findByText("Applies to the job")).toBeVisible();
+    expect(screen.getByText("This job")).toBeVisible();
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {

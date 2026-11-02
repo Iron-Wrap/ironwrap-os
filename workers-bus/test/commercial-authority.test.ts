@@ -33,6 +33,7 @@ import {
   type RecordLeadTriageInput,
 } from "../src/commercial-store.ts";
 import { runExternalEffect } from "../src/effect-runtime.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
 const NOW = new Date("2026-08-20T12:00:00.000Z");
@@ -913,10 +914,12 @@ function seedOperatingCore(db: DatabaseSync): void {
   const now = NOW.toISOString();
   db.prepare(
     `INSERT INTO app_users
-     (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+     (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
       active, created_by, created_at, updated_at)
-     VALUES (?, ?, 'owner@example.invalid', 'Owner', 'owner', NULL, 1, 'test-seed', ?, ?)`,
+     VALUES (?, ?, 'owner@example.invalid', 'Owner', 'owner', 'owner', NULL, 1, 'test-seed', ?, ?)`,
   ).run(OWNER_ID, TENANT, now, now);
+  // These contracts carry a deposit: the tenant takes deposits (MD-13), since 0155's default is OD-01.
+  recordDepositPolicy(db, { tenantId: TENANT, ownerUserId: OWNER_ID, at: now });
   db.prepare(
     `INSERT INTO envelopes
      (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts,

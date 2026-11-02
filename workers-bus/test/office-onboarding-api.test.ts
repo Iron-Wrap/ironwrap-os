@@ -51,7 +51,7 @@ test("deactivating a teammate keeps them listed so access can be restored", asyn
   await handleAuthenticatedRoute(
     apiRequest("/api/v1/admin/app-users", {
       method: "POST",
-      body: { ...TEAMMATE, active: false },
+      body: { ...TEAMMATE, active: false, expected_access_version: 1 },
     }),
     env,
     owner,

@@ -489,12 +489,15 @@ practice off sets the setting in force, with its ceiling. A draft closed before
 `as_proposed` existed has none, which reads as not known, never as true. `superseded` means only
 that a newer draft for the same record (the same pair, or the same person, change and device)
 replaced it; `readback.reference` names that draft's step (`step/<step_id>`), and it carries no
-`applied`. `permit.approved_by` stays null, and a draft closes once. A role
-change, on the Access screen or by provisioning, closes the drafts after it commits, and a close
-that closed any writes an `agent_draft_close` auth audit row naming the role and who set it; if
-that close fails, repeating the same role on the Access screen closes them (a repeated
-provisioning does not). Once a person's access is versioned, only
-drafts prepared against an older access version close. Needs you is to offer "Not now",
+`applied`. `permit.approved_by` stays null, and a draft closes once. A role change, on the Access
+screen or by provisioning, closes the drafts after it commits, naming the role it wrote and who
+wrote it, and a close that closed any writes an `agent_draft_close` auth audit row naming the
+same; if that close fails, repeating the same role on the Access screen closes them (a repeated
+provisioning does not), whether the repeat names the person's access version now or is refused
+because the same viewer's own change set the role now. Only drafts prepared against an older
+access version than the one that role change produced close, and a repeat names that change and
+who made it, its `as_proposed` comparing the role that change set: a removal or give-back moves
+the version but sets no role, so it answers no draft. Any other refusal closes none. Needs you is to offer "Not now",
 which names what it removes; it is not built yet, and `payee.unfreeze_prepare` and
 `safety_stop.release_prepare` drafts do not close yet (see `CAPABILITY-MATRIX.md`). A run gets the names of the people-only acts its specialist owns
 as `people_only` (each `{action_id, name}`), so a receipt can name them; they are never its tools.

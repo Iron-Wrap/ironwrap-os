@@ -222,6 +222,16 @@ is GitOps (owner decision, 2026-10-21). The version it runs is declared in
 production gate, and that repository's `promote-production.yml` is the only caller of this
 workflow. The contract is `docs/PRODUCTION-PROMOTION.md` in `iron-wrap-infra`.
 
+Production and qa live in different Cloudflare accounts (decision of 2026-10-30, IRO-221).
+Production — the Worker `ironwrap-bus`, D1 `ironwrap-bus` (`a8fd0116-7af6-4788-98bd-083addbe58bc`),
+R2 `ironwrap-bus-raw` / `ironwrap-bus-privacy` and the six `ironwrap-*` queues — is in the Mindburn
+Labs account `5023dd227b538fc4238439fd7d52640f` and is published as `ironwrap.mindburn.org` (zone
+`mindburn.org`). qa stays in IronWrap's account `7ee5775bc1ba46f05c5a65235b60e939`;
+`workers-bus/wrangler.jsonc` pins it in `env.qa.account_id`, and
+`deploy/release-provider-policy.json` (schema v2) records the account per environment. Production
+mail runs on the mindburn.org Workspace, like qa: sender `sergeyap@mindburn.org`, the shared-drive
+ids empty.
+
 `validateMergePolicy` requires `allow_merge_commit: false` with `allow_squash_merge` and
 `allow_rebase_merge` `true` on `main`, and the repository is set that way (owner change of
 2026-10-01). `readMergePolicy` reads those three settings through GraphQL (`mergeCommitAllowed`,
@@ -265,10 +275,13 @@ takes effect from the first push after the commit that introduces it.
 
 The release path, end to end:
 
-1. **Conventional commits land on `main`.** `.github/workflows/release-please.yml` fails the
-   `pr-title` check on any pull request whose landing subject release-please cannot parse. Because
+1. **Conventional commits land on `main`.** release-please drops a commit whose subject it cannot
+   parse from the release without saying so. `.github/workflows/release-please.yml` therefore warns
+   on every push to `main` whose commit subject is not conventional; the warning never fails
+   anything and nothing checks a pull request before the merge. Because
    `squash_merge_commit_title` is `COMMIT_OR_PR_TITLE`, a single-commit pull request lands its
-   **commit** subject, so that subject is validated too whenever the PR has exactly one commit.
+   **commit** subject and a multi-commit one lands the PR title, so write both as conventional
+   commits.
 2. **release-please keeps one release pull request open** on the `release-please--branches--main`
    branch, updating `CHANGELOG.md` and `.release-please-manifest.json` with the next version.
 3. **A person merges that release pull request.** This is the documented default and the only
@@ -898,8 +911,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 ```
 
 `backup-d1-to-r2.sh` is bound to Cloudflare account
-`7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
-`8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d` (created empty in WNAM on 2026-10-21; the earlier WEUR
+`5023dd227b538fc4238439fd7d52640f`, database `ironwrap-bus`, and UUID
+`a8fd0116-7af6-4788-98bd-083addbe58bc` (created empty in WNAM on 2026-10-21; the earlier WEUR
 database `f0674848…` was exported and deleted the same day). It runs locked Wrangler `d1 export --remote`, imports
 the SQL into isolated SQLite, checks integrity and the complete migration-derived table, index,
 and invariant-trigger inventories, packages manifest plus SQL, encrypts
@@ -935,7 +948,7 @@ with the locally verified SQLite export:
 
 ```bash
 export D1_RESTORE_MODE=remote
-export D1_RESTORE_TARGET_ACCOUNT_ID=7ee5775bc1ba46f05c5a65235b60e939
+export D1_RESTORE_TARGET_ACCOUNT_ID=5023dd227b538fc4238439fd7d52640f
 export D1_RESTORE_TARGET_DATABASE_NAME='ironwrap-restore-drill-launch'
 export D1_RESTORE_TARGET_DATABASE_ID='<different-non-production-d1-uuid>'
 export D1_RESTORE_API_TOKEN='<just-in-time-d1-drill-write-token>'

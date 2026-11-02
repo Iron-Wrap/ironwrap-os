@@ -189,15 +189,11 @@ describe("loading a job's gates", () => {
     answers["/api/v1/production"] = { status: 503, body: { error: "unavailable" } };
     await act(() => client.invalidateQueries());
     expect(
-      client.getQueryState([
-        "production-job-gates",
-        "ironwrap",
-        "appu_production_synthetic",
-        JOB_ID,
-      ])?.status,
+      client.getQueryCache().find({ queryKey: ["production-job-gates"], exact: false })?.state
+        .status,
     ).toBe("success");
     expect(
-      client.getQueryState(["production-runway", "ironwrap", "appu_production_synthetic"])?.status,
+      client.getQueryCache().find({ queryKey: ["production-runway"], exact: false })?.state.status,
     ).toBe("error");
     expect(
       await screen.findByText(

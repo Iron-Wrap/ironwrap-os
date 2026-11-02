@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 
@@ -8,10 +7,10 @@ import { Button } from "../../components/ui/button";
 import { ErrorState } from "../../components/ui/state-panel";
 import { messageForLoad } from "../../lib/plain-error";
 import type { AppRole } from "../../lib/roles";
-import { loadSignedCopyQueue, signedCopyQueueQueryKey } from "./gate-api";
 import { gateCopy } from "./gate-copy";
 import type { SignedCopyQueueJob, SignedCopyQueueResponse } from "./gate-contracts";
 import { canRecordSignedCopy } from "./gate-model";
+import { useSignedCopyQueueRead } from "./gate-queries";
 import { officeStamp } from "./gate-time";
 import { GateField, InfoBanner, NextLine } from "./gate-ui";
 
@@ -41,16 +40,15 @@ function SignedCopyQueueGuard() {
 
 function SignedCopyQueueContent({ role }: { role: AppRole }) {
   const session = useSession();
-  const query = useQuery({
-    queryKey: signedCopyQueueQueryKey(session.tenant.id, session.user.id),
-    queryFn: () => loadSignedCopyQueue(),
-  });
+  const query = useSignedCopyQueueRead(session);
   if (query.isError || !query.data) {
     if (query.isError) {
       return (
         <section className="mx-auto max-w-3xl">
           <ErrorState
-            title={query.data ? gateCopy.queue.readbackFailed : gateCopy.queue.loadFailed}
+            title={
+              query.data !== undefined ? gateCopy.queue.readbackFailed : gateCopy.queue.loadFailed
+            }
             message={messageForLoad(query.error)}
             error={query.error}
             action={

@@ -34,11 +34,13 @@ export function signedCopyQueueQueryKey(tenantId: string, userId: string) {
 export async function loadJobGates(
   jobId: string,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<JobGatesResponse> {
   return await apiRequest({
     path: API_PATHS.productionJobGates(jobId),
     schema: jobGatesResponseSchema,
     fetcher,
+    signal,
   });
 }
 
@@ -151,10 +153,12 @@ export async function recordSignedCopy(
 
 export async function loadSignedCopyQueue(
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<SignedCopyQueueResponse> {
   return await apiRequest({
     path: API_PATHS.productionSignedCopyMissing,
     schema: signedCopyQueueResponseSchema,
     fetcher,
+    signal,
   });
 }

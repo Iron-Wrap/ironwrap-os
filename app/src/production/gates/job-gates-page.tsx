@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
@@ -9,13 +9,11 @@ import { RoleGuard } from "../../components/role-guard";
 import { Button } from "../../components/ui/button";
 import { ErrorState } from "../../components/ui/state-panel";
 import { useOnlineStatus } from "../../hooks/use-online-status";
-import { ApiError, apiRequest } from "../../lib/api";
+import { ApiError } from "../../lib/api";
 import { messageForLoad } from "../../lib/plain-error";
-import { jobHistoryPath, jobHistoryResponseSchema } from "../../jobs/job-history-contracts";
-import { loadProductionRunway } from "../production-api";
-import { jobGatesQueryKey, loadJobGates } from "./gate-api";
 import { gateCopy } from "./gate-copy";
 import { isAttestableGate, type JobGate } from "./gate-contracts";
+import { useJobGateReads } from "./gate-queries";
 import {
   canReverse,
   canRecordSignedCopy,
@@ -73,18 +71,7 @@ export function JobGatesPage({ jobId, step }: { jobId: string; step?: string }) 
 function JobGatesContent({ jobId, step }: { jobId: string; step?: GateStep }) {
   const session = useSession();
   const queryClient = useQueryClient();
-  const gatesKey = jobGatesQueryKey(session.tenant.id, session.user.id, jobId);
-  const gates = useQuery({ queryKey: gatesKey, queryFn: () => loadJobGates(jobId) });
-  const runway = useQuery({
-    queryKey: ["production-runway", session.tenant.id, session.user.id],
-    queryFn: () => loadProductionRunway(),
-  });
-  const history = useQuery({
-    queryKey: ["job-gates-identity", session.tenant.id, session.user.id, jobId],
-    queryFn: () => apiRequest({ path: jobHistoryPath(jobId), schema: jobHistoryResponseSchema }),
-    retry: false,
-    staleTime: 5 * 60_000,
-  });
+  const { gatesKey, gates, runway, history } = useJobGateReads(session, jobId);
   const refresh = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: gatesKey }),
@@ -98,12 +85,12 @@ function JobGatesContent({ jobId, step }: { jobId: string; step?: GateStep }) {
       const error = failedGates ? gates.error : runway.error;
       const notFound = error instanceof ApiError && error.status === 404;
       const title = failedGates
-        ? gates.data
+        ? gates.data !== undefined
           ? gateCopy.page.readbackFailed
           : notFound
             ? gateCopy.page.notFound
             : gateCopy.page.loadFailed
-        : runway.data
+        : runway.data !== undefined
           ? gateCopy.page.productionReadbackFailed
           : gateCopy.page.productionLoadFailed;
       return (

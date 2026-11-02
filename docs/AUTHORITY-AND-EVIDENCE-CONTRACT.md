@@ -660,6 +660,57 @@ revision and the policy's Deposit entries take D1's clock, not the Worker's:
   name the policy and the term to change; the customer gets the code and plain words only, and the
   log keeps the policy and the term. D1 aborts such an acceptance as the backstop.
 
+Materials, Access, Weather and Safety also clear on a person's attestation (migration `0158`): one
+small typed record per gate, by an active owner or production person who is on no crew, whose only
+free text is an optional note of at most 300 characters kept in the redactable reason. Its evidence
+is 0 to 10 references to verified, stored Work Package captures of the job or, for Materials, live
+stock reservations of the job; the Worker resolves each reference and records its checksum, so a
+client never supplies a hash. Safety is its own operation set, `production.gates.safety`, carried
+today by owner and production. Its proof answers the permit: needed and held, with the permit
+number, or not needed; an unknown answer is refused as `production_gate_safety_permit_unknown`, so
+the person changes the answer. Safety also needs the attester's current internal Worker Competency
+(`authority.record`) in site safety: `authority_scope` exactly `site_safety`, a closed token in a
+field that is otherwise free text, so an empty, foreign or near value does not count; verified by an
+internal assessment, neither revoked nor superseded, in force today and not bound to another job.
+Safety is refused while a stop applies to the job: an active stop on the tenant, the job or any of
+its Work Packages in any status, Superseded included; a crew `stop_work` on one of them that no
+release has lifted; or an active stop whose scope cannot be resolved, meaning an unknown scope type
+or a Work Package id that maps to no job. An active stop that names a job the tenant does not have
+holds Safety on every job of the tenant, refused as `production_gate_stop_job_unknown` with the
+stop's id. The owner's exception list shows it as "This work stop names a job that doesn’t exist",
+with who raised it, when and what they wrote, never the raw job id, and with no controls. An active
+stop that names a Work Package the tenant does not have is treated the same way (migration
+`0159`): `production_gate_stop_work_package_unknown` with the stop's id, and the owner's item "This
+work stop names a job plan that doesn’t exist" with the same fields; the screen says job plan, never
+work package. From `0159` both stops also hold every schedule, so both items say "Safety and
+scheduling stay held on every job while this work stop is active." Nothing refuses such a stop when
+it is recorded, because a person may always stop work, and a stop's scope cannot be corrected
+today, so it holds until it is lifted. Another job's stop, a shop or a vehicle stop does not hold
+it. The entry names the competency record, D1 checks both rules again at insert with the same
+predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
+reversal, takes D1's clock, as the policy's entries do.
+
+Crew clears only by policy, when a person schedules the job (migration `0159`). The schedule
+(`POST /api/v1/jobs/{job}/schedule`, from the person's own cookie session, never the QA seed owner)
+appends `crew_assignment` to Crew in the same D1 batch as the assignment, bound to the crew it names
+at that crew's version, so the two commit together or not at all. A schedule naming another crew or
+crew version first appends the policy's `crew_superseded` reversal of the entry Crew stands on. Crew
+has no waiver and no person clear. The schedule rests on the gate evidence as it stands when it is
+written, read with D1's own clock, and each refusal is named on the route and repeated in D1:
+
+- no stop applies to the job, read exactly as a Safety attestation reads it, so a Safety gate
+  attested before a new stop schedules nothing; a stop naming a job or a Work Package the tenant
+  does not have holds every schedule of the tenant, answered by its own code with the stop's id;
+- Deposit does not stand on a contract with no deposit while the job's latest contract is another
+  one with other terms: the window before the policy's `contract_superseded` lands;
+- Weather stands on a person's attestation whose window has not ended and holds the scheduled work
+  (a schedule with no end is held to its start), so a Weather gate left `ready` after its window
+  ended (`operating_job_assignment_weather_window_ended`), or one recorded before the ledger, which
+  names no window (`operating_job_assignment_weather_window_missing`), schedules nothing until it
+  is attested again;
+- no member of the crew shares a login (user id, email or Frappe user) with the person whose
+  attestation Materials, Safety, Access or Weather stands on.
+
 ## Stop taxonomy
 
 | Stop | Examples | Required response |

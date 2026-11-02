@@ -1,14 +1,20 @@
 name: Release Please
 
-# The release train (IRO-264), in three independent jobs that share no state:
+# The release train (IRO-264), in two independent jobs that share no state:
 #
-#   pr-title       on every pull request: the subject that will land on main must
-#                  be a conventional commit release-please can parse, or the
-#                  change is silently dropped from the release.
-#   release-pr     on every push to main: keep exactly one release pull request
-#                  open, with the next version and the accumulated changelog.
+#   release-pr     on every push to main (or by hand): keep exactly one release
+#                  pull request open, with the next version and the accumulated
+#                  changelog. First it warns, without failing anything, when the
+#                  commit that landed is not a conventional commit release-please
+#                  can parse: such a commit is silently dropped from the release.
 #   github-release on a successful Deploy of the merged release commit: tag that
 #                  commit, which is what starts the production release.
+#
+# Nothing here runs on a pull request event. The subject check used to, on every
+# push to every pull request, and Release Please was about a fifth of all Actions
+# runs. It now warns after the merge instead of before it, and it never holds up
+# a pull request. `workflow_dispatch` re-runs release-pr by hand; the `release`
+# environment admits runs from main only.
 #
 # Both release jobs write through RELEASE_TAG_TOKEN, a fine-grained PAT held only in the
 # `release` environment (deployments from main only). A pull request or tag created with
@@ -18,13 +24,12 @@ name: Release Please
 # release-please is run through npx, not an action: the organization allows only
 # GitHub-owned actions, and `googleapis/release-please-action` is not one.
 on:
-  pull_request:
-    types: [opened, edited, reopened, synchronize]
   push:
     branches: [main]
   workflow_run:
     workflows: [Deploy]
     types: [completed]
+  workflow_dispatch:
 
 # Nothing is granted by default; each job declares exactly what it needs.
 permissions: {}
@@ -33,53 +38,9 @@ env:
   RELEASE_PLEASE_VERSION: 17.11.2
 
 jobs:
-  pr-title:
-    name: Conventional commit subject release-please can parse
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Reads the pull request's own commits through the API; writes nothing.
-    # pull-requests: read is required for GET /pulls/{number}/commits itself,
-    # not only for a private repository (IRO-264 follow-up: the job 403ed
-    # without it on the very first real pull request).
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-
-      # The title and the commit subject reach the checker only through the
-      # environment. They are attacker-controlled text and are never
-      # interpolated into the shell script.
-      - name: Validate the subject that will land on main
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          set -euo pipefail
-          # squash_merge_commit_title is COMMIT_OR_PR_TITLE: a single-commit pull
-          # request lands its COMMIT subject, not this title, so the commit count
-          # decides what else has to be valid. Only "exactly one" matters here, so
-          # one page of commits is enough to decide it.
-          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" \
-            > "$RUNNER_TEMP/pr-commits.json"
-          commit_count="$(jq -r 'length' "$RUNNER_TEMP/pr-commits.json")"
-          head_commit_subject=""
-          if [[ "$commit_count" == "1" ]]; then
-            head_commit_subject="$(jq -r '.[0].commit.message | split("\n")[0]' "$RUNNER_TEMP/pr-commits.json")"
-          fi
-          PR_COMMIT_COUNT="$commit_count" HEAD_COMMIT_SUBJECT="$head_commit_subject" \
-            node tools/conventional-pr-title.mjs
-
   release-pr:
     name: Keep one release pull request open
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # release-please pushes the release branch and opens/updates the release PR with
@@ -95,6 +56,19 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+
+      # The subject that landed is what release-please reads, and it is text a
+      # contributor chose: it reaches the script only through the environment,
+      # never through the shell. The step warns and never fails.
+      - name: Warn when the commit that landed is not a conventional commit
+        if: github.event_name == 'push'
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          subject="$(printf '%s\n' "$COMMIT_MESSAGE" | head -n 1)"
+          if ! PR_TITLE="$subject" node tools/conventional-pr-title.mjs; then
+            echo "::warning title=Not a conventional commit::release-please leaves the commit that landed out of the next release. The details are above."
+          fi
 
       - name: Create or update the release pull request
         env:

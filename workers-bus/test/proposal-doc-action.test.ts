@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handleProposalDocAction, parseProposalDocRequest } from "../src/proposal-doc-action.ts";
 import { fileToJobFolder } from "../src/google.ts";
-import { sha256Hex } from "../src/newo-hash.ts";
+import { sha256Hex } from "../src/canonical.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
 import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 

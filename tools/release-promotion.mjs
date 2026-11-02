@@ -54,7 +54,7 @@ import {
   verifyReleasePermit,
 } from "./release-permit.mjs";
 
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -2037,7 +2037,6 @@ export const RELEASE_POLICY_FILES = [
   ".github/workflows/ci.yml",
   ".github/workflows/deploy-production.yml",
   ".github/workflows/deploy.yml",
-  ".github/workflows/release-please.yml",
   "deploy/release-provider-policy.json",
   "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
   "docs/DOCUMENTATION-CONTRACT.md",

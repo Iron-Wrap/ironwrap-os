@@ -166,7 +166,7 @@ import {
   handleFieldAction,
   r2ObjectStore,
 } from "./field-actions.ts";
-import { type FrappeRow } from "./frappe-read.ts";
+import type { DocumentRow } from "./document-row.ts";
 import { handleFleetAction, type FleetActionKind } from "./fleet-actions.ts";
 import {
   handleFleetCollisionCollection,
@@ -174,7 +174,7 @@ import {
 } from "./fleet-collision-api.ts";
 import { handleFleetPhotoUpload } from "./fleet-photo-evidence.ts";
 import { buildFleetPanelReadModel } from "./fleet-panel.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   handleWorkPackageAction,
   replayVerifiedWorkPackageAction,
@@ -7249,7 +7249,7 @@ function workPackageOfficeManifestKey(
 }
 
 function officeWorkPackageIssueManifest(
-  document: FrappeRow,
+  document: DocumentRow,
   auth: AuthContext,
   deviceActionId: string,
   jobName: string,
@@ -7338,7 +7338,7 @@ async function officeWorkPackageIssueResponse(
 }
 
 function officeWorkPackageIssueScope(
-  assignment: FrappeRow,
+  assignment: DocumentRow,
   jobId: string,
   routeScope?: WorkObjectScope,
 ): WorkObjectScope | null {
@@ -7381,7 +7381,7 @@ function officeWorkPackageIssueScope(
 }
 
 function officeWorkPackageAssignmentRoster(
-  assignment: FrappeRow,
+  assignment: DocumentRow,
 ): NativeWorkPackageWorker[] | null {
   const roster = new Map<
     string,

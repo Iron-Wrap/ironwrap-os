@@ -21,7 +21,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
 
 const execFile = promisify(execFileCallback);

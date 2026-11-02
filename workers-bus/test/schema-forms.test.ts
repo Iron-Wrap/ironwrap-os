@@ -5,7 +5,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
 
 import type { AppEnv } from "../src/app-types.ts";
-import { canonicalJson } from "../src/newo-hash.ts";
+import { canonicalJson } from "../src/canonical.ts";
 import {
   createSchemaFieldDefinition,
   listAuthorizedSchemaFieldValues,

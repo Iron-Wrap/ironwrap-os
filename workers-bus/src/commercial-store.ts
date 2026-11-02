@@ -6,7 +6,7 @@ import {
   type CommercialEvidenceRef,
   resolveCommercialAuthority,
 } from "./commercial-authority.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export type CommercialLeadStatus = "triaged" | "qualified" | "disqualified";

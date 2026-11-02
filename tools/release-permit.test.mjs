@@ -40,7 +40,7 @@ import {
   verifyServiceAdapterReceipt,
   verifyReleasePermit,
 } from "./release-permit.mjs";
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 
 const run = promisify(execFile);
 const sha = (value) => createHash("sha256").update(value).digest("hex");

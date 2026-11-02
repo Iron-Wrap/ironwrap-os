@@ -19,7 +19,7 @@ import {
   proposalDeliveryLateAnswerWindowMs,
 } from "./commercial-store.ts";
 import { getExternalEffect, type ExternalEffectRecord } from "./effect-runtime.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 /** One check reads back within about 25 s; each provider call has its own, shorter bound. */
 export const PROPOSAL_DELIVERY_CHECK_TIMEOUT_MS = 25_000;

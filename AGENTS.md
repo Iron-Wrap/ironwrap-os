@@ -196,7 +196,7 @@ setsel() { gh project item-edit --id "$1" --project-id $PROJECT_ID --field-id "$
 **Merge tiers (all non-blocking).** Every PR auto-merges on green `gate`; a tier decides only what review
 follows. Tier 0: dependency patch/minor, docs, mechanical changes. Tier 1: agent product code; the Codex
 connector's review comment is advisory (fix findings in the PR if they arrive before the merge, in a
-follow-up after). Tier 2: PRs touching `workers-bus/migrations/`, `release-issuer/`, `deploy/`,
+follow-up after). Tier 2: PRs touching `workers-bus/migrations/`, `deploy/`,
 `.github/workflows/`, `config/authority/` or the release-please files get the label `tier-2` and land
 in a weekly post-merge review queue for Ivan and Sergey: revert, don't gate. The release-please release
 PR keeps its own procedure (see the validation ladder). Tiers govern PR review only; the product

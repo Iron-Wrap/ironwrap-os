@@ -2098,7 +2098,7 @@ export async function validateReleaseEnvironmentPreflight({ repoRoot, environmen
   return { ...fields, evidence_digest: sha256(canonicalJson(fields)) };
 }
 
-/** Sign the independent reviewer GO receipt used by the release issuer. */
+/** Sign an independent reviewer GO receipt. */
 export function signReviewGoReceipt(privateKey, payload, options = {}) {
   if (!privateKey) fail("review_private_key_required");
   const normalized = validateReviewGoReceipt(payload, options);

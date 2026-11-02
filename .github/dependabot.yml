@@ -51,7 +51,7 @@ updates:
         update-types: [patch, minor]
 
   - package-ecosystem: npm
-    directories: ['/agent-host', '/mcp/*', '/release-issuer', '/workers-bus']
+    directories: ['/agent-host', '/mcp/*', '/workers-bus']
     schedule:
       interval: monthly
     open-pull-requests-limit: 5

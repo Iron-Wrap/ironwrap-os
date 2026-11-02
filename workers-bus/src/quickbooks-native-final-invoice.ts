@@ -26,7 +26,7 @@ import {
   listAccountingIntentTaxBindings,
   readTaxPolicySnapshot,
 } from "./accounting-tax-snapshots.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type {
   QuickBooksCandidate,
   QuickBooksCandidateBlocker,

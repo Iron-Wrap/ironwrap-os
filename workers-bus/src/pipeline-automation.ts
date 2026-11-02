@@ -30,7 +30,7 @@ import {
 } from "./automation-recipients.ts";
 import { effectLedgerAvailable } from "./effect-runtime.ts";
 import { sendPipelineAutomationEmail, gmailConfigured } from "./google.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 /** Deliver the built-in stage-change summary. */
 export const PIPELINE_AUTOMATION_ACTION = "operations.email.send" as const;

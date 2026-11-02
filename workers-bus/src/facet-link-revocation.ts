@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { AppEnv } from "./app-types.ts";
 
 export const FACET_LINK_REVOCATION_REASON_CODES = [

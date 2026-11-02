@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const LEAD_TRIAGE_SHADOW_POLICY_SCHEMA =
   "ironwrap.lead-triage-shadow-policy.v1";

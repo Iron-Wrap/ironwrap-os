@@ -8,7 +8,7 @@
 // accept what is posted. There is no code path here that deletes a row.
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson } from "./newo-hash.ts";
+import { canonicalJson } from "./canonical.ts";
 
 export const ACCOUNTING_EXCEPTION_REASON_CODES = [
   "duplicate_provider_entity",

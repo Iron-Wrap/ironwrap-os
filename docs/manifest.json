@@ -608,15 +608,6 @@
       ]
     },
     {
-      "path": "release-issuer/README.md",
-      "class": "component",
-      "authority": [
-        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
-        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
-        "docs/CAPABILITY-MATRIX.md"
-      ]
-    },
-    {
       "path": "workers-bus/README.md",
       "class": "component",
       "authority": [

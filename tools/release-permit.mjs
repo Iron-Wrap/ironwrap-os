@@ -21,7 +21,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -2098,7 +2098,7 @@ export async function validateReleaseEnvironmentPreflight({ repoRoot, environmen
   return { ...fields, evidence_digest: sha256(canonicalJson(fields)) };
 }
 
-/** Sign the independent reviewer GO receipt used by the release issuer. */
+/** Sign an independent reviewer GO receipt. */
 export function signReviewGoReceipt(privateKey, payload, options = {}) {
   if (!privateKey) fail("review_private_key_required");
   const normalized = validateReviewGoReceipt(payload, options);

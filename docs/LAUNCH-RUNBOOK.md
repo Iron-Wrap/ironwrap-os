@@ -258,9 +258,9 @@ takes effect from the first push after the commit that introduces it.
   provider and smoke inputs" and at the `^[0-9a-f]{32}$` zone-format check. The zone waits for the
   domain (IRO-221).
 - The first production release writes a generation-0 row to `release-policy:Iron-Wrap/ironwrap-os`
-  and then fails closed before any promotion (step 7 below, "Capture the current production
+  and then fails closed before any promotion (step 4 below, "Capture the current production
   revision" fails `deployment_list_empty` on a Worker that has never been deployed). Any later
-  release whose base tree hashes differently across the 13 `RELEASE_POLICY_FILES` then fails
+  release whose base tree hashes differently across the 12 `RELEASE_POLICY_FILES` then fails
   `policy_genesis_drift` with no override. Clearing or resetting that row is a D1 write with
   `RELEASE_POLICY_LEDGER_API_TOKEN`, owner only.
 
@@ -270,43 +270,27 @@ takes effect from the first push after the commit that introduces it.
   0153/0155/0158/0159/0160) until (1) PR-C, the office UI for A1–A5, (2) the P33 stop
   raise/release UI and (3) Sergey's production pre-flight have all landed. On QA, today's office
   UI shows the gate refusals without explanation; that is acceptable on QA only. Once 0153 is on
-  `main`, every later release commit carries it, so the person merging the release pull request
-  (step 3 below) leaves it unmerged until all three have landed.
+  `main`, every later commit carries it, so the maintainer tags no commit that contains 0153
+  (step 2 below) until all three have landed.
 
 The release path, end to end:
 
-1. **Conventional commits land on `main`.** release-please drops a commit whose subject it cannot
-   parse from the release without saying so. `.github/workflows/release-please.yml` therefore warns
-   on every push to `main` whose commit subject is not conventional; the warning never fails
-   anything and nothing checks a pull request before the merge. Because
-   `squash_merge_commit_title` is `COMMIT_OR_PR_TITLE`, a single-commit pull request lands its
-   **commit** subject and a multi-commit one lands the PR title, so write both as conventional
-   commits.
-2. **release-please keeps one release pull request open** on the `release-please--branches--main`
-   branch, updating `CHANGELOG.md` and `.release-please-manifest.json` with the next version.
-3. **A person merges that release pull request.** This is the documented default and the only
-   configured behaviour: releasing is the one decision a human still makes. The alternative is to
-   let an automation merge it (a scheduled job, or GitHub auto-merge). Changing that costs the last
-   human checkpoint in front of production: every green release pull request would then tag and
-   promote itself, so a bad change reaches customers without anyone choosing to ship it. Do not
-   change it without a recorded owner decision.
-   **No auto-merge is configured** for the release pull request. Note, however, that
-   `allow_auto_merge` is still **enabled at the repository level** (read back 2026-10-01), so anyone
-   with write access can enable auto-merge on an individual pull request. Disabling it is an
-   owner-only repository setting and is *not* changed by this work.
-4. **Deploy proves `qa` on the release commit**, exactly as for any other push to `main`, and
-   publishes `iro41-release-artifact-<sha>` and `iro41-qa-proof-<sha>` (retained 30 days, so a
-   production re-run days after the tag still finds the bytes).
-5. **`github-release` tags that commit.** The job runs on a successful Deploy of `main` and exits
-   without tagging unless that Deploy's head SHA is the merge commit of the newest merged release
-   pull request. Every other successful Deploy is an ordinary commit and is not a release.
-6. **A promotion PR in `iron-wrap-infra` starts the production workflow.** The tag does not:
-   `deploy-production.yml` has no `push` trigger. `github-release` pushes the tag with
-   `RELEASE_TAG_TOKEN`, a fine-grained PAT (`Contents` and `Pull requests` read and write,
-   `ironwrap-os` only) held in the `release` GitHub Environment, which deploys from `main` only;
-   `release-pr` uses the same token, so CI runs on the release pull request without an approval
-   click. A missing secret stops either job at `release_tag_token_missing`; an expired token
-   answers 401. The owner then opens a PR in `iron-wrap-infra` that sets
+1. **Deploy proves `qa` on every push to `main`** and publishes `iro41-release-artifact-<sha>` and
+   `iro41-qa-proof-<sha>` (retained 30 days, so a production run days after the tag still finds the
+   bytes; a commit older than that cannot be released).
+2. **A maintainer pushes the release tag** (owner decision 2026-11-01, ironwrap-tracker#68; the
+   contract is `iron-wrap-infra` `docs/PRODUCTION-PROMOTION.md` "Release tags"). Pick a commit on
+   `main` whose CI run (push to `main`) and Deploy run both succeeded, choose `vMAJOR.MINOR.PATCH`
+   from what changed since the last tag, write the `CHANGELOG.md` entry by hand, and push:
+   `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. Tagging an unproven commit is harmless but
+   useless: step 3 refuses it with `release_production_missing_ci_run`,
+   `release_production_missing_qa_run` or `release_production_qa_proof_foreign`. `v*` tags cannot
+   be moved or deleted; a mistake is fixed with the next version. Do not tag the merge commit of the
+   pull request that removed release-please: its parent's enforcer still lists
+   `.github/workflows/release-please.yml` in `RELEASE_POLICY_FILES`, so `assemble` fails reading it.
+   Any later commit is fine.
+3. **A promotion PR in `iron-wrap-infra` starts the production workflow.** The tag does not:
+   `deploy-production.yml` has no `push` trigger. The owner opens a PR in `iron-wrap-infra` that sets
    `components.ironwrap-os.ref: vX.Y.Z` in `environments/production/stand.yml`, and merges it.
    `promote-production.yml` there checks the tag exists and dispatches this workflow on the tag with
    `tag` and `declaration_sha` (the merge commit), using `RELEASE_PROMOTION_DISPATCH_TOKEN`. The job
@@ -317,7 +301,7 @@ The release path, end to end:
    on `main` still names this tag. A re-run uses **Re-run jobs** on the `promote-production.yml`
    run; a hand dispatch must pass the same two inputs and meets the same check. A rollback is a
    revert of the promotion PR.
-7. **Production promotes the qa-proven bytes behind the permit and the ledger.** The job re-verifies
+4. **Production promotes the qa-proven bytes behind the permit and the ledger.** The job re-verifies
    the artifact digest against the qa proof, re-reads the merged source with
    `--source-policy reachable` (the tagged commit must still be *on* `main`, not necessarily its
    tip), assembles the signed short-lived permit from that evidence, consumes it exactly once

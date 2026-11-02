@@ -62,7 +62,7 @@ import { personCookieSession, validAppCsrf, type PersonSession } from "./app-aut
 import { listAccountingIntents, type AccountingIntentRecord } from "./accounting-intents.ts";
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { listJobEvidenceItemsFromD1, r2ObjectStore } from "./field-actions.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { cancellationWindowHold, readCancellationWindow } from "./production-cancellation-window.ts";
 import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 import {

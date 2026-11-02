@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { auth, request, setup } from "./pipeline-board-fixture.ts";
 import { bytesHash } from "../src/job-measurement-report-store.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 import {
   parseReportResult,
   parseReportsList,

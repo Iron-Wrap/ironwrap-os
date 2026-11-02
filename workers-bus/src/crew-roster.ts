@@ -9,7 +9,7 @@
 
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
-import { sha256Hex } from "./newo-hash.ts";
+import { sha256Hex } from "./canonical.ts";
 
 const CREWS_PATH = "/api/v1/admin/crews";
 const MEMBERS_PATH = /^\/api\/v1\/admin\/crews\/([^/]+)\/members$/;

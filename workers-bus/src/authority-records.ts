@@ -1,7 +1,7 @@
 import { sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
-import { canonicalJson } from "./newo-hash.ts";
+import { canonicalJson } from "./canonical.ts";
 
 export const AUTHORITY_RECORD_OPERATIONS = [
   "record",

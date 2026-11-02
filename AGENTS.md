@@ -194,11 +194,10 @@ setsel() { gh project item-edit --id "$1" --project-id $PROJECT_ID --field-id "$
 **Merge tiers (all non-blocking).** Every PR auto-merges on green `gate`; a tier decides only what review
 follows. Tier 0: dependency patch/minor, docs, mechanical changes. Tier 1: agent product code; the Codex
 connector's review comment is advisory (fix findings in the PR if they arrive before the merge, in a
-follow-up after). Tier 2: PRs touching `workers-bus/migrations/`, `release-issuer/`, `deploy/`,
-`.github/workflows/`, `config/authority/` or the release-please files get the label `tier-2` and land
-in a weekly post-merge review queue for Ivan and Sergey: revert, don't gate. The release-please release
-PR keeps its own procedure (see the validation ladder). Tiers govern PR review only; the product
-write contract in "Mutation guardrails" below is unchanged.
+follow-up after). Tier 2: PRs touching `workers-bus/migrations/`, `deploy/`, `.github/workflows/`
+or `config/authority/` get the label `tier-2` and land in a weekly post-merge review queue for Ivan
+and Sergey: revert, don't gate. Tiers govern PR review only; the product write contract in
+"Mutation guardrails" below is unchanged.
 
 **Soft concurrency targets** (scheduling guidance for conductors, never a refusal): about 8 live root
 chats on the workstation and about 3 on this repo; serialize Figma and computer-use lanes; cap
@@ -241,10 +240,9 @@ the touched surface warrants them. Report skipped or blocked checks explicitly.
 A push to `main` deploys `qa` only (`.github/workflows/deploy.yml`, IRO-260); production releases
 come from a `v*` tag through `.github/workflows/deploy-production.yml`, which promotes the bytes that
 Deploy already proved on `qa` rather than building its own (IRO-264).
-`.github/workflows/release-please.yml` keeps one release pull request open, warns (never fails)
-when a commit that landed on `main` is not a conventional commit, and tags the release commit after
-Deploy proves it; it does not run on pull request events. A person merges that release pull
-request. The first Deploy run after that merge fails closed at admission by design.
+A maintainer pushes the `vX.Y.Z` tag by hand on a `main` commit whose CI and Deploy are green, and
+writes its `CHANGELOG.md` entry by hand; there is no release bot.
+The steps are in `docs/LAUNCH-RUNBOOK.md`.
 
 ## Mutation guardrails
 

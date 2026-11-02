@@ -5,7 +5,7 @@ import type { JnResult } from "./jobnimbus.ts";
 import type { RoofGraphV1 } from "./roof-graph.ts";
 import type { NewoSessionRecord } from "./newo-store.ts";
 import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { materializeOperatingCore } from "./operating-core.ts";
 
 type ErpEnv = Env & {

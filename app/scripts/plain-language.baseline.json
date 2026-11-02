@@ -62,6 +62,9 @@
   "src/field/fleet-page.tsx": {
     "banned-term": 5
   },
+  "src/field/job-label-text.tsx": {
+    "allow-escape": 1
+  },
   "src/field/safety-action-panel.tsx": {
     "machine-name": 1
   },

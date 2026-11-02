@@ -41,6 +41,7 @@ import {
 import { parseBody } from "./core.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
 import { publicCompanyContact } from "./company-profile.ts";
+import { NO_DEPOSIT_UNDER_CONTRACT } from "./deposit-policy.ts";
 import {
   listCurrentJobMeasurements,
   type JobMeasurementSummary,
@@ -274,6 +275,8 @@ interface NativeProductionGateRow {
   assigned_at: string;
   due_at: string;
   updated_at: string;
+  /** The basis of the ledger entry the gate stands on (0153), when one does. */
+  basis_in_force: string | null;
 }
 
 interface NativeProductionCrewRow {
@@ -303,6 +306,31 @@ interface NativeOwnerFieldBlockerRow {
   manifest_key: string | null;
   updated_at: string;
 }
+
+interface NativeOwnerUnknownStopRow {
+  occurrence_id: string;
+  reported_at: string;
+  reported_by_name: string | null;
+  summary: string;
+  updated_at: string;
+}
+
+/**
+ * The owner's exception for an active work stop that names a job the tenant does not have (Track
+ * B's final copy). The stop's raw job id is not shown. The item has no controls and no link. From
+ * 0159 such a stop holds every schedule as well as Safety, so the item says both.
+ */
+export const STOP_JOB_UNKNOWN_TITLE = "This work stop names a job that doesn’t exist";
+export const STOP_JOB_UNKNOWN_WHY =
+  "Safety and scheduling stay held on every job while this work stop is active.";
+
+/**
+ * Its twin for an active work stop that names a Work Package the tenant does not have (0159), in
+ * Track B's final copy: the screen says "job plan", never "work package", and the stop's raw
+ * package id is not shown. The same fields, no controls and no link.
+ */
+export const STOP_WORK_PACKAGE_UNKNOWN_TITLE = "This work stop names a job plan that doesn’t exist";
+export const STOP_WORK_PACKAGE_UNKNOWN_WHY = STOP_JOB_UNKNOWN_WHY;
 
 interface NativeOwnerEffectExceptionRow {
   exception_id: string;
@@ -648,6 +676,17 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
     bus_status: string | null;
     triage_status: string | null;
     mctb: MctbStatus | null;
+    /**
+     * Who raised the work stop (`stop_job_unknown`, `stop_work_package_unknown`): their display
+     * name in this tenant, or null when they have none. When it was raised is `occurred_at`. Null
+     * on every other kind.
+     */
+    reported_by_name: string | null;
+    /**
+     * The work stop's own summary, raw as it was written (`stop_job_unknown`,
+     * `stop_work_package_unknown`); the UI wraps and truncates it. Null on every other kind.
+     */
+    summary: string | null;
   }>;
   /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
   partial_sources: string[];
@@ -1538,7 +1577,7 @@ export async function buildProductionRunwayReadModel(
       const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map(
         (name) => ({
           name,
-          state: nativeGateStateLabel(text(latestGatesByName.get(name)?.state)),
+          state: productionGateStateLabel(latestGatesByName.get(name)),
         }),
       );
       const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] =
@@ -1559,8 +1598,9 @@ export async function buildProductionRunwayReadModel(
           .length,
         waived: schedulingGates.filter((gate) => text(gate.state) === "waived")
           .length,
-        done: schedulingGates.filter((gate) => text(gate.state) === "complete")
-          .length,
+        done: schedulingGates.filter(
+          (gate) => text(gate.state) === "complete" && !depositNotRequiredByContract(gate),
+        ).length,
       };
       const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap(
         (row) => {
@@ -1928,7 +1968,7 @@ export async function buildJobReadModel(
           slot,
           label: `${slot} proof`,
           state: text(row.state) ?? "Blocked",
-          blocker_reason: text(row.blocker_reason),
+          blocker_reason: productionGateReason(row),
         },
       ];
     }),
@@ -2227,6 +2267,8 @@ export async function buildOwnerNowReadModel(
     untriagedLeadSource,
     materialExceptionSource,
     quoteSource,
+    unknownJobStopSource,
+    unknownWorkPackageStopSource,
   ] = await Promise.all([
     nativeOwnerFieldBlockers(env, auth.session.tenant_id, jobIds),
     nativeProductionGates(
@@ -2248,6 +2290,8 @@ export async function buildOwnerNowReadModel(
       OWNER_NOW_SOURCE_LIMIT,
     ),
     nativeOwnerCommercialQuotes(env, auth.session.tenant_id, jobIds),
+    nativeOwnerUnknownJobStops(env, auth.session.tenant_id),
+    nativeOwnerUnknownWorkPackageStops(env, auth.session.tenant_id),
   ]);
 
   const fieldBlockers = fieldBlockerSource.rows.map(
@@ -2589,6 +2633,35 @@ export async function buildOwnerNowReadModel(
         occurredAt: text(row.submitted_at),
       }),
     ),
+    // The stop holds Safety on every job while it is active; the item names who raised it, when,
+    // and what they wrote.
+    ...unknownJobStopSource.rows.flatMap((row) =>
+      exceptionRow({}, {
+        id: row.occurrence_id,
+        kind: "stop_job_unknown",
+        severity: null,
+        title: STOP_JOB_UNKNOWN_TITLE,
+        why: STOP_JOB_UNKNOWN_WHY,
+        jobId: null,
+        occurredAt: row.reported_at,
+        reportedByName: text(row.reported_by_name),
+        summary: row.summary,
+      }),
+    ),
+    // So does a stop naming a Work Package the tenant does not have (0159), with the same fields.
+    ...unknownWorkPackageStopSource.rows.flatMap((row) =>
+      exceptionRow({}, {
+        id: row.occurrence_id,
+        kind: "stop_work_package_unknown",
+        severity: null,
+        title: STOP_WORK_PACKAGE_UNKNOWN_TITLE,
+        why: STOP_WORK_PACKAGE_UNKNOWN_WHY,
+        jobId: null,
+        occurredAt: row.reported_at,
+        reportedByName: text(row.reported_by_name),
+        summary: row.summary,
+      }),
+    ),
     ...gates.flatMap((row) =>
       exceptionRow(row, {
         id: text(row.gate_id) ?? text(row.name),
@@ -2644,6 +2717,8 @@ export async function buildOwnerNowReadModel(
   const partialSources = [
     ...(jobSource.partial ? ["active_jobs"] : []),
     ...(fieldBlockerSource.partial ? ["field_blockers"] : []),
+    ...(unknownJobStopSource.partial ? ["unknown_job_stops"] : []),
+    ...(unknownWorkPackageStopSource.partial ? ["unknown_work_package_stops"] : []),
     ...(gateSource.partial ? ["blocked_gates"] : []),
     ...(incidentSource.partial ? ["automation_incidents"] : []),
     ...(accountingIntentSource.partial ||
@@ -2675,6 +2750,10 @@ export async function buildOwnerNowReadModel(
       [
         ...jobs,
         ...fieldBlockers,
+        ...[...unknownJobStopSource.rows, ...unknownWorkPackageStopSource.rows].map((row) => ({
+          name: row.occurrence_id,
+          modified: row.updated_at,
+        })),
         ...gates,
         ...incidents,
         ...payments,
@@ -3424,13 +3503,16 @@ async function nativeProductionGates(
   if (selected.length === 0) return { rows: [], partial: false };
   return await boundedNativeRows<NativeProductionGateRow>(
     env,
-    `SELECT gate_id, roof_job_id, gate, state, blocker_reason, owner_user,
-            assigned_at, due_at, updated_at
-       FROM operating_production_gates
-      WHERE tenant_id = ?
-        AND roof_job_id IN (${selected.map(() => "?").join(", ")})
-        ${state ? "AND state = ?" : ""}
-      ORDER BY roof_job_id ASC, gate ASC, updated_at DESC, gate_id ASC`,
+    `SELECT gate.gate_id, gate.roof_job_id, gate.gate, gate.state, gate.blocker_reason,
+            gate.owner_user, gate.assigned_at, gate.due_at, gate.updated_at,
+            entry.basis AS basis_in_force
+       FROM operating_production_gates gate
+       LEFT JOIN production_gate_clearances entry
+         ON entry.tenant_id = gate.tenant_id AND entry.clearance_id = gate.clearance_decision_id
+      WHERE gate.tenant_id = ?
+        AND gate.roof_job_id IN (${selected.map(() => "?").join(", ")})
+        ${state ? "AND gate.state = ?" : ""}
+      ORDER BY gate.roof_job_id ASC, gate.gate ASC, gate.updated_at DESC, gate.gate_id ASC`,
     [tenantId, ...selected, ...(state ? [state] : [])],
     limit,
   );
@@ -3526,6 +3608,67 @@ async function nativeOwnerFieldBlockers(
         AND package.job_id IN (${selected.map(() => "?").join(", ")})
       ORDER BY package.updated_at DESC, package.work_package_id ASC`,
     [tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+/**
+ * Active safety stops that name a job this tenant does not have. Recording a stop never fails, so
+ * a mistyped job is caught here: such a stop holds Safety on every job (0158) until it is opened
+ * and fixed or lifted.
+ */
+async function nativeOwnerUnknownJobStops(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerUnknownStopRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerUnknownStopRow>(
+    env,
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            reporter.display_name AS reported_by_name, occurrence.updated_at
+       FROM safety_occurrences AS occurrence
+       LEFT JOIN app_users AS reporter
+         ON reporter.tenant_id = occurrence.tenant_id
+        AND reporter.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'roof_job'
+        AND NOT EXISTS (
+          SELECT 1 FROM operating_roof_jobs AS job
+           WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
+    [tenantId],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+/**
+ * Active safety stops that name a Work Package this tenant does not have, with who raised each.
+ * Like a stop on a job that doesn't exist, such a stop is recorded and holds Safety and every
+ * schedule on every job (0159) until it is lifted.
+ */
+async function nativeOwnerUnknownWorkPackageStops(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerUnknownStopRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerUnknownStopRow>(
+    env,
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            reporter.display_name AS reported_by_name, occurrence.updated_at
+       FROM safety_occurrences AS occurrence
+       LEFT JOIN app_users AS reporter
+         ON reporter.tenant_id = occurrence.tenant_id
+        AND reporter.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'work_package'
+        AND NOT EXISTS (
+          SELECT 1 FROM work_packages AS package
+           WHERE package.tenant_id = occurrence.tenant_id
+             AND package.work_package_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
+    [tenantId],
     OWNER_NOW_SOURCE_LIMIT,
   );
 }
@@ -3791,6 +3934,7 @@ function nativeProductionGateFrappeRow(
     assigned_at: row.assigned_at,
     due_at: row.due_at,
     modified: row.updated_at,
+    basis_in_force: row.basis_in_force,
   };
 }
 
@@ -3925,6 +4069,27 @@ function nativeGateStateLabel(value: string | null): string | null {
   if (value === "complete") return "Done";
   if (value === "waived") return "Waived";
   return value;
+}
+
+/**
+ * OD-01 (0155): the policy recorded that the signed contract has no deposit. That gate is
+ * complete, but nothing was done or paid: it reads as a system state, "No deposit under this
+ * contract", and never reads or counts as done.
+ */
+function depositNotRequiredByContract(row: FrappeRow | undefined): boolean {
+  return text(row?.gate) === "Deposit" && text(row?.state) === "complete" &&
+    text(row?.basis_in_force) === "contract_no_deposit";
+}
+
+function productionGateStateLabel(row: FrappeRow | undefined): string | null {
+  return depositNotRequiredByContract(row)
+    ? NO_DEPOSIT_UNDER_CONTRACT
+    : nativeGateStateLabel(text(row?.state));
+}
+
+/** The gate's recorded reason, or the system state when the contract has no deposit. */
+function productionGateReason(row: FrappeRow): string | null {
+  return depositNotRequiredByContract(row) ? NO_DEPOSIT_UNDER_CONTRACT : text(row.blocker_reason);
 }
 
 function jobReadMode(auth: AuthContext): "any" | "assigned" {
@@ -4069,8 +4234,8 @@ function gateModel(
         {
           id: gateId,
           name: text(row.gate),
-          state: nativeGateStateLabel(text(row.state)),
-          blocker_reason: text(row.blocker_reason),
+          state: productionGateStateLabel(row),
+          blocker_reason: productionGateReason(row),
           owner: redactOwner ? null : text(row.owner_user),
           due_at: text(row.due_at),
         },
@@ -4237,6 +4402,8 @@ function exceptionRow(
     busStatus?: string | null;
     triageStatus?: string | null;
     mctb?: MctbStatus | null;
+    reportedByName?: string | null;
+    summary?: string | null;
   },
 ): OwnerNowReadModel["exceptions"] {
   return input.id
@@ -4255,6 +4422,8 @@ function exceptionRow(
           bus_status: input.busStatus ?? null,
           triage_status: input.triageStatus ?? null,
           mctb: input.mctb ?? null,
+          reported_by_name: input.reportedByName ?? null,
+          summary: input.summary ?? null,
         },
       ]
     : [];

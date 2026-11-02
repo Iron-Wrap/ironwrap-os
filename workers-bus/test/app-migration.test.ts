@@ -2341,8 +2341,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0153 lands after 0154-0206 on deployed databases, and 0155 after 0153 and 0156-0206; neither
     // touches an object a later-numbered migration touches, so both orders give the same schema.
     // 0159 binds Crew by policy in the scheduling batch and checks current gate evidence.
+    // 0160 holds a firm start, Materials attestation and job purchase order lines while the
+    // cancellation window is unknown or open, and records receipt of the signed copy.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 146);
+    assert.equal(migrations.length, 147);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2504,9 +2506,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence and readback-conflict guards under their names.
     // 0158 re-creates the ledger validate and replace guards; object counts stay unchanged.
     // 0159 adds one schedule evidence guard and re-creates three existing guards.
+    // 0160 adds signed-copy event, served-confirmation and manual-receipt tables with four guards
+    // each, plus four cancellation-window holds: three tables and sixteen triggers, no named index.
+    // It also adds a job link to purchase order lines and re-creates the assignment validate and
+    // ledger replace guards under their existing names.
     assert.deepEqual(
       { ...counts },
-      { tables: 282, indexes: 382, triggers: 786 },
+      { tables: 285, indexes: 382, triggers: 802 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3844,13 +3850,14 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155, 0158 and 0159 applied after higher main migrations give the sorted schema", async () => {
+test("0155, 0158, 0159 and 0160 applied after higher main migrations give the sorted schema", async () => {
   // Existing databases receive the gate-ledger migrations in actual deployment order, after
   // higher-numbered main migrations. Each validate guard follows the guard it replaces.
   const late = [
     "0155_od01_deposit_policy.sql",
     "0158_production_gate_attestations.sql",
     "0159_production_gate_crew_policy.sql",
+    "0160_production_cancellation_window.sql",
   ];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));

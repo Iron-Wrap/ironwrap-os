@@ -430,6 +430,7 @@ function JobSurface({
             </Link>
           )}
         </Button>
+        {!model.packet.work_package ? <NoWorkPlanNotice /> : null}
         <OfflineReadiness
           ready={!model.stale_fields.includes(NOT_SAVED_ON_DEVICE)}
           saving={savingOffline}
@@ -470,6 +471,7 @@ function JobSurface({
           offline={offline}
           dateOptions={dateOptions}
           captureAllowed={fieldCaptureAllowed}
+          showNoPlanNotice={false}
         />
         <WorkStatus model={model} blockedGates={blockedGates} dateOptions={dateOptions} />
         {/*
@@ -748,16 +750,36 @@ function fieldPacketQueryKey(
     : ["job", session.tenant.id, session.user.id, jobId];
 }
 
+function NoWorkPlanNotice() {
+  return (
+    <section
+      className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
+      aria-labelledby="work-package-heading"
+    >
+      <p className="text-sm font-semibold text-warning">Work plan</p>
+      <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
+        No work plan is ready
+      </h2>
+      <p className="mt-2 leading-6 text-muted">
+        Do not start, resume, release a hold point, or change scope. Go online for the latest issued
+        plan, or call production.
+      </p>
+    </section>
+  );
+}
+
 function WorkPackagePanel({
   model,
   offline,
   dateOptions,
   captureAllowed,
+  showNoPlanNotice = true,
 }: {
   model: WorkPackagePanelModel;
   offline: boolean;
   dateOptions: FieldDateOptions;
   captureAllowed: boolean;
+  showNoPlanNotice?: boolean;
 }) {
   const session = useSession();
   const queryClient = useQueryClient();
@@ -837,22 +859,11 @@ function WorkPackagePanel({
   );
 
   if (!workPackage) {
+    if (!showNoPlanNotice) return issueForm;
     return (
       <div className="space-y-5">
         {issueForm}
-        <section
-          className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
-          aria-labelledby="work-package-heading"
-        >
-          <p className="text-sm font-semibold text-warning">Work plan</p>
-          <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-            No work plan is ready
-          </h2>
-          <p className="mt-2 leading-6 text-muted">
-            Do not start, resume, release a hold point, or change scope. Go online for the latest
-            issued plan, or call production.
-          </p>
-        </section>
+        <NoWorkPlanNotice />
       </div>
     );
   }

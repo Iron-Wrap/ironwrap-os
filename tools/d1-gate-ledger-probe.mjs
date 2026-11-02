@@ -8,8 +8,11 @@
 // checks the engine the migrations ship to: wrangler's local D1 (workerd's SQLite), on a database
 // `wrangler d1 migrations apply --local` has migrated. It reads the engine's JSON functions, then
 // inserts a Materials attestation whose evidence is JSON5 and expects 0158's refusal, then the
-// same attestation with plain JSON and expects the gate ready. It writes synthetic
-// example.invalid rows only, under fresh ids, so it can run on the same database more than once.
+// same attestation with plain JSON and expects the gate ready. Materials waits for the job's OD-01
+// cancellation window (0160), read with D1's clock: the probe first expects that hold by name, then
+// records, as an owner does, that the customer received the signed copy eleven days ago, which
+// D1 bounds and stamps with its own clock. It writes synthetic example.invalid rows only, under fresh
+// ids, so it can run on the same database more than once.
 //
 // Usage: node tools/d1-gate-ledger-probe.mjs --persist-to <dir>
 
@@ -27,6 +30,7 @@ const TENANT = "ironwrap";
 // JSON5 that json_each reads as an empty list, so no other evidence rule has anything to refuse.
 const JSON5_EVIDENCE = "[/* JSON5 comment */]";
 const REFUSAL = "production_gate_evidence_invalid";
+const WINDOW_HOLD = "production_gate_cancellation_window_unknown";
 
 const persistArg = process.argv.indexOf("--persist-to");
 if (persistArg === -1 || !process.argv[persistArg + 1]) {
@@ -88,6 +92,7 @@ try {
   // 2. One active production person on no crew, a job and its blocked Materials gate.
   const suffix = randomBytes(6).toString("hex");
   const userId = `appu_probe_${suffix}`;
+  const ownerId = `appu_probe_owner_${suffix}`;
   const jobId = `job:probe:${suffix}`;
   const gateId = `gate:probe:${suffix}:materials`;
   const envelopeId = `ow_gate_probe_${suffix}`;
@@ -98,6 +103,9 @@ try {
        active, created_by, created_at, updated_at)
     VALUES (${quote(userId)}, ${quote(TENANT)}, ${quote(`${userId}@example.invalid`)}, 'Synthetic production',
             'ops', 'production', NULL, 1, 'owner@example.invalid',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')),
+           (${quote(ownerId)}, ${quote(TENANT)}, ${quote(`${ownerId}@example.invalid`)}, 'Synthetic owner',
+            'owner', 'owner', NULL, 1, 'owner@example.invalid',
             strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day'));
     INSERT INTO envelopes
       (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts, status, created_at, updated_at)
@@ -148,6 +156,25 @@ try {
     execute(`SELECT state, version FROM operating_production_gates WHERE gate_id = ${quote(gateId)};`).results[0] ?? {};
 
   if (seeded.ok) {
+    // 2a. Nothing records that the customer received the signed copy, so the cancellation window
+    //     is unknown and holds Materials (0160), whatever the evidence.
+    const held = execute(attestation("[]", 0));
+    expect(!held.ok && held.output.includes(WINDOW_HOLD), `Materials was not held with ${WINDOW_HOLD}`, held.output);
+    // 2b. An owner records that the copy arrived eleven days ago: D1 bounds the end, stamps the
+    //     record with its own clock, and the window has ended.
+    const received = execute(`
+      INSERT INTO production_cancellation_window_receipts
+        (receipt_id, tenant_id, roof_job_id, received_at, window_ends_at, time_zone, acceptance_binding_id,
+         contract_signed_at, reason, evidence_ref, recorded_by_user_id, recorded_by_role, recorded_at,
+         request_sha256, idempotency_key_hash)
+      VALUES (${quote(`pcw_${sha(`${suffix}:receipt`).slice(0, 40)}`)}, ${quote(TENANT)}, ${quote(jobId)},
+              strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-11 days'),
+              strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-11 days', '+240 hours'), 'America/Edmonton', NULL, NULL,
+              'Synthetic probe: the signed copy was received.', 'probe://signed-copy', ${quote(ownerId)}, 'owner',
+              strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ${quote(sha(`${suffix}:receipt:request`))},
+              ${quote(sha(`${suffix}:receipt:key`))});`);
+    expect(received.ok, "recording that the signed copy was received was refused", received.output);
+
     // 3. JSON5 evidence is refused by 0158 and leaves the gate blocked.
     const json5 = execute(attestation(JSON5_EVIDENCE, 1));
     expect(!json5.ok && json5.output.includes(REFUSAL), `a JSON5 evidence list was not refused with ${REFUSAL}`, json5.output);
@@ -168,4 +195,7 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`d1-gate-ledger-probe: FAIL ${failure}`);
   process.exit(1);
 }
-console.log("d1-gate-ledger-probe: ok - D1 refuses JSON5 evidence in a gate attestation and admits plain JSON");
+console.log(
+  "d1-gate-ledger-probe: ok - D1 holds Materials in an unknown cancellation window, records the signed copy's " +
+    "receipt on its own clock, refuses JSON5 evidence in a gate attestation and admits plain JSON",
+);

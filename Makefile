@@ -138,7 +138,10 @@ app: app/node_modules/.package-lock.json
 
 worker: worker-contract worker-tests
 
-# The typegen/typecheck/dry-run contract, plus the migration smoke. Nothing under
+# The typegen/typecheck/dry-run contract, plus the migration smoke and, on the
+# database it migrates, tools/d1-gate-ledger-probe.mjs: the Worker suite runs the
+# migrations on node:sqlite, so the probe repeats 0158's JSON evidence rule on
+# wrangler's local D1, the engine they ship to. Nothing under
 # workers-bus/src imports from app/ (IRO-267 blocker 9), but the dry-run below
 # validates the real app/dist bundle, so this target needs app's node_modules too.
 # typecheck needs worker-configuration.d.ts, which typegen generates (blocker 10),
@@ -158,6 +161,7 @@ worker-contract: workers-bus/node_modules/.package-lock.json app/node_modules/.p
 	npm run typegen --prefix workers-bus
 	rm -rf $(OUT)/d1
 	npm run db:migrate:local --prefix workers-bus -- --persist-to "$(abspath $(OUT))/d1"
+	node tools/d1-gate-ledger-probe.mjs --persist-to "$(abspath $(OUT))/d1"
 	npm run typecheck --prefix workers-bus
 	npm run build --prefix app
 	npm run deploy --prefix workers-bus -- --dry-run 2>&1 | tee $(OUT)/worker-dry-run.log

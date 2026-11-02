@@ -206,6 +206,8 @@ import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-dispos
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import {
   handleProductionGateClearance,
+  handleProductionGateReversal,
+  handleProductionGatesRead,
   handleProductionGateWaiverDecision,
 } from "./production-gate-clearance.ts";
 import {
@@ -2040,15 +2042,25 @@ export async function handleAuthenticatedRoute(
   // under the job on purpose: a gate has no identity apart from the job it locks, and
   // the path says which job's schedule is being unlocked.
   const productionGateLedgerMatch = url.pathname.match(
-    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions)$/,
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions|reversals)$/,
   );
   if (req.method === "POST" && productionGateLedgerMatch) {
     const roofJobId = decodedPathSegment(productionGateLedgerMatch[1]);
     const gate = decodedPathSegment(productionGateLedgerMatch[2]);
     if (!roofJobId || !gate) return privateAppJson({ error: "not_found" }, 404);
-    return productionGateLedgerMatch[3] === "clearance"
-      ? await handleProductionGateClearance(req, env, auth, roofJobId, gate)
-      : await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate);
+    const action = productionGateLedgerMatch[3];
+    if (action === "clearance") {
+      return await handleProductionGateClearance(req, env, auth, roofJobId, gate);
+    }
+    return action === "waiver-decisions"
+      ? await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate)
+      : await handleProductionGateReversal(req, env, auth, roofJobId, gate);
+  }
+  const productionGatesMatch = url.pathname.match(/^\/api\/v1\/production\/jobs\/([^/]+)\/gates$/);
+  if (req.method === "GET" && productionGatesMatch) {
+    const roofJobId = decodedPathSegment(productionGatesMatch[1]);
+    if (!roofJobId) return privateAppJson({ error: "not_found" }, 404);
+    return await handleProductionGatesRead(env, auth, roofJobId);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
     if (!hasPermission(auth, "production:read")) {
@@ -4061,6 +4073,12 @@ async function reconcileProposalPublicationApproval(
   }
 }
 
+/**
+ * `production.schedule`: a person (owner, ops or production) schedules a roof job. A schedule clears
+ * Crew by policy (0159), so it is people-only like every gate write: the CSRF token, then the
+ * person's own cookie session and their live role. Agents, connectors, service tokens and the
+ * effect runtime never schedule.
+ */
 async function createOperatingJobAssignment(
   req: Request,
   env: AppEnv,
@@ -4075,6 +4093,11 @@ async function createOperatingJobAssignment(
   }
   if (!validAppCsrf(req, auth)) {
     return privateAppJson({ error: "csrf_failed" }, 403);
+  }
+  const person = await personCookieSession(env, auth);
+  if (!person) return privateAppJson({ error: "person_session_required" }, 403);
+  if (!["owner", "ops", "production"].includes(person.role)) {
+    return privateAppJson({ error: "production_role_required" }, 403);
   }
   const requestIdempotencyKey = idempotencyKey(req);
   if (!requestIdempotencyKey) {
@@ -4102,7 +4125,7 @@ async function createOperatingJobAssignment(
       scheduledEnd: input.scheduledEnd,
       supersedesAssignmentId: input.supersedesAssignmentId,
       correctionReason: input.correctionReason,
-      actorUserId: auth.session.user_id,
+      actorUserId: person.userId,
       idempotencyKey: requestIdempotencyKey,
     });
     const assignment = result.assignment;
@@ -7995,10 +8018,16 @@ function operatingJobAssignmentErrorResponse(error: unknown): Response {
   if (!code) {
     return privateAppJson({ error: "operating_job_assignment_unavailable" }, 502);
   }
-  if (code === "operating_job_assignment_actor_invalid") {
+  if (
+    code === "operating_job_assignment_actor_invalid" ||
+    code === "operating_job_assignment_seed_identity_refused"
+  ) {
     return privateAppJson({ error: code }, 403);
   }
-  return privateAppJson({ error: code }, 409);
+  // Every other refusal is named, including the gate ledger's own code when a gate moved while
+  // the schedule was written (0159), with the stop to open when a stop names no job or package.
+  const detail = error instanceof OperatingJobAssignmentError ? error.detail : {};
+  return privateAppJson({ ...detail, error: code }, 409);
 }
 
 function operatingWorkObjectAssignmentErrorResponse(error: unknown): Response {

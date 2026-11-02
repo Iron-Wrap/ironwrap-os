@@ -31,14 +31,6 @@ export type AppEnv = Env & {
   // Owner-approved manifest/profile admission only. Provider proofs require a separate
   // authenticated provider readback; unset and false refuse every configuration write.
   APP_READINESS_ADMISSION_ENABLED?: string;
-  // Dedicated owner/ops desktop draft pilot. False by default and separate from
-  // field-device pairing, browser sessions, and every approved-write rail.
-  APP_HERMES_DESKTOP_ENABLED?: string;
-  // The native desktop and hosted reference paths share one persisted provider request.
-  // A real provider model must be configured explicitly; source never chooses one.
-  APP_HERMES_PROVIDER_MODEL?: string;
-  // Reference execution remains separately disabled even when desktop pairing is enabled.
-  APP_HERMES_HOSTED_REFERENCE_ENABLED?: string;
   // A customer portal is a separately activated, read-only capability surface. It never
   // inherits an office BFF session or the office read-model allowlists.
   APP_CUSTOMER_PORTAL_ENABLED?: string;

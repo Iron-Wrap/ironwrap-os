@@ -221,8 +221,7 @@ Current source tracing distinguishes implemented modules from reachable producti
   withdrawn acceptance, the unblocked disqualified lead and six test gaps; all are fixed here and
   each fix is proven to fail without it. Repository tests only; the durable draft, decision and
   governed send that consume it are a separate slice.
-- measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
-  `lead_follow_up_draft` pilot.
+- measurement OCR is a bounded review-required AI interpreter.
 - AI team coordination is Locally-validated, Partial (`workers-bus/src/agents/`,
   `test/agents-policy.test.ts`, `test/agents-api.test.ts`, `test/agents-control.test.ts`,
   `test/agents-memory.test.ts`, `test/authority-record-native.test.ts`; `agent-host/`,
@@ -1288,9 +1287,6 @@ Implemented:
 - D1/Worker and Newo seams.
 - versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
   informational only and cannot issue a receipt, activate policy, reach a route, or write a record.
-- default-off owner/ops desktop text pilot with separate one-time fragment pairing, a device-bound
-  15-minute `task_envelope_v1`, and exactly three fixed read/draft MCP tools for
-  `lead_follow_up_draft` handoff.
 
 Current constraint:
 
@@ -1300,11 +1296,6 @@ Current constraint:
   never blindly retried; the ledger does not establish accounting truth;
 - a `shadow_eligible` lead-triage result still requires the existing human approval receipt;
 - customer communication is generally record-only;
-- desktop-native Gmail, Outlook, Calendar, Drive, OneDrive, Teams, and Slack observations are
-  optional untrusted read/draft context; connector credentials never enter IronWrap;
-- desktop submission stops at a handoff to `dry_run_communication_event`; a separate human approval
-  receipt is still required before `request_record_communication_event` records Draft or Blocked;
-- desktop Facet, capture, and vision workflows are deferred;
 - routine autonomous external supplier, customer, accounting, regulator, and machine authority
   policies are not present; IRO-38 does not claim those target capabilities.
 
@@ -1508,7 +1499,7 @@ in `make check` (the `contracts` CI job); their passing result is a source gate,
 | Facility | Target. Deployment infrastructure only: no facility, building, fire, security, or environmental operating object exists among the 79 DocTypes or in `workers-bus/src`, and no check covers one. | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | Locally-validated, Partial. Tenant isolation, consent records, and toolchain hygiene pass named checks on this checkout: `node tools/validate-tenant-config.mjs`, `node tools/validate-ingest-doctype-coverage.mjs` (every DocType the Worker writes is swept for tenant leakage), `deploy/local/frappe-marker-sweep.test.mjs`, and `npm audit` for both `app` and `workers-bus` with and without `--omit=dev`, all four reporting 0 vulnerabilities — so the dev-toolchain advisories this row's gap column asks about are currently clear rather than accepted. The owner-only report/intake inventory and exact R2 readback for attributable receipts have focused local checks (`workers-bus/test/job-measurement-report.test.ts`, `measurement-intake-privacy.test.ts`). Null-tenant historical intake, other data classes, subject matching, DSAR, breach, and retention/destruction have no complete object or check; no restore, breach, access, or production-audit drill has been run. | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |
 | Insurance/risk | Source-present, Partial. Insurance Supplement, Insurance Supplement Evidence, and Job Compliance Record exist and pass the DocType/permission and domain-policy contract checks, and supplements are read by estimator pricing (`workers-bus/test/estimator-native-store.test.ts`). Policy, claim, notification, and recovery lifecycles have no object and no check, and no claim tabletop has run. | policy/claim/notification/recovery | claim tabletop |
-| Audit | Locally-validated, Partial. Append-only audit, effect, gate, evidence, and reconciliation records. Checks: `workers-bus/test/effect-runtime.test.ts` (business idempotency binds the complete immutable effect envelope; an unknown outcome never retries until reconciled and each retry carries a new attempt identity; an authoritative readback reconciles a lost provider response without a second dispatch; inconclusive reconciliation opens a terminal exception and never authorizes retry), `transition-kernel.test.ts`, `accounting-reconciliation.test.ts`, `accounting-append-only-inserts.test.ts`, `dead-letter-sweep-episodes.test.ts`. Hermes is a disabled narrow draft pilot (`hermes-draft.test.ts`), not the operating authority or a resident coordinator. No deterministic full-job reconstruction has been performed end to end. | independent cross-domain audit, anomaly closure, and a thin context/plan/policy/permit/readback coordinator | deterministic full-job reconstruction before model-assisted anomaly trials |
+| Audit | Locally-validated, Partial. Append-only audit, effect, gate, evidence, and reconciliation records. Checks: `workers-bus/test/effect-runtime.test.ts` (business idempotency binds the complete immutable effect envelope; an unknown outcome never retries until reconciled and each retry carries a new attempt identity; an authoritative readback reconciles a lost provider response without a second dispatch; inconclusive reconciliation opens a terminal exception and never authorizes retry), `transition-kernel.test.ts`, `accounting-reconciliation.test.ts`, `accounting-append-only-inserts.test.ts`, `dead-letter-sweep-episodes.test.ts`. Hermes is role/tool configuration, not the operating authority or a resident coordinator. No deterministic full-job reconstruction has been performed end to end. | independent cross-domain audit, anomaly closure, and a thin context/plan/policy/permit/readback coordinator | deterministic full-job reconstruction before model-assisted anomaly trials |
 | White label | Source-present, Partial. Tenant config generation, Worker config derivation with no source-tenant references surviving, and runtime tenant identity pass named checks (`node --test tools/generate-tenant-config.test.mjs`, `tools/generate-tenant-worker-config.test.mjs`, `tools/validate-tenant-runtime.test.mjs`; `node tools/validate-tenant-config.mjs`). The White Label Tenant and Tenant Export Run records themselves carry only the DocType/permission contract check and no export has been exercised, so the row records the weakest part of its scope. No second tenant, isolation proof, or pack upgrade/rollback exists; versioned Operating Packs and a marketplace are Target. | complete operating-domain isolation and managed ops; versioned Operating Packs only after repeated configurations, with marketplace deferred until upgrade/rollback/isolation proof | second real tenant proof plus pack compatibility/rollback |
 
 ## Gap audit of the previous operating model

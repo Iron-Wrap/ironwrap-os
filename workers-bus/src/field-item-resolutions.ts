@@ -593,7 +593,7 @@ const reply = (body: unknown, status = 200) =>
 /**
  * A machine credential or an agent marker on the request. App sessions are cookie-only, so an
  * `Authorization` header is always a machine caller (agent host, MCP, effect runtime, service);
- * the Hermes desktop agent announces itself with its own headers.
+ * an `x-ironwrap-hermes-*` header marks a Hermes agent caller.
  */
 function machineActorMarker(req: Request): boolean {
   if (req.headers.has("authorization")) return true;

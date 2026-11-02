@@ -27,15 +27,13 @@ When sources disagree, use this order:
    human/agent boundary.
 4. [`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./AUTHORITY-AND-EVIDENCE-CONTRACT.md) for authority,
    evidence, transitions, stops, and side effects.
-5. [`HERMES-DESKTOP-TEXT-PILOT.md`](./HERMES-DESKTOP-TEXT-PILOT.md) for the accepted owner/ops
-   desktop text pilot and its pairing, task, connector-context, draft, and handoff boundary.
-6. [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md) for researched regulatory triggers. It is a
+5. [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md) for researched regulatory triggers. It is a
    control index, not legal advice.
-7. [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) for implemented versus missing capability.
-8. Current component contracts and runbooks for behavior that exists in this repository.
-9. Runtime agent profiles, skills, tenant configuration, and provider knowledge bases, bounded by
-   items 1 through 8.
-10. Tests, release evidence, and live probes for proof of a particular build or environment.
+6. [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) for implemented versus missing capability.
+7. Current component contracts and runbooks for behavior that exists in this repository.
+8. Runtime agent profiles, skills, tenant configuration, and provider knowledge bases, bounded by
+   items 1 through 7.
+9. Tests, release evidence, and live probes for proof of a particular build or environment.
 
 Git history is the only archive. A deleted plan remains recoverable there but has no current
 authority.

@@ -352,7 +352,6 @@ function repositoryArchitectureFacts() {
       effect_runtime_enabled: configBoolean("EFFECT_RUNTIME_ENABLED"),
       quickbooks_oauth_enabled: configBoolean("QB_OAUTH_ENABLED"),
       quickbooks_final_invoice_enabled: configBoolean("QB_FINAL_INVOICE_ENABLED"),
-      hermes_desktop_enabled: configBoolean("APP_HERMES_DESKTOP_ENABLED"),
       public_estimator_enabled: configBoolean("PUBLIC_ESTIMATE_ENABLED"),
       newo_enabled: configBoolean("NEWO_ENABLED"),
       postiz_enabled: configBoolean("POSTIZ_ENABLED"),

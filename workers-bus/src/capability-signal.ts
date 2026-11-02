@@ -34,8 +34,6 @@ export const CAPABILITY_SIGNAL_IDS = [
   "facet_launch",
   "facet_native_projection",
   "facet_quote_revision_prepare",
-  "hermes_desktop",
-  "hermes_hosted_reference",
   "newo",
   "postiz",
   "proposal_publication",
@@ -48,13 +46,13 @@ export const CAPABILITY_SIGNAL_IDS = [
 export type CapabilitySignalId = (typeof CAPABILITY_SIGNAL_IDS)[number];
 
 /**
- * The eight capabilities spec §9.3 names and G1.3 audited. `tools/production-readiness.mjs` gates
- * exactly this set, so a flag flip on any of them fails the readiness contract until the reference
- * state is re-recorded. Kept here, beside the registry, so the tool cannot cover a stale list.
+ * The capabilities spec §9.3 names and G1.3 audited, less the retired Hermes desktop pilot.
+ * `tools/production-readiness.mjs` gates exactly this set, so a flag flip on any of them fails the
+ * readiness contract until the reference state is re-recorded. Kept here, beside the registry, so
+ * the tool cannot cover a stale list.
  */
 export const NAMED_REFERENCE_CAPABILITY_IDS = [
   "facet_design_ingest",
-  "hermes_desktop",
   "newo",
   "postiz",
   "proposal_template",
@@ -200,26 +198,6 @@ export const CAPABILITY_SIGNAL_REGISTRY: Readonly<
     dependsOn: ["quickbooks_oauth", "effect_runtime"],
     audience: ["quickbooks:read", "accounting:read"],
     note: "Off means no invoice reaches QuickBooks and an approved intent waits; it does not mean the intent was lost.",
-  },
-  hermes_desktop: {
-    id: "hermes_desktop",
-    title: "Hermes desktop pilot",
-    presence: "present",
-    flagBinding: "APP_HERMES_DESKTOP_ENABLED",
-    requires: [],
-    dependsOn: [],
-    audience: OFFICE_ONLY,
-    note: "Owner/ops desktop draft pilot. G1.3 found it had no readiness entry at all.",
-  },
-  hermes_hosted_reference: {
-    id: "hermes_hosted_reference",
-    title: "Hermes hosted reference execution",
-    presence: "present",
-    flagBinding: "APP_HERMES_HOSTED_REFERENCE_ENABLED",
-    requires: [binding("APP_HERMES_PROVIDER_MODEL")],
-    dependsOn: [],
-    audience: OFFICE_ONLY,
-    note: "Undeclared in every environment. `undeclared` rather than `off` keeps the omission legible to an operator.",
   },
   public_estimator: {
     id: "public_estimator",

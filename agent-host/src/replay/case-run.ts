@@ -51,8 +51,7 @@ export function caseClock(item: Pick<EvalCase, "clock">): number {
   return wall - edmontonOffsetMinutes(first) * 60_000;
 }
 
-// America/Edmonton's UTC offset at an instant, read from Intl as workers-bus/src/hermes-desktop.ts
-// reads a configured zone's offset.
+// America/Edmonton's UTC offset at an instant, read from Intl's `longOffset` time-zone name.
 function edmontonOffsetMinutes(at: number): number {
   const label = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Edmonton", timeZoneName: "longOffset" })
     .formatToParts(new Date(at))

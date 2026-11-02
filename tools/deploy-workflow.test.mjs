@@ -12,10 +12,6 @@ const productionWorkflowUrl = new URL(
   "../.github/workflows/deploy-production.yml",
   import.meta.url,
 );
-const releasePleaseWorkflowUrl = new URL(
-  "../.github/workflows/release-please.yml",
-  import.meta.url,
-);
 
 function section(workflow, heading) {
   const start = workflow.indexOf(`  ${heading}:`);
@@ -697,83 +693,6 @@ function validateProductionWorkflow(workflow) {
   assert.equal((workflow.match(/persist-credentials: false/g) ?? []).length, 1);
 }
 
-function validateReleasePleaseWorkflow(workflow) {
-  const releasePr = section(workflow, "release-pr");
-  const githubRelease = section(workflow, "github-release");
-
-  // No job's GITHUB_TOKEN writes. The two release jobs write through RELEASE_TAG_TOKEN,
-  // held only in the `release` environment, so their PR and tag start workflows.
-  assert.match(releasePr, /environment: release\n\s+permissions:\n\s+contents: read\n\s+steps:/);
-  assert.match(githubRelease, /environment: release\n\s+permissions:\n\s+contents: read\n\s+pull-requests: read\n\s+actions: read/);
-  assert.equal((workflow.match(/: write/g) ?? []).length, 0);
-  for (const job of [releasePr, githubRelease]) {
-    assert.match(job, /GITHUB_TOKEN: \$\{\{ secrets\.RELEASE_TAG_TOKEN \}\}\n\s+run: \|\n\s+set -euo pipefail\n\s+test -n "\$GITHUB_TOKEN" \|\|/);
-  }
-  assert.equal((workflow.match(/GITHUB_TOKEN: \$\{\{ github\.token \}\}/g) ?? []).length, 0);
-  assert.equal((workflow.match(/\$\{\{ secrets\.RELEASE_TAG_TOKEN \}\}/g) ?? []).length, 2);
-
-  // Nothing runs per pull request event: release-pr on pull_request would open a
-  // release PR for every branch, and the subject check there was about a fifth of
-  // all Actions runs. release-pr answers to a push to main or a manual dispatch.
-  assert.doesNotMatch(workflow, /^\s*pull_request(_target)?:/m);
-  assert.match(workflow, /\n  workflow_dispatch:\n/);
-  assert.match(
-    releasePr,
-    /if: github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/,
-  );
-  assert.doesNotMatch(releasePr, /pull_request/);
-
-  // The tag is minted only for the merge commit of the newest merged release PR,
-  // on a successful Deploy of this repository's own main.
-  assert.match(githubRelease, /github\.event\.workflow_run\.conclusion == 'success'/);
-  assert.match(githubRelease, /github\.event\.workflow_run\.head_branch == 'main'/);
-  assert.match(
-    githubRelease,
-    /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/,
-  );
-  assert.match(githubRelease, /id: release_commit/);
-  assert.match(githubRelease, /--head release-please--branches--main/);
-  assert.match(
-    githubRelease,
-    /if \[\[ "\$merge_commit" != "\$DEPLOY_HEAD_SHA" \]\]; then[\s\S]*tag=false[\s\S]*exit 0/,
-  );
-  assert.match(
-    githubRelease,
-    /if: \$\{\{ steps\.release_commit\.outputs\.tag == 'true' \}\}[\s\S]*github-release/,
-  );
-
-  // release-please itself is run through npx at a pinned version: the
-  // organization allows only GitHub-owned actions.
-  assert.match(workflow, /RELEASE_PLEASE_VERSION: 17\.11\.2/);
-  assert.equal(
-    (workflow.match(/npx --yes "release-please\$\{?RELEASE_PLEASE_VERSION\}?"/g) ?? []).length,
-    0,
-  );
-  assert.equal(
-    (workflow.match(/npx --yes "release-please@\$RELEASE_PLEASE_VERSION"/g) ?? []).length,
-    2,
-  );
-  for (const uses of workflow.match(/uses: [^\s]+/g) ?? []) {
-    assert.match(uses, /uses: actions\/(checkout|setup-node)@[0-9a-f]{40}/, uses);
-  }
-
-  // The subject check is advisory and push-only. The landed subject is text a
-  // contributor chose: it may reach the job in exactly one way, an `env:`
-  // assignment, never the `run:` script. The step warns and never fails.
-  assert.match(releasePr, /if: github\.event_name == 'push'\n\s+env:\n\s+COMMIT_MESSAGE: \$\{\{ github\.event\.head_commit\.message \}\}/);
-  assert.match(releasePr, /if ! PR_TITLE="\$subject" node tools\/conventional-pr-title\.mjs; then\n\s+echo "::warning /);
-  const subjectUses = [
-    ...workflow.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_-]*): \$\{\{ github\.event\.head_commit\.message \}\}$/gm),
-  ];
-  assert.equal(subjectUses.length, 1, "the landed commit message is read exactly once");
-  assert.equal(subjectUses[0][1], "COMMIT_MESSAGE", "and only as an env assignment");
-  assert.equal(
-    (workflow.match(/github\.event\.head_commit\.message/g) ?? []).length,
-    1,
-    "the commit message expression appears nowhere else",
-  );
-}
-
 test("the production release promotes qa-proven bytes from a tag, behind the predecessor enforcer", async () => {
   validateProductionWorkflow(await readFile(productionWorkflowUrl, "utf8"));
 });
@@ -984,84 +903,6 @@ test("production workflow validation rejects a mutable or out-of-order promotion
     validateProductionWorkflow(workflow.replace("if: ${{ success() }}", "if: ${{ always() }}")),
   );
 });
-
-test("the release train warns on the landed subject, opens one release PR, and tags only the release merge", async () => {
-  validateReleasePleaseWorkflow(await readFile(releasePleaseWorkflowUrl, "utf8"));
-});
-
-test("release-please workflow validation rejects a per-pull-request run, a write token or an ungated tag", async () => {
-  const workflow = await readFile(releasePleaseWorkflowUrl, "utf8");
-  // No job's GITHUB_TOKEN may write.
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace(
-        "    permissions:\n      contents: read\n",
-        "    permissions:\n      contents: write\n",
-      ),
-    ),
-  );
-  // A pull_request trigger would bring the per-event runs back.
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace("on:\n", "on:\n  pull_request:\n    types: [opened, synchronize]\n"),
-    ),
-  );
-  // The landed subject may not be interpolated into the script.
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace('subject="$(printf', 'echo "${{ github.event.head_commit.message }}"\n          subject="$(printf'),
-    ),
-  );
-  // A GITHUB_TOKEN-made release PR or tag starts no workflow; the PAT outside its
-  // environment would reach every branch.
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace("GITHUB_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}", "GITHUB_TOKEN: ${{ github.token }}"),
-    ),
-  );
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(workflow.replace("    environment: release\n", "")),
-  );
-  // Opening a release PR from a pull_request event would mint one per branch.
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace("if: github.event_name == 'push'", "if: github.event_name == 'pull_request'"),
-    ),
-  );
-  // Without the merge-commit gate, every successful Deploy of main would tag.
-  const gate = workflow.slice(
-    workflow.indexOf("      - name: Require this Deploy run to be the merged release pull request"),
-    workflow.indexOf("      - name: Tag the release commit and publish the GitHub release"),
-  );
-  assert.throws(() => validateReleasePleaseWorkflow(workflow.replace(gate, "")));
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace('if [[ "$merge_commit" != "$DEPLOY_HEAD_SHA" ]]; then', 'if false; then'),
-    ),
-  );
-  // A fork's Deploy must never tag this repository.
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace(
-        "github.event.workflow_run.head_repository.full_name == github.repository",
-        "github.event.workflow_run.head_repository.full_name != ''",
-      ),
-    ),
-  );
-  // Only GitHub-owned actions, and release-please only through pinned npx.
-  const thirdPartyAction = workflow.replace(
-    /      - uses: actions\/setup-node@[^\n]+/,
-    "      - uses: googleapis/release-please-action@v4",
-  );
-  assert.notEqual(thirdPartyAction, workflow, "the refusal fixture must replace the current pinned action");
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(thirdPartyAction),
-  );
-  assert.throws(() =>
-    validateReleasePleaseWorkflow(workflow.replace("RELEASE_PLEASE_VERSION: 17.11.2", "RELEASE_PLEASE_VERSION: latest")),
-  );
-});
-
 
 const dependencyWorkflowUrl = new URL(
   "../.github/workflows/dependabot-automerge.yml",

@@ -109,7 +109,6 @@ test-tools:
 	  tools/ci-workflow.test.mjs \
 	  tools/ci-scope.test.mjs \
 	  tools/launch-proof.test.mjs \
-	  tools/conventional-pr-title.test.mjs \
 	  tools/deploy-workflow.test.mjs \
 	  tools/qa-artifact-flow.test.mjs \
 	  tools/qa-dead-letter-workflow.test.mjs \

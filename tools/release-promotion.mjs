@@ -2471,7 +2471,6 @@ export const RELEASE_POLICY_FILES = [
   ".github/workflows/ci.yml",
   ".github/workflows/deploy-production.yml",
   ".github/workflows/deploy.yml",
-  ".github/workflows/release-please.yml",
   "deploy/release-provider-policy.json",
   "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
   "docs/DOCUMENTATION-CONTRACT.md",

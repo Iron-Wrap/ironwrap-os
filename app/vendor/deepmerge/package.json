@@ -1,0 +1,9 @@
+{
+  "name": "@ironwrap/deepmerge",
+  "version": "4.3.1-ironwrap.1",
+  "private": true,
+  "description": "Private deepmerge 4.3.1 security fork for the PWA build; provenance and patch scope are in UPSTREAM.json",
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "license": "MIT"
+}

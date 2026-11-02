@@ -23,8 +23,10 @@ import {
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
+import { z } from "zod";
 
 import { dateTimeFormatter } from "../../lib/intl-cache";
+import { appRoles, roleLabel, type AppRole } from "../../lib/roles";
 import type { StatusKind } from "../ui/status";
 
 /*
@@ -72,7 +74,28 @@ export function specialistName(id: SpecialistId): string {
 /** The action class, fixed by consequence. Shown only inside System details. */
 export type ActionClass = "A0" | "A1" | "A2" | "A3" | "H";
 
-/** What a specialist may do with one action, in the words people see (AI-PRIMITIVES). */
+/**
+ * The owner's dial, the words screens show for a delegation setting (owner ruling); the contract
+ * settings stay internal.
+ */
+export const DIAL = {
+  off: "Off",
+  suggest: "Suggest",
+  approval: "Act with approval",
+  auto: "Auto with undo",
+  locked: "Locked",
+} as const;
+
+/** The contract's delegation settings a person can set, on the dial (owner ruling). */
+export const DIAL_OF = {
+  off: DIAL.off,
+  off_until_enabled: DIAL.off,
+  shadow: DIAL.suggest,
+  asks_first: DIAL.approval,
+  within_limits: DIAL.auto,
+} as const satisfies Record<string, (typeof DIAL)[keyof typeof DIAL]>;
+
+/** What a specialist may do with one action, as a screen says it. */
 export type DelegationSetting =
   | "reads"
   | "prepares"
@@ -84,16 +107,22 @@ export type DelegationSetting =
   | "always_on"
   | "always_asks_first";
 
+/**
+ * Each setting on the owner's dial (owner ruling): reading, preparing and practice suggest; a
+ * paused specialist is off; people-only acts are Locked. An action the owner can never raise reads
+ * "Act with approval · always" with the lock Locked rows carry, so it never reads as a step to turn
+ * up. Protective actions are not on the dial and keep "Always on: protects you".
+ */
 export const DELEGATION: Record<DelegationSetting, { words: string; glyph: LucideIcon }> = {
-  reads: { words: "Reads and watches", glyph: Eye },
-  prepares: { words: "Prepares", glyph: Pencil },
-  within_limits: { words: "Acts within your limits", glyph: CircleGauge },
-  asks_first: { words: "Asks first", glyph: UserCheck },
-  people_only: { words: "People only", glyph: Lock },
-  paused: { words: "Paused", glyph: Pause },
-  off_until_enabled: { words: "Off until you turn it on", glyph: CircleOff },
+  reads: { words: DIAL.suggest, glyph: Eye },
+  prepares: { words: DIAL.suggest, glyph: Pencil },
+  within_limits: { words: DIAL_OF.within_limits, glyph: CircleGauge },
+  asks_first: { words: DIAL_OF.asks_first, glyph: UserCheck },
+  people_only: { words: DIAL.locked, glyph: Lock },
+  paused: { words: DIAL.off, glyph: Pause },
+  off_until_enabled: { words: DIAL_OF.off_until_enabled, glyph: CircleOff },
   always_on: { words: "Always on: protects you", glyph: ShieldCheck },
-  always_asks_first: { words: "Always asks first", glyph: Lock },
+  always_asks_first: { words: `${DIAL.approval} · always`, glyph: Lock },
 };
 
 /** The catalog fields of one action that decide its delegation words. */
@@ -129,8 +158,9 @@ export function delegationOf(
 }
 
 /**
- * The specialist-level control's words: "Paused" while the owner has paused the specialist, and
- * nothing otherwise. Each action then shows its own words through `delegationOf`, never "Paused".
+ * The specialist-level control's words: Off on the dial (owner ruling: Paused reads Off) while the
+ * owner has paused the specialist, and nothing otherwise. Each action then shows its own words
+ * through `delegationOf`, never the paused control's.
  */
 export function specialistDelegation({
   paused,
@@ -159,8 +189,10 @@ export const RECEIPT_FIELDS = [
 ] as const satisfies readonly (keyof ContractReceipt)[];
 
 export const REASON_CODES = {
-  // An answer that stands although its generated view was refused (contract f4.1).
-  succeeded: ["view_spec_invalid"],
+  // An answer that stands although its generated view was refused (contract f4.1), and a
+  // people-only draft that leaves Needs you because a person made the change or a newer draft
+  // replaced it (contract f5).
+  succeeded: ["view_spec_invalid", "applied_by_person", "superseded"],
   failed: [
     "policy_denied",
     "declined",
@@ -211,7 +243,7 @@ export interface ContractReceipt {
     reason_codes: ReasonCode[];
   };
   permit: {
-    kind: "none" | "draft" | "within_limits" | "asks_first";
+    kind: "none" | "draft" | "within_limits" | "asks_first" | "shadow";
     permit_id: string | null;
     approval_id: string | null;
     approved_by: string | null;
@@ -233,6 +265,8 @@ export interface Person {
   name: string;
   /** Two letters for the circle; taken from the name when absent. */
   initials?: string;
+  /** The signed-in person: their own step reads "you", never their name (gate c2, C2-D4). */
+  isViewer?: boolean;
 }
 
 export function initialsOf({ name, initials }: Person): string {
@@ -282,9 +316,8 @@ export interface ReceiptWords {
   /** Held: why it waits, in one sentence. */
   why?: string;
   /**
-   * Done, with something the person should know, such as `VIEW_REFUSED`: "IronWrap couldn't draw
-   * the layout you asked for, so the answer is in the text above. To try once more, type your
-   * request in other words in the box below."
+   * Something the person should know: on Done, `VIEW_REFUSED` ("IronWrap couldn't draw the layout
+   * you asked for, …"); on a closed people-only draft, `appliedByPersonNote` or `supersededNote`.
    */
   note?: string;
   /** Held: the one next step. */
@@ -295,7 +328,12 @@ export interface ReceiptWords {
 
 type HeldReason = Exclude<
   ReasonCode,
-  "declined" | "superseded" | "done_by_person" | "no_readback_yet" | "view_spec_invalid"
+  | "declined"
+  | "superseded"
+  | "done_by_person"
+  | "no_readback_yet"
+  | "view_spec_invalid"
+  | "applied_by_person"
 >;
 
 /** Why a held step waits, in one sentence, and the one next step (AI-PRIMITIVES outcome table). */
@@ -363,10 +401,111 @@ const notItsJob = { why: "This is not something it may do.", next: "A person dec
 export const VIEW_REFUSED =
   "IronWrap couldn't draw the layout you asked for, so the answer is in the text above. To try once more, type your request in other words in the box below.";
 
+/** What a person set by hand on the record a closed draft prepared (`do_it_myself.context.applied`). */
+export interface AppliedByPerson {
+  field: "role" | "delegation_setting";
+  value: string;
+  /** The person's user id; without it the note says "A person". */
+  by?: string;
+  /** True only when the value set is the one the draft proposed; anything else says nothing. */
+  as_proposed?: boolean;
+}
+
+const appliedSchema = z.object({
+  applied: z.object({
+    field: z.enum(["role", "delegation_setting"]),
+    value: z.string().min(1),
+    by: z.string().min(1).optional(),
+    // A malformed flag reads as absent rather than dropping what was set.
+    as_proposed: z.boolean().optional().catch(undefined),
+  }),
+});
+
+/** The `applied` record of a closed draft's `do_it_myself.context`; anything else reads as absent. */
+export function appliedOf(context: unknown): AppliedByPerson | undefined {
+  const parsed = appliedSchema.safeParse(context);
+  return parsed.success ? parsed.data.applied : undefined;
+}
+
+/** What a person changed, when the screen names no record. */
+const APPLIED_SUBJECT: Record<AppliedByPerson["field"], string> = {
+  role: "the role",
+  delegation_setting: "the AI team setting",
+};
+
+/**
+ * The delegation settings a person can set by hand, in the dial's words, each with what it means
+ * once (gate c2: the setting's name alone was terse).
+ */
+const APPLIED_SETTING: Record<string, string> = {
+  asks_first: `${DIAL_OF.asks_first}: it asks a person each time before it acts`,
+  within_limits: `${DIAL_OF.within_limits}: it acts without asking up to the limit set, and asks a person for anything over the limit`,
+  off: `${DIAL_OF.off}: it does not do this at all, and people do it by hand`,
+  shadow: `${DIAL_OF.shadow}: it runs practice rounds that change nothing, and people still do the real work`,
+};
+
+/** What is set now, in the words its screen shows (a role, or a delegation setting on the dial). */
+function appliedValueWords({ field, value }: Pick<AppliedByPerson, "field" | "value">) {
+  if (field === "role")
+    return (appRoles as readonly string[]).includes(value)
+      ? roleLabel(value as AppRole)
+      : undefined;
+  return Object.hasOwn(APPLIED_SETTING, value) ? APPLIED_SETTING[value] : undefined;
+}
+
+/**
+ * A card time ("Today 09:30", "Mon 19 Oct 14:05") as it reads inside a sentence: "today at 09:30",
+ * "on Mon 19 Oct at 14:05". A time it cannot place ("Not known yet") reads as nothing.
+ */
+export function timeInSentence(when: string): string | undefined {
+  // Intl may space "p.m." with a no-break space; \s takes it.
+  const match = /^(.+?),?\s(\d{1,2}:\d{2}(?:\s[ap]\.m\.)?)$/.exec(when.trim());
+  if (!match) return undefined;
+  const [, day, time] = match as unknown as [string, string, string];
+  if (/^(Today|Yesterday|Tomorrow|In \d+ days|\d+ days ago)$/.test(day))
+    return `${day.charAt(0).toLowerCase()}${day.slice(1)} at ${time}`;
+  // A weekday, with or without its date; anything else it does not guess at.
+  return /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/.test(day) ? `on ${day} at ${time}` : undefined;
+}
+
+/**
+ * A people-only draft whose record a person changed by hand (`applied_by_person`). With what is
+ * set now (`applied`): who changed which record, that the draft is closed, and what the record
+ * is now, whatever the draft proposed, so it never claims the person made "this change". Without
+ * it, or with a value it has no words for: who made the change, to which record, that the draft is
+ * closed (gate f5: "closing this draft" read as a button to find), that the change stays in place
+ * (gate f5: "does not undo the change" left readers only fairly sure it still held), and that
+ * nothing is left. `when` is the card's time, said in the line too (gate c2: the header time alone
+ * left readers unsure which moment it was).
+ */
+export function appliedByPersonNote(
+  by = "A person",
+  record?: string,
+  applied?: Pick<AppliedByPerson, "field" | "value" | "as_proposed">,
+  when?: string,
+): string {
+  const value = applied && appliedValueWords(applied);
+  if (applied && value) {
+    const subject = record ?? APPLIED_SUBJECT[applied.field];
+    const at = when ? timeInSentence(when) : undefined;
+    // Only the Worker's as_proposed says the value is the draft's own; the app never guesses.
+    const proposed = applied.as_proposed === true ? " That is what this draft proposed." : "";
+    return `${by} changed ${subject} by hand${at ? ` ${at}` : ""}, so this draft is closed. ${subject.charAt(0).toUpperCase()}${subject.slice(1)} is now ${value}.${proposed}`;
+  }
+  return `${by} already made this change${record ? ` to ${record}` : ""}, so this draft is closed. The change stays in place, and nothing is left to do.`;
+}
+
+/** A people-only draft a newer one replaced (`superseded`): it changed nothing; where the newer one waits. */
+export function supersededNote(record?: string): string {
+  return `A newer draft ${record ? `for ${record}` : "of the same change"} replaced this one. This draft changed nothing; the newer draft is in Needs you.`;
+}
+
 /**
  * The state words of one receipt. `by` names the person who declined, undid or did the step;
  * `where` is the outside system in plain words ("QuickBooks"); `waitingFor` is where a person's
- * answer still has to arrive ("the phone").
+ * answer still has to arrive ("the phone"); `record` is what a people-only draft changes ("Grace
+ * Obi's role"); `applied` is what a person set on it by hand (`appliedOf`); `byViewer` says the
+ * person who acted is the one reading, so the words say "you"; `when` is the card's time.
  */
 export function receiptWords(
   receipt: Pick<ContractReceipt, "outcome" | "policy" | "needs_from_you">,
@@ -374,9 +513,24 @@ export function receiptWords(
     by,
     where = "the other system",
     waitingFor,
-  }: { by?: string; where?: string; waitingFor?: string } = {},
+    record,
+    applied,
+    byViewer = false,
+    when,
+  }: {
+    by?: string;
+    where?: string;
+    waitingFor?: string;
+    record?: string;
+    applied?: AppliedByPerson;
+    byViewer?: boolean;
+    when?: string;
+  } = {},
 ): ReceiptWords {
   const [reason] = receipt.policy.reason_codes;
+  // The person who acted, as a chip says it and as a sentence starts with it.
+  const who = byViewer ? "you" : by;
+  const Who = byViewer ? "You" : by;
   const as = (state: ReceiptState, words?: string): ReceiptWords => ({
     state,
     ...RECEIPT_STATE[state],
@@ -393,15 +547,26 @@ export function receiptWords(
   switch (receipt.outcome) {
     case "succeeded":
       // The answer stands; only its generated view was refused, so say what to do instead.
-      return reason === "view_spec_invalid" ? { ...as("done"), note: VIEW_REFUSED } : as("done");
+      if (reason === "view_spec_invalid") return { ...as("done"), note: VIEW_REFUSED };
+      // A people-only draft leaves Needs you, never for Done for you: a person made the change,
+      // or a newer draft replaced it.
+      if (reason === "applied_by_person")
+        return {
+          ...(who
+            ? { state: "done_by_person" as const, ...personDoneWords(who) }
+            : as("done_by_person")),
+          note: appliedByPersonNote(Who, record, applied, when),
+        };
+      if (reason === "superseded") return { ...as("replaced"), note: supersededNote(record) };
+      return as("done");
     case "unknown":
       return { ...as("working"), waiting: `Waiting for ${where} to confirm.` };
     case "failed":
-      if (reason === "declined") return as("undone", by && `Undone by ${by}`);
+      if (reason === "declined") return as("undone", who && `Undone by ${who}`);
       if (reason === "superseded") return as("replaced");
       if (reason === "done_by_person")
-        return by
-          ? { state: "done_by_person", ...personDoneWords(by, waitingFor) }
+        return who
+          ? { state: "done_by_person", ...personDoneWords(who, waitingFor) }
           : as("done_by_person");
       return held(reason);
     case "abstained":

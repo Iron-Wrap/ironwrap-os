@@ -1696,10 +1696,6 @@ async function authorityReadbackLineage(
   return { rows: [...byReadback.values()], overflow: false };
 }
 
-function sameAuthorityRecord(left: AuthorityRecordReadback, right: AuthorityRecordReadback): boolean {
-  return left.authority_record_id === right.authority_record_id;
-}
-
 function compareAuthorityRecency(left: AuthorityRecordReadback, right: AuthorityRecordReadback): number {
   return (
     left.authority_version - right.authority_version ||

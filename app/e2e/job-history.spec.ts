@@ -93,7 +93,7 @@ const jobHistory = {
     items: [
       {
         id: "evi_finished_north_slope",
-        type: "Work Package Evidence",
+        type: "Job plan evidence",
         proof_slot: "North slope",
         occurred_at: "2024-11-02T10:00:00.000Z",
         summary: "Finished roof, north slope",

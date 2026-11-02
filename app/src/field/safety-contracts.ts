@@ -151,16 +151,6 @@ export interface SafetyActionPayload {
   equipment_id?: string;
 }
 
-export function safetyActionLabel(kind: SafetyActionKind): string {
-  return kind === "report_occurrence"
-    ? "Safety report"
-    : kind === "make_safe"
-      ? "Make safe record"
-      : kind === "equipment_defect"
-        ? "Equipment defect report"
-        : "Rescue call";
-}
-
 export const safetyEquipmentResponseSchema = z.lazy(() =>
   z.object({
     version: z.literal(1),

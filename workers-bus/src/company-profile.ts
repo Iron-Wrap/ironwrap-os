@@ -6,7 +6,7 @@
  * uploaded image bytes, storing those bytes in R2, and presenting the saved profile to
  * public/customer-facing surfaces. R2 never stores a second profile document.
  */
-import type { AppEnv, AppRole } from "./app-types.ts";
+import { COMPANY_PHONE_PATTERN, type AppEnv, type AppRole } from "./app-types.ts";
 import {
   COMPANY_LOGO_CONTENT_TYPES,
   companyProfileDefaults,
@@ -302,7 +302,7 @@ export function parseCompanyProfileInput(
   if (optional.website && !/^https?:\/\/\S+$/.test(optional.website)) {
     return { ok: false, error: "invalid_website" };
   }
-  if (optional.phone && !/^[0-9 ()+.\-]{7,32}$/.test(optional.phone)) {
+  if (optional.phone && !COMPANY_PHONE_PATTERN.test(optional.phone)) {
     return { ok: false, error: "invalid_phone" };
   }
 

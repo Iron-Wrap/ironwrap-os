@@ -18,6 +18,7 @@ import { canonicalJson, sha256Hex } from "../newo-hash.ts";
 import type { ObjectModel, ObjectRead } from "./memory.ts";
 import type { AgentDb } from "./store.ts";
 import { delegationRecord } from "./shadow.ts";
+import { leadProposal, openLeadProposals } from "./lead-proposals.ts";
 
 /** The role-screen readers take the Worker environment; they read only its D1 binding. */
 const envOf = (db: AgentDb) => ({ DB: db }) as unknown as AppEnv;
@@ -164,7 +165,7 @@ const lead: ObjectModel = {
       .bind(tenantId, id)
       .first<Record<string, unknown>>();
     if (!row) return null;
-    const [jobs, consented] = await Promise.all([
+    const [jobs, consented, proposals] = await Promise.all([
       rows<{ roof_job_id: string }>(
         db,
         `SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND lead_id = ?
@@ -173,6 +174,8 @@ const lead: ObjectModel = {
         id,
       ),
       consents(db, tenantId, "lead_id", id),
+      // The lead's open proposals reach a run about it, so a later inbound can confirm one.
+      openLeadProposals(db, tenantId, id, LINKED_PROPOSALS),
     ]);
     return {
       data: {
@@ -182,8 +185,22 @@ const lead: ObjectModel = {
         consents: consented,
         jobs: jobs.map((entry) => entry.roof_job_id),
       },
-      links: jobLinks(jobs),
+      links: [...jobLinks(jobs), ...proposals.map((stepId) => ({ kind: "lead_proposal", id: stepId }))],
     };
+  },
+};
+
+const LINKED_PROPOSALS = 5;
+
+const leadProposalModel: ObjectModel = {
+  // An open lead_fact.propose draft (lead-proposals.ts); a closed one reads as no fact. Its fields
+  // carry customer details, so only the sales view reads it.
+  views: [{ permission: "sales:read", pointers: null }],
+  async read(db, tenantId, id) {
+    const proposal = await leadProposal(db, tenantId, id);
+    if (!proposal?.open) return null;
+    const { open: _open, ...data } = proposal;
+    return { data, links: [{ kind: "lead", id: proposal.lead_id }] };
   },
 };
 
@@ -434,4 +451,13 @@ export const OBJECT_MODELS: Record<string, ObjectModel> = {
   inventory_position: inventoryPosition,
   money_item: moneyItem,
   delegation,
+  lead_proposal: leadProposalModel,
 };
+
+/**
+ * The objects a report run reads: every one but an open lead proposal, whose fields carry customer
+ * details and so never reach text written for a wider audience (contract "Citing facts").
+ */
+export const REPORT_MODELS: Record<string, ObjectModel> = Object.fromEntries(
+  Object.entries(OBJECT_MODELS).filter(([kind]) => kind !== "lead_proposal"),
+);

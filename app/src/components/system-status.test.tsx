@@ -259,3 +259,55 @@ describe("crew storage status from first render", () => {
     expect(screen.queryByText(/Checking device storage/)).toBeNull();
   });
 });
+
+describe("office storage status", () => {
+  beforeEach(() => {
+    setOnline(true);
+    Object.assign(outbox, {
+      pending: 0,
+      uploading: 0,
+      needsAttention: 0,
+      unclaimed: 0,
+      readState: "ready",
+    });
+    environment.canInstall = false;
+  });
+  const office = () =>
+    render(
+      <SessionProvider session={sessionFor("owner")}>
+        <SystemStatus />
+      </SessionProvider>,
+    );
+
+  it.each(["persistence_denied", "check_failed"] as const)(
+    "shows nothing about storage when nothing on this device could be lost: %s",
+    (warning) => {
+      environment.storage = { checked: true, persistent: false, warning };
+      office();
+      expect(screen.queryByText(/storage/i)).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    },
+  );
+
+  it("says what to do about low space even with nothing waiting", () => {
+    environment.storage = { checked: true, persistent: false, warning: "low_storage" };
+    office();
+    expect(
+      screen.getByText("This device is low on space. Free space before you take more photos."),
+    ).toBeVisible();
+    expect(screen.queryByText("Storage warning")).toBeNull();
+  });
+
+  it("explains a storage doubt in one line with the way to send while work waits", () => {
+    environment.storage = { checked: true, persistent: false, warning: "persistence_denied" };
+    Object.assign(outbox, { pending: 2 });
+    office();
+    expect(
+      screen.getByText(
+        "This device did not lock storage in place. Capture still works. Send saved work soon.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send now" })).toBeVisible();
+    expect(screen.queryByText("Storage warning")).toBeNull();
+  });
+});

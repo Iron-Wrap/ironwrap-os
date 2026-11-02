@@ -4,6 +4,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
 import { flattenEnv } from "../src/env-bindings.ts";
+import { facetV2StaticRoutes } from "../src/facet-design-ingest.ts";
+import { facetLaunchConfigured } from "../src/facet-launch.ts";
 
 // IRO-268: wrangler.jsonc groups vars into CFG_* JSON bindings. Flatten each parsed environment's
 // `vars` in place, the same way flattenEnv restores them at the Worker's entry points, so the
@@ -124,6 +126,19 @@ test("document generation stays disabled in production and local, and is on in q
   assert.equal(config.env.local.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
   // qa writes generated documents only to its own R2 bucket; nothing leaves the environment.
   assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
+});
+
+test("the proposal first-open record stays off until the owner approves its privacy notice", async () => {
+  // 3 years is the maximum retention of a first-open row (0163). Deletion exists: D1 lets a row go
+  // only once it is older than 3 years, and the daily cron deletes those rows. The flag still stays
+  // off in every environment until the owner approves the portal privacy notice that says so.
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
+  for (const environment of [config, config.env.local, config.env.qa]) {
+    assert.equal(environment.vars.APP_CUSTOMER_PORTAL_PROPOSAL_VIEWS_ENABLED, "false");
+  }
 });
 
 test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
@@ -1771,13 +1786,42 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
     assert.equal("FACET_LAUNCH_HMAC_KEY" in environment.vars, false);
   }
 
-  // Deployed environments still carry no route table and no launch identity: the real Facet
-  // production tenant id, issuer and origin are not in this repository. Until they are, the
-  // rail is enabled and provably unreachable rather than enabled and guessing.
-  for (const environment of [config, config.env.qa]) {
-    assert.equal(environment.vars.FACET_V2_ROUTES_JSON, "[]");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_BASE_URL, "");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+  // Production still carries no route table and no launch identity: the real Facet production
+  // tenant id, issuer and origin are not in this repository. Until they are, the rail is
+  // enabled and provably unreachable rather than enabled and guessing.
+  assert.equal(config.vars.FACET_V2_ROUTES_JSON, "[]");
+  assert.equal(config.vars.APP_FACET_LAUNCH_BASE_URL, "");
+  assert.equal(config.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+
+  // qa is wired to the single QA Facet on netcup_arm (ironwrap-tracker#74): one route from its
+  // `qa` tenant to this qa Worker's own ingest URL, and a launch identity naming the same tenant.
+  // It must never point at the local namespace or at production.
+  const qa = config.env.qa.vars;
+  const qaRoutes = JSON.parse(qa.FACET_V2_ROUTES_JSON);
+  assert.equal(qaRoutes.length, 1);
+  // Identifiers need at least three characters, so the QA Facet's environment is `qa-arm`, not `qa`.
+  assert.equal(qaRoutes[0].source_environment, "qa-arm");
+  // Shape checks alone let a route the real parser rejects reach qa once (`qa` was too short):
+  // the configured route must pass the parser, and launch must resolve with any well-formed key.
+  assert.ok(
+    facetV2StaticRoutes({ FACET_V2_ROUTES_JSON: qa.FACET_V2_ROUTES_JSON }),
+    "the qa route must pass facetV2StaticRoutes",
+  );
+  assert.equal(
+    facetLaunchConfigured({ ...qa, FACET_LAUNCH_HMAC_KEY: "A".repeat(43) }, qa.APP_TENANT_ID),
+    true,
+  );
+  assert.equal(qaRoutes[0].destination_tenant_id, qa.APP_TENANT_ID);
+  assert.equal(qaRoutes[0].source_tenant_id, qa.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
+  // Facet delivers straight to the Worker's own workers.dev host: behind the qa-iwrap proxy the
+  // Worker sees that URL, and delivery verification signs the destination it receives.
+  const destinationOrigin = new URL(qaRoutes[0].destination_url).origin;
+  assert.match(new URL(destinationOrigin).hostname, /^ironwrap-bus-qa\.[a-z0-9-]+\.workers\.dev$/);
+  assert.ok(qa.APP_ALLOWED_ORIGINS.split(",").includes(destinationOrigin));
+  assert.equal(new URL(qaRoutes[0].destination_url).pathname, "/ingest/facet-design");
+  assert.equal(qa.APP_FACET_LAUNCH_BASE_URL, "https://facet.mindburn.org");
+  for (const url of [qaRoutes[0].destination_url, qa.APP_FACET_LAUNCH_BASE_URL]) {
+    assert.doesNotMatch(new URL(url).hostname, /\.test$/);
   }
 
   // The local stack carries a complete, self-consistent route so `npm run dev` can drive the
@@ -2282,18 +2326,29 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
     // proposal revision checks. 0155 adds the owner's deposit policy (OD-01 payment on completion
     // or MD-13 deposits), which acceptance and the Deposit gate's policy entries follow. 0156 lets
-    // a person record whether an unconfirmed proposal send reached the customer. 0158 lets a
-    // person attest Materials, Safety, Access and Weather and reverse a gate entry, all through the
-    // gate ledger. 0159 binds Crew by policy when a job is scheduled and holds the schedule to the
-    // gate evidence as it stands when it is written. 0160 holds a firm start, the Materials
-    // attestation and a job's purchase order lines while the OD-01 cancellation window is unknown
-    // or open, and records when the customer received the signed copy.
+    // a person record whether an unconfirmed proposal send reached the customer. 0157 adds a
+    // version to a person's access, so role/access changes apply against the version read.
+    // 0161 records what people found about a send, and their corrections, without changing it;
+    // holds the late-answer wait in D1 with a window per provider; and names the permit holder
+    // of each new publication.
+    // 0163 keeps the first time a customer's portal link opened a published proposal.
+    // 0164 holds a proposal send to one attempt, settles an unknown one only from a person's record,
+    // and keeps a conflicting readback from being recorded as not delivered.
+    // 0165 names who lifted a safety-occurrence stop and refuses a lift by the person who raised it
+    // (L06) or one without its own `released` event.
+    // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
+    // readback be recorded as not delivered only by citing a complete-scan "not found" check.
+    // 0153 lands after 0154-0206 on deployed databases, and 0155 after 0153 and 0156-0206; neither
+    // touches an object a later-numbered migration touches, so both orders give the same schema.
+    // 0159 binds Crew by policy in the scheduling batch and checks current gate evidence.
+    // 0160 holds a firm start, Materials attestation and job purchase order lines while the
+    // cancellation window is unknown or open, and records receipt of the signed copy.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 140);
+    assert.equal(migrations.length, 147);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0205_agent_step_pair_index.sql",
+      "0206_agent_draft_closing.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2433,7 +2488,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards. 0205 adds one named index on one specialist's steps of one
-    // action.
+    // action. 0206 re-creates the decided-step guard under its name, so counts are unchanged.
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
     // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
@@ -2441,18 +2496,23 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (validate, audit, two append-only), and re-creates 0116's enqueue trigger and two 0153 guards
     // under their names. 0156 adds the proposal delivery confirmation ledger, one named
     // index, four guards and the proposal publish single-flight guard, and re-creates the external
-    // effect binding guard under its name. 0158 re-creates the gate ledger's validate and replace
-    // guards under their names, so counts are unchanged. 0159 adds the schedule's gate evidence
-    // guard and re-creates the gate ledger's validate and replace guards and 0098's assignment
-    // validate trigger under their names: one trigger more. 0160 adds the signed-copy event, served
-    // confirmation and cancellation-window record tables with four guards each (validate, audit,
-    // two append-only), the window's holds on schedules, Materials clears and purchase order lines
-    // (four triggers) and the lines' job link column; it re-creates 0098's assignment validate
-    // trigger and 0153's replace guard under their names: three tables and sixteen triggers more,
-    // no named index.
+    // effect binding guard under its name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
+    // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
+    // portal first-open table, one named index and four validation, update, age-gated delete and
+    // no-replace guards. 0164 adds three outside-send guards (retry limit, no retry, settle
+    // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
+    // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
+    // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
+    // evidence and readback-conflict guards under their names.
+    // 0158 re-creates the ledger validate and replace guards; object counts stay unchanged.
+    // 0159 adds one schedule evidence guard and re-creates three existing guards.
+    // 0160 adds signed-copy event, served-confirmation and manual-receipt tables with four guards
+    // each, plus four cancellation-window holds: three tables and sixteen triggers, no named index.
+    // It also adds a job link to purchase order lines and re-creates the assignment validate and
+    // ledger replace guards under their existing names.
     assert.deepEqual(
       { ...counts },
-      { tables: 280, indexes: 379, triggers: 777 },
+      { tables: 285, indexes: 382, triggers: 802 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3790,11 +3850,9 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
   assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
 });
 
-test("0155, 0158, 0159 and 0160 applied after 0156 and 0200-0205 on a database already through them give the sorted schema", async () => {
-  // qa and production applied 0156 and 0200-0205 first, so they receive 0155, 0158, 0159 and then
-  // 0160 after them. 0158 re-creates the validate guard 0155 re-creates, 0159 re-creates it once
-  // more and 0098's assignment validate trigger, and 0160 re-creates that trigger and 0153's replace
-  // guard again, so each must land after the one before it.
+test("0155, 0158, 0159 and 0160 applied after higher main migrations give the sorted schema", async () => {
+  // Existing databases receive the gate-ledger migrations in actual deployment order, after
+  // higher-numbered main migrations. Each validate guard follows the guard it replaces.
   const late = [
     "0155_od01_deposit_policy.sql",
     "0158_production_gate_attestations.sql",

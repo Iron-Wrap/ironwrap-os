@@ -109,6 +109,8 @@ export interface OutboxVerification {
   serverRef?: string;
   cursor?: string;
   verifiedAt: number;
+  /** A safety stop recorded although its job or Work Package was not found: it holds every job. */
+  scopeUnresolved?: boolean;
   /**
    * Set when a person in the office, not the upload's own answer, confirmed that the office
    * holds this exact item (`GET /api/v1/field-item-resolutions`).

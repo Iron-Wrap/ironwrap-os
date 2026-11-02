@@ -14,7 +14,6 @@ import {
   getOutboxAction,
   listOutboxActionsByKind,
   queueOutboxAction,
-  retryOutboxAction,
   saveOutboxAction,
 } from "../storage/outbox";
 import { outboxFailureGuidance } from "../storage/outbox-failure";
@@ -94,25 +93,6 @@ export async function queueCorrectiveEvidence(
     ...(evidence ? { fileCount: evidence.files.length } : {}),
     ...(guidance ? { guidance } : {}),
   };
-}
-
-/**
- * Sends a stopped submission again, the same saved item with the same files and keys, for a stop
- * that waiting out can clear (a slow link, a busy store). It never makes a copy.
- */
-export async function retryQueuedCorrectiveEvidence(
-  session: AuthenticatedSession,
-  deviceActionId: string,
-) {
-  await retryOutboxAction(deviceActionId);
-  if (navigator.onLine && !isOfflineSession(session)) {
-    await flushOutbox({
-      tenantId: session.tenant.id,
-      userId: session.user.id,
-      csrfToken: session.csrf_token,
-      deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
-    });
-  }
 }
 
 export function decideCorrectiveAction(

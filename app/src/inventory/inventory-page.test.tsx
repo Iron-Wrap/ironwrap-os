@@ -430,6 +430,7 @@ describe("InventoryPage", () => {
     expect(await screen.findByRole("heading", { name: "Inventory" })).toBeVisible();
     expect(screen.getByText("Authority-Inventory-Readback-01")).toBeVisible();
     expect(screen.getByText("Inventory command rules")).toBeVisible();
+    expect(screen.getByText("Current rules")).toBeVisible();
     expect(screen.queryByText("policy:inventory-command")).not.toBeInTheDocument();
     expect(screen.getAllByText("PANEL-24")[0]).toBeVisible();
     expect(screen.getAllByText("Warehouse")[0]).toBeVisible();

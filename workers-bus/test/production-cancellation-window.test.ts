@@ -960,6 +960,47 @@ test("an owner or ops person records when the copy was received, people only, wi
   assert.deepEqual(receipts(h, JOB).map((row) => row.received_at), [body.received_at, later]);
 });
 
+test("a stale owner context cannot record a copy after live session or access authority changes", async () => {
+  for (const change of ["revoked", "expired", "inactive", "demoted", "other_tenant", "other_token"] as const) {
+    const h = setup();
+    try {
+      let auth = await person(h, USERS.owner);
+      const auditBefore = h.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log").get()!.n;
+      if (change === "revoked") {
+        h.sqlite.prepare("UPDATE app_sessions SET revoked_at = ? WHERE session_hash = ?")
+          .run(at(-MINUTE), auth.session.session_hash);
+      } else if (change === "expired") {
+        h.sqlite.prepare("UPDATE app_sessions SET expires_at = ? WHERE session_hash = ?")
+          .run(at(-10_000), auth.session.session_hash);
+      } else if (change === "inactive") {
+        h.sqlite.prepare("UPDATE app_users SET active = 0 WHERE user_id = ?").run(USERS.owner.id);
+      } else if (change === "demoted") {
+        h.sqlite.prepare("UPDATE app_users SET role = 'ops', access_role = 'production' WHERE user_id = ?")
+          .run(USERS.owner.id);
+      } else if (change === "other_tenant") {
+        auth = { ...auth, session: { ...auth.session, tenant_id: "other-synthetic-tenant" } };
+      } else {
+        auth = { ...auth, rawSessionToken: randomToken() };
+      }
+      const answer = await recordReceipt(h, auth, JOB, {
+        received_at: d1At(h, -2 * HOUR), reason: REASON, evidence_ref: EVIDENCE,
+      });
+      assert.deepEqual(answer, {
+        status: 403,
+        body: {
+          error: change === "demoted"
+            ? "cancellation_window_receipt_owner_or_ops_required"
+            : "person_session_required",
+        },
+      }, change);
+      assert.deepEqual(receipts(h, JOB), [], change);
+      assert.equal(h.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log").get()!.n, auditBefore, change);
+    } finally {
+      h.sqlite.close();
+    }
+  }
+});
+
 test("D1 holds every record to its rules for a writer that skips the Worker", () => {
   const h = setup();
   h.sqlite.prepare("UPDATE app_users SET active = 0 WHERE user_id = ?").run(USERS.ops.id);

@@ -308,7 +308,7 @@ describe("PipelineBoardPage", () => {
     await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Someone else changed this card first\. It is now at version 9\. The board has been refreshed/,
+      /Someone else changed this card first\. The board has been refreshed/,
     );
     const needQuote = screen.getByRole("region", { name: "Need Quote column" });
     expect(within(needQuote).getByRole("heading", { name: "Naina Tamang" })).toBeVisible();

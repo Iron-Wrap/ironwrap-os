@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { mintToken, seedOwnerSql } from "../../tools/qa-seed-owner.mjs";
-import { PROVIDER, SEED_CREW, runJourney } from "../../tools/seed-qa-journey.mjs";
+import { PROVIDER, SEED_CREW, loadQaConfig, runJourney } from "../../tools/seed-qa-journey.mjs";
 import worker from "../src/index.ts";
 import { SqliteD1, type SqliteStatement, TENANT, USERS, env as baseEnv } from "./company-setup-fixture.ts";
 import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
@@ -22,6 +22,9 @@ const CUSTOMER_TESTER = "customer-tester@example.invalid";
 const ACCOUNTING_TESTER = "accounting-tester@example.invalid";
 const DAY = 86_400_000;
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+// The Worker's data class as workers-bus/wrangler.jsonc sets it: the effect routes take the seed's
+// `qa-synthetic-*` provider only on a synthetic Worker (0164), so qa's own value is what runs here.
+const WRANGLER_VARS = loadQaConfig();
 
 const policy = (validFrom: number, validUntil: number) =>
   JSON.stringify({
@@ -47,7 +50,7 @@ class D1ShapedSqlite extends SqliteD1 {
   }
 }
 
-function harness() {
+function harness(dataClass: string = WRANGLER_VARS.qa.AGENT_DATA_CLASS) {
   const db = new D1ShapedSqlite();
   // The seed's offer carries a 25% deposit, so this tenant takes deposits (MD-13): since 0155 a
   // tenant with no revision is OD-01 and refuses that quote by name. PR-D moves the seed to OD-01.
@@ -55,6 +58,7 @@ function harness() {
   const queue: unknown[] = [];
   const policyJson = policy(Date.now() - DAY, Date.now() + 365 * DAY);
   const env = baseEnv(db, {
+    AGENT_DATA_CLASS: dataClass,
     RAW: new MemoryR2() as never,
     JN_QUEUE: {
       send: async (message: unknown) => void queue.push(message),
@@ -80,11 +84,17 @@ function harness() {
     production: { APP_PUBLIC_ORIGIN: PRODUCTION_ORIGIN, APP_ALLOWED_ORIGINS: PRODUCTION_ORIGIN },
   };
   const calls: string[] = [];
+  // Publication rows present right after each effect settle answers: a settle never records one.
+  const publicationsAfterSettle: number[] = [];
   const fetchImpl = async (url: URL, init: RequestInit) => {
     calls.push(`${init.method} ${url.pathname}`);
     const headers = new Headers(init.headers);
     headers.set("cf-connecting-ip", "203.0.113.30");
-    return await worker.fetch(new Request(url, { ...init, headers }), env as never, ctx as never);
+    const response = await worker.fetch(new Request(url, { ...init, headers }), env as never, ctx as never);
+    if (url.pathname === "/admin/effects/settle") {
+      publicationsAfterSettle.push(count("SELECT count(*) AS n FROM commercial_proposal_publication_events"));
+    }
+    return response;
   };
   const drainQueue = async () => {
     const messages = queue.splice(0).map((body) => ({ body, ack() {}, retry() { throw new Error("queue_retry_unexpected"); } }));
@@ -96,7 +106,7 @@ function harness() {
     return token;
   };
   const count = (sql: string) => (db.raw.prepare(sql).get() as { n: number }).n;
-  return { db, env, config, calls, fetchImpl, drainQueue, mint, count };
+  return { db, env, config, calls, publicationsAfterSettle, fetchImpl, drainQueue, mint, count };
 }
 
 function run(h: ReturnType<typeof harness>, out: string, overrides: Record<string, unknown> = {}) {
@@ -148,6 +158,16 @@ test("the seed publishes one synthetic offer through the governed routes, and a 
     assert.equal(statSync(join(out, "portal-link.json")).mode & 0o777, 0o600);
 
     assert.equal(h.count(`SELECT count(*) AS n FROM external_effects WHERE provider = '${PROVIDER}' AND state = 'succeeded'`), 1);
+    // The settle went reconciling -> succeeded, never through unknown, so 0164's evidence guard
+    // never applied, and it used no retry (attempt 1 of a limit of 0).
+    assert.deepEqual(
+      { ...h.db.raw.prepare(`SELECT retry_limit, attempt_count FROM external_effects WHERE provider = '${PROVIDER}'`).get() },
+      { retry_limit: 0, attempt_count: 1 },
+    );
+    assert.equal(h.count(`SELECT count(*) AS n FROM external_effect_events event JOIN external_effects effect
+      ON effect.effect_id = event.effect_id WHERE effect.provider = '${PROVIDER}' AND event.to_state IN ('unknown', 'retry')`), 0);
+    // The settle itself recorded nothing; the publication row is the seed owner's own record.
+    assert.deepEqual(h.publicationsAfterSettle, [0]);
     assert.equal(h.count("SELECT count(*) AS n FROM commercial_proposal_publication_events WHERE state = 'published'"), 1);
     assert.equal(h.count("SELECT count(*) AS n FROM app_users WHERE email_normalized = 'accounting-tester@example.invalid' AND access_role = 'accounting'"), 1);
     // The crew went through the roster route: two synthetic field users on one active crew, each
@@ -176,6 +196,21 @@ test("the seed publishes one synthetic offer through the governed routes, and a 
   } finally {
     globalThis.fetch = outbound;
   }
+});
+
+test("on a business Worker the seed stops at the effect claim and publishes nothing", async () => {
+  // Production's own data class: the seed's synthetic provider is refused there (0164), so a seed
+  // pointed at a business Worker can never publish.
+  const h = harness(WRANGLER_VARS.production.AGENT_DATA_CLASS);
+  const out = mkdtempSync(join(tmpdir(), "qa-seed-journey-"));
+  await assert.rejects(run(h, out), (error: { code?: string; message?: string }) =>
+    error.code === "publication_claim_refused" && /effect_provider_not_allowed/.test(String(error.message)));
+  // It got as far as a live, unused permit; only the token's refusal stopped it.
+  assert.equal(h.count("SELECT count(*) AS n FROM commercial_authority_permits WHERE action = 'proposal.publish'"), 1);
+  assert.equal(h.count("SELECT count(*) AS n FROM external_effects WHERE action = 'proposal.publish'"), 0);
+  assert.equal(h.count("SELECT count(*) AS n FROM commercial_proposal_publication_events"), 0);
+  assert.ok(h.calls.includes("POST /admin/effects/claim"));
+  assert.ok(!h.calls.includes("POST /admin/effects/settle"));
 });
 
 test("the seed refuses before any request when the target is not qa or the qa window has lapsed", async () => {

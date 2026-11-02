@@ -394,8 +394,6 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const QBO_ID = /^[1-9][0-9]{0,31}$/;
 const INTENT_ID = /^[A-Za-z0-9:_-]{16,160}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
-const MONEY = /^(0|[1-9][0-9]{0,8})\.[0-9]{2}$/;
-const TAX_RATE = /^(0|[1-9][0-9]{0,2})\.[0-9]{4}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
@@ -2281,7 +2279,6 @@ async function readbackInvoice(
   }
   const normalizedHash = normalized ? await sha256Hex(canonicalJson(normalized.compare)) : null;
   const voided = normalized?.resolve.payment_status === "Voided";
-  const verified = !!exact && !voided;
   if (!exact || !normalized || voided) {
     await recordObservation(env, row, "drift", normalizedHash, tid, now,
       normalized ? string(normalized.resolve.balance_due) : null,

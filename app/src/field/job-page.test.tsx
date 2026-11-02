@@ -13,7 +13,7 @@ import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { JobResponse, WorkObjectResponse } from "./field-contracts";
 import { loadJob, loadWorkObject } from "./field-cache";
-import { JobPage, WorkObjectPage } from "./field-pages";
+import { dialableNumber, JobPage, WorkObjectPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),
@@ -191,7 +191,8 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
         effective_date: "2026-07-10",
         hazard_summary: "Steep-slope fall exposure",
         controls: "Use roof anchors and harnesses",
-        emergency_plan: "Call dispatch and emergency services",
+        emergency_plan:
+          "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
         ppe_requirements: "Harness and eye protection",
         weather_limits: "Stop above plan wind limit",
       },
@@ -461,6 +462,18 @@ describe("JobPage", () => {
     );
   });
 
+  it("labels the crew's role for an office role on a typed work object", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    renderWorkObject(workObjectModel(), ownerSession);
+    expect(await screen.findByText("Crew role")).toBeVisible();
+    expect(screen.queryByText("Your role")).toBeNull();
+  });
+
   it("renders a typed Shop Order packet as an actionable field surface", async () => {
     routeParams = {
       workObjectType: "Shop Order",
@@ -472,6 +485,10 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
+    expect(screen.getByText("Shop Order · SHOP-001")).toBeVisible();
+    expect(screen.queryByText("Applies to the job")).toBeNull();
+    expect(screen.getByText("Your role")).toBeVisible();
+    expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: /Add proof/ })[0]).toHaveAttribute(
@@ -717,10 +734,113 @@ describe("JobPage", () => {
     expect(screen.queryByRole("heading", { name: "Proof obligations" })).not.toBeInTheDocument();
   });
 
+  it("offers 911 and the office's own number in an emergency, never a number written in code", async () => {
+    const { unmount } = renderJob(jobModel(), {
+      ...fieldSession,
+      tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" },
+    });
+    const emergency = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office, 780-555-0142",
+    });
+    expect(within(emergency).getByRole("link", { name: "Call 911" })).toHaveAttribute(
+      "href",
+      "tel:911",
+    );
+    expect(within(emergency).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+    unmount();
+    // Without the office's number in the company profile, 911 still stands and nothing is made up.
+    renderJob();
+    const bare = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office",
+    });
+    expect(within(bare).getByRole("link", { name: "Call 911" })).toBeVisible();
+    expect(within(bare).queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["780-555-0142", "7805550142"],
+    ["(780) 555-0142 ext. 2", "7805550142"],
+    ["780.555.0142 x12", "7805550142"],
+    ["780 555 0142, ask for dispatch", "7805550142"],
+    ["1-780-555-0142", "17805550142"],
+    ["555-0142", "5550142"],
+    ["+1 780 555 0142", "+17805550142"],
+    ["+44 20 7946 0000", "+442079460000"],
+    ["Cell: 403\u2013555\u20130199", "4035550199"],
+    ["+44 (0)20 7946 0000", null],
+    ["780-555-0142 2", null],
+    ["555-0142 555-0143", null],
+    ["780-555-0142-43", null],
+    ["1-800-FLOWERS", null],
+    ["780-555-0142 / 780-555-0143", null],
+    ["780+555", null],
+    ["555-01", null],
+    ["dispatch", null],
+    ["", null],
+    [null, null],
+  ])("dials %j as %j, never a wrong or merged number", (text, expected) => {
+    expect(dialableNumber(text)).toBe(expected);
+  });
+
+  it("calls the job contact only on a dialable number, and shows any other as text", async () => {
+    const model = jobModel();
+    const contact = (phone: string | null) => ({
+      ...model,
+      packet: { ...model.packet, contact: { ...model.packet.contact!, phone } },
+    });
+    const { unmount } = renderJob(contact("(780) 555-0199 ext. 4"));
+    expect(await screen.findByRole("link", { name: "Call job contact" })).toHaveAttribute(
+      "href",
+      "tel:7805550199",
+    );
+    unmount();
+    renderJob(contact("ask at the gate"));
+    expect(await screen.findByText("ask at the gate")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Call job contact" })).not.toBeInTheDocument();
+  });
+
+  it("calls the office without its extension, and offers no office call on a number it can't dial", async () => {
+    const { unmount } = renderJob(jobModel(), {
+      ...fieldSession,
+      tenant: { ...fieldSession.tenant, office_phone: "780-555-0142 ext. 2" },
+    });
+    const emergency = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office, 780-555-0142 ext. 2",
+    });
+    expect(within(emergency).getByRole("link", { name: "Call the office" })).toHaveAttribute(
+      "href",
+      "tel:7805550142",
+    );
+    unmount();
+    renderJob(jobModel(), {
+      ...fieldSession,
+      tenant: { ...fieldSession.tenant, office_phone: "1-800-ROOFING" },
+    });
+    const shown = await screen.findByRole("region", {
+      name: "Emergency: call 911 · then the office, 1-800-ROOFING",
+    });
+    expect(within(shown).getByRole("link", { name: "Call 911" })).toBeVisible();
+    expect(within(shown).queryByRole("link", { name: "Call the office" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the emergency line when the job has no safety plan", async () => {
+    const model = jobModel();
+    renderJob({ ...model, packet: { ...model.packet, safety_plan: null } });
+    expect(
+      await screen.findByRole("region", { name: "Emergency: call 911 · then the office" }),
+    ).toBeVisible();
+    expect(screen.getByText("The safety plan is missing. Do not start work.")).toBeVisible();
+  });
+
   it("surfaces safety detail as read-only context and keeps proof provenance visible", async () => {
     renderJob();
 
     expect(await screen.findByText("Safety plan · v2")).toBeVisible();
+    expect(screen.getByText("Your role")).toBeVisible();
+    expect(screen.getByText("Production crew · Assigned")).toBeVisible();
     expect(screen.getByText("Steep-slope fall exposure")).toBeVisible();
     expect(screen.getByText("Use roof anchors and harnesses")).toBeVisible();
     expect(screen.getByText(/field_checkin · Team only/i)).toBeVisible();
@@ -743,6 +863,9 @@ describe("JobPage", () => {
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "Production" })).toHaveAttribute("href", "/production");
     expect(screen.getByRole("heading", { name: "View only" })).toBeVisible();
+    // An office role reads the crew's role, never "Your role" about a crew it is not on.
+    expect(screen.getByText("Crew role")).toBeVisible();
+    expect(screen.queryByText("Your role")).toBeNull();
     expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "I reviewed this plan" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();
@@ -916,6 +1039,87 @@ describe("JobPage", () => {
 
     expect(await screen.findByText(/This is a saved copy from/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
+  });
+
+  it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
+    const first = renderJob(workPackageModel());
+    expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
+    expect(screen.getByText("Applies to the job").parentElement).toHaveTextContent(
+      "Applies to the jobJamie Homeowner · 123 Example Avenue · IW-1042",
+    );
+    // The code never breaks across lines.
+    expect(screen.getByText("IW-1042", { selector: "span" })).toHaveClass("whitespace-nowrap");
+    expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
+    expect(screen.queryByText("Work object")).toBeNull();
+    first.unmount();
+
+    // A plan whose read had no scope ids (the read fills in "unknown") still names this job.
+    const model = workPackageModel();
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...releasedWorkPackage(),
+          work_object_id: "unknown",
+          physical_context_id: "unknown",
+        },
+      },
+    });
+    expect((await screen.findByText("Applies to the job")).parentElement).toHaveTextContent(
+      "Jamie Homeowner · 123 Example Avenue · IW-1042",
+    );
+    expect(screen.queryByText(/unknown/)).toBeNull();
+  });
+
+  it("keeps the record's own scope when a plan is not for this job's roof", async () => {
+    const withPackage = (
+      overrides: Partial<NonNullable<JobResponse["packet"]["work_package"]>>,
+    ): JobResponse => {
+      const model = workPackageModel();
+      return {
+        ...model,
+        packet: { ...model.packet, work_package: { ...releasedWorkPackage(), ...overrides } },
+      };
+    };
+    // A roof job plan that names another job never claims this one.
+    const other = renderJob(
+      withPackage({ work_object_id: "OTHER-JOB", physical_context_id: "OTHER-JOB" }),
+    );
+    expect(await screen.findByText("Roof Job · OTHER-JOB")).toBeVisible();
+    expect(screen.getByText("Roof Site · OTHER-JOB")).toBeVisible();
+    expect(screen.queryByText("Applies to the job")).toBeNull();
+    other.unmount();
+
+    // Another scope leaves out an id the read did not get, and never shows "unknown".
+    renderJob(
+      withPackage({
+        work_object_type: "Shop Order",
+        work_object_id: "unknown",
+        physical_context_type: "Shop Floor",
+        physical_context_id: "unknown",
+      }),
+    );
+    expect(await screen.findByText("Work object")).toBeVisible();
+    expect(screen.getByText("Shop Order")).toBeVisible();
+    expect(screen.getByText("Shop Floor")).toBeVisible();
+    expect(screen.queryByText(/unknown/)).toBeNull();
+  });
+
+  it("leaves out a part of the job's name the read does not have", async () => {
+    const model = workPackageModel();
+    const first = renderJob({ ...model, job: { ...model.job, job_number: null, address: null } });
+    const named = (await screen.findByText("Applies to the job")).parentElement!;
+    expect(within(named).getByText("Jamie Homeowner")).toBeVisible();
+    first.unmount();
+
+    renderJob({
+      ...model,
+      job: { ...model.job, job_number: null, address: null },
+      packet: { ...model.packet, contact: null },
+    });
+    expect(await screen.findByText("Applies to the job")).toBeVisible();
+    expect(screen.getByText("This job")).toBeVisible();
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {

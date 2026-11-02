@@ -184,7 +184,7 @@ describe("corrective action", () => {
       await screen.findByText("Your sign-in ended before this was recorded"),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Decision findings")).toHaveValue("Checked on site.");
-    expect(screen.getByText(/Action ca_fix, revision 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Action ca_fix\. Owned by/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close action" })).toBeDisabled();
     expect(decideCorrectiveAction).toHaveBeenCalledTimes(1);
   });
@@ -211,7 +211,7 @@ describe("corrective action", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Close action" }));
     expect(await screen.findByText("Decision recorded")).toBeInTheDocument();
-    expect(screen.getByText(/revision 4/)).toBeInTheDocument();
+    expect(screen.queryByText(/revision \d/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close action" })).not.toBeInTheDocument();
     expect(decideCorrectiveAction).toHaveBeenCalledWith(
       expect.anything(),

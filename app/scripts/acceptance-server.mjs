@@ -93,6 +93,8 @@ const fixtureSession = {
     locale: "en-CA",
     time_zone: "America/Edmonton",
     currency: "CAD",
+    // A fictional 555-01xx number: the company profile's office phone for the emergency line.
+    office_phone: "780-555-0142",
   },
   csrf_token: "acceptance-csrf",
   session_expires_at: "2030-07-10T12:00:00.000Z",
@@ -394,9 +396,10 @@ const fixtureJob = {
       effective_date: "2026-07-10",
       hazard_summary: "Steep-slope fall exposure",
       controls: "Use roof anchors and harnesses",
-      emergency_plan: "Call dispatch and emergency services",
+      emergency_plan:
+        "Meet at the front of the driveway. Nearest hospital: 12 minutes by road; the route is on the job map.",
       ppe_requirements: "Harness and eye protection",
-      weather_limits: "Stop above plan wind limit",
+      weather_limits: "Stop work above 40 km/h wind or 60 km/h gusts",
     },
     contact: {
       display_name: "Acceptance Homeowner",
@@ -412,7 +415,8 @@ const fixtureJob = {
       boundaries: "North slope only; no fascia scope.",
       prerequisites: "Materials staged and fall protection inspected.",
       expected_result: "Weather-tight completed north slope.",
-      stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
+      stop_conditions:
+        "Stop for wind above 40 km/h, gusts above 60 km/h, or unprotected edge exposure.",
       make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
       issued_at: "2026-07-10T15:00:00.000Z",
       released_at: "2026-07-10T15:15:00.000Z",
@@ -2296,16 +2300,49 @@ const onboardingDefaults = () => ({
       display_name: "Ada Owner",
       role: "owner",
       active: true,
+      access_version: 1,
       updated_at: "2026-08-22T12:00:00.000Z",
       is_self: true,
+      crew_phone_unpaired: false,
     },
   ],
   leads: [],
   intakeReceipts: {},
   intakeDetails: {},
+  /** The Worker's versioned access audit: one entry per role or access change. */
+  accessChanges: [],
 });
 
 let onboardingState = onboardingDefaults();
+
+/** The Worker's 409 `conflict` body, read from the changes above the refused change's version. */
+function onboardingAccessConflict(person, expectedVersion) {
+  const since = onboardingState.accessChanges
+    .filter((change) => change.user_id === person.user_id && change.version > expectedVersion)
+    .sort((left, right) => right.version - left.version);
+  const newest = since[0];
+  const first = since.at(-1);
+  const actor = newest
+    ? onboardingState.users.find((user) => user.user_id === newest.actor_user_id)
+    : undefined;
+  return {
+    user_id: person.user_id,
+    access_version: person.access_version,
+    changed_at: newest?.at ?? null,
+    changed_by: newest
+      ? {
+          user_id: newest.actor_user_id,
+          display_name: actor?.display_name ?? null,
+          // The acceptance session is always the owner, so its other changes are its own.
+          is_self_actor: newest.actor_user_id === "appu_acceptance_owner",
+        }
+      : null,
+    change: {
+      before: first?.version === expectedVersion + 1 ? first.before : null,
+      after: { role: person.role, active: person.active },
+    },
+  };
+}
 
 function resetOnboardingState() {
   onboardingState = onboardingDefaults();
@@ -2637,18 +2674,52 @@ async function routeOnboarding(request, requestUrl, method) {
         return { status: 400, body: { error: "invalid_email" } };
       }
       const existing = onboardingState.users.find((user) => user.email === email);
+      // The Worker's 0157 rule: an existing person's change names their access version, and a
+      // stale one is refused with what moved since (who, the access before and now).
+      const expected = body.expected_access_version;
+      if (existing && expected === undefined) {
+        return { status: 400, body: { error: "expected_access_version_required" } };
+      }
+      if (
+        (existing && expected !== existing.access_version) ||
+        (!existing && expected !== undefined)
+      ) {
+        return {
+          status: 409,
+          body: {
+            error: "access_version_conflict",
+            conflict: existing ? onboardingAccessConflict(existing, expected) : null,
+          },
+        };
+      }
       const next = {
         user_id: existing?.user_id ?? `appu_${onboardingState.users.length}`,
         email,
         display_name: String(body.display_name ?? ""),
         role: String(body.role ?? "sales"),
         active: body.active !== false,
+        access_version: existing ? existing.access_version + 1 : 1,
         updated_at: "2026-08-22T12:32:00.000Z",
         is_self: existing?.is_self ?? false,
+        // The Worker's computed crew_phone_unpaired: crew members here use a crew phone, so
+        // removing one unpairs it, and nobody in this fixture pairs a phone again.
+        crew_phone_unpaired: Boolean(
+          existing &&
+          (existing.crew_phone_unpaired ||
+            (existing.active && body.active === false && existing.role === "field")),
+        ),
       };
       onboardingState.users = existing
         ? onboardingState.users.map((user) => (user.email === email ? next : user))
         : [...onboardingState.users, next];
+      onboardingState.accessChanges.push({
+        user_id: next.user_id,
+        version: next.access_version,
+        before: existing ? { role: existing.role, active: existing.active } : null,
+        after: { role: next.role, active: next.active },
+        actor_user_id: "appu_acceptance_owner",
+        at: new Date().toISOString(),
+      });
       return { status: 200, body: { user: next } };
     }
   }

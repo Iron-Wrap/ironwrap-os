@@ -568,7 +568,7 @@ Capability, которой экран не может воспользовать
 ![Размеченный экран Money desk](./diagrams/screenshots/accounting-desk-annotated.png)
 
 1. Money desk прямо сообщает, что без человека ничего не двигается, и предлагает Refresh вместо hidden mutation.
-2. Mobile navigation разделяет Money, Issues, Now, Setup и persistent Safety; approval и provider wait различны.
+2. Mobile navigation разделяет Money, Issues, Now, Settings и persistent Safety; approval и provider wait различны.
 3. Financial mismatch не превращается в provider success; issue открыт, freshness QuickBooks показана отдельно.
 
 **Доказательство:** локальная accounting fixture; 6 из 6 targeted scenarios прошли. **Не доказано:** live OAuth, posting, payment, tax mapping или accountant acceptance.

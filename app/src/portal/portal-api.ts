@@ -1,3 +1,4 @@
+import { officeSessionIsLive } from "../auth/session";
 import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import {
@@ -13,19 +14,51 @@ import {
   type CustomerPortalResponse,
 } from "./portal-contracts";
 
-/** Public capability resolver: never attach an office/session cookie to this request. */
+/**
+ * Public capability resolver: never attach an office/session cookie to this request. With
+ * `staffPreview` (an office sign-in is live in this browser) the server does not record the open as
+ * the customer's; the flag can only stop that record, never make one.
+ */
 export async function loadCustomerPortal(
   token: string,
   fetcher?: typeof fetch,
+  staffPreview = false,
 ): Promise<CustomerPortalResponse> {
   return await apiRequest({
     path: API_PATHS.customerPortalResolve,
     method: "POST",
-    body: { token },
+    body: staffPreview ? { token, staff_preview: true } : { token },
     schema: customerPortalResponseSchema,
     credentials: "omit",
     fetcher,
   });
+}
+
+/**
+ * Whether the resolve request carries `staff_preview`: an office sign-in is live in this browser.
+ * The page never waits longer than `timeoutMs` for the answer; a check that fails or is slow answers
+ * false, which only lets the open be recorded.
+ */
+export async function portalStaffPreview(
+  check: () => boolean | Promise<boolean> = officeSessionIsLive,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(check)
+        .then(
+          (live) => live === true,
+          () => false,
+        ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Start an email-verified contract confirmation; a portal capability alone cannot accept terms. */

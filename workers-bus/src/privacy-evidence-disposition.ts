@@ -2,7 +2,7 @@ import { validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { assertNoPendingEvidenceUploadWrites, EvidenceUploadError, evidenceUploadFailure, type EvidenceUploadReceipt } from "./evidence-uploads.ts";
 import { assertExternalEvidenceMarkerCompatible, assertExternalEvidenceMarkerUnchanged,
-  ensureExternalEvidenceMarker, EvidencePrivacyLedgerUnavailable, EvidencePrivacyMarkerConflict, externalEvidenceMarkerPresent,
+  ensureExternalEvidenceMarker, EvidencePrivacyMarkerConflict, externalEvidenceMarkerPresent,
   readExternalEvidenceMarker, type EvidencePrivacyMarker } from "./evidence-privacy-ledger.ts";
 import { assertCurrentOwner, inspectBusinessLinks } from "./privacy-evidence-audit.ts";
 

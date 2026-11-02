@@ -16,7 +16,13 @@ import { ProposedValue } from "./proposed";
 import { SourceChip } from "./source";
 import { TimelineItem } from "./timeline-item";
 import { Receipt } from "./receipt";
-import { DELEGATION, SPECIALIST_IDS, specialistName, type DelegationSetting } from "./words";
+import {
+  DELEGATION,
+  SPECIALIST_IDS,
+  VIEW_REFUSED,
+  specialistName,
+  type DelegationSetting,
+} from "./words";
 
 describe("who acted", () => {
   it("draws every agent as a rounded square with its glyph and every person as a circle", () => {
@@ -78,6 +84,24 @@ describe("delegation words", () => {
       expect(pill.className).not.toMatch(/signal-/);
     }
     expect(container).not.toHaveTextContent(/\bA[0-3]\b/);
+  });
+
+  it("draws the Locked lock on an action the owner can never raise", () => {
+    const { container } = render(
+      <>
+        <DelegationPill setting="people_only" />
+        <DelegationPill setting="always_asks_first" />
+        <DelegationPill setting="asks_first" />
+      </>,
+    );
+    const glyph = (setting: DelegationSetting) =>
+      container.querySelector(`[data-delegation="${setting}"] svg`)?.getAttribute("class");
+    expect(glyph("people_only")).toMatch(/lucide-lock\b/);
+    expect(glyph("always_asks_first")).toBe(glyph("people_only"));
+    expect(glyph("asks_first")).not.toMatch(/lucide-lock\b/);
+    expect(container.querySelector('[data-delegation="always_asks_first"]')).toHaveTextContent(
+      "Act with approval · always",
+    );
   });
 });
 
@@ -254,6 +278,26 @@ describe("the face", () => {
 });
 
 describe("conversation", () => {
+  it("says under the answer when its generated view was refused, and where to ask again", () => {
+    render(
+      <Conversation place="docked" onSend={vi.fn()}>
+        <Message
+          from="ironwrap"
+          parts={[
+            {
+              text: "Both crews work Mon to Fri this week.",
+              sources: [{ kind: "record", label: "Schedule", code: "WK-42" }],
+            },
+          ]}
+          note={VIEW_REFUSED}
+        />
+      </Conversation>,
+    );
+    const log = screen.getByRole("log");
+    expect(within(log).getByText(VIEW_REFUSED)).toBeVisible();
+    expect(within(log).getByText("Both crews work Mon to Fri this week.")).toBeVisible();
+  });
+
   it("is a named panel with a message log, sources under every fact and a two-button composer", async () => {
     const send = vi.fn();
     render(

@@ -1,3 +1,4 @@
+import { accessChangeAuditStatement, accessStateOf } from "./app-auth-store.ts";
 import type {
   AppRole,
   AppUserRecord,
@@ -33,7 +34,8 @@ const INVITE_COLUMNS = `invite_id, tenant_id, email_normalized, display_name, ac
        accepted_at, accepted_user_id, revoked_at, revoked_by_user_id, revoked_reason`;
 
 const USER_COLUMNS = `user_id, tenant_id, email_normalized, display_name,
-       access_role AS role, frappe_user_id, active, created_by, created_at, updated_at`;
+       access_role AS role, access_version, frappe_user_id, active, created_by, created_at,
+       updated_at`;
 
 /**
  * Issue one invitation, superseding whatever was open for the same mailbox.
@@ -195,8 +197,15 @@ export async function findUserInviteByTokenHash(
  * in, which is what keeps `accepted_user_id` pointing at the row that exists after statement one
  * whether it was inserted here or already present.
  *
- * `storageRole` mirrors `upsertAppUser`: the deployed `app_users.role` CHECK predates the
- * least-privilege vocabulary and `access_role` (migration 0038) is the sole effective role.
+ * Giving a removed person access back is an access change like any other (0157): it applies only
+ * against the access version the caller read (`expected`, null for a mailbox with no account),
+ * bumps it, and commits its audit row with the change as `access_change` in the same batch, so a
+ * decision someone made on the earlier version is refused instead of landing on top. The claim
+ * itself only lands when that row did (`changes() = 1`), so a moved version spends nothing.
+ *
+ * `storageRole` mirrors `upsertAppUserWithAuthority`: the deployed `app_users.role` CHECK
+ * predates the least-privilege vocabulary and `access_role` (migration 0038) is the sole effective
+ * role.
  */
 export async function claimUserInvite(
   env: Env,
@@ -205,8 +214,12 @@ export async function claimUserInvite(
     candidateUserId: string;
     storageRole: "owner" | "ops";
     now: string;
+    /** The account the mailbox has, read before this batch; null when it has none. */
+    expected: AppUserRecord | null;
+    request: AuthRequestContext;
   },
 ): Promise<{ claimed: boolean; user: AppUserRecord | null }> {
+  const expectedVersion = input.expected ? Number(input.expected.access_version ?? 1) : null;
   const openInvite =
     `SELECT 1 FROM app_user_invites
       WHERE invite_id = ? AND tenant_id = ?
@@ -222,7 +235,9 @@ export async function claimUserInvite(
        role = excluded.role,
        access_role = excluded.access_role,
        active = 1,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at,
+       access_version = app_users.access_version + 1
+      WHERE app_users.access_version = ?`,
   ).bind(
     input.candidateUserId,
     input.invite.tenant_id,
@@ -236,6 +251,27 @@ export async function claimUserInvite(
     input.invite.invite_id,
     input.invite.tenant_id,
     input.now,
+    // No account was read: an account that appeared meanwhile is not this claim's to change.
+    expectedVersion,
+  );
+  const audit = accessChangeAuditStatement(
+    env,
+    input.invite.tenant_id,
+    input.expected?.user_id ?? input.candidateUserId,
+    {
+      event: "user_invite_accept",
+      outcome: "granted",
+      request: input.request,
+      detailCode: `${input.invite.access_role}:${input.invite.invite_id}`,
+    },
+    {
+      version: expectedVersion === null ? 1 : expectedVersion + 1,
+      before: input.expected ? accessStateOf(input.expected) : null,
+      after: { role: input.invite.access_role, active: true },
+      // The person who accepted made this change, not whoever issued the invitation: an office
+      // tab left open on the earlier version must not read it as its own.
+      actorUserId: input.expected?.user_id ?? input.candidateUserId,
+    },
   );
   const claim = env.DB.prepare(
     `UPDATE app_user_invites
@@ -245,7 +281,8 @@ export async function claimUserInvite(
                WHERE tenant_id = ? AND email_normalized = ? LIMIT 1
             )
       WHERE invite_id = ? AND tenant_id = ?
-        AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`,
+        AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+        AND changes() = 1`,
   ).bind(
     input.now,
     input.invite.tenant_id,
@@ -254,7 +291,7 @@ export async function claimUserInvite(
     input.invite.tenant_id,
     input.now,
   );
-  const [, claimResult] = await env.DB.batch([grant, claim]);
+  const [, , claimResult] = await env.DB.batch([grant, audit, claim]);
   if (d1Changes(claimResult) !== 1) return { claimed: false, user: null };
   const user = await env.DB.prepare(
     `SELECT ${USER_COLUMNS} FROM app_users

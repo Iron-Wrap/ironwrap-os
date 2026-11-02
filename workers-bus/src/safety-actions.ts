@@ -62,6 +62,12 @@ export interface VerifiedSafetyActionResponse {
   status: "verified";
   server_ref: string;
   cursor: string;
+  /**
+   * Raises only (`report_occurrence`, `rescue_request`): true when the scope names no job, Work
+   * Package or tenant of this tenant. The stop is recorded and active either way. Absent for `shop`
+   * and `vehicle` scopes, which nothing checks yet, and when the scope could not be read.
+   */
+  scope_unresolved?: boolean;
 }
 
 interface SafetyActionIdentity {
@@ -303,11 +309,13 @@ export async function processSafetyDeviceAction(
 
     await renewSafetyLease(env, submission.deviceActionId, token, now);
     const applied = await applySafetyAction(env, identity, submission, now());
+    // Stored below as `response_json`, so a replay repeats this answer, scope flag included.
     const response: VerifiedSafetyActionResponse = {
       device_action_id: submission.deviceActionId,
       status: "verified",
       server_ref: applied.serverRef,
       cursor: applied.cursor,
+      ...(applied.scopeUnresolved === undefined ? {} : { scope_unresolved: applied.scopeUnresolved }),
     };
     const completed = await env.DB.prepare(
       `UPDATE safety_device_actions
@@ -357,7 +365,7 @@ async function applySafetyAction(
   identity: SafetyActionIdentity,
   submission: SafetyDeviceActionSubmission,
   now: Date,
-): Promise<{ serverRef: string; cursor: string }> {
+): Promise<{ serverRef: string; cursor: string; scopeUnresolved?: boolean }> {
   const nowIso = now.toISOString();
   // A device clock ahead of the server never invents a future safety record.
   // The device's raw value stays in the R2 manifest either way.
@@ -389,6 +397,8 @@ async function applySafetyAction(
     return {
       serverRef: result.occurrence.occurrence_id,
       cursor: `${result.occurrence.occurrence_id}:${result.occurrence.version}`,
+      // The stop is already recorded: its scope is read only to flag it, never to refuse it.
+      scopeUnresolved: await raisedScopeUnresolved(env, identity.tenantId, submission.scope),
     };
   }
   if (submission.kind === "make_safe") {
@@ -422,6 +432,34 @@ async function applySafetyAction(
     serverRef: equipment.equipment_id,
     cursor: `${equipment.equipment_id}:${equipment.version}`,
   };
+}
+
+/** Where a stop's job and Work Package live: the native job, and any version of the package. */
+const SCOPE_EXISTS_SQL: Partial<Record<SafetyScopeRef["type"], string>> = {
+  roof_job: "SELECT 1 FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ? LIMIT 1",
+  work_package: "SELECT 1 FROM work_packages WHERE tenant_id = ? AND work_package_id = ? LIMIT 1",
+};
+
+/**
+ * Whether a raised stop's scope names nothing this tenant has: another tenant's id, a job with no
+ * `operating_roof_jobs` row, or a Work Package with no `work_packages` row in any status.
+ * Undefined for `shop` and `vehicle`, which nothing checks yet, and when the read fails.
+ */
+async function raisedScopeUnresolved(
+  env: AppEnv,
+  tenantId: string,
+  scope: SafetyScopeRef,
+): Promise<boolean | undefined> {
+  if (scope.type === "tenant") return scope.id !== tenantId;
+  const sql = SCOPE_EXISTS_SQL[scope.type];
+  if (!sql) return undefined;
+  try {
+    return (await env.DB.prepare(sql).bind(tenantId, scope.id).first()) === null;
+  } catch (error) {
+    // The stop is already recorded, so a failed read costs the answer its flag, never the answer.
+    console.error("safety_scope_lookup_failed", { scope_type: scope.type, scope_id: scope.id }, error);
+    return undefined;
+  }
 }
 
 function submissionEvidence(submission: SafetyDeviceActionSubmission): SafetyEvidence | null {

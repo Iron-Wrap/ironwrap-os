@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -282,7 +282,8 @@ describe("ApprovalInboxPage", () => {
     expect(rejectApproval).not.toHaveBeenCalled();
     expect((await screen.findAllByText("Lead check saved")).length).toBeGreaterThan(0);
     expect(screen.getByText("run:lead-triage:ui-001")).not.toBeVisible();
-    await user.click(screen.getByText("System details"));
+    const runDetails = screen.getByText("run:lead-triage:ui-001").closest("details")!;
+    await user.click(within(runDetails).getByText("System details"));
     expect(screen.getByText("run:lead-triage:ui-001")).toBeVisible();
   });
 

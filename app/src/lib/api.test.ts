@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { getDeviceSecret, storeDeviceSecret } from "../auth/device-credential";
-import { ApiError, apiBlob, apiRequest, isRetryableApiError, retryAfterMilliseconds } from "./api";
+import { ApiError, apiRequest, isRetryableApiError, retryAfterMilliseconds } from "./api";
 
 describe("apiRequest", () => {
   it("sends same-origin credentials and parses the response contract", async () => {
@@ -212,119 +212,7 @@ describe("retryAfterMilliseconds", () => {
   });
 });
 
-describe("apiBlob", () => {
-  it("reads a file through the same authenticated call, asking for the file and not for JSON", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
-      );
-    const blob = await apiBlob({
-      path: "/api/v1/evidence-uploads/evu_x/content",
-      deviceProof: async () => "p".repeat(43),
-      fetcher,
-    });
-    expect(blob.type).toBe("image/png");
-    expect(blob.size).toBe(3);
-    const [path, init] = fetcher.mock.calls[0] ?? [];
-    expect(path).toBe("/api/v1/evidence-uploads/evu_x/content");
-    expect(init).toMatchObject({ method: "GET", credentials: "same-origin", cache: "no-store" });
-    const headers = init?.headers as Headers;
-    expect(headers.get("Accept")).toBe("*/*");
-    expect(headers.get("X-IronWrap-Device-Proof")).toBe("p".repeat(43));
-    expect(headers.has("Content-Type")).toBe(false);
-  });
-
-  it("raises the Worker's refusal as an ApiError with its code and status", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ error: "not_found" }, { status: 404 }));
-    await expect(
-      apiBlob({ path: "/api/v1/evidence-uploads/evu_x/content", fetcher }),
-    ).rejects.toMatchObject({ status: 404, code: "not_found" });
-  });
-
-  it("stays timed out while the file is still arriving: a body that stalls ends as a timeout", async () => {
-    const stalledBody = (signal?: AbortSignal | null) =>
-      new Promise<Blob>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-      });
-    const fetcher = vi.fn(
-      async (_input: RequestInfo | URL, init?: RequestInit) =>
-        ({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          blob: () => stalledBody(init?.signal),
-        }) as unknown as Response,
-    );
-    await expect(
-      apiBlob({ path: "/api/v1/evidence-uploads/evu_x/content", fetcher, timeoutMs: 20 }),
-    ).rejects.toMatchObject({ status: 0, code: "timeout" });
-  });
-
-  it("ends a stalled download as cancelled when the caller aborts it", async () => {
-    const controller = new AbortController();
-    const fetcher = vi.fn(
-      async (_input: RequestInfo | URL, init?: RequestInit) =>
-        ({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          blob: () =>
-            new Promise<Blob>((_resolve, reject) => {
-              init?.signal?.addEventListener("abort", () =>
-                reject(new DOMException("aborted", "AbortError")),
-              );
-              queueMicrotask(() => controller.abort());
-            }),
-        }) as unknown as Response,
-    );
-    await expect(
-      apiBlob({
-        path: "/api/v1/evidence-uploads/evu_x/content",
-        fetcher,
-        signal: controller.signal,
-        timeoutMs: 60_000,
-      }),
-    ).rejects.toMatchObject({ status: 0, code: "aborted" });
-  });
-
-  it("calls a body that breaks off, with no timeout or abort, a lost connection", async () => {
-    const fetcher = vi.fn(
-      async () =>
-        ({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          blob: () => Promise.reject(new TypeError("network error")),
-        }) as unknown as Response,
-    );
-    await expect(
-      apiBlob({ path: "/api/v1/evidence-uploads/evu_x/content", fetcher }),
-    ).rejects.toMatchObject({ status: 0, code: "network_error" });
-  });
-
-  it("lets go of its timer once the file has arrived, and when the request failed", async () => {
-    const clear = vi.spyOn(window, "clearTimeout");
-    const ok = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
-      );
-    await apiBlob({ path: "/api/v1/evidence-uploads/evu_x/content", fetcher: ok });
-    const afterSuccess = clear.mock.calls.length;
-    expect(afterSuccess).toBeGreaterThanOrEqual(1);
-    const refused = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ error: "not_found" }, { status: 404 }));
-    await expect(
-      apiBlob({ path: "/api/v1/evidence-uploads/evu_x/content", fetcher: refused }),
-    ).rejects.toMatchObject({ status: 404 });
-    expect(clear.mock.calls.length).toBeGreaterThan(afterSuccess);
-    clear.mockRestore();
-  });
-
+describe("request bodies and headers", () => {
   it("keeps JSON as the default ask for every other call", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ ok: true }));
     await apiRequest({

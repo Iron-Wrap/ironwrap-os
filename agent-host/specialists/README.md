@@ -78,9 +78,10 @@ Runtime tier: <routine|hard|audit>
 ```
 
 - `action_id` must exist in the contract catalog and list this specialist in `owners`.
-- `autonomy` equals the catalog level. The action class is fixed by the contract; how an action
-  runs for this tenant (asks first or within limits) is the owner's delegation setting, never the
-  allowlist. `H` (human-only) actions are never allowlisted.
+- `autonomy` equals the catalog level. The action class is fixed by the contract; how a delegable
+  action runs for this tenant (asks first or within limits) is the owner's delegation setting,
+  never the allowlist. A never-delegable action always asks first. `H` (human-only) actions are
+  never allowlisted.
 - `catalog_sha256` pins the catalog revision the playbook was written against. A catalog change
   makes the validator fail until the allowlist and its eval cases are re-checked.
 

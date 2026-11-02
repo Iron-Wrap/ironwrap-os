@@ -90,7 +90,3 @@ export function catalogSpecialist(specialistId: string): CatalogSpecialist | nul
 export function toolName(actionId: string): string {
   return actionId.replaceAll(".", "__");
 }
-
-export function isReasonCode(outcome: "failed" | "unknown" | "abstained", code: string): boolean {
-  return (CATALOG.receipt.reason_codes[outcome] ?? []).includes(code);
-}

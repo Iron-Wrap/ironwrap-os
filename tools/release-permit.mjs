@@ -2033,15 +2033,17 @@ export async function validateProviderTargetPolicy({ candidateRoot, policyRoot, 
   const candidate = providerTargetManifest(parseJsonc(candidateSource), environment);
   let policy;
   try { policy = JSON.parse(policySource); } catch { fail("provider_target_policy_invalid"); }
-  exactKeys(policy, ["schema", "account_id", "environments"], "provider_target_policy_shape_invalid");
-  equal("ironwrap_release_provider_policy_v1", policy.schema, "provider_target_policy_schema_invalid");
-  text(policy.account_id, "provider_target_policy_account_invalid", /^[0-9a-f]{32}$/);
+  // v2: each environment names its own Cloudflare account. qa lives in IronWrap's account and
+  // production in the Mindburn Labs account (IRO-221, 2026-10-30).
+  exactKeys(policy, ["schema", "environments"], "provider_target_policy_shape_invalid");
+  equal("ironwrap_release_provider_policy_v2", policy.schema, "provider_target_policy_schema_invalid");
   exactKeys(policy.environments, ["qa", "production"], "provider_target_policy_environment_shape_invalid");
   const expected = policy.environments[environment];
-  exactKeys(expected, ["credential_secret", "worker_name", "workers_dev", "compatibility_date", "compatibility_flags", "observability", "assets", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"], "provider_target_policy_environment_invalid");
+  exactKeys(expected, ["account_id", "credential_secret", "worker_name", "workers_dev", "compatibility_date", "compatibility_flags", "observability", "assets", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"], "provider_target_policy_environment_invalid");
+  text(expected.account_id, "provider_target_policy_account_invalid", /^[0-9a-f]{32}$/);
   const expectedCredential = environment === "qa" ? "RELEASE_QA_CLOUDFLARE_API_TOKEN" : "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN";
   equal(expectedCredential, expected.credential_secret, "provider_target_credential_scope_invalid");
-  const expectedManifest = { account_id: policy.account_id, ...Object.fromEntries(Object.entries(expected).filter(([key]) => key !== "credential_secret")) };
+  const expectedManifest = Object.fromEntries(Object.entries(expected).filter(([key]) => key !== "credential_secret"));
   for (const key of ["compatibility_flags", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"]) {
     if (!Array.isArray(expectedManifest[key])) fail("provider_target_policy_environment_invalid");
     expectedManifest[key] = [...expectedManifest[key]].sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));

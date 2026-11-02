@@ -221,7 +221,8 @@ seed:
 audit: deps
 	npm audit --prefix app
 	npm audit --prefix workers-bus
-	for package in $(NODE_PACKAGES) workers-bus; do npm audit --omit=dev --prefix $$package || exit $$?; done
+	# The full app and Worker audits already include their production dependencies.
+	for package in $(filter-out app workers-bus,$(NODE_PACKAGES)); do npm audit --omit=dev --prefix $$package || exit $$?; done
 
 static:
 	find deploy workers-bus -path '*/node_modules' -prune -o -type f -name '*.sh' -print0 \

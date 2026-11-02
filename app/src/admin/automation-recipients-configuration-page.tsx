@@ -317,8 +317,7 @@ function RecipientCard({
               </StatusPill>
             </CardTitle>
             <CardDescription className="mt-1 break-words">
-              {recipient.recipient_ref} · {recipient.channel} · {recipient.destination_masked} ·
-              revision {recipient.version}
+              {recipient.recipient_ref} · {recipient.channel} · {recipient.destination_masked}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">

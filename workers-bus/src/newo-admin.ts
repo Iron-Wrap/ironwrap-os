@@ -19,23 +19,6 @@ import { listRecentNewoSessions, newoOperationalCounts } from "./newo-store.ts";
 
 const MAX_ADMIN_BODY_BYTES = 64 * 1024;
 
-export const NEWO_ADMIN_READ_OPERATIONS = [
-  "agent_actors.list",
-  "agent_actor.get",
-  "user_actors.list",
-  "user_actor.get",
-  "user_actor.get_external",
-  "chat.user.poll",
-  "chat.agent.receive",
-  "chat.history",
-  "conversations.acts.list",
-  "conversations.act.get",
-  "session.aggregates",
-  "webhooks.outgoing.list",
-  "webhooks.incoming.list",
-  "analytics.logs",
-] as const;
-
 export async function handleNewoAdmin(
   req: Request,
   env: Env,

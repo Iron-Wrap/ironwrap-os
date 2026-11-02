@@ -72,7 +72,7 @@ export function TimelineItem({
   const chip =
     status ??
     (personDone
-      ? personDoneWords(personDone.name, waitingFor)
+      ? personDoneWords(personDone.isViewer ? "you" : personDone.name, waitingFor)
       : state === "needs_you" && !viewerMayDecide
         ? {
             words: waitingOn ? `Waiting on ${waitingOn}` : "Waiting on a person",

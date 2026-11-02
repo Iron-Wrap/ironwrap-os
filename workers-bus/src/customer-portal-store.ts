@@ -14,6 +14,12 @@ export interface CustomerPortalLinkRecord {
   access_count: number;
 }
 
+/** A live link with the hashes of the device that issued it (0018), for telling staff apart. */
+export interface ActiveCustomerPortalLink extends CustomerPortalLinkRecord {
+  issued_ip_hash: string;
+  issued_user_agent_hash: string;
+}
+
 export interface CreateCustomerPortalLinkInput {
   linkId: string;
   tokenHash: string;
@@ -71,16 +77,17 @@ export async function findActiveCustomerPortalLink(
   tokenHash: string,
   tenantId: string,
   now: string,
-): Promise<CustomerPortalLinkRecord | null> {
+): Promise<ActiveCustomerPortalLink | null> {
   return await env.DB.prepare(
     `SELECT link_id, tenant_id, roof_job_id, customer_id, issued_by_user_id, created_at, expires_at,
-            revoked_at, revoked_by_user_id, last_accessed_at, access_count
+            revoked_at, revoked_by_user_id, last_accessed_at, access_count,
+            issued_ip_hash, issued_user_agent_hash
      FROM customer_portal_links
      WHERE token_hash = ? AND tenant_id = ? AND revoked_at IS NULL AND expires_at > ?
      LIMIT 1`,
   )
     .bind(tokenHash, tenantId, now)
-    .first<CustomerPortalLinkRecord>();
+    .first<ActiveCustomerPortalLink>();
 }
 
 export async function listCustomerPortalLinks(
@@ -142,6 +149,49 @@ export async function touchCustomerPortalLink(
     .run();
 }
 
+/**
+ * Keep the first open of one published proposal through one portal link (0163). A later open of
+ * the same publication through the same link inserts nothing. D1 refuses a row whose link, job,
+ * customer or publication do not match, or whose time is not D1's own.
+ */
+export async function recordCustomerPortalProposalView(
+  env: Env,
+  input: {
+    viewId: string;
+    tenantId: string;
+    linkId: string;
+    roofJobId: string;
+    customerId: string;
+    proposalPackId: string;
+    proposalRevisionId: string;
+    publicationEventId: string;
+    viewedAt: string;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO customer_portal_proposal_views
+       (view_id, tenant_id, link_id, roof_job_id, customer_id, proposal_pack_id,
+        proposal_revision_id, publication_event_id, first_viewed_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+      WHERE NOT EXISTS (
+        SELECT 1 FROM customer_portal_proposal_views
+         WHERE tenant_id = ?2 AND link_id = ?3 AND publication_event_id = ?8
+      )`,
+  )
+    .bind(
+      input.viewId,
+      input.tenantId,
+      input.linkId,
+      input.roofJobId,
+      input.customerId,
+      input.proposalPackId,
+      input.proposalRevisionId,
+      input.publicationEventId,
+      input.viewedAt,
+    )
+    .run();
+}
+
 export async function claimCustomerPortalAccessThrottle(
   env: Env,
   input: {
@@ -180,6 +230,32 @@ export async function claimCustomerPortalAccessThrottle(
   return Number(row?.attempts ?? input.limit + 1) <= input.limit;
 }
 
+/**
+ * Delete first-open records (0163) older than 3 years, their maximum retention, 500 at a time. D1
+ * refuses to delete a younger row. The daily cron runs this whatever the recording flag says, and
+ * before the link prune, so a link it frees goes in the same run.
+ */
+export async function pruneCustomerPortalProposalViews(env: Env): Promise<number> {
+  let deleted = 0;
+  // ponytail: at most 20 batches (10,000 rows) a run; the next daily run takes the rest.
+  for (let batch = 0; batch < 20; batch += 1) {
+    const changes = d1Changes(
+      await env.DB.prepare(
+        `DELETE FROM customer_portal_proposal_views
+          WHERE view_id IN (
+            SELECT view_id FROM customer_portal_proposal_views
+             WHERE first_viewed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 years')
+             ORDER BY first_viewed_at
+             LIMIT 500
+          )`,
+      ).run(),
+    );
+    deleted += changes;
+    if (changes < 500) break;
+  }
+  return deleted;
+}
+
 export async function pruneCustomerPortalRecords(
   env: Env,
   now = new Date(),
@@ -189,12 +265,30 @@ export async function pruneCustomerPortalRecords(
     now.getTime() - 365 * 24 * 60 * 60_000,
   ).toISOString();
   await Promise.all([
+    // A link stays while any row still names it. Each of those rows holds an ON DELETE RESTRICT key
+    // on the link, so deleting one such link would fail this whole statement and stop every other
+    // link from being pruned. A first-open record (0163) keeps its link for its own retention (at
+    // most 3 years), not this one-year window. A table that adds such a key adds its clause here
+    // (test/customer-portal-proposal-views.test.ts reads them from the schema).
     env.DB.prepare(
       `DELETE FROM customer_portal_links
        WHERE expires_at <= ? AND (revoked_at IS NULL OR revoked_at <= ?)
          AND NOT EXISTS (
            SELECT 1 FROM customer_portal_acceptance_challenges AS challenge
            WHERE challenge.portal_link_id = customer_portal_links.link_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_acceptance_intents AS acceptance
+           WHERE acceptance.portal_link_id = customer_portal_links.link_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_decision_intents AS decision
+           WHERE decision.portal_link_id = customer_portal_links.link_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_proposal_views AS view
+           WHERE view.tenant_id = customer_portal_links.tenant_id
+             AND view.link_id = customer_portal_links.link_id
          )`,
     )
       .bind(retentionCutoff, retentionCutoff)

@@ -20,7 +20,6 @@ import {
   getDocumentTemplateRevision,
   listDocumentTemplates,
   type DocumentGenerationServiceAuthority,
-  type DocumentTemplateRevision,
 } from "./document-templates.ts";
 import { generateDocumentToR2 } from "./document-generation-r2.ts";
 import {
@@ -60,9 +59,6 @@ export const PIPELINE_AUTOMATION_REGISTRY = [
 ] as const;
 
 export type PipelineAutomationAction = (typeof PIPELINE_AUTOMATION_REGISTRY)[number]["action"];
-
-export const PIPELINE_AUTOMATION_ACTIONS: readonly PipelineAutomationAction[] =
-  PIPELINE_AUTOMATION_REGISTRY.map((entry) => entry.action);
 
 /** A document permit lives well past the retry ladder but never indefinitely. */
 const DOCUMENT_PERMIT_TTL_MS = 24 * 60 * 60_000;

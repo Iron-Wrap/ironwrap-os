@@ -340,7 +340,7 @@ test("live-env mode binds D1 recovery to exact source, separated authority, and 
   env.D1_RESTORE_API_TOKEN = env.RCLONE_CONFIG_R2_ACCESS_KEY_ID;
   env.D1_RESTORE_R2_COMPLETED_PREFIX = "d1/other/latest";
   env.D1_RESTORE_MODE = "remote";
-  env.D1_RESTORE_TARGET_DATABASE_ID = "f0674848-13df-4422-9896-8ba2719663b8";
+  env.D1_RESTORE_TARGET_DATABASE_ID = "a8fd0116-7af6-4788-98bd-083addbe58bc";
   env.D1_RESTORE_CONFIRMATION = "RESTORE_D1:unsafe";
 
   const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });

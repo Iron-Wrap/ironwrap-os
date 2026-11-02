@@ -118,6 +118,93 @@ describe("offline outbox", () => {
     expect(JSON.stringify(saved)).not.toContain("current-device-proof");
   });
 
+  it("keeps that a safety stop's job was not found, so the phone can say it holds every job", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "stop-action-1",
+      kind: "safety_action",
+      endpoint: "/api/v1/safety/actions",
+      payload: {
+        kind: "report_occurrence",
+        scope_type: "roof_job",
+        scope_id: "JOB-GONE",
+        captured_at: "2026-08-17T12:00:00.000Z",
+        detail: "Work stopped on J-GONE",
+        occurrence_kind: "hazard",
+        severity: "high",
+      },
+    });
+    await queueOutboxAction("stop-action-1", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          device_action_id: "stop-action-1",
+          status: "verified",
+          server_ref: "so_0001",
+          scope_unresolved: true,
+        },
+        { status: 201 },
+      ),
+    );
+    await flushOutbox({ ...principal, fetcher, csrfToken: "csrf", now: () => 3_000 });
+    expect(await getOutboxAction("stop-action-1")).toMatchObject({
+      state: "verified",
+      verification: { serverRef: "so_0001", scopeUnresolved: true },
+    });
+  });
+
+  it("verifies a raised safety stop whether or not the answer flags its scope", async () => {
+    // The safety rail adds `scope_unresolved` when it checked the scope a raise named. A shop or
+    // vehicle raise, and an answer stored before the flag existed, carry no such field.
+    const answers: Record<string, Record<string, unknown>> = {
+      "raise-flagged": { scope_unresolved: true },
+      "raise-unflagged": {},
+    };
+    for (const deviceActionId of Object.keys(answers)) {
+      await saveOutboxAction({
+        ...principal,
+        deviceActionId,
+        kind: "safety_action",
+        endpoint: "/api/v1/safety/actions",
+        payload: {
+          kind: "report_occurrence",
+          scope_type: "roof_job",
+          scope_id: "job-missing-0001",
+          captured_at: "2026-08-17T11:45:00.000Z",
+          detail: "Unguarded skylight opening on the east slope.",
+          occurrence_kind: "hazard",
+          severity: "high",
+        },
+      });
+      await queueOutboxAction(deviceActionId, 2_000);
+    }
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const { device_action_id } = JSON.parse(String(init?.body)) as { device_action_id: string };
+      return Response.json({
+        device_action_id,
+        status: "verified",
+        server_ref: `so_${device_action_id}`,
+        cursor: `so_${device_action_id}:1`,
+        ...answers[device_action_id],
+      });
+    });
+
+    const result = await flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "csrf",
+      now: () => 3_000,
+    });
+
+    expect(result).toMatchObject({ processed: 2, verified: 2, needsAttention: 0 });
+    for (const deviceActionId of Object.keys(answers)) {
+      expect(await getOutboxAction(deviceActionId)).toMatchObject({
+        state: "verified",
+        verification: { serverRef: `so_${deviceActionId}`, cursor: `so_${deviceActionId}:1` },
+      });
+    }
+  });
+
   it("replays inventory intent and scan bodies unchanged with durable identities", async () => {
     await saveOutboxAction({
       ...principal,

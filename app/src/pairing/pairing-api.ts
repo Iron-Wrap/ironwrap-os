@@ -76,8 +76,7 @@ export async function consumeDevicePairing(
     throw new ApiError({
       status: 200,
       code: "invalid_pairing_session",
-      message:
-        "The pairing response did not create a Field Companion session. Ask the office to issue a new code.",
+      message: "This phone could not finish pairing. Ask the office for a new code.",
     });
   }
   return session;

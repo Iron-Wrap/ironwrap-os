@@ -51,12 +51,20 @@ describe("persisted approval proof", () => {
       "datetime",
       "2026-10-02T10:02:00.000Z",
     );
-    expect(events[2]).toHaveTextContent("empty quote draft v8 created; audit receipt finalized");
-    expect(screen.getByText("Request now").nextElementSibling).toHaveTextContent("v41");
+    expect(events[2]).toHaveTextContent("empty quote draft created; audit receipt finalized");
+    // Version numbers sit in System details only, never in the receipt's own lines (ruling).
+    const details = screen.getByText("System details").closest("details")!;
+    expect(within(details).getByText("Request version").nextElementSibling).toHaveTextContent("41");
     expect(screen.getByText("Approved snapshot version").nextElementSibling).toHaveTextContent(
       "Not provided by the saved receipt",
     );
-    expect(screen.getByText(/v7 · Needs Review/)).toBeVisible();
+    expect(screen.getByText(/Needs Review · observed/)).toBeVisible();
+    expect(
+      within(details).getByText("Observed quote version").nextElementSibling,
+    ).toHaveTextContent("7");
+    const lines = screen.getByRole("list", { name: "Recorded approval events" }).parentElement!
+      .parentElement!;
+    expect(lines.textContent?.replace(details.textContent ?? "", "")).not.toMatch(/\bv\d+\b/);
     // A code never stands alone: the tag prints its plain kind word first.
     expect(screen.getByText("Record QUOTE-READ-001")).toBeVisible();
     expect(screen.getByText(/material release, and crew dispatch still require/)).toBeVisible();

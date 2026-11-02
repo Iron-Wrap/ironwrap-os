@@ -117,8 +117,8 @@ export function CorrectiveActionPage({ actionId }: { actionId: string }) {
               {action.due_at}.
             </p>
             <p className="break-all text-sm text-muted">
-              Action {action.corrective_action_id}, revision {action.version}. Owned by{" "}
-              {action.owner_user_id}. From {action.occurrence_id}.
+              Action {action.corrective_action_id}. Owned by {action.owner_user_id}. From{" "}
+              {action.occurrence_id}.
             </p>
             <Button
               variant="outline"

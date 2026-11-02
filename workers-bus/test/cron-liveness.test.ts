@@ -8,6 +8,13 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import worker from "../src/index.ts";
+import type { AppEnv } from "../src/app-types.ts";
+import {
+  claimProposalPublicationApprovalExecution,
+  createProposalPublicationApprovalRequest,
+  getProposalPublicationApprovalRequest,
+  type ProposalPublicationApprovalRequestRecord,
+} from "../src/proposal-publication-approval-store.ts";
 import { getOperationalStatus } from "../src/operations.ts";
 import {
   CRON_LIVENESS_WINDOW_SECONDS,
@@ -417,4 +424,100 @@ test("/ready?scope=ops is 503 on a stale row and 200 once a tick lands; other sc
   const body = await freshAdmin.json() as { crons: Array<{ cron: string; state: string }> };
   assert.equal(body.crons.length, 2);
   assert.ok(body.crons.every((c) => c.state === "fresh"));
+});
+
+test("scheduled: lost proposal execution becomes reconciliation work once without changing the approval", async (t) => {
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  const providerFetch = t.mock.method(globalThis, "fetch", async () => {
+    throw new Error("unexpected_provider_effect");
+  });
+  const db = new BusTestD1();
+  t.after(() => db.raw.close());
+  const runtime = readinessEnv(db, { APP_PROPOSAL_PUBLICATION_ENABLED: "false" });
+  const appEnv = runtime as unknown as AppEnv;
+  const claimedAt = new Date(now - 120_000).toISOString();
+  for (const tenant of ["ironwrap", "reference"]) {
+    for (const role of ["owner", "ops"]) {
+      db.raw.prepare(
+        `INSERT INTO app_users
+          (user_id, tenant_id, email_normalized, display_name, role, access_role, active,
+           created_by, created_at, updated_at)
+         VALUES (?, ?, ?, 'Synthetic approver', ?, ?, 1, 'seed', ?, ?)`,
+      ).run(`appu_lease_${tenant}_${role}`, tenant, `${role}@example.invalid`, role, role, claimedAt, claimedAt);
+    }
+  }
+  const retained = new Map<string, ProposalPublicationApprovalRequestRecord>();
+  for (const [suffix, tenant, leaseEnd] of [
+    ["expired", "ironwrap", now - 60_000],
+    ["live", "ironwrap", now + 60_000],
+    ["foreign", "reference", now - 60_000],
+  ] as const) {
+    const id = `proposal-publication-approval:lease-${suffix}`;
+    const created = await createProposalPublicationApprovalRequest(appEnv, {
+      id,
+      tenantId: tenant,
+      prepareIdempotencyKey: `prepare:lease-${suffix}`,
+      intentFingerprint: "a".repeat(64),
+      actorUser: "owner@example.invalid",
+      siteId: "https://frappe.example.invalid",
+      roofJobId: `job:lease-${suffix}`,
+      proposalEvidencePackId: `proposal:lease-${suffix}`,
+      customerQuoteId: `quote:lease-${suffix}`,
+      packStatusBefore: "Draft",
+      requestText: "Publish the reviewed synthetic proposal evidence pack.",
+      writeArgsJson: JSON.stringify({ proposal_evidence_pack_id: `proposal:lease-${suffix}` }),
+      previewJson: JSON.stringify({ roof_job_id: `job:lease-${suffix}`, pack_status_before: "Draft" }),
+      argsDigest: "b".repeat(64),
+      previewDigest: "c".repeat(64),
+      receiptPreviewDigest: "d".repeat(64),
+      dryRunReceipt: "synthetic-dry-run-receipt-".repeat(2),
+      expiresAt: new Date(now + 600_000).toISOString(),
+      requestedByUserId: `appu_lease_${tenant}_ops`,
+      requestedByFrappeUser: "ops@example.invalid",
+      runId: `run:proposal-lease-${suffix}`,
+      now: claimedAt,
+    });
+    assert.equal(created.kind, "created");
+    const claimed = await claimProposalPublicationApprovalExecution(appEnv, {
+      tenantId: tenant, requestId: id, expectedVersion: 1,
+      decisionIdempotencyKey: `decision:lease-${suffix}`,
+      approvedByUserId: `appu_lease_${tenant}_owner`,
+      approvedByFrappeUser: "owner@example.invalid",
+      now: claimedAt,
+      leaseExpiresAt: new Date(leaseEnd).toISOString(),
+    });
+    assert.equal(claimed.kind, "claimed");
+    if (claimed.kind !== "claimed") throw new Error("approval_not_claimed");
+    retained.set(suffix, claimed.request);
+  }
+
+  // Model process loss after durable claim: no broker call or finalization occurs.
+  assert.equal(await runCron(runtime, FREQUENT, now), false);
+  const expired = retained.get("expired")!;
+  const uncertain = await getProposalPublicationApprovalRequest(appEnv, "ironwrap", expired.proposal_publication_approval_id);
+  assert.deepEqual(uncertain, {
+    ...expired,
+    state: "execution_uncertain",
+    version: expired.version + 1,
+    execution_lease_expires_at: null,
+    completed_at: new Date(now).toISOString(),
+    updated_at: new Date(now).toISOString(),
+    error_code: "broker_response_timeout",
+    transition_actor_kind: "system",
+    transition_actor_id: "proposal-publication-approval-lease-sweep",
+    transition_actor_frappe_user: null,
+    transition_detail_code: "proposal_publication_approval_execution_lease_expired",
+  });
+  const live = retained.get("live")!;
+  assert.deepEqual(await getProposalPublicationApprovalRequest(appEnv, "ironwrap", live.proposal_publication_approval_id), live);
+
+  assert.equal(await runCron(runtime, FREQUENT, now), false);
+  assert.deepEqual(await getProposalPublicationApprovalRequest(appEnv, "ironwrap", expired.proposal_publication_approval_id), uncertain);
+  assert.equal(db.raw.prepare(
+    "SELECT COUNT(*) AS n FROM proposal_publication_approval_request_events WHERE event_type = 'execution_uncertain'",
+  ).get()!.n, 1);
+  const foreign = retained.get("foreign")!;
+  assert.deepEqual(await getProposalPublicationApprovalRequest(appEnv, "reference", foreign.proposal_publication_approval_id), foreign);
+  assert.equal(providerFetch.mock.callCount(), 0, "recovery must not dispatch or retry a provider write");
 });

@@ -75,7 +75,7 @@ jobs:
       pull-requests: read
     steps:
       # Fail closed before anything is checked out. Only a release tag of the
-      # exact `vMAJOR.MINOR.PATCH` shape release-please produces may promote, and
+      # exact `vMAJOR.MINOR.PATCH` shape may promote, and
       # the dispatch must name the very ref it was dispatched on, so
       # `github.sha` is always the tagged commit.
       - name: Require a release tag

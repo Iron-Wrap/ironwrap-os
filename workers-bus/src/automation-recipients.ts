@@ -24,7 +24,7 @@
  */
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 /**
  * The closed transport registry. It is closed in CODE rather than by a column CHECK on purpose:

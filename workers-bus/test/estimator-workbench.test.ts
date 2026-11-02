@@ -16,7 +16,7 @@ import {
   type FacetV2CustomerDecisionEvent,
 } from "../src/facet-design-v2-protocol.ts";
 import { importEstimatorEvidenceFromNativeSources } from "../src/estimator-native.ts";
-import { canonicalJson } from "../src/newo-hash.ts";
+import { canonicalJson } from "../src/canonical.ts";
 import type { PriceList } from "../src/pricing.ts";
 
 const NOW = new Date("2026-08-21T10:00:00.000Z");

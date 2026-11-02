@@ -16,7 +16,7 @@
 
 import { comparableObservedSha256 } from "./accounting-expectations.ts";
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson } from "./newo-hash.ts";
+import { canonicalJson } from "./canonical.ts";
 import type { MoneyEffectOutcome } from "./accounting-effect-port.ts";
 import {
   AccountingIntentError,

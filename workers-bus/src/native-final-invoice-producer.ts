@@ -15,7 +15,7 @@ import {
 } from "./accounting-tax-snapshots.ts";
 import type { AppEnv } from "./app-types.ts";
 import { commercialPaymentTermsDays } from "./commercial-store.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   nativeFinalInvoiceEffectIdempotencyKey,
   nativeFinalInvoiceExpectedReadback,

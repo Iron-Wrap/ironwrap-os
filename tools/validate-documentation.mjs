@@ -57,7 +57,7 @@ const forbiddenAuthorityClaims = [
   /one tenant \+ one Frappe site \+ one Worker deployment/i,
   /one canonical implementation owner across Facet and Home Config 3D/i,
   /Home Config 3D repository \| Separate predecessor\/lineage product/i,
-  /Home Config 3D (?:is|was) (?:retired )?draft lineage/i,
+  /Home Config 3D\s+(?:is|was)\s+(?:retired\s+)?draft\s+lineage/i,
   /archive\/freeze requires a separate owner decision/i,
   /leftover Frappe\s+adapter receipts are optional sentinels, not a release gate/i,
 ];

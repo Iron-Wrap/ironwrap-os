@@ -443,9 +443,9 @@ not a runtime marketplace for arbitrary hooks or plugins.
 - Facet remains a separate active customer-facing design/measurement product boundary and signed
   design-evidence producer. IronWrap owns operating association and every commercial transition.
 - Facet is the canonical implementation owner for accepted Capture, parser, geometry, rendering,
-  pricing, catalog, and computer-vision lineage. An idea found in the separate, read-only Home Config 3D
-  product is triaged as a Facet backlog input; it never creates a parallel porting obligation or a
-  second product authority.
+  pricing, catalog, and computer-vision lineage. An idea found in the separate, read-only
+  Home Config 3D product is triaged as a Facet backlog input; it never creates a parallel porting
+  obligation or a second product authority.
 - Frappe is compatibility only. While its wheel ships, its required tests and exact
   stage/promote/readback/rollback receipts must be release-blocking; remove the wheel and that
   release gate together after the last consumer and rollback proof are gone.

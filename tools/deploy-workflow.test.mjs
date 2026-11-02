@@ -117,12 +117,11 @@ function validateWorkflow(workflow) {
     admission,
     /ci-checks[\s\S]*--job-names "[^"]*\bgate\b[^"]*validate-and-test"/,
   );
-  // Automated checks are the only release gate. The reviewer GO receipt and the
-  // independent evidence issuer are gone from the enforcer, and the external
-  // Frappe adapter signer it still carries must not come back into the workflow.
+  // Automated checks are the only release gate: no reviewer GO receipt, no
+  // independent evidence issuer, and no external Frappe adapter signer.
   assert.doesNotMatch(
     workflow,
-    /review\.receipt|RELEASE_REVIEW_|service-adapter|RELEASE_SERVICE_ADAPTER_/,
+    /issuer-request|review-wait|release-evidence-wait|review\.receipt|RELEASE_INDEPENDENT_|RELEASE_REVIEW_|service-adapter|RELEASE_SERVICE_ADAPTER_/,
   );
   assert.match(workflow, /RELEASE_FRAPPE_SCOPE: out-of-scope/);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);

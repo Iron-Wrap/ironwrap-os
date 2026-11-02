@@ -59,8 +59,9 @@ env:
   # restore and rollback drills, then production smoke with automatic rollback.
   # There is no independent reviewer or external evidence issuer. The leftover
   # Frappe/VPS host is not promoted by this train: its candidate identities came
-  # from that issuer and its adapter is an external signer. The wheel is still
-  # built and digest-bound into the artifact.
+  # from that issuer and its adapter is an external signer. While the app is in
+  # the tree its wheel is built and digest-bound into the artifact; out of scope,
+  # a tree without the app is admissible and its artifact carries no wheel.
   RELEASE_FRAPPE_SCOPE: out-of-scope
 
 jobs:
@@ -288,7 +289,7 @@ jobs:
             --output "$RUNNER_TEMP/production-config.json"
           node "$RELEASE_ENFORCER" admission-context \
             --repo-root "$GITHUB_WORKSPACE" --repository "$RELEASE_REPOSITORY" \
-            --environment production \
+            --environment production --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --source "$RUNNER_TEMP/source-evidence.json" --checks "$RUNNER_TEMP/ci-checks.json" \
             --pr-context "$RUNNER_TEMP/pr-context.json" \
             --policy "$RUNNER_TEMP/policy.json" \
@@ -310,6 +311,7 @@ jobs:
             --worker "$RUNNER_TEMP/release-artifact/worker/index.js" \
             --pwa "$RUNNER_TEMP/release-artifact/app/dist" \
             --frappe-wheel "$RUNNER_TEMP/release-artifact/frappe/ironwrap_roofing.whl" \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --output "$RUNNER_TEMP/artifact-components.json"
           echo "artifact_digest=$actual" >> "$GITHUB_OUTPUT"
 

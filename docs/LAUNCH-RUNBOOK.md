@@ -334,7 +334,11 @@ Dependabot PR, never starts a release or merges anything; the release follows wh
 The name-only inventory is in `deploy/release.env.example`. The train is Worker/PWA/D1 only
 (`RELEASE_FRAPPE_SCOPE: out-of-scope`): the leftover Frappe wheel is built and digest-bound into
 the artifact but not promoted, because the Frappe candidate identities came from the retired
-issuer and the Frappe adapter is an external signer.
+issuer and the Frappe adapter is an external signer. Both workflows pass that scope to
+`admission-context` and `artifact-manifest`. Out of scope, the enforcer also admits a source tree
+without the Frappe app: its Frappe source, schema, and migration digests are then the digest of an
+empty listing, and the artifact records a fixed absent-wheel digest in place of a wheel. A tree
+that still has the app must ship its wheel, and a release without the scope gets no exception.
 
 Generation N enforcement is loaded from the PR base, not from candidate source, so a candidate
 cannot weaken and approve its own release boundary. That predecessor enforcer atomically

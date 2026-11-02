@@ -32,6 +32,26 @@ function ordered(source, markers) {
   }
 }
 
+// One enforcer invocation: from `node "$RELEASE_ENFORCER" <name>` through its last
+// backslash-continued line.
+function enforcerCommand(source, name) {
+  const start = source.indexOf(`node "$RELEASE_ENFORCER" ${name} `);
+  assert.ok(start >= 0, `missing enforcer command ${name}`);
+  const lines = [];
+  for (const line of source.slice(start).split("\n")) {
+    lines.push(line);
+    if (!line.endsWith("\\")) break;
+  }
+  return lines.join("\n");
+}
+
+// Out of scope, the enforcer admits a source tree without the Frappe app and an artifact
+// without its wheel, but only when the workflow hands it the scope.
+function assertFrappeScopeBound(admission, build) {
+  assert.match(enforcerCommand(admission, "admission-context"), /--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/);
+  assert.match(enforcerCommand(build, "artifact-manifest"), /--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/);
+}
+
 function validateWorkflow(workflow) {
   const admission = section(workflow, "admission");
   const build = section(workflow, "build");
@@ -124,6 +144,7 @@ function validateWorkflow(workflow) {
     /issuer-request|review-wait|release-evidence-wait|review\.receipt|RELEASE_INDEPENDENT_|RELEASE_REVIEW_|service-adapter|RELEASE_SERVICE_ADAPTER_/,
   );
   assert.match(workflow, /RELEASE_FRAPPE_SCOPE: out-of-scope/);
+  assertFrappeScopeBound(admission, build);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
   // The generation-N policy ledger left the push path entirely: there is no
   // permit to make single-use in a qa-only release.
@@ -345,6 +366,25 @@ test("workflow validation rejects omitted component artifacts", async () => {
   assert.throws(() =>
     validateWorkflow(workflow.replace("--frappe-wheel", "--unbound-wheel")),
   );
+});
+
+test("workflow validation rejects an admission or artifact manifest without the Frappe scope", async () => {
+  // admission-context carries the scope on its --environment line; artifact-manifest
+  // carries it on a line of its own.
+  const ownLine = /\n +--frappe-scope "\$RELEASE_FRAPPE_SCOPE" \\(?=\n)/;
+  for (const [url, validate, environment] of [
+    [workflowUrl, validateWorkflow, "qa"],
+    [productionWorkflowUrl, validateProductionWorkflow, "production"],
+  ]) {
+    const workflow = await readFile(url, "utf8");
+    for (const removed of [
+      workflow.replace(`--environment ${environment} --frappe-scope "$RELEASE_FRAPPE_SCOPE"`, `--environment ${environment}`),
+      workflow.replace(ownLine, ""),
+    ]) {
+      assert.notEqual(removed, workflow);
+      assert.throws(() => validate(removed));
+    }
+  }
 });
 
 test("workflow rejects a drill without its scoped token or drain-before-export guard", async () => {
@@ -682,6 +722,7 @@ function validateProductionWorkflow(workflow) {
 
   // --- pinned constants --------------------------------------------------
   assert.match(workflow, /RELEASE_FRAPPE_SCOPE: out-of-scope/);
+  assertFrappeScopeBound(production, production);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
   const workerPackage = JSON.parse(
     readFileSync(new URL("../workers-bus/package.json", import.meta.url), "utf8"),

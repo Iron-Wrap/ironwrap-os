@@ -1704,6 +1704,23 @@ test("source evidence binds a pristine checkout's commit, tree, and binary diff"
   assert.match(evidence.diff_sha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(Object.keys(evidence.component_digests).sort(), ["frappe", "hermes", "mcp", "pwa", "tenant_config", "worker"]);
   assert.equal(evidence.worktree_clean, true);
+  // A tree without the Frappe app lists nothing under it, so every Frappe digest is the
+  // digest of an empty listing: the enforcer's marker for an absent app.
+  assert.equal(evidence.component_digests.frappe, sha(""));
+  assert.equal(evidence.frappe_schema_digest, sha(""));
+  assert.equal(evidence.frappe_migration_digest, sha(""));
+
+  const doctype = path.join(root, "frappe-apps", "ironwrap_roofing", "ironwrap_roofing", "doctype", "roof_job");
+  await mkdir(doctype, { recursive: true });
+  await writeFile(path.join(doctype, "roof_job.json"), "{}\n");
+  await writeFile(path.join(root, "frappe-apps", "ironwrap_roofing", "ironwrap_roofing", "hooks.py"), "app_name = 'ironwrap_roofing'\n");
+  await run("git", ["-C", root, "add", "."]);
+  await run("git", ["-C", root, "commit", "-qm", "frappe app"]);
+  const withApp = await computeSourceEvidence({ repoRoot: root, sourceCommit: "HEAD", baseCommit: base });
+  for (const digest of [withApp.component_digests.frappe, withApp.frappe_schema_digest, withApp.frappe_migration_digest]) {
+    assert.match(digest, /^[0-9a-f]{64}$/);
+    assert.notEqual(digest, sha(""));
+  }
 });
 
 test("supply-chain evidence is deterministic and bound to exact release-source CI", async (t) => {

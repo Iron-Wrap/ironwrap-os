@@ -28,6 +28,9 @@ env:
   # tag-triggered release (IRO-264). The first Deploy run after this merge
   # fails closed at admission by design: the enforcer is the pre-merge tree,
   # which still rejects --environment qa (IRO-260).
+  # The leftover Frappe app is never promoted. admission-context and
+  # artifact-manifest read this scope: out of scope, a source tree without the
+  # Frappe app is admissible and its artifact carries no wheel.
   RELEASE_FRAPPE_SCOPE: out-of-scope
 
 jobs:
@@ -117,7 +120,7 @@ jobs:
             --output "$RUNNER_TEMP/qa-config.json"
           node "$RELEASE_ENFORCER" admission-context \
             --repo-root "$GITHUB_WORKSPACE" --repository "$RELEASE_REPOSITORY" \
-            --environment qa \
+            --environment qa --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --source "$RUNNER_TEMP/source-evidence.json" --checks "$RUNNER_TEMP/ci-checks.json" \
             --pr-context "$RUNNER_TEMP/pr-context.json" \
             --qa "$RUNNER_TEMP/qa-config.json" --output "$RUNNER_TEMP/context.json"
@@ -207,6 +210,7 @@ jobs:
           node "$RELEASE_ENFORCER" artifact-manifest \
             --worker "$artifact_root/worker/index.js" --pwa "$artifact_root/app/dist" \
             --frappe-wheel "$artifact_root/frappe/ironwrap_roofing.whl" \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --output "$RUNNER_TEMP/artifact-components.json"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -C "$artifact_root" -cf "$RUNNER_TEMP/ironwrap-release-artifact.tar" .

@@ -410,7 +410,8 @@ IRO-41 branch-local implementation:
   source cannot approve weakening that boundary for its own release.
 
 The current deploy workflow creates `frappe/ironwrap_roofing.whl` and binds its digest into the
-artifact and permit, but it does not
+artifact and permit; out of scope, the enforcer also admits a tree without the Frappe app, whose
+artifact records a fixed absent-wheel digest instead. It does not
 deliver those bytes to an immutable provider-stage revision or invoke the checked-in
 `service-adapter` client. The production receipt records Frappe as not promoted; Worker recovery
 records `automatic_rollback_incomplete` durably if the recovery step cannot complete. These are

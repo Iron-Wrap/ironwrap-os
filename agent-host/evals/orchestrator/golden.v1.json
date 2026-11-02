@@ -3834,7 +3834,9 @@
       "tags": [
         "staff_question",
         "routing",
-        "no_price"
+        "no_price",
+        "lead_read_model",
+        "pending_record_access"
       ],
       "signal": {
         "kind": "owner_request",
@@ -3870,15 +3872,26 @@
           "kind": "lead",
           "version": 1,
           "trust": "owned",
-          "observed_at": "-PT10M",
-          "fresh_until": "PT24H",
+          "observed_at": "PT0M",
           "data": {
-            "customer_name": "Delgado",
-            "service": "gutters",
-            "stage": "qualification",
-            "stated_lengths": "140 feet of 5-inch gutter, 4 downspouts (caller's figures)",
-            "measurement_accepted": false,
-            "quote_revision": null
+            "lead_id": "L-9902",
+            "source": "phone",
+            "contact_name": "Delgado",
+            "job_ref": null,
+            "lifecycle_status": "untriaged",
+            "record_version": 1,
+            "created_at": {
+              "$case_time": "-PT10M"
+            },
+            "updated_at": {
+              "$case_time": "-PT10M"
+            },
+            "has_phone": true,
+            "has_email": false,
+            "consents": [],
+            "jobs": [
+              "J-9902"
+            ]
           }
         }
       ],
@@ -3916,7 +3929,8 @@
             "do_it_myself"
           ],
           "must_cite": [
-            "lead:L-9902"
+            "lead:L-9902",
+            "signal"
           ],
           "needs_from_you": "none"
         },
@@ -3924,8 +3938,8 @@
           "audience": "staff",
           "language": "en",
           "must_convey": [
-            "there is no measured scope or committed quote, so no number can be given on the call",
-            "the AI receptionist has the inquiry to arrange measuring with the caller's lengths noted",
+            "no verified measurement or committed quote is available in this snapshot, so no number can be given on the call",
+            "the AI receptionist receives the inquiry with the caller's unverified 140 feet of 5-inch gutter and 4 downspouts from the staff request",
             "offer the customer a written quote after measuring and a callback from a person"
           ],
           "must_not_convey": [
@@ -3939,7 +3953,7 @@
         "books_confirmed_date",
         "calls_forbidden_action"
       ],
-      "judge_notes": "Without an accepted measurement the inquiry is still the AI receptionist's; even a per-foot rate passed through staff would be an uncommitted price."
+      "judge_notes": "The lead fact has exactly the Worker lead read model, read at run opening. Service and the caller's quantities come only from the staff request signal; they are unverified statements, never accepted measurement. No measurement or quote record is in this snapshot: say that those records are not available, never invent their status from the lead. Route to the AI receptionist without a price, rate, quote-arrival time or confirmed booking. The existing person-role fixture and staff-question access remain target-only (pending_record_access); this case is not runtime proof."
     },
     {
       "id": "orchestrator.golden.024",

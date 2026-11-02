@@ -148,7 +148,7 @@ export const newoOperationsResponseSchema = z
         pending_bookings: z.number().int().nonnegative(),
         control_failures: z.number().int().nonnegative(),
         dlq_items: z.number().int().nonnegative(),
-        unresolved_incidents: z.number().int().nonnegative().nullable(),
+        unresolved_incidents: z.number().int().nonnegative(),
         last_event_at: nullableTimestamp,
         last_report_at: nullableTimestamp,
       })

@@ -36,6 +36,16 @@ describe("Newo operations browser contract", () => {
     expect(newoOperationsResponseSchema.safeParse(widened).success).toBe(false);
   });
 
+  it("requires the open-issue count but still accepts a run that did not count issues", () => {
+    const uncounted = newoOperationsFixture();
+    uncounted.counts = { ...uncounted.counts, unresolved_incidents: null } as never;
+    expect(newoOperationsResponseSchema.safeParse(uncounted).success).toBe(false);
+
+    const fiveMinuteRun = newoOperationsFixture();
+    expect(fiveMinuteRun.reconciliation.five_minute?.unresolved_incidents).toBeNull();
+    expect(newoOperationsResponseSchema.safeParse(fiveMinuteRun).success).toBe(true);
+  });
+
   it("requires the complete readiness check set in stable order", () => {
     const reordered = newoOperationsFixture();
     reordered.readiness.checks = [...reordered.readiness.checks].reverse();

@@ -107,6 +107,36 @@ describe("field response validation", () => {
     expect(constructedShapes).toHaveLength(constructions);
   });
 
+  it("keeps a Today job's customer name and still reads a run sheet saved before it existed", () => {
+    const job = {
+      id: "JOB-TEST",
+      job_number: "IW-TEST",
+      brand: "ironwrap",
+      status: "In Production",
+      address: "1 Synthetic Way, Calgary, AB",
+      scheduled_start: null,
+      scheduled_end: null,
+      blocked_gate_count: 0,
+      next_action: "Open field check-in",
+      assignment: null,
+    };
+    const read = (jobs: unknown[]) =>
+      contracts.todayResponseSchema.parse({ ...envelope, date: "2026-09-29", jobs }).jobs[0];
+
+    expect(
+      read([{ ...job, customer_display_name: "Synthetic Customer" }])?.customer_display_name,
+    ).toBe("Synthetic Customer");
+    expect(read([{ ...job, customer_display_name: null }])?.customer_display_name).toBeNull();
+    expect(read([job])).toEqual(job);
+    expect(
+      contracts.todayResponseSchema.safeParse({
+        ...envelope,
+        date: "2026-09-29",
+        jobs: [{ ...job, customer_display_name: 42 }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("retains synchronous nested work-package validation and defaults", () => {
     const parsed = contracts.workObjectResponseSchema.parse(workObject());
     expect(parsed.work_package?.acknowledgement.workers).toEqual([]);

@@ -727,6 +727,17 @@ function env(
                     ),
                   };
                 }
+                if (
+                  sql.includes("FROM operating_customers") &&
+                  sql.includes("customer_id IN")
+                ) {
+                  const customerIds = new Set(ids.slice(1).map(String));
+                  return {
+                    results: nativeRows.customers.filter((row) =>
+                      customerIds.has(String(row.customer_id)),
+                    ),
+                  };
+                }
                 if (sql.includes("FROM operating_customers")) {
                   return {
                     results: nativeRows.customers.filter(
@@ -1754,6 +1765,11 @@ test("field Today uses direct and active crew membership assignments, never gene
     assert.deepEqual(
       model.jobs.map((item) => item.id),
       ["JOB-A", "JOB-B"],
+    );
+    // JOB-C's customer belongs to no assignment of this crew and is never named.
+    assert.deepEqual(
+      model.jobs.map((item) => item.customer_display_name),
+      ["Customer 1", "Customer 2"],
     );
     assert.equal(model.jobs[0]?.assignment?.id, "ASSIGN-A");
     assert.equal(model.jobs[1]?.assignment?.crew_profile, "CREW-1");

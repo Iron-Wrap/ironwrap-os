@@ -1447,13 +1447,24 @@ async function readPriorInvoices(
   const unresolved = rows.filter(
     (row) => row.state !== "rejected" && !["reconciled", "partially_settled"].includes(row.state),
   );
-  if (unresolved.length > 0) {
-    return blocked("prior_invoice_truth_unresolved", "reconcile_or_reject_prior_invoices", {
-      intents: unresolved.map((row) => ({
-        intent_id: row.intent_id,
-        state: row.state,
-      })),
-    });
+  // A reversal answers a provider duplicate, surplus or mismatch, so whether a reversed invoice
+  // still bills is not in the intent, and no command takes it on from there: reject needs
+  // pending_review or blocked, and reconcile does not start from a reversal. A bookkeeper settles it
+  // in QuickBooks. The invoices a person can reconcile or reject are named first.
+  const reversed = unresolved.filter((row) => ["compensating", "compensated"].includes(row.state));
+  const open = unresolved.filter((row) => !reversed.includes(row));
+  const named = (list: AccountingIntentRecord[]) => ({
+    intents: list.map((row) => ({ intent_id: row.intent_id, state: row.state })),
+  });
+  if (open.length > 0) {
+    return blocked("prior_invoice_truth_unresolved", "reconcile_or_reject_prior_invoices", named(open));
+  }
+  if (reversed.length > 0) {
+    return blocked(
+      "prior_invoice_compensated",
+      "resolve_in_quickbooks_then_mark_prior_invoice_resolved",
+      named(reversed),
+    );
   }
   const invoices: PriorInvoice[] = [];
   const providerFacts: ProviderFacts[] = [];

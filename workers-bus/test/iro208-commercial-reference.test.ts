@@ -31,7 +31,9 @@ import {
   depositIntentIsReconciled,
   selectPhaseWorkPackage,
 } from "../src/commercial-job-phase.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
+import { attestGateInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
+import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
 const PUBLIC_ORIGIN = "https://app.example.invalid";
@@ -90,6 +92,17 @@ class SqliteD1 {
     insert.run(OTHER_OPS_ID, TENANT, "other-ops@example.invalid", "Other Ops", "ops", "ops", "other-ops@example.invalid", now, now);
     insert.run(ACCOUNTANT_ID, TENANT, "accounting@example.invalid", "Accounting", "ops", "accounting", "accounting@example.invalid", now, now);
     insert.run(SECOND_ACCOUNTANT_ID, TENANT, "second-accounting@example.invalid", "Second Accounting", "ops", "accounting", "second-accounting@example.invalid", now, now);
+    // These contracts carry a deposit, so this tenant takes deposits (MD-13): since 0155 a tenant
+    // with no policy revision is OD-01 and refuses them. Like 0133's column, a truncated chain
+    // carries the policy table forward, because the routes read it.
+    if (lastMigration && lastMigration < "0155") {
+      const policy = readFileSync(new URL("0155_od01_deposit_policy.sql", directory), "utf8");
+      this.raw.exec(policy.slice(
+        policy.indexOf("CREATE TABLE IF NOT EXISTS tenant_deposit_policy_revisions"),
+        policy.indexOf("CREATE TRIGGER IF NOT EXISTS tenant_deposit_policy_revisions_validate_insert"),
+      ));
+    }
+    recordDepositPolicy(this.raw, { tenantId: TENANT, ownerUserId: OWNER_ID });
   }
 
   prepare(sql: string): SqliteStatement {
@@ -1400,16 +1413,68 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       depositGateBeforeConflict,
     );
 
-    // Attestation and Crew-by-policy entries do not exist yet, so the journey records Safety,
-    // Weather and Crew the way 0153 backfills gates cleared before the ledger, and proves the
-    // phase then admits the job.
-    recordLegacyGateStates(h.db.raw, {
+    // The owner, on no crew, attests Safety and Weather (0158). Crew is bound by the schedule
+    // (0159), so until the job is scheduled it still counts as blocked.
+    for (const gate of ["Safety", "Weather"] as const) {
+      attestGateInLedger(h.db.raw, {
+        tenantId: TENANT,
+        roofJobId: journey.ids.jobId,
+        gate,
+        actorUserId: OWNER_ID,
+        actorRole: "owner",
+      });
+    }
+    const unscheduled = await jobPhase(h, journey.ids.jobId);
+    assert.equal(unscheduled.phase, "production_blocked");
+    assert.equal(unscheduled.facts.production.all_required_gates_ready, false);
+
+    // A person schedules a crew of one synthetic field worker; the schedule binds Crew by policy
+    // in the same batch, and the phase admits the job.
+    const at = new Date().toISOString();
+    h.db.raw.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+          active, created_by, created_at, updated_at)
+       VALUES ('appu_field_iro208', ?, 'field-iro208@example.invalid', 'Field', 'field', 'field',
+               'field-iro208@example.invalid', 1, 'reference-test', ?, ?)`,
+    ).run(TENANT, at, at);
+    h.db.raw.prepare(
+      `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
+       VALUES ('crew:iro208:0001', ?, 'Synthetic Crew', 'Active', 1, ?, ?)`,
+    ).run(TENANT, at, at);
+    h.db.raw.prepare(
+      `INSERT INTO fleet_crew_members
+         (membership_id, tenant_id, crew_id, user_id, active, version, created_at, updated_at)
+       VALUES ('membership:iro208:0001', ?, 'crew:iro208:0001', 'appu_field_iro208', 1, 1, ?, ?)`,
+    ).run(TENANT, at, at);
+    const job = h.db.raw.prepare(
+      "SELECT version FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?",
+    ).get(TENANT, journey.ids.jobId) as { version: number };
+    const day = fixtureSchedule(1);
+    await recordOperatingJobAssignment(h.env, {
       tenantId: TENANT,
       roofJobId: journey.ids.jobId,
-      gates: ["Safety", "Weather", "Crew"],
+      expectedRoofJobVersion: Number(job.version),
+      crewId: "crew:iro208:0001",
+      expectedCrewVersion: 1,
+      authorityRequirements: [{
+        authority_record_id: "authority:iro208:worker",
+        subject_type: "Person",
+        subject_role: "Worker",
+        subject_ref: "appu_field_iro208",
+        authority_kind: "Worker Competency",
+        scope_type: "Roof Job",
+        scope_ref: journey.ids.jobId,
+        version: 1,
+        state_digest_sha256: "c".repeat(64),
+      }],
+      scheduledStart: day.start,
+      scheduledEnd: day.end,
+      actorUserId: OWNER_ID,
+      idempotencyKey: "iro208b-schedule-0001",
     });
     const ready = await jobPhase(h, journey.ids.jobId);
-    assert.equal(ready.phase, "production_ready");
+    assert.equal(ready.phase, "scheduled");
     assert.equal(ready.facts.accounting.deposit_reconciled, true);
     assert.equal(ready.facts.production.all_required_gates_ready, true);
     assert.equal(h.fake.providerInvoices.size, 1);
@@ -1580,28 +1645,46 @@ test("0116 backfills shipped acceptances into the native activation and deposit 
   }
 });
 
-test("acceptance refuses non-integer and out-of-range deposit percentages atomically", async () => {
-  const cases: Array<[string, unknown]> = [["string", "25"], ["decimal", 25.5], ["range", 101]];
+// Since 0155 the tenant's deposit policy refuses such terms by name where the quote is recorded,
+// so they never reach a customer. The acceptance trigger still aborts the same values atomically
+// as the backstop, proved in customer-contract-acceptance.test.ts ("D1 keeps MD-13's 1-100 rule").
+test("a deposit outside 1-100 is refused by name at the quote, before anything reaches a customer", async () => {
+  const cases: Array<[string, unknown]> = [["string", "25"], ["decimal", 25.5], ["range", 101], ["zero", 0]];
   for (const [label, depositPercent] of cases) {
     const h = setup();
     try {
       const ids = await intakeAndMaterialize(h);
-      await publishSyntheticContract(h, ids, { ...TERMS, deposit_percent: depositPercent }, label);
-      const token = await issuePortalLink(h, ids);
-      const challenge = await worker.fetch(
-        publicRequest("/api/v1/customer-portal/acceptance/challenge", { token }), h.env as never, {} as never,
+      const triage = await handleAuthenticatedRoute(
+        request("/api/v1/commercial/lead-triage-decisions", {
+          lead_id: ids.leadId, expected_lead_version: 1, lifecycle_status: "qualified", priority: "normal",
+          category: "replacement", summary: `Synthetic ${label} triage.`, next_action: "Prepare the synthetic proposal.",
+        }, `iro208-invalid-${label}-triage-0001`), h.env, auth("ops"),
       );
-      assert.equal(challenge.status, 200, await challenge.clone().text());
-      const challengeToken = h.fake.sentEmails.at(-1)?.match(/contract-accept#token=([A-Za-z0-9_-]{43})/)?.[1];
-      assert.ok(challengeToken);
-      const confirmed = await worker.fetch(
-        publicRequest("/api/v1/customer-portal/acceptance/confirm", {
-          token: challengeToken, signer_name: "Ada Customer", accepted: true,
-        }, `iro208-invalid-${label}-acceptance-0001`), h.env as never, {} as never,
+      assert.equal(triage.status, 201, await triage.clone().text());
+      const quote = await handleAuthenticatedRoute(
+        request(
+          "/api/v1/commercial/quote-revisions",
+          quoteBody(ids, new Date().toISOString(), { ...TERMS, deposit_percent: depositPercent }),
+          `iro208-invalid-${label}-quote-0001`,
+        ),
+        h.env,
+        auth("ops"),
       );
-      assert.equal(confirmed.status, 503, await confirmed.clone().text());
-      assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings").get()!.count, 0);
-      assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_deposit_derivations").get()!.count, 0);
+      assert.equal(quote.status, 409, label);
+      assert.deepEqual(await quote.json(), {
+        error: "deposit_terms_not_allowed_by_policy",
+        policy: "md13_deposit",
+        field: "terms.deposit_percent",
+      }, label);
+      // Refused before any authority was admitted for it, so nothing was written.
+      assert.equal(h.db.raw.prepare(
+        "SELECT COUNT(*) AS count FROM commercial_authority_permits WHERE action = 'quote.revision.record'",
+      ).get()!.count, 0, label);
+      for (const table of [
+        "commercial_quote_revisions", "commercial_acceptance_bindings", "commercial_deposit_derivations",
+      ]) {
+        assert.equal(h.db.raw.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()!.count, 0, `${label} ${table}`);
+      }
     } finally {
       h.restore();
     }

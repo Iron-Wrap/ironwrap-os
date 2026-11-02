@@ -275,10 +275,13 @@ takes effect from the first push after the commit that introduces it.
 
 The release path, end to end:
 
-1. **Conventional commits land on `main`.** `.github/workflows/release-please.yml` fails the
-   `pr-title` check on any pull request whose landing subject release-please cannot parse. Because
+1. **Conventional commits land on `main`.** release-please drops a commit whose subject it cannot
+   parse from the release without saying so. `.github/workflows/release-please.yml` therefore warns
+   on every push to `main` whose commit subject is not conventional; the warning never fails
+   anything and nothing checks a pull request before the merge. Because
    `squash_merge_commit_title` is `COMMIT_OR_PR_TITLE`, a single-commit pull request lands its
-   **commit** subject, so that subject is validated too whenever the PR has exactly one commit.
+   **commit** subject and a multi-commit one lands the PR title, so write both as conventional
+   commits.
 2. **release-please keeps one release pull request open** on the `release-please--branches--main`
    branch, updating `CHANGELOG.md` and `.release-please-manifest.json` with the next version.
 3. **A person merges that release pull request.** This is the documented default and the only

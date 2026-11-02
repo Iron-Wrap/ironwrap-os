@@ -6,7 +6,7 @@
 import { ROLE_PERMISSIONS, type AppEnv, type AppRole } from "./app-types.ts";
 import { entityExists, knownEntityType } from "./pipeline-board-store.ts";
 import { listCurrentOperatingJobAssignments } from "./operating-job-assignment-store.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const SCHEMA_FIELD_TYPES = [

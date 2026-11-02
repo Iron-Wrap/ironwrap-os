@@ -25,7 +25,7 @@
 // paths for the facts the contract names - same facts, the shape Intuit actually returns, which is
 // what the synthetic fixtures have to look like to be worth anything.
 
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const ACCOUNTING_ENTITY_TYPES = [
   "Invoice", "Payment", "CreditMemo", "RefundReceipt", "JournalEntry", "TimeActivity", "TaxRate",

@@ -19,7 +19,7 @@ import {
   catalogRevisionView,
   catalogActivationView,
 } from "../src/pricing-catalog.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 
 import { catalogList } from "./pricing-catalog-fixture.ts";
 const actor = { tenantId: TENANT, userId: USERS.owner.userId, role: "owner" };

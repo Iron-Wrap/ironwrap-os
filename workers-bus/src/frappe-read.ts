@@ -1,4 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
+import type { DocumentRow } from "./document-row.ts";
 
 export type FrappeDocType = keyof typeof FRAPPE_READ_FIELDS;
 export type OfficeProductionDocType =
@@ -59,7 +60,6 @@ export type AccountingJobFrappeFilter = readonly [
   operator: string,
   value: unknown,
 ];
-export type FrappeRow = Record<string, unknown>;
 
 /**
  * The only DocTypes and fields the PWA BFF may ask the privileged Frappe integration user for.
@@ -1399,7 +1399,7 @@ export async function listFrappeResource(
   filters: readonly FrappeFilter[] = [],
   limit = 50,
   parentDoctype?: string,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePage(
     env,
     doctype,
@@ -1417,7 +1417,7 @@ export async function listFrappeResourcePage(
   limit = 50,
   offset = 0,
   parentDoctype?: string,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1439,7 +1439,7 @@ export async function listOfficeProductionFrappeResource(
   doctype: OfficeProductionDocType,
   filters: readonly OfficeProductionFrappeFilter[] = [],
   limit = 50,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1460,7 +1460,7 @@ export async function listOfficeSalesFrappeResource(
   doctype: OfficeSalesDocType,
   filters: readonly OfficeSalesFrappeFilter[] = [],
   limit = 50,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1481,7 +1481,7 @@ export async function listOfficeEstimatorFrappeResource(
   doctype: OfficeEstimatorDocType,
   filters: readonly OfficeEstimatorFrappeFilter[] = [],
   limit = 50,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1502,7 +1502,7 @@ export async function listFacetLaunchFrappeResource(
   doctype: FacetLaunchDocType,
   filters: readonly FacetLaunchFrappeFilter[] = [],
   limit = 2,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1523,7 +1523,7 @@ export async function listCustomerPortalFrappeResource(
   doctype: CustomerPortalDocType,
   filters: readonly CustomerPortalFrappeFilter[] = [],
   limit = 50,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1540,7 +1540,7 @@ export async function listReceptionLookupFrappeResource(
   doctype: ReceptionLookupDocType,
   filters: readonly ReceptionLookupFrappeFilter[],
   limit = 10,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1561,7 +1561,7 @@ export async function listAccountingJobFrappeResource(
   doctype: AccountingJobDocType,
   filters: readonly AccountingJobFrappeFilter[],
   limit = 1,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   return await listFrappeResourcePageForContract(
     env,
     doctype,
@@ -1582,7 +1582,7 @@ export async function readOfficeEstimatorFrappeResource(
   env: AppEnv,
   doctype: OfficeEstimatorDetailDocType,
   name: string,
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   if (!validFrappeDocumentName(name))
     throw new Error("frappe_read_invalid_name");
   const contract = OFFICE_ESTIMATOR_DETAIL_READ[doctype];
@@ -1599,7 +1599,7 @@ export async function readOfficeEstimatorFrappeResource(
 export async function readFieldWorkPackageFrappeResource(
   env: AppEnv,
   name: string,
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   if (!validFrappeDocumentName(name))
     throw new Error("frappe_read_invalid_name");
   const contract = FIELD_WORK_PACKAGE_DETAIL_READ["Work Package"];
@@ -1620,7 +1620,7 @@ export async function listFieldWorkPackagesForAssignment(
   env: AppEnv,
   jobId: string,
   assignmentId: string,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   const roofRows = await listFrappeResourcePageForContract(
     env,
     "Work Package",
@@ -1671,7 +1671,7 @@ export async function listFieldWorkPackageHoldReleases(
   jobId: string,
   assignmentId: string,
   version: number,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   const filters = [
     ["Work Package Event", "work_package", "=", workPackageName],
     ["Work Package Event", "roof_job", "=", jobId],
@@ -1726,7 +1726,7 @@ export async function listFieldWorkPackageAcknowledgements(
   jobId: string,
   assignmentId: string,
   version: number,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   const filters = [
     ["Work Package Event", "work_package", "=", workPackageName],
     ["Work Package Event", "roof_job", "=", jobId],
@@ -1781,7 +1781,7 @@ export async function listFieldWorkPackageEvidence(
   jobId: string,
   assignmentId: string,
   version: number,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   const filters = [
     ["Work Package Event", "work_package", "=", workPackageName],
     ["Work Package Event", "roof_job", "=", jobId],
@@ -1838,7 +1838,7 @@ async function listFrappeResourcePageForContract(
   fieldsByDocType: Readonly<Record<string, readonly string[]>>,
   filterFieldsByDocType: Readonly<Record<string, ReadonlySet<string>>>,
   parentDoctype?: string,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100)
     throw new Error("frappe_read_invalid_limit");
   if (!Number.isInteger(offset) || offset < 0 || offset > 100_000)
@@ -1916,7 +1916,7 @@ async function readFrappeDocumentForContract(
   name: string,
   fields: readonly string[],
   children: Readonly<Record<string, readonly string[]>>,
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   const base = frappeBaseUrl(env);
   if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
     throw new Error("frappe_read_not_configured");
@@ -1958,13 +1958,13 @@ async function readFrappeDocumentForContract(
   }
 }
 
-export function publicFrappeRow(row: FrappeRow): FrappeRow {
+export function publicFrappeRow(row: DocumentRow): DocumentRow {
   return { ...row };
 }
 
-function projectRow(fields: readonly string[], row: FrappeRow): FrappeRow {
+function projectRow(fields: readonly string[], row: DocumentRow): DocumentRow {
   const allowed = new Set<string>(fields);
-  const projected: FrappeRow = {};
+  const projected: DocumentRow = {};
   for (const [key, value] of Object.entries(row))
     if (allowed.has(key)) projected[key] = value;
   return projected;
@@ -1973,13 +1973,13 @@ function projectRow(fields: readonly string[], row: FrappeRow): FrappeRow {
 function projectDetailRow(
   fields: readonly string[],
   children: Readonly<Record<string, readonly string[]>>,
-  row: FrappeRow,
-): FrappeRow {
+  row: DocumentRow,
+): DocumentRow {
   const projected = projectRow(fields, row);
   for (const [field, childFields] of Object.entries(children)) {
     const value = row[field];
     if (!Array.isArray(value)) continue;
-    const children: FrappeRow[] = [];
+    const children: DocumentRow[] = [];
     for (const child of value) {
       if (!isRecord(child)) continue;
       children.push(projectRow(childFields, child));

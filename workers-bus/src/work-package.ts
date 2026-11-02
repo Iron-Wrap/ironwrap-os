@@ -18,7 +18,7 @@ import {
   type FieldEvidenceAuthorization,
   type FieldSubmission,
 } from "./field-actions.ts";
-import type { FrappeRow } from "./frappe-read.ts";
+import type { DocumentRow } from "./document-row.ts";
 import type { SafetyBlocker } from "./safety-lifecycle.ts";
 import {
   nativeWorkPackageDocumentById,
@@ -196,7 +196,7 @@ export async function currentWorkPackageAuthorityResolution(
 
 /** Match the actor against the immutable authority captured by a typed assignment. */
 export function hasPhysicalAssignmentAuthority(
-  assignment: FrappeRow | null,
+  assignment: DocumentRow | null,
   actorUser: string | readonly string[] | null,
   actorRole: AppRole,
 ): boolean {
@@ -221,7 +221,7 @@ export function hasPhysicalAssignmentAuthority(
  */
 export function hasWorkPackageCompletionAuthority(
   workPackage: FieldWorkPackage | null,
-  assignment: FrappeRow | null,
+  assignment: DocumentRow | null,
   actorUser: string | readonly string[] | null,
   actorRole: AppRole,
 ): boolean {
@@ -591,7 +591,7 @@ function fieldEvidenceAuthorizationError(
 
 function rowMatchesWorkScope(
   workPackage: FieldWorkPackage,
-  row: FrappeRow,
+  row: DocumentRow,
   jobId: string,
 ): boolean {
   if (workPackage.workObjectType === "Roof Job") {
@@ -928,7 +928,7 @@ function sameActor(
     : Boolean(actorUser?.some((identity) => sameUser(candidate, identity)));
 }
 
-function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
+function fieldWorkPackage(row: DocumentRow): FieldWorkPackage | null {
   const name = text(row.name);
   const id = text(row.work_package_id);
   const status = text(row.status);
@@ -1054,7 +1054,7 @@ function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
   };
 }
 
-function fieldWorkPackageAuthority(row: FrappeRow): {
+function fieldWorkPackageAuthority(row: DocumentRow): {
   requirements?: AuthorityRequirement[];
   state: "current" | "missing" | "invalid";
 } {
@@ -1081,7 +1081,7 @@ function fieldWorkPackageAuthority(row: FrappeRow): {
 
 async function workPackageSupersession(
   env: AppEnv,
-  document: FrappeRow,
+  document: DocumentRow,
   tenantId: string,
 ): Promise<FieldWorkPackage["supersession"]> {
   const priorReference = text(document.supersedes);
@@ -1127,7 +1127,7 @@ function changedRowSequences(
 ): number[] {
   if (!Array.isArray(current) || !Array.isArray(prior)) return [];
   const bySequence = (rows: unknown[]) => {
-    const result = new Map<number, FrappeRow>();
+    const result = new Map<number, DocumentRow>();
     for (const row of rows) {
       if (!isRecord(row)) continue;
       const sequence = integer(row.sequence);
@@ -1155,7 +1155,7 @@ function changedRowSequences(
  */
 function withVerifiedHoldReleases(
   workPackage: FieldWorkPackage,
-  rows: FrappeRow[],
+  rows: DocumentRow[],
   jobId: string,
   assignmentId: string,
 ): FieldWorkPackage {
@@ -1211,7 +1211,7 @@ function withVerifiedHoldReleases(
 /** Validate the per-worker acknowledgement ledger before it drives a capability. */
 function withVerifiedAcknowledgements(
   workPackage: FieldWorkPackage,
-  rows: FrappeRow[],
+  rows: DocumentRow[],
   jobId: string,
   assignmentId: string,
 ): FieldWorkPackage {
@@ -1289,7 +1289,7 @@ function withVerifiedAcknowledgements(
 /** Validate typed evidence events while preserving every immutable correction link. */
 export function withVerifiedEvidence(
   workPackage: FieldWorkPackage,
-  rows: FrappeRow[],
+  rows: DocumentRow[],
   jobId: string,
   assignmentId: string,
 ): FieldWorkPackage {
@@ -1529,7 +1529,7 @@ export function withVerifiedEvidence(
 
 function orderedRows<T>(
   value: unknown,
-  project: (row: FrappeRow, sequence: number) => T | null,
+  project: (row: DocumentRow, sequence: number) => T | null,
 ): T[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   const rows = value.flatMap((item) => {
@@ -1627,6 +1627,6 @@ function timestamp(value: unknown): string | null {
   return parsed && !Number.isNaN(Date.parse(parsed)) ? parsed : null;
 }
 
-function isRecord(value: unknown): value is FrappeRow {
+function isRecord(value: unknown): value is DocumentRow {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }

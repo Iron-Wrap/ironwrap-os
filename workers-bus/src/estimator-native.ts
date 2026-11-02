@@ -10,7 +10,7 @@ import {
 } from "./facet-prequote.ts";
 import type { GeometryModel } from "./geometry.ts";
 import { parseMeasurementSubmission, extractGeometry } from "./measurements.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { approvedPricingPolicySnapshot, priceTakeoff, type PriceList } from "./pricing.ts";
 import { PricingCatalogError, pricingCatalogEnabled, selectCatalogPricingForImport } from "./pricing-catalog.ts";
 import { deriveRoofGraph } from "./roof-graph.ts";

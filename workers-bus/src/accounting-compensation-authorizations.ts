@@ -17,7 +17,7 @@
 // Append-only, one row per exception. A retried command replays it rather than authorizing a
 // second reversal, because money that is owed back once must not be returned twice.
 
-import { canonicalJson } from "./newo-hash.ts";
+import { canonicalJson } from "./canonical.ts";
 import type { AppEnv } from "./app-types.ts";
 import type { CompensationPlan } from "./accounting-compensation.ts";
 

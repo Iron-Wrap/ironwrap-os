@@ -30,7 +30,7 @@ import {
   recordEstimatorEvidenceRevision,
   type EstimatorEvidencePayloadV1,
 } from "../src/estimator-native-store.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 
 const TENANT = "ironwrap";
 const OTHER_TENANT = "iroof";

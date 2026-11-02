@@ -23,7 +23,7 @@ import {
   verifyReviewGoReceipt,
   verifyServiceAdapterReceipt,
 } from "./release-permit.mjs";
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const COMMIT = "a".repeat(40);

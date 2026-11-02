@@ -4,7 +4,7 @@
 
 import { appPublicOrigin, devOutboxCapture } from "./app-auth.ts";
 import { gmailConfigured, sendGmail, type GmailSendReceipt } from "./google.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { AppEnv } from "./app-types.ts";
 
 export interface PortalDecisionConfirmationInput {

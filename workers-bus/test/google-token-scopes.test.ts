@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ensureJobFolder, resetGoogleAdapterStateForTest, sendGmail } from "../src/google.ts";
 import { getExternalEffectByIdempotency } from "../src/effect-runtime.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 import { watchdogAlertHtml } from "../src/operations.ts";
 import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 

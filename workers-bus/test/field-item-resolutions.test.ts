@@ -9,7 +9,7 @@ import {
   recordFieldItemResolution,
   type FieldItemResolutionInput,
 } from "../src/field-item-resolutions.ts";
-import { sha256Hex } from "../src/newo-hash.ts";
+import { sha256Hex } from "../src/canonical.ts";
 import { SqliteD1 } from "./pipeline-board-fixture.ts";
 
 const TENANT = "ironwrap";

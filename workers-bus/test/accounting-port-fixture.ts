@@ -9,7 +9,7 @@
 // execute -> settle order, the same envelope hash over the same canonical JSON, and the same
 // refusal codes. `accounting-port.test.ts` pins that correspondence.
 
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 import {
   MoneyEffectError,
   toExternalEffectShape,

@@ -10,7 +10,7 @@ import {
   r2ObjectStore,
   type ImmutableObjectStore,
 } from "./field-actions.ts";
-import type { FrappeRow } from "./frappe-read.ts";
+import type { DocumentRow } from "./document-row.ts";
 import type { AuthorityCurrentPrecondition } from "./authority-records.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
 import type { SafetyBlocker } from "./safety-lifecycle.ts";
@@ -164,7 +164,7 @@ export async function handleWorkPackageAction(
   env: AppEnv,
   auth: AuthContext,
   jobId: string,
-  assignment: FrappeRow,
+  assignment: DocumentRow,
   kind: WorkPackageActionKind,
   scope?: WorkObjectScope,
 ): Promise<Response> {
@@ -567,7 +567,7 @@ async function assertCurrentActionAllowed(
   env: AppEnv,
   auth: AuthContext,
   submission: WorkPackageActionSubmission,
-  assignment: FrappeRow,
+  assignment: DocumentRow,
 ): Promise<AuthorityCurrentPrecondition[]> {
   const workPackage = await fieldWorkPackageForAssignment(
     env,

@@ -10,7 +10,7 @@
 // cannot write the row. `accounting-intents.test.ts` asserts the two layers agree.
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { MoneyEffectOutcome } from "./accounting-effect-port.ts";
 import { recordAccountingIntentExpectation } from "./accounting-expectations.ts";
 

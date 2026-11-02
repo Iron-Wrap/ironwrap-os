@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export interface ApprovedSnapshot {
   snapshot_id: string;

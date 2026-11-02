@@ -18,7 +18,11 @@ import {
   type SchemaFieldActor,
   type SchemaFieldDefinitionInput,
 } from "../src/schema-forms.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import {
+  bindCrewInLedger,
+  clearScheduleGatesInLedger,
+  fixtureSchedule,
+} from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const OTHER_TENANT = "othertenant";
@@ -835,7 +839,14 @@ function seedJobAuthority(db: DatabaseSync): void {
   );
   for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"])
     insertGate.run(`gate:schema:${gate.toLowerCase()}`, TENANT, JOB_ID, gate, OWNER_ID, now, "2030-01-01T00:00:00.000Z", now, now);
-  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB_ID, at: now });
+  // The owner, on no crew, clears the five gates a schedule rests on.
+  clearScheduleGatesInLedger(db, {
+    tenantId: TENANT,
+    roofJobId: JOB_ID,
+    ownerUserId: OWNER_ID,
+    attesterUserId: OWNER_ID,
+    attesterRole: "owner",
+  });
   db.prepare(
     `INSERT INTO fleet_crews
      (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
@@ -846,6 +857,15 @@ function seedJobAuthority(db: DatabaseSync): void {
      (membership_id, tenant_id, crew_id, user_id, active, version, created_at, updated_at)
      VALUES ('membership:schema:0001', ?, 'crew:schema:0001', ?, 1, 1, ?, ?)`,
   ).run(TENANT, FIELD_ID, now, now);
+  // The schedule binds Crew by policy in the same write as its row (0159), and its work falls inside
+  // the attested Weather window, which D1 holds to its own clock.
+  bindCrewInLedger(db, {
+    tenantId: TENANT,
+    roofJobId: JOB_ID,
+    crewId: "crew:schema:0001",
+    assignmentId: "assignment:schema:0001",
+  });
+  const day = fixtureSchedule(1);
   db.prepare(
     `INSERT INTO operating_job_assignments
      (assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version,
@@ -853,11 +873,13 @@ function seedJobAuthority(db: DatabaseSync): void {
       supersedes_assignment_id, correction_reason, actor_user_id, command_fingerprint,
       idempotency_key_hash, created_at)
      VALUES ('assignment:schema:0001', ?, ?, 1, 1, 'crew:schema:0001', 1, ?,
-             '2026-08-28T08:00:00.000Z', '2026-08-28T16:00:00.000Z', NULL, NULL, ?, ?, ?, ?)`,
+             ?, ?, NULL, NULL, ?, ?, ?, ?)`,
   ).run(
     TENANT,
     JOB_ID,
     JSON.stringify([FIELD_ID]),
+    day.start,
+    day.end,
     OWNER_ID,
     "e".repeat(64),
     "f".repeat(64),

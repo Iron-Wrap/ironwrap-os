@@ -14,7 +14,13 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import { buildOwnerNowReadModel, STOP_JOB_UNKNOWN_TITLE, STOP_JOB_UNKNOWN_WHY } from "../src/app-read-models.ts";
+import {
+  buildOwnerNowReadModel,
+  STOP_JOB_UNKNOWN_TITLE,
+  STOP_JOB_UNKNOWN_WHY,
+  STOP_WORK_PACKAGE_UNKNOWN_TITLE,
+  STOP_WORK_PACKAGE_UNKNOWN_WHY,
+} from "../src/app-read-models.ts";
 import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import {
   permissionsForRole,
@@ -35,7 +41,6 @@ import {
   SITE_SAFETY_AUTHORITY_SCOPE,
 } from "../src/production-gate-clearance.ts";
 import { recordMakeSafe, recordSafetyResponse, reportSafetyOccurrence } from "../src/safety-lifecycle.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities and run-relative times. D1 checks
 // every time rule against its own clock, so the fixtures are relative to the real one.
@@ -913,14 +918,17 @@ test("Safety's permit is held with its number or not needed; unknown is refused 
  * and straight at D1 as a writer that skipped the route would. Both are refused by the stop, and
  * the gate stays blocked.
  */
-async function assertSafetyHeldByStop(h: Harness): Promise<void> {
+async function assertSafetyHeldByStop(
+  h: Harness,
+  code = "production_gate_safety_stop_active",
+): Promise<void> {
   const production = await person(h, USERS.production.id);
   const competency = insertCompetency(h.sqlite, USERS.production.id);
   const route = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
-  assert.deepEqual([route.status, route.body.error], [409, "production_gate_safety_stop_active"]);
+  assert.deepEqual([route.status, route.body.error], [409, code]);
   refused(
     () => append(h.sqlite, { gate: "Safety", attestation_json: safetyStored(competency) }),
-    "production_gate_safety_stop_active",
+    code,
   );
   assert.deepEqual({ state: gateRow(h.sqlite, "Safety").state, entries: ledgerRows(h.sqlite).length }, { state: "blocked", entries: 0 });
 }
@@ -985,10 +993,10 @@ function insertUnknownScopeStop(db: DatabaseSync): void {
 
 test("an unresolvable stop scope holds Safety, on the route and in D1", async () => {
   // A work_package stop naming a package this tenant does not have maps to no job: it may be this
-  // job's, so it holds.
+  // job's, so it holds, under its own code (0159).
   const h = setup();
   insertSafetyStop(h.sqlite, { type: "work_package", id: "wp:attest:unknown" });
-  await assertSafetyHeldByStop(h);
+  await assertSafetyHeldByStop(h, "production_gate_stop_work_package_unknown");
   // A scope type the rule does not know may cover this job, so it holds too.
   const unknownType = setup();
   insertUnknownScopeStop(unknownType.sqlite);
@@ -1032,7 +1040,8 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
     kind: "stop_job_unknown",
     severity: null,
     title: "This work stop names a job that doesn\u2019t exist",
-    why: "Safety stays held on every job while this work stop is active.",
+    // From A4 (0159) the stop holds every schedule as well, so the item says both.
+    why: "Safety and scheduling stay held on every job while this work stop is active.",
     next_action: null,
     job_id: null,
     occurred_at: reportedAt,
@@ -1109,6 +1118,122 @@ test("a stop on a job the tenant does not have is recorded, holds Safety on ever
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
 });
 
+test("a stop on a work package the tenant does not have is recorded, holds Safety on every job until it is lifted, and is on the owner's list", async () => {
+  const h = setup();
+  const occurrenceId = "occurrence.attest.unknown-package";
+  const step = (minutesAgo: number) => at(-minutesAgo * 60_000);
+  const reportedAt = step(50);
+  // The tenant has a real package, on the other job, so every read must match the stop's package
+  // id, not merely find the tenant without packages.
+  insertWorkPackage(h.sqlite, "wp:attest:real", OTHER_JOB);
+  // A person may always stop work: the stop is recorded though no Work Package of the tenant has
+  // this id.
+  const reported = await reportSafetyOccurrence(h.env, {
+    occurrenceId,
+    tenantId: TENANT,
+    occurrenceKind: "hazard",
+    severity: "high",
+    scope: { type: "work_package", id: "wp:attest:mistyped" },
+    reportedByUserId: USERS.field.id,
+    reportedAt,
+    summary: "Synthetic hazard on a mistyped job plan, for repository proof only.",
+    rescueRequired: false,
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    now: reportedAt,
+  });
+  assert.equal(reported.kind, "reported");
+  // The owner's exception list shows it in Track B's final copy: the screen says "job plan", never
+  // "work package", and never the raw package id; with who raised it, when, and what they wrote;
+  // no job and no next step.
+  const owner = await person(h, USERS.owner.id);
+  const listed = async () => (await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind === "stop_work_package_unknown");
+  assert.deepEqual(await listed(), [{
+    id: occurrenceId,
+    kind: "stop_work_package_unknown",
+    severity: null,
+    title: "This work stop names a job plan that doesn\u2019t exist",
+    why: "Safety and scheduling stay held on every job while this work stop is active.",
+    next_action: null,
+    job_id: null,
+    occurred_at: reportedAt,
+    due_at: null,
+    received_at: null,
+    bus_status: null,
+    triage_status: null,
+    mctb: null,
+    reported_by_name: "Synthetic field",
+    summary: "Synthetic hazard on a mistyped job plan, for repository proof only.",
+  }]);
+  const shown = JSON.stringify((await listed()).map(({ title, why }) => ({ title, why })));
+  assert.ok(!/work package/i.test(shown), "the item says job plan, never work package");
+  assert.ok(!JSON.stringify(await listed()).includes("wp:attest:mistyped"), "the raw package id is not shown");
+  // It holds Safety on every job of the tenant: on the route by name, with the stop to open, and
+  // in D1.
+  const production = await person(h, USERS.production.id);
+  const competency = insertCompetency(h.sqlite, USERS.production.id);
+  for (const job of [JOB, OTHER_JOB]) {
+    const routed = await call(h, production, "POST", CLEARANCE("Safety", job), attest("Safety"));
+    assert.deepEqual(
+      [routed.status, routed.body.error, routed.body.stop_id],
+      [409, "production_gate_stop_work_package_unknown", occurrenceId],
+      job,
+    );
+    refused(
+      () => append(h.sqlite, {
+        gate: "Safety",
+        gate_id: gateId("Safety", job),
+        roof_job_id: job,
+        attestation_json: safetyStored(competency),
+      }),
+      "production_gate_stop_work_package_unknown",
+    );
+  }
+  // A stop's scope cannot be corrected (0047 keeps it immutable), so the stop is recorded again on
+  // the real package, the other job's, and the mistyped one is lifted through its lifecycle.
+  insertSafetyStop(h.sqlite, { type: "work_package", id: "wp:attest:real" });
+  await recordMakeSafe(h.env, {
+    tenantId: TENANT,
+    occurrenceId,
+    actorUserId: USERS.field.id,
+    detail: "Area taped off.",
+    evidence: null,
+    capturedOffline: false,
+    deviceActionId: null,
+    occurredAt: step(40),
+    now: step(40),
+  });
+  for (const [command, minutesAgo] of [["investigation_opened", 30], ["controlled", 20], ["released", 10]] as const) {
+    await recordSafetyResponse(h.env, {
+      tenantId: TENANT,
+      occurrenceId,
+      actorUserId: USERS.production.id,
+      command,
+      detail: "Synthetic response for repository proof only.",
+      evidence: null,
+      now: step(minutesAgo),
+    });
+  }
+  // The lifted stop leaves the owner's list, and a real package's stop never joins it.
+  assert.deepEqual(await listed(), []);
+  // The hold narrows to the one job whose package the stop is on, on the route and in D1.
+  const other = await call(h, production, "POST", CLEARANCE("Safety", OTHER_JOB), attest("Safety"));
+  assert.deepEqual([other.status, other.body.error], [409, "production_gate_safety_stop_active"]);
+  refused(
+    () => append(h.sqlite, {
+      gate: "Safety",
+      gate_id: gateId("Safety", OTHER_JOB),
+      roof_job_id: OTHER_JOB,
+      attestation_json: safetyStored(competency),
+    }),
+    "production_gate_safety_stop_active",
+  );
+  const cleared = await call(h, production, "POST", CLEARANCE("Safety"), attest("Safety"));
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+});
+
 test("the owner's item for a work stop on a job that doesn't exist names who raised it, or null, and keeps the summary raw", async () => {
   const h = setup();
   // A login whose display name is blank has no name to show.
@@ -1143,6 +1268,45 @@ test("the owner's item for a work stop on a job that doesn't exist names who rai
   // Every other kind carries the two fields as null.
   assert.ok((await buildOwnerNowReadModel(h.env, owner)).exceptions
     .filter((row) => row.kind !== "stop_job_unknown")
+    .every((row) => row.reported_by_name === null && row.summary === null));
+});
+
+test("the owner's item for a work stop on a job plan that doesn't exist names who raised it, or null, and keeps the summary raw", async () => {
+  const h = setup();
+  // A login whose display name is blank has no name to show.
+  h.sqlite.prepare("UPDATE app_users SET display_name = ' ' WHERE user_id = ?").run(USERS.ops.id);
+  const report = (occurrenceId: string, reportedByUserId: string, minutesAgo: number, summary: string) =>
+    reportSafetyOccurrence(h.env, {
+      occurrenceId,
+      tenantId: TENANT,
+      occurrenceKind: "hazard",
+      severity: "high",
+      scope: { type: "work_package", id: `wp:missing:${minutesAgo}` },
+      reportedByUserId,
+      reportedAt: at(-minutesAgo * 60_000),
+      summary,
+      rescueRequired: false,
+      evidence: null,
+      capturedOffline: false,
+      deviceActionId: null,
+      now: at(-minutesAgo * 60_000),
+    });
+  const raw = '  Tarp torn over the open valley - "keep off" until resecured.  ';
+  await report("occurrence.attest.plan-named", USERS.field.id, 30, raw);
+  await report("occurrence.attest.plan-unnamed", USERS.ops.id, 20, "Gutter guard loose above the walkway.");
+  const owner = await person(h, USERS.owner.id);
+  const items = (await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind === "stop_work_package_unknown")
+    .map((row) => ({ id: row.id, title: row.title, why: row.why, reported_by_name: row.reported_by_name, summary: row.summary }));
+  assert.deepEqual(items, [
+    { id: "occurrence.attest.plan-named", title: STOP_WORK_PACKAGE_UNKNOWN_TITLE, why: STOP_WORK_PACKAGE_UNKNOWN_WHY, reported_by_name: "Synthetic field", summary: raw },
+    { id: "occurrence.attest.plan-unnamed", title: STOP_WORK_PACKAGE_UNKNOWN_TITLE, why: STOP_WORK_PACKAGE_UNKNOWN_WHY, reported_by_name: null, summary: "Gutter guard loose above the walkway." },
+  ]);
+  // Both items say the same thing about what the stop holds.
+  assert.equal(STOP_WORK_PACKAGE_UNKNOWN_WHY, STOP_JOB_UNKNOWN_WHY);
+  // Every kind but the two work-stop items carries the two fields as null.
+  assert.ok((await buildOwnerNowReadModel(h.env, owner)).exceptions
+    .filter((row) => row.kind !== "stop_job_unknown" && row.kind !== "stop_work_package_unknown")
     .every((row) => row.reported_by_name === null && row.summary === null));
 });
 
@@ -1213,7 +1377,7 @@ test("the route alone holds the site_safety scope, every stop and the permit ans
     ["stop on an unknown package", (db: DatabaseSync) => {
       insertCompetency(db, USERS.production.id);
       insertSafetyStop(db, { type: "work_package", id: "wp:attest:unknown" });
-    }, [409, "production_gate_safety_stop_active"]],
+    }, [409, "production_gate_stop_work_package_unknown"]],
     ["stop of an unknown scope type", (db: DatabaseSync) => {
       insertCompetency(db, USERS.production.id);
       insertUnknownScopeStop(db);
@@ -1376,27 +1540,6 @@ test("a reversal returns the gate to blocked, deletes nothing, and writes one au
     assert.deepEqual([result.status, result.body.error], [400, "invalid_production_gate_reversal"]);
   }
   assert.equal(gateRow(h.sqlite, "Materials").state, "ready");
-});
-
-test("a person never reverses a contract that needs no deposit", async () => {
-  const h = setup();
-  // A2's policy entry is not appendable here yet, so the fixture records it the way a backfill would.
-  recordLegacyGateStates(h.sqlite, {
-    tenantId: TENANT,
-    roofJobId: JOB,
-    gates: ["Deposit"],
-    state: "complete",
-    basis: "contract_no_deposit",
-  });
-  const [deposit] = ledgerRows(h.sqlite);
-  const owner = await person(h, USERS.owner.id);
-  const result = await call(h, owner, "POST", REVERSALS("Deposit"), {
-    expected_gate_version: 2,
-    reverses_id: deposit!.clearance_id,
-    reason: "The owner tries to put the deposit back on a no-deposit contract.",
-  });
-  assert.deepEqual([result.status, result.body.error], [409, "production_gate_contract_no_deposit_not_reversible"]);
-  assert.deepEqual({ state: gateRow(h.sqlite, "Deposit").state, entries: ledgerRows(h.sqlite).length }, { state: "complete", entries: 1 });
 });
 
 test("the office reads every gate with its entries and the request ids a waiver decision answers", async () => {
@@ -1769,7 +1912,7 @@ test("D1 checks every time against its own clock, never the entry's created_at",
   assert.deepEqual(ledgerRows(db), []);
 });
 
-test("D1 reverses only the entry holding a gate's state, never a no-deposit contract, and never deletes", () => {
+test("D1 reverses only the entry holding a gate's state, and never deletes", () => {
   const { sqlite: db } = setup();
   refused(() => append(db, reversal("Materials", `pgc_${"0".repeat(40)}`)), "production_gate_not_cleared");
   const first = append(db);
@@ -1788,15 +1931,13 @@ test("D1 reverses only the entry holding a gate's state, never a no-deposit cont
   refused(() => append(db, reversal("Materials", access)), "production_gate_reversal_target_invalid");
   // A crew member may re-block: reversal is the safe direction and the crew rule is the attester's.
   append(db, reversal("Materials", second, { actor_user_id: USERS.crewed.id }));
-  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB, gates: ["Deposit"], state: "complete", basis: "contract_no_deposit" });
-  const contract = ledgerRows(db).find((row) => row.basis === "contract_no_deposit")!.clearance_id;
-  refused(() => append(db, reversal("Deposit", contract, { actor_user_id: USERS.owner.id, actor_role: "owner" })), "production_gate_contract_no_deposit_not_reversible");
+  // No person reverses a contract that needs no deposit: proved on a real contract's policy entry in
+  // customer-contract-acceptance.test.ts, on the route and in D1.
   refused(
     () => db.prepare("DELETE FROM production_gate_clearances WHERE clearance_id = ?").run(first),
     "production_gate_clearance_append_only",
   );
   for (const id of [first, reversed, second, access]) assert.equal(auditRows(db, id).length, 1, id);
-  assert.equal(gateRow(db, "Deposit").state, "complete");
 });
 
 test("the final validate guard carries every line of 0155 as the merged tree holds it, in order", () => {

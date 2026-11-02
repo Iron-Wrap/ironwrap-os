@@ -91,15 +91,25 @@ export function cancellationWindowEnded(
               SELECT 1 FROM contract_signed_copy_events shown
                 JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
                WHERE shown.tenant_id = :tenant AND shown.roof_job_id = :job
-                 AND NOT EXISTS (
-                   SELECT 1 FROM commercial_acceptance_bindings contract
+                 AND shown.acceptance_binding_id = (
+                   SELECT contract.acceptance_binding_id
+                     FROM commercial_acceptance_bindings contract
                     WHERE contract.tenant_id = shown.tenant_id
                       AND contract.roof_job_id = shown.roof_job_id
-                      AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+                    ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+                    LIMIT 1
                  )
             ) OR EXISTS (
               SELECT 1 FROM production_cancellation_window_receipts receipt
                WHERE receipt.tenant_id = :tenant AND receipt.roof_job_id = :job
+                 AND receipt.acceptance_binding_id IS (
+                   SELECT contract.acceptance_binding_id
+                     FROM commercial_acceptance_bindings contract
+                    WHERE contract.tenant_id = receipt.tenant_id
+                      AND contract.roof_job_id = receipt.roof_job_id
+                    ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+                    LIMIT 1
+                 )
                  AND NOT EXISTS (
                    SELECT 1 FROM commercial_acceptance_bindings contract
                     WHERE contract.tenant_id = receipt.tenant_id

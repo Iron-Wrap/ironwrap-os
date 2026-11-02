@@ -745,9 +745,10 @@ Materials waiver lifts none of its holds (migration `0160`).
   (`POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy`), from their own cookie
   session, with a reason and an evidence reference. The time is not before the job's latest contract
   signature (equal is allowed), not after D1's now, and never earlier than one already recorded or
-  shown: a record only moves the window later, and the same time is a no-op. A job with no contract
-  in D1 records with no floor, and its record says so. D1 stamps the record with its own clock and
-  writes its audit row in the same statement; each refusal has its own code.
+  shown: no record moves a previous start or end earlier. The same time for the same binding is a
+  no-op; a different latest binding records its own receipt provenance even at that same instant.
+  A job with no contract in D1 records with no floor, and its record says so. D1 stamps the record
+  with its own clock and writes its audit row in the same statement; each refusal has its own code.
 - Interim, pending counsel: it ends at the end of the 10th local calendar day after the day it
   starts on, in the business time zone, the start's own day being day 0 (a copy received Tuesday
   18:26 holds through the end of Friday the following week). `ends_at` is the first instant of the
@@ -761,8 +762,11 @@ Materials waiver lifts none of its holds (migration `0160`).
   [start + 240 hours, start + 266 hours]: with no time zone database, a reading is at most 264 hours
   after a start at local midnight plus the span of the zone's offsets (one hour for Edmonton), and
   D1 allows a span of two.
-- It is unknown until the job's latest contract has a copy shown or a record at or after its
-  signature, open until it ends, then ended. While it is unknown or open, D1 and the routes refuse,
+- It is unknown until the job's actual latest binding has a confirmed copy or its own receipt at
+  or after its signature. Latest means signature time, then binding id, including tied times. A
+  receipt naming no binding counts only while the job has no D1 contract. Historical ends still
+  hold later windows to their monotonic floor. It is open until it ends, then ended. While it is
+  unknown or open, D1 and the routes refuse,
   each by name: a schedule (the firm start), the Materials attestation, and a D1 purchase order line
   for the job or one moving back to `ordered`. A line with no job (stock) is never held.
 - Not held (gaps): the Frappe Supplier Order path (the ERPNext MCP's

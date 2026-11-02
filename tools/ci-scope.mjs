@@ -11,8 +11,9 @@ import { fileURLToPath } from "node:url";
  *   app   the PWA bundle and its Playwright and Lighthouse harness. Everything they read lives
  *         under `app/` (no import leaves it), plus the Node pin, the Makefile recipes that build
  *         and run them, ci.yml, which pins the runner and installs the browsers, and this file.
- *   code  every test suite: any change except markdown. docs/CAPABILITY-MATRIX.md is not
- *         exempt, because the Worker suite and the capability evidence receipt both read it.
+ *   code  the scoped product suites: any change except prose-only markdown. The capability
+ *         matrix, AI catalog and view templates are test inputs, even though they are markdown.
+ *         The contracts job always runs, including documentation, MCP and agent-host checks.
  *
  * Only a pull request is scoped. A push to main, a merge group and a manual run prove
  * everything, so the commit Deploy promotes always carries the full gate, and a scope this
@@ -26,7 +27,11 @@ export const APP_INPUTS = Object.freeze([
   "tools/ci-scope.mjs",
 ]);
 
-const ALWAYS_TESTED_DOCS = new Set(["docs/CAPABILITY-MATRIX.md"]);
+const ALWAYS_TESTED_DOCS = new Set([
+  "docs/CAPABILITY-MATRIX.md",
+  "docs/AI-TEAM-CONTRACT.md",
+  "design/system-v2/TEMPLATES.md",
+]);
 
 export function isMarkdownOnly(file) {
   return file.endsWith(".md") && !ALWAYS_TESTED_DOCS.has(file);

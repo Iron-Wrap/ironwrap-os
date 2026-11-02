@@ -509,7 +509,7 @@ function FieldRow({
           </h3>
           <p className="mt-1 break-words text-sm text-muted">
             <span className="font-semibold text-foreground">{field.field_key}</span> ·{" "}
-            {field.entity_type} · {field.field_type} · revision {field.version}
+            {field.entity_type} · {field.field_type}
           </p>
           {!field.active ? (
             <p className="mt-1 text-xs leading-5 text-muted">
@@ -651,8 +651,8 @@ function FieldRow({
         />
       ) : null}
       <p className="mt-4 text-xs leading-5 text-muted">
-        Definition revision {field.revision_id}. Created {formatDate(field.created_at)} by{" "}
-        {field.actor.role}; changes append a new reasoned revision.
+        Created {formatDate(field.created_at)} by {field.actor.role}; each change is kept in its
+        history with its reason.
       </p>
     </article>
   );

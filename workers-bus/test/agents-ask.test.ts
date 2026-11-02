@@ -1471,3 +1471,53 @@ test("a refused ask says when to come back: the oldest of the window leaves, and
   // The window's oldest ask leaves in nine minutes; the waiting asks stop counting in fifteen.
   assert.deepEqual([both.body.error, both.retryAfter], ["too_many_pending_asks", String(15 * 60)]);
 });
+
+test("a person's role change closes the open role-change drafts for them, whatever role they set, and leaves device drafts open", async () => {
+  const t = setup();
+  const { closeAccessDrafts } = await import("../src/agents/drafts.ts");
+  const draft = async (key: string, args: (ref: string) => Record<string, unknown>) => {
+    const askId = await ask(t, "owner", key, askBody("Synthetic: change the crew member's access.", null));
+    const run = await openFace(t, askId);
+    const own = factOf(run, `signal/${askId}`);
+    const body = await step(t, run.run_id, "access.prepare_change", args(own.fact_id), [cite(own)]);
+    assert.equal(body.decision, "drafted", JSON.stringify(body));
+    return body.step_id as string;
+  };
+  const toSales = await draft("ask-role-sales", (ref) => ({ ...pairing(ref), change: "change_role", target_role: "sales" }));
+  const toProduction = await draft("ask-role-production", (ref) => ({ ...pairing(ref), person_ref: "person:appu_field_0002", change: "change_role", target_role: "production" }));
+  const device = await draft("ask-device", (ref) => pairing(ref));
+  const row = (id: string) => t.db.raw.prepare("SELECT reason_code, needs_ask, readback_json, do_it_myself_json FROM agent_run_steps WHERE step_id = ?").get(id) as Record<string, string | null>;
+  const person = (pairing("signal/x").person_ref as string).slice("person:".length);
+  // Given the person's access version, only drafts prepared against an older one close.
+  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001", 1), false);
+  assert.equal(row(toSales).needs_ask, "apply_in_own_screen");
+  // The owner sets the role the first draft proposed.
+  assert.equal(await closeAccessDrafts(t.db as never, TENANT, person, "sales", "appu_owner_0001", 2), true);
+  const applied = row(toSales);
+  assert.deepEqual(
+    [applied.reason_code, applied.needs_ask, JSON.parse(applied.readback_json!).reference, JSON.parse(applied.do_it_myself_json!).context.applied],
+    ["applied_by_person", null, `person:${person}`, { field: "role", value: "sales", by: "appu_owner_0001", as_proposed: true }],
+  );
+  // The device draft for the same person, and another person's role draft, stay open.
+  assert.deepEqual([row(device).needs_ask, row(toProduction).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
+  // A different role than proposed is still the person's own change: applied, naming what is set now,
+  // not as proposed.
+  await closeAccessDrafts(t.db as never, TENANT, "appu_field_0002", "sales", "appu_owner_0001", 2);
+  const other = row(toProduction);
+  const otherApplied = JSON.parse(other.do_it_myself_json!).context.applied;
+  assert.deepEqual([other.reason_code, otherApplied.value, otherApplied.as_proposed], ["applied_by_person", "sales", false]);
+  // A newer draft replaces only a draft of the same person, change and device: revoking the tablet
+  // leaves the phone's revoke open, and a second revoke of the phone replaces the first.
+  const revoke = (key: string, device: string) => {
+    t.tick(15 * 60_000); // past the ask rate window and the pending-ask cap
+    return draft(key, (ref) => ({ ...pairing(ref), change: "revoke_device", device_ref: device }));
+  };
+  const phone = await revoke("ask-revoke-phone", "device:synthetic_phone");
+  const tablet = await revoke("ask-revoke-tablet", "device:synthetic_tablet");
+  assert.deepEqual([row(phone).needs_ask, row(tablet).needs_ask], ["apply_in_own_screen", "apply_in_own_screen"]);
+  const phoneAgain = await revoke("ask-revoke-phone-again", "device:synthetic_phone");
+  assert.deepEqual(
+    [row(phone).reason_code, JSON.parse(row(phone).readback_json!).reference, JSON.parse(row(phone).do_it_myself_json!).context.applied, row(tablet).needs_ask, row(device).needs_ask],
+    ["superseded", `step/${phoneAgain}`, undefined, "apply_in_own_screen", "apply_in_own_screen"],
+  );
+});

@@ -44,6 +44,7 @@ import {
   plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { jobLabel } from "../lib/job-label";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   afterFailedSend,
@@ -57,7 +58,9 @@ import { ErrorSystemDetails } from "../components/ui/system-details";
 import { CustomerJobHistorySection } from "../customers/customer-history-section";
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
+import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
 import { GateChip } from "./gate-chip";
+import { JobLabelText } from "./job-label-text";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
 
@@ -325,7 +328,8 @@ function WorkObjectPacketHeader({
   model: WorkObjectResponse;
   offline: boolean;
 }) {
-  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(model.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -343,7 +347,7 @@ function WorkObjectPacketHeader({
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
-        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        <JobFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
         <JobFact
           label="Work plan"
           value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
@@ -546,9 +550,12 @@ function JobPacketHeader({
   offline: boolean;
   dateOptions: FieldDateOptions;
 }) {
-  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  const assignment = assignmentRole(model.assignment);
+  const roleLabel = assignmentRoleLabel(useSession().user.role);
+  // The job's facts follow the header's own width: the crew shell is a phone-wide column even on
+  // a desktop, where window breakpoints squeezed three facts into it.
   return (
-    <header className="border-b border-border pb-5 sm:pb-6">
+    <header className="@container border-b border-border pb-5 sm:pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">
@@ -562,9 +569,9 @@ function JobPacketHeader({
           {offline ? "Saved copy" : "Office update"}
         </p>
       </div>
-      <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+      <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
         <JobFact label="Service" value={model.job.service_type ?? "Service details are missing"} />
-        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
+        <JobFact label={roleLabel} value={assignment || ASSIGNMENT_ROLE_MISSING} />
         <JobFact
           label="Scheduled"
           value={formatFieldSchedule(model.assignment?.scheduled_start ?? null, dateOptions)}
@@ -625,10 +632,11 @@ function JobDataLimits({ fields }: { fields: string[] }) {
 }
 
 type WorkPackagePanelModel = {
-  job: Pick<JobResponse["job"], "id">;
+  job: Pick<JobResponse["job"], "id"> & Partial<Pick<JobResponse["job"], "job_number" | "address">>;
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
-  packet: Pick<JobResponse["packet"], "work_package">;
+  packet: Pick<JobResponse["packet"], "work_package"> &
+    Partial<Pick<JobResponse["packet"], "contact">>;
   scope?: TypedWorkObjectScope | null;
 };
 
@@ -656,6 +664,51 @@ function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObje
     physical_context_type: workPackage.physical_context_type,
     physical_context_id: workPackage.physical_context_id,
   };
+}
+
+/** The read's word for a scope id it did not get (field-contracts.ts); never shown to a crew. */
+const MISSING_SCOPE_ID = "unknown";
+
+/**
+ * Where a plan applies, in the crew's words. A roof job's plan on its own job names the job by
+ * its ruled label, "{customer} · {street} · {code}" (D5), never by record ids or a placeholder
+ * (gate e-crew-version-copy: "Roof Job · unknown"); a bare code read as a site id (e-plan-scope).
+ * Any other scope keeps its type and id, and leaves out an id the read did not get.
+ */
+function planScopeFacts(
+  workPackage: FieldWorkPackage,
+  job: WorkPackagePanelModel["job"],
+  customer: string | null | undefined,
+): Array<{ label: string; value: ReactNode }> {
+  const known = (id: string) => (id && id !== MISSING_SCOPE_ID ? id : null);
+  const objectId = known(workPackage.work_object_id);
+  const areaId = known(workPackage.physical_context_id);
+  const thisJob = (id: string | null) => !id || id === job.id;
+  if (
+    workPackage.work_object_type === "Roof Job" &&
+    thisJob(objectId) &&
+    workPackage.physical_context_type === "Roof Site" &&
+    thisJob(areaId)
+  ) {
+    const named = jobLabel({ customer, address: job.address, code: job.job_number });
+    const value = named ? (
+      <JobLabelText customer={customer} address={job.address} code={job.job_number} />
+    ) : (
+      "This job"
+    );
+    return [{ label: "Applies to the job", value }];
+  }
+  return [
+    {
+      label: "Work object",
+      value: joinKnown([workPackage.work_object_type, objectId]) ?? workPackage.work_object_type,
+    },
+    {
+      label: "Work area",
+      value:
+        joinKnown([workPackage.physical_context_type, areaId]) ?? workPackage.physical_context_type,
+    },
+  ];
 }
 
 function workPackageActionPayload(
@@ -831,6 +884,7 @@ function WorkPackagePanel({
     model.allowed_actions.includes("work_package.start");
   const completionAllowed = model.allowed_actions.includes("work_package.complete");
   const canComplete = completionAllowed && !offline && canAttemptSync;
+  const scopeFacts = planScopeFacts(workPackage, model.job, model.packet.contact?.display_name);
 
   function showActionFailure(error: unknown, copy?: PlainErrorCopy) {
     setActionError({ text: messageFor(error, copy), error });
@@ -996,7 +1050,7 @@ function WorkPackagePanel({
       aria-labelledby="work-package-heading"
     >
       {issueForm}
-      <header className="border-b border-border px-4 py-4 sm:px-5">
+      <header className="@container border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-muted">Work plan</p>
@@ -1009,7 +1063,7 @@ function WorkPackagePanel({
             {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
           </p>
         </div>
-        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+        <dl className="mt-5 grid gap-4 text-sm @2xl:grid-cols-3">
           <JobFact
             label="Issued"
             value={formatFieldTimestamp(workPackage.issued_at, dateOptions)}
@@ -1023,15 +1077,12 @@ function WorkPackagePanel({
             value={formatFieldTimestamp(workPackage.expires_at, dateOptions)}
           />
         </dl>
-        <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
-          <JobFact
-            label="Work object"
-            value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
-          />
-          <JobFact
-            label="Work area"
-            value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
-          />
+        <dl
+          className={`mt-4 grid gap-4 border-t border-border pt-4 text-sm ${scopeFacts.length > 1 ? "sm:grid-cols-2" : ""}`}
+        >
+          {scopeFacts.map((fact) => (
+            <JobFact key={fact.label} label={fact.label} value={fact.value} />
+          ))}
         </dl>
       </header>
 
@@ -1695,6 +1746,7 @@ function SafetyAndAccess({
 }) {
   const safety = model.packet.safety_plan;
   const contact = model.packet.contact;
+  const officePhone = useSession().tenant.office_phone ?? null;
   const safetyFacts = safety
     ? [
         [
@@ -1709,7 +1761,7 @@ function SafetyAndAccess({
       ].filter((entry): entry is [string, string] => Boolean(entry[1]))
     : [];
   return (
-    <section aria-labelledby="safety-access-heading" className="space-y-4">
+    <section aria-labelledby="safety-access-heading" className="@container space-y-4">
       <header className="border-b border-border pb-4">
         <p className="text-sm font-semibold text-muted">Check before work</p>
         <h2
@@ -1719,7 +1771,8 @@ function SafetyAndAccess({
           Safety and site
         </h2>
       </header>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <EmergencyLine officePhone={officePhone} />
+      <div className="grid gap-4 @3xl:grid-cols-2">
         <article className="border border-border bg-surface-raised p-4 sm:p-5">
           <div className="flex items-start gap-3">
             <HardHat className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
@@ -1754,13 +1807,15 @@ function SafetyAndAccess({
               </p>
             </div>
           </div>
-          {contact?.phone ? (
+          {dialableNumber(contact?.phone) ? (
             <Button asChild variant="outline" size="field" fullWidth className="mt-5">
-              <a href={`tel:${contact.phone}`}>
+              <a href={`tel:${dialableNumber(contact?.phone)}`}>
                 <Phone aria-hidden="true" />
                 Call job contact
               </a>
             </Button>
+          ) : contact?.phone ? (
+            <p className="mt-5 text-sm font-semibold">{contact.phone}</p>
           ) : (
             <p className="mt-5 text-sm font-semibold text-muted">Phone number is missing</p>
           )}
@@ -1940,7 +1995,68 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
   );
 }
 
-function JobFact({ label, value }: { label: string; value: string }) {
+/**
+ * Who to call in an emergency, with a control for each: 911 first, then the office from the
+ * company's profile (safety block, rework ruling). Never a literal office number in code; while the
+ * profile gives none, the line still says to call the office and offers 911.
+ */
+function EmergencyLine({ officePhone }: { officePhone: string | null }) {
+  const dialable = dialableNumber(officePhone);
+  return (
+    <div
+      className="border-2 border-danger/45 bg-danger-soft p-4 sm:p-5"
+      role="region"
+      aria-labelledby="emergency-line"
+    >
+      <p id="emergency-line" className="font-bold leading-6">
+        Emergency: call 911 · then the office{officePhone ? `, ${officePhone}` : ""}
+      </p>
+      <div className="mt-3 grid gap-2 @md:grid-cols-2">
+        <Button asChild variant="danger" size="field" fullWidth>
+          <a href="tel:911">
+            <Phone aria-hidden="true" />
+            Call 911
+          </a>
+        </Button>
+        {dialable ? (
+          <Button asChild variant="outline" size="field" fullWidth>
+            <a href={`tel:${dialable}`}>
+              <Phone aria-hidden="true" />
+              Call the office
+            </a>
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The number a tel: link may dial, or null when the text is not one plain phone number. A label
+ * before it ("Cell:") and anything after an extension mark ("ext", "x", "#", ",") are left out;
+ * only digits, spaces, dots, dashes and brackets may stand around the digits, a "+" only first.
+ * A local number has 7 or 10 digits, or 11 starting with 1; an international one ("+") 8 to 15
+ * digits with no "(0)" trunk group. A shown number that is not dialable gets no Call button,
+ * never a wrong one.
+ */
+export function dialableNumber(text: string | null | undefined): string | null {
+  const number = (text ?? "")
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/^[^\d+(]*:\s*/, "")
+    .split(/\s*(?:ext\.?|x|#|,)/i)[0]!
+    .trim();
+  if (!/^\+?[\d\s().-]+$/.test(number)) return null;
+  const digits = number.replace(/\D/g, "");
+  if (number.startsWith("+")) {
+    if (/\(\s*0\s*\)/.test(number) || digits.length < 8 || digits.length > 15) return null;
+    return `+${digits}`;
+  }
+  const local =
+    digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+  return local ? digits : null;
+}
+
+function JobFact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <dt className="text-xs font-bold text-muted">{label}</dt>

@@ -208,7 +208,10 @@ describe("blockers the server actually sends", () => {
       { toStageName: "Quote Sent" },
     );
     expect(blocker.code).toBe("pipeline_card_version_conflict");
-    expect(blocker.message).toContain("version 12");
+    // A version number never stands in a person's line (ruling).
+    expect(blocker.message).toBe(
+      "Someone else changed this card first. The board has been refreshed; check the card and move it again.",
+    );
     expect(blocker.refresh).toBe(true);
   });
 

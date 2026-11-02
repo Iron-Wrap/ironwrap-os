@@ -112,24 +112,6 @@ async function findByField(cfg, doctype, field, value) {
   return rows[0]?.name ?? null;
 }
 
-async function listAll(cfg, doctype, fields, filters) {
-  const out = [];
-  const pageSize = 200;
-  for (let start = 0; ; start += pageSize) {
-    const qs = [
-      `fields=${enc(JSON.stringify(fields))}`,
-      filters ? `filters=${enc(JSON.stringify(filters))}` : null,
-      `limit_page_length=${pageSize}`,
-      `limit_start=${start}`,
-    ].filter(Boolean).join("&");
-    const json = await frappe(cfg, "GET", `/api/resource/${enc(doctype)}?${qs}`);
-    const rows = Array.isArray(json?.data) ? json.data : [];
-    out.push(...rows);
-    if (rows.length < pageSize) break;
-  }
-  return out;
-}
-
 // ── field transforms (contract: docs/JOBNIMBUS-MIGRATION-MAP.md) ──────────────
 
 const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : undefined);

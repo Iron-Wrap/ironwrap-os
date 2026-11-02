@@ -6,6 +6,7 @@
     "lib": ["ES2022"],
     "types": [],
     "strict": true,
+    "noUnusedLocals": true,
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,

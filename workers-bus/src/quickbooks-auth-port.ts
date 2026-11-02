@@ -44,8 +44,6 @@ export const QUICKBOOKS_AUTH_ERROR_CODES = [
   "quickbooks_connection_unreadable",
 ] as const;
 
-export type QuickBooksAuthErrorCode = (typeof QUICKBOOKS_AUTH_ERROR_CODES)[number];
-
 export class QuickBooksAuthError extends Error {
   readonly code: string;
 

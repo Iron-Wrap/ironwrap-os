@@ -272,9 +272,10 @@ export function buildLeadTriageCommand(input: RecordLeadTriageInput): Readonly<R
 /**
  * External effect states in which a proposal send has started but its delivery is not confirmed:
  * proposed, claimed (authorized, executing, reconciling, retry), unknown, compensating, or a
- * manual exception. A delivery check (`reconcileExternalEffect`) settles an unknown send; a person
- * settles a manual exception with `recordProposalDeliveryConfirmation`; compensating clears when
- * the compensation settles.
+ * manual exception. A person settles an unknown send or a manual exception with
+ * `recordProposalDeliveryConfirmation`; D1 refuses any other move from unknown to succeeded or
+ * reconciled unless a delivery check dated at the move justifies it, which no path does before B2
+ * (0164, 0167). Compensating clears when the compensation settles.
  */
 export const UNCONFIRMED_PROPOSAL_DELIVERY_STATES = [
   "proposed",
@@ -300,6 +301,8 @@ export interface ProposalDeliveryConfirmationRecord {
   confirmed_by_user_id: string;
   confirmed_by_role: string;
   created_at: string;
+  /** The delivery check a "not delivered" cites as provider evidence (0167), or null. */
+  delivery_check_id: string | null;
 }
 
 export class ProposalDeliveryConfirmationError extends Error {
@@ -319,8 +322,9 @@ export class ProposalDeliveryConfirmationError extends Error {
 /**
  * A person records what they found about a proposal send that could not be confirmed (0156): one
  * append-only row whose insert moves an `unknown` or `manual_exception` effect to `succeeded` or
- * `reconciled`, resolves its exception and writes the audit row. The same key with the same request
- * replays; anything else conflicts.
+ * `reconciled`, resolves its exception and writes the audit row. A "not delivered" may cite a
+ * delivery check of the same send as provider evidence (0167); on a send whose readback conflicted
+ * it must. The same key with the same request replays; anything else conflicts.
  */
 export async function recordProposalDeliveryConfirmation(
   env: AppEnv,
@@ -332,20 +336,24 @@ export async function recordProposalDeliveryConfirmation(
     actorUserId: string;
     actorRole: string;
     idempotencyKey: string;
+    deliveryCheckId?: string | null;
     now?: string;
   },
 ): Promise<{ confirmation: ProposalDeliveryConfirmationRecord; replayed: boolean; effectState: string }> {
   const keyHash = await sha256Hex(`proposal-delivery-confirmation\n${input.tenantId}\n${input.idempotencyKey}`);
+  const deliveryCheckId = input.deliveryCheckId ?? null;
   const requestSha = await sha256Hex(canonicalJson({
     effect_id: input.effectId,
     outcome: input.outcome,
     note: input.note,
     actor: input.actorUserId,
+    // Only when cited, so a confirmation recorded before 0167 still replays under its key.
+    ...(deliveryCheckId === null ? {} : { delivery_check_id: deliveryCheckId }),
   }));
   const readConfirmation = async (where: string, value: string) =>
     await env.DB.prepare(
       `SELECT confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome,
-              note, confirmed_by_user_id, confirmed_by_role, created_at, request_sha256
+              note, confirmed_by_user_id, confirmed_by_role, created_at, delivery_check_id, request_sha256
          FROM proposal_delivery_confirmations WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
     ).bind(input.tenantId, value).first<ProposalDeliveryConfirmationRecord & { request_sha256: string }>();
   const replay = async () => {
@@ -363,7 +371,8 @@ export async function recordProposalDeliveryConfirmation(
   if (earlier) return earlier;
 
   const effect = await env.DB.prepare(
-    `SELECT effect_id, state, aggregate_id, intent_id, updated_at FROM external_effects
+    `SELECT effect_id, state, aggregate_id, intent_id, provider, attempt_count, updated_at
+       FROM external_effects
       WHERE tenant_id = ? AND effect_id = ? AND action = 'proposal.publish'
         AND aggregate_type = 'proposal_publication'`,
   ).bind(input.tenantId, input.effectId).first<{
@@ -371,6 +380,8 @@ export async function recordProposalDeliveryConfirmation(
     state: string;
     aggregate_id: string;
     intent_id: string;
+    provider: string;
+    attempt_count: number;
     updated_at: string;
   }>();
   if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
@@ -379,33 +390,82 @@ export async function recordProposalDeliveryConfirmation(
       delivery_state: effect.state,
     });
   }
-  const createdAt = input.now ?? new Date().toISOString();
-  // A fresh unknown may only be late: "not delivered" waits until the provider's own answer could no
-  // longer arrive inside an attempt lease, so a person cannot clear the way for a second send early.
-  if (effect.state === "unknown" && input.outcome === "not_delivered") {
-    const settleableUntil = Date.parse(effect.updated_at) + EFFECT_ATTEMPT_LEASE_MS;
-    if (Date.parse(createdAt) < settleableUntil) {
-      throw new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
-        delivery_state: effect.state,
-        not_before: new Date(settleableUntil).toISOString(),
-      });
+  // A cited check is provider evidence that the send went nowhere: a complete-scan "not found" of
+  // this same send, and only "not delivered" cites one. D1 holds the same rule (0167).
+  const cited = deliveryCheckId === null ? null : await env.DB.prepare(
+    `SELECT created_at FROM proposal_delivery_checks
+      WHERE tenant_id = ? AND check_id = ? AND effect_id = ? AND outcome = 'not_found' AND scan_complete = 1`,
+  ).bind(input.tenantId, deliveryCheckId, effect.effect_id).first<{ created_at: string }>();
+  if (deliveryCheckId !== null && (input.outcome !== "not_delivered" || !cited)) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_check_invalid", 409, {
+      delivery_state: effect.state,
+    });
+  }
+  // A check of the send that found the message sent proves it was executed: no "not delivered" of
+  // it, cited or not, whichever came first (a lagging mailbox may show it only later). A bounce does
+  // not: the customer did not get it. D1 holds the same rule (0167).
+  if (input.outcome === "not_delivered" && await env.DB.prepare(
+    `SELECT 1 AS found FROM proposal_delivery_checks
+      WHERE tenant_id = ? AND effect_id = ? AND outcome = 'sent' LIMIT 1`,
+  ).bind(input.tenantId, effect.effect_id).first<{ found: number }>()) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_confirmation_check_contradicted", 409, {
+      delivery_state: effect.state,
+    });
+  }
+  // A send whose provider answered (its readback conflicted, or it refused the send yet a later
+  // check says it ran or cannot tell) did something: "not delivered" would make it "not executed"
+  // and open the way to a second send. That needs provider evidence, never a person's word: a cited
+  // complete-scan "not found" made after the send's latest move into the exception. D1 refuses it as
+  // well (0164, 0167). "Delivered" stays open. Only this send's own events decide.
+  if (input.outcome === "not_delivered" && effect.state === "manual_exception") {
+    // The latest move into the exception says why it is one, as 0161's late-answer wait reads it.
+    const cause = await env.DB.prepare(
+      `SELECT from_state, occurred_at FROM external_effect_events
+        WHERE effect_id = ? AND to_state = 'manual_exception' ORDER BY event_seq DESC LIMIT 1`,
+    ).bind(effect.effect_id).first<{ from_state: string | null; occurred_at: string }>();
+    if (
+      (cause?.from_state === "reconciling" || cause?.from_state === "failed") &&
+      !(cited && Date.parse(cited.created_at) > Date.parse(cause.occurred_at))
+    ) {
+      throw new ProposalDeliveryConfirmationError(
+        "proposal_delivery_confirmation_conflict_needs_provider_evidence",
+        409,
+        { delivery_state: effect.state },
+      );
     }
   }
+  const createdAt = input.now ?? new Date().toISOString();
+  // A send that went unknown may only be late: "not delivered" waits until its provider's own answer
+  // can no longer arrive (the late-answer window after its last attempt ended), so a person cannot
+  // clear the way for a second send early. D1 refuses it too (0161); answering here first names the
+  // moment it may go.
+  const settleableUntil = input.outcome === "not_delivered"
+    ? await proposalDeliveryLateAnswerUntil(env, effect)
+    : null;
+  const answerMayBeLate = () =>
+    new ProposalDeliveryConfirmationError("proposal_delivery_answer_may_be_late", 409, {
+      delivery_state: effect.state,
+      ...(settleableUntil === null ? {} : { not_before: new Date(settleableUntil).toISOString() }),
+    });
+  if (settleableUntil !== null && Date.parse(createdAt) < settleableUntil) throw answerMayBeLate();
   const confirmationId = `delivery-confirmation:${keyHash.slice(0, 40)}`;
   try {
     await env.DB.prepare(
       `INSERT INTO proposal_delivery_confirmations
          (confirmation_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, outcome, note,
-          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          confirmed_by_user_id, confirmed_by_role, idempotency_key_hash, request_sha256, created_at,
+          delivery_check_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).bind(
       confirmationId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id,
       input.outcome, input.note, input.actorUserId, input.actorRole, keyHash, requestSha, createdAt,
+      deliveryCheckId,
     ).run();
   } catch (error) {
     const raced = await replay();
     if (raced) return raced;
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("proposal_delivery_answer_may_be_late")) throw answerMayBeLate();
     const code = message.match(/proposal_delivery_confirmation_[a-z_]+/)?.[0] ?? "proposal_delivery_confirmation_failed";
     throw new ProposalDeliveryConfirmationError(code, code.endsWith("_failed") ? 503 : 409);
   }
@@ -417,6 +477,194 @@ export async function recordProposalDeliveryConfirmation(
     replayed: false,
     effectState: input.outcome === "delivered" ? "succeeded" : "reconciled",
   };
+}
+
+/**
+ * How long after a proposal send became unknown its provider's own answer may still arrive: the
+ * provider's row in `proposal_delivery_late_answer_windows` (0161), else the default row `*`. Each
+ * row records where its value comes from; D1 applies the same rows.
+ */
+export async function proposalDeliveryLateAnswerWindowMs(env: AppEnv, provider: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT window_ms FROM proposal_delivery_late_answer_windows
+      WHERE provider IN (?, '*') ORDER BY provider = '*' LIMIT 1`,
+  ).bind(provider).first<{ window_ms: number }>();
+  // The default row is append-only; if it were ever missing, D1 still decides at the insert.
+  return row?.window_ms ?? EFFECT_ATTEMPT_LEASE_MS;
+}
+
+/**
+ * Until when an unknown proposal send may not be called "not executed": the end of its last attempt
+ * plus its provider's late-answer window, or null when the wait does not apply. It applies to an
+ * unknown send, and to a manual exception that came straight from unknown (the latest move into
+ * manual_exception left `unknown`); a manual exception reached any other way, such as a readback
+ * conflict, is not held. D1 holds the same rule (0161, `external_effects_proposal_late_answer_guard`).
+ */
+async function proposalDeliveryLateAnswerUntil(
+  env: AppEnv,
+  effect: { effect_id: string; state: string; provider: string; attempt_count: number; updated_at: string },
+): Promise<number | null> {
+  if (effect.state !== "unknown") {
+    if (effect.state !== "manual_exception") return null;
+    const entered = await env.DB.prepare(
+      `SELECT from_state FROM external_effect_events
+        WHERE effect_id = ? AND to_state = 'manual_exception'
+        ORDER BY event_seq DESC LIMIT 1`,
+    ).bind(effect.effect_id).first<{ from_state: string | null }>();
+    if (entered?.from_state !== "unknown") return null;
+  }
+  const attempt = await env.DB.prepare(
+    "SELECT ended_at FROM external_effect_attempts WHERE effect_id = ? AND attempt_number = ?",
+  ).bind(effect.effect_id, effect.attempt_count).first<{ ended_at: string | null }>();
+  const endedAt = Date.parse(attempt?.ended_at ?? effect.updated_at);
+  return endedAt + await proposalDeliveryLateAnswerWindowMs(env, effect.provider);
+}
+
+/** What a person found. "Not executed" is never a person's finding: only provider proof says so. */
+export type ProposalDeliveryFindingKind = "delivered" | "not_received";
+
+export interface ProposalDeliveryFindingRecord {
+  finding_id: string;
+  tenant_id: string;
+  effect_id: string;
+  proposal_pack_id: string;
+  proposal_revision_id: string;
+  finding: ProposalDeliveryFindingKind;
+  /**
+   * The send's last attempt when the finding was recorded: `succeeded` (the provider confirmed the
+   * send) or `unknown` (the provider's answer is not confirmed: no answer, or a readback that did not
+   * match what was sent).
+   */
+  attempt_state: "succeeded" | "unknown";
+  supersedes_finding_id: string | null;
+  note: string;
+  found_by_user_id: string;
+  found_by_role: string;
+  created_at: string;
+}
+
+/** The newest finding people recorded about one proposal send, or null when there is none (0161). */
+async function latestProposalDeliveryFinding(
+  env: AppEnv,
+  tenantId: string,
+  effectId: string,
+): Promise<{ finding_id: string } | null> {
+  const findings = await env.DB.prepare(
+    `SELECT finding_id, supersedes_finding_id FROM proposal_delivery_findings
+      WHERE tenant_id = ? AND effect_id = ?`,
+  ).bind(tenantId, effectId).all<{ finding_id: string; supersedes_finding_id: string | null }>();
+  const rows = findings.results ?? [];
+  const superseded = new Set(rows.map((row) => row.supersedes_finding_id));
+  return rows.find((row) => !superseded.has(row.finding_id)) ?? null;
+}
+
+/**
+ * A person records what they found about a settled proposal send, or corrects what was found
+ * (0161): one append-only finding that never changes the send. A person finds `delivered` or
+ * `not_received` (the customer says they did not get it); whether the provider executed the send is
+ * provider proof, never a person's finding. Each finding keeps the state of the send's last attempt
+ * at that moment (`succeeded` or `unknown`). The first finding of a send supersedes nothing; a
+ * correction names the newest finding, so the history never forks. Open until the next send of the
+ * proposal or the customer's decision on it. The same key with the same request replays; anything
+ * else conflicts.
+ */
+export async function recordProposalDeliveryFinding(
+  env: AppEnv,
+  input: {
+    tenantId: string;
+    effectId: string;
+    supersedesFindingId: string | null;
+    finding: ProposalDeliveryFindingKind;
+    note: string;
+    actorUserId: string;
+    actorRole: string;
+    idempotencyKey: string;
+    now?: string;
+  },
+): Promise<{ finding: ProposalDeliveryFindingRecord; replayed: boolean; effectState: string }> {
+  const keyHash = await sha256Hex(`proposal-delivery-finding\n${input.tenantId}\n${input.idempotencyKey}`);
+  const requestSha = await sha256Hex(canonicalJson({
+    effect_id: input.effectId,
+    supersedes_finding_id: input.supersedesFindingId,
+    finding: input.finding,
+    note: input.note,
+    actor: input.actorUserId,
+  }));
+  const effectState = async (effectId: string) =>
+    (await env.DB.prepare("SELECT state FROM external_effects WHERE effect_id = ?")
+      .bind(effectId).first<{ state: string }>())?.state ?? "";
+  const readFinding = async (where: string, value: string) =>
+    await env.DB.prepare(
+      `SELECT finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+              attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role, created_at,
+              request_sha256
+         FROM proposal_delivery_findings WHERE tenant_id = ? AND ${where} = ? LIMIT 1`,
+    ).bind(input.tenantId, value).first<ProposalDeliveryFindingRecord & { request_sha256: string }>();
+  const replay = async () => {
+    const prior = await readFinding("idempotency_key_hash", keyHash);
+    if (!prior) return null;
+    if (prior.request_sha256 !== requestSha) {
+      throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_replay_conflict", 409);
+    }
+    const { request_sha256: _hash, ...finding } = prior;
+    return { finding, replayed: true, effectState: await effectState(prior.effect_id) };
+  };
+  const earlier = await replay();
+  if (earlier) return earlier;
+
+  const effect = await env.DB.prepare(
+    `SELECT effect.effect_id, effect.aggregate_id, effect.intent_id, attempt.state AS attempt_state
+       FROM external_effects effect
+       LEFT JOIN external_effect_attempts attempt
+         ON attempt.effect_id = effect.effect_id AND attempt.attempt_number = effect.attempt_count
+      WHERE effect.tenant_id = ? AND effect.effect_id = ? AND effect.action = 'proposal.publish'
+        AND effect.aggregate_type = 'proposal_publication'`,
+  ).bind(input.tenantId, input.effectId).first<{
+    effect_id: string;
+    aggregate_id: string;
+    intent_id: string;
+    attempt_state: string | null;
+  }>();
+  if (!effect) throw new ProposalDeliveryConfirmationError("proposal_delivery_effect_not_found", 404);
+  // A finding is about a send the provider confirmed (`succeeded`) or whose answer is not confirmed
+  // (`unknown`: no answer, or a readback that did not match); a refused send reached no one.
+  if (effect.attempt_state !== "succeeded" && effect.attempt_state !== "unknown") {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_effect_invalid", 409, {
+      attempt_state: effect.attempt_state,
+    });
+  }
+  // Only the newest finding is corrected; naming another one would fork the history.
+  const latest = await latestProposalDeliveryFinding(env, input.tenantId, effect.effect_id);
+  if ((latest?.finding_id ?? null) !== input.supersedesFindingId) {
+    throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_not_latest", 409, {
+      latest_finding_id: latest?.finding_id ?? null,
+    });
+  }
+  const createdAt = input.now ?? new Date().toISOString();
+  const findingId = `delivery-finding:${keyHash.slice(0, 40)}`;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO proposal_delivery_findings
+         (finding_id, tenant_id, effect_id, proposal_pack_id, proposal_revision_id, finding,
+          attempt_state, supersedes_finding_id, note, found_by_user_id, found_by_role,
+          idempotency_key_hash, request_sha256, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).bind(
+      findingId, input.tenantId, effect.effect_id, effect.aggregate_id, effect.intent_id, input.finding,
+      effect.attempt_state, input.supersedesFindingId, input.note, input.actorUserId, input.actorRole,
+      keyHash, requestSha, createdAt,
+    ).run();
+  } catch (error) {
+    const raced = await replay();
+    if (raced) return raced;
+    const message = error instanceof Error ? error.message : String(error);
+    const code = message.match(/proposal_delivery_finding_[a-z_]+/)?.[0] ?? "proposal_delivery_finding_failed";
+    throw new ProposalDeliveryConfirmationError(code, code.endsWith("_failed") ? 503 : 409);
+  }
+  const stored = await readFinding("finding_id", findingId);
+  if (!stored) throw new ProposalDeliveryConfirmationError("proposal_delivery_finding_failed", 503);
+  const { request_sha256: _hash, ...finding } = stored;
+  return { finding, replayed: false, effectState: await effectState(effect.effect_id) };
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   VALID_PROFILE,
   env,
 } from "./company-setup-fixture.ts";
+import { findSavedCompanyPhone } from "../src/app-auth-store.ts";
 
 const FIELDS: CompanyProfileFields = { ...VALID_PROFILE };
 
@@ -183,6 +184,20 @@ test("a profile is scoped to its tenant and never leaks across one", async () =>
   const other = await getCompanyProfile(env(database), "other-tenant");
   assert.equal(other.profile_version, 0);
   assert.equal(other.is_default, true);
+});
+
+test("the session's office-line read sees the saved phone of its own tenant only", async () => {
+  const database = new SqliteD1();
+  // Nothing saved yet: the deployment defaults carry no phone, so there is none to hand out.
+  assert.equal(await findSavedCompanyPhone(env(database), TENANT), null);
+
+  await saveProfile(database, { phone: "780-555-0142" });
+  assert.equal(await findSavedCompanyPhone(env(database), TENANT), "780-555-0142");
+  assert.equal(await findSavedCompanyPhone(env(database), "other-tenant"), null);
+
+  // A saved profile may leave the phone blank; the session then turns "" into null.
+  await saveProfile(database, { phone: "" }, { expected: 1, idempotencyKey: key("002") });
+  assert.equal(await findSavedCompanyPhone(env(database), TENANT), "");
 });
 
 test("the migration refuses a stored profile that the API would never accept", async () => {

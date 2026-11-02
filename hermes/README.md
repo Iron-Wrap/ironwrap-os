@@ -12,7 +12,8 @@ there:
 | You are looking for | It is in |
 | --- | --- |
 | MCP server processes, tool registration, role filtering at runtime | `mcp/erpnext-roofing-mcp/`, `mcp/ironwrap-bus-mcp/`, `mcp/newo-mcp/` |
-| Approval brokers and the desktop text pilot server | `mcp/ironwrap-bus-mcp/src/` |
+| Approval brokers | `mcp/erpnext-roofing-mcp/src/*approval-broker.mjs` |
+| Desktop text pilot server | `mcp/ironwrap-bus-mcp/src/desktop-server.mjs` |
 | Which tools each role may call, as source of truth | `hermes/agents/roles.json` (here) |
 | Launch command, args, and env var names per server | `hermes/mcp-servers.json` (here) |
 | Agent role prompts and procedure packs | `hermes/agents/*.md`, `hermes/skills/*.md` (here) |

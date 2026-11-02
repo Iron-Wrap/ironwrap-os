@@ -47,7 +47,6 @@ function RecordRow({ head }: { head: AuthorityHead }) {
       <p className="mt-1 text-sm text-muted">{expiryText(head)}</p>
       <p className="mt-1 text-sm break-words text-muted">
         {head.issuer_name}, {head.issuer_jurisdiction}. Read back {head.observed_at.slice(0, 10)}.
-        Version {head.authority_version}.
         {head.authority_scope ? ` Scope: ${head.authority_scope}.` : ""}
       </p>
       {denial ? <p className="mt-1 text-sm">{denial}</p> : null}

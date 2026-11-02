@@ -343,11 +343,12 @@ function CommercialSnapshot({
           value={formatMoney(quote.quote_total, locale, currency) ?? "Not recorded"}
           prominent
         />
-        <CommercialFact
-          label="Version"
-          value={quote.version === null ? "Not recorded" : `Version ${quote.version}`}
-        />
         <CommercialFact label="Payment" value={quote.payment_status ?? "Not recorded"} />
+        {/* Two quotes are told apart by when they were made, never by a version number. */}
+        <CommercialFact
+          label="Prepared"
+          value={formatDate(quote.prepared_at, locale) ?? "Not recorded"}
+        />
         <CommercialFact
           label="Proposal"
           value={
@@ -423,10 +424,7 @@ function InsuranceEvidenceRail({
               <li key={supplement.presentation_key} className="py-5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-bold text-foreground">
-                      Insurance supplement
-                      {supplement.version === null ? "" : " · Version " + supplement.version}
-                    </p>
+                    <p className="text-sm font-bold text-foreground">Insurance supplement</p>
                     <p className="mt-1 text-xs leading-5 text-muted">
                       This only shows saved proof. IronWrap does not decide what the insurer means.
                     </p>
@@ -1555,11 +1553,6 @@ function QuoteLedger({
   const currency = quote.currency ?? tenantCurrency;
   return (
     <div className="mt-5">
-      <div className="flex flex-wrap items-center gap-2">
-        {quote.version !== null ? (
-          <p className="text-sm font-bold text-muted">Version {quote.version}</p>
-        ) : null}
-      </div>
       <p className="mt-3 text-3xl font-bold tracking-[-0.035em] tabular-nums">
         {formatMoney(quote.quote_total, locale, currency) ?? "Total not recorded"}
       </p>
@@ -1686,10 +1679,7 @@ function QuoteRevisionEntry({
             : "Facet could not be opened. IronWrap did not change the quote; try again."}
         </p>
       ) : null}
-      <p className="mt-3 break-all text-xs font-semibold text-muted">
-        Source: {quote.id}
-        {quote.version === null ? " · Version not recorded" : ` · Version ${quote.version}`}
-      </p>
+      <p className="mt-3 break-all text-xs font-semibold text-muted">Source: {quote.id}</p>
     </section>
   );
 }
@@ -1734,12 +1724,6 @@ function PricingSnapshot({
         <StatusChip label={label} tone={tone} />
       </div>
       <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
-        <RecordLine
-          label="Quote version"
-          value={
-            snapshot.quote_version === null ? "Not recorded" : `Version ${snapshot.quote_version}`
-          }
-        />
         <RecordLine label="Price book" value={snapshot.price_book_version ?? "Not recorded"} />
         <RecordLine
           label="Price date"
@@ -1799,9 +1783,7 @@ function QuoteRevisionLedger({
             Quote changes
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
-            Linked {prior.version === null ? "older quote" : `V${prior.version}`} →{" "}
-            {quote.version === null ? "this quote" : `V${quote.version}`}. This page does not make
-            new amounts.
+            Compared with the earlier quote. This page does not make new amounts.
           </p>
         </div>
         <StatusChip label="Quotes linked" tone="bg-ok-soft text-ok" />
@@ -1939,9 +1921,7 @@ function ScopeChangeLedger({
                   <div>
                     <p className="font-bold text-foreground">{change.title ?? "Untitled change"}</p>
                     <p className="mt-1 text-xs font-semibold text-muted">
-                      {[change.number, change.version === null ? null : `v${change.version}`]
-                        .filter(Boolean)
-                        .join(" · ") || "Change identity unavailable"}
+                      {change.number ?? "Change identity unavailable"}
                     </p>
                   </div>
                   <StatusChip

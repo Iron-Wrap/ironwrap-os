@@ -56,9 +56,9 @@
 -- to no earlier than the job's previous end: no writer can shorten a window.
 --
 -- The window is derived and read-only. It is not a gate: it has no ledger and no waiver.
---   * Unknown while the job has neither a confirmed copy event for its latest contract nor a record
---     at or after that contract's signature: nothing at all, only an unconfirmed copy event, or only
---     records from before a later contract.
+--   * Unknown while the job has neither a confirmed copy nor a receipt for its actual latest
+--     binding (signature, then binding id), even when signatures tie. A receipt with no binding
+--     supports an imported job only while it has no D1 contract. Receipt signature floors remain.
 --   * Open while any end on the job is after D1's now (ends never move earlier); ended at the end.
 --   * Ended otherwise.
 -- While a job's window is unknown or open, D1 refuses each of these by its own code, read with
@@ -170,7 +170,7 @@ CREATE TABLE IF NOT EXISTS production_cancellation_window_receipts (
     length(idempotency_key_hash) = 64 AND idempotency_key_hash NOT GLOB '*[^0-9a-f]*'
   ),
   UNIQUE (tenant_id, idempotency_key_hash),
-  UNIQUE (tenant_id, roof_job_id, received_at),
+  UNIQUE (tenant_id, roof_job_id, acceptance_binding_id, received_at),
   CHECK ((acceptance_binding_id IS NULL) = (contract_signed_at IS NULL)),
   FOREIGN KEY (roof_job_id, tenant_id)
     REFERENCES operating_roof_jobs(roof_job_id, tenant_id) ON DELETE RESTRICT,
@@ -443,7 +443,8 @@ BEGIN
     AND julianday(NEW.received_at) < julianday(NEW.contract_signed_at);
 
   -- Later only, against both records: an earlier time would end the window sooner, and the same
-  -- time changes nothing.
+  -- time changes nothing for the same contract. A different latest binding needs its own
+  -- provenance even when the receipt instant is equal; its end still cannot move earlier.
   SELECT RAISE(ABORT, 'cancellation_window_receipt_earlier_than_recorded')
   WHERE EXISTS (
     SELECT 1
@@ -466,6 +467,7 @@ BEGIN
       FROM production_cancellation_window_receipts recorded
      WHERE recorded.tenant_id = NEW.tenant_id
        AND recorded.roof_job_id = NEW.roof_job_id
+       AND recorded.acceptance_binding_id IS NEW.acceptance_binding_id
        AND recorded.received_at = NEW.received_at
   )
      OR EXISTS (
@@ -474,6 +476,7 @@ BEGIN
       JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
+       AND shown.acceptance_binding_id = NEW.acceptance_binding_id
        AND shown.shown_at = NEW.received_at
   );
 
@@ -552,12 +555,13 @@ BEGIN
       JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
-       AND NOT EXISTS (
-         SELECT 1
+       AND shown.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
            FROM commercial_acceptance_bindings contract
           WHERE contract.tenant_id = shown.tenant_id
             AND contract.roof_job_id = shown.roof_job_id
-            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
        )
   )
     AND NOT EXISTS (
@@ -565,6 +569,14 @@ BEGIN
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
        AND receipt.roof_job_id = NEW.roof_job_id
+       AND receipt.acceptance_binding_id IS (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
        AND NOT EXISTS (
          SELECT 1
            FROM commercial_acceptance_bindings contract
@@ -604,12 +616,13 @@ BEGIN
       JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
-       AND NOT EXISTS (
-         SELECT 1
+       AND shown.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
            FROM commercial_acceptance_bindings contract
           WHERE contract.tenant_id = shown.tenant_id
             AND contract.roof_job_id = shown.roof_job_id
-            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
        )
   )
     AND NOT EXISTS (
@@ -617,6 +630,14 @@ BEGIN
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
        AND receipt.roof_job_id = NEW.roof_job_id
+       AND receipt.acceptance_binding_id IS (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
        AND NOT EXISTS (
          SELECT 1
            FROM commercial_acceptance_bindings contract
@@ -666,12 +687,13 @@ BEGIN
       JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = NEW.tenant_id
        AND shown.roof_job_id = NEW.roof_job_id
-       AND NOT EXISTS (
-         SELECT 1
+       AND shown.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
            FROM commercial_acceptance_bindings contract
           WHERE contract.tenant_id = shown.tenant_id
             AND contract.roof_job_id = shown.roof_job_id
-            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
        )
   )
     AND NOT EXISTS (
@@ -679,6 +701,14 @@ BEGIN
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = NEW.tenant_id
        AND receipt.roof_job_id = NEW.roof_job_id
+       AND receipt.acceptance_binding_id IS (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
        AND NOT EXISTS (
          SELECT 1
            FROM commercial_acceptance_bindings contract
@@ -723,12 +753,13 @@ BEGIN
         JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
        WHERE shown.tenant_id = NEW.tenant_id
          AND shown.roof_job_id = NEW.roof_job_id
-         AND NOT EXISTS (
-           SELECT 1
+         AND shown.acceptance_binding_id = (
+           SELECT contract.acceptance_binding_id
              FROM commercial_acceptance_bindings contract
             WHERE contract.tenant_id = shown.tenant_id
               AND contract.roof_job_id = shown.roof_job_id
-              AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+            ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+            LIMIT 1
          )
     )
     AND NOT EXISTS (
@@ -736,6 +767,14 @@ BEGIN
         FROM production_cancellation_window_receipts receipt
        WHERE receipt.tenant_id = NEW.tenant_id
          AND receipt.roof_job_id = NEW.roof_job_id
+         AND receipt.acceptance_binding_id IS (
+           SELECT contract.acceptance_binding_id
+             FROM commercial_acceptance_bindings contract
+            WHERE contract.tenant_id = receipt.tenant_id
+              AND contract.roof_job_id = receipt.roof_job_id
+            ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+            LIMIT 1
+         )
          AND NOT EXISTS (
            SELECT 1
              FROM commercial_acceptance_bindings contract

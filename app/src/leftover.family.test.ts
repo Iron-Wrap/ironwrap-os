@@ -89,7 +89,7 @@ describe("IronWrap leftover family", () => {
   });
 
   it("keeps pairing on the dusk mineral family", () => {
-    expect(pairing).toMatch(/Crew devices/);
+    expect(pairing).toMatch(/Crew phones/);
     expect(pairing).not.toMatch(/Office controls/);
     expect(fleetPage).toMatch(/Vehicle/);
   });

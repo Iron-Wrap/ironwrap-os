@@ -165,8 +165,6 @@ export const MONEY_EFFECT_ERROR_CODES = [
   "effect_deadline_expired",
 ] as const;
 
-export type MoneyEffectErrorCode = (typeof MONEY_EFFECT_ERROR_CODES)[number];
-
 export class MoneyEffectError extends Error {
   readonly code: string;
 

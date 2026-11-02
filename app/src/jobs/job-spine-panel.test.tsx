@@ -110,6 +110,7 @@ describe("job source connections", () => {
     renderSpine();
 
     expect(await screen.findByText(match.request_text)).toBeVisible();
+    expect(screen.getByText(/^Requested /)).toBeVisible();
     expect(await screen.findByText("Publication approval history unavailable")).toBeVisible();
     expect(screen.queryByText("Other job review must stay out")).not.toBeInTheDocument();
     expect(

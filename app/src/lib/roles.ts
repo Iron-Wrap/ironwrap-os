@@ -190,7 +190,6 @@ const officeNavigation = [
   },
   {
     label: "Settings",
-    mobileLabel: "Setup",
     to: "/settings",
     icon: Settings,
     activeColor: "accent",
@@ -276,7 +275,6 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
     },
     {
       label: "Settings",
-      mobileLabel: "Setup",
       to: "/accounting/quickbooks",
       icon: Settings,
       activeColor: "accent",

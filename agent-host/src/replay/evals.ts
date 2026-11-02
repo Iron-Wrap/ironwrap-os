@@ -27,7 +27,7 @@ export interface EvalCase {
   id: string;
   title: string;
   tags: string[];
-  signal: { kind: SignalKind; source: string; watch_id?: string; at: string; content: unknown; actor?: unknown };
+  signal: { kind: SignalKind; source: string; watch_id?: string; at: string; content: unknown; actor?: unknown; subject?: { aggregate: string; id: string } };
   facts: CaseFact[];
   attack: unknown;
   expected: { decision: Decision; [field: string]: unknown };

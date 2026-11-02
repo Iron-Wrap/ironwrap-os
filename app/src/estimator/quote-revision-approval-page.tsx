@@ -263,9 +263,9 @@ function RevisionQueueRow({ approval }: { approval: QuoteRevisionApprovalRequest
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-bold text-foreground">
-            <span>Quote {quoteVersion(approval.source.quote_version)}</span>
+            <span>Current quote</span>
             <ArrowRight className="size-4 text-muted" aria-hidden="true" />
-            <span>Empty draft {quoteVersion(approval.target.quote_version)}</span>
+            <span>New empty draft</span>
           </p>
           <p className="mt-1 break-all text-sm text-muted">
             {approval.source.customer_quote_id} · {approval.source.status}
@@ -488,7 +488,7 @@ function QuoteRevisionApprovalDetailContent() {
             className="h-auto! min-h-6 max-w-full whitespace-normal! py-1! leading-4!"
           />
         }
-        title={`Review empty draft ${quoteVersion(approval.target.quote_version)}`}
+        title="Review the new empty draft"
       />
 
       {offline ? (
@@ -525,7 +525,6 @@ function QuoteRevisionApprovalDetailContent() {
           </div>
           {approval.state === "pending" ? (
             <PendingDecisionPanel
-              approval={approval}
               canApprove={canApprove}
               canReject={canReject}
               offline={offline}
@@ -570,7 +569,7 @@ function QuoteRevisionApprovalDetailContent() {
               onSubmit={reconcile}
             />
           ) : null}
-          {approval.state === "executed" ? <ExecutedPanel approval={approval} /> : null}
+          {approval.state === "executed" ? <ExecutedPanel /> : null}
           {["denied", "expired", "failed", "audit_failed"].includes(approval.state) ? (
             <ClosedRequestPanel approval={approval} />
           ) : null}
@@ -697,7 +696,6 @@ function QuoteRevisionApprovalPrepareContent() {
     quote_version: quote.version,
     status: quote.status ?? "Status unavailable",
   };
-  const nextVersion = quote.version + 1;
   const trimmedReason = correctionReason.trim();
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -754,11 +752,7 @@ function QuoteRevisionApprovalPrepareContent() {
         </Notice>
       ) : null}
 
-      <PrepareDecisionRail
-        sourceVersion={source.quote_version}
-        targetVersion={nextVersion}
-        sourceStatus={source.status}
-      />
+      <PrepareDecisionRail sourceStatus={source.status} />
       <CommercialFence />
 
       <form
@@ -861,15 +855,7 @@ function QueueSignal({
   );
 }
 
-function PrepareDecisionRail({
-  sourceVersion,
-  targetVersion,
-  sourceStatus,
-}: {
-  sourceVersion: number;
-  targetVersion: number;
-  sourceStatus: string;
-}) {
+function PrepareDecisionRail({ sourceStatus }: { sourceStatus: string }) {
   return (
     <section
       className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
@@ -879,11 +865,8 @@ function PrepareDecisionRail({
         What happens
       </h2>
       <ol className="grid border-t border-border sm:grid-cols-4">
-        <RailStep
-          label="Current quote"
-          detail={`${quoteVersion(sourceVersion)} · ${sourceStatus}`}
-        />
-        <RailStep label="Empty draft" detail={quoteVersion(targetVersion)} bordered />
+        <RailStep label="Current quote" detail={sourceStatus} />
+        <RailStep label="Empty draft" detail="New, with no prices" bordered />
         <RailStep label="Review" detail="Needed" tone="bg-warning-soft text-warning" bordered />
         <RailStep label="Save record" detail="Made after review" bordered />
       </ol>
@@ -962,19 +945,15 @@ function RevisionRequestFacts({ approval }: { approval: QuoteRevisionApprovalReq
       <div className="grid border-y border-border sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
         <dl className="min-w-0 px-5 py-4 sm:px-6">
           <dt className="text-sm text-muted">Current quote</dt>
-          <dd className="mt-1 text-lg font-semibold">
-            {quoteVersion(approval.source.quote_version)}
-          </dd>
-          <dd className="mt-1 text-sm text-muted">{approval.source.status}</dd>
+          <dd className="mt-1 text-lg font-semibold">{approval.source.status}</dd>
+          <dd className="mt-1 text-sm text-muted">As it is now; it stays as it is</dd>
         </dl>
         <div className="hidden items-center text-faint sm:flex" aria-hidden="true">
           <ArrowRight className="size-4" />
         </div>
         <dl className="min-w-0 border-t border-border px-5 py-4 sm:border-t-0 sm:px-6">
           <dt className="text-sm text-muted">New empty draft</dt>
-          <dd className="mt-1 text-lg font-semibold">
-            {quoteVersion(approval.target.quote_version)}
-          </dd>
+          <dd className="mt-1 text-lg font-semibold">Empty</dd>
           <dd className="mt-1 text-sm text-muted">No prices or job details</dd>
         </dl>
       </div>
@@ -1001,6 +980,8 @@ function RevisionSystemDetails({ approval }: { approval: QuoteRevisionApprovalRe
     ["New draft ID", approval.target.customer_quote_id],
     ["Request ID", approval.id],
     ["Request version", String(approval.version)],
+    ["Current quote version", String(approval.source.quote_version)],
+    ["New draft version", String(approval.target.quote_version)],
     ["Save record ID", approval.hermes_run_id ?? approval.run_id],
     ...(approval.outcome ? [["Recorded draft ID", approval.outcome.customer_quote_id]] : []),
     ...(approval.error_code ? [["Error code", approval.error_code]] : []),
@@ -1040,7 +1021,6 @@ function DecisionStatus({ state }: { state: QuoteRevisionApprovalRequest["state"
 }
 
 function PendingDecisionPanel({
-  approval,
   canApprove,
   canReject,
   offline,
@@ -1054,7 +1034,6 @@ function PendingDecisionPanel({
   onRejectionReasonChange,
   onReject,
 }: {
-  approval: QuoteRevisionApprovalRequest;
   canApprove: boolean;
   canReject: boolean;
   offline: boolean;
@@ -1105,8 +1084,7 @@ function PendingDecisionPanel({
           Make the empty draft?
         </h3>
         <p className="mt-2 text-sm leading-6 text-muted">
-          Create {quoteVersion(approval.target.quote_version)} with no prices, job details,
-          payments, or customer reply.
+          Create a new empty draft with no prices, job details, payments, or customer reply.
         </p>
       </div>
       {rejecting ? (
@@ -1183,8 +1161,8 @@ function PendingDecisionPanel({
             ) : null}
           </div>
           <p className="mt-4 text-xs leading-5 text-muted">
-            Only for quote {quoteVersion(approval.source.quote_version)} and empty draft{" "}
-            {quoteVersion(approval.target.quote_version)}. If either changes, this request stops.
+            Only for the current quote and this new empty draft. If either changes, this request
+            stops.
           </p>
         </div>
       )}
@@ -1354,8 +1332,7 @@ function UncertainExecutionPanel({
   );
 }
 
-function ExecutedPanel({ approval }: { approval: QuoteRevisionApprovalRequest }) {
-  const outcome = approval.outcome;
+function ExecutedPanel() {
   return (
     <section className="px-5 py-4" aria-labelledby="executed-heading">
       <div className="flex items-start gap-3">
@@ -1370,9 +1347,7 @@ function ExecutedPanel({ approval }: { approval: QuoteRevisionApprovalRequest })
           </p>
         </div>
       </div>
-      <p className="mt-4 border-t border-border pt-4 text-sm font-semibold">
-        Empty draft {quoteVersion(outcome?.quote_version ?? approval.target.quote_version)}
-      </p>
+      <p className="mt-4 border-t border-border pt-4 text-sm font-semibold">New empty draft</p>
     </section>
   );
 }
@@ -1464,10 +1439,6 @@ function PrepareSkeleton() {
       <div className="min-h-72 rounded-lg border border-border bg-surface-muted/55" />
     </section>
   );
-}
-
-function quoteVersion(version: number): string {
-  return `V${version}`;
 }
 
 function resultLabel(outcome: ReconciliationOutcome): string {

@@ -283,7 +283,7 @@ const BANNED: readonly Term[] = [
   term(
     "action class",
     /\b(?:A[0-3]|[Cc]lass H)\b/,
-    "the delegation words (Reads and watches, Prepares, Acts within your limits, Asks first, People only); the class stays in System details",
+    "the dial words (Off, Suggest, Act with approval, Auto with undo, Locked); the class stays in System details",
     ["Class A3", "an A2 action", "class H"],
     ["A4 sheet", "A10", "AA", "class Hours"],
   ),

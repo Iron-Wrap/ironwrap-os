@@ -21,6 +21,14 @@ const tenantSchema = z.object({
   locale: z.string().min(2),
   time_zone: z.string().min(1),
   currency: z.string().length(3),
+  /** The company's office phone from its profile, dialable from a crew phone; absent until set. */
+  office_phone: z
+    .string()
+    .trim()
+    .transform((value) => value || null)
+    .nullish()
+    // A malformed value reads as none rather than failing sign-in.
+    .catch(null),
 });
 
 const sessionBaseSchema = z.object({
@@ -53,6 +61,13 @@ export type SessionResponse = z.infer<typeof sessionResponseSchema>;
 export type AuthenticatedSession = Extract<SessionResponse, { authenticated: true }>;
 
 const SNAPSHOT_KEY = "authenticated-session-v1";
+/**
+ * The expiry of this browser's sign-in, kept in localStorage beside the snapshot: written with it,
+ * removed with it (sign-out, or a session read that finds no sign-in), and holding no identity. The
+ * customer portal reads it synchronously, so a customer's device never opens the local database
+ * just to learn that nobody from the office signed in there.
+ */
+const OFFICE_SESSION_MARKER = "ironwrap.office-session-expires-at";
 
 interface OfflineSessionSnapshot {
   session: AuthenticatedSession;
@@ -94,6 +109,7 @@ export async function persistOrInvalidateSession(
 export async function persistAuthenticatedSession(session: AuthenticatedSession): Promise<void> {
   const expiresAt = Date.parse(session.session_expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
+  writeOfficeSessionMarker(expiresAt);
   await setMeta(SNAPSHOT_KEY, {
     session: { ...session, csrf_token: "offline-session-no-csrf" },
     expiresAt,
@@ -124,7 +140,29 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
   };
 }
 
+/**
+ * True while this browser holds an unexpired sign-in, read from its localStorage marker without
+ * touching the local database or sending the office cookie anywhere. Unreadable storage is false.
+ */
+export function officeSessionIsLive(): boolean {
+  try {
+    return Number(window.localStorage.getItem(OFFICE_SESSION_MARKER)) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function writeOfficeSessionMarker(expiresAt: number | null): void {
+  try {
+    if (expiresAt === null) window.localStorage.removeItem(OFFICE_SESSION_MARKER);
+    else window.localStorage.setItem(OFFICE_SESSION_MARKER, String(expiresAt));
+  } catch {
+    // Storage can be unavailable (private browsing, a worker); the portal then records the open.
+  }
+}
+
 export async function clearSessionSnapshot(): Promise<void> {
+  writeOfficeSessionMarker(null);
   await deleteMeta(SNAPSHOT_KEY);
 }
 

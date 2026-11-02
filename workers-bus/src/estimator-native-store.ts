@@ -517,34 +517,6 @@ export async function readEstimatorEvidenceHead(
   return { state: "current", revision: rows[0]!, competing_revision_ids: [] };
 }
 
-export async function listEstimatorEvidenceRevisions(
-  env: AppEnv,
-  tenantId: string,
-  roofJobId: string,
-  limit = 20,
-): Promise<{ rows: EstimatorEvidenceRevisionRecord[]; partial: boolean }> {
-  const bounded = Math.max(1, Math.min(50, Math.trunc(limit)));
-  if (!env.DB) return { rows: [], partial: false };
-  const rows = await allRows<EstimatorEvidenceRevisionRecord>(
-    env,
-    `SELECT revision.*,
-            anchor.estimator_ready_event_id, anchor.estimator_ready_raw_key,
-            anchor.estimator_ready_raw_sha256, anchor.estimator_ready_design_revision_id,
-            anchor.estimator_ready_design_revision_sha256,
-            anchor.estimator_ready_frozen_evidence_sha256
-       FROM estimator_evidence_revisions AS revision
-       LEFT JOIN estimator_evidence_facet_ready_anchors AS anchor
-         ON anchor.estimator_revision_id = revision.estimator_revision_id
-      WHERE revision.tenant_id = ? AND revision.roof_job_id = ?
-      ORDER BY revision.revision_number DESC, revision.estimator_revision_id ASC
-      LIMIT ?`,
-    tenantId,
-    roofJobId,
-    bounded + 1,
-  );
-  return { rows: rows.slice(0, bounded), partial: rows.length > bounded };
-}
-
 /**
  * Lost-response readback for the governed import route. The raw idempotency key
  * never reaches D1; callers can only recover the immutable revision in their

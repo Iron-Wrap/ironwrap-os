@@ -55,7 +55,9 @@ import {
 import {
   attestGateInLedger,
   bindCrewInLedger,
+  cancellationWindowEnded,
   d1Now,
+  endCancellationWindow,
   fixtureSchedule,
   waiveGateInLedger,
 } from "./production-gate-ledger-fixture.ts";
@@ -705,7 +707,8 @@ async function executePublicationEffect(
       preconditions: { quote_status: "approved" },
       evidenceRefs: EVIDENCE.map(({ ref }) => ref),
       expectedReadback: { state: input.state },
-      retryLimit: 1,
+      // A proposal send runs once: D1 refuses any other retry limit for it (0164).
+      retryLimit: 0,
       compensationPlan: {},
       correlationId: input.externalEffectId,
     },
@@ -3092,6 +3095,8 @@ test("no schedule rests on a contract with no deposit once a later contract with
     const second = await inThePast(20, () => accept(h, portalToken, "acceptance-md13-schedule-0001"));
     assert.equal(second.status, 200, await second.clone().text());
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    // A5 requires this corrected binding's own evidenced receipt, not the earlier contract's.
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await refusedSchedule(schedule("schedule-acceptance-0002"), "operating_job_assignment_deposit_contract_superseded");
     // D1 holds the same line for a writer that skipped the Worker.
     const current = h.db.raw.prepare(
@@ -3143,6 +3148,7 @@ test("a later contract that again has no deposit leaves Deposit standing, and th
     assert.equal(second.status, 200, await second.clone().text());
     assert.equal(depositEntries(h).length, 1);
     assert.equal(depositGate(h).state, "complete");
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await schedule("schedule-acceptance-again-0002");
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
@@ -3170,6 +3176,7 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
     h.db.failNextLedgerAppend = true;
     const second = await inThePast(30, () => accept(h, portalToken, "acceptance-md13-latest-0001"));
     assert.equal(second.status, 200, await second.clone().text());
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await refusedSchedule(schedule("schedule-acceptance-latest-0002"), "operating_job_assignment_deposit_contract_superseded");
 
     // ...then a contract with no deposit again, under OD-01. The policy acts only on the latest
@@ -3181,6 +3188,7 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
     assert.equal(third.status, 200, await third.clone().text());
     assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await schedule("schedule-acceptance-latest-0003");
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
@@ -4981,6 +4989,169 @@ test("the cancellation window pre-flight counts the open signed jobs, in D1 or o
     ).run(new Date().toISOString(), TENANT, "job:acceptance:imported");
     assert.deepEqual(preflightRows(), [{ tenant_id: TENANT, open_signed_jobs: 1, with_d1_contract: 1, signed_outside_d1: 0 }]);
   } finally {
+    h.restore();
+  }
+});
+
+
+/** Deterministic synthetic entropy makes signature ties exercise the existing binding-id order. */
+function orderTiedAcceptanceBindings(descending = false): void {
+  const ids = Array.from({ length: 128 }, (_, i) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`);
+  const bindingOf = (id: string) => createHash("sha256")
+    .update(`${TENANT}:${createHash("sha256").update(`acceptance_${id}`).digest("hex")}`).digest("hex");
+  ids.sort((a, b) => bindingOf(a).localeCompare(bindingOf(b)));
+  if (descending) ids.reverse();
+  mock.method(crypto, "randomUUID", () => {
+    const id = ids.shift();
+    assert.ok(id, "synthetic acceptance entropy pool");
+    return id;
+  });
+}
+
+test("tied latest binding holds an existing PO reorder until its own confirmed copy ends", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    orderTiedAcceptanceBindings();
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const initial = await acceptShowingCopy(h, portalToken, "acceptance-tie-po-initial-0001");
+    assert.equal(initial.status, 200, await initial.clone().text());
+    // Establish an existing job line during a legitimately ended window. No guard is disabled.
+    mock.timers.setTime(Date.parse((await readCancellationWindow(h.env, TENANT, JOB_ID)).ends_at!) + 1);
+    placeJobOrderLine(h, "po_line_tied_existing", "backordered");
+    await publishCorrectedContract(h, OD01_TERMS);
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-tie-po-first-0002");
+    assert.equal(first.status, 200, await first.clone().text());
+    const firstBinding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
+    const earlierEnd = (await readCancellationWindow(h.env, TENANT, JOB_ID)).ends_at!;
+    await publishCorrectedContract(h, OD01_TERMS, 3);
+    h.db.failSignedCopyConfirmations = 3;
+    const latestKey = "acceptance-tie-po-latest-0003";
+    const latest = await acceptShowingCopy(h, portalToken, latestKey);
+    assert.equal(latest.status, 200, await latest.clone().text());
+    const latestToken = emailChallengeToken(h.sentEmails);
+    const latestBinding = bindingFor(h, (await latest.json() as { acceptance_id: string }).acceptance_id);
+    assert.equal(latestBinding.accepted_at, firstBinding.accepted_at);
+    assert.ok(latestBinding.acceptance_binding_id > firstBinding.acceptance_binding_id);
+    mock.timers.setTime(Date.parse(earlierEnd) + 1);
+    await assertUnconfirmedWindow(h);
+    assert.equal(cancellationWindowEnded(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID }), false);
+    const window = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    const gatesResponse = await handleAuthenticatedRoute(
+      new Request(`${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/gates`),
+      h.env,
+      await personAuth(h, OWNER_ID),
+    );
+    assert.equal(gatesResponse.status, 200);
+    const gates = (await gatesResponse.json() as Record<string, any>).cancellation_window;
+    for (const read of [window, gates]) {
+      assert.equal(read.contract!.acceptance_binding_id, latestBinding.acceptance_binding_id);
+      assert.deepEqual([read.starts_at, read.started_from, read.signed_copy_shown,
+        read.signed_copy_received, read.last_day, read.ends_at, read.ends_on_calendar_day], Array(7).fill(null));
+    }
+    assert.equal((await signedCopyQueue(h)).counts.signed_copy_unconfirmed, 1);
+    const reorder = () => h.db.raw.prepare(
+      "UPDATE inventory_po_lines SET status = 'ordered', version = version + 1 WHERE po_line_id = 'po_line_tied_existing'",
+    ).run();
+    assert.throws(reorder, /inventory_po_line_cancellation_window_unknown/);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 0);
+    const replay = await worker.fetch(
+      confirmShowingCopyRequest(latestToken, latestKey), h.env as never, {} as never,
+    );
+    assert.equal(replay.status, 200, await replay.clone().text());
+    const confirmed = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.equal(confirmed.signed_copy_shown!.acceptance_binding_id, latestBinding.acceptance_binding_id);
+    assert.ok(confirmed.ends_at! >= earlierEnd);
+    assert.throws(reorder, /inventory_po_line_cancellation_window_open/);
+    mock.timers.setTime(Date.parse(confirmed.ends_at!) + 1);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "ended");
+    assert.equal(await cancellationWindowHold(h.env, TENANT, JOB_ID), null);
+    assert.equal((await signedCopyQueue(h)).count, 0);
+    assert.equal(cancellationWindowEnded(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID }), true);
+    assert.equal(Number(reorder().changes), 1);
+  } finally {
+    mock.timers.reset();
+    mock.restoreAll();
+    h.restore();
+  }
+});
+
+test("tied latest binding needs its own receipt even at an earlier binding's identical receipt instant", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    orderTiedAcceptanceBindings();
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    h.db.failSignedCopyConfirmations = 3;
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-tie-receipt-first-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const firstBinding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
+    const owner = await personAuth(h, OWNER_ID);
+    const original = await recordReceivedCopy(h, owner, firstBinding.accepted_at, "receipt-tie-first-0001");
+    assert.equal(original.status, 201, JSON.stringify(original.body));
+    await publishCorrectedContract(h, OD01_TERMS);
+    h.db.failSignedCopyConfirmations = 3;
+    const latest = await acceptShowingCopy(h, portalToken, "acceptance-tie-receipt-latest-0002");
+    assert.equal(latest.status, 200, await latest.clone().text());
+    const latestBinding = bindingFor(h, (await latest.json() as { acceptance_id: string }).acceptance_id);
+    assert.equal(latestBinding.accepted_at, firstBinding.accepted_at);
+    assert.ok(latestBinding.acceptance_binding_id > firstBinding.acceptance_binding_id);
+    await assertUnconfirmedWindow(h);
+    assert.equal((await signedCopyQueue(h)).counts.signed_copy_unconfirmed, 1);
+    const recorded = await recordReceivedCopy(h, owner, firstBinding.accepted_at, "receipt-tie-latest-0002");
+    assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+    const current = recorded.body.cancellation_window;
+    assert.equal(current.signed_copy_received.acceptance_binding_id, latestBinding.acceptance_binding_id);
+    assert.equal(current.starts_at, firstBinding.accepted_at);
+    assert.equal(current.signed_copy_shown, null);
+    assert.ok(current.ends_at >= original.body.cancellation_window.ends_at);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 2);
+    assert.equal((await signedCopyQueue(h)).count, 0);
+    const repeated = await recordReceivedCopy(h, owner, firstBinding.accepted_at, "receipt-tie-repeat-0003");
+    assert.equal(repeated.status, 200);
+    assert.equal(repeated.body.unchanged, true);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 2);
+    const receipts = h.db.raw.prepare(
+      "SELECT acceptance_binding_id FROM production_cancellation_window_receipts ORDER BY receipt_id",
+    ).all().map((row) => row.acceptance_binding_id).sort();
+    assert.deepEqual(receipts, [firstBinding.acceptance_binding_id, latestBinding.acceptance_binding_id].sort());
+  } finally {
+    mock.timers.reset();
+    mock.restoreAll();
+    h.restore();
+  }
+});
+
+test("a lower-id tied binding's pending copy does not hide the actual latest confirmed binding", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null, clocked: true });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    orderTiedAcceptanceBindings(true);
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const first = await acceptShowingCopy(h, portalToken, "acceptance-tie-order-first-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const firstBinding = bindingFor(h, (await first.json() as { acceptance_id: string }).acceptance_id);
+    await publishCorrectedContract(h, OD01_TERMS);
+    h.db.failSignedCopyConfirmations = 3;
+    const second = await acceptShowingCopy(h, portalToken, "acceptance-tie-order-second-0002");
+    assert.equal(second.status, 200, await second.clone().text());
+    const secondBinding = bindingFor(h, (await second.json() as { acceptance_id: string }).acceptance_id);
+    assert.equal(secondBinding.accepted_at, firstBinding.accepted_at);
+    assert.ok(firstBinding.acceptance_binding_id > secondBinding.acceptance_binding_id);
+    const current = await readCancellationWindow(h.env, TENANT, JOB_ID);
+    assert.equal(current.contract!.acceptance_binding_id, firstBinding.acceptance_binding_id);
+    assert.equal(current.signed_copy_shown!.acceptance_binding_id, firstBinding.acceptance_binding_id);
+    assert.equal((await signedCopyQueue(h)).count, 0);
+    mock.timers.setTime(Date.parse(current.ends_at!) + 1);
+    assert.equal((await readCancellationWindow(h.env, TENANT, JOB_ID)).state, "ended");
+    assert.equal(await cancellationWindowHold(h.env, TENANT, JOB_ID), null);
+    assert.equal(count(h, "production_cancellation_window_receipts"), 0);
+  } finally {
+    mock.timers.reset();
+    mock.restoreAll();
     h.restore();
   }
 });

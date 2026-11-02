@@ -41,7 +41,7 @@ function OwnerSetup() {
     <section className="mx-auto max-w-4xl space-y-6 pb-6">
       <WorkspaceHeader
         icon={<Settings2 aria-hidden="true" />}
-        title="Setup"
+        title="Settings"
         description="Everything you set up once: who this company is, who works here, and which phones the crew uses."
       />
 

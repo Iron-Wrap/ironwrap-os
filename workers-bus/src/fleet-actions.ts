@@ -1108,10 +1108,6 @@ function nonNegativeNumber(value: unknown): number {
   return value;
 }
 
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }

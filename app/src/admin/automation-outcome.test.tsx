@@ -229,7 +229,7 @@ describe("choosing what an automation sends", () => {
       [...(screen.getByLabelText("Template") as HTMLSelectElement).options].map(
         (option) => option.textContent,
       ),
-    ).toEqual(["Materials list · v2"]);
+    ).toEqual(["Materials list"]);
 
     await user.click(screen.getByRole("button", { name: "Save automation" }));
     await waitFor(() => expect(createAutomationRule).toHaveBeenCalledOnce());
@@ -245,7 +245,7 @@ describe("choosing what an automation sends", () => {
     renderWithSession(<AutomationConfigurationPage />, sessionFor("owner"));
 
     expect(
-      await screen.findByText(/Generate a document and send it · Materials list · v2 · shop/),
+      await screen.findByText(/Generate a document and send it · Materials list · shop/),
     ).toBeVisible();
     // `template_key` holds a template_id for a document rule. An administrator never chose that
     // string and cannot act on it, so it does not appear.
@@ -266,13 +266,28 @@ describe("choosing what an automation sends", () => {
     expect(automationTemplateOptions(legacy, EMAIL_ACTION)).toHaveLength(1);
   });
 
+  it("says in words when a rule keeps an earlier version, never the number", () => {
+    const current = catalog().templates.find(
+      (entry) => entry.template_key === MATERIALS_TEMPLATE_ID,
+    )!;
+    const display = (template_version: number) =>
+      automationTemplateDisplay(catalog(), {
+        template_key: MATERIALS_TEMPLATE_ID,
+        template_version,
+      });
+    expect(display(current.version)).toBe(current.label);
+    expect(display(current.version - 1)).toBe(`${current.label} · an earlier version`);
+    // A rule ahead of the catalog it reads is not "earlier".
+    expect(display(current.version + 1)).toBe(current.label);
+  });
+
   it("says so plainly when a rule points at a document that is gone", () => {
     expect(
       automationTemplateDisplay(catalog({ templates: [] }), {
         template_key: MATERIALS_TEMPLATE_ID,
         template_version: 2,
       }),
-    ).toBe("A document that is no longer offered · v2");
+    ).toBe("A document that is no longer offered");
   });
 });
 

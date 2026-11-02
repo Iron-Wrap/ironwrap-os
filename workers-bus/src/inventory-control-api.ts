@@ -58,7 +58,6 @@ const TRANSITIONS_BY_ROLE: ReadonlyMap<string, ReadonlySet<InventoryTransition>>
 ]);
 
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,199}$/;
-const POSITION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,239}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
 function json(body: unknown, status = 200): Response {

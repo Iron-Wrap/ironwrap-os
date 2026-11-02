@@ -572,7 +572,7 @@ configuration-surface change, not a presentation change.
 ![Annotated accounting Money desk](./diagrams/screenshots/accounting-desk-annotated.png)
 
 1. The Money desk explicitly states that nothing moves without a person and offers refresh rather than hidden mutation.
-2. Mobile navigation separates Money, Issues, Now, Setup, and persistent Safety; approval and provider wait remain different states.
+2. Mobile navigation separates Money, Issues, Now, Settings, and persistent Safety; approval and provider wait remain different states.
 3. A financial mismatch is not collapsed into provider success; the issue remains open and QuickBooks freshness is reported separately.
 
 **Evidence:** locally rendered accounting fixture; six targeted accounting acceptance scenarios passed. **Not proven:** live OAuth, posting, payment, tax mapping, or accountant acceptance.

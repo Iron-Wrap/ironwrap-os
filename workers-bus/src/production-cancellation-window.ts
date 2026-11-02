@@ -87,7 +87,8 @@
 //         (frame 22);
 //       * 409 `cancellation_window_receipt_earlier_than_recorded`, with `received_at`,
 //         `recorded_received_at` and its `recorded_source` (frame 23): earlier than a record or than
-//         the copy the portal showed. Nothing is saved, and the same time again is a no-op.
+//         the copy the portal showed. The same time for the same binding is a no-op; a different
+//         latest binding needs its own receipt provenance, without moving a previous end earlier.
 //     D1 stamps the record with its own clock and writes its audit row in the same statement.
 //   GET /api/v1/production/jobs/{job}/gates
 //     Carries `cancellation_window` next to the gates.
@@ -263,7 +264,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * The window's two predicates over `job`, exactly as 0160's holds read them. Only a copy event the
  * Worker confirmed served counts; an unconfirmed one starts and ends nothing. Unknown: neither a
- * confirmed copy for the job's latest contract nor a record at or after its signature. Open: an end
+ * confirmed copy or receipt for the job's actual latest binding (signature, then binding id).
+ * A receipt with no binding supports an imported job only while it has no D1 contract. Open: an end
  * on the job after D1's now; ends never move earlier, so that is the latest end.
  */
 const UNKNOWN_SQL = `(NOT EXISTS (
@@ -272,12 +274,13 @@ const UNKNOWN_SQL = `(NOT EXISTS (
       JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
      WHERE shown.tenant_id = job.tenant_id
        AND shown.roof_job_id = job.roof_job_id
-       AND NOT EXISTS (
-         SELECT 1
+       AND shown.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
            FROM commercial_acceptance_bindings contract
           WHERE contract.tenant_id = shown.tenant_id
             AND contract.roof_job_id = shown.roof_job_id
-            AND julianday(contract.accepted_at) > julianday(shown.contract_signed_at)
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
        )
   )
     AND NOT EXISTS (
@@ -285,6 +288,14 @@ const UNKNOWN_SQL = `(NOT EXISTS (
       FROM production_cancellation_window_receipts receipt
      WHERE receipt.tenant_id = job.tenant_id
        AND receipt.roof_job_id = job.roof_job_id
+       AND receipt.acceptance_binding_id IS (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
        AND NOT EXISTS (
          SELECT 1
            FROM commercial_acceptance_bindings contract
@@ -328,12 +339,13 @@ const COPY_UNCONFIRMED_SQL = `EXISTS (
       FROM contract_signed_copy_events pending
      WHERE pending.tenant_id = job.tenant_id
        AND pending.roof_job_id = job.roof_job_id
-       AND NOT EXISTS (
-         SELECT 1
+       AND pending.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
            FROM commercial_acceptance_bindings contract
           WHERE contract.tenant_id = pending.tenant_id
             AND contract.roof_job_id = pending.roof_job_id
-            AND julianday(contract.accepted_at) > julianday(pending.contract_signed_at)
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
        )
   )`;
 /** A signed job: a contract in D1, or a Deposit gate cleared for a contract signed outside D1. */
@@ -354,6 +366,8 @@ interface WindowFacts {
   copy_unconfirmed: number;
   binding_id: string | null;
   contract_signed_at: string | null;
+  previous_shown_at: string | null;
+  previous_received_at: string | null;
   ends_at: string | null;
   shown_id: string | null;
   shown_binding_id: string | null;
@@ -388,6 +402,11 @@ async function windowFacts(
             ${COPY_UNCONFIRMED_SQL} AS copy_unconfirmed,
             contract.acceptance_binding_id AS binding_id,
             contract.accepted_at AS contract_signed_at,
+            (SELECT MAX(every.shown_at) FROM contract_signed_copy_events every
+               JOIN contract_signed_copy_served confirmed ON confirmed.event_id = every.event_id
+              WHERE every.tenant_id = job.tenant_id AND every.roof_job_id = job.roof_job_id) AS previous_shown_at,
+            (SELECT MAX(every.received_at) FROM production_cancellation_window_receipts every
+              WHERE every.tenant_id = job.tenant_id AND every.roof_job_id = job.roof_job_id) AS previous_received_at,
             max(
               COALESCE((SELECT MAX(every.window_ends_at) FROM contract_signed_copy_events every
                          JOIN contract_signed_copy_served confirmed ON confirmed.event_id = every.event_id
@@ -415,6 +434,7 @@ async function windowFacts(
        LEFT JOIN contract_signed_copy_events shown
          ON shown.tenant_id = job.tenant_id
         AND shown.roof_job_id = job.roof_job_id
+        AND shown.acceptance_binding_id = contract.acceptance_binding_id
         AND EXISTS (SELECT 1 FROM contract_signed_copy_served confirmed WHERE confirmed.event_id = shown.event_id)
         AND NOT EXISTS (
           SELECT 1
@@ -422,6 +442,7 @@ async function windowFacts(
             JOIN contract_signed_copy_served confirmed ON confirmed.event_id = newer.event_id
            WHERE newer.tenant_id = shown.tenant_id
              AND newer.roof_job_id = shown.roof_job_id
+             AND newer.acceptance_binding_id = shown.acceptance_binding_id
              AND (newer.shown_at > shown.shown_at
                   OR (newer.shown_at = shown.shown_at AND newer.event_id > shown.event_id))
         )
@@ -430,11 +451,13 @@ async function windowFacts(
        LEFT JOIN production_cancellation_window_receipts latest
          ON latest.tenant_id = job.tenant_id
         AND latest.roof_job_id = job.roof_job_id
+        AND latest.acceptance_binding_id IS contract.acceptance_binding_id
         AND NOT EXISTS (
           SELECT 1
             FROM production_cancellation_window_receipts newer
            WHERE newer.tenant_id = latest.tenant_id
              AND newer.roof_job_id = latest.roof_job_id
+             AND newer.acceptance_binding_id IS latest.acceptance_binding_id
              AND newer.received_at > latest.received_at
         )
        LEFT JOIN app_users recorder
@@ -474,15 +497,24 @@ function receiptOf(facts: WindowFacts): SignedCopyReceipt | null {
   };
 }
 
-/** The latest start on record and which record it is: a later time wins, as later only requires. */
-function latestStart(facts: WindowFacts): {
+function startOf(shownAt: string | null, receivedAt: string | null): {
   at: string;
   from: "signed_copy_shown" | "manual_record";
 } | null {
-  const shown = facts.shown_at ? Date.parse(facts.shown_at) : Number.NEGATIVE_INFINITY;
-  const received = facts.received_at ? Date.parse(facts.received_at) : Number.NEGATIVE_INFINITY;
-  if (facts.received_at && received >= shown) return { at: facts.received_at, from: "manual_record" };
-  return facts.shown_at ? { at: facts.shown_at, from: "signed_copy_shown" } : null;
+  const shown = shownAt ? Date.parse(shownAt) : Number.NEGATIVE_INFINITY;
+  const received = receivedAt ? Date.parse(receivedAt) : Number.NEGATIVE_INFINITY;
+  if (receivedAt && received >= shown) return { at: receivedAt, from: "manual_record" };
+  return shownAt ? { at: shownAt, from: "signed_copy_shown" } : null;
+}
+
+/** Only the actual latest contract's copy or receipt supplies the displayed start. */
+function latestStart(facts: WindowFacts) {
+  return startOf(facts.shown_at, facts.received_at);
+}
+
+/** Historical starts constrain later-only records after their binding is superseded. */
+function previousStart(facts: WindowFacts) {
+  return startOf(facts.previous_shown_at, facts.previous_received_at);
 }
 
 function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): CancellationWindowState {
@@ -523,7 +555,7 @@ function stateOf(facts: WindowFacts | null, timeZone: string, asOf: string): Can
       ? null
       : Number(facts.copy_unconfirmed) === 1
       ? "signed_copy_unconfirmed"
-      : start
+      : previousStart(facts)
       ? "signed_copy_before_contract"
       : "signed_copy_time_missing",
     starts_at: known ? start?.at ?? null : null,
@@ -1106,7 +1138,7 @@ export async function handleCancellationWindowSignedCopy(
     }
     // Later only, against the latest start on record: a person's record or the copy the portal
     // showed at signing.
-    const start = latestStart(facts);
+    const start = previousStart(facts);
     if (start) {
       const recorded = Date.parse(start.at);
       if (received < recorded) {
@@ -1121,7 +1153,12 @@ export async function handleCancellationWindowSignedCopy(
         );
       }
       if (received === recorded) {
-        return await answer(200, { recorded: false, unchanged: true, replayed: false });
+        const current = latestStart(facts);
+        if (current && Date.parse(current.at) === received) {
+          return await answer(200, { recorded: false, unchanged: true, replayed: false });
+        }
+        // A different latest binding still needs its own provenance. Equal time moves no
+        // historical start/end earlier; only the same binding's repeat is a no-op.
       }
     }
 

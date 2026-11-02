@@ -896,8 +896,6 @@ export async function pushPhotoEvidenceToErpNext(
   });
   return { names, reused: reused || checkIn.reused, fieldCheckInName: checkIn.name };
 }
-
-const SHA256 = /^[a-f0-9]{64}$/;
 async function createIfMissingByField(
   env: ErpEnv,
   base: string,
@@ -942,25 +940,6 @@ async function findByTerm(env: ErpEnv, base: string, doctype: string, field: str
   const rows = Array.isArray(found.data) ? found.data as Array<{ name?: unknown }> : [];
   const name = rows[0]?.name;
   return typeof name === "string" && name ? name : null;
-}
-
-async function findUniqueByTerm(env: ErpEnv, base: string, doctype: string, field: string, value: string): Promise<string | null> {
-  const fields = encodeURIComponent(JSON.stringify(["name"]));
-  const filters = encodeURIComponent(JSON.stringify([[doctype, field, "=", value]]));
-  const path = `/api/resource/${enc(doctype)}?fields=${fields}&filters=${filters}&limit_page_length=2`;
-  const found = await erpFetch(env, base, "GET", path);
-  const rows = Array.isArray(found.data) ? found.data as Array<{ name?: unknown }> : [];
-  if (rows.length !== 1) return null;
-  const name = rows[0]?.name;
-  return typeof name === "string" && name ? name : null;
-}
-
-async function readResource(env: ErpEnv, base: string, doctype: string, name: string): Promise<Record<string, unknown>> {
-  const found = await erpFetch(env, base, "GET", `/api/resource/${enc(doctype)}/${enc(name)}`);
-  if (!found.data || typeof found.data !== "object" || Array.isArray(found.data)) {
-    throw new Error(`erpnext_read_no_record:${doctype}`);
-  }
-  return found.data as Record<string, unknown>;
 }
 
 async function erpFetch(

@@ -46,7 +46,8 @@ test.describe("the safety desk", () => {
     expect(request.headers()["x-csrf-token"]).toBeTruthy();
     await expect(page.getByText("Inspection recorded", { exact: true })).toBeVisible();
     await expect(page.getByText("Quarantined", { exact: true })).toBeVisible();
-    await expect(page.getByText(/revision 2/)).toBeVisible();
+    // A version number never stands in a person's line (ruling).
+    await expect(page.getByText(/revision \d/)).toHaveCount(0);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -81,7 +82,7 @@ test.describe("the safety desk", () => {
       .fill("Independent verification accepted; close action.");
     await expectTouchTarget(close, { name: "Close action" });
     await close.click();
-    await expect(page.getByText(/revision 4/)).toBeVisible();
+    await expect(page.getByText("Decision recorded", { exact: true })).toBeVisible();
     await expect(close).toHaveCount(0);
     expect(
       await page.evaluate(
@@ -140,7 +141,7 @@ test.describe("the safety desk", () => {
     await expect(
       page.getByText("Independent verification required", { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText(/revision 2/)).toBeVisible();
+    await expect(page.getByText(/revision \d/)).toHaveCount(0);
     await expect(
       page.getByText("Evidence saved on this device is waiting to upload", { exact: true }),
     ).toHaveCount(0);
@@ -164,7 +165,7 @@ test.describe("the safety desk", () => {
     await expect(page.getByLabel("Decision findings")).toHaveValue(
       "Replacement label checked independently.",
     );
-    await expect(page.getByText(/Action ca_acceptance_tracking, revision 2/)).toBeVisible();
+    await expect(page.getByText(/Action ca_acceptance_tracking\. Owned by/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Verify the fix" })).toBeDisabled();
     expect(page.url()).toContain("/safety/corrective-actions/ca_acceptance_tracking");
     expect(
@@ -180,7 +181,7 @@ test.describe("the safety desk", () => {
     await page.getByRole("button", { name: "Refresh action" }).click();
     await expect(page.getByRole("button", { name: "Verify the fix" })).toBeEnabled();
     await page.getByRole("button", { name: "Verify the fix" }).click();
-    await expect(page.getByText(/revision 3/)).toBeVisible();
+    await expect(page.getByText("Decision recorded", { exact: true })).toBeVisible();
   });
 
   test("refuses the occurrence reporter as verifier even with full authority", async ({ page }) => {
@@ -200,7 +201,7 @@ test.describe("the safety desk", () => {
     );
     expect(refused.status()).toBe(409);
     await page.reload();
-    await expect(page.getByText(/revision 2/)).toBeVisible();
+    await expect(page.getByText(/Action ca_acceptance_reported\. Owned by/)).toBeVisible();
   });
 
   test("queues evidence offline, uploads after reconnect, and refuses self-verification", async ({

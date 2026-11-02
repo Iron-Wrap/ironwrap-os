@@ -507,7 +507,7 @@ test("manual transport bounds input bytes and enum types; recording rights remai
     assert.equal(total(f), before);
     for (const role of ["owner", "ops", "sales"] as const) {
       const expected = role !== "sales";
-      const session = sessionPayload(auth(role), f.env);
+      const session = await sessionPayload(auth(role), f.env);
       assert.equal(
         (session.permissions as string[]).includes("measurements:record"),
         expected,

@@ -491,22 +491,6 @@ export async function latestTransition(
     .first<PipelineTransitionRecord>();
 }
 
-export async function listCardTransitions(
-  env: AppEnv,
-  tenantId: string,
-  cardId: string,
-): Promise<PipelineTransitionRecord[]> {
-  const rows = await env.DB.prepare(
-    `SELECT * FROM pipeline_card_transitions
-      WHERE tenant_id = ? AND card_id = ?
-      ORDER BY occurred_at ASC, card_version ASC, transition_id ASC
-      LIMIT 200`,
-  )
-    .bind(tenantId, cardId)
-    .all<PipelineTransitionRecord>();
-  return rows.results;
-}
-
 async function initialPlacementTransition(
   env: AppEnv,
   tenantId: string,
@@ -1199,23 +1183,6 @@ export async function stageHasHistory(
     .bind(tenantId, pipelineId, stageId, stageId)
     .first<{ present: number }>();
   return Boolean(row);
-}
-
-export async function listConfigurationEvents(
-  env: AppEnv,
-  tenantId: string,
-  pipelineId: string,
-  limit = 50,
-): Promise<PipelineConfigurationEventRecord[]> {
-  const rows = await env.DB.prepare(
-    `SELECT * FROM pipeline_configuration_events
-      WHERE tenant_id = ? AND pipeline_id = ?
-      ORDER BY occurred_at DESC, event_id DESC
-      LIMIT ?`,
-  )
-    .bind(tenantId, pipelineId, Math.min(Math.max(limit, 1), 200))
-    .all<PipelineConfigurationEventRecord>();
-  return rows.results;
 }
 
 export interface PipelineConfigurationEventRecord {

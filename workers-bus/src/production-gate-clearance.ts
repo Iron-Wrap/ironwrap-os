@@ -637,7 +637,14 @@ async function appendEntry(
   } catch (error) {
     const raced = await entryByKey(env, tenantId, idempotency.keyHash);
     if (raced) return { row: replayOf(raced, requestSha256), replayed: true };
-    throw ledgerRefusal(error);
+    const refused = ledgerRefusal(error);
+    if (refused.code === "production_gate_stop_job_unknown") {
+      // The INSERT is already refused. Only a current read can supply its optional stop detail;
+      // a lifted stop or an unavailable read must leave that refusal intact.
+      const stopId = await unknownJobStop(env, tenantId).catch(() => null);
+      if (stopId) throw refusal(refused.code, refused.status, { stop_id: stopId });
+    }
+    throw refused;
   }
   const stored = await entryById(env, tenantId, idempotency.clearanceId);
   if (!stored) throw refusal("production_gate_clearance_failed", 502);

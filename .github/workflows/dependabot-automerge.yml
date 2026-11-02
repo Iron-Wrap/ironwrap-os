@@ -1,15 +1,11 @@
-# Arms GitHub auto-merge for Dependabot pull requests whose every update is a
-# semver patch or minor. GitHub then merges once the required `gate` check is
-# green, and a red check keeps the pull request open. Majors and updates with no
-# semver type (digest-only) are left for review.
+# Read-only dependency metadata for an authorized root's serial review.
+# Never merge, approve or arm auto-merge with GITHUB_TOKEN. The authorized
+# user-token merge path must produce its own push CI and QA qualification.
+# These advisory notices grant no source approval or release authority.
 #
-# Not a required check: it only turns auto-merge on, and it never fails a pull
-# request on policy.
-#
-# Only GitHub-owned actions are allowed in this organization, so this reads the
-# `update-type:` lines Dependabot writes into its commit message with the
-# preinstalled `gh` CLI instead of using dependabot/fetch-metadata.
-name: Dependabot auto-merge
+# Only GitHub-owned actions are allowed, so read Dependabot's commit metadata
+# with the preinstalled gh CLI instead of dependabot/fetch-metadata.
+name: Dependabot review classification
 
 on:
   pull_request:
@@ -18,38 +14,121 @@ on:
 permissions: {}
 
 jobs:
-  auto-merge:
+  classify:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
-      - name: Arm auto-merge for patch and minor updates
+      - name: Classify dependency metadata for serial review
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          types="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate \
-            --jq '.[].commit.message' | sed -n 's/^[[:space:]]*update-type:[[:space:]]*//p' | sort -u)"
-          if [[ -z "${types}" ]]; then
-            echo "::notice::no update type in the commit message; left for review"
-            exit 0
+          if ! commits="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate)"; then
+            echo "::warning::dependency_classification=metadata_unavailable; commit metadata read failed"
+            exit 1
           fi
-          if grep -qvE '^version-update:semver-(patch|minor)$' <<<"${types}"; then
-            echo "::notice::not only patch and minor updates (${types//$'\n'/, }); left for review"
-            exit 0
+          # Keep raw page/commit boundaries. Accept only closed, unambiguous scalar
+          # dependency records; unknown or malformed metadata is never eligible.
+          if ! classification="$(printf '%s\n' "$commits" | jq -sr '
+            def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+            def scalar:
+              trim | (if startswith("\"") then (try fromjson catch null)
+                      elif test("^[A-Za-z0-9@_./:+~^*<>=?!-]+$") then . else null end)
+              | if type != "string" then null
+                elif (trim | length) == 0 or test("[[:cntrl:]]") then null else . end;
+            def metadata:
+              gsub("\r\n"; "\n") | split("\n") as $lines
+              | [range(0; $lines | length) | select($lines[.] == "updated-dependencies:")] as $headers
+              | if ($headers | length) != 1 then {bad: true, records: []}
+                elif $headers[0] == 0 or $lines[$headers[0] - 1] != "---" then {bad: true, records: []}
+                else $lines[($headers[0] + 1):] as $tail
+                  | ([range(0; $tail | length) | select($tail[.] == "...")][0] // null) as $end
+                  | if $end == null then {bad: true, records: []}
+                    else reduce $tail[:$end][] as $line ({bad: false, records: []};
+                      if $line | test("^[ \t]*$") then .
+                      elif $line | test("^- dependency-name:") then
+                        ($line | capture("^- dependency-name:[ \t]*(?<value>.*)$").value | scalar) as $name
+                        | if $name == null then .bad = true else .records += [{"dependency-name": $name}] end
+                      elif $line | test("^  [a-z][a-z0-9-]*:") then
+                        ($line | capture("^  (?<key>[a-z][a-z0-9-]*):[ \t]*(?<value>.*)$")) as $field
+                        | ($field.value | scalar) as $value
+                        | if (.records | length) == 0 then .bad = true
+                          elif $value == null then .bad = true
+                          elif .records[-1] | has($field.key) then .bad = true
+                          else .records[-1][$field.key] = $value end
+                      else .bad = true end)
+                    | if (.records | length) == 0 then .bad = true
+                      elif (.records | map(.["dependency-name"]) | unique | length) != (.records | length) then .bad = true
+                      elif any(.records[]; has("update-type") | not) then .bad = true
+                      else . end
+                    end
+                end;
+            if any(.[]; type != "array") then error("invalid commit page")
+            else [.[][]] as $commits
+              | if any($commits[]; if type != "object" then true
+                       elif (.commit | type) != "object" then true
+                       else (.commit.message | type) != "string" end) then error("invalid commit metadata")
+                elif ($commits | length) == 0 then "metadata_missing"
+                else [$commits[] | .commit.message | metadata] as $metadata
+                  | if any($metadata[]; .bad) then "metadata_missing"
+                    elif any($metadata[].records[]; .["update-type"] != "version-update:semver-patch" and .["update-type"] != "version-update:semver-minor") then "review_required"
+                    else "eligible_for_serial_review" end
+                end
+            end')"; then
+            echo "::warning::dependency_classification=metadata_unavailable; commit response is invalid"
+            exit 1
           fi
-          # Auto-merge on a branch with no required status check would merge at once.
-          required="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/${BASE}" \
-            --jq '[.[] | select(.type == "required_status_checks")] | length')"
-          if [[ "${required}" -eq 0 ]]; then
-            echo "::warning::${BASE} has no required status check, so auto-merge would merge without CI; not arming it"
-            exit 0
+          case "$classification" in
+            metadata_missing|review_required)
+              echo "::notice::dependency_classification=$classification; each commit and dependency must have unambiguous patch/minor metadata"
+              exit 0 ;;
+            eligible_for_serial_review) ;;
+            *) echo "::warning::dependency_classification=metadata_unavailable; invalid classification"; exit 1 ;;
+          esac
+          if ! rules="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/rules/branches/${BASE}")"; then
+            echo "::warning::dependency_classification=checks_unavailable; branch rules read failed"
+            exit 1
           fi
-          gh pr merge --auto --squash "${PR_URL}"
-          echo "::notice::auto-merge armed (${types//$'\n'/, })"
+          # A rule object alone proves nothing: every required-check configuration must
+          # contain actual nonempty valid contexts, not missing parameters or empty lists.
+          if ! checks="$(printf '%s\n' "$rules" | jq -sr '
+            def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+            def bad_context:
+              if type != "object" then true
+              elif (.context | type) != "string" then true
+              elif (.context | trim | length) == 0 or (.context | test("[[:cntrl:]]")) then true
+              elif has("integration_id") and .integration_id != null then
+                if (.integration_id | type) != "number" then true
+                else (.integration_id | floor) != .integration_id end
+              else false end;
+            if length != 1 then error("invalid rules response")
+            else .[0]
+              | if type != "array" then error("invalid rules response")
+                elif any(.[]; if type != "object" then true else (.type | type) != "string" end) then error("invalid rule")
+                else [.[] | select(.type == "required_status_checks")] as $rules
+                  | if ($rules | length) == 0 then "checks_missing"
+                    elif any($rules[]; if (.parameters | type) != "object" then true
+                             else (.parameters.required_status_checks | type) != "array" end) then "checks_unavailable"
+                    elif any($rules[]; .parameters |
+                      (has("strict_required_status_checks_policy") and (.strict_required_status_checks_policy | type) != "boolean")
+                      or (has("do_not_enforce_on_create") and (.do_not_enforce_on_create | type) != "boolean")) then "checks_unavailable"
+                    elif any($rules[]; (.parameters.required_status_checks | length) == 0) then "checks_missing"
+                    elif any($rules[].parameters.required_status_checks[]; bad_context) then "checks_unavailable"
+                    else "eligible_for_serial_review" end
+                end
+            end')"; then
+            echo "::warning::dependency_classification=checks_unavailable; branch rules response is invalid"
+            exit 1
+          fi
+          case "$checks" in
+            checks_missing) echo "::warning::dependency_classification=checks_missing; no complete nonempty required-check configuration"; exit 0 ;;
+            eligible_for_serial_review) ;;
+            *) echo "::warning::dependency_classification=checks_unavailable; malformed required-check configuration"; exit 1 ;;
+          esac
+          echo "::notice::dependency_classification=eligible_for_serial_review; each commit and dependency is patch/minor and actual check contexts are configured; authorized root merge and exact push CI/QA remain separate"

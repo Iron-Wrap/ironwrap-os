@@ -234,6 +234,11 @@ export async function failNewoReceipt(
   ).bind(error.slice(0, 500), now, now, eventId).run();
 }
 
+/**
+ * Upserts one session snapshot. A session keeps its highest urgency, never the latest one, and
+ * its strongest handoff status: failed outranks requested, and no other value clears a requested
+ * callback (callback only, owner decisions MD-05 and D-03).
+ */
 export async function upsertNewoSession(
   env: Env,
   rec: NewoSessionRecord,
@@ -267,10 +272,18 @@ export async function upsertNewoSession(
        postal_code = COALESCE(excluded.postal_code, newo_sessions.postal_code),
        division = COALESCE(excluded.division, newo_sessions.division),
        service = COALESCE(excluded.service, newo_sessions.service),
-       urgency = COALESCE(excluded.urgency, newo_sessions.urgency),
+       urgency = CASE
+         WHEN 'emergency' IN (excluded.urgency, newo_sessions.urgency) THEN 'emergency'
+         WHEN 'urgent' IN (excluded.urgency, newo_sessions.urgency) THEN 'urgent'
+         ELSE COALESCE(excluded.urgency, newo_sessions.urgency)
+       END,
        lead_envelope_id = COALESCE(excluded.lead_envelope_id, newo_sessions.lead_envelope_id),
        appointment_request_id = COALESCE(excluded.appointment_request_id, newo_sessions.appointment_request_id),
-       handoff_status = COALESCE(excluded.handoff_status, newo_sessions.handoff_status),
+       handoff_status = CASE
+         WHEN 'failed' IN (excluded.handoff_status, newo_sessions.handoff_status) THEN 'failed'
+         WHEN 'requested' IN (excluded.handoff_status, newo_sessions.handoff_status) THEN 'requested'
+         ELSE COALESCE(excluded.handoff_status, newo_sessions.handoff_status)
+       END,
        booking_status = COALESCE(excluded.booking_status, newo_sessions.booking_status),
        summary = COALESCE(excluded.summary, newo_sessions.summary),
        transcript_ref = COALESCE(excluded.transcript_ref, newo_sessions.transcript_ref),

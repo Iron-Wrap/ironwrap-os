@@ -220,3 +220,29 @@ test("queue sync timestamps cannot suppress a later provider report", async () =
   });
   db.raw.close();
 });
+
+test("a stored session keeps its strongest handoff status and its highest urgency", async () => {
+  const db = new SqliteD1();
+  const env = { DB: db as never } as never;
+  const stored = () => ({
+    ...(db.raw.prepare("SELECT handoff_status, urgency FROM newo_sessions WHERE session_id = ?")
+      .get("session-reconcile-1") as Record<string, unknown>),
+  });
+  const later = (minute: number, overrides: Partial<NewoSessionRecord>) => upsertNewoSession(env, session({
+    updated_at: `2026-07-18T18:${String(minute).padStart(2, "0")}:00.000Z`,
+    ...overrides,
+  }));
+
+  await later(0, { handoff_status: "requested", urgency: "emergency" });
+  // A later snapshot with another status (an old "completed"), no status, or a lower urgency
+  // never clears a requested callback or lowers the urgency.
+  await later(1, { handoff_status: "completed", urgency: "routine" });
+  assert.deepEqual(stored(), { handoff_status: "requested", urgency: "emergency" });
+  await later(2, { handoff_status: null, urgency: "urgent" });
+  assert.deepEqual(stored(), { handoff_status: "requested", urgency: "emergency" });
+  // failed outranks requested, and a later requested does not undo it.
+  await later(3, { handoff_status: "failed" });
+  await later(4, { handoff_status: "requested" });
+  assert.deepEqual(stored(), { handoff_status: "failed", urgency: "emergency" });
+  db.raw.close();
+});

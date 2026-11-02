@@ -1,17 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index.ts";
 import {
   canonicalJson,
   handleNewoQueueMessage,
+  newoHandoffStatus,
+  newoOwnerAlerts,
+  newoUrgency,
   parseNewoEvent,
   sha256Hex,
   type NewoEventV1,
 } from "../src/newo.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
+import type { NewoSessionRecord } from "../src/newo-store.ts";
 import { materializeOperatingCore } from "../src/operating-core.ts";
+import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 type Row = Record<string, unknown>;
 
@@ -877,4 +883,372 @@ test("caller lookup requires address or postal verification before any durable w
   assert.equal(state.raw.length, 0);
   assert.equal(state.receipts.size, 0);
   assert.equal(state.sessions.size, 0);
+});
+
+// Callback only (owner decisions MD-05 and D-03): "requested" is the routine handoff status and
+// opens a callback; "failed" means the handoff request did not arrive or could not be processed.
+function handoffEvent(overrides: Partial<NewoEventV1> = {}): NewoEventV1 {
+  return newoEvent({
+    event_id: "event-handoff-001",
+    event_type: "handoff_requested",
+    handoff_summary: "Caller asked for a person.",
+    ...overrides,
+  });
+}
+
+function alertSubjects(event: NewoEventV1): Array<[string, string]> {
+  return newoOwnerAlerts(event).map((alert) => [alert.kind, alert.subject]);
+}
+
+test("a requested handoff alerts staff to call back, urgently only when the caller's urgency says so", () => {
+  for (const [urgency, subject] of [
+    ["routine", "Newo callback requested"],
+    ["urgent", "Urgent Newo callback requested - urgent"],
+    ["emergency", "Urgent Newo callback requested - emergency"],
+  ] as const) {
+    const event = handoffEvent({
+      intent: { ...newoEvent().intent, urgency },
+      outcome: { ...newoEvent().outcome, handoff_status: "requested" },
+    });
+    assert.equal(newoHandoffStatus(event), "requested", urgency);
+    assert.deepEqual(alertSubjects(event), [["handoff", subject]], urgency);
+  }
+});
+
+test("a failed handoff or a failed session still raises the urgent failure alert", () => {
+  const report = (handoffStatus: string | null, eventType: NewoEventV1["event_type"] = "session_ended") =>
+    newoEvent({
+      event_id: "event-report-001",
+      event_type: eventType,
+      outcome: { ...newoEvent().outcome, handoff_status: handoffStatus },
+    });
+  assert.deepEqual(alertSubjects(report("failed")), [["failure", "Urgent Newo callback required"]]);
+  assert.deepEqual(alertSubjects(report(null, "session_failed")), [["failure", "Urgent Newo callback required"]]);
+  assert.deepEqual(alertSubjects(report("requested")), []);
+  assert.deepEqual(alertSubjects(report(null)), []);
+});
+
+test("a handoff request is stored as requested, never failed, and a reported failure stays failed", async () => {
+  for (const handoffStatus of [null, "requested"]) {
+    const state = fakeNewoEnv();
+    const response = await worker.fetch(
+      request("/webhook/newo/handoff", handoffEvent({ outcome: { ...newoEvent().outcome, handoff_status: handoffStatus } })),
+      state.env as never,
+      ctx as never,
+    );
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(state.sessions.get("session-001")?.handoff_status, "requested", String(handoffStatus));
+  }
+
+  const state = fakeNewoEnv();
+  const report = newoEvent({
+    event_id: "event-report-001",
+    event_type: "session_ended",
+    outcome: {
+      ...newoEvent().outcome,
+      handoff_status: "failed",
+      ended_at: "2026-07-18T18:05:00.000Z",
+      duration_seconds: 420,
+    },
+  });
+  const response = await worker.fetch(request("/webhook/newo/report", report), state.env as never, ctx as never);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(state.sessions.get("session-001")?.handoff_status, "failed");
+});
+
+// The session the Worker already holds, for the precedence and work-list rules below.
+function storedSession(overrides: Partial<NewoSessionRecord> = {}): NewoSessionRecord {
+  return {
+    session_id: "session-001",
+    project_id: null,
+    agent_id: null,
+    user_actor_id: null,
+    conversation_id: null,
+    channel: "phone",
+    direction: "inbound",
+    status: "handoff_requested",
+    outcome: null,
+    contact_name: "Stored Caller",
+    contact_phone: "+15875550142",
+    contact_email: null,
+    address_line1: "9 Stored Road",
+    city: "Edmonton",
+    province: "AB",
+    postal_code: "T5J 0N9",
+    division: "residential",
+    service: null,
+    urgency: "routine",
+    lead_envelope_id: null,
+    appointment_request_id: null,
+    handoff_status: null,
+    booking_status: null,
+    summary: null,
+    transcript_ref: null,
+    recording_ref: null,
+    ai_disclosed: 1,
+    recording_disclosed: 1,
+    structured_json: "{}",
+    raw_key: "raw/newo/events/stored.json",
+    payload_hash: "e".repeat(64),
+    started_at: null,
+    ended_at: null,
+    duration_seconds: null,
+    report_expected_at: null,
+    report_received_at: null,
+    report_event_id: null,
+    missing_report_detected_at: null,
+    sync_status: "synced",
+    sync_attempts: 0,
+    last_error: null,
+    sync_updated_at: null,
+    created_at: "2026-07-18T17:58:00.000Z",
+    updated_at: "2026-07-18T17:59:00.000Z",
+    ...overrides,
+  };
+}
+
+function closingReport(urgency: NewoEventV1["intent"]["urgency"], handoffStatus: NewoEventV1["outcome"]["handoff_status"] = null,
+  eventType: NewoEventV1["event_type"] = "session_ended"): NewoEventV1 {
+  return newoEvent({
+    event_id: "event-report-002",
+    event_type: eventType,
+    intent: { ...newoEvent().intent, urgency },
+    outcome: { ...newoEvent().outcome, handoff_status: handoffStatus, ended_at: "2026-07-18T18:05:00.000Z", duration_seconds: 300 },
+  });
+}
+
+test("the callback and failure emails are the work list: name, phone and address of the caller", () => {
+  const [callback] = newoOwnerAlerts(handoffEvent({ intent: { ...newoEvent().intent, urgency: "urgent" } }));
+  assert.equal(callback?.kind, "handoff");
+  for (const detail of [
+    "Name: Newo Caller",
+    "Phone: +1 (587) 555-7788",
+    "Address: 123 Main Street, Edmonton, AB, T5J 0N3",
+    "Reason: Caller asked for a person.",
+  ]) {
+    assert.ok(callback?.html.includes(detail), detail);
+  }
+
+  // A report that omits the contact still names the caller the session already holds.
+  const bare = closingReport("emergency");
+  bare.contact = { name: null, phone: null, email: "caller@example.com", address: { line1: null, city: null, province: null, postal_code: null } };
+  const failure = newoOwnerAlerts(bare, storedSession()).find((alert) => alert.kind === "failure");
+  for (const detail of ["Name: Stored Caller", "Phone: +15875550142", "Address: 9 Stored Road, Edmonton, AB, T5J 0N9"]) {
+    assert.ok(failure?.html.includes(detail), detail);
+  }
+  const escaped = newoOwnerAlerts(handoffEvent({ contact: { ...newoEvent().contact, name: "<b>Caller</b>" } }));
+  assert.ok(escaped[0]?.html.includes("Name: &lt;b&gt;Caller&lt;/b&gt;"));
+});
+
+test("a handoff status other than requested, failed or null is refused, and a live connection says why", async () => {
+  const withStatus = (handoffStatus: unknown) => JSON.stringify({
+    ...newoEvent(),
+    outcome: { ...newoEvent().outcome, handoff_status: handoffStatus },
+  });
+  for (const accepted of ["requested", "failed", null]) {
+    assert.equal(parseNewoEvent(withStatus(accepted)).ok, true, String(accepted));
+  }
+  const connected = parseNewoEvent(withStatus("connected"));
+  assert.equal(connected.ok, false);
+  if (!connected.ok) {
+    assert.deepEqual(connected.issues, ["outcome.handoff_status reports a live connection; the receptionist is callback only"]);
+  }
+  const completed = parseNewoEvent(withStatus("completed"));
+  assert.equal(completed.ok, false);
+  if (!completed.ok) assert.deepEqual(completed.issues, ["outcome.handoff_status must be one of requested, failed"]);
+
+  const state = fakeNewoEnv();
+  const refused = await worker.fetch(new Request("https://bus.example/webhook/newo/report", {
+    method: "POST",
+    headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
+    body: JSON.stringify({ ...closingReport("routine"), outcome: { ...closingReport("routine").outcome, handoff_status: "connected" } }),
+  }), state.env as never, ctx as never);
+  assert.equal(refused.status, 422);
+  assert.equal(state.raw.length, 0);
+  assert.equal(state.sessions.size, 0);
+});
+
+test("a session keeps its strongest handoff status and its highest urgency", () => {
+  const requested = storedSession({ handoff_status: "requested", urgency: "emergency" });
+  assert.equal(newoHandoffStatus(closingReport("routine"), requested), "requested");
+  assert.equal(newoHandoffStatus(closingReport("routine", "failed"), requested), "failed");
+  assert.equal(newoHandoffStatus(handoffEvent(), storedSession({ handoff_status: "failed" })), "failed");
+  assert.equal(newoUrgency(closingReport("routine"), requested), "emergency");
+  assert.equal(newoUrgency(closingReport("urgent"), storedSession({ urgency: "routine" })), "urgent");
+  assert.deepEqual(alertSubjects(closingReport("routine")), []);
+  // A failed session still owes the failure alert on a later event; the sent marker, not the state
+  // the event found, keeps it to one email (the retry tests below).
+  assert.deepEqual(
+    newoOwnerAlerts(closingReport("routine"), storedSession({ handoff_status: "failed" }))
+      .map(({ kind, marker }) => [kind, marker]),
+    [["failure", "raw/newo/owner-alerts/session-001/failure.json"]],
+  );
+});
+
+test("an emergency session that closes without a handoff request is a failed handoff", async () => {
+  for (const eventType of ["session_ended", "session_failed"] as const) {
+    assert.equal(newoHandoffStatus(closingReport("emergency", null, eventType)), "failed", eventType);
+  }
+  assert.equal(newoHandoffStatus(closingReport("emergency"), storedSession({ handoff_status: "requested" })), "requested");
+  assert.equal(newoHandoffStatus(closingReport("urgent")), null);
+  // The urgency the session already holds counts, not only the report's.
+  assert.equal(newoHandoffStatus(closingReport("routine"), storedSession({ urgency: "emergency" })), "failed");
+  assert.deepEqual(alertSubjects(closingReport("emergency")), [["failure", "Urgent Newo callback required"]]);
+
+  const state = fakeNewoEnv();
+  const response = await worker.fetch(request("/webhook/newo/report", closingReport("emergency")), state.env as never, ctx as never);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(state.sessions.get("session-001")?.handoff_status, "failed");
+});
+
+// The owner alerts end to end: the Worker's own sendOwnerAlert through the Gmail adapter, with
+// only Google's token and send endpoints faked. Every name, address and mailbox is synthetic.
+function alertingNewoState(t: { mock: { method: typeof import("node:test").mock.method }; after(fn: () => void): void }) {
+  const state = nativeNewoState();
+  const { privateKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { format: "pem", type: "pkcs8" },
+    publicKeyEncoding: { format: "pem", type: "spki" },
+  });
+  const objects = new Map<string, string>();
+  const queue = { failNext: false, sent: 0 };
+  const emails: Array<{ to: string | null; subject: string | null; body: string }> = [];
+  const env = withTestEffectRuntime({
+    ...state.env,
+    OWNER_ALERT_EMAIL: "owner@example.com",
+    BACKUP_ALERT_EMAIL: "backup@example.com",
+    FROM_EMAIL: "ops@example.com",
+    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: "alerts@example.com", private_key: privateKey }),
+    RAW: {
+      put: async (key: string, body: string) => { objects.set(key, body); },
+      head: async (key: string) => (objects.has(key) ? { key } : null),
+    },
+    NEWO_QUEUE: {
+      // A queue outage after the session row is written: the request fails and Newo retries it.
+      send: async () => {
+        if (queue.failNext) {
+          queue.failNext = false;
+          throw new Error("simulated_queue_outage");
+        }
+        queue.sent += 1;
+      },
+    },
+  });
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === "https://oauth2.googleapis.com/token") return Response.json({ access_token: "gmail-test-token" });
+    if (url === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") {
+      const mime = Buffer.from((JSON.parse(String(init?.body)) as { raw: string }).raw, "base64url").toString("utf8");
+      const header = (name: string) => mime.match(new RegExp(`^${name}: (.*)$`, "m"))?.[1]?.trim() ?? null;
+      emails.push({
+        to: header("To"),
+        subject: header("Subject")?.replace(/^=\?UTF-8\?B\?(.*)\?=$/, (_, b64: string) =>
+          Buffer.from(b64, "base64").toString("utf8")) ?? null,
+        body: mime.slice(mime.indexOf("\r\n\r\n") + 4),
+      });
+      return Response.json({ id: `gmail-${emails.length}` });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const pending: Array<Promise<unknown>> = [];
+  const alertCtx = { waitUntil: (promise: Promise<unknown>) => { pending.push(promise.catch(() => {})); } };
+  const deliver = async (path: string, event: NewoEventV1) => {
+    const response = await worker.fetch(request(path, event), env as never, alertCtx as never);
+    while (pending.length > 0) await Promise.all(pending.splice(0));
+    return response.status;
+  };
+  const session = () => state.db.raw.prepare(
+    "SELECT handoff_status, urgency FROM newo_sessions WHERE session_id = ?",
+  ).get("session-001") as { handoff_status: string | null; urgency: string | null } | undefined;
+  return { env, objects, queue, emails, deliver, session };
+}
+
+const toAlertBoxes = (emails: Array<{ to: string | null; subject: string | null }>) =>
+  emails.map(({ to, subject }) => `${to}: ${subject}`).sort();
+
+test("an emergency session that closes without a handoff emails the owner and the backup the urgent alert", async (t) => {
+  const alerting = alertingNewoState(t);
+  assert.equal(await alerting.deliver("/webhook/newo/report", closingReport("emergency")), 200);
+  assert.equal(alerting.session()?.handoff_status, "failed");
+  assert.deepEqual(toAlertBoxes(alerting.emails), [
+    "backup@example.com: Urgent Newo callback required",
+    "owner@example.com: Urgent Newo callback required",
+  ]);
+  for (const email of alerting.emails) {
+    for (const detail of ["Name: Newo Caller", "Phone: +15875557788", "Address: 123 Main Street, Edmonton, AB, T5J 0N3"]) {
+      assert.ok(email.body.includes(detail), `${email.to} carries ${detail}`);
+    }
+  }
+});
+
+test("a requested callback emails the owner and the backup, urgently when the caller's urgency says so", async (t) => {
+  const alerting = alertingNewoState(t);
+  const event = handoffEvent({ intent: { ...newoEvent().intent, urgency: "urgent" } });
+  assert.equal(await alerting.deliver("/webhook/newo/handoff", event), 200);
+  assert.equal(alerting.session()?.handoff_status, "requested");
+  assert.deepEqual(toAlertBoxes(alerting.emails), [
+    "backup@example.com: Urgent Newo callback requested - urgent",
+    "owner@example.com: Urgent Newo callback requested - urgent",
+  ]);
+  assert.ok(alerting.emails.every((email) => email.body.includes("Reason: Caller asked for a person.")));
+});
+
+test("a failure alert survives a retry after the session was written, and is sent only once", async (t) => {
+  const failedHandoff = closingReport("routine", "failed");
+  for (const [name, path, event] of [
+    ["failed handoff report", "/webhook/newo/report", failedHandoff],
+    ["emergency close without a handoff", "/webhook/newo/report", closingReport("emergency")],
+  ] as const) {
+    await t.test(name, async (subtest) => {
+      const alerting = alertingNewoState(subtest);
+      alerting.queue.failNext = true;
+      assert.equal(await alerting.deliver(path, event), 500);
+      // The first attempt wrote the failed handoff, then failed before any alert was attempted.
+      assert.equal(alerting.session()?.handoff_status, "failed");
+      assert.deepEqual(alerting.emails, []);
+
+      // Newo retries the same event. The session already says failed; the alert is still owed.
+      assert.equal(await alerting.deliver(path, event), 200);
+      assert.deepEqual(toAlertBoxes(alerting.emails), [
+        "backup@example.com: Urgent Newo callback required",
+        "owner@example.com: Urgent Newo callback required",
+      ]);
+      assert.deepEqual([...alerting.objects.keys()].filter((key) => key.includes("owner-alerts")), [
+        "raw/newo/owner-alerts/session-001/failure.json",
+      ]);
+
+      // A later event of the same failed session, with different caller details, sends nothing more.
+      const later = newoEvent({
+        event_id: "event-report-003",
+        event_type: "session_ended",
+        contact: { ...newoEvent().contact, phone: "+1 (587) 555-0199" },
+        outcome: { ...newoEvent().outcome, ended_at: "2026-07-18T18:06:00.000Z", duration_seconds: 360 },
+      });
+      assert.equal(await alerting.deliver("/webhook/newo/report", later), 200);
+      assert.equal(alerting.emails.length, 2);
+    });
+  }
+});
+
+test("a failure alert whose send fails is not recorded as sent, so the next event sends it", async (t) => {
+  const alerting = alertingNewoState(t);
+  // The send fails before anything is dispatched: Gmail is not configured yet.
+  const serviceAccount = alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = "";
+  assert.equal(await alerting.deliver("/webhook/newo/report", closingReport("routine", "failed")), 200);
+  assert.deepEqual(alerting.emails, []);
+  assert.equal(alerting.objects.has("raw/newo/owner-alerts/session-001/failure.json"), false);
+
+  alerting.env.GOOGLE_SERVICE_ACCOUNT_JSON = serviceAccount;
+  const later = newoEvent({
+    event_id: "event-report-003",
+    event_type: "session_ended",
+    outcome: { ...newoEvent().outcome, ended_at: "2026-07-18T18:06:00.000Z", duration_seconds: 360 },
+  });
+  assert.equal(await alerting.deliver("/webhook/newo/report", later), 200);
+  assert.deepEqual(toAlertBoxes(alerting.emails), [
+    "backup@example.com: Urgent Newo callback required",
+    "owner@example.com: Urgent Newo callback required",
+  ]);
+  assert.equal(alerting.objects.has("raw/newo/owner-alerts/session-001/failure.json"), true);
 });

@@ -96,7 +96,6 @@ function env(db: SqliteD1): Env {
     NEWO_CONTROL_WRITE_ENABLED: "false",
     NEWO_EXPECTED_CONFIG_VERSION: "newo.production.v1",
     NEWO_ENABLED_CHANNELS: "voice",
-    NEWO_TRANSFER_POLICY: "owner_then_voicemail",
     NEWO_USAGE_ALERT_PERCENT: "80",
   } as unknown as Env;
 }

@@ -6,8 +6,9 @@ import { newoTenantId } from "./newo-store.ts";
 /**
  * A person's resolution of one failed Newo handoff.
  *
- * A failed handoff is a caller who asked for a person and was not put through
- * (`newo_sessions.handoff_status = 'failed'`). The Newo reconcile and the operations read model
+ * A failed handoff is a caller's request for a person that did not arrive or could not be
+ * processed (`newo_sessions.handoff_status = 'failed'`). A callback the receptionist requested is
+ * `requested`, not failed (newo.ts, newoHandoffStatus). The Newo reconcile and the operations read model
  * count it, and keep the model in `attention`, until a person records how it ended. There is no
  * lookback window: a window would retire a failure that nobody decided. These routes are the only
  * write path for that record:

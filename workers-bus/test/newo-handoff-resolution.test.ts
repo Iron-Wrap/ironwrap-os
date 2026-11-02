@@ -234,3 +234,21 @@ test("D1 keeps the record append-only and re-checks the failed status and the re
   assert.throws(() => insert(`nhr_${"3".repeat(32)}`, "newo-session-failed-1", USERS.ops.id, "ops", "direct-key-0003", true));
   assert.equal(raw.prepare("SELECT count(*) AS n FROM newo_handoff_resolutions").get()?.n, 1);
 });
+
+test("a requested callback is not a failed handoff: no failed count, no failed list, no resolution", async () => {
+  const env = testEnv();
+  env.DB.sqlite.prepare(
+    `INSERT INTO newo_sessions
+      (session_id, status, handoff_status, structured_json, raw_key, payload_hash, created_at, updated_at)
+     VALUES (?, 'handoff_requested', 'requested', '{}', ?, ?, ?, ?)`,
+  ).run("newo-session-requested", "raw/newo/4", "d".repeat(64), at(-5), at(-5));
+  assert.equal((await newoOperationalCounts(env as never)).failed_handoffs, 2);
+  const model = await buildNewoOperationsReadModel(env as never);
+  assert.deepEqual(
+    model.exceptions.failed_handoffs.map((session) => session.session_id).sort(),
+    ["newo-session-failed-1", "newo-session-failed-2"],
+  );
+  const ops = await personAuth(env, USERS.ops.id);
+  const refused = await call(env, ops, "newo-session-requested", { outcome: "called_back" });
+  assert.deepEqual([refused.status, refused.body.error], [409, "newo_handoff_not_failed"]);
+});

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
+import { newoCallbackRecordPresent, newoEnabledEnvironments, newoEnablementRefusal } from "./newo-enablement.mjs";
 // The capability registry and its evaluator are imported, not restated. G1.3 found this verifier
 // covered none of the eight capabilities spec 9.3 names, so a flag flip on QuickBooks, Newo,
 // Postiz, Hermes desktop or the proposal template was caught by nothing. Restating the rules here
@@ -991,6 +992,26 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       `${CAPABILITY_SIGNAL_REGISTRY[id].flagBinding ?? id} must be exactly "true" or "false"`,
     ));
   }
+
+  // Newo stays off until IronWrap owns a D1 callback record a person works and closes. Recording
+  // the newo capability as on is not enough: only the marker migration in
+  // tools/newo-enablement.mjs flips this check.
+  let newoEnabledIn = null;
+  try {
+    newoEnabledIn = newoEnabledEnvironments(wranglerSource ?? "");
+  } catch {
+    newoEnabledIn = null;
+  }
+  const newoRefusal = newoEnabledIn === null ? null : newoEnablementRefusal({
+    enabledIn: newoEnabledIn,
+    callbackRecordPresent: newoCallbackRecordPresent(repoRoot),
+  });
+  checks.push(check(
+    "contract.newo.callback_record_gate",
+    newoEnabledIn !== null && newoRefusal === null,
+    "Newo is off, or the D1 callback record it needs exists",
+    newoRefusal ?? "workers-bus/wrangler.jsonc is unreadable, so the Newo enablement gate cannot be checked",
+  ));
 
   return finish("contract", checks);
 }

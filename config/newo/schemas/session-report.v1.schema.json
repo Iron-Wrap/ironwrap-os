@@ -144,7 +144,7 @@
       "properties": {
         "status": { "type": ["string", "null"], "maxLength": 80 },
         "summary": { "type": ["string", "null"], "maxLength": 4000 },
-        "handoff_status": { "type": ["string", "null"], "maxLength": 80 },
+        "handoff_status": { "enum": ["requested", "failed", null] },
         "booking_status": { "type": ["string", "null"], "maxLength": 80 },
         "transcript_ref": { "type": ["string", "null"], "maxLength": 1000 },
         "recording_ref": { "type": ["string", "null"], "maxLength": 1000 },

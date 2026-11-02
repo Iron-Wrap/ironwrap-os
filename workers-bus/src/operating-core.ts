@@ -1,7 +1,7 @@
 import { trustedOfficeCapture } from "./office-lead-intake-store.ts";
 import type { EnvelopeRecord } from "./core.ts";
 import type { JnResult } from "./jobnimbus.ts";
-import { sha256Hex } from "./newo-hash.ts";
+import { sha256Hex } from "./canonical.ts";
 
 type OperatingEnv = Env & {
   APP_TENANT_ID?: string;

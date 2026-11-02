@@ -9,7 +9,7 @@
  */
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   MAX_STAGES_PER_PIPELINE,
   PIPELINE_CARD_POSITION_STEP,

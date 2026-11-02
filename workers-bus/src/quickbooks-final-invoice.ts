@@ -1,6 +1,6 @@
 import { sha256Hex } from "./app-auth.ts";
 import { assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
-import { canonicalJson as canonicalEffectJson } from "./newo-hash.ts";
+import { canonicalJson as canonicalEffectJson } from "./canonical.ts";
 import { normalizeEmail, normalizePhone } from "./core.ts";
 import { currentTaxPolicySnapshot } from "./accounting-tax-snapshots.ts";
 import {

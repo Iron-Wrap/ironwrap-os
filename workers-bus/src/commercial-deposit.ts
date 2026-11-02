@@ -26,7 +26,7 @@ import {
   readNativeInitialProviderMapping,
   taxForSubtotal,
 } from "./native-final-invoice-producer.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export interface CommercialDepositDerivationRecord {
   derivation_id: string;

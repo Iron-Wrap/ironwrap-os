@@ -11,7 +11,7 @@
 
 import { isOn } from "./core.ts";
 import { adapterAuthority, assertEffectLedgerReady, EffectRuntimeError, getExternalEffectByIdempotency, runExternalEffect } from "./effect-runtime.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { AppEnv } from "./app-types.ts";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";

@@ -101,7 +101,7 @@
 
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 
 export const CANCELLATION_WINDOW_DAYS = 10;

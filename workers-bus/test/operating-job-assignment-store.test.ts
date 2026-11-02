@@ -4,6 +4,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { authenticateAppRequest, randomToken, sessionHashFor } from "../src/app-auth.ts";
 import {
   permissionsForRole,
   type AppEnv,
@@ -25,12 +26,16 @@ import {
 } from "../src/operating-work-object-assignment-store.ts";
 import {
   attestGateInLedger,
-  recordLegacyGateStates,
+  clearScheduleGatesInLedger,
+  fixtureSchedule,
   reverseGateInLedger,
 } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const NOW = new Date("2026-08-21T08:00:00.000Z");
+// A schedule falls inside the Weather window a person attested, which D1 holds to its own clock.
+const SCHEDULE_DAY = fixtureSchedule(1);
+const NEXT_DAY = fixtureSchedule(2);
 const JOB_ID = "job:schedule:0001";
 const CREW_ID = "crew:schedule:0001";
 const OWNER_ID = "appu_owner_schedule";
@@ -80,6 +85,19 @@ class SqliteD1 {
     return new SqliteStatement(this.raw, this.raw.prepare(sql));
   }
 
+  async batch(statements: SqliteStatement[]) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   close(): void {
     this.raw.close();
   }
@@ -119,7 +137,36 @@ class SqliteStatement {
 }
 
 function env(db: SqliteD1): AppEnv {
-  return { DB: db as never } as AppEnv;
+  return {
+    DB: db as never,
+    APP_TENANT_ID: TENANT,
+    APP_AUTH_PEPPER: "synthetic-schedule-pepper-0123456789",
+  } as AppEnv;
+}
+
+/** A person's real cookie session: scheduling clears Crew, so it is people-only (0159). */
+async function personAuth(db: SqliteD1, userId: string): Promise<AuthContext> {
+  const appEnv = env(db);
+  const token = randomToken();
+  const now = Date.now();
+  db.raw.prepare(
+    `INSERT INTO app_sessions
+       (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+  ).run(
+    await sessionHashFor(appEnv, token), userId, TENANT, new Date(now - 60_000).toISOString(),
+    new Date(now + 3_600_000).toISOString(), new Date(now - 60_000).toISOString(), "d".repeat(64),
+    "e".repeat(64),
+  );
+  const outcome = await authenticateAppRequest(
+    new Request("https://app.example.invalid/api/v1/session", {
+      headers: { cookie: `__Host-ironwrap_session=${token}` },
+    }),
+    appEnv,
+  );
+  assert.ok(outcome.ok, "the synthetic person session authenticates");
+  return outcome.auth;
 }
 
 function auth(role: AppRole): AuthContext {
@@ -157,8 +204,8 @@ function request(
     crewId: CREW_ID,
     expectedCrewVersion: 1,
     authorityRequirements: ROOF_AUTHORITY_REQUIREMENTS,
-    scheduledStart: "2026-08-24T14:00:00.000Z",
-    scheduledEnd: "2026-08-24T22:00:00.000Z",
+    scheduledStart: SCHEDULE_DAY.start,
+    scheduledEnd: SCHEDULE_DAY.end,
     supersedesAssignmentId: null,
     correctionReason: null,
     actorUserId: OWNER_ID,
@@ -219,8 +266,8 @@ test("native scheduling creates, replays, supersedes, and reads the frozen crew 
         appEnv,
         {
           ...firstInput,
-          scheduledStart: "2026-08-25T14:00:00.000Z",
-          scheduledEnd: "2026-08-25T22:00:00.000Z",
+          scheduledStart: NEXT_DAY.start,
+          scheduledEnd: NEXT_DAY.end,
         },
         NOW,
       ),
@@ -242,8 +289,8 @@ test("native scheduling creates, replays, supersedes, and reads the frozen crew 
       appEnv,
       request({
         idempotencyKey: "schedule:replace:0002",
-        scheduledStart: "2026-08-25T14:00:00.000Z",
-        scheduledEnd: "2026-08-25T22:00:00.000Z",
+        scheduledStart: NEXT_DAY.start,
+        scheduledEnd: NEXT_DAY.end,
         supersedesAssignmentId: first.assignment.assignment_id,
         correctionReason: "Customer moved the confirmed installation date.",
       }),
@@ -682,28 +729,38 @@ test("authenticated production scheduling writes native authority without Frappe
       crew_id: CREW_ID,
       expected_crew_version: 1,
       authority_requirements: ROOF_AUTHORITY_REQUIREMENTS,
-      scheduled_start: "2026-08-24T14:00:00.000Z",
-      scheduled_end: "2026-08-24T22:00:00.000Z",
+      scheduled_start: SCHEDULE_DAY.start,
+      scheduled_end: SCHEDULE_DAY.end,
       supersedes_assignment_id: null,
       correction_reason: null,
     });
-    const makeRequest = (idempotencyKey: string) =>
+    const owner = await personAuth(db, OWNER_ID);
+    const makeRequest = (idempotencyKey: string, csrf = owner.csrfToken) =>
       new Request(
         `https://app.example.invalid/api/v1/jobs/${encodeURIComponent(JOB_ID)}/schedule`,
         {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-csrf-token": "csrf",
+            "x-csrf-token": csrf,
             "idempotency-key": idempotencyKey,
           },
           body,
         },
       );
+    // A connector or agent session holding the owner's role is not a person.
+    const machine = await handleAuthenticatedRoute(
+      makeRequest("schedule:api:machine", "csrf"),
+      env(db),
+      auth("owner"),
+    );
+    assert.equal(machine.status, 403);
+    assert.deepEqual(await machine.json(), { error: "person_session_required" });
+
     const created = await handleAuthenticatedRoute(
       makeRequest("schedule:api:create:0001"),
       env(db),
-      auth("owner"),
+      owner,
     );
     assert.equal(created.status, 201);
     const createdBody = (await created.json()) as {
@@ -726,7 +783,7 @@ test("authenticated production scheduling writes native authority without Frappe
     const replay = await handleAuthenticatedRoute(
       makeRequest("schedule:api:create:0001"),
       env(db),
-      auth("owner"),
+      owner,
     );
     assert.equal(replay.status, 200);
     assert.equal(
@@ -735,7 +792,7 @@ test("authenticated production scheduling writes native authority without Frappe
     );
 
     const denied = await handleAuthenticatedRoute(
-      makeRequest("schedule:api:field-denied"),
+      makeRequest("schedule:api:field-denied", "csrf"),
       env(db),
       auth("field"),
     );
@@ -919,7 +976,13 @@ function seed(db: DatabaseSync): void {
       now,
     );
   }
-  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB_ID, at: now });
+  clearScheduleGatesInLedger(db, {
+    tenantId: TENANT,
+    roofJobId: JOB_ID,
+    ownerUserId: OWNER_ID,
+    attesterUserId: PRODUCTION_ID,
+    attesterRole: "production",
+  });
   db.prepare(
     `INSERT INTO fleet_crews
      (crew_id, tenant_id, display_name, status, version, created_at, updated_at)

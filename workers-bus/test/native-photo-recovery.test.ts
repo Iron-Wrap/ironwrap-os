@@ -126,7 +126,7 @@ test("0085 native photo evidence authority is complete in backup and restore con
     // 0155 tenant deposit policy and the 0205 step pair index are included in both D1 inventories.
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 282);
     assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 395);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 785);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 786);
   }
 
   for (const [name, table] of INDEXES) {

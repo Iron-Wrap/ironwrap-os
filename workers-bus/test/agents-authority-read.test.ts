@@ -11,7 +11,7 @@ import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
 import { ROLE_PERMISSIONS, type AppEnv } from "../src/app-types.ts";
 import { recordAuthorityReadback, type AuthorityRequirement } from "../src/authority-records.ts";
 import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { clearScheduleGatesInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 const TOKEN = "synthetic-agent-host-token-0001";
@@ -122,7 +122,8 @@ async function seed(db: SqliteD1) {
      VALUES (?, ?, ?, 'ow_authority_read_0001', 'raw/authority-read/0001.json', ?, 'blocked', ?, ?, ?, 'No active blocker', 1, ?, ?)`,
   );
   for (const name of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) gate.run(`gate:authority-read:${name.toLowerCase()}`, TENANT, JOB, name, OWNER, NOW, NOW, NOW, NOW);
-  recordLegacyGateStates(db.raw, { tenantId: TENANT, roofJobId: JOB, at: NOW });
+  // The owner, on no crew, clears the five gates a schedule rests on; the schedule binds Crew.
+  clearScheduleGatesInLedger(db.raw, { tenantId: TENANT, roofJobId: JOB, ownerUserId: OWNER, attesterUserId: OWNER, attesterRole: "owner" });
   db.raw.prepare("INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at) VALUES (?, ?, 'Synthetic Crew', 'Active', 1, ?, ?)").run(CREW, TENANT, NOW, NOW);
   WORKERS.forEach((worker, n) =>
     db.raw
@@ -138,8 +139,9 @@ async function seed(db: SqliteD1) {
       crewId: CREW,
       expectedCrewVersion: 1,
       authorityRequirements: [REQUIREMENT],
-      scheduledStart: "2026-08-24T14:00:00.000Z",
-      scheduledEnd: "2026-08-24T22:00:00.000Z",
+      // Inside the Weather window the owner attested, which D1 holds to its own clock.
+      scheduledStart: fixtureSchedule(1).start,
+      scheduledEnd: fixtureSchedule(1).end,
       supersedesAssignmentId: null,
       correctionReason: null,
       actorUserId: OWNER,

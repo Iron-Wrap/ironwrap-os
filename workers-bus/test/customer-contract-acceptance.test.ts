@@ -42,6 +42,11 @@ import {
 } from "../src/native-final-invoice-producer.ts";
 import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 import { recordCompletedRoofJobWork } from "./native-completion-fixture.ts";
+import {
+  OperatingJobAssignmentError,
+  recordOperatingJobAssignment,
+} from "../src/operating-job-assignment-store.ts";
+import { attestGateInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 
 const TENANT = "ironwrap";
 /**
@@ -1781,14 +1786,15 @@ async function reviseQuote(
   chain: NativeChain,
   terms: Record<string, unknown>,
   base: Date,
+  revision = 2,
 ): Promise<string> {
   const suffix = chain.quoteId.split(":").at(-1)!;
-  const quoteRevisionId = `quote-revision:acceptance:${suffix}:2`;
+  const quoteRevisionId = `quote-revision:acceptance:${suffix}:${revision}`;
   const quote: RecordCommercialQuoteInput = {
     tenantId: TENANT,
     quoteRevisionId,
     customerQuoteId: chain.quoteId,
-    revisionNumber: 2,
+    revisionNumber: revision,
     roofJobId: JOB_ID,
     customerId: CUSTOMER_ID,
     supersedesQuoteRevisionId: chain.quoteRevisionId,
@@ -1810,15 +1816,15 @@ async function reviseQuote(
       taxCents: 5_000,
     }],
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: `acceptance:quote:${suffix}:2`,
+    idempotencyKey: `acceptance:quote:${suffix}:${revision}`,
   };
   const preparedQuote = await prepareCommercialQuote(quote);
   const quotePermit = await admitFor(
     h.env,
     "quote.revision.record",
-    { type: "customer_quote", id: chain.quoteId, version: 2 },
+    { type: "customer_quote", id: chain.quoteId, version: revision },
     preparedQuote.command,
-    `permit:acceptance:quote:${suffix}:2`,
+    `permit:acceptance:quote:${suffix}:${revision}`,
     base,
     preparedQuote.totalCents,
   );
@@ -1828,8 +1834,8 @@ async function reviseQuote(
 }
 
 /**
- * Proposal revision 2 of the chain's pack, made of the given quote revision, unpublished. The chain
- * moves onto both.
+ * Proposal revision 2 (or `revision`) of the chain's pack, made of the given quote revision,
+ * unpublished. The chain moves onto both.
  */
 async function reviseProposal(
   h: Harness,
@@ -1837,14 +1843,15 @@ async function reviseProposal(
   quoteRevisionId: string,
   terms: Record<string, unknown>,
   base: Date,
+  revision = 2,
 ): Promise<void> {
   const suffix = chain.quoteId.split(":").at(-1)!;
-  const proposalRevisionId = `proposal-revision:acceptance:${suffix}:2`;
+  const proposalRevisionId = `proposal-revision:acceptance:${suffix}:${revision}`;
   const proposal: RecordCommercialProposalInput = {
     tenantId: TENANT,
     proposalRevisionId,
     proposalPackId: chain.proposalPackId,
-    revisionNumber: 2,
+    revisionNumber: revision,
     quoteRevisionId,
     roofJobId: JOB_ID,
     customerId: CUSTOMER_ID,
@@ -1856,15 +1863,15 @@ async function reviseProposal(
     contentHash: "d".repeat(64),
     evidence: EVIDENCE,
     authority: { kind: "policy_permit", permitId: "pending" },
-    idempotencyKey: `acceptance:proposal:${suffix}:2`,
+    idempotencyKey: `acceptance:proposal:${suffix}:${revision}`,
   };
   const preparedProposal = await prepareCommercialProposal(proposal);
   const proposalPermit = await admitFor(
     h.env,
     "proposal.revision.record",
-    { type: "proposal", id: chain.proposalPackId, version: 2 },
+    { type: "proposal", id: chain.proposalPackId, version: revision },
     preparedProposal.command,
-    `permit:acceptance:proposal:${suffix}:2`,
+    `permit:acceptance:proposal:${suffix}:${revision}`,
     new Date(base.getTime() + 2_000),
   );
   proposal.authority = { kind: "policy_permit", permitId: proposalPermit.permit_id };
@@ -1873,12 +1880,17 @@ async function reviseProposal(
   chain.proposalRevisionId = proposalRevisionId;
 }
 
-/** Quote revision 2 and its proposal, published in place of the first contract. */
-async function publishCorrectedContract(h: Harness, terms: Record<string, unknown>): Promise<void> {
+/** Quote revision 2 (or `revision`) and its proposal, published in place of the contract before. */
+async function publishCorrectedContract(
+  h: Harness,
+  terms: Record<string, unknown>,
+  revision = 2,
+): Promise<void> {
   const chain = h.chain!;
-  const base = new Date(Date.now() - 20_000);
-  const quoteRevisionId = await reviseQuote(h, chain, terms, base);
-  await reviseProposal(h, chain, quoteRevisionId, terms, base);
+  // Each later revision's events start later, after the ones the revision before it recorded.
+  const base = new Date(Date.now() - 20_000 + (revision - 2) * 10_000);
+  const quoteRevisionId = await reviseQuote(h, chain, terms, base, revision);
+  await reviseProposal(h, chain, quoteRevisionId, terms, base, revision);
 
   // The lead converted at the first acceptance, so only the correction's revision may move the
   // publication: withdraw the pack under it, then publish it.
@@ -2531,6 +2543,32 @@ test("with no signed contract Deposit stays blocked, and no person ever reverses
       }),
       "production_gate_contract_no_deposit_not_reversible",
     );
+    // Nor on the reversal route (0158): the owner's own session is refused by name.
+    const owner = await personAuth(h, OWNER_ID);
+    const reversal = await handleAuthenticatedRoute(
+      new Request(
+        `${PUBLIC_ORIGIN}/api/v1/production/jobs/${encodeURIComponent(JOB_ID)}/gates/Deposit/reversals`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "deposit-reversal-od01-0001",
+            "x-csrf-token": owner.csrfToken,
+          },
+          body: JSON.stringify({
+            expected_gate_version: 2,
+            reverses_id: noDeposit.clearance_id,
+            reason: "The owner tries to put the deposit back on a no-deposit contract.",
+          }),
+        },
+      ),
+      h.env,
+      owner,
+    );
+    assert.deepEqual(
+      [reversal.status, ((await reversal.json()) as { error: string }).error],
+      [409, "production_gate_contract_no_deposit_not_reversible"],
+    );
     // The policy reverses it only for a later contract that carries a deposit.
     refusedWith(
       () => appendDeposit(h, {
@@ -2863,6 +2901,193 @@ test("on a database built from every migration, an OD-01 contract's final invoic
     );
     assert.equal(count(h, "commercial_deposit_derivations"), 0);
     assert.equal(count(h, "native_completion_packets"), 1);
+  } finally {
+    h.restore();
+  }
+});
+
+// --- A4 (0159): a schedule never rests on a superseded contract with no deposit ---------------------
+
+/**
+ * The owner attests Materials, Safety, Access and Weather (0158) and one synthetic field worker
+ * forms a crew; Deposit stands on the contract. Returns a scheduler that writes the next schedule
+ * revision, which binds Crew by policy (0159).
+ */
+function readyToSchedule(h: Harness): (key: string) => Promise<unknown> {
+  for (const gate of ["Materials", "Safety", "Access", "Weather"] as const) {
+    attestGateInLedger(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID, gate, actorUserId: OWNER_ID, actorRole: "owner" });
+  }
+  const at = new Date().toISOString();
+  h.db.raw.prepare(
+    `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+        active, created_by, created_at, updated_at)
+     VALUES ('appu_field_acceptance', ?, 'field-acceptance@example.invalid', 'Field', 'field',
+             'field', 'field-acceptance@example.invalid', 1, 'test-seed', ?, ?)`,
+  ).run(TENANT, at, at);
+  h.db.raw.prepare(
+    `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
+     VALUES ('crew:acceptance:0001', ?, 'Synthetic Crew', 'Active', 1, ?, ?)`,
+  ).run(TENANT, at, at);
+  h.db.raw.prepare(
+    `INSERT INTO fleet_crew_members
+       (membership_id, tenant_id, crew_id, user_id, active, version, created_at, updated_at)
+     VALUES ('membership:acceptance:0001', ?, 'crew:acceptance:0001', 'appu_field_acceptance', 1, 1, ?, ?)`,
+  ).run(TENANT, at, at);
+  let previous: string | null = null;
+  return async (key: string) => {
+    const job = h.db.raw.prepare(
+      "SELECT version FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?",
+    ).get(TENANT, JOB_ID) as { version: number };
+    const day = fixtureSchedule(1);
+    const result = await recordOperatingJobAssignment(h.env, {
+      tenantId: TENANT,
+      roofJobId: JOB_ID,
+      expectedRoofJobVersion: Number(job.version),
+      crewId: "crew:acceptance:0001",
+      expectedCrewVersion: 1,
+      authorityRequirements: [{
+        authority_record_id: "authority:acceptance:worker",
+        subject_type: "Person",
+        subject_role: "Worker",
+        subject_ref: "appu_field_acceptance",
+        authority_kind: "Worker Competency",
+        scope_type: "Roof Job",
+        scope_ref: JOB_ID,
+        version: 1,
+        state_digest_sha256: "c".repeat(64),
+      }],
+      scheduledStart: day.start,
+      scheduledEnd: day.end,
+      supersedesAssignmentId: previous,
+      correctionReason: previous ? "Synthetic schedule revision after a new contract." : null,
+      actorUserId: OWNER_ID,
+      idempotencyKey: key,
+    });
+    previous = result.assignment.assignment_id;
+    return result;
+  };
+}
+
+async function refusedSchedule(action: Promise<unknown>, code: string): Promise<void> {
+  await assert.rejects(action, (error: unknown) => {
+    const message = error instanceof OperatingJobAssignmentError ? error.code : String((error as Error).message);
+    assert.match(message, new RegExp(code));
+    return true;
+  });
+}
+
+test("no schedule rests on a contract with no deposit once a later contract with a deposit is signed, before or after the policy re-blocks Deposit", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const first = await accept(h, portalToken, "acceptance-od01-schedule-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    assert.equal(depositEntries(h)[0]!.basis, "contract_no_deposit");
+    const schedule = readyToSchedule(h);
+    await schedule("schedule-acceptance-0001");
+
+    // MD-13's input arrives and the customer signs a contract with a deposit. The policy's
+    // reversal does not land after that commit, so Deposit still stands on the first contract.
+    recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
+    await publishCorrectedContract(h, TERMS);
+    h.db.failNextLedgerAppend = true;
+    const second = await accept(h, portalToken, "acceptance-md13-schedule-0001");
+    assert.equal(second.status, 200, await second.clone().text());
+    assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    await refusedSchedule(schedule("schedule-acceptance-0002"), "operating_job_assignment_deposit_contract_superseded");
+    // D1 holds the same line for a writer that skipped the Worker.
+    const current = h.db.raw.prepare(
+      `SELECT * FROM operating_job_assignments
+        WHERE tenant_id = ? AND roof_job_id = ?
+        ORDER BY assignment_version DESC LIMIT 1`,
+    ).get(TENANT, JOB_ID) as Record<string, unknown>;
+    refusedWith(
+      () => h.db.raw.prepare(
+        `INSERT INTO operating_job_assignments
+           (assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version, crew_id,
+            crew_version, assigned_users_json, scheduled_start, scheduled_end,
+            supersedes_assignment_id, correction_reason, actor_user_id, command_fingerprint,
+            idempotency_key_hash, created_at)
+         VALUES ('assignment:acceptance:direct', ?, ?, 2, ?, ?, 1, ?, ?, ?, ?,
+                 'Synthetic direct revision after a new contract.', ?, ?, ?, ?)`,
+      ).run(
+        TENANT, JOB_ID, current.roof_job_version as number, current.crew_id as string,
+        current.assigned_users_json as string, current.scheduled_start as string,
+        current.scheduled_end as string, current.assignment_id as string, OWNER_ID,
+        "e".repeat(64), "f".repeat(64), new Date().toISOString(),
+      ),
+      "operating_job_assignment_deposit_contract_superseded",
+    );
+
+    // Once the sweep lands the policy's reversal, Deposit is blocked and 0098 answers.
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 1, recorded: 1, refused: 0 });
+    assert.equal(depositGate(h).state, "blocked");
+    await refusedSchedule(schedule("schedule-acceptance-0003"), "operating_job_assignment_gates_blocked");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a later contract that again has no deposit leaves Deposit standing, and the job schedules", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const first = await accept(h, portalToken, "acceptance-od01-again-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const schedule = readyToSchedule(h);
+    await schedule("schedule-acceptance-again-0001");
+    // A corrected contract with no deposit either: the policy never re-binds one contract with no
+    // deposit to another, so refusing here would leave the job with no way to schedule.
+    await publishCorrectedContract(h, OD01_TERMS);
+    const second = await accept(h, portalToken, "acceptance-od01-again-0002");
+    assert.equal(second.status, 200, await second.clone().text());
+    assert.equal(depositEntries(h).length, 1);
+    assert.equal(depositGate(h).state, "complete");
+    await schedule("schedule-acceptance-again-0002");
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
+      2,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("only the job's latest contract counts: a deposit contract superseded in turn by one with no deposit leaves the job schedulable", async () => {
+  const h = await setup({ terms: OD01_TERMS, depositPolicy: null });
+  try {
+    seedGates(h);
+    const portalToken = await seedPortalLink(h.db);
+    const first = await accept(h, portalToken, "acceptance-od01-latest-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const schedule = readyToSchedule(h);
+    await schedule("schedule-acceptance-latest-0001");
+
+    // A deposit contract under MD-13 whose policy reversal never lands...
+    recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "md13_deposit" });
+    await publishCorrectedContract(h, TERMS);
+    h.db.failNextLedgerAppend = true;
+    const second = await accept(h, portalToken, "acceptance-md13-latest-0001");
+    assert.equal(second.status, 200, await second.clone().text());
+    await refusedSchedule(schedule("schedule-acceptance-latest-0002"), "operating_job_assignment_deposit_contract_superseded");
+
+    // ...then a contract with no deposit again, under OD-01. The policy acts only on the latest
+    // contract, so nothing will ever reverse the first contract's entry: refusing here would hold
+    // the job forever.
+    recordDepositPolicy(h.db.raw, { tenantId: TENANT, ownerUserId: OWNER_ID, policy: "od01_payment_on_completion" });
+    await publishCorrectedContract(h, OD01_TERMS, 3);
+    const third = await accept(h, portalToken, "acceptance-od01-latest-0002");
+    assert.equal(third.status, 200, await third.clone().text());
+    assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
+    assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    await schedule("schedule-acceptance-latest-0003");
+    assert.equal(
+      (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
+      2,
+    );
   } finally {
     h.restore();
   }

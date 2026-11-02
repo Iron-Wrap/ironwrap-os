@@ -57,6 +57,7 @@ import {
   bindCrewInLedger,
   cancellationWindowEnded,
   d1Now,
+  endCancellationWindow,
   fixtureSchedule,
   waiveGateInLedger,
 } from "./production-gate-ledger-fixture.ts";
@@ -3094,6 +3095,8 @@ test("no schedule rests on a contract with no deposit once a later contract with
     const second = await inThePast(20, () => accept(h, portalToken, "acceptance-md13-schedule-0001"));
     assert.equal(second.status, 200, await second.clone().text());
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    // A5 requires this corrected binding's own evidenced receipt, not the earlier contract's.
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await refusedSchedule(schedule("schedule-acceptance-0002"), "operating_job_assignment_deposit_contract_superseded");
     // D1 holds the same line for a writer that skipped the Worker.
     const current = h.db.raw.prepare(
@@ -3145,6 +3148,7 @@ test("a later contract that again has no deposit leaves Deposit standing, and th
     assert.equal(second.status, 200, await second.clone().text());
     assert.equal(depositEntries(h).length, 1);
     assert.equal(depositGate(h).state, "complete");
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await schedule("schedule-acceptance-again-0002");
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,
@@ -3172,6 +3176,7 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
     h.db.failNextLedgerAppend = true;
     const second = await inThePast(30, () => accept(h, portalToken, "acceptance-md13-latest-0001"));
     assert.equal(second.status, 200, await second.clone().text());
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await refusedSchedule(schedule("schedule-acceptance-latest-0002"), "operating_job_assignment_deposit_contract_superseded");
 
     // ...then a contract with no deposit again, under OD-01. The policy acts only on the latest
@@ -3183,6 +3188,7 @@ test("only the job's latest contract counts: a deposit contract superseded in tu
     assert.equal(third.status, 200, await third.clone().text());
     assert.deepEqual(await sweepContractDepositGates(h.env), { candidates: 0, recorded: 0, refused: 0 });
     assert.deepEqual({ state: depositGate(h).state, entries: depositEntries(h).length }, { state: "complete", entries: 1 });
+    endCancellationWindow(h.db.raw, { tenantId: TENANT, roofJobId: JOB_ID });
     await schedule("schedule-acceptance-latest-0003");
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM operating_job_assignments WHERE roof_job_id = ?").get(JOB_ID) as { n: number }).n,

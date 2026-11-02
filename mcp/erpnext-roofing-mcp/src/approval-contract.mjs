@@ -225,8 +225,7 @@ export const BROKER_MCP_CHILD_FORWARDED_KEYS = Object.freeze([
   "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
   "ERPNEXT_ALLOW_INSECURE_LOCAL", "ERPNEXT_TENANT_ID",
   "IRONWRAP_EFFECT_RUNTIME_ENABLED", "IRONWRAP_EFFECT_RUNTIME_URL", "IRONWRAP_EFFECT_RUNTIME_TOKEN",
-  "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
-  "HERMES_APPROVAL_PUBLIC_KEY",
+  "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE", "HERMES_APPROVAL_PUBLIC_KEY",
 ]);
 
 /**
@@ -245,14 +244,19 @@ export const BROKER_MCP_CHILD_FORWARDED_KEYS = Object.freeze([
  * lives with the contract both sides share, not copied per broker.
  *
  * Still an allowlist, not `process.env`: the child gets the runtime it needs to build
- * a write-enabled server and nothing else.
+ * a write-enabled server and nothing else. The same holds for tools: `allowedTools` is
+ * the exact set the broker calls, and the child registers nothing beyond it.
  */
-export function brokerMcpChildEnvironment(env, { agentRole, actorUser, approverId }) {
+export function brokerMcpChildEnvironment(env, { agentRole, actorUser, approverId, allowedTools }) {
+  if (!Array.isArray(allowedTools) || allowedTools.length === 0) {
+    throw new Error("broker_mcp_child_allowed_tools_required");
+  }
   const child = {};
   for (const key of BROKER_MCP_CHILD_FORWARDED_KEYS) {
     if (typeof env[key] === "string" && env[key]) child[key] = env[key];
   }
   child.ERPNEXT_WRITE_ENABLED = "true";
+  child.MCP_ALLOWED_TOOLS = allowedTools.join(",");
   child.HERMES_AGENT_ROLE = agentRole;
   child.HERMES_ACTOR_USER = actorUser;
   child.HERMES_APPROVER_ID = approverId;

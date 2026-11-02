@@ -143,10 +143,6 @@ export function productionScheduleApprovalBrokerConfigFromEnv(env = process.env)
   if (!runtime.writeEnabled || runtime.agentRole !== PRODUCTION_SCHEDULE_AGENT_ROLE) {
     throw new Error("production_schedule_broker_requires_production_controller_write_runtime");
   }
-  if (!runtime.allowedTools.includes(PRODUCTION_SCHEDULE_DRY_RUN_TOOL) ||
-      !runtime.allowedTools.includes(PRODUCTION_SCHEDULE_WRITE_TOOL)) {
-    throw new Error("production_schedule_broker_role_tools_missing");
-  }
   const privatePublic = createPublicKey(privateKey).export({ type: "spki", format: "der" });
   const configuredPublic = createPublicKey(runtime.approvalPublicKey).export({ type: "spki", format: "der" });
   if (privatePublic.length !== configuredPublic.length || !timingSafeEqual(privatePublic, configuredPublic)) {
@@ -166,6 +162,11 @@ export function productionScheduleApprovalBrokerConfigFromEnv(env = process.env)
       agentRole: PRODUCTION_SCHEDULE_AGENT_ROLE,
       actorUser: runtime.actorUser,
       approverId: runtime.approverId,
+      allowedTools: [
+        PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL,
+        PRODUCTION_SCHEDULE_DRY_RUN_TOOL,
+        PRODUCTION_SCHEDULE_WRITE_TOOL,
+      ],
     }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(

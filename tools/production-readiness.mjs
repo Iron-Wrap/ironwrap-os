@@ -398,7 +398,6 @@ function privateBrokerEnvTemplate(text, {
     HERMES_AGENT_ROLE: role,
     HERMES_ACTOR_USER: actor,
     HERMES_APPROVER_ID: "owner@ironwrapexteriors.com",
-    HERMES_ROLE_POLICY_PATH: "/srv/ironwrap/hermes/agents/roles.json",
     HERMES_APPROVAL_PUBLIC_KEY_FILE: publicKeyPath,
     HERMES_APPROVAL_PRIVATE_KEY_FILE: privateKeyPath,
     [`${prefix}_TENANT_ID`]: "ironwrap",

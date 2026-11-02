@@ -12,27 +12,22 @@ import {
 test("configFromEnv requires bus URL and admin token", () => {
   assert.throws(() => configFromEnv({}), /IRONWRAP_BUS_BASE_URL/);
   assert.throws(() => configFromEnv({ IRONWRAP_BUS_BASE_URL: "https://bus.example" }), /IRONWRAP_ADMIN_TOKEN/);
-  assert.throws(() => configFromEnv({
-    IRONWRAP_BUS_BASE_URL: "https://bus.example/",
-    IRONWRAP_ADMIN_TOKEN: "token",
-  }), /HERMES_AGENT_ROLE/);
-  assert.throws(() => configFromEnv({
-    IRONWRAP_BUS_BASE_URL: "https://bus.example/",
-    IRONWRAP_ADMIN_TOKEN: "token",
-    HERMES_AGENT_ROLE: "unknown-role",
-  }), /HERMES_AGENT_ROLE/);
+  for (const MCP_ALLOWED_TOOLS of [undefined, "", " , ", "get_envelope,Get-Envelope"]) {
+    assert.throws(() => configFromEnv({
+      IRONWRAP_BUS_BASE_URL: "https://bus.example/",
+      IRONWRAP_ADMIN_TOKEN: "token",
+      MCP_ALLOWED_TOOLS,
+    }), /MCP_ALLOWED_TOOLS must list/);
+  }
 
   const readOnly = configFromEnv({
     IRONWRAP_BUS_BASE_URL: "https://bus.example/",
     IRONWRAP_ADMIN_TOKEN: "token",
-    HERMES_AGENT_ROLE: "lead-concierge",
+    MCP_ALLOWED_TOOLS: "list_recent_envelopes, get_envelope,get_envelope",
   });
   assert.equal(readOnly.baseUrl, "https://bus.example");
   assert.equal(readOnly.writeEnabled, false);
-  assert.equal(readOnly.agentRole, "lead-concierge");
-  assert.equal(readOnly.agentRoleTitle, "Lead Concierge");
-  assert.ok(readOnly.allowedTools.includes("get_envelope"));
-  assert.equal(readOnly.allowedTools.includes("request_replay"), false);
+  assert.deepEqual(readOnly.allowedTools, ["list_recent_envelopes", "get_envelope"]);
 
   const writable = configFromEnv({
     IRONWRAP_BUS_BASE_URL: "https://bus.example/",
@@ -40,13 +35,12 @@ test("configFromEnv requires bus URL and admin token", () => {
     IRONWRAP_BUS_WRITE_ENABLED: "true",
     HERMES_WRITE_TOKEN: "approve",
     IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "2500",
-    HERMES_AGENT_ROLE: "support-admin",
+    MCP_ALLOWED_TOOLS: "dry_run_replay,request_replay",
   });
   assert.equal(writable.writeEnabled, true);
   assert.equal(writable.writeToken, "approve");
   assert.equal(writable.requestTimeoutMs, 2500);
-  assert.equal(writable.agentRole, "support-admin");
-  assert.ok(writable.allowedTools.includes("request_replay"));
+  assert.deepEqual(writable.allowedTools, ["dry_run_replay", "request_replay"]);
 });
 
 test("configFromEnv requires HTTPS except explicitly enabled localhost", () => {
@@ -62,7 +56,7 @@ test("configFromEnv requires HTTPS except explicitly enabled localhost", () => {
     IRONWRAP_BUS_BASE_URL: "http://127.0.0.1:8787/",
     IRONWRAP_ADMIN_TOKEN: "token",
     IRONWRAP_BUS_ALLOW_INSECURE_LOCAL: "true",
-    HERMES_AGENT_ROLE: "lead-concierge",
+    MCP_ALLOWED_TOOLS: "get_envelope",
   }).baseUrl, "http://127.0.0.1:8787");
   assert.throws(() => configFromEnv({
     IRONWRAP_BUS_BASE_URL: "https://user:secret@bus.example?token=x",
@@ -72,7 +66,7 @@ test("configFromEnv requires HTTPS except explicitly enabled localhost", () => {
     IRONWRAP_BUS_BASE_URL: "https://bus.example",
     IRONWRAP_ADMIN_TOKEN: "token",
     IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "0",
-    HERMES_AGENT_ROLE: "lead-concierge",
+    MCP_ALLOWED_TOOLS: "get_envelope",
   }), /must be an integer/);
 });
 
@@ -160,34 +154,37 @@ test("write approval helper gates replay mutations", () => {
   assert.doesNotThrow(() => assertWriteApproved({ writeEnabled: true, writeToken: "right" }, "right"));
 });
 
-test("bus MCP registers only tools granted to the runtime Hermes role", () => {
-  const leadConcierge = buildServer({
-    baseUrl: "https://bus.example",
-    adminToken: "token",
-    agentRole: "lead-concierge",
-  });
-  assert.ok(leadConcierge._registeredTools.list_recent_envelopes);
-  assert.ok(leadConcierge._registeredTools.get_envelope);
-  assert.equal(leadConcierge._registeredTools.list_measurement_intake_exceptions, undefined);
-  assert.equal(leadConcierge._registeredTools.get_bus_readiness, undefined);
-  assert.equal(leadConcierge._registeredTools.dry_run_replay, undefined);
-  assert.equal(leadConcierge._registeredTools.request_replay, undefined);
+test("bus MCP registers exactly the tools the launching host grants and refuses anything else", () => {
+  const base = { baseUrl: "https://bus.example", adminToken: "token" };
+  assert.throws(() => buildServer(base), /mcp_allowed_tools_required/);
+  assert.throws(() => buildServer({ ...base, allowedTools: [] }), /mcp_allowed_tools_required/);
+  assert.throws(
+    () => buildServer({ ...base, allowedTools: ["get_envelope", "replay_everything"] }),
+    /mcp_allowed_tools_unknown:replay_everything/,
+  );
 
-  const supportAdmin = buildServer({
-    baseUrl: "https://bus.example",
-    adminToken: "token",
-    agentRole: "support-admin",
-  });
-  assert.ok(supportAdmin._registeredTools.get_operational_status);
-  assert.ok(supportAdmin._registeredTools.list_measurement_intake_exceptions);
-  assert.ok(supportAdmin._registeredTools.dry_run_replay);
-  assert.ok(supportAdmin._registeredTools.request_replay);
+  const reader = buildServer({ ...base, allowedTools: ["list_recent_envelopes", "get_envelope"] });
+  assert.deepEqual(Object.keys(reader._registeredTools).sort(), ["get_envelope", "list_recent_envelopes"]);
+  assert.equal(reader._registeredTools.request_replay, undefined);
 
-  const estimator = buildServer({
-    baseUrl: "https://bus.example",
-    adminToken: "token",
-    agentRole: "estimator-assistant",
+  const recovery = buildServer({
+    ...base,
+    allowedTools: [
+      "get_bus_readiness",
+      "get_operational_status",
+      "list_recent_envelopes",
+      "get_envelope",
+      "list_dead_letters",
+      "list_measurement_intake_exceptions",
+      "dry_run_replay",
+      "request_replay",
+    ],
   });
-  assert.ok(estimator._registeredTools.list_measurement_intake_exceptions);
-  assert.equal(estimator._registeredTools.list_dead_letters, undefined);
+  assert.equal(Object.keys(recovery._registeredTools).length, 8, "the bus server has eight tools");
+  assert.ok(recovery._registeredTools.dry_run_replay);
+  const replay = recovery._registeredTools.request_replay.inputSchema.shape;
+  for (const field of ["run_id", "approved_by", "approval_token"]) {
+    assert.ok(replay[field], `request_replay must require ${field}`);
+    assert.equal(replay[field].isOptional(), false, `request_replay.${field} must not be optional`);
+  }
 });

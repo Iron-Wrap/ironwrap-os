@@ -17,7 +17,7 @@ import {
 } from "./accounting-fixture.ts";
 
 import type { AppEnv } from "../src/app-types.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 import {
   ACCOUNTING_INTENT_KINDS,
   ACCOUNTING_INTENT_STATES,

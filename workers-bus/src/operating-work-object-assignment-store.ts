@@ -3,7 +3,7 @@ import {
   parseAuthorityRequirements,
   type AuthorityRequirement,
 } from "./authority-records.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export type OperatingWorkObjectAuthorityRole = "owner" | "production";
 

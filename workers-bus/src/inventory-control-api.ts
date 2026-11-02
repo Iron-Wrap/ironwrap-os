@@ -24,7 +24,7 @@ import {
   type AuthorityLifecycleDenial,
   type AuthorityRecordReadback,
 } from "./authority-records.ts";
-import { canonicalJson } from "./newo-hash.ts";
+import { canonicalJson } from "./canonical.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
 import { assertCurrentEvidenceReader, binarySha256, evidenceFilesForDetail, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedEvidenceFilesForRefs, resolveEvidenceUploads } from "./evidence-uploads.ts";
 

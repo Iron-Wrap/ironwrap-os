@@ -17,7 +17,7 @@ import {
   type SchemaRetentionPolicy,
 } from "./schema-forms.ts";
 import { entityExists, knownEntityType } from "./pipeline-board-store.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const DOCUMENT_TEMPLATE_ACTIONS = ["create", "revise", "retire"] as const;
 export type DocumentTemplateAction = (typeof DOCUMENT_TEMPLATE_ACTIONS)[number];

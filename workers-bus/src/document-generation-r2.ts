@@ -25,7 +25,7 @@ import {
   type ExternalEffectRecord,
 } from "./effect-runtime.ts";
 import { bodySize, r2ObjectMatches, r2ObjectStore } from "./field-actions.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   getSchemaFieldDefinition,
   recordVerifiedSchemaObjectFieldValue,

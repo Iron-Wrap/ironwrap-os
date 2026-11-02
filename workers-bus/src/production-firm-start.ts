@@ -30,7 +30,7 @@
 //     `crew_superseded` of that entry, then the `clear`.
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { cancellationWindowHold } from "./production-cancellation-window.ts";
 import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "./production-job-stops.ts";
 

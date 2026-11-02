@@ -7,7 +7,7 @@ import {
   manualMeasurementResultSchema,
   manualMeasurementsResponseSchema,
 } from "../../app/src/estimator/manual-measurement-contracts.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 const JOB = "job:board:0001";
 const PATH = `/api/v1/estimator/jobs/${encodeURIComponent(JOB)}/manual-measurements`;
 const key = () => `manual-measurement:${crypto.randomUUID()}`;

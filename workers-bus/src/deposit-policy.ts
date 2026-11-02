@@ -22,7 +22,7 @@
 // any that is missing on the five-minute cron. Both are idempotent by acceptance binding id.
 
 import { configuredTenantId, personCookieSession, validAppCsrf } from "./app-auth.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 
 export const TENANT_DEPOSIT_POLICIES = ["od01_payment_on_completion", "md13_deposit"] as const;

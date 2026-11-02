@@ -196,10 +196,10 @@ setsel() { gh project item-edit --id "$1" --project-id $PROJECT_ID --field-id "$
 **Merge tiers (all non-blocking).** Every PR auto-merges on green `gate`; a tier decides only what review
 follows. Tier 0: dependency patch/minor, docs, mechanical changes. Tier 1: agent product code; the Codex
 connector's review comment is advisory (fix findings in the PR if they arrive before the merge, in a
-follow-up after). Tier 2: PRs touching `workers-bus/migrations/`, `release-issuer/`, `deploy/`,
-`.github/workflows/` or `config/authority/` get the label `tier-2` and land in a weekly post-merge
-review queue for Ivan and Sergey: revert, don't gate. Tiers govern PR review only; the product write
-contract in "Mutation guardrails" below is unchanged.
+follow-up after). Tier 2: PRs touching `workers-bus/migrations/`, `deploy/`, `.github/workflows/`
+or `config/authority/` get the label `tier-2` and land in a weekly post-merge review queue for Ivan
+and Sergey: revert, don't gate. Tiers govern PR review only; the product write contract in
+"Mutation guardrails" below is unchanged.
 
 **Soft concurrency targets** (scheduling guidance for conductors, never a refusal): about 8 live root
 chats on the workstation and about 3 on this repo; serialize Figma and computer-use lanes; cap

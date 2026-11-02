@@ -1,5 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { resolveFacetEstimatorReadyAnchor } from "./facet-prequote.ts";
 
 export const ESTIMATOR_EVIDENCE_SCHEMA_VERSION =

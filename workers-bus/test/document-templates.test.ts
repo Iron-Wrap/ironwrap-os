@@ -10,7 +10,7 @@ import {
   runExternalEffect,
   type EffectAuthority,
 } from "../src/effect-runtime.ts";
-import { canonicalJson } from "../src/newo-hash.ts";
+import { canonicalJson } from "../src/canonical.ts";
 import {
   beginDocumentGeneration,
   createDocumentTemplate,

@@ -112,9 +112,9 @@ test-tools:
 	  tools/deploy-workflow.test.mjs \
 	  tools/qa-artifact-flow.test.mjs \
 	  tools/qa-dead-letter-workflow.test.mjs \
+	  tools/canonical-json.test.mjs \
 	  tools/release-permit.test.mjs \
 	  tools/release-promotion.test.mjs
-	npm test --prefix release-issuer
 
 mcp: $(addsuffix /node_modules/.package-lock.json,$(filter mcp/%,$(NODE_PACKAGES)))
 	npm test --prefix mcp/erpnext-roofing-mcp

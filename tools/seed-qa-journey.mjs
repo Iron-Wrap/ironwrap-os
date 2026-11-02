@@ -18,8 +18,9 @@
 // The job is not scheduled to the crew: POST /api/v1/jobs/:id/schedule needs all six production
 // gates cleared, and a gate clears only by an entry in the gate ledger (migration 0153): Deposit on
 // the job's reconciled deposit invoice, or a waiver on Deposit, Materials or Access that only the
-// owner decides. Safety and Weather are never waivable and Crew has no waiver. D1 refuses every such
-// entry from the seed identity, so the seed clears no gate.
+// owner decides. Safety and Weather are never waivable and Crew has no waiver: it clears by policy
+// when a person schedules the job (0159). D1 refuses every such entry from the seed identity, and a
+// schedule from it, so the seed clears no gate.
 //
 // Usage (QA_SEED_MAGIC_LINK_TOKEN from tools/qa-seed-owner.mjs, EFFECT_RUNTIME_TOKEN, both from the
 // release env file, never on the command line):

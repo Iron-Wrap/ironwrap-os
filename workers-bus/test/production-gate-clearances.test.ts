@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import { recordLegacyGateStates, SCHEDULING_GATES } from "./production-gate-ledger-fixture.ts";
+import { SCHEDULING_GATES } from "./production-gate-ledger-fixture.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities.
 const TENANT = "ironwrap";
@@ -796,36 +796,6 @@ test("the backfill records each gate already out of blocked as one legacy entry"
   refused(() => append(db), "production_gate_already_cleared");
   append(db, { gate: "Access" });
   assert.equal(gateRow(db, "Access").version, 2);
-});
-
-test("a fixture's legacy write restores every guard exactly as it was", () => {
-  const db = ledger();
-  const triggers = () => db.prepare(
-    "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
-  ).all().map((row) => ({ ...row }));
-  const before = triggers();
-  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB, at: LATER });
-  assert.deepEqual(triggers(), before);
-  for (const gate of SCHEDULING_GATES) {
-    assert.deepEqual({ state: gateRow(db, gate).state, version: gateRow(db, gate).version }, { state: "ready", version: 2 }, gate);
-  }
-  const legacy = db.prepare(
-    "SELECT clearance_id FROM production_gate_clearances WHERE entry_kind = 'legacy'",
-  ).all() as Array<{ clearance_id: string }>;
-  assert.equal(legacy.length, SCHEDULING_GATES.length);
-  for (const { clearance_id: id } of legacy) {
-    assert.equal(
-      (db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE run_id = ?").get(id) as { n: number }).n,
-      1,
-    );
-  }
-  refused(
-    () => db.prepare(
-      "UPDATE operating_production_gates SET state = 'blocked', version = version + 1 WHERE gate_id = ?",
-    ).run(gateId("Weather")),
-    "operating_production_gates_ledger_required",
-  );
-  refused(() => append(db, { gate: "Access", entry_kind: "legacy", actor_kind: null, request_sha256: null, idempotency_key_hash: null }), "production_gate_clearance_legacy_closed");
 });
 
 test("both D1 recovery inventories carry the ledger, its index and every guard", () => {

@@ -596,7 +596,7 @@ list or with a name it does not have. The separate desktop pilot server takes no
 remain fixed at `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. MCP base
 URLs must be production HTTPS URLs. Plain HTTP is accepted only for explicit localhost development.
 
-Keep `APP_HERMES_DESKTOP_ENABLED=false` during the broad role smoke test. The checked-in desktop
+Keep `APP_HERMES_DESKTOP_ENABLED=false` during the first MCP smoke test. The checked-in desktop
 surface is a narrow `lead_follow_up_draft` pilot, not a resident company coordinator or operating
 authority. For first pairing, issue
 the one-time fragment link from PWA Settings and pass it only as
@@ -616,7 +616,7 @@ npm test --prefix mcp/ironwrap-bus-mcp
 npm test --prefix mcp/newo-mcp
 ```
 
-Ask the owner-operator profile for bus readiness, operational status, and blocked jobs. Confirm
+Ask an MCP client granted the bus read tools for bus readiness, operational status, and blocked jobs. Confirm
 that no mutation or `Hermes Run` was created. For the approved-write proof, enable only the one
 required write surface, use a stable unique `run_id`, execute the matching dry-run, obtain human
 approval, and invoke the request tool with the approval token. Repeating the same completed

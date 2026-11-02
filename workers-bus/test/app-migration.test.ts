@@ -4,6 +4,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
 import { flattenEnv } from "../src/env-bindings.ts";
+import { facetV2StaticRoutes } from "../src/facet-design-ingest.ts";
+import { facetLaunchConfigured } from "../src/facet-launch.ts";
 
 // IRO-268: wrangler.jsonc groups vars into CFG_* JSON bindings. Flatten each parsed environment's
 // `vars` in place, the same way flattenEnv restores them at the Worker's entry points, so the
@@ -1784,13 +1786,42 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
     assert.equal("FACET_LAUNCH_HMAC_KEY" in environment.vars, false);
   }
 
-  // Deployed environments still carry no route table and no launch identity: the real Facet
-  // production tenant id, issuer and origin are not in this repository. Until they are, the
-  // rail is enabled and provably unreachable rather than enabled and guessing.
-  for (const environment of [config, config.env.qa]) {
-    assert.equal(environment.vars.FACET_V2_ROUTES_JSON, "[]");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_BASE_URL, "");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+  // Production still carries no route table and no launch identity: the real Facet production
+  // tenant id, issuer and origin are not in this repository. Until they are, the rail is
+  // enabled and provably unreachable rather than enabled and guessing.
+  assert.equal(config.vars.FACET_V2_ROUTES_JSON, "[]");
+  assert.equal(config.vars.APP_FACET_LAUNCH_BASE_URL, "");
+  assert.equal(config.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+
+  // qa is wired to the single QA Facet on netcup_arm (ironwrap-tracker#74): one route from its
+  // `qa` tenant to this qa Worker's own ingest URL, and a launch identity naming the same tenant.
+  // It must never point at the local namespace or at production.
+  const qa = config.env.qa.vars;
+  const qaRoutes = JSON.parse(qa.FACET_V2_ROUTES_JSON);
+  assert.equal(qaRoutes.length, 1);
+  // Identifiers need at least three characters, so the QA Facet's environment is `qa-arm`, not `qa`.
+  assert.equal(qaRoutes[0].source_environment, "qa-arm");
+  // Shape checks alone let a route the real parser rejects reach qa once (`qa` was too short):
+  // the configured route must pass the parser, and launch must resolve with any well-formed key.
+  assert.ok(
+    facetV2StaticRoutes({ FACET_V2_ROUTES_JSON: qa.FACET_V2_ROUTES_JSON }),
+    "the qa route must pass facetV2StaticRoutes",
+  );
+  assert.equal(
+    facetLaunchConfigured({ ...qa, FACET_LAUNCH_HMAC_KEY: "A".repeat(43) }, qa.APP_TENANT_ID),
+    true,
+  );
+  assert.equal(qaRoutes[0].destination_tenant_id, qa.APP_TENANT_ID);
+  assert.equal(qaRoutes[0].source_tenant_id, qa.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
+  // Facet delivers straight to the Worker's own workers.dev host: behind the qa-iwrap proxy the
+  // Worker sees that URL, and delivery verification signs the destination it receives.
+  const destinationOrigin = new URL(qaRoutes[0].destination_url).origin;
+  assert.match(new URL(destinationOrigin).hostname, /^ironwrap-bus-qa\.[a-z0-9-]+\.workers\.dev$/);
+  assert.ok(qa.APP_ALLOWED_ORIGINS.split(",").includes(destinationOrigin));
+  assert.equal(new URL(qaRoutes[0].destination_url).pathname, "/ingest/facet-design");
+  assert.equal(qa.APP_FACET_LAUNCH_BASE_URL, "https://facet.mindburn.org");
+  for (const url of [qaRoutes[0].destination_url, qa.APP_FACET_LAUNCH_BASE_URL]) {
+    assert.doesNotMatch(new URL(url).hostname, /\.test$/);
   }
 
   // The local stack carries a complete, self-consistent route so `npm run dev` can drive the

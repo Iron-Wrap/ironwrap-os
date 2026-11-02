@@ -31,7 +31,8 @@ import {
   depositIntentIsReconciled,
   selectPhaseWorkPackage,
 } from "../src/commercial-job-phase.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
+import { attestGateInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 
 const TENANT = "ironwrap";
@@ -1412,16 +1413,68 @@ test("IRO-208B closes the no-seed commercial path through reconciled deposit and
       depositGateBeforeConflict,
     );
 
-    // Attestation and Crew-by-policy entries do not exist yet, so the journey records Safety,
-    // Weather and Crew the way 0153 backfills gates cleared before the ledger, and proves the
-    // phase then admits the job.
-    recordLegacyGateStates(h.db.raw, {
+    // The owner, on no crew, attests Safety and Weather (0158). Crew is bound by the schedule
+    // (0159), so until the job is scheduled it still counts as blocked.
+    for (const gate of ["Safety", "Weather"] as const) {
+      attestGateInLedger(h.db.raw, {
+        tenantId: TENANT,
+        roofJobId: journey.ids.jobId,
+        gate,
+        actorUserId: OWNER_ID,
+        actorRole: "owner",
+      });
+    }
+    const unscheduled = await jobPhase(h, journey.ids.jobId);
+    assert.equal(unscheduled.phase, "production_blocked");
+    assert.equal(unscheduled.facts.production.all_required_gates_ready, false);
+
+    // A person schedules a crew of one synthetic field worker; the schedule binds Crew by policy
+    // in the same batch, and the phase admits the job.
+    const at = new Date().toISOString();
+    h.db.raw.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+          active, created_by, created_at, updated_at)
+       VALUES ('appu_field_iro208', ?, 'field-iro208@example.invalid', 'Field', 'field', 'field',
+               'field-iro208@example.invalid', 1, 'reference-test', ?, ?)`,
+    ).run(TENANT, at, at);
+    h.db.raw.prepare(
+      `INSERT INTO fleet_crews (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
+       VALUES ('crew:iro208:0001', ?, 'Synthetic Crew', 'Active', 1, ?, ?)`,
+    ).run(TENANT, at, at);
+    h.db.raw.prepare(
+      `INSERT INTO fleet_crew_members
+         (membership_id, tenant_id, crew_id, user_id, active, version, created_at, updated_at)
+       VALUES ('membership:iro208:0001', ?, 'crew:iro208:0001', 'appu_field_iro208', 1, 1, ?, ?)`,
+    ).run(TENANT, at, at);
+    const job = h.db.raw.prepare(
+      "SELECT version FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?",
+    ).get(TENANT, journey.ids.jobId) as { version: number };
+    const day = fixtureSchedule(1);
+    await recordOperatingJobAssignment(h.env, {
       tenantId: TENANT,
       roofJobId: journey.ids.jobId,
-      gates: ["Safety", "Weather", "Crew"],
+      expectedRoofJobVersion: Number(job.version),
+      crewId: "crew:iro208:0001",
+      expectedCrewVersion: 1,
+      authorityRequirements: [{
+        authority_record_id: "authority:iro208:worker",
+        subject_type: "Person",
+        subject_role: "Worker",
+        subject_ref: "appu_field_iro208",
+        authority_kind: "Worker Competency",
+        scope_type: "Roof Job",
+        scope_ref: journey.ids.jobId,
+        version: 1,
+        state_digest_sha256: "c".repeat(64),
+      }],
+      scheduledStart: day.start,
+      scheduledEnd: day.end,
+      actorUserId: OWNER_ID,
+      idempotencyKey: "iro208b-schedule-0001",
     });
     const ready = await jobPhase(h, journey.ids.jobId);
-    assert.equal(ready.phase, "production_ready");
+    assert.equal(ready.phase, "scheduled");
     assert.equal(ready.facts.accounting.deposit_reconciled, true);
     assert.equal(ready.facts.production.all_required_gates_ready, true);
     assert.equal(h.fake.providerInvoices.size, 1);

@@ -14,7 +14,7 @@ import {
 import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
 import { issueNativeWorkPackage, nativeWorkPackageAction } from "../src/work-package-store.ts";
 import type { AuthContext } from "../src/app-types.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { clearScheduleGatesInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 import {
   auth,
   request,
@@ -192,7 +192,14 @@ async function fixture(typed = false) {
         SEED_TIME,
         SEED_TIME,
       );
-  recordLegacyGateStates(raw, { tenantId: "ironwrap", roofJobId: JOB, at: SEED_TIME });
+  // Production, on no crew, clears the five gates a schedule rests on; the schedule binds Crew.
+  clearScheduleGatesInLedger(raw, {
+    tenantId: "ironwrap",
+    roofJobId: JOB,
+    ownerUserId: USERS.owner.userId,
+    attesterUserId: USERS.production.userId,
+    attesterRole: "production",
+  });
   const assignment = (
     await recordOperatingJobAssignment(
       f.env,
@@ -203,7 +210,8 @@ async function fixture(typed = false) {
         crewId: "crew:measurement:0001",
         expectedCrewVersion: 1,
         authorityRequirements: REQUIREMENTS,
-        scheduledStart: SEED_TIME,
+        // Inside the Weather window production attested, which D1 holds to its own clock.
+        scheduledStart: fixtureSchedule(1).start,
         actorUserId: USERS.owner.userId,
         idempotencyKey: "measurement-assignment-0001",
       },

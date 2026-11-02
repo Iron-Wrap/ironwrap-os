@@ -204,6 +204,7 @@ export function brokerConfigFromEnv(env = process.env) {
       agentRole: "lead-concierge",
       actorUser: runtime.actorUser,
       approverId: runtime.approverId,
+      allowedTools: [LEAD_TRIAGE_DRY_RUN_TOOL, LEAD_TRIAGE_WRITE_TOOL],
     }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(env.APPROVAL_BROKER_MAX_CLOCK_SKEW_MS, MAX_CLOCK_SKEW_MS, 10_000, 120_000),

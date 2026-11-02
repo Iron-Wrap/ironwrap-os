@@ -63,6 +63,7 @@ test("quote price-rule binding is receipt-bound, redacted, and fails before a He
     approverId: "owner@example.com",
     dryRunSigningKey: "p".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_bind_quote_price_rules", "request_bind_quote_price_rules"],
   });
   const sourceQuote = quote();
   const sourceRule = rule();

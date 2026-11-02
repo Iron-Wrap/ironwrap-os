@@ -98,6 +98,7 @@ test("quote revision preview is receipt-safe and rejects an already-created dete
     apiKey: "key",
     apiSecret: "secret",
     writeEnabled: false,
+    allowedTools: ["dry_run_quote_revision", "request_create_quote_revision"],
   });
   assert.ok(server._registeredTools.dry_run_quote_revision);
   assert.ok(server._registeredTools.request_create_quote_revision);
@@ -139,6 +140,7 @@ test("Customer Quote reads are strict projections, not a route to tax, payment, 
     apiKey: "key",
     apiSecret: "secret",
     writeEnabled: false,
+    allowedTools: ["get_customer_quote"],
   });
   t.mock.method(globalThis, "fetch", quoteReadMock({
     source: {
@@ -174,6 +176,7 @@ test("an approved quote revision command writes one audited Draft shell and stal
     approverId: "owner@example.com",
     dryRunSigningKey: "q".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_quote_revision", "request_create_quote_revision"],
   });
   let quoteWrites = 0;
   let hermesRunPosts = 0;

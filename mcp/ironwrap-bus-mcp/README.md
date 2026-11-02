@@ -35,6 +35,8 @@ Required environment:
 ```bash
 IRONWRAP_BUS_BASE_URL=https://<worker-host>
 IRONWRAP_ADMIN_TOKEN=...
+# The exact tools this process may register; the server refuses to start without it.
+MCP_ALLOWED_TOOLS=get_bus_readiness,list_recent_envelopes
 IRONWRAP_BUS_WRITE_ENABLED=false
 HERMES_WRITE_TOKEN=...
 IRONWRAP_BUS_REQUEST_TIMEOUT_MS=10000

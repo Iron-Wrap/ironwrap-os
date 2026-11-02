@@ -4,10 +4,9 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over the Frappe compatibility projection, not native
-IronWrap business authority. It uses Frappe token auth. The manifest in
-`hermes/mcp-servers.json`, `hermes/agents/roles.json`, and the implemented registrations are the
-machine-validated tool inventory; [`hermes/README.md`](../../hermes/README.md) records the current
-derived totals once. Deployed runtime proof remains a separate launch gate. Canonical authority is
+IronWrap business authority. It uses Frappe token auth. The implemented registrations are the tool
+inventory; each process registers only the tools its launching host lists in `MCP_ALLOWED_TOOLS`.
+Deployed runtime proof remains a separate launch gate. Canonical authority is
 defined in [`docs/AI-NATIVE-ARCHITECTURE.md`](../../docs/AI-NATIVE-ARCHITECTURE.md).
 
 These approved writes implement the current human-receipt compatibility control. They remain
@@ -128,9 +127,10 @@ Frappe write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true`. A writable
 process must also configure the Worker effect runtime with
 `IRONWRAP_EFFECT_RUNTIME_URL` and `IRONWRAP_EFFECT_RUNTIME_TOKEN`; it cannot
 fall back to a direct provider mutation. Every MCP process must also bind one
-canonical `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`;
-the server registers only that role's `roles.json` allowlist. An approved request
-needs a stable `run_id`, request text, approver, a short-lived server-issued
+canonical `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`, and its launching host must list the
+exact tools it may call in `MCP_ALLOWED_TOOLS`; the server registers only those and refuses to
+start without the list or with a name it does not have. The role is identity, not a grant. An
+approved request needs a stable `run_id`, request text, approver, a short-lived server-issued
 `dry_run_receipt`, and an independently signed `approval_receipt` for the exact
 arguments, role, actor, and Frappe site. Receipts are retained in dedicated
 `Hermes Run` audit fields, excluded from `tool_args_json` and result payloads,
@@ -236,6 +236,7 @@ ERPNEXT_WRITE_ENABLED=false
 # unknown/reconciliation state, and the durable effect ledger.
 IRONWRAP_EFFECT_RUNTIME_URL=https://<worker-subdomain>.workers.dev
 IRONWRAP_EFFECT_RUNTIME_TOKEN=<dedicated-worker-admin-token>
+MCP_ALLOWED_TOOLS=get_roof_job,get_lead_envelope
 HERMES_AGENT_ROLE=owner-operator
 HERMES_ACTOR_USER=owner@example.com
 HERMES_APPROVER_ID=owner@example.com
@@ -251,7 +252,8 @@ Both runtimes normalize that public URL before hashing it into `site_id`; this
 prevents a valid capability for another site from being consumed locally.
 
 The private brokers hold the Ed25519 private key and start a fresh, fixed-role
-MCP child only for their bounded endpoints. Lead triage remains
+MCP child only for their bounded endpoints, granting it exactly the tools that
+endpoint calls. Lead triage remains
 `node src/approval-broker.mjs` behind
 `deploy/approval-broker.service.example`. Quote revision is a separate process:
 `node src/quote-revision-approval-broker.mjs` behind

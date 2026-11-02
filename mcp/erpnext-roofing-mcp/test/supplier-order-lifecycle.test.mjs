@@ -216,6 +216,7 @@ test("a signed Supplier Order transmission writes only Frappe records and never 
     approverId: "owner@example.invalid",
     dryRunSigningKey: "s".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_supplier_order_transition", "request_transition_supplier_order"],
   });
   assert.ok(server._registeredTools.dry_run_supplier_order_transition);
   assert.ok(server._registeredTools.request_transition_supplier_order);
@@ -313,6 +314,7 @@ test("an idempotent supplier acknowledgement records no Supplier Order mutation"
     approverId: "owner@example.invalid",
     dryRunSigningKey: "a".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_supplier_order_transition", "request_transition_supplier_order"],
   });
   let supplierOrderWrites = 0;
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {

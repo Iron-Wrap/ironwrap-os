@@ -48,7 +48,6 @@ margin, or customer promise can override a safety stop.
 | `app/` | React PWA for field, estimating, customer, sales, production, and owner surfaces |
 | `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection and legacy command policy; no new operating authority |
 | `mcp/` | Bounded read, preview, compatibility, and recovery adapters |
-| `hermes/` | Role/tool configuration and a narrow default-off drafting pilot; not a system of record or resident coordinator |
 | `config/` | Tenant and integration release contracts; secret names only |
 | `deploy/` | Local and production deployment assets |
 | `docs/` | Canonical contracts and current runbooks only |
@@ -66,7 +65,6 @@ Run the cheapest relevant check first, then broaden:
 node tools/validate-documentation.mjs
 node tools/validate-erpnext-doctypes.mjs
 node tools/validate-tenant-config.mjs
-node tools/validate-hermes-config.mjs
 node tools/validate-newo-config.mjs
 node tools/validate-lead-triage-shadow-authority.mjs
 node tools/applicad-xml-proof.mjs --check

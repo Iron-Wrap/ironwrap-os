@@ -243,7 +243,7 @@ fi
 check 7 "MCP: a tenant profile reads only its own tenant, and cross-tenant Frappe keys fail"
 mcp_envelopes() { # base-url admin-token
   IRONWRAP_BUS_BASE_URL="$1" IRONWRAP_ADMIN_TOKEN="$2" IRONWRAP_BUS_ALLOW_INSECURE_LOCAL=true \
-    HERMES_AGENT_ROLE=owner-operator \
+    MCP_ALLOWED_TOOLS=list_recent_envelopes \
     node "$ROOT_DIR/deploy/local/mcp-list-envelopes.mjs" "$ROOT_DIR/mcp/ironwrap-bus-mcp"
 }
 mcp_b="$(mcp_envelopes "$B_ORIGIN" "$B_ADMIN" || echo "MCP_ERROR")"

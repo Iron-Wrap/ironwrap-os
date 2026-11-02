@@ -79,7 +79,6 @@ The primary executable modules are:
 | [`app/`](../app/) | Same-origin role and customer surfaces, offline field capture, and approval experiences |
 | [`frappe-apps/ironwrap_roofing/`](../frappe-apps/ironwrap_roofing/) | Temporary compatibility projection and legacy command adapters; no new operating authority |
 | [`mcp/`](../mcp/) | Bounded read, preview, compatibility, and recovery adapters; not a second policy or state layer |
-| [`hermes/`](../hermes/) | Role/tool configuration and the narrow desktop drafting pilot; not a resident autonomous runtime |
 | Facet repository | Separate design bounded context, signed evidence producer, and canonical owner of the accepted configurator lineage |
 
 ## Authority map

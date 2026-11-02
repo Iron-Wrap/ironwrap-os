@@ -50,7 +50,6 @@ deps: $(addsuffix /node_modules/.package-lock.json,$(NODE_PACKAGES) workers-bus)
 
 validate:
 	node tools/validate-erpnext-doctypes.mjs
-	node tools/validate-hermes-config.mjs
 	node tools/validate-tenant-config.mjs
 	node tools/validate-newo-config.mjs
 	node tools/validate-lead-triage-shadow-authority.mjs
@@ -227,7 +226,7 @@ audit: deps
 static:
 	find deploy workers-bus -path '*/node_modules' -prune -o -type f -name '*.sh' -print0 \
 	  | xargs -0 -r -n1 bash -n
-	if grep -rl $$'—' hermes/ config/ deploy/; then \
+	if grep -rl $$'—' config/ deploy/; then \
 	  echo "em dash found in agent-facing content" >&2; exit 1; \
 	fi
 

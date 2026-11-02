@@ -95,6 +95,7 @@ test("lead-triage dry runs reject ineligible source state before issuing a recei
     writeEnabled: false,
     agentRole: "lead-concierge",
     actorUser: "concierge@example.com",
+    allowedTools: ["dry_run_mark_lead_triaged"],
   });
   const envelope = { name: "lead:1", triage_status: "Untriaged" };
   const requests = [];
@@ -119,7 +120,7 @@ test("lead-triage dry runs reject ineligible source state before issuing a recei
   assert.ok(requests.every(({ method }) => method === "GET"));
 });
 
-test("lead-triage discovery and history are limited to lead concierge and owner", async (t) => {
+test("lead-triage discovery and history register only where the launching host grants them", async (t) => {
   const concierge = buildServer({
     baseUrl: "https://erp.example",
     apiKey: "key",
@@ -127,6 +128,12 @@ test("lead-triage discovery and history are limited to lead concierge and owner"
     writeEnabled: false,
     agentRole: "lead-concierge",
     actorUser: "concierge@example.com",
+    allowedTools: [
+      "list_untriaged_lead_envelopes",
+      "list_communication_events_for_lead",
+      "dry_run_mark_lead_triaged",
+      "request_mark_lead_triaged",
+    ],
   });
   const production = buildServer({
     baseUrl: "https://erp.example",
@@ -135,6 +142,7 @@ test("lead-triage discovery and history are limited to lead concierge and owner"
     writeEnabled: false,
     agentRole: "production-controller",
     actorUser: "production@example.com",
+    allowedTools: ["get_roof_job"],
   });
 
   for (const name of [
@@ -143,8 +151,8 @@ test("lead-triage discovery and history are limited to lead concierge and owner"
     "dry_run_mark_lead_triaged",
     "request_mark_lead_triaged",
   ]) {
-    assert.ok(concierge._registeredTools[name], `lead-concierge must register ${name}`);
-    assert.equal(production._registeredTools[name], undefined, `production-controller must not register ${name}`);
+    assert.ok(concierge._registeredTools[name], `a host granting ${name} must see it`);
+    assert.equal(production._registeredTools[name], undefined, `a host not granting ${name} must not see it`);
   }
 
   const calls = [];
@@ -207,6 +215,7 @@ test("lead triage requires matching receipts, patches only local fields, and rep
     approverId: "owner@example.com",
     dryRunSigningKey: "l".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_mark_lead_triaged", "request_mark_lead_triaged"],
   });
 
   let triageCommands = 0;
@@ -353,6 +362,7 @@ test("lead triage write preflight refuses a state that changed after its approve
     approverId: "owner@example.com",
     dryRunSigningKey: "l".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_mark_lead_triaged", "request_mark_lead_triaged"],
   });
   const leadEnvelope = {
     name: "lead:1",

@@ -282,6 +282,8 @@ Run tenant-dedicated MCP server processes with tenant-only env:
 - `mcp/newo-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
   `NEWO_MCP_WRITE_ENABLED`, and no provider API key. The tenant Worker owns the Newo key,
   signed receipt ledger, control gates, and provider calls.
+- Every one of these processes also needs its own `MCP_ALLOWED_TOOLS`: the exact tools it may
+  register. A server refuses to start without that list or with a name it does not have.
 
 Defaults for a new tenant: write flags off (`ERPNEXT_WRITE_ENABLED` unset/false) until the
 tenant passes the approved-write proof. `HERMES_DRY_RUN_SIGNING_KEY` is unique per tenant and the

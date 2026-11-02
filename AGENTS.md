@@ -32,7 +32,6 @@ deployment, runtime verification, business acceptance, or production proof.
 | `app/` | React PWA for public estimate, field, portal, sales, production, and owner surfaces |
 | `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection during the D1 cutover; no new operating authority |
 | `mcp/` | Bounded agent tools for the bus, compatibility rails, and Newo |
-| `hermes/` | Agent roles, MCP configuration, and procedure packs |
 | `config/tenants/` | White-label tenant contracts; secrets by environment-variable name only |
 | `config/newo/` | Newo release contract, tools, evidence inventory, and versioned AKB |
 | `deploy/` | Local stack and production launch assets |
@@ -49,9 +48,8 @@ deployment, runtime verification, business acceptance, or production proof.
 - Do not add a new Frappe DocType, direct Worker dependency, readiness dependency, or release
   dependency. Retire existing dependencies workflow by workflow after reconciliation and rollback
   proof.
-- Hermes currently supplies role/tool configuration and one default-off drafting pilot. The target
-  coordinator is the bounded loop in `docs/AI-NATIVE-ARCHITECTURE.md`; neither is a database or
-  grant of authority.
+- Hermes currently supplies one default-off drafting pilot. The target coordinator is the bounded
+  loop in `docs/AI-NATIVE-ARCHITECTURE.md`; neither is a database or grant of authority.
 - The PWA is the owned human work, customer, estimator, and supervisory surface.
 - QuickBooks remains posted accounting truth; the OS prepares, validates, submits, and reconciles
   accounting side effects through explicit adapters.
@@ -228,7 +226,6 @@ make secret-scan   # set GITLEAKS_BIN off linux x64
 node tools/validate-documentation.mjs
 node tools/validate-erpnext-doctypes.mjs
 node tools/validate-tenant-config.mjs
-node tools/validate-hermes-config.mjs
 node tools/validate-newo-config.mjs
 node tools/applicad-xml-proof.mjs --check
 node tools/production-readiness.mjs contract
@@ -251,7 +248,7 @@ request. The first Deploy run after that merge fails closed at admission by desi
 
 ## Mutation guardrails
 
-Current code uses role allowlists and bounded tools. Where a write requires
+Current code uses explicit tool allowlists and bounded tools. Where a write requires
 `read → propose → dry_run → policy_check → human_approval → write → audit_event`, do not bypass
 that contract because the target eventually permits machine authority. Change the contract only
 with matching policy, receipt, tests, audit, reconciliation, and documentation.

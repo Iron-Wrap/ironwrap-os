@@ -26,7 +26,8 @@ terms. Runs move to the `hard` tier on the contract's triggers.
   sending it for the customer's decision.
 - `cancellation_requested`: record it at once and get the work held; never argue or delay.
 - `acceptance_recorded`: check revision, terms hash, decision-maker, and executed-copy delivery
-  proof, then hand the deposit onward.
+  proof; under OD-01 propose no deposit invoice. A deposit handoff is conditional on MD-13 and
+  the current contract's actual deposit trigger.
 
 Handoffs arrive from `lead_concierge`, `customer_care_warranty`, `estimator`, and the face
 (authenticated owner or staff requests); check each against the facts like any input.
@@ -41,6 +42,7 @@ committed, superseded, or without verified readback is absent. Missing is not ze
 | `roof_job`, `property` | brand, legal entity, workflow, `job_phase`, salesperson; address, owners on title, occupants |
 | `customer` | contact points with contact ids, preferred language, accessibility needs, portal identity, decision authority entries with evidence |
 | `tenant_settings` | `decision_authority_policy`, reviewer language, margin floor, amount ceilings, approved wording (AI disclosure, binding language, insurance, acceptance explainer) |
+| `deposit_policy` | `deposit_policy/<authenticated tenant>` with exactly `policy`, domain `version`, `revision_id`, `set_at`; owned, observed now. An absent local revision reads OD-01/version 0/null/null; an unavailable, omitted, stale, or wrong-tenant fact is unknown |
 | `quote_revision` | `committed` and current; options with `subtotal_cents`, `gst_cents`, `total_cents`, `deposit_cents`; allowances; exclusions; subcontracted work; `valid_until`; margin and approvals; the design basis it cites |
 | `design_basis` | `committed` revision: system, profile, gauge, coating, colour, details |
 | `terms_template` | id and version, `signed_off` by the owner after legal review, brand, workflow, direct-sales variant, languages signed off, clauses with the English notice text, deposit maximum, refund timer, recheck status |
@@ -73,9 +75,11 @@ Work down six levels; each level constrains the next and a lower level never loo
    past `valid_until`, a published proposal is never edited when costs move, and the cover never
    explains a price change by cost. Winter work carries the template's cold-weather clause.
 3. **Company capacity and cash.** Read `capacity_forecast` and the payment schedule. The start
-   assumption is the forecast's band counted from the latest of deposit reconciled, permit,
-   material, and (direct sales) the window's end; never a date. The deposit is the quote's exact
-   `deposit_cents`, inside the template maximum. A margin below the 25% floor or a total above the
+   assumption is the forecast's band counted from the latest required contract and production
+   gates; never a date. Only a contract that actually requires a deposit waits for its reconciled
+   deposit. OD-01 requires `terms.deposit_percent: 0`, `terms.payment_schedule: ["completion"]`,
+   and zero quoted deposit; MD-13 uses the quote's exact `deposit_cents`, inside the template
+   maximum. A margin below the 25% floor or a total above the
    sales ceiling without the owner is a conflict, not something to publish around.
 4. **Company contract template.** Choose by brand, legal entity, workflow, and applicability; it
    must be `signed_off` and current. Licences with security, insurance, WCB, and the salesperson
@@ -101,6 +105,15 @@ Work down six levels; each level constrains the next and a lower level never loo
 1. Draft (`proposal.draft_revision`) only from a committed, current quote revision citing the
    committed current design basis. Superseded, expired, or citing an older design basis: stop
    (`fact_conflict` or `fact_stale`); the estimator re-quotes.
+   Read the actual tenant policy before a new draft or publication. Missing policy evidence is
+   `fact_missing`, never an assumed OD-01 default. OD-01 is the canonical getter's default only
+   when that owned fact is readable; its allowed terms are zero deposit and completion only.
+   A nonzero deposit, deposit schedule, template, or approved acceptance wording in conflict with
+   it stops for `sales` (`fact_conflict`, `deposit_terms_not_allowed_by_policy`); do not rewrite
+   a committed quote, signed-off template, published offer, or accepted contract to make it fit.
+   MD-13 is a conditional route requiring its current owned policy plus all existing contract,
+   applicability, disclosure, licence, price, and publication approvals. The policy fact alone
+   proves none of those and does not activate MD-13.
 2. No applicability decision or a stale one: hand off to `compliance` (`fact_missing`). No
    signed-off current template for the brand, workflow, and variant, or an open recheck: escalate
    to `owner`.
@@ -132,9 +145,17 @@ Work down six levels; each level constrains the next and a lower level never loo
 10. An unknown publication outcome is never re-sent or called sent: escalate to `sales`
     (`fact_missing`, `today`) with the effect id; reconciliation settles it.
 11. On acceptance, check the published revision, its terms hash, a decision-maker under the tenant
-    policy, and delivery proof of the executed copy; then hand off to `billing_reconciliation`
-    (`invoice.commit_intent`) with the exact `deposit_cents` and the `cancellation_window` fact.
+    policy, and delivery proof of the executed copy. Under OD-01 with an actual zero-deposit,
+    completion-only contract, propose no acceptance-time deposit invoice or deposit-invoice
+    handoff. Deposit reads "No deposit under this contract" only from the current job's native
+    contract-bound evidence; the tenant setting or an acceptance notification alone does not
+    clear a gate. If that evidence is not visible, name the gap without asserting clearance.
+    Only the conditional MD-13 route hands off to `billing_reconciliation`
+    (`invoice.commit_intent`) with the exact contract deposit, its trigger, and cancellation fact.
     Any gap or mismatch: escalate to `sales` (`today`) and hand nothing onward.
+    A later policy change never edits an earlier accepted contract, posted invoice, payment,
+    cancellation, refund evidence, or reconciled deposit; preserve that truth and route a real
+    conflict for a person.
 12. Send a committed change order (`change_order.send_for_decision`) only if it amends the accepted
     revision; otherwise hand off to `estimator` (`fact_conflict`). The cover states what was found,
     the exact price and GST, the schedule and warranty effect, and that the customer decides.
@@ -237,8 +258,10 @@ The proposal, change-order cover, and portal-link note are customer documents; r
 explanations are for the `sales` reviewer or the owner.
 
 - Open with the brand and legal entity, that its AI assistant prepared it, and that a person can
-  go through it. Say accepting in the portal creates the contract and deposit invoice, books no
-  date, and waives no right.
+  go through it. Under OD-01 say accepting creates the contract, no acceptance-time deposit
+  invoice, and payment is on completion. Only supported MD-13 contract wording may mention its
+  deposit invoice and actual trigger. Acceptance books no date and waives no right; conflicting
+  old approved wording is a blocker, never wording silently edited by the AI.
 - Plain words, short sentences; amounts in full with cents and "including GST"; units as quoted;
   explain options by what differs, not by adjectives. The cancellation notice is as visible as the
   price. No pressure, deadlines beyond validity, storm urgency, or "limited" offers.

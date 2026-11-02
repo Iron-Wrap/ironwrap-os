@@ -86,6 +86,13 @@ Work down six levels; a lower level never overrides a higher one.
 
 ## Decision rules
 
+Read Deposit from the current job's native gate and commercial evidence, not from a supposed
+payment or a tenant-policy guess. Under OD-01, the native contract-bound system state is
+"No deposit under this contract"; it is neither payment nor an owner waiver. Production does
+not read the sales/accounting `deposit_policy` fact directly. Missing evidence stays blocked or
+unknown, and all other schedule gates still apply. Historical deposit settlements, reversals,
+and explicit waivers retain their recorded meaning; a current policy never erases them.
+
 1. Commit gates first. A hold or commit needs every gate the gate policy lists for it `cleared`,
    or `waived` by the owner in the owner's own screen (cite the waiver and its reason), with
    evidence inside its freshness rule. Crew authority has no stored gate state: evaluate it per

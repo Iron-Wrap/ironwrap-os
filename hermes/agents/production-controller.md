@@ -4,81 +4,15 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 
 ## Reads
 
-- get_roof_job
-- list_job_gates
-- list_blocked_jobs
-- get_material_takeoff
-- list_material_takeoffs_for_job
-- get_supplier_order
-- list_supplier_orders_for_job
-- get_supplier_quote
-- list_supplier_quotes_for_job
-- get_field_check_in
-- list_field_check_ins_for_job
-- get_measurement_report
-- get_crew_profile
-- list_crew_profiles
-- get_crew_authority_roster
-- get_job_assignment
-- list_job_assignments_for_job
-- get_work_package
-- list_work_packages_for_job
-- get_work_package_event
-- list_work_package_events_for_job
-- get_change_order
-- list_change_orders_for_job
-- get_safety_plan
-- list_safety_plans_for_job
-- get_job_compliance_record
-- list_job_compliance_records_for_job
-- get_authority_record
-- list_authority_records_for_job
-- get_visual_property_model
-- list_visual_property_models_for_job
-- get_roof_area
-- list_roof_areas_for_job
-- get_scope_clause
-- list_scope_clauses_for_job
+None.
 
 ## Dry-run (preview)
 
-- dry_run_update_gate
-- dry_run_supplier_order
-- dry_run_supplier_order_transition
-- dry_run_receive_material_lot
-- dry_run_release_shop_order
-- dry_run_reserve_shop_order_materials
-- dry_run_advance_shop_order_setup
-- dry_run_record_first_piece_outcome
-- dry_run_record_final_shop_quality
-- dry_run_record_shop_handover
-- dry_run_record_shop_billing_basis
-- dry_run_job_assignment
-- dry_run_safety_plan
-- dry_run_safety_acknowledgement
-- dry_run_job_compliance_record
-- dry_run_complete_work_package
-- dry_run_authority_record
+None.
 
 ## Approved-write
 
-- request_update_gate
-- request_create_supplier_order
-- request_transition_supplier_order
-- request_receive_material_lot
-- request_release_shop_order
-- request_reserve_shop_order_materials
-- request_advance_shop_order_setup
-- request_record_first_piece_outcome
-- request_record_final_shop_quality
-- request_record_shop_handover
-- request_record_shop_billing_basis
-- request_create_job_assignment
-- request_create_safety_plan
-- request_record_safety_acknowledgement
-- request_record_job_compliance
-- request_complete_work_package
-- request_authority_record
+None.
 
 ## Forbidden
 

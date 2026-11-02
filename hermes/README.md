@@ -11,8 +11,7 @@ there:
 
 | You are looking for | It is in |
 | --- | --- |
-| MCP server processes, tool registration, role filtering at runtime | `mcp/erpnext-roofing-mcp/`, `mcp/ironwrap-bus-mcp/`, `mcp/newo-mcp/` |
-| Approval brokers | `mcp/erpnext-roofing-mcp/src/*approval-broker.mjs` |
+| MCP server processes, tool registration, role filtering at runtime | `mcp/ironwrap-bus-mcp/`, `mcp/newo-mcp/` |
 | Desktop text pilot server | `mcp/ironwrap-bus-mcp/src/desktop-server.mjs` |
 | Which tools each role may call, as source of truth | `hermes/agents/roles.json` (here) |
 | Launch command, args, and env var names per server | `hermes/mcp-servers.json` (here) |
@@ -45,25 +44,22 @@ See the canonical boundary in
 
 ## MCP servers
 
-Four MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
+Three MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
 `tool_filter`, and env var names):
 
 - `mcp/ironwrap-bus-mcp/src/server.mjs`: readiness and operational truth
   (`get_bus_readiness`, `get_operational_status`), envelope/dead-letter and measurement-exception
   reads, and approved, envelope-scoped recovery (`dry_run_replay` / `request_replay`). Bulk replay
   is not exposed.
-- `mcp/erpnext-roofing-mcp/src/server.mjs`: legacy-named Frappe compatibility surface with reads,
-  deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
-  review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 - `mcp/newo-mcp/src/server.mjs`: bounded Worker-backed session, conversation, actor, webhook,
   analytics, and control access. It never receives the provider API key or exposes a raw proxy.
 - `mcp/ironwrap-bus-mcp/src/desktop-server.mjs`: fixed owner/ops desktop text pilot with only
   `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. It is device-credential
   bound and can return only a governed communication-record handoff.
 
-The validated role-filtered inventory is **179 tools** across the first three servers: the bus
-contributes 8, the Frappe server contributes **151 (75 reads, 38 dry-runs, 38 approved writes)**,
-and Newo contributes **20 (17 reads, 1 exact-argument dry-run, 2 approval/execution actions)**.
+The validated role-filtered inventory is **28 tools** across the first two servers: the bus
+contributes 8 and Newo contributes **20 (17 reads, 1 exact-argument dry-run, 2 approval/execution
+actions)**.
 The desktop server's three fixed tools are validated separately and are not role grants.
 
 ## Tool filtering per agent role

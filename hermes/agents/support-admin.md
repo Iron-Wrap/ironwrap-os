@@ -19,31 +19,14 @@ Diagnoses failed automations, records reconciliation resolutions, requests audit
 - list_newo_outgoing_webhooks
 - list_newo_incoming_webhooks
 - list_newo_analytics_logs
-- get_hermes_run
-- list_hermes_runs_for_job
-- get_automation_incident
-- list_automation_incidents
-- get_white_label_tenant
-- list_white_label_tenants
-- get_integration_reconciliation
-- list_integration_reconciliations_for_job
-- get_tenant_export_run
-- list_tenant_export_runs_for_tenant
-- list_market_watch_items
 
 ## Dry-run (preview)
 
 - dry_run_replay
-- dry_run_market_watch_item
-- dry_run_reconciliation_resolution
-- dry_run_tenant_export
 
 ## Approved-write
 
 - request_replay
-- request_add_market_watch_item
-- request_resolve_reconciliation
-- request_tenant_export
 
 ## Forbidden
 

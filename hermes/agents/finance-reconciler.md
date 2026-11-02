@@ -4,28 +4,15 @@ Reads payment/invoice mirror truth and records evidence-backed reconciliation re
 
 ## Reads
 
-- get_roof_job
-- get_payment_milestone
-- list_payment_milestones_for_job
-- get_price_book_rule
-- list_price_book_rules
-- get_option_package
-- list_option_packages_for_job
-- get_change_order
-- list_change_orders_for_job
-- get_integration_reconciliation
-- list_integration_reconciliations_for_job
-- get_job_cost_event
-- list_job_cost_events_for_job
+None.
 
 ## Dry-run (preview)
 
-- dry_run_reconciliation_resolution
-- dry_run_job_cost_event
+None.
 
 ## Approved-write
 
-- request_resolve_reconciliation
+None.
 
 ## Forbidden
 

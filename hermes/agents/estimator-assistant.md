@@ -4,72 +4,15 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 
 ## Reads
 
-- get_roof_job
-- get_measurement_report
-- list_measurement_reports_for_job
 - list_measurement_intake_exceptions
-- get_evidence_item
-- list_evidence_for_job
-- get_material_takeoff
-- list_material_takeoffs_for_job
-- get_supplier_quote
-- list_supplier_quotes_for_job
-- get_customer_quote
-- list_customer_quotes_for_job
-- get_proposal_evidence_pack
-- list_proposal_evidence_packs_for_job
-- get_instant_estimate_session
-- list_instant_estimate_sessions_for_job
-- get_price_book_rule
-- list_price_book_rules
-- get_visual_property_model
-- list_visual_property_models_for_job
-- get_roof_area
-- list_roof_areas_for_job
-- get_option_package
-- list_option_packages_for_job
-- get_scope_clause
-- list_scope_clauses_for_job
-- get_change_order
-- list_change_orders_for_job
-- get_insurance_supplement
-- list_insurance_supplements_for_job
-- get_customer_decision
-- list_customer_decisions_for_job
-- get_contract_acceptance
-- list_contract_acceptances_for_job
-- get_job_cost_event
-- list_job_cost_events_for_job
 
 ## Dry-run (preview)
 
-- dry_run_material_takeoff
-- dry_run_update_material_takeoff_status
-- dry_run_supplier_quote
-- dry_run_quote_revision
-- dry_run_bind_quote_price_rules
-- dry_run_proposal_evidence_pack
-- dry_run_change_order
-- dry_run_change_order_transition
-- dry_run_insurance_supplement
-- dry_run_set_insurance_supplement_evidence
-- dry_run_insurance_supplement_transition
-- dry_run_customer_decision
+None.
 
 ## Approved-write
 
-- request_create_material_takeoff
-- request_update_material_takeoff_status
-- request_create_supplier_quote
-- request_create_quote_revision
-- request_bind_quote_price_rules
-- request_create_proposal_evidence_pack
-- request_create_change_order
-- request_transition_change_order
-- request_create_insurance_supplement
-- request_set_insurance_supplement_evidence
-- request_transition_insurance_supplement
-- request_record_customer_decision
+None.
 
 ## Forbidden
 

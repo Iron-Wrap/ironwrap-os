@@ -12,30 +12,14 @@ Handles new leads, first-response records, and evidence-backed consent history. 
 - get_newo_chat_history
 - list_newo_conversation_acts
 - get_newo_conversation_act
-- get_lead_envelope
-- list_untriaged_lead_envelopes
-- get_roof_job
-- get_instant_estimate_session
-- list_instant_estimate_sessions_for_job
-- get_communication_event
-- list_communication_events_for_job
-- list_communication_events_for_lead
-- get_communication_consent
-- list_communication_consents_for_job
-- check_consent
-- check_quiet_hours
 
 ## Dry-run (preview)
 
-- dry_run_communication_event
-- dry_run_mark_lead_triaged
-- dry_run_communication_consent
+None.
 
 ## Approved-write
 
-- request_record_communication_event
-- request_mark_lead_triaged
-- request_record_communication_consent
+None.
 
 ## Forbidden
 

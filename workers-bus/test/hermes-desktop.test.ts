@@ -10,7 +10,7 @@ import {
   HERMES_DESKTOP_DEVICE_PROOF_HEADER,
   runHermesHostedReference,
 } from "../src/hermes-desktop.ts";
-import { buildCommunicationEventDraftFromArgs } from "../../mcp/erpnext-roofing-mcp/src/communication-draft.mjs";
+import { communicationPolicy } from "../src/hermes-draft.ts";
 import type { AppEnv, AuthContext } from "../src/app-types.ts";
 
 const NOW = "2026-08-10T18:00:00.000Z";
@@ -475,10 +475,14 @@ test("lead follow-up stays bound and hands only a governed draft to the existing
   assert.deepEqual(handoff.calendar_slot_suggestions.map((slot: any) => slot.slot_id), ["slot-1"]);
   assert.equal(handoff.calendar_slot_suggestions[0].trust, "untrusted");
   assert.equal(handoff.calendar_slot_suggestions[0].availability_only, true);
-  const governedDraft = await buildCommunicationEventDraftFromArgs(handoff.args);
-  assert.equal(governedDraft.policy_result, "Allowed");
-  assert.equal(governedDraft.status, "Draft");
-  assert.notEqual(governedDraft.status, "Sent");
+  const handoffPolicy = communicationPolicy({
+    channel: handoff.args.channel,
+    consentBasis: handoff.args.consent_basis,
+    nowUtcIso: handoff.args.now_utc_iso,
+    timezoneOffsetMinutes: handoff.args.timezone_offset_minutes,
+  });
+  assert.deepEqual(handoffPolicy.reasons, []);
+  assert.equal(handoffPolicy.allowed, true);
 
   const replay = await handleHermesDesktopNativeRoute(
     request("/api/v1/hermes/submit-draft", acceptedSubmission, setup.accessToken),

@@ -9,7 +9,32 @@ import {
   quoteRevisionSnapshotLabel,
 } from "../src/approval-snapshot.ts";
 import { canonicalJson } from "../src/canonical.ts";
-import { canonicalJson as brokerCanonicalJson, digest, semanticPreview } from "../../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+// The broker's canonical bytes: keys sorted with localeCompare, undefined members dropped. The
+// release tools keep the same function, so the Worker's byte-preservation proof does not depend on
+// the retired broker package.
+import { canonicalJson as brokerCanonicalJson } from "../../tools/canonical-json.mjs";
+
+// The broker's semantic preview digest: volatile timestamps never take part in it.
+const VOLATILE_PREVIEW_FIELDS = new Set([
+  "acknowledged_at", "assigned_at", "approved_at", "captured_at", "completed_at", "created_at",
+  "prepared_at", "requested_at", "run_ts", "submitted_at", "triaged_at", "updated_at", "verified_at",
+]);
+
+function semanticPreview(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(semanticPreview);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key, child]) => child !== undefined && !VOLATILE_PREVIEW_FIELDS.has(key))
+        .map(([key, child]) => [key, semanticPreview(child)]),
+    );
+  }
+  return value;
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(brokerCanonicalJson(value)).digest("hex");
+}
 
 function input() {
   return {

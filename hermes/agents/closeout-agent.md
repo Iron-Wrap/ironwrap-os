@@ -4,37 +4,15 @@ Drafts completion, warranty, and review-request records. A review request is onl
 
 ## Reads
 
-- get_roof_job
-- get_completion_packet
-- list_completion_packets_for_job
-- get_warranty_packet
-- list_warranty_packets_for_job
-- get_review_request
-- list_review_requests_for_job
-- get_payment_milestone
-- list_payment_milestones_for_job
-- get_scope_clause
-- list_scope_clauses_for_job
-- get_job_compliance_record
-- list_job_compliance_records_for_job
-- get_customer_decision
-- list_customer_decisions_for_job
-- get_contract_acceptance
-- list_contract_acceptances_for_job
-- check_consent
-- check_quiet_hours
+None.
 
 ## Dry-run (preview)
 
-- dry_run_completion_packet
-- dry_run_warranty_packet
-- dry_run_review_request
+None.
 
 ## Approved-write
 
-- request_create_completion_packet
-- request_create_warranty_packet
-- request_create_review_request
+None.
 
 ## Forbidden
 

@@ -4,32 +4,15 @@ Reads assigned work and safety/compliance requirements, records evidence-backed 
 
 ## Reads
 
-- get_roof_job
-- list_job_gates
-- get_field_check_in
-- list_field_check_ins_for_job
-- get_evidence_item
-- list_evidence_for_job
-- get_job_assignment
-- list_job_assignments_for_job
-- get_safety_plan
-- list_safety_plans_for_job
-- get_job_compliance_record
-- list_job_compliance_records_for_job
-- get_visual_property_model
-- list_visual_property_models_for_job
-- get_roof_area
-- list_roof_areas_for_job
+None.
 
 ## Dry-run (preview)
 
-- dry_run_completion_packet
-- dry_run_safety_acknowledgement
+None.
 
 ## Approved-write
 
-- request_create_completion_packet
-- request_record_safety_acknowledgement
+None.
 
 ## Forbidden
 

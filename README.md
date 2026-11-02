@@ -47,7 +47,7 @@ margin, or customer promise can override a safety stop.
 | `workers-bus/` | Cloudflare Worker integration bus and owned D1/R2 intake spine |
 | `app/` | React PWA for field, estimating, customer, sales, production, and owner surfaces |
 | `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection and legacy command policy; no new operating authority |
-| `mcp/` | Bounded read, preview, compatibility, and recovery adapters |
+| `mcp/` | Bounded read, preview, and recovery adapters |
 | `hermes/` | Role/tool configuration and a narrow default-off drafting pilot; not a system of record or resident coordinator |
 | `config/` | Tenant and integration release contracts; secret names only |
 | `deploy/` | Local and production deployment assets |
@@ -72,7 +72,6 @@ node tools/validate-lead-triage-shadow-authority.mjs
 node tools/applicad-xml-proof.mjs --check
 node tools/production-readiness.mjs contract
 (cd workers-bus && npm test && npm run typecheck)
-(cd mcp/erpnext-roofing-mcp && npm test)
 (cd mcp/ironwrap-bus-mcp && npm test)
 (cd mcp/newo-mcp && npm test)
 ```

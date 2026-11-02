@@ -68,7 +68,6 @@ const architectureNavigationDocuments = new Set([
   "workers-bus/README.md",
   "frappe-apps/ironwrap_roofing/README.md",
   "hermes/README.md",
-  "mcp/erpnext-roofing-mcp/README.md",
 ]);
 const historicalDesignDocuments = new Set([
   "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",

@@ -6,7 +6,7 @@ production).
 Owner: IronWrap OS product owner
 Last verified: 2026-10-02
 Review trigger: Wrangler pin change, Cloudflare plan change, token rotation, or a change to
-`.github/workflows/deploy.yml`, `deploy-production.yml` or `release-please.yml`
+`.github/workflows/deploy.yml` or `deploy-production.yml`
 
 Evidence base: `Iron-Wrap/ironwrap-os@6a1318a1` (`main`) merged into this branch, Wrangler 4.131.0
 (`workers-bus/node_modules/.bin/wrangler` after `npm ci --ignore-scripts --prefix workers-bus`),
@@ -444,16 +444,10 @@ on Free once both are registered; the live count is Not verified.
   `workflow_run` and deploys qa only; `deploy-production.yml` is `workflow_dispatch` only, dispatched
   on the tag by `iron-wrap-infra`'s `promote-production.yml`, and re-checks `ref_type` and the tag
   shape (`:81-99`).
-- **The chain.** CI → Deploy (`workflow_run`) → `release-please.yml` `github-release`
-  (`workflow_run` of Deploy, `release-please.yml:25-27`, `:112-174`) → `v*` tag → promotion PR
-  merged in `iron-wrap-infra` → `promote-production.yml` dispatches Deploy Production with
-  `RELEASE_PROMOTION_DISPATCH_TOKEN`. The tag is written with `RELEASE_TAG_TOKEN`, not `GITHUB_TOKEN`. GitHub: "events
-  triggered by the `GITHUB_TOKEN` will not create a new workflow run, with the following
-  exceptions: `workflow_dispatch` and `repository_dispatch` events always create workflow runs"
-  (https://docs.github.com/en/actions/concepts/security/github_token). A tag pushed with
-  `GITHUB_TOKEN` started nothing; since the tag no longer triggers `deploy-production.yml` at all,
-  that now matters for CI on the release pull request only. Because Deploy has not succeeded since
-  #305, `github-release` cannot tag and the chain cannot start.
+- **The chain.** CI → Deploy (`workflow_run`) proves qa → a maintainer pushes a `v*` tag on a
+  qa-proven `main` commit → promotion PR merged in `iron-wrap-infra` → `promote-production.yml`
+  dispatches Deploy Production with `RELEASE_PROMOTION_DISPATCH_TOKEN`. The tag starts nothing by
+  itself: no workflow has a `push: tags` trigger.
 - **What each trigger exposes.** `workflow_run`: `github.event.workflow_run.head_sha`, `.id`,
   `.conclusion`, `.event`, `.head_branch`, `.head_repository.full_name`. `deploy.yml:43-47` gates on
   the first four of those that decide admission (`.conclusion`, `.head_repository.full_name`,
@@ -467,24 +461,11 @@ on Free once both are registered; the live count is Not verified.
 - **`concurrency`.** Two groups, both `cancel-in-progress: false`: `deploy-qa`
   (`deploy.yml:267-269`) and `deploy-production` (`deploy-production.yml:35-37`). Cancelling
   mid-run could leave `d1 migrations apply` half-applied, and migrations are forward-only.
-- **release-please, as implemented.** The organisation permits GitHub-owned actions only, so it
-  runs through `npx release-please@17.11.2` (`release-please.yml:33`, `:105`, `:169`), not an
-  action. Two jobs: `release-pr` and `github-release`. Flags: `--config-file release-please-config.json` (the file has no leading dot) and
-  `--manifest-file .release-please-manifest.json`. `"release-type": "simple"` and
-  `"include-v-in-tag": true` (`release-please-config.json:2`, `:4`) give `vX.Y.Z` tags, matching
-  `deploy-production.yml:92`. The manifest is `{".": "0.1.0"}`. Writes go through
-  `RELEASE_TAG_TOKEN` in the `release` environment (`release-please.yml:87`, `:101`, `:124`,
-  `:165`) under `permissions: {}` (`:30`). Release PR #323 changes
-  `.release-please-manifest.json` and `CHANGELOG.md` only. No `v*` tag exists — 20 tags, none
-  matching — and there is no GitHub release.
-- **Conventional-commit warning.** release-please silently drops a commit whose subject it cannot
-  parse, and with squash merges the PR title (or the single commit's subject) becomes that
-  subject. The `release-pr` job therefore runs `tools/conventional-pr-title.mjs` on the subject of
-  the commit that landed, on push to `main` only, and emits a warning annotation when it is not
-  conventional. The commit message reaches the script through `env`, never through the shell, and
-  the step never fails. Nothing runs on `pull_request` events: the earlier per-PR `pr-title` job
-  was about a fifth of all Actions runs. It was never a required check (ruleset 20652163 requires
-  exactly `gate`).
+- **Release tags (since 2026-11-01).** release-please was removed (ironwrap-tracker#68): it never
+  produced a tag — `"package-name"` made its configured component differ from the component-less
+  release branch, and `github-release` finished green without tagging. A maintainer now pushes
+  `vX.Y.Z` by hand; `deploy-production.yml` refuses a commit without a successful push CI run on
+  `main` and a successful qa Deploy (`:171-191`). Steps: `docs/LAUNCH-RUNBOOK.md`.
 - **Untrusted interpolation.** An audit of every `${{ }}` inside a `run:` block on `6a1318a1`
   finds only step outputs (`deploy.yml:514`, `:566`, `deploy-production.yml:627`) and matrix or
   workflow `env` values (`ci.yml:164`, `:243`, `:277`). Nothing attacker-controlled is

@@ -17,7 +17,10 @@ import type { EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { EstimatorWorkbenchPage } from "./estimator-workbench-page";
 import { loadManualMeasurements } from "./manual-measurement-api";
 
-const manualSearch = vi.hoisted(() => ({ measurementRequest: undefined as string | undefined }));
+const manualSearch = vi.hoisted(() => ({
+  measurementRequest: undefined as string | undefined,
+  read: undefined as "proposal" | "saved" | undefined,
+}));
 
 vi.mock("../capabilities/capability-api", () => ({ loadCapabilitySignal: vi.fn() }));
 vi.mock("./manual-measurement-api", () => ({
@@ -37,7 +40,34 @@ vi.mock("../portal/customer-portal-office-access", () => ({
   ),
 }));
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({
+    children,
+    to,
+    params,
+    search,
+    hash,
+    ...props
+  }: {
+    children: ReactNode;
+    to: string;
+    params?: { jobId: string };
+    search?: (current: typeof manualSearch) => typeof manualSearch;
+    hash?: string;
+  }) => {
+    const query = new URLSearchParams(
+      Object.entries(search?.(manualSearch) ?? {}).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ).toString();
+    return (
+      <a
+        {...props}
+        href={`${to.replace("$jobId", params?.jobId ?? "")}${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`}
+      >
+        {children}
+      </a>
+    );
+  },
   useParams: () => ({ jobId: "JOB-A" }),
   useSearch: () => manualSearch,
   useNavigate: () => vi.fn(),
@@ -303,6 +333,8 @@ describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     manualSearch.measurementRequest = undefined;
+    manualSearch.read = undefined;
+    window.history.replaceState(null, "", "/");
     // The default is an empty capability list: `facet_launch` is not visible to this role, so
     // every other test in this file sees exactly the behaviour it saw before the signal existed.
     vi.mocked(loadCapabilitySignal).mockResolvedValue(capabilitySignal("owner", []));
@@ -402,7 +434,7 @@ describe("EstimatorWorkbenchPage", () => {
     ["ready", "Open proposal details", "proposal-heading"],
     ["unavailable", "Open saved details", "review-workspace-heading"],
   ] as const)(
-    "opens the existing read section for %s without approving it",
+    "links to the saved read destination for %s without approving it",
     async (state, label, id) => {
       const model = workbenchModel();
       vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
@@ -413,16 +445,13 @@ describe("EstimatorWorkbenchPage", () => {
 
       const nextStep = await screen.findByRole("region", { name: "Next step" });
       const action = within(nextStep).getByRole("link", { name: label });
-      expect(action).toHaveAttribute("href", `#${id}`);
-      const proposal = screen.getByRole("heading", { name: "Proposal" }).closest("details")!;
-      expect(proposal).not.toHaveAttribute("open");
-
-      fireEvent.click(action);
-
-      const target = document.getElementById(id)!;
-      expect(target).toBeVisible();
-      expect(target).toHaveFocus();
-      if (state !== "unavailable") expect(proposal).toHaveAttribute("open");
+      expect(action).toHaveAttribute(
+        "href",
+        `/estimator/jobs/JOB-A?read=${state === "unavailable" ? "saved" : "proposal"}#${id}`,
+      );
+      expect(
+        screen.getByRole("heading", { name: "Proposal" }).closest("details"),
+      ).not.toHaveAttribute("open");
       expect(createFacetLaunch).not.toHaveBeenCalled();
       expect(
         screen.queryByRole("button", { name: /approve quote|send proposal/i }),
@@ -486,6 +515,102 @@ describe("EstimatorWorkbenchPage", () => {
     expect(screen.getByText("Roof value details").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("Material details").closest("details")).not.toHaveAttribute("open");
   });
+
+  it("reads the complete linked proposal from the existing job model without mounting write workflows", async () => {
+    manualSearch.read = "proposal";
+    renderWorkbench();
+    const heading = await screen.findByRole("heading", { name: "Proposal", level: 1 });
+    expect(heading).toHaveFocus();
+    expect(screen.getByText("Ref: IW-1001 · Roof replacement")).toBeVisible();
+    for (const label of ["Prepared", "Approved", "Signed", "Assumptions", "Exclusions"]) {
+      expect(screen.getByText(label, { exact: true })).toBeVisible();
+    }
+    const check = screen.getByRole("heading", { name: "Proposal check" });
+    expect(check).toBeVisible();
+    expect(
+      check.compareDocumentPosition(screen.getByText("Prepared", { exact: true })) & 4,
+    ).toBeTruthy();
+    expect(screen.getByText(/does not create, approve, send, sign, or take money/i)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Back to roof and quote review" })).toHaveAttribute(
+      "href",
+      "/estimator/jobs/JOB-A#next-safe-step-heading",
+    );
+    expect(screen.getByRole("link", { name: "Saved job details" })).toHaveAttribute(
+      "href",
+      "/estimator/jobs/JOB-A?read=saved#review-workspace-heading",
+    );
+    expect(loadEstimatorWorkbench).toHaveBeenCalledWith("JOB-A");
+    expect(loadEstimatorWorkbench).toHaveBeenCalledTimes(1);
+    expect(loadManualMeasurements).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("customer-portal-office-access")).not.toBeInTheDocument();
+    expect(createFacetLaunch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the full roof and material evidence accessible in the saved job destination", async () => {
+    manualSearch.read = "saved";
+    renderWorkbench();
+    await screen.findByRole("heading", { name: "Saved job details", level: 1 });
+    expect(screen.getByRole("heading", { name: "What needs review" })).toHaveFocus();
+    openReviewGroup("Roof details");
+    openReviewGroup("Materials and insurance");
+    expect(screen.getByText("Roof math needs review")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Roof face check" })).toBeVisible();
+    expect(screen.getByText("Architectural shingles")).toBeVisible();
+    expect(
+      screen.getByText(/do not confirm hidden damage, deck condition, access, or site size/i),
+    ).toBeVisible();
+    expect(loadManualMeasurements).toHaveBeenCalledWith("JOB-A", expect.anything());
+    expect(screen.getByRole("link", { name: "Proposal details" })).toHaveAttribute(
+      "href",
+      "/estimator/jobs/JOB-A?read=proposal#proposal-heading",
+    );
+    expect(createFacetLaunch).not.toHaveBeenCalled();
+  });
+
+  it("keeps unavailable and mismatched proposal facts unavailable in a direct read link", async () => {
+    manualSearch.read = "proposal";
+    const model = workbenchModel();
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+      ...model,
+      proposal: null,
+      lineage: { ...model.lineage, quote_to_proposal: "mismatch" },
+      proposal_readiness: { state: "unavailable", reasons: ["source_window_partial"] },
+    });
+    renderWorkbench();
+    await screen.findByRole("heading", { name: "Proposal", level: 1 });
+    expect(screen.getByText("No proposal links to this quote")).toBeVisible();
+    expect(screen.getByText(/proposals were found, but none use this quote/i)).toBeVisible();
+    expect(screen.getByText("Source incomplete")).toBeVisible();
+    expect(screen.queryByText("Approved", { exact: true })).not.toBeInTheDocument();
+    expect(createFacetLaunch).not.toHaveBeenCalled();
+  });
+
+  it.each(["proposal", "saved"] as const)(
+    "refuses a different job model in the %s read destination",
+    async (view) => {
+      manualSearch.read = view;
+      const model = workbenchModel();
+      vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+        ...model,
+        job: { ...model.job, id: "JOB-OTHER" },
+      });
+      renderWorkbench();
+      expect(await screen.findByText("These details belong to another job")).toBeVisible();
+      expect(screen.queryByText(/Ref: IW-1001/)).not.toBeInTheDocument();
+      expect(loadManualMeasurements).not.toHaveBeenCalled();
+      expect(createFacetLaunch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["proposal", "saved"] as const)(
+    "preserves role refusal for a direct %s read link",
+    async (view) => {
+      manualSearch.read = view;
+      renderWorkbench({ ...ownerSession, user: { ...ownerSession.user, role: "field" } });
+      expect(await screen.findByText("This work belongs to another role")).toBeVisible();
+      expect(loadEstimatorWorkbench).not.toHaveBeenCalled();
+    },
+  );
 
   it("shows a source-read failure as unavailable instead of relabeling it as field verified", async () => {
     const model = workbenchModel();
@@ -849,7 +974,7 @@ describe("EstimatorWorkbenchPage", () => {
     renderWorkbench();
 
     const request = await screen.findByRole("link", { name: /request draft revision/i });
-    expect(request).toHaveAttribute("href", "/estimator/jobs/$jobId/revision");
+    expect(request).toHaveAttribute("href", "/estimator/jobs/JOB-A/revision");
     expect(
       screen.getByText(/price, tax, scope, payment, approvals, and customer terms are not copied/i),
     ).toBeVisible();

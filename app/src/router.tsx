@@ -696,7 +696,10 @@ const facetDesignsRoute = createRoute({
 const estimatorWorkbenchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/estimator/jobs/$jobId",
-  validateSearch: (search: Record<string, unknown>): { measurementRequest?: string } => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { measurementRequest?: string; read?: "proposal" | "saved" } => ({
+    read: search.read === "proposal" || search.read === "saved" ? search.read : undefined,
     measurementRequest:
       typeof search.measurementRequest === "string" &&
       /^manual-measurement:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(

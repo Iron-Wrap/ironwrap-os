@@ -368,9 +368,7 @@ test.describe("Pipeline board acceptance", () => {
       if (viewport.width < 640) {
         await page.getByRole("link", { name: "See what needs review" }).click();
         await expect(page.locator("#proposal-readiness-heading")).toBeFocused();
-        await expect(page.locator('details[aria-labelledby="proposal-heading"]')).toHaveAttribute(
-          "open",
-        );
+        await expect(page).toHaveURL(/\?read=proposal#proposal-readiness-heading$/);
         const reviewBox = await page.locator("#proposal-readiness-heading").boundingBox();
         expect(reviewBox!.y).toBeGreaterThanOrEqual(56);
         expect(reviewBox!.y).toBeLessThan(viewport.height / 2);

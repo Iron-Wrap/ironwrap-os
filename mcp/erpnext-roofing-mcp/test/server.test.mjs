@@ -4,11 +4,13 @@ import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  allowedToolsFromEnv,
   attestFrappeServicePrincipal,
   assertGateEvidenceForState,
   assertMaterialTakeoffReplaySafe,
   assertWriteApproved,
   buildGateUpdatePatch,
+  buildServer,
   buildAuditFinalizationIncidentDraft,
   buildMaterialTakeoffDraft,
   buildMaterialTakeoffDraftFromErp,
@@ -62,6 +64,15 @@ test("configFromEnv requires ERPNext credentials, runtime role binding, and rece
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
   }), /HERMES_AGENT_ROLE/);
+  for (const role of ["unknown-role", "Owner Operator", "toString", "__proto__"]) {
+    assert.throws(() => configFromEnv({
+      ERPNEXT_BASE_URL: "https://erp.example/",
+      ERPNEXT_API_KEY: "key",
+      ERPNEXT_API_SECRET: "secret",
+      ...ROLE_ENV,
+      HERMES_AGENT_ROLE: role,
+    }), /HERMES_AGENT_ROLE must name a canonical agent role/);
+  }
   const readOnly = configFromEnv({
     ERPNEXT_BASE_URL: "https://erp.example/",
     ERPNEXT_API_KEY: "key",
@@ -73,7 +84,9 @@ test("configFromEnv requires ERPNext credentials, runtime role binding, and rece
   assert.equal(readOnly.agentRole, "owner-operator");
   assert.equal(readOnly.actorUser, "owner@example.com");
   assert.equal(readOnly.tenantId, "ironwrap");
-  assert.ok(readOnly.allowedTools.includes("request_update_gate"));
+  assert.equal(readOnly.agentRoleTitle, "Owner Operator");
+  // Tool grants never come from the role: the launching host supplies them separately.
+  assert.equal("allowedTools" in readOnly, false);
 
   const localReadOnly = configFromEnv({
     ERPNEXT_BASE_URL: "http://127.0.0.1:19090",
@@ -118,6 +131,30 @@ test("configFromEnv requires ERPNext credentials, runtime role binding, and rece
     HERMES_DRY_RUN_SIGNING_KEY: "a".repeat(32),
     HERMES_APPROVAL_PUBLIC_KEY: APPROVAL_PUBLIC_KEY,
   }), /IRONWRAP_EFFECT_RUNTIME_URL/);
+});
+
+test("the server registers only an explicit host tool grant and refuses a missing or unknown one", () => {
+  for (const MCP_ALLOWED_TOOLS of [undefined, "", " , ", "get_roof_job,Get Roof Job"]) {
+    assert.throws(() => allowedToolsFromEnv({ MCP_ALLOWED_TOOLS }), /MCP_ALLOWED_TOOLS must list/);
+  }
+  assert.deepEqual(
+    allowedToolsFromEnv({ MCP_ALLOWED_TOOLS: " get_roof_job,dry_run_update_gate,get_roof_job " }),
+    ["get_roof_job", "dry_run_update_gate"],
+  );
+
+  const base = { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: false };
+  assert.throws(() => buildServer(base), /mcp_allowed_tools_required/);
+  assert.throws(() => buildServer({ ...base, allowedTools: [] }), /mcp_allowed_tools_required/);
+  assert.throws(
+    () => buildServer({ ...base, allowedTools: ["get_roof_job", "request_send_invoice"] }),
+    /mcp_allowed_tools_unknown:request_send_invoice/,
+  );
+  assert.throws(
+    () => buildServer({ ...base, agentRole: "unknown-role", allowedTools: ["get_roof_job"] }),
+    /hermes_agent_role_unknown/,
+  );
+  const server = buildServer({ ...base, allowedTools: ["get_roof_job", "dry_run_update_gate"] });
+  assert.deepEqual(Object.keys(server._registeredTools).sort(), ["dry_run_update_gate", "get_roof_job"]);
 });
 
 test("Frappe endpoint configuration is HTTPS-only and timeout-bounded", () => {

@@ -426,7 +426,6 @@ const brokerCommonEnv = [
   "IRONWRAP_EFFECT_RUNTIME_ENABLED=true",
   `IRONWRAP_EFFECT_RUNTIME_URL=${workerOrigin}`,
   `IRONWRAP_EFFECT_RUNTIME_TOKEN=${effectRuntimeToken}`,
-  `HERMES_ROLE_POLICY_PATH=${path.join(repoRoot, "hermes/agents/roles.json")}`,
   `HERMES_DRY_RUN_SIGNING_KEY=${readFileSync(dryRunKeyPath, "utf8").trim()}`,
   `HERMES_APPROVAL_PUBLIC_KEY_FILE=${publicKeyPath}`,
   `HERMES_APPROVAL_PRIVATE_KEY_FILE=${privateKeyPath}`,

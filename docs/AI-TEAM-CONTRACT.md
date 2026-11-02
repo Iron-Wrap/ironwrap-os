@@ -909,8 +909,8 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
   exists yet and the runtime adds a Worker command for it. A "predecessor" is what does the
   equivalent today. A predecessor `erp:` tool is the Frappe compatibility tool and is never the
   binding, because new operating workflows may not depend on Frappe; predecessor Worker code may be
-  reused behind the new command. Today's per-role tool allowlists are in
-  [`hermes/agents/roles.json`](../hermes/agents/roles.json).
+  reused behind the new command. Today each MCP process registers only the tools its launching
+  host lists in `MCP_ALLOWED_TOOLS`.
 
 #### Shared by every specialist
 

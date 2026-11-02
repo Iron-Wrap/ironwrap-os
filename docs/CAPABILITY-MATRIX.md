@@ -1265,8 +1265,10 @@ Remaining autonomous-company model gaps independent of Frappe retirement:
 
 Implemented:
 
-- role-filtered reads, dry-runs, reviewed writes, policy checks, signed receipts, and audit.
-- owner, lead, estimator, production, field, finance-reconciliation, closeout, and support roles.
+- grant-scoped reads (the launching host lists tools in `MCP_ALLOWED_TOOLS`), dry-runs, reviewed
+  writes, policy checks, signed receipts, and audit.
+- owner, lead, estimator, production, field, finance-reconciliation, closeout, and support role
+  identities for audit and the Frappe boundary checks; no role policy file grants tools.
 - no direct accounting mutation.
 - D1/Worker, temporary Frappe compatibility, and Newo seams.
 - versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is

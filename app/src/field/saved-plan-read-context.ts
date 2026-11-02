@@ -8,13 +8,18 @@ import {
   subscribePrincipalContextChanges,
   sessionReadContextIdentity,
   sessionReadContextIsCurrent,
+  sessionObservationMatchesContext,
   getSessionReadObservation,
   principalCredentialHash,
   type PrincipalReadObservation,
 } from "../auth/principal-context";
 import type { AuthenticatedSession } from "../auth/session";
 import { ApiError } from "../lib/api";
-import { principalEpochMatches } from "../auth/principal-epoch";
+import {
+  getPrincipalEpochRevision,
+  principalEpochMatches,
+  subscribePrincipalEpochChanges,
+} from "../auth/principal-epoch";
 
 export interface SavedPlanReadContext {
   deviceSecret: string | undefined;
@@ -41,6 +46,7 @@ export async function captureSavedPlanReadContext(
   isCurrent: () => boolean = () => true,
   observation = getSessionReadObservation(session),
 ): Promise<SavedPlanReadContext> {
+  if (!(await principalEpochMatches(observation?.epoch))) throw savedPlanContextChanged();
   const snapshot = JSON.stringify(session);
   const revision = getPrincipalContextRevision();
   const check = () => {
@@ -69,6 +75,7 @@ export async function captureSavedPlanReadContext(
     deviceSecret,
     observation,
     async assertCurrent() {
+      if (!(await principalEpochMatches(observation?.epoch))) throw savedPlanContextChanged();
       check();
       if (session.user.role === "field" && (await getDeviceSecret()) !== deviceSecret)
         throw savedPlanContextChanged();
@@ -85,6 +92,7 @@ export function useSavedPlanReadContext(session: AuthenticatedSession) {
     subscribePrincipalContextChanges,
     getPrincipalContextRevision,
   );
+  useSyncExternalStore(subscribePrincipalEpochChanges, getPrincipalEpochRevision);
   const expiresAt = Date.parse(session.session_expires_at);
   const subscribeExpiry = useCallback(
     (listener: () => void) => {
@@ -126,19 +134,20 @@ export function useSavedPlanReadContext(session: AuthenticatedSession) {
       current.current = null;
     };
   }, [id]);
-  const blocked =
+  const acquisitionBlocked =
     expired ||
     principalContextIsChanging() ||
     !observation ||
-    !sessionReadContextIsCurrent(session, observation);
+    !sessionObservationMatchesContext(session, observation);
+  const blocked = acquisitionBlocked || !sessionReadContextIsCurrent(session, observation);
   const isCurrent = useCallback(
     () =>
       current.current === id &&
-      !blocked &&
+      !acquisitionBlocked &&
       getPrincipalContextRevision() === revision &&
       !principalContextIsChanging() &&
       Date.parse(session.session_expires_at) > Date.now(),
-    [id, blocked, revision, session],
+    [id, acquisitionBlocked, revision, session],
   );
-  return { id, blocked, isCurrent, observation };
+  return { id, blocked, acquisitionBlocked, isCurrent, observation };
 }

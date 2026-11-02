@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDeviceSecret, storeDeviceSecret } from "../auth/device-credential";
 import { SessionProvider } from "../auth/session-context";
 import { getSessionReadObservation } from "../auth/principal-context";
-import type { AuthenticatedSession } from "../auth/session";
+import { readVerifiedSavedFieldSession, type AuthenticatedSession } from "../auth/session";
 import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { resetDatabaseForTests } from "../storage/db";
@@ -14,6 +14,7 @@ import type { TodayResponse } from "./field-contracts";
 import { SavedPlanPage } from "./saved-plan-page";
 import { TodayPage } from "./today-page";
 import { savedPlanJobFixture, verifiedSavedPlanSessionFixture } from "./saved-plan-test-fixture";
+import { loadSavedPlan } from "./saved-plan";
 
 vi.mock("@tanstack/react-router", () => ({
   useParams: () => ({ jobId: "JOB-SYNTHETIC" }),
@@ -137,7 +138,7 @@ describe("mounted saved-plan and Today context withdrawal", () => {
     ).toBeNull();
   });
 
-  it("does not publish an old-context Today prefetch or saved availability after worker replacement", async () => {
+  it("preventive-policy v1 waits for the older cookie-sensitive read and never publishes its availability after worker replacement", async () => {
     const plan = savedPlanJobFixture();
     const today: TodayResponse = {
       version: 1,
@@ -176,14 +177,24 @@ describe("mounted saved-plan and Today context withdrawal", () => {
       user: { ...first.user, frappe_user_id: "replacement@example.invalid" },
     });
     view.rerender(surface(client, replacement, true));
-    await waitFor(() => expect(finish).toHaveLength(2));
+    // The original parallel-dispatch expectation remains at f673. A pending protected read
+    // may still expire the cookie, so it must settle before B becomes a current field read.
+    expect(finish).toHaveLength(1);
     await act(async () => {
       finish[0]!(Response.json(plan));
     });
     expect(screen.queryByRole("heading", { name: "Ready offline" })).toBeNull();
+    await waitFor(() => expect(finish).toHaveLength(2));
     await act(async () => {
       finish[1]!(Response.json(plan));
     });
     await screen.findByRole("heading", { name: "Ready offline" });
+    const offline = await readVerifiedSavedFieldSession();
+    expect(offline?.user.frappe_user_id).toBe(replacement.user.frappe_user_id);
+    expect(await loadSavedPlan(offline!, { kind: "job", jobId: "JOB-SYNTHETIC" })).toMatchObject({
+      offline: true,
+      saved: true,
+      plan: { version: 7 },
+    });
   });
 });

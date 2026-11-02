@@ -3,6 +3,7 @@ import {
   capturePrincipalEpoch,
   principalEpochIsCurrent,
   principalEpochMatches,
+  principalEpochRefersTo,
 } from "./principal-epoch";
 
 export const PRINCIPAL_GENERATION_KEY = "ironwrap.principal-read-generation-v1";
@@ -61,7 +62,9 @@ export function subscribePrincipalContextChanges(listener: () => void): () => vo
   if (Channel && !channel) {
     try {
       channel = new Channel("ironwrap-principal-context");
-      channel.addEventListener("message", () => notify(false));
+      channel.addEventListener("message", (event) => {
+        if (event.data === "changed") notify(false);
+      });
     } catch {
       channel = undefined;
     }
@@ -108,6 +111,7 @@ export function beginPrincipalContextChange(): () => void {
     }
   };
 }
+
 export function principalSessionKey(session: AuthenticatedSession): string {
   return JSON.stringify([
     session.tenant.id,
@@ -162,16 +166,38 @@ export function sessionReadContextIsCurrent(
   session: AuthenticatedSession,
   observed = observations.get(session),
 ): boolean {
+  return (
+    sessionObservationMatchesContext(session, observed) && principalEpochIsCurrent(observed?.epoch)
+  );
+}
+
+/** Structural acquisition context only; pending epochs still refuse returned/viewed plans. */
+export function sessionObservationMatchesContext(
+  session: AuthenticatedSession,
+  observed: PrincipalReadObservation | undefined,
+): boolean {
   return Boolean(
     observed &&
     observed.format === "principal-read-v2" &&
     observed.generation &&
     observed.generation === getPrincipalGeneration() &&
-    principalEpochIsCurrent(observed.epoch) &&
+    typeof observed.epoch === "string" &&
     observed.revision === revision &&
     observed.sessionKey === principalSessionKey(session) &&
     !principalContextIsChanging() &&
     (session.user.role !== "field" || observed.deviceHash),
+  );
+}
+
+/** Persist the real response's observation while pending; restoration still requires no pending ids. */
+export async function principalObservationCanPersist(
+  session: AuthenticatedSession,
+  observed: PrincipalReadObservation,
+): Promise<boolean> {
+  return (
+    sessionObservationMatchesContext(session, observed) &&
+    (await principalEpochRefersTo(observed.epoch)) &&
+    sessionObservationMatchesContext(session, observed)
   );
 }
 export async function restorePrincipalObservation(

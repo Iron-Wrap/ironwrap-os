@@ -1,4 +1,4 @@
-import type { AuthenticatedSession } from "../auth/session";
+import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { getDeviceSecret } from "../auth/device-credential";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { getDatabase } from "../storage/db";
@@ -28,6 +28,8 @@ export async function loadToday(
   session: AuthenticatedSession,
   fetcher: typeof fetch = fetch,
 ): Promise<TodayResponse> {
+  if (isOfflineSession(session))
+    return await cachedModel(cacheKey(session, "today"), todayResponseSchema);
   let model: TodayResponse;
   try {
     model = await apiRequest({
@@ -56,6 +58,7 @@ export async function loadJob(
   context?: SavedPlanReadContext,
 ): Promise<JobResponse> {
   const key = cacheKey(session, `job:${jobId}`);
+  if (isOfflineSession(session)) return await cachedModel(key, jobResponseSchema);
   const bindingContext = context ?? (await optionalBindingContext(session));
   const deviceSecret = context
     ? context.deviceSecret
@@ -103,6 +106,7 @@ export async function loadWorkObject(
   context?: SavedPlanReadContext,
 ): Promise<WorkObjectResponse> {
   const key = cacheKey(session, workObjectCacheSuffix(scope));
+  if (isOfflineSession(session)) return await cachedModel(key, workObjectResponseSchema);
   const bindingContext = context ?? (await optionalBindingContext(session));
   const path = workObjectPath(scope);
   const deviceSecret = context
@@ -394,6 +398,14 @@ async function offlineModel<T>(
   error: unknown,
 ): Promise<T> {
   if (!isRetryableApiError(error)) throw error;
+  return await cachedModel(key, schema, error);
+}
+
+async function cachedModel<T>(
+  key: string,
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
+  error?: unknown,
+): Promise<T> {
   const cached = await getCachedFieldModel(key);
   const parsed = schema.safeParse(cached);
   if (!parsed.success) {

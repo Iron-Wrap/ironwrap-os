@@ -48,9 +48,16 @@ export function SavedPlanPage() {
       context.id,
       target ? savedPlanTargetKey(target) : "missing",
     ],
-    enabled: target !== null && !context.blocked,
+    enabled: target !== null && !context.acquisitionBlocked,
     queryFn: () =>
-      loadSavedPlan(session, target!, undefined, context.isCurrent, context.observation),
+      loadSavedPlan(
+        session,
+        target!,
+        undefined,
+        context.isCurrent,
+        context.observation,
+        "prefer-saved",
+      ),
     // A first visit without signal must run the IndexedDB fallback instead of pausing this read.
     networkMode: "always",
     retry: false,

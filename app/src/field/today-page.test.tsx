@@ -171,11 +171,16 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
   };
 }
 
-function renderToday(
+async function renderToday(
   model = todayModel(),
   initialToday?: TodayResponse,
   session: AuthenticatedSession = fieldSession,
 ) {
+  // Preventive-policy v1: only the selected reader is current. Pre-acquiring two roles in
+  // one browser made the earlier fixture stale under the real principal-read fencing.
+  const verified = await fetchSession(async () => Response.json(session));
+  if (!verified.authenticated) throw new Error("Expected the synthetic authenticated fixture");
+  fixtureObservations.set(principalSessionKey(verified), getSessionReadObservation(verified)!);
   vi.mocked(loadToday).mockResolvedValue(model);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = render(
@@ -237,11 +242,6 @@ describe("TodayPage", () => {
   beforeEach(async () => {
     await storeDeviceSecret("a".repeat(43));
     fixtureObservations.clear();
-    for (const fixture of [fieldSession, officeSession]) {
-      const verified = await fetchSession(async () => Response.json(fixture));
-      if (!verified.authenticated) throw new Error("Expected the synthetic authenticated fixture");
-      fixtureObservations.set(principalSessionKey(verified), getSessionReadObservation(verified)!);
-    }
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(hasSavedPlan).mockResolvedValue(true);
     vi.mocked(prefetchSavedPlans).mockImplementation(async (_session, model, options) => {
@@ -262,7 +262,7 @@ describe("TodayPage", () => {
   });
 
   it("shows a typed-only tenant stop and holds the Other work card", async () => {
-    renderToday(typedToday([{ ...typedStop, scope: "tenant" }]));
+    await renderToday(typedToday([{ ...typedStop, scope: "tenant" }]));
 
     const notice = (await screen.findByText("Work is stopped on every job.")).closest("section")!;
     expect(
@@ -281,7 +281,7 @@ describe("TodayPage", () => {
 
   it("unions and deduplicates tenant stops from job and typed assignments", async () => {
     const tenantStop = { ...typedStop, scope: "tenant" as const };
-    renderToday(
+    await renderToday(
       typedToday([tenantStop], {
         jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
       }),
@@ -296,7 +296,7 @@ describe("TodayPage", () => {
     "holds every assignment when a tenant stop is present only in the %s list",
     async (stopList) => {
       const tenantStop = { ...typedStop, scope: "tenant" as const };
-      renderToday(
+      await renderToday(
         typedToday(stopList === "typed" ? [tenantStop] : [], {
           jobs: todayModel().jobs.map((job) => ({
             ...job,
@@ -314,7 +314,7 @@ describe("TodayPage", () => {
   it.each([false, true])(
     "shows typed local stop identity, authority and snapshot (offline=%s)",
     async (offline) => {
-      renderToday(
+      await renderToday(
         typedToday([typedStop], { stale_fields: offline ? ["offline.cached_packet"] : [] }),
         undefined,
         { ...fieldSession, tenant: { ...fieldSession.tenant, office_phone: "780-555-0142" } },
@@ -356,7 +356,7 @@ describe("TodayPage", () => {
   );
 
   it("keeps a malformed typed stop holding its assignment without inventing an office number", async () => {
-    renderToday(typedToday([42]));
+    await renderToday(typedToday([42]));
     const notice = (await screen.findByText("Work is stopped on this assignment.")).closest(
       "section",
     )!;
@@ -372,7 +372,7 @@ describe("TodayPage", () => {
     ["missing typed projection", undefined, []],
     ["unavailable marker overriding typed empty list", [], ["jobs.active_stops_unavailable"]],
   ] as const)("holds typed-only work with %s", async (_label, stops, staleFields) => {
-    renderToday(typedToday(stops, { stale_fields: [...staleFields] }));
+    await renderToday(typedToday(stops, { stale_fields: [...staleFields] }));
     expect(await screen.findByText("Safety stops need checking")).toBeVisible();
     expect(
       screen.getByText("Ask the office to check safety stops before starting work"),
@@ -385,7 +385,7 @@ describe("TodayPage", () => {
   it.each(["job", "typed"] as const)(
     "holds both assignment lists when the %s projection is unknown",
     async (unknownList) => {
-      renderToday(
+      await renderToday(
         typedToday(unknownList === "typed" ? null : [], {
           jobs: todayModel().jobs.map((job) => ({
             ...job,
@@ -406,7 +406,7 @@ describe("TodayPage", () => {
 
   it("keeps typed work held through an unavailable retry until an explicit successful empty read", async () => {
     const user = userEvent.setup();
-    const { queryClient } = renderToday(typedToday([typedStop]));
+    const { queryClient } = await renderToday(typedToday([typedStop]));
     await screen.findByText("Work is stopped on this assignment.");
     vi.mocked(loadToday).mockResolvedValueOnce(
       typedToday(null, { stale_fields: ["jobs.active_stops_unavailable"] }),
@@ -427,7 +427,7 @@ describe("TodayPage", () => {
   it.each([fieldSession, officeSession])(
     "permits clear typed guidance and preserves the reader's assignment role ($user.role)",
     async (session) => {
-      renderToday(typedToday([]), undefined, session);
+      await renderToday(typedToday([]), undefined, session);
       expect(await screen.findByText("See job plan")).toBeVisible();
       expect(screen.getByRole("link", { name: "Open work plan" })).toBeVisible();
       expect(
@@ -448,7 +448,7 @@ describe("TodayPage", () => {
       stale_fields: [...staleFields],
       jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: stops })),
     });
-    renderToday(model);
+    await renderToday(model);
 
     expect(await screen.findByText("Safety stops need checking")).toBeVisible();
     expect(screen.getByText(/keep work stopped and ask the office to check it/i)).toBeVisible();
@@ -478,7 +478,7 @@ describe("TodayPage", () => {
         ],
       })),
     });
-    const { queryClient } = renderToday(stopped);
+    const { queryClient } = await renderToday(stopped);
     await screen.findByText("Work is stopped on every job.");
     vi.mocked(loadToday).mockResolvedValueOnce(
       todayResponseSchema.parse({
@@ -505,7 +505,7 @@ describe("TodayPage", () => {
 
   it("keeps the unknown-stop warning and disables its refresh while offline", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
-    renderToday(
+    await renderToday(
       todayResponseSchema.parse({
         ...todayModel(),
         stale_fields: ["offline.cached_packet", "jobs.active_stops_unavailable"],
@@ -520,7 +520,7 @@ describe("TodayPage", () => {
 
   it("makes an assigned Shop Order discoverable from Today through its typed packet route", async () => {
     const user = userEvent.setup();
-    renderToday(
+    await renderToday(
       todayModel({
         jobs: [],
         work_objects: [
@@ -563,7 +563,7 @@ describe("TodayPage", () => {
 
   it("shows a stop on a job on that job's card, naming the job, who stopped it and when", async () => {
     const [blocked, next] = todayModel().jobs;
-    renderToday(
+    await renderToday(
       todayModel({
         read_model_generated_at: "2026-07-10T16:30:00.000Z",
         jobs: [
@@ -615,7 +615,7 @@ describe("TodayPage", () => {
 
   it("offers a call to the office that releases the stop when the profile has its number", async () => {
     const [blocked] = todayModel().jobs;
-    renderToday(
+    await renderToday(
       todayModel({
         jobs: [
           {
@@ -646,7 +646,7 @@ describe("TodayPage", () => {
 
   it("labels a cached stop as a saved snapshot and does not claim a fresh stop check", async () => {
     const [job] = todayModel().jobs;
-    renderToday(
+    await renderToday(
       todayModel({
         read_model_generated_at: "2026-07-10T16:30:00.000Z",
         stale_fields: ["offline.cached_packet"],
@@ -673,7 +673,7 @@ describe("TodayPage", () => {
 
   it("does not present a check older than its stop as a valid freshness receipt", async () => {
     const [job] = todayModel().jobs;
-    renderToday(
+    await renderToday(
       todayModel({
         jobs: [
           {
@@ -699,7 +699,7 @@ describe("TodayPage", () => {
 
   it("never names the run sheet's generic next step as a stopped job's work check", async () => {
     const [blocked] = todayModel().jobs;
-    renderToday(
+    await renderToday(
       todayModel({
         jobs: [
           {
@@ -734,7 +734,7 @@ describe("TodayPage", () => {
       summary: null,
       raiser_display_name: "Priya Nand",
     };
-    renderToday(
+    await renderToday(
       todayModel({
         jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
       }),
@@ -763,7 +763,7 @@ describe("TodayPage", () => {
       summary: null,
       raiser_display_name: null,
     };
-    renderToday(
+    await renderToday(
       todayModel({
         jobs: todayModel().jobs.map((job) => ({ ...job, active_stops: [tenantStop] })),
       }),
@@ -789,7 +789,7 @@ describe("TodayPage", () => {
   });
 
   it("turns assigned work into a truthful run sheet with a distinct blocked-work action", async () => {
-    renderToday();
+    await renderToday();
 
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(screen.getByText("1 check blocks work")).toBeVisible();
@@ -817,7 +817,7 @@ describe("TodayPage", () => {
   });
 
   it("lays a job card out by its own width, so the crew shell's narrow column never squeezes it", async () => {
-    renderToday();
+    await renderToday();
     const link = await screen.findByRole("link", { name: "Check what blocks work" });
     const card = link.closest("article")!;
     // Three columns only when the card is 48rem wide (the office), the two facts side by side only
@@ -830,7 +830,7 @@ describe("TodayPage", () => {
 
   it("renders the verified bootstrap run sheet without a second initial today request", async () => {
     const bootstrapToday = todayModel();
-    renderToday(todayModel(), bootstrapToday);
+    await renderToday(todayModel(), bootstrapToday);
 
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(loadToday).not.toHaveBeenCalled();
@@ -842,7 +842,7 @@ describe("TodayPage", () => {
     vi.mocked(cacheToday).mockRejectedValueOnce(
       new DOMException("Storage full", "QuotaExceededError"),
     );
-    renderToday(todayModel(), todayModel());
+    await renderToday(todayModel(), todayModel());
 
     expect(await screen.findByRole("heading", { name: "Not ready offline" })).toBeVisible();
     expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
@@ -860,7 +860,7 @@ describe("TodayPage", () => {
           resolvePacket = resolve;
         }),
     );
-    renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
+    await renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
 
     expect(await screen.findByRole("heading", { name: "Saving for offline use" })).toBeVisible();
     expect(screen.queryByText("Job plan not saved")).not.toBeInTheDocument();
@@ -874,7 +874,7 @@ describe("TodayPage", () => {
       options?.onPacket?.({ kind: "job", jobId: model.jobs[0]!.id }, false);
       return { [model.jobs[0]!.id]: false };
     });
-    renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
+    await renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
 
     expect(await screen.findByText("Job plan not saved")).toBeVisible();
     expect(screen.getByRole("button", { name: "Save job plan again" })).toBeVisible();
@@ -882,7 +882,7 @@ describe("TodayPage", () => {
 
   it("labels cached data as an offline snapshot instead of live work", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
-    renderToday(todayModel({ stale_fields: ["offline.cached_packet"] }));
+    await renderToday(todayModel({ stale_fields: ["offline.cached_packet"] }));
 
     expect(await screen.findByText("Saved copy")).toBeVisible();
     expect(screen.getByText(/This is a saved copy for .*Jul 10, 2026/i)).toBeVisible();
@@ -892,7 +892,7 @@ describe("TodayPage", () => {
 
   it("shows D1 website intake separately from assigned field jobs, for an office reader", async () => {
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload());
-    renderToday(todayModel(), undefined, officeSession);
+    await renderToday(todayModel(), undefined, officeSession);
 
     expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
     expect(screen.getByText("Launch Proof")).toBeVisible();
@@ -911,7 +911,7 @@ describe("TodayPage", () => {
   // for a field session is what stops the request being made at all.
   it("never asks a crew phone's run sheet for office website intake", async () => {
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload());
-    renderToday();
+    await renderToday();
 
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Website intake" })).not.toBeInTheDocument();
@@ -950,7 +950,7 @@ describe("TodayPage", () => {
         version: 2,
       } satisfies OutboxAction,
     ]);
-    renderToday();
+    await renderToday();
 
     expect(
       await screen.findByRole("heading", { name: "One saved item needs review" }),
@@ -987,7 +987,7 @@ describe("TodayPage", () => {
         version: 2,
       } satisfies OutboxAction,
     ]);
-    renderToday();
+    await renderToday();
 
     expect(
       await screen.findByRole("heading", { name: "The office has your saved item" }),

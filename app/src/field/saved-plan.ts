@@ -61,15 +61,19 @@ export async function loadSavedPlan(
   fetcher: typeof fetch = fetch,
   isCurrent?: () => boolean,
   observation?: PrincipalReadObservation,
+  mode: "live" | "prefer-saved" = "live",
 ) {
   const context = await captureSavedPlanReadContext(session, isCurrent, observation);
+  const existing =
+    mode === "prefer-saved" && (await hasSavedPlan(session, target, undefined, context));
   // An offline session cannot attest a new live paired principal. Until auth refresh, it may
   // read only a previously acquired snapshot bound to its own session/principal/device.
-  const model = isOfflineSession(session)
-    ? await cachedPlanModel(session, target)
-    : target.kind === "job"
-      ? await loadJob(session, target.jobId, fetcher, context)
-      : await loadWorkObject(session, target.scope, fetcher, context);
+  const model =
+    isOfflineSession(session) || existing
+      ? await cachedPlanModel(session, target)
+      : target.kind === "job"
+        ? await loadJob(session, target.jobId, fetcher, context)
+        : await loadWorkObject(session, target.scope, fetcher, context);
   await context.assertCurrent();
   const plan = workPlanForTarget(target, model);
   const offline = model.stale_fields.includes("offline.cached_packet");

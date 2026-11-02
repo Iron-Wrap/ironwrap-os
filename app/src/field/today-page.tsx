@@ -49,6 +49,7 @@ export function TodayPage() {
   const {
     id: contextId,
     blocked: contextBlocked,
+    acquisitionBlocked,
     isCurrent: contextIsCurrent,
     observation: readObservation,
   } = useSavedPlanReadContext(session);
@@ -61,7 +62,7 @@ export function TodayPage() {
   const [bootstrapSaving, setBootstrapSaving] = useState(Boolean(initialToday));
   const query = useQuery({
     queryKey: ["today", session.tenant.id, session.user.id, contextId],
-    enabled: !contextBlocked,
+    enabled: !acquisitionBlocked,
     queryFn: async () => {
       const readContext = await captureSavedPlanReadContext(
         session,
@@ -121,7 +122,7 @@ export function TodayPage() {
   }, []);
 
   useEffect(() => {
-    if (!today || contextBlocked) return;
+    if (!today || acquisitionBlocked) return;
     let active = true;
     const online = navigator.onLine;
     const targets = assignedPlanTargets(today);
@@ -173,7 +174,7 @@ export function TodayPage() {
     packetRefreshCycle,
     session,
     today,
-    contextBlocked,
+    acquisitionBlocked,
     contextId,
     contextIsCurrent,
     readObservation,

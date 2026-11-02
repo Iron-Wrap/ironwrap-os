@@ -3,15 +3,18 @@ import { z } from "zod";
 import { getDeviceSecret } from "./device-credential";
 import {
   capturePrincipalReadStart,
+  principalReadStart,
   observePrincipalRead,
   getSessionReadObservation,
   type PrincipalReadObservation,
 } from "./principal-context";
+import type { PreparedPrincipalExchange } from "./principal-epoch";
 import {
   persistAuthenticatedSession,
   persistOrInvalidateSession,
   recoverOfflineSession,
   sessionResponseSchema,
+  takeVerifiedSavedFieldEntry,
   type SessionResponse,
 } from "./session";
 import { todayResponseSchema, type TodayResponse } from "../field/field-contracts";
@@ -53,11 +56,21 @@ const FIELD_BOOTSTRAP_DEVICE_PROOF_TIMEOUT_MS = 1_000;
 
 let primedFieldBootstrap: Promise<FieldBootstrap> | undefined;
 
+/** First visit/reload can use a genuine verified cached session without sending its cookie. */
+export async function fetchInitialFieldBootstrap(): Promise<FieldBootstrap> {
+  const session = await takeVerifiedSavedFieldEntry();
+  return session
+    ? { session, field_read_observation: getSessionReadObservation(session) }
+    : fetchFieldBootstrap();
+}
+
 type FieldBootstrapPreloadWindow = Window & {
   __ironwrapFieldBootstrapResponse?: Promise<Response>;
   __ironwrapFieldBootstrapPreloadConsumed?: boolean;
   __ironwrapFieldBootstrapReadGeneration?: string | null;
   __ironwrapFieldBootstrapReadEpoch?: string | null | Promise<string | null>;
+  __ironwrapFieldBootstrapPreparation?: Promise<PreparedPrincipalExchange | undefined>;
+  __ironwrapFieldBootstrapCancel?: () => void;
 };
 
 /**
@@ -98,7 +111,7 @@ export async function fetchFieldBootstrap(fetcher: typeof fetch = fetch): Promis
 async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
   const preloaded = takeInitialFieldBootstrapPreload(fetcher);
   if (preloaded) {
-    const initial = await capturePrincipalReadStart();
+    const initial = principalReadStart();
     const deviceProof = await valueBeforeDeadline(
       getDeviceSecret(),
       FIELD_BOOTSTRAP_DEVICE_PROOF_TIMEOUT_MS,
@@ -118,9 +131,14 @@ async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
         path: API_PATHS.fieldBootstrap,
         schema: fieldBootstrapResponseSchema,
         fetcher: async () => response,
+        preparedPrincipalExchange: await valueBeforeDeadline(
+          Promise.resolve(preloaded.preparation),
+          FIELD_BOOTSTRAP_PRELOAD_TIMEOUT_MS,
+        ),
       });
       return { payload, start, deviceProof };
     }
+    preloaded.cancel?.();
   }
   const start = await capturePrincipalReadStart();
   const deviceProof = await valueBeforeDeadline(
@@ -132,6 +150,9 @@ async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
     schema: fieldBootstrapResponseSchema,
     fetcher,
     deviceProof: deviceProof ? async () => deviceProof : undefined,
+    onPrincipalPreparation: (prepared) => {
+      start.epoch = prepared.epoch;
+    },
   });
   return { payload, start, deviceProof };
 }
@@ -141,6 +162,8 @@ function takeInitialFieldBootstrapPreload(fetcher: typeof fetch):
       response: Promise<Response>;
       generation: string | null;
       epoch: string | null | Promise<string | null>;
+      preparation?: Promise<PreparedPrincipalExchange | undefined>;
+      cancel?: () => void;
     }
   | undefined {
   if (fetcher !== fetch || typeof window === "undefined") return undefined;
@@ -149,10 +172,14 @@ function takeInitialFieldBootstrapPreload(fetcher: typeof fetch):
   const response = preloadWindow.__ironwrapFieldBootstrapResponse;
   const generation = preloadWindow.__ironwrapFieldBootstrapReadGeneration ?? null;
   const epoch = preloadWindow.__ironwrapFieldBootstrapReadEpoch ?? null;
+  const preparation = preloadWindow.__ironwrapFieldBootstrapPreparation;
+  const cancel = preloadWindow.__ironwrapFieldBootstrapCancel;
   delete preloadWindow.__ironwrapFieldBootstrapResponse;
   delete preloadWindow.__ironwrapFieldBootstrapReadGeneration;
   delete preloadWindow.__ironwrapFieldBootstrapReadEpoch;
-  return response ? { response, generation, epoch } : undefined;
+  delete preloadWindow.__ironwrapFieldBootstrapPreparation;
+  delete preloadWindow.__ironwrapFieldBootstrapCancel;
+  return response ? { response, generation, epoch, preparation, cancel } : undefined;
 }
 
 /**
@@ -196,7 +223,7 @@ function valueBeforeDeadline<T>(value: Promise<T>, timeoutMs: number): Promise<T
  * caches a session beyond the first consumer.
  */
 export function primeFieldBootstrap(
-  loader: () => Promise<FieldBootstrap> = fetchFieldBootstrap,
+  loader: () => Promise<FieldBootstrap> = fetchInitialFieldBootstrap,
 ): void {
   primedFieldBootstrap ??= loader();
 }
@@ -223,7 +250,7 @@ export async function settlePrimedFieldBootstrap(): Promise<FieldBootstrap | und
  * retries and later refetches always make a fresh authenticated request.
  */
 export function takePrimedFieldBootstrap(
-  loader: () => Promise<FieldBootstrap> = fetchFieldBootstrap,
+  loader: () => Promise<FieldBootstrap> = fetchInitialFieldBootstrap,
 ): Promise<FieldBootstrap> {
   const bootstrap = primedFieldBootstrap;
   primedFieldBootstrap = undefined;

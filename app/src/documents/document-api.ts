@@ -1,7 +1,7 @@
 import type { AuthenticatedSession } from "../auth/session";
 import { getDeviceSecret } from "../auth/device-credential";
 import { cacheFieldModel, getCachedFieldModel } from "../field/field-cache";
-import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
+import { ApiError, apiRequest, apiResponse, isRetryableApiError } from "../lib/api";
 import {
   DOCUMENT_GENERATIONS_ROUTE,
   DOCUMENTS_ROUTE_PREFIX,
@@ -121,22 +121,21 @@ export async function loadGeneratedDocument(
   receiptId: string,
   signal: AbortSignal,
 ): Promise<string> {
-  const response = await fetch(
-    `${DOCUMENT_GENERATIONS_ROUTE}/${encodeURIComponent(receiptId)}/document`,
+  return await apiResponse(
     {
+      path: `${DOCUMENT_GENERATIONS_ROUTE}/${encodeURIComponent(receiptId)}/document`,
       credentials: "same-origin",
-      cache: "no-store",
       signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
     },
+    // The Worker verifies the exact bytes and enforces the 8 MiB retrieval bound.
+    (response) => response.text(),
+    async (response) => {
+      const detail = (await response.json().catch(() => ({}))) as { error?: string };
+      return new ApiError({
+        status: response.status,
+        code: detail.error,
+        message: "The document could not be opened.",
+      });
+    },
   );
-  if (!response.ok) {
-    const detail = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError({
-      status: response.status,
-      code: detail.error,
-      message: "The document could not be opened.",
-    });
-  }
-  // The Worker verifies the exact bytes and enforces the 8 MiB retrieval bound.
-  return response.text();
 }

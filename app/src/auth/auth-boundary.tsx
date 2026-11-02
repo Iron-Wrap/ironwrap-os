@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeferredValue, useEffect, type ReactNode } from "react";
 
 import { ApiError, isRetryableApiError } from "../lib/api";
@@ -11,24 +11,35 @@ import {
   type FieldBootstrap,
 } from "./field-bootstrap";
 import { MagicLinkForm } from "./magic-link-form";
-import { fetchSession, isOfflineSession } from "./session";
+import { fetchSession, isOfflineSession, takeVerifiedSavedFieldEntry } from "./session";
 import { SessionProvider } from "./session-context";
 import { sessionQueryKey } from "./session-query";
 import { getSessionReadObservation } from "./principal-context";
 
 export function AuthBoundary({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const primaryFieldEntry = isPrimaryFieldEntry();
   const fieldCompanionPath = isFieldCompanionPath();
   const unifiedEntry = isUnifiedEntry();
   const sessionQuery = useQuery({
     queryKey: sessionQueryKey,
-    queryFn: () =>
-      primaryFieldEntry
-        ? takePrimedFieldBootstrap()
+    queryFn: () => {
+      const held = queryClient.getQueryData<FieldBootstrap>(sessionQueryKey);
+      return primaryFieldEntry
+        ? held
+          ? fetchFieldBootstrap()
+          : takePrimedFieldBootstrap()
         : unifiedEntry
-          ? fetchUnifiedEntry()
-          : fetchSessionOnly(),
+          ? fetchUnifiedEntry(!held)
+          : fetchSessionOnly(!held);
+    },
     staleTime: 60_000,
+    // The first cached-only field read must run even when React Query knows the browser is offline.
+    networkMode: "always",
+    // A focus/online hint is not proof that a cookie-sensitive probe has no effect. A verified
+    // cached-only field entry stays local until an explicit refresh requests a live read.
+    refetchOnWindowFocus: (query) => !isVerifiedLocalEntry(query.state.data),
+    refetchOnReconnect: (query) => !isVerifiedLocalEntry(query.state.data),
     retry(failureCount, error) {
       return error instanceof ApiError && error.status === 0 && failureCount < 1;
     },
@@ -46,13 +57,14 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   // touches nothing in the queue.
   const heldSession = sessionQuery.data?.session;
   const offlineSession = Boolean(heldSession?.authenticated && isOfflineSession(heldSession));
+  const localOnly = isVerifiedLocalEntry(sessionQuery.data);
   const refetchSession = sessionQuery.refetch;
   useEffect(() => {
-    if (!offlineSession) return;
+    if (!offlineSession || localOnly) return;
     const restore = () => void refetchSession();
     window.addEventListener("online", restore);
     return () => window.removeEventListener("online", restore);
-  }, [offlineSession, refetchSession]);
+  }, [offlineSession, localOnly, refetchSession]);
 
   if (sessionQuery.isPending) return <LoadingState label="Checking your sign-in…" />;
   // Held-session policy after a failed re-check. A transient failure (network, 5xx) while the
@@ -116,8 +128,10 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   );
 }
 
-async function fetchSessionOnly(): Promise<FieldBootstrap> {
-  const session = await fetchSession();
+async function fetchSessionOnly(allowLocalOnly = true): Promise<FieldBootstrap> {
+  const saved =
+    allowLocalOnly && isFieldCompanionPath() ? await takeVerifiedSavedFieldEntry() : undefined;
+  const session = saved ?? (await fetchSession());
   return {
     session,
     ...(session.authenticated && getSessionReadObservation(session)
@@ -126,10 +140,13 @@ async function fetchSessionOnly(): Promise<FieldBootstrap> {
   };
 }
 
-async function fetchUnifiedEntry(): Promise<FieldBootstrap> {
-  if (!(await getDeviceSecret())) return fetchSessionOnly();
+async function fetchUnifiedEntry(allowLocalOnly = true): Promise<FieldBootstrap> {
+  if (!(await getDeviceSecret())) return fetchSessionOnly(allowLocalOnly);
   try {
-    return await fetchFieldBootstrap();
+    const saved = allowLocalOnly ? await takeVerifiedSavedFieldEntry() : undefined;
+    return saved
+      ? { session: saved, field_read_observation: getSessionReadObservation(saved) }
+      : await fetchFieldBootstrap();
   } catch (error) {
     if (!(error instanceof ApiError) || error.code !== "today_read_required") throw error;
     await clearDeviceSecret();
@@ -148,7 +165,17 @@ function isFieldCompanionPath(): boolean {
     pathname === "/" ||
     pathname === "/today" ||
     pathname.startsWith("/jobs/") ||
+    pathname.startsWith("/work-objects/") ||
     pathname.startsWith("/check-in")
+  );
+}
+
+function isVerifiedLocalEntry(value: FieldBootstrap | undefined): boolean {
+  return Boolean(
+    value?.session.authenticated &&
+    value.session.user.role === "field" &&
+    isOfflineSession(value.session) &&
+    value.field_read_observation?.source === "offline",
   );
 }
 

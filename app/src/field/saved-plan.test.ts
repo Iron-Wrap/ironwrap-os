@@ -10,7 +10,7 @@ import {
   savedPlanSessionFixture,
   verifiedSavedPlanSessionFixture,
 } from "./saved-plan-test-fixture";
-import { fetchSession } from "../auth/session";
+import { readVerifiedSavedFieldSession } from "../auth/session";
 import { savedPlanCacheKey, type SavedPlanTarget } from "./saved-plan-context";
 
 const stamp = new Date(0).toISOString();
@@ -55,6 +55,14 @@ const live = (model: unknown) => vi.fn<typeof fetch>().mockResolvedValue(Respons
 const disconnected = () =>
   vi.fn<typeof fetch>().mockRejectedValue(new TypeError("Synthetic offline read"));
 
+// Preventive-policy v1: choose genuine cached-only admission before any live exchange.
+// The original network-first bodies remain bound to immutable f673 and its retained archive.
+async function localSession() {
+  const saved = await readVerifiedSavedFieldSession();
+  if (!saved) throw new Error("Expected the genuinely verified cached-only session");
+  return saved;
+}
+
 describe("saved work-plan context and offline reads", () => {
   beforeEach(async () => {
     await storeDeviceSecret("a".repeat(43));
@@ -91,7 +99,7 @@ describe("saved work-plan context and offline reads", () => {
 
   it("opens the full bound saved version after a live acquisition, with stops and checks still open", async () => {
     await loadSavedPlan(session, target, live(savedPlanJobFixture()));
-    const saved = await loadSavedPlan(session, target, disconnected());
+    const saved = await loadSavedPlan(await localSession(), target, disconnected());
     expect(saved.offline).toBe(true);
     expect(saved.plan.stop_conditions).toBe("Stop if the boundary is unsafe");
     expect(saved.plan.make_safe_procedure).toContain("contact the office");
@@ -107,7 +115,7 @@ describe("saved work-plan context and offline reads", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe(
       "/api/v1/work-objects/Shop%20Order/SHOP-SYNTHETIC/physical-contexts/Shop%20Floor/FLOOR-SYNTHETIC",
     );
-    expect((await loadSavedPlan(session, typedTarget, disconnected())).plan.id).toBe(
+    expect((await loadSavedPlan(await localSession(), typedTarget, disconnected())).plan.id).toBe(
       "WP-SHOP-SYNTHETIC",
     );
     expect(await hasSavedPlan(session, target)).toBe(false);
@@ -116,9 +124,10 @@ describe("saved work-plan context and offline reads", () => {
   it("refuses a legacy unbound saved packet while preserving ordinary job-detail compatibility", async () => {
     const model = savedPlanJobFixture();
     await cacheFieldModel(savedPlanCacheKey(session, target), model, model.source_updated_at);
-    expect((await loadJob(session, "JOB-SYNTHETIC", disconnected())).job.id).toBe("JOB-SYNTHETIC");
+    const offline = await localSession();
+    expect((await loadJob(offline, "JOB-SYNTHETIC", disconnected())).job.id).toBe("JOB-SYNTHETIC");
     expect(await hasSavedPlan(session, target)).toBe(false);
-    await expect(loadSavedPlan(session, target, disconnected())).rejects.toMatchObject({
+    await expect(loadSavedPlan(offline, target, disconnected())).rejects.toMatchObject({
       code: "saved_plan_unavailable",
     });
   });
@@ -172,9 +181,11 @@ describe("saved work-plan context and offline reads", () => {
     const record = (await db.get("field_cache", savedPlanCacheKey(session, target)))!;
     (record.value as JobResponse).packet.work_package!.version += 1;
     await db.put("field_cache", record);
-    await expect(loadSavedPlan(session, target, disconnected())).rejects.toMatchObject({
-      code: "saved_plan_unavailable",
-    });
+    await expect(loadSavedPlan(await localSession(), target, disconnected())).rejects.toMatchObject(
+      {
+        code: "saved_plan_unavailable",
+      },
+    );
   });
 
   it("invalidates an old saved plan when the fresh actual read has none; a denied read cannot revive it", async () => {
@@ -184,9 +195,11 @@ describe("saved work-plan context and offline reads", () => {
     await expect(loadSavedPlan(session, target, live(missing))).rejects.toMatchObject({
       code: "saved_plan_unavailable",
     });
-    await expect(loadSavedPlan(session, target, disconnected())).rejects.toMatchObject({
-      code: "saved_plan_unavailable",
-    });
+    await expect(loadSavedPlan(await localSession(), target, disconnected())).rejects.toMatchObject(
+      {
+        code: "saved_plan_unavailable",
+      },
+    );
     await loadSavedPlan(session, target, live(savedPlanJobFixture()));
     await expect(
       loadSavedPlan(
@@ -315,8 +328,7 @@ describe("saved work-plan context and offline reads", () => {
 
   it("uses an offline session only for existing bound data and never mints through a new live request", async () => {
     await loadSavedPlan(session, target, live(savedPlanJobFixture()));
-    const offline = await fetchSession(disconnected());
-    if (!offline.authenticated) throw new Error("Expected the verified offline snapshot");
+    const offline = await localSession();
     const fetcher = live(savedPlanJobFixture());
     expect((await loadSavedPlan(offline, target, fetcher)).offline).toBe(true);
     expect(fetcher).not.toHaveBeenCalled();

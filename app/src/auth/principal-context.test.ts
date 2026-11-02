@@ -52,7 +52,7 @@ describe("auth observations used by the saved-plan reader", () => {
     });
   });
 
-  it("preserves the ordinary offline DTO but refuses its old field observation after local generation writes recover", async () => {
+  it("preventive-policy v1 preserves the ordinary offline DTO but cannot erase its indeterminate exchange with a later DTO", async () => {
     const source = savedPlanSessionFixture();
     await verifiedSavedPlanSessionFixture(source);
     const generation = getPrincipalGeneration();
@@ -85,7 +85,11 @@ describe("auth observations used by the saved-plan reader", () => {
     });
     const fresh = await fetchSession(async () => Response.json(source));
     if (!fresh.authenticated) throw new Error("Expected unchanged ordinary fresh sign-in");
-    await expect(captureSavedPlanReadContext(fresh)).resolves.toBeDefined();
+    // A later successful read cannot settle the earlier lost exchange. No automatic reset
+    // authority is inferred; the unchanged original expectation is retained at f673.
+    await expect(captureSavedPlanReadContext(fresh)).rejects.toMatchObject({
+      code: "saved_plan_context_changed",
+    });
   });
 
   it.each(["session", "bootstrap"])(

@@ -426,6 +426,17 @@ Source publication proves only repository availability; it does not prove later 
 repository CI, an HTTPS deployment, the provider command, scoped credentials, Frappe identities,
 or any live stage/promote/readback/rollback receipt.
 
+#### Current delivery ownership
+
+Ivan owns business approval, release sign-off and GitHub merge authority. Development, source
+reviews and data checks stay with AI assistants and Ivan; the independent reviewer is separate
+from the builder, and Ivan runs the AI-prepared production pre-flight queries.
+
+Sergey owns devops: provider accounts, Cloudflare, DNS, hosts, deploy infrastructure and production
+secret custody. Sergey and Kirill receive no development, review or data-check assignments.
+Andrei has left, and Ilya is the customer, not a team member. Participation grants no protected
+credential by implication.
+
 #### Release-control custody and dependency chain
 
 Retired for release admission on 2026-09-24: `deploy.yml` no longer calls the independent issuer or

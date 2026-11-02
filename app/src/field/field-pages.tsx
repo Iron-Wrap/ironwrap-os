@@ -59,6 +59,7 @@ import { CustomerJobHistorySection } from "../customers/customer-history-section
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
 import { ASSIGNMENT_ROLE_MISSING, assignmentRole, assignmentRoleLabel } from "./assignment-words";
+import { dialableNumber } from "./dialable-number";
 import { GateChip } from "./gate-chip";
 import { JobLabelText } from "./job-label-text";
 import { ProofStream } from "./proof-stream";
@@ -429,6 +430,7 @@ function JobSurface({
             </Link>
           )}
         </Button>
+        {!model.packet.work_package ? <NoWorkPlanNotice /> : null}
         <OfflineReadiness
           ready={!model.stale_fields.includes(NOT_SAVED_ON_DEVICE)}
           saving={savingOffline}
@@ -469,6 +471,7 @@ function JobSurface({
           offline={offline}
           dateOptions={dateOptions}
           captureAllowed={fieldCaptureAllowed}
+          showNoPlanNotice={false}
         />
         <WorkStatus model={model} blockedGates={blockedGates} dateOptions={dateOptions} />
         {/*
@@ -747,16 +750,36 @@ function fieldPacketQueryKey(
     : ["job", session.tenant.id, session.user.id, jobId];
 }
 
+function NoWorkPlanNotice() {
+  return (
+    <section
+      className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
+      aria-labelledby="work-package-heading"
+    >
+      <p className="text-sm font-semibold text-warning">Work plan</p>
+      <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
+        No work plan is ready
+      </h2>
+      <p className="mt-2 leading-6 text-muted">
+        Do not start, resume, release a hold point, or change scope. Go online for the latest issued
+        plan, or call production.
+      </p>
+    </section>
+  );
+}
+
 function WorkPackagePanel({
   model,
   offline,
   dateOptions,
   captureAllowed,
+  showNoPlanNotice = true,
 }: {
   model: WorkPackagePanelModel;
   offline: boolean;
   dateOptions: FieldDateOptions;
   captureAllowed: boolean;
+  showNoPlanNotice?: boolean;
 }) {
   const session = useSession();
   const queryClient = useQueryClient();
@@ -836,22 +859,11 @@ function WorkPackagePanel({
   );
 
   if (!workPackage) {
+    if (!showNoPlanNotice) return issueForm;
     return (
       <div className="space-y-5">
         {issueForm}
-        <section
-          className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
-          aria-labelledby="work-package-heading"
-        >
-          <p className="text-sm font-semibold text-warning">Work plan</p>
-          <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-            No work plan is ready
-          </h2>
-          <p className="mt-2 leading-6 text-muted">
-            Do not start, resume, release a hold point, or change scope. Go online for the latest
-            issued plan, or call production.
-          </p>
-        </section>
+        <NoWorkPlanNotice />
       </div>
     );
   }
@@ -2029,31 +2041,6 @@ function EmergencyLine({ officePhone }: { officePhone: string | null }) {
       </div>
     </div>
   );
-}
-
-/**
- * The number a tel: link may dial, or null when the text is not one plain phone number. A label
- * before it ("Cell:") and anything after an extension mark ("ext", "x", "#", ",") are left out;
- * only digits, spaces, dots, dashes and brackets may stand around the digits, a "+" only first.
- * A local number has 7 or 10 digits, or 11 starting with 1; an international one ("+") 8 to 15
- * digits with no "(0)" trunk group. A shown number that is not dialable gets no Call button,
- * never a wrong one.
- */
-export function dialableNumber(text: string | null | undefined): string | null {
-  const number = (text ?? "")
-    .replace(/[\u2010-\u2015]/g, "-")
-    .replace(/^[^\d+(]*:\s*/, "")
-    .split(/\s*(?:ext\.?|x|#|,)/i)[0]!
-    .trim();
-  if (!/^\+?[\d\s().-]+$/.test(number)) return null;
-  const digits = number.replace(/\D/g, "");
-  if (number.startsWith("+")) {
-    if (/\(\s*0\s*\)/.test(number) || digits.length < 8 || digits.length > 15) return null;
-    return `+${digits}`;
-  }
-  const local =
-    digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
-  return local ? digits : null;
 }
 
 function JobFact({ label, value }: { label: string; value: ReactNode }) {

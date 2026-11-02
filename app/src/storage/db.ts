@@ -16,6 +16,8 @@ export interface FieldCacheRecord {
   value: unknown;
   sourceUpdatedAt: string | null;
   updatedAt: number;
+  /** Optional read-context receipt. Legacy/unbound packets remain readable as job details. */
+  savedPlanBinding?: unknown;
 }
 
 interface IronWrapDatabase extends DBSchema {

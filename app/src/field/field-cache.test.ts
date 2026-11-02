@@ -72,6 +72,7 @@ function today(jobIds: string[]): TodayResponse {
       blocked_gate_count: 0,
       next_action: "Open field check-in",
       assignment: { ...assignment, id: `ASSIGN-${id}` },
+      active_stops: [],
     })),
     work_objects: [],
   };

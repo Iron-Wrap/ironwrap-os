@@ -145,6 +145,9 @@ const TodayPage = lazy(async () => ({
 const JobPage = lazy(async () => ({
   default: (await loadFieldPages()).JobPage,
 }));
+const SavedPlanPage = lazy(async () => ({
+  default: (await import("./field/saved-plan-page")).SavedPlanPage,
+}));
 const JobHistoryPage = lazy(async () => ({
   default: (await import("./jobs/job-history-page")).JobHistoryPage,
 }));
@@ -361,6 +364,18 @@ const jobHistoryRoute = createRoute({
   component: JobHistoryRoute,
 });
 
+const savedJobPlanRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/jobs/$jobId/plan",
+  component: SavedPlanRoute,
+});
+
+const savedWorkPlanRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId/plan",
+  component: SavedPlanRoute,
+});
+
 const workObjectRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId",
@@ -463,6 +478,16 @@ function JobHistoryRoute() {
     <RoleGuard surface="jobHistory">
       <Suspense fallback={<FieldRouteSkeleton label="Loading this job's record" />}>
         <JobHistoryPage />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
+function SavedPlanRoute() {
+  return (
+    <RoleGuard surface="job">
+      <Suspense fallback={<FieldRouteSkeleton label="Opening work and safety plan" />}>
+        <SavedPlanPage />
       </Suspense>
     </RoleGuard>
   );
@@ -1077,6 +1102,8 @@ const routeTree = rootRoute.addChildren([
     todayRoute,
     jobRoute,
     jobHistoryRoute,
+    savedJobPlanRoute,
+    savedWorkPlanRoute,
     workObjectRoute,
     checkInRoute,
     jobCheckInRoute,

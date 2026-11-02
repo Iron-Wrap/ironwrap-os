@@ -1,6 +1,7 @@
 (() => {
   const DATABASE_NAME = "ironwrap-os";
   const DEVICE_SECRET_KEY = "field-device-secret-v1";
+  const PRINCIPAL_EPOCH_KEY = "field-principal-epoch-v1";
   const DEVICE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
   const BOOTSTRAP_PATH = "/api/v1/field/bootstrap";
   const TIMEOUT_MS = 12_000;
@@ -33,10 +34,45 @@
   // An async head script may arrive after the entry has started its ordinary read.
   // Do not leave a late response for a later refetch to mistake for the initial one.
   if (window.__ironwrapFieldBootstrapPreloadConsumed) return;
+  let cancelled = false;
+  let activeTransaction;
+  const clock = () => (typeof performance === "undefined" ? Date.now() : performance.now());
+  const started = clock();
+  window.__ironwrapFieldBootstrapCancel = () => {
+    cancelled = true;
+    try {
+      activeTransaction?.abort();
+    } catch {
+      // A committed refusal remains durable; cancellation never rolls it back.
+    }
+  };
 
-  const preload = readStoredDeviceProof().then((deviceProof) => {
-    if (!deviceProof) throw new Error("field_device_proof_unavailable");
-    return fetchBootstrap(deviceProof);
+  // Local provenance for the consuming app, never a Worker field or permission. Capture
+  // before the asynchronous proof read so an intervening auth transition remains visible.
+  try {
+    const key = "ironwrap.principal-read-generation-v1";
+    let generation = window.localStorage.getItem(key);
+    if (!generation) generation = crypto.randomUUID();
+    window.localStorage.setItem(key, generation);
+    window.__ironwrapFieldBootstrapReadGeneration =
+      window.localStorage.getItem(key) === generation ? generation : null;
+  } catch {
+    window.__ironwrapFieldBootstrapReadGeneration = null;
+  }
+
+  const read = readStoredDeviceProof();
+  window.__ironwrapFieldBootstrapReadEpoch = read.then(
+    (value) => value?.epoch ?? null,
+    () => null,
+  );
+  window.__ironwrapFieldBootstrapPreparation = read.then(
+    (value) => value?.preparation,
+    () => undefined,
+  );
+  const preload = read.then((read) => {
+    if (!read || cancelled || clock() - started >= 2_000)
+      throw new Error("field_device_proof_unavailable");
+    return fetchBootstrap(read.deviceProof);
   });
 
   // The React entry consumes this promise as its normal, schema-validated bootstrap
@@ -63,11 +99,94 @@
 
     const database = await openExistingDatabase();
     try {
+      if (cancelled) return undefined;
       if (!database.objectStoreNames.contains("meta")) return undefined;
-      const transaction = database.transaction("meta", "readonly");
-      const record = await requestResult(transaction.objectStore("meta").get(DEVICE_SECRET_KEY));
+      const transaction = database.transaction("meta", "readwrite", { durability: "strict" });
+      activeTransaction = transaction;
+      const completed = new Promise((resolve, reject) => {
+        transaction.addEventListener("complete", resolve, { once: true });
+        transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+        transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      });
+      void completed.catch(() => undefined);
+      const store = transaction.objectStore("meta");
+      const [record, epochRecord, snapshotRecord] = await Promise.all([
+        requestResult(store.get(DEVICE_SECRET_KEY)),
+        requestResult(store.get(PRINCIPAL_EPOCH_KEY)),
+        requestResult(store.get("authenticated-session-v1")),
+      ]);
       const value = typeof record?.value === "string" ? record.value : record?.value?.value;
-      return typeof value === "string" && DEVICE_SECRET_PATTERN.test(value) ? value : undefined;
+      // The entry module must decide verified cached-only admission before any cookie-sensitive
+      // exchange. This head optimization cannot turn a healthy offline entry into a live probe.
+      if (
+        snapshotRecord?.value?.field_read_observation ||
+        typeof value !== "string" ||
+        !DEVICE_SECRET_PATTERN.test(value)
+      ) {
+        await completed;
+        return undefined;
+      }
+      const previous = epochRecord?.value;
+      const valid =
+        previous?.format === "field-principal-epoch-v2" &&
+        typeof previous.epoch === "string" &&
+        previous.epoch &&
+        Array.isArray(previous.pending) &&
+        previous.pending.every((id) => typeof id === "string" && id) &&
+        new Set(previous.pending).size === previous.pending.length;
+      if (epochRecord && !valid && !(typeof previous === "string" && previous)) {
+        await completed;
+        return undefined;
+      }
+      // Each session/bootstrap acquisition gets a new epoch. A later acquisition cannot be
+      // overwritten by an older response settling afterward, even for the same app actor.
+      const epoch = crypto.randomUUID();
+      const id = crypto.randomUUID();
+      if (cancelled) {
+        transaction.abort();
+        return undefined;
+      }
+      await requestResult(
+        store.put({
+          key: PRINCIPAL_EPOCH_KEY,
+          value: {
+            format: "field-principal-epoch-v2",
+            epoch,
+            pending: [...(valid ? previous.pending : []), id],
+          },
+          updatedAt: Date.now(),
+        }),
+      );
+      await completed;
+      activeTransaction = undefined;
+      const readTransaction = database.transaction("meta", "readonly");
+      const readCompleted = new Promise((resolve, reject) => {
+        readTransaction.addEventListener("complete", resolve, { once: true });
+        readTransaction.addEventListener("abort", () => reject(readTransaction.error), {
+          once: true,
+        });
+        readTransaction.addEventListener("error", () => reject(readTransaction.error), {
+          once: true,
+        });
+      });
+      void readCompleted.catch(() => undefined);
+      const readback = await requestResult(
+        readTransaction.objectStore("meta").get(PRINCIPAL_EPOCH_KEY),
+      );
+      await readCompleted;
+      try {
+        const Channel = window.BroadcastChannel;
+        if (Channel) {
+          const notification = new Channel("ironwrap-principal-context");
+          notification.postMessage({ type: "epoch" });
+          notification.close();
+        }
+      } catch {
+        // Receipts use the committed state even if the optional notification is unavailable.
+      }
+      return readback?.value?.pending?.includes(id)
+        ? { deviceProof: value, epoch, preparation: { id, epoch } }
+        : undefined;
     } finally {
       database.close();
     }

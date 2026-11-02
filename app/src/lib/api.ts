@@ -1,6 +1,14 @@
 import { z, type ZodType } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
+import { beginPrincipalContextChange } from "../auth/principal-context";
+import {
+  preparePrincipalExchange,
+  preparedPrincipalExchangeExists,
+  settlePrincipalExchange,
+  type PreparedPrincipalExchange,
+} from "../auth/principal-epoch";
+import { API_PATHS } from "./api-paths";
 
 export const apiErrorBodySchema = z
   .object({
@@ -69,6 +77,10 @@ export interface ApiRequestOptions<T> {
   timeoutMs?: number;
   fetcher?: typeof fetch;
   credentials?: RequestCredentials;
+  /** Only the actual head preloader supplies its already committed local preparation. */
+  preparedPrincipalExchange?: PreparedPrincipalExchange;
+  /** Local read provenance for the real dispatched session/bootstrap response, never wire data. */
+  onPrincipalPreparation?: (prepared: PreparedPrincipalExchange) => void;
 }
 
 export interface ApiCommandOptions {
@@ -122,48 +134,68 @@ export function isRetryableApiError(error: unknown): boolean {
 export async function apiRequest<T>(options: ApiRequestOptions<T>): Promise<T> {
   // The timeout and the caller's abort stay armed until the whole body has been read: an answer
   // whose headers arrive but whose body stalls must end, not leave the screen waiting for ever.
-  const { response, release, failure } = await executeRequest(options, true);
+  const { response, release, failure, settle } = await executeRequest(options, true);
   const requestId = response.headers.get("X-Request-ID") ?? undefined;
-  let text: string;
   try {
-    text = await response.text();
-  } catch (error) {
-    const lost = failure(error);
-    // The server answered, so it may already have acted; the body never arrived.
-    throw new ApiError({
-      status: response.status,
-      code: lost.code === "aborted" ? "aborted" : "response_lost",
-      message: "The answer was lost before it arrived.",
-      requestId,
-      cause: error,
-    });
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      const lost = failure(error);
+      throw new ApiError({
+        status: response.status,
+        code: lost.code === "aborted" ? "aborted" : "response_lost",
+        message: "The answer was lost before it arrived.",
+        requestId,
+        cause: error,
+      });
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      throw new ApiError({
+        status: response.status,
+        code: "invalid_json",
+        message: "The server returned an unreadable response.",
+        requestId,
+        cause: error,
+      });
+    }
+    const parsed = options.schema.safeParse(payload);
+    if (!parsed.success)
+      throw new ApiError({
+        status: response.status,
+        code: "invalid_response",
+        message: "The server response did not match the app contract.",
+        requestId,
+        cause: parsed.error,
+      });
+    const pathname = apiPathname(options.path);
+    const model = payload as { authenticated?: unknown; session?: { authenticated?: unknown } };
+    const authenticated =
+      pathname === API_PATHS.session
+        ? model?.authenticated
+        : pathname === API_PATHS.fieldBootstrap
+          ? model?.session?.authenticated
+          : undefined;
+    if (authenticated === false) {
+      const finish = beginPrincipalContextChange();
+      try {
+        await settle("changed");
+      } finally {
+        finish();
+      }
+    } else if (
+      authenticated === true ||
+      ![API_PATHS.session, API_PATHS.fieldBootstrap].some((path) => path === pathname)
+    ) {
+      await settle("unchanged");
+    }
+    return parsed.data;
   } finally {
     release();
   }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(text);
-  } catch (error) {
-    throw new ApiError({
-      status: response.status,
-      code: "invalid_json",
-      message: "The server returned an unreadable response.",
-      requestId,
-      cause: error,
-    });
-  }
-
-  const parsed = options.schema.safeParse(payload);
-  if (!parsed.success) {
-    throw new ApiError({
-      status: response.status,
-      code: "invalid_response",
-      message: "The server response did not match the app contract.",
-      requestId: response.headers.get("X-Request-ID") ?? undefined,
-      cause: parsed.error,
-    });
-  }
-  return parsed.data;
 }
 
 export async function apiCommand(options: ApiCommandOptions): Promise<void> {
@@ -176,6 +208,23 @@ interface Exchange {
   release: () => void;
   /** What a failure while reading the body means: cancelled, too slow, or no connection. */
   failure: (error: unknown) => ApiError;
+  settle: (outcome: "unchanged" | "changed") => Promise<void>;
+}
+
+/** The protected raw document caller uses the same preparation and full-body settlement. */
+export async function apiResponse<T>(
+  options: Omit<ApiRequestOptions<unknown>, "schema">,
+  read: (response: Response) => Promise<T>,
+  readError: (response: Response) => Promise<ApiError> = responseError,
+): Promise<T> {
+  const exchange = await executeRequest(options, true, readError, true);
+  try {
+    const value = await read(exchange.response);
+    await exchange.settle("unchanged");
+    return value;
+  } finally {
+    exchange.release();
+  }
 }
 
 async function executeRequest(
@@ -183,8 +232,42 @@ async function executeRequest(
     method?: ApiRequestOptions<unknown>["method"];
   },
   readBodyLater = false,
+  readError: (response: Response) => Promise<ApiError> = responseError,
+  raw = false,
 ): Promise<Exchange> {
   assertApiPath(options.path);
+  const pathname = apiPathname(options.path);
+  const changesPrincipal =
+    (options.method ?? "GET") === "POST" &&
+    [API_PATHS.magicLinkConsume, API_PATHS.devicePairingConsume, API_PATHS.logout].some(
+      (path) => path === pathname,
+    );
+  const finishPrincipalChange = changesPrincipal ? beginPrincipalContextChange() : undefined;
+  const readsPrincipal =
+    (options.method ?? "GET") === "GET" &&
+    [API_PATHS.session, API_PATHS.fieldBootstrap].some((path) => path === pathname);
+  const cookieSensitive =
+    options.credentials !== "omit" &&
+    !(
+      (options.method ?? "GET") === "POST" &&
+      [API_PATHS.magicLinkRequest, "/api/v1/auth/invites/accept"].some((path) => path === pathname)
+    ) &&
+    ![
+      API_PATHS.customerPortalResolve,
+      API_PATHS.customerPortalAcceptanceChallenge,
+      API_PATHS.customerPortalAcceptancePreview,
+      API_PATHS.customerPortalAcceptanceConfirm,
+      API_PATHS.customerPortalDecision,
+    ].some((path) => path === pathname);
+  let prepared: PreparedPrincipalExchange | undefined;
+  let settled = false;
+  let dispatched = false;
+  const settle = async (outcome: "unchanged" | "changed") => {
+    if (prepared && !settled) {
+      settled = true;
+      await settlePrincipalExchange(prepared, outcome);
+    }
+  };
   const fetcher = options.fetcher ?? fetch;
   const controller = new AbortController();
   const timeout = window.setTimeout(
@@ -193,7 +276,9 @@ async function executeRequest(
   );
   const forwardAbort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
+  if (options.signal?.aborted) forwardAbort();
   const release = () => {
+    finishPrincipalChange?.();
     window.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", forwardAbort);
   };
@@ -218,7 +303,24 @@ async function executeRequest(
   };
 
   try {
-    const headers = new Headers({ Accept: "application/json" });
+    if (controller.signal.aborted) throw failure(new DOMException("Aborted", "AbortError"));
+    if (cookieSensitive) {
+      const supplied = options.preparedPrincipalExchange;
+      prepared =
+        supplied && (await preparedPrincipalExchangeExists(supplied))
+          ? supplied
+          : await preparePrincipalExchange(changesPrincipal || readsPrincipal);
+      if (!prepared)
+        throw new ApiError({
+          status: 0,
+          code: "principal_prepare_failed",
+          message:
+            "This device could not safely prepare the sign-in check. This request was not sent. Keep work stopped and try again when device storage is available.",
+          details: { dispatched: false },
+        });
+      options.onPrincipalPreparation?.(prepared);
+    }
+    const headers = new Headers(raw ? undefined : { Accept: "application/json" });
     // A multipart body must keep the boundary the browser writes into its own Content-Type.
     const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
     if (options.body !== undefined && !multipart) headers.set("Content-Type", "application/json");
@@ -227,7 +329,8 @@ async function executeRequest(
     if (options.deviceActionId) headers.set("X-Device-Action-Id", options.deviceActionId);
     const deviceProof = await options.deviceProof?.();
     if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
-
+    if (controller.signal.aborted) throw failure(new DOMException("Aborted", "AbortError"));
+    dispatched = true;
     const response = await fetcher(options.path, {
       method: options.method ?? "GET",
       credentials: options.credentials ?? "same-origin",
@@ -242,15 +345,40 @@ async function executeRequest(
       signal: controller.signal,
     });
     if (!response.ok) {
-      const error = await responseError(response);
+      const error = await readError(response);
+      // The protected app router expires a missing/revoked cookie for this exact refusal.
+      // device_proof_required is deliberately distinct and does not expire the cookie.
+      if (
+        error.status === 401 &&
+        error.code === "unauthorized" &&
+        options.path.startsWith("/api/v1/")
+      ) {
+        const finish = beginPrincipalContextChange();
+        try {
+          await settle("changed");
+        } finally {
+          finish();
+        }
+      } else if (
+        error.status < 500 &&
+        error.status !== 408 &&
+        error.status !== 429 &&
+        (error.status !== 401 || error.code === "device_proof_required")
+      ) {
+        await settle("unchanged");
+      }
       if (options.deviceProof && error.status === 401) await clearDeviceSecret();
       throw error;
     }
-    if (!readBodyLater) release();
-    return { response, release, failure };
+    if (!readBodyLater) {
+      await settle("unchanged");
+      release();
+    }
+    return { response, release, failure, settle };
   } catch (error) {
+    if (!dispatched) await settle("unchanged");
     release();
-    throw failure(error);
+    throw raw ? error : failure(error);
   }
 }
 
@@ -283,4 +411,8 @@ function assertApiPath(path: string): void {
   if (!path.startsWith("/api/v1/") || path.startsWith("//") || path.includes("\\")) {
     throw new Error("API requests must use a same-origin /api/v1/ path.");
   }
+}
+
+function apiPathname(path: string): string {
+  return new URL(path, "https://app.example.invalid").pathname;
 }

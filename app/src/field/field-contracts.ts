@@ -267,6 +267,55 @@ export const proofStreamItemSchema = z.lazy(() =>
   }),
 );
 
+/**
+ * A work stop that holds an assignment (Track C's read shape): "job" when it is on this work
+ * object or one of its plans, "tenant" when its job wasn't found, so it holds every assignment.
+ * An unknown scope reads as "job", so a stop is never dropped.
+ */
+export const activeStopSchema = z.object({
+  occurrence_id: z.string(),
+  scope: z.enum(["job", "tenant"]).catch("job"),
+  reported_at: z.string(),
+  summary: z.string().nullable(),
+  raiser_display_name: z.string().nullable(),
+});
+
+export type ActiveStop = z.infer<typeof activeStopSchema>;
+
+/**
+ * A run sheet's stops, read one by one: an entry the app cannot read still shows as a stop on this
+ * assignment (its id kept when it has one), never dropped and never failing the whole run sheet.
+ */
+function readableStop(value: unknown, index: number): unknown {
+  if (activeStopSchema.safeParse(value).success) return value;
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  return {
+    occurrence_id:
+      typeof raw.occurrence_id === "string"
+        ? raw.occurrence_id
+        : // The same unreadable stop on every job keeps one id, so it shows once; scope keeps a job
+          // stop and an every-job stop at the same moment apart.
+          `unreadable_${raw.scope === "tenant" ? "tenant" : "job"}_${typeof raw.reported_at === "string" ? raw.reported_at : String(index)}`,
+    scope: raw.scope === "tenant" ? "tenant" : "job",
+    reported_at: typeof raw.reported_at === "string" ? raw.reported_at : "",
+    summary: typeof raw.summary === "string" ? raw.summary : null,
+    raiser_display_name:
+      typeof raw.raiser_display_name === "string" ? raw.raiser_display_name : null,
+  };
+}
+
+const activeStopsSchema = z.preprocess(
+  // Only an explicit empty list confirms no stop. A failed or absent projection is unknown.
+  // A single stop sent without its list still holds work instead of being dropped.
+  (value) =>
+    value == null
+      ? null
+      : Array.isArray(value)
+        ? value.map(readableStop)
+        : [readableStop(value, 0)],
+  z.array(activeStopSchema).nullable(),
+);
+
 export const todayResponseSchema = envelopeSchema.extend({
   date: z.string().min(1),
   jobs: z.array(
@@ -281,6 +330,8 @@ export const todayResponseSchema = envelopeSchema.extend({
       blocked_gate_count: z.number().int().nonnegative(),
       next_action: z.string().min(1),
       assignment: assignmentSchema.nullable(),
+      // Unknown on older/unavailable reads; only [] confirms that no stop holds the job.
+      active_stops: activeStopsSchema,
     }),
   ),
   work_objects: z
@@ -294,6 +345,8 @@ export const todayResponseSchema = envelopeSchema.extend({
         scheduled_end: nullableText,
         next_action: z.string().min(1),
         assignment: assignmentSchema.nullable(),
+        // The same holding/unknown projection as jobs; a legacy omission never means clear.
+        active_stops: activeStopsSchema,
       }),
     )
     .default([]),

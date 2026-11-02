@@ -1,10 +1,20 @@
 import { z } from "zod";
 
-import { deleteMeta, getMeta, setMeta } from "../storage/db";
+import { deleteMeta, getDatabase, getMeta, setMeta } from "../storage/db";
+import { PRINCIPAL_EPOCH_KEY, principalEpochRecordRefersTo } from "./principal-epoch";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { appRoles } from "../lib/roles";
 import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
+import {
+  capturePrincipalReadStart,
+  observePrincipalRead,
+  getSessionReadObservation,
+  restorePrincipalObservation,
+  type PrincipalReadObservation,
+  sessionReadContextIsCurrent,
+  principalObservationCanPersist,
+} from "./principal-context";
 
 const userSchema = z.object({
   id: z.string().min(1),
@@ -72,16 +82,60 @@ const OFFICE_SESSION_MARKER = "ironwrap.office-session-expires-at";
 interface OfflineSessionSnapshot {
   session: AuthenticatedSession;
   expiresAt: number;
+  field_read_observation?: PrincipalReadObservation;
+}
+
+let savedFieldEntryTaken = false;
+
+/** Only the first real field entry may choose cached-only admission before any HTTP effect. */
+export async function takeVerifiedSavedFieldEntry(): Promise<AuthenticatedSession | undefined> {
+  if (savedFieldEntryTaken) return undefined;
+  savedFieldEntryTaken = true;
+  return readVerifiedSavedFieldSession();
+}
+
+/** No request, retryability test or online hint participates in this local-only decision. */
+export async function readVerifiedSavedFieldSession(): Promise<AuthenticatedSession | undefined> {
+  try {
+    const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
+    if (!snapshot || snapshot.expiresAt <= Date.now()) return undefined;
+    const parsed = sessionResponseSchema.safeParse(snapshot.session);
+    if (!parsed.success || !parsed.data.authenticated || parsed.data.user.role !== "field")
+      return undefined;
+    const session: AuthenticatedSession = {
+      ...parsed.data,
+      csrf_token: "offline-session-no-csrf",
+      stale_fields: [...new Set([...parsed.data.stale_fields, "session.offline_snapshot"])],
+    };
+    const observation = await restorePrincipalObservation(
+      session,
+      snapshot.field_read_observation,
+      await getDeviceSecret(),
+    );
+    return observation && sessionReadContextIsCurrent(session, observation) ? session : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function fetchSession(fetcher: typeof fetch = fetch): Promise<SessionResponse> {
+  const start = await capturePrincipalReadStart();
+  let pairedProof: string | undefined;
   try {
     const session = await apiRequest({
       path: API_PATHS.session,
       schema: sessionResponseSchema,
       fetcher,
-      deviceProof: getDeviceSecret,
+      onPrincipalPreparation: (prepared) => {
+        start.epoch = prepared.epoch;
+      },
+      deviceProof: async () => {
+        pairedProof = await getDeviceSecret();
+        return pairedProof;
+      },
     });
+    if (session.authenticated)
+      await observePrincipalRead(session, start, pairedProof).catch(() => undefined);
     return await persistOrInvalidateSession(session);
   } catch (error) {
     return await recoverOfflineSession(error);
@@ -109,11 +163,36 @@ export async function persistOrInvalidateSession(
 export async function persistAuthenticatedSession(session: AuthenticatedSession): Promise<void> {
   const expiresAt = Date.parse(session.session_expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
-  writeOfficeSessionMarker(expiresAt);
-  await setMeta(SNAPSHOT_KEY, {
+  const observation = getSessionReadObservation(session);
+  const keepObservation =
+    observation && (await principalObservationCanPersist(session, observation));
+  const snapshot: OfflineSessionSnapshot = {
     session: { ...session, csrf_token: "offline-session-no-csrf" },
     expiresAt,
-  } satisfies OfflineSessionSnapshot);
+    ...(keepObservation ? { field_read_observation: observation } : {}),
+  };
+  if (session.user.role === "field" && observation) {
+    const tx = (await getDatabase()).transaction("meta", "readwrite", { durability: "strict" });
+    const [epoch, previous] = await Promise.all([
+      tx.store.get(PRINCIPAL_EPOCH_KEY),
+      tx.store.get(SNAPSHOT_KEY),
+    ]);
+    const held = previous?.value as OfflineSessionSnapshot | undefined;
+    if (
+      principalEpochRecordRefersTo(epoch?.value, held?.field_read_observation?.epoch) &&
+      !principalEpochRecordRefersTo(epoch?.value, observation.epoch)
+    ) {
+      await tx.done;
+      return; // An older field DTO may return, but cannot overwrite the newer bound snapshot.
+    }
+    await tx.store.put({ key: SNAPSHOT_KEY, value: snapshot, updatedAt: Date.now() });
+    await tx.done;
+    writeOfficeSessionMarker(expiresAt);
+  } else {
+    // Ordinary office snapshot/marker behavior remains unchanged.
+    writeOfficeSessionMarker(expiresAt);
+    await setMeta(SNAPSHOT_KEY, snapshot);
+  }
 }
 
 export async function recoverOfflineSession(error: unknown): Promise<SessionResponse> {
@@ -133,11 +212,21 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
       cause: parsed.success ? undefined : parsed.error,
     });
   }
-  return {
+  const recovered: AuthenticatedSession = {
     ...parsed.data,
     csrf_token: "offline-session-no-csrf",
     stale_fields: [...new Set([...parsed.data.stale_fields, "session.offline_snapshot"])],
   };
+  try {
+    await restorePrincipalObservation(
+      recovered,
+      snapshot.field_read_observation,
+      await getDeviceSecret(),
+    );
+  } catch {
+    /* ordinary offline session policy is unchanged; field observation stays unverified */
+  }
+  return recovered;
 }
 
 /**

@@ -1530,9 +1530,9 @@ The program has exactly two product lanes:
 | IronWrap OS | lead/job/customer/property, commercial transitions, production, field, safety, inventory/shop, providers, accounting intent/reconciliation, operating AI | Facet project/design truth |
 | Facet | tenant project, attributable measurement/design, 3D/configuration, visual estimate, customer design-decision evidence, signed evidence delivery | IronWrap quote/publication/contract/deposit/schedule/invoice/accounting truth |
 
-Home Config 3D is retired draft lineage already absorbed into Facet. It has no third workstream,
-repository disposition, parity burden, release, deployment, or proof gate. Any useful historical
-idea becomes an ordinary Facet backlog input.
+Home Config 3D is a separate product, read-only for this program. It has no third workstream,
+repository disposition, parity burden, release, deployment, or proof gate here. Any useful idea
+from it becomes an ordinary Facet backlog input.
 
 ### Program outcome and pre-customer ceiling
 
@@ -1661,8 +1661,8 @@ range, release artifact, or unresolved contract. Do not create all agents first.
 - implementation versus live proof vocabulary;
 - policy, transition, evidence, and human work-package schemas;
 - canonical Job/Facet Project vocabulary and a staged portability contract;
-- exactly two active products, with Facet as the canonical owner of all accepted Home Config 3D
-  draft lineage and no third execution or parity lane;
+- exactly two active products, with Home Config 3D a separate read-only product and no third
+  execution or parity lane;
 - ordered migration manifests, reserved-range handling, authority cutovers, and rollback ownership;
 - map coverage for every open target gap and native blocker edges before implementation claims.
 

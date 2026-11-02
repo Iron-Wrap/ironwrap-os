@@ -139,7 +139,7 @@ The machine-checked snapshot is intentionally conservative:
       "facet"
     ],
     "facet_repository": "Iron-Wrap/facet",
-    "home_config_3d": "retired_draft_lineage_absorbed_into_facet",
+    "home_config_3d": "separate_product_read_only",
     "home_config_3d_execution_lane": false
   },
   "maturity": {
@@ -430,9 +430,9 @@ not a runtime marketplace for arbitrary hooks or plugins.
 
 ## Repository and migration coherence
 
-- The active product topology has exactly two products: IronWrap OS and Facet. Home Config 3D was
-  draft lineage whose accepted capability is already absorbed into Facet; it has no current
-  repository, roadmap, deployment, ownership, parity, or Wayfinder lane.
+- The active product topology has exactly two products: IronWrap OS and Facet. Home Config 3D is a
+  separate product owned outside this program and is read-only here: it has no repository,
+  roadmap, deployment, ownership, parity, or Wayfinder lane in this program.
 - IronWrap is the company operating authority.
 - `Job` is the canonical IronWrap operating and commercial aggregate. `Facet Project` is a separate
   design aggregate. The target is a stable Job kernel plus a versioned `job_kind`/operating profile
@@ -443,8 +443,8 @@ not a runtime marketplace for arbitrary hooks or plugins.
 - Facet remains a separate active customer-facing design/measurement product boundary and signed
   design-evidence producer. IronWrap owns operating association and every commercial transition.
 - Facet is the canonical implementation owner for accepted Capture, parser, geometry, rendering,
-  pricing, catalog, and computer-vision lineage. A surviving idea found in retired Home Config 3D
-  history is triaged as a Facet backlog input; it never creates a parallel porting obligation or a
+  pricing, catalog, and computer-vision lineage. An idea found in the separate, read-only Home Config 3D
+  product is triaged as a Facet backlog input; it never creates a parallel porting obligation or a
   second product authority.
 - Frappe is compatibility only. While its wheel ships, its required tests and exact
   stage/promote/readback/rollback receipts must be release-blocking; remove the wheel and that

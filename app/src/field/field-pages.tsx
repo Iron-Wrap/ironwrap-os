@@ -536,6 +536,9 @@ function JobSurface({
           />
         </section>
         <PacketDetails model={model} dateOptions={dateOptions} />
+        {session.user.role === "field" ? (
+          <WorkPlanTargetSummary model={model} offline={offline} />
+        ) : null}
       </section>
     </RoleGuard>
   );
@@ -709,6 +712,33 @@ function planScopeFacts(
         joinKnown([workPackage.physical_context_type, areaId]) ?? workPackage.physical_context_type,
     },
   ];
+}
+
+function WorkPlanTargetSummary({ model, offline }: { model: JobResponse; offline: boolean }) {
+  const workPackage = model.packet.work_package;
+  if (!workPackage) return null;
+  const scopeFacts = planScopeFacts(workPackage, model.job, model.packet.contact?.display_name);
+
+  return (
+    <section
+      aria-labelledby="work-plan-target-heading"
+      className="border border-border bg-surface-raised p-4 sm:p-5"
+    >
+      <h2 id="work-plan-target-heading" className="text-lg font-bold">
+        Work plan target
+      </h2>
+      <p className="mt-1 text-sm font-semibold">
+        {/* plain-language-allow: banned-term - The crew must match this target to the actual work plan version above. */}
+        {workPackage.title} · Version {workPackage.version}
+      </p>
+      {offline ? <p className="mt-2 text-sm font-semibold text-warning">Saved plan copy</p> : null}
+      <dl className={`mt-4 grid gap-4 text-sm ${scopeFacts.length > 1 ? "sm:grid-cols-2" : ""}`}>
+        {scopeFacts.map((fact) => (
+          <JobFact key={fact.label} label={fact.label} value={fact.value} />
+        ))}
+      </dl>
+    </section>
+  );
 }
 
 function workPackageActionPayload(

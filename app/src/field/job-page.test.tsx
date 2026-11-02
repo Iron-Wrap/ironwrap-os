@@ -384,6 +384,13 @@ function renderJob(model = jobModel(), session: AuthenticatedSession = fieldSess
   );
 }
 
+function workPlanIdentityRegions() {
+  return [
+    screen.getByRole("region", { name: "North slope replacement" }),
+    screen.getByRole("region", { name: "Work plan target" }),
+  ];
+}
+
 function workObjectModel(): WorkObjectResponse {
   const model = workPackageModel();
   const workPackage = model.packet.work_package;
@@ -1041,16 +1048,40 @@ describe("JobPage", () => {
     expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
   });
 
-  it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
-    const first = renderJob(workPackageModel());
-    expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
-    expect(screen.getByText("Applies to the job").parentElement).toHaveTextContent(
+  it("repeats the complete bound plan at the document end without adding controls", async () => {
+    renderJob(workPackageModel());
+    const target = await screen.findByRole("region", { name: "Work plan target" });
+    expect(target.previousElementSibling).toBe(screen.getByRole("region", { name: "Job details" }));
+    expect(target.parentElement?.lastElementChild).toBe(target);
+    expect(within(target).getByText("North slope replacement · Version 3")).toBeVisible();
+    expect(within(target).getByText("Applies to the job").parentElement).toHaveTextContent(
       "Applies to the jobJamie Homeowner · 123 Example Avenue · Ref IW-1042",
     );
-    // The code never breaks across lines.
-    expect(screen.getByText("Ref IW-1042", { selector: "span" })).toHaveClass("whitespace-nowrap");
-    expect(screen.queryByText("Roof Job · JOB-1")).toBeNull();
-    expect(screen.queryByText("Work object")).toBeNull();
+    expect(within(target).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(target).queryByRole("link")).not.toBeInTheDocument();
+    expect(target).not.toHaveTextContent("WP-1");
+    expect(target).not.toHaveTextContent("Released");
+    expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
+    expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();
+    expect(apiCommand).not.toHaveBeenCalled();
+    expect(saveOutboxAction).not.toHaveBeenCalled();
+    expect(queueOutboxAction).not.toHaveBeenCalled();
+  });
+
+  it("names the job a roof job's plan applies to, never its record ids or a placeholder", async () => {
+    const first = renderJob(workPackageModel());
+    await screen.findByRole("heading", { name: "North slope replacement" });
+    for (const region of workPlanIdentityRegions()) {
+      expect(within(region).getByText("Applies to the job").parentElement).toHaveTextContent(
+        "Applies to the jobJamie Homeowner · 123 Example Avenue · Ref IW-1042",
+      );
+      expect(within(region).getByText("Ref IW-1042", { selector: "span" })).toHaveClass(
+        "whitespace-nowrap",
+      );
+      expect(within(region).queryByText("Roof Job · JOB-1")).toBeNull();
+      expect(within(region).queryByText("Work object")).toBeNull();
+    }
     first.unmount();
 
     // A plan whose read had no scope ids (the read fills in "unknown") still names this job.
@@ -1066,51 +1097,77 @@ describe("JobPage", () => {
         },
       },
     });
-    expect((await screen.findByText("Applies to the job")).parentElement).toHaveTextContent(
-      "Jamie Homeowner · 123 Example Avenue · Ref IW-1042",
-    );
-    expect(screen.queryByText(/unknown/)).toBeNull();
+    await screen.findByRole("heading", { name: "North slope replacement" });
+    for (const region of workPlanIdentityRegions()) {
+      expect(within(region).getByText("Applies to the job").parentElement).toHaveTextContent(
+        "Jamie Homeowner · 123 Example Avenue · Ref IW-1042",
+      );
+      expect(region).not.toHaveTextContent("unknown");
+    }
   });
 
-  it("keeps the record's own scope when a plan is not for this job's roof", async () => {
-    const withPackage = (
-      overrides: Partial<NonNullable<JobResponse["packet"]["work_package"]>>,
-    ): JobResponse => {
+  it.each([
+    ["OTHER-JOB", "OTHER-JOB"],
+    ["OTHER-JOB", "JOB-1"],
+    ["JOB-1", "OTHER-JOB"],
+  ])(
+    "keeps both scope identities when the plan tuple differs: %s / %s",
+    async (objectId, areaId) => {
       const model = workPackageModel();
-      return {
+      renderJob({
         ...model,
-        packet: { ...model.packet, work_package: { ...releasedWorkPackage(), ...overrides } },
-      };
-    };
-    // A roof job plan that names another job never claims this one.
-    const other = renderJob(
-      withPackage({ work_object_id: "OTHER-JOB", physical_context_id: "OTHER-JOB" }),
-    );
-    expect(await screen.findByText("Roof Job · OTHER-JOB")).toBeVisible();
-    expect(screen.getByText("Roof Site · OTHER-JOB")).toBeVisible();
-    expect(screen.queryByText("Applies to the job")).toBeNull();
-    other.unmount();
+        packet: {
+          ...model.packet,
+          work_package: {
+            ...releasedWorkPackage(),
+            work_object_id: objectId,
+            physical_context_id: areaId,
+          },
+        },
+      });
+      await screen.findByRole("heading", { name: "North slope replacement" });
+      for (const region of workPlanIdentityRegions()) {
+        expect(within(region).getByText(`Roof Job · ${objectId}`)).toBeVisible();
+        expect(within(region).getByText(`Roof Site · ${areaId}`)).toBeVisible();
+        expect(within(region).queryByText("Applies to the job")).toBeNull();
+        expect(region).not.toHaveTextContent("Jamie Homeowner");
+      }
+    },
+  );
 
-    // Another scope leaves out an id the read did not get, and never shows "unknown".
-    renderJob(
-      withPackage({
-        work_object_type: "Shop Order",
-        work_object_id: "unknown",
-        physical_context_type: "Shop Floor",
-        physical_context_id: "unknown",
-      }),
-    );
-    expect(await screen.findByText("Work object")).toBeVisible();
-    expect(screen.getByText("Shop Order")).toBeVisible();
-    expect(screen.getByText("Shop Floor")).toBeVisible();
-    expect(screen.queryByText(/unknown/)).toBeNull();
+  it("keeps another scope's types without unknown ids in both plan regions", async () => {
+    const model = workPackageModel();
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...releasedWorkPackage(),
+          work_object_type: "Shop Order",
+          work_object_id: "unknown",
+          physical_context_type: "Shop Floor",
+          physical_context_id: "unknown",
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "North slope replacement" });
+    for (const region of workPlanIdentityRegions()) {
+      expect(within(region).getByText("Work object")).toBeVisible();
+      expect(within(region).getByText("Shop Order")).toBeVisible();
+      expect(within(region).getByText("Shop Floor")).toBeVisible();
+      expect(within(region).queryByText("Applies to the job")).toBeNull();
+      expect(region).not.toHaveTextContent("unknown");
+    }
   });
 
   it("leaves out a part of the job's name the read does not have", async () => {
     const model = workPackageModel();
     const first = renderJob({ ...model, job: { ...model.job, job_number: null, address: null } });
-    const named = (await screen.findByText("Applies to the job")).parentElement!;
-    expect(within(named).getByText("Jamie Homeowner")).toBeVisible();
+    await screen.findByRole("heading", { name: "North slope replacement" });
+    for (const region of workPlanIdentityRegions()) {
+      const named = within(region).getByText("Applies to the job").parentElement!;
+      expect(within(named).getByText("Jamie Homeowner")).toBeVisible();
+    }
     first.unmount();
 
     renderJob({
@@ -1118,8 +1175,22 @@ describe("JobPage", () => {
       job: { ...model.job, job_number: null, address: null },
       packet: { ...model.packet, contact: null },
     });
-    expect(await screen.findByText("Applies to the job")).toBeVisible();
-    expect(screen.getByText("This job")).toBeVisible();
+    await screen.findByRole("heading", { name: "North slope replacement" });
+    for (const region of workPlanIdentityRegions()) {
+      expect(within(region).getByText("Applies to the job")).toBeVisible();
+      expect(within(region).getByText("This job")).toBeVisible();
+    }
+  });
+
+  it("adds no target summary for a missing plan or an office reader", async () => {
+    const noPlan = renderJob(jobModel());
+    await screen.findByRole("heading", { name: "Job details" });
+    expect(screen.queryByRole("region", { name: "Work plan target" })).not.toBeInTheDocument();
+    noPlan.unmount();
+
+    renderJob(workPackageModel(), ownerSession);
+    await screen.findByRole("heading", { name: "North slope replacement" });
+    expect(screen.queryByRole("region", { name: "Work plan target" })).not.toBeInTheDocument();
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {
@@ -1130,6 +1201,9 @@ describe("JobPage", () => {
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
     expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
     expect(screen.getByText(/saved plan may be old/i)).toBeVisible();
+    const target = screen.getByRole("region", { name: "Work plan target" });
+    expect(within(target).getByText("Saved plan copy")).toBeVisible();
+    expect(within(target).getByText("North slope replacement · Version 3")).toBeVisible();
     expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();

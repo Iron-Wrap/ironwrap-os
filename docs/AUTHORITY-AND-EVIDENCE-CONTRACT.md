@@ -748,6 +748,13 @@ it. The entry names the competency record, D1 checks both rules again at insert 
 predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
 reversal, takes D1's clock, as the policy's entries do.
 
+Migration `0170` also retains the named Owner Now exception while an unresolved-scope latch is
+active after its target arrives. The same stop keeps its identity, raiser, summary and time; it
+says "This work stop still holds every job" and explains the earlier unresolved history. It does
+not claim that an existing target is missing. The original missing-target wording stays unchanged
+while a target is still absent. Only an authorized person release removes the active exception;
+the protected latch history remains.
+
 Crew clears only by policy, when a person schedules the job (migration `0159`). The schedule
 (`POST /api/v1/jobs/{job}/schedule`, from the person's own cookie session, never the QA seed owner)
 appends `crew_assignment` to Crew in the same D1 batch as the assignment, bound to the crew it names

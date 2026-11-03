@@ -900,7 +900,9 @@ stale from before that merge):
   or a stop on a job or package that doesn't exist holds every job of the tenant. Unresolved scope
   is latched in immutable D1 history, including active unresolved stops at migration; adding or
   restoring its target never narrows that hold. Only the existing person-authorized release lifts
-  it; this slice adds no re-scope route. Work Package
+  it. Owner Now retains the same named global-stop exception after target arrival, with accurate
+  history wording, until that release; it never claims that a now-present target is missing.
+  This slice adds no re-scope route. Work Package
   acknowledge, start and complete answer `safety_stop_active` with the holding stops, and migration
   `0170` repeats the rule in D1. Stopping work and captures stay open. The crew Today, job and
   typed-work reads list the holding stops (`active_stops`); the stop detail and safety panel carry

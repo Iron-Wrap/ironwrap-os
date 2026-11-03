@@ -9,13 +9,13 @@ import {
   recordAuthorityReadback,
   type AuthorityCurrentPrecondition,
 } from "../src/authority-records.ts";
-import { activeAssignmentForWorkObject, buildJobReadModel, buildTodayReadModel,
+import { activeAssignmentForWorkObject, buildJobReadModel, buildOwnerNowReadModel, buildTodayReadModel,
   buildUniversalWorkPackageReadModel } from "../src/app-read-models.ts";
 import { permissionsForRole, type AppEnv, type AuthContext, type WorkObjectScope } from "../src/app-types.ts";
 import { recordOperatingWorkObjectAssignment } from "../src/operating-work-object-assignment-store.ts";
 import { handleWorkPackageAction, nativeWorkPackageWriter } from "../src/work-package-actions.ts";
 import { FieldActionError } from "../src/field-actions.ts";
-import { safetyStopActive, unknownJobStop } from "../src/production-job-stops.ts";
+import { safetyStopActive, unknownJobStop, unknownWorkPackageStop } from "../src/production-job-stops.ts";
 import {
   evaluateSafetyReadiness,
   holdingSafetyStops,
@@ -515,10 +515,10 @@ async function raise(
 }
 
 /** Make safe, investigate, control and release a stop the crew raised, by people who did not. */
-async function lift(env: TestEnv, occurrenceId: string) {
+async function lift(env: TestEnv, occurrenceId: string, occurredAt = at(200)) {
   await recordMakeSafe(env, {
     tenantId: TENANT, occurrenceId, actorUserId: USERS.crew.id, detail: "Crew off the roof.",
-    evidence: null, capturedOffline: false, deviceActionId: null, occurredAt: at(200), now: at(200),
+    evidence: null, capturedOffline: false, deviceActionId: null, occurredAt, now: occurredAt,
   });
   for (const command of ["investigation_opened", "controlled", "released"] as const) {
     await recordSafetyResponse(env, {
@@ -1137,4 +1137,55 @@ for (const reverseTriggers of [false, true]) {
       safety: "production_gate_stop_job_unknown", schedule: "operating_job_assignment_stop_job_unknown",
     }, "late target arrival cannot narrow the attestation or scheduling hold");
   });
+
+  for (const scopeType of ["roof_job", "work_package"] as const) {
+    test(`Owner Now keeps ${scopeType} uncertainty through target arrival until release (${reverseTriggers ? "reversed" : "normal"} triggers)`, async () => {
+      const env = testEnv({ reverseTriggers });
+      const { jobA, jobB } = await twoJobs(env);
+      const pending = definition({ jobId: `JOB-OWNER-LATE-${scopeType}` });
+      if (scopeType === "work_package") seedAssignmentSnapshot(env, pending);
+      const owner = fieldAuth(USERS.owner);
+      owner.session.role = "owner";
+      owner.permissions = permissionsForRole("owner");
+      const kind = scopeType === "roof_job" ? "stop_job_unknown" : "stop_work_package_unknown";
+      const list = async () => (await buildOwnerNowReadModel(env, owner)).exceptions
+        .filter((row) => row.kind === kind);
+      const known = await raise(env, { type: scopeType,
+        id: scopeType === "roof_job" ? jobA.jobId : jobA.workPackageId });
+      const foreign = await raise(env, { type: scopeType, id: "FOREIGN-OWNER-MISSING" },
+        OTHER_USERS.crew, { tenantId: OTHER_TENANT });
+      assert.deepEqual(await list(), [], "resolved local and unresolved foreign targets are excluded");
+      const stop = await raise(env, { type: scopeType,
+        id: scopeType === "roof_job" ? pending.jobId : pending.workPackageId });
+      const before = await list();
+      assert.equal(before.length, 1);
+      assert.equal(before[0]!.id, stop);
+      assert.match(before[0]!.title, /doesn’t exist/, "still-missing approved copy stays accurate");
+      const clearances = env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM production_gate_clearances").get();
+      if (scopeType === "roof_job") seedAssignmentSnapshot(env, pending, { jobOnly: true });
+      else await issue(env, pending);
+      assert.deepEqual(env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM production_gate_clearances").get(), clearances,
+        "target arrival grants no gate clearance");
+      const after = await list();
+      assert.equal(after.length, 1);
+      assert.equal(after[0]!.id, stop);
+      assert.match(after[0]!.title, /still holds every job/);
+      assert.doesNotMatch(after[0]!.title, /doesn’t exist/);
+      assert.match(after[0]!.why ?? "", /history/);
+      assert.deepEqual({ ...after[0], title: null, why: null }, { ...before[0], title: null, why: null },
+        "all DTO identity, raiser, summary, timestamps, null controls and links stay unchanged");
+      assert.equal(after[0]!.job_id, null);
+      assert.equal(await (scopeType === "roof_job" ? unknownJobStop : unknownWorkPackageStop)(env, TENANT), stop);
+      await expectHeld(env, jobB, USERS.other, [{ occurrence_id: stop, scope: "tenant" }],
+        "named Owner Now exception agrees with the actual Worker/D1 global hold");
+      await lift(env, stop, new Date().toISOString());
+      assert.deepEqual(await list(), [], "an actual independent person release removes the active exception");
+      assert.ok(env.DB.sqlite.prepare("SELECT 1 FROM safety_stop_unresolved_scopes WHERE occurrence_id = ?").get(stop),
+        "release does not erase immutable uncertainty history");
+      assert.equal(env.DB.sqlite.prepare("SELECT stop_active FROM safety_occurrences WHERE occurrence_id = ?").get(foreign)!.stop_active, 1);
+      const holds = await holdingSafetyStops(env, TENANT, [jobA.jobId, jobB.jobId]);
+      assert.deepEqual(holds.get(jobB.jobId), []);
+      assert.ok(holds.get(jobA.jobId)!.some((row) => row.occurrence_id === known), "the genuine same-scope stop remains active");
+    });
+  }
 }

@@ -315,6 +315,8 @@ interface NativeOwnerUnknownStopRow {
   reported_by_name: string | null;
   summary: string;
   updated_at: string;
+  /** Internal query fact only; the public exception keeps the same DTO. */
+  target_exists: number;
 }
 
 /**
@@ -333,6 +335,10 @@ export const STOP_JOB_UNKNOWN_WHY =
  */
 export const STOP_WORK_PACKAGE_UNKNOWN_TITLE = "This work stop names a job plan that doesn’t exist";
 export const STOP_WORK_PACKAGE_UNKNOWN_WHY = STOP_JOB_UNKNOWN_WHY;
+
+const STOP_SCOPE_LATCHED_TITLE = "This work stop still holds every job";
+const STOP_SCOPE_LATCHED_WHY =
+  "An earlier unresolved scope remains in this stop’s history. Safety and scheduling stay held on every job until an authorized person lifts the stop.";
 
 interface NativeOwnerEffectExceptionRow {
   exception_id: string;
@@ -2704,8 +2710,8 @@ export async function buildOwnerNowReadModel(
         id: row.occurrence_id,
         kind: "stop_job_unknown",
         severity: null,
-        title: STOP_JOB_UNKNOWN_TITLE,
-        why: STOP_JOB_UNKNOWN_WHY,
+        title: row.target_exists ? STOP_SCOPE_LATCHED_TITLE : STOP_JOB_UNKNOWN_TITLE,
+        why: row.target_exists ? STOP_SCOPE_LATCHED_WHY : STOP_JOB_UNKNOWN_WHY,
         jobId: null,
         occurredAt: row.reported_at,
         reportedByName: text(row.reported_by_name),
@@ -2718,8 +2724,8 @@ export async function buildOwnerNowReadModel(
         id: row.occurrence_id,
         kind: "stop_work_package_unknown",
         severity: null,
-        title: STOP_WORK_PACKAGE_UNKNOWN_TITLE,
-        why: STOP_WORK_PACKAGE_UNKNOWN_WHY,
+        title: row.target_exists ? STOP_SCOPE_LATCHED_TITLE : STOP_WORK_PACKAGE_UNKNOWN_TITLE,
+        why: row.target_exists ? STOP_SCOPE_LATCHED_WHY : STOP_WORK_PACKAGE_UNKNOWN_WHY,
         jobId: null,
         occurredAt: row.reported_at,
         reportedByName: text(row.reported_by_name),
@@ -3677,9 +3683,8 @@ async function nativeOwnerFieldBlockers(
 }
 
 /**
- * Active safety stops that name a job this tenant does not have. Recording a stop never fails, so
- * a mistyped job is caught here: such a stop holds Safety on every job (0158) until it is opened
- * and fixed or lifted.
+ * Active missing-target or historically unresolved job stops. A target's later arrival never
+ * removes this named exception while the immutable latch still holds Safety and scheduling.
  */
 async function nativeOwnerUnknownJobStops(
   env: AppEnv,
@@ -3688,7 +3693,10 @@ async function nativeOwnerUnknownJobStops(
   return await boundedNativeRows<NativeOwnerUnknownStopRow>(
     env,
     `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
-            reporter.display_name AS reported_by_name, occurrence.updated_at
+            reporter.display_name AS reported_by_name, occurrence.updated_at,
+            EXISTS (SELECT 1 FROM operating_roof_jobs AS job
+                     WHERE job.tenant_id = occurrence.tenant_id
+                       AND job.roof_job_id = occurrence.scope_id) AS target_exists
        FROM safety_occurrences AS occurrence
        LEFT JOIN app_users AS reporter
          ON reporter.tenant_id = occurrence.tenant_id
@@ -3696,10 +3704,14 @@ async function nativeOwnerUnknownJobStops(
       WHERE occurrence.tenant_id = ?
         AND occurrence.stop_active = 1
         AND occurrence.scope_type = 'roof_job'
-        AND NOT EXISTS (
+        AND (EXISTS (
+          SELECT 1 FROM safety_stop_unresolved_scopes AS latch
+           WHERE latch.tenant_id = occurrence.tenant_id
+             AND latch.occurrence_id = occurrence.occurrence_id
+        ) OR NOT EXISTS (
           SELECT 1 FROM operating_roof_jobs AS job
            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
-        )
+        ))
       ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
     [tenantId],
     OWNER_NOW_SOURCE_LIMIT,
@@ -3707,9 +3719,7 @@ async function nativeOwnerUnknownJobStops(
 }
 
 /**
- * Active safety stops that name a Work Package this tenant does not have, with who raised each.
- * Like a stop on a job that doesn't exist, such a stop is recorded and holds Safety and every
- * schedule on every job (0159) until it is lifted.
+ * The same immutable uncertainty for a Work Package, retaining its raiser, summary and time.
  */
 async function nativeOwnerUnknownWorkPackageStops(
   env: AppEnv,
@@ -3718,7 +3728,10 @@ async function nativeOwnerUnknownWorkPackageStops(
   return await boundedNativeRows<NativeOwnerUnknownStopRow>(
     env,
     `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
-            reporter.display_name AS reported_by_name, occurrence.updated_at
+            reporter.display_name AS reported_by_name, occurrence.updated_at,
+            EXISTS (SELECT 1 FROM work_packages AS package
+                     WHERE package.tenant_id = occurrence.tenant_id
+                       AND package.work_package_id = occurrence.scope_id) AS target_exists
        FROM safety_occurrences AS occurrence
        LEFT JOIN app_users AS reporter
          ON reporter.tenant_id = occurrence.tenant_id
@@ -3726,11 +3739,15 @@ async function nativeOwnerUnknownWorkPackageStops(
       WHERE occurrence.tenant_id = ?
         AND occurrence.stop_active = 1
         AND occurrence.scope_type = 'work_package'
-        AND NOT EXISTS (
+        AND (EXISTS (
+          SELECT 1 FROM safety_stop_unresolved_scopes AS latch
+           WHERE latch.tenant_id = occurrence.tenant_id
+             AND latch.occurrence_id = occurrence.occurrence_id
+        ) OR NOT EXISTS (
           SELECT 1 FROM work_packages AS package
            WHERE package.tenant_id = occurrence.tenant_id
              AND package.work_package_id = occurrence.scope_id
-        )
+        ))
       ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
     [tenantId],
     OWNER_NOW_SOURCE_LIMIT,

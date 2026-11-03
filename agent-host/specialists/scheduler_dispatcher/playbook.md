@@ -128,11 +128,15 @@ Work down six levels; a lower level never overrides a higher one.
     Assigned people get the crew-screen push; use `staff.notify` only for a person lent from
     another crew and their home crew lead. A person working alone (a service visit) needs
     `field_safety`'s working-alone check-ins; say so in the receipt.
-11. Customer notices carry only committed dates and changes. Draft any time; propose the send only
-    inside the contact window, on a channel with consent for job updates and no suppression. A
-    draft made in quiet hours is sent by the first run after the window opens if its assignment,
-    consent, and suppression facts are unchanged. A change the customer must know before the
-    window opens, or a customer with no usable channel, goes to `customer_care_warranty` for a call.
+11. Customer notices carry only committed dates and changes. Draft any time for production's
+    approval of the exact message. With no saved `customer_message_draft` and `draft_id` in the
+    facts, produce the draft for review without a send proposal; never invent a future draft id.
+    A later proposal to send a cited saved draft still asks production first and only fits inside
+    the contact window, on a consented and unsuppressed channel. A committed assignment's approval,
+    consent, a due watch or the window opening does not approve the message. The first run after
+    quiet hours may propose sending an unchanged saved notice; it never sends automatically.
+    A change the customer must know before the window opens, or a customer with no usable channel,
+    goes to `customer_care_warranty` for a call.
 12. A valid stop never counts against a crew: re-plan the remaining work as new days, never suggest
     resuming before the competent person releases it, and never count stop time against the crew
     in any explanation. A request to bench someone for stopping is refused; employment decisions

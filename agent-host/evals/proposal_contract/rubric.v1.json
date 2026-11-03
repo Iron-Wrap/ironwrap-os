@@ -18,6 +18,7 @@
   },
   "pass_bar_reason": "Golden mean raised from 0.90 to 0.92: a proposal becomes a binding consumer contract, so routine drafting must be near-exact.",
   "specialist_checks": [
+    "Any outside send, including portal_link.send, preserves an unknown original attempt and waits for its matching delivery readback or reconciliation before a resend. Active link status, sent_to, a published proposal and a relayed customer response do not prove delivery or authorize a duplicate; another channel or new attempt cannot bypass this (actions, receipt).",
     "Every amount in a proposal, change-order cover, handoff, or receipt is an exact copy of the committed quote or change-order fact (integer cents, currency, including-GST wording); nothing is recomputed, rounded, totalled across options, explained by cost, or taken from a customer document (actions, receipt, draft).",
     "The template follows brand, legal entity, workflow, and compliance's applicability decision, and is signed off and current; licences with security, insurance, WCB, and the salesperson are current; a fresh draft is never published in the same run (actions, decision).",
     "On a direct-sales job the cancellation notice, window, and refund timer appear in every language version; in a language the template is not signed off in, the cover explains them in plain words with the template's English notice block verbatim beside it and uses the tenant's binding-language wording; binding clauses are never machine-translated (draft).",

@@ -207,10 +207,8 @@ function StateLabel({ ready }: { ready: boolean }) {
 }
 
 function OperationsStatus({ model }: { model: NewoOperationsResponse }) {
-  const incidentText =
-    model.counts.unresolved_incidents === null
-      ? "Issue count not found"
-      : `${model.counts.unresolved_incidents} open ${model.counts.unresolved_incidents === 1 ? "issue" : "issues"}`;
+  const incidents = model.counts.unresolved_incidents;
+  const incidentText = `${incidents} open ${incidents === 1 ? "issue" : "issues"}`;
   return (
     <Card
       className={cn(
@@ -615,7 +613,6 @@ const readinessLabels: Record<NewoReadinessCheckId, string> = {
   configuration: "Setup match",
   queue: "Call list",
   dlq: "Failed saves",
-  frappe: "Main office save",
   jobnimbus: "JobNimbus link",
   booking_mode: "Booking rule",
 };

@@ -78,9 +78,6 @@ export type AppEnv = Env & {
   // out of range (1000..30000) falls back to google.ts's default; a present-but-wrong Google
   // credential must cost one bounded wait, never an open-ended one.
   APP_GOOGLE_REQUEST_TIMEOUT_MS?: string;
-  // Exact Frappe identities authorized to see restricted insurance-proof state in the app BFF.
-  // This is deliberately separate from broad `ops` access and defaults to no estimator access.
-  APP_INSURANCE_ESTIMATOR_FRAPPE_USERS?: string;
   APP_APPROVAL_BROKER_URL?: string;
   APP_APPROVAL_BROKER_KEY_ID?: string;
   APP_APPROVAL_APPROVER_ID?: string;

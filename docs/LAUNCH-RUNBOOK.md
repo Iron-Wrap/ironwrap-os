@@ -657,14 +657,12 @@ Before treating the configured BFF as launch-ready in the intended Cloudflare ac
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
    `APP_ALLOWED_ORIGINS` to that exact origin (or an explicit, reviewed comma-separated set).
-   Leave `APP_ALLOW_INSECURE_LOCAL=false`. If restricted insurance evidence is needed in the
-   browser, set `APP_INSURANCE_ESTIMATOR_FRAPPE_USERS` only to reviewed, exact Frappe estimator
-   identities; leave it blank to restrict the rail to owner sessions. Broad app `ops` access never
-   grants this read. Do not bake an operator's temporary preview origin into the release
-   configuration.
+   Leave `APP_ALLOW_INSECURE_LOCAL=false`. Restricted insurance evidence reaches only owner and
+   `ops` sessions, and no variable widens that. Do not bake an operator's temporary preview origin
+   into the release configuration.
 3. Store a new high-entropy `APP_AUTH_PEPPER` only with `wrangler secret put`; it is a Worker
-   secret, never a `vars` value or a browser value. Configure the dedicated Gmail sender and any
-   Frappe read credentials separately. Keep Hermes write flags false for this gate.
+   secret, never a `vars` value or a browser value. Configure the dedicated Gmail sender
+   separately; the BFF reads no Frappe data. Keep Hermes write flags false for this gate.
 
    The enabled BFF carries the two bounded field-capture rails, and each issues Frappe with its
    OWN identity rather than the broad `ERPNEXT_API_KEY` pair. Create one non-interactive Frappe
@@ -730,8 +728,8 @@ Before treating either configured route as available in the intended Cloudflare 
    incomplete, override its flag to false or block the deployment; a checked-in true value cannot
    waive runtime proof.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
-   `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
-   `APP_AUTH_PEPPER` secret. Then set `APP_CUSTOMER_PORTAL_ENABLED=true`; the portal fails closed
+   `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, and the `APP_AUTH_PEPPER` secret. Then
+   set `APP_CUSTOMER_PORTAL_ENABLED=true`; the portal fails closed
    without every one of those prerequisites or an enabled, healthy BFF. This preserves an office
    revocation path for every live customer link.
 3. From an owner/ops session, issue one explicit-expiry link for a test job with a linked Roofing

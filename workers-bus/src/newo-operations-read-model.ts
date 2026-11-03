@@ -1,4 +1,4 @@
-import { getNewoOpenIncidentCount, getReadiness } from "./operations.ts";
+import { getReadiness } from "./operations.ts";
 import {
   countOpenNewoDeadLetters,
   getLatestNewoReconciliationRun,
@@ -19,7 +19,6 @@ export const NEWO_READINESS_CHECK_IDS = [
   "configuration",
   "queue",
   "dlq",
-  "frappe",
   "jobnimbus",
   "booking_mode",
 ] as const;
@@ -114,7 +113,7 @@ export interface NewoOperationsReadModel {
     pending_bookings: number;
     control_failures: number;
     dlq_items: number;
-    unresolved_incidents: number | null;
+    unresolved_incidents: number;
     last_event_at: string | null;
     last_report_at: string | null;
   };
@@ -154,7 +153,6 @@ export async function buildNewoOperationsReadModel(
   const [
     readiness,
     counts,
-    unresolvedIncidents,
     recentSessions,
     missingReports,
     failedHandoffs,
@@ -169,7 +167,6 @@ export async function buildNewoOperationsReadModel(
   ] = await Promise.all([
     getReadiness(env),
     newoOperationalCounts(env),
-    getNewoOpenIncidentCount(env),
     listSessions(env, "recent", OPERATIONS_LIMIT),
     listSessions(env, "missing_report", OPERATIONS_LIMIT),
     listSessions(env, "failed_handoff", OPERATIONS_LIMIT),
@@ -199,8 +196,6 @@ export async function buildNewoOperationsReadModel(
     counts.pending_bookings > 0 ||
     counts.control_failures > 0 ||
     deadLetterCount > 0 ||
-    unresolvedIncidents === null ||
-    unresolvedIncidents > 0 ||
     normalizedDaily?.status === "degraded" ||
     normalizedDaily?.status === "failed" ||
     normalizedDaily?.usage_status === "threshold_exceeded";
@@ -222,7 +217,9 @@ export async function buildNewoOperationsReadModel(
     counts: {
       ...counts,
       dlq_items: deadLetterCount,
-      unresolved_incidents: unresolvedIncidents,
+      // Open callback issues are the D1 sessions whose handoff failed. They were Frappe
+      // Automation Incidents, which no writer has created since the native D1 cutover.
+      unresolved_incidents: counts.failed_handoffs,
     },
     exceptions: {
       missing_reports: missingReports,
@@ -261,7 +258,6 @@ function readinessChecks(
     { id: "configuration", ok: report.checks.newo_configuration_drift },
     { id: "queue", ok: report.checks.newo_queue_binding },
     { id: "dlq", ok: report.checks.newo_dlq_state },
-    { id: "frappe", ok: report.checks.newo_frappe_readiness },
     { id: "jobnimbus", ok: report.checks.newo_jobnimbus_bridge },
     { id: "booking_mode", ok: report.checks.newo_booking_mode },
   ];

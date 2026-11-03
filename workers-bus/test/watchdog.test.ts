@@ -28,7 +28,6 @@ const CHECKS = {
   newo_configuration_drift: true,
   newo_queue_binding: true,
   newo_dlq_state: true,
-  newo_frappe_readiness: true,
   newo_jobnimbus_bridge: true,
   newo_booking_mode: true,
 } as never;

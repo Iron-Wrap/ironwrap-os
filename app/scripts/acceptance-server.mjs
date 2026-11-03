@@ -1068,8 +1068,8 @@ function computeWorkPackageAllowedActions() {
 }
 
 // field-contracts.ts's workPackageSchema only accepts status "Released" |
-// "Acknowledged" | "In Progress" (workers-bus/src/frappe-read.ts
-// FIELD_WORK_PACKAGE_CURRENT_STATUSES): the "current work package" query
+// "Acknowledged" | "In Progress" (workers-bus/src/work-package-store.ts
+// CURRENT_STATUSES): the "current work package" query
 // backing this read model excludes terminal packages entirely. A completed
 // or stopped-to-blocked package therefore does not read back with its
 // status intact -- it reads back as no current package at all, same as the

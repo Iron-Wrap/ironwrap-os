@@ -71,8 +71,8 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     ).toBeVisible();
 
     // 4. Complete -- only reachable once the server-side ledger (ack + start + evidence) agrees.
-    // The "current work package" read model (frappe-read.ts
-    // FIELD_WORK_PACKAGE_CURRENT_STATUSES) only ever returns Released/Acknowledged/
+    // The "current work package" read model (work-package-store.ts
+    // CURRENT_STATUSES) only ever returns Released/Acknowledged/
     // In Progress, so a completed package reads back as no current package at all --
     // that is the state read-back that proves completion actually landed server-side.
     await page.getByRole("button", { name: "Finish work" }).click();

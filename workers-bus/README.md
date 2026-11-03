@@ -135,7 +135,7 @@ the new read fields and enqueue the structured object before the joined workflow
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
 | Facet review projection | `facet-design-frappe-projection.ts` reads only current native v2 heads with exact project, identity, quote, proposal, publication, and acceptance authority. The default-off Frappe endpoint creates a blank non-customer-safe Draft Customer Quote for active decisions, rejects the predecessor projected quote on chain advance, and appends Evidence Item plus Integration Reconciliation records without supplying commercial terms. |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
-| Permission-shaped PWA reads | `app-read-models.ts` and native D1 domain stores; any remaining `frappe-read.ts` compatibility access uses hard-coded DocType/field/filter allowlists and fails closed |
+| Permission-shaped PWA reads | `app-read-models.ts` and native D1 domain stores; no PWA read calls Frappe |
 | Governed stage-change automation | `pipeline-automation.ts` + migrations `0123_pipeline_stage_automation.sql` and `0127_pipeline_automation_action_registry.sql`; a closed two-action registry (stage-change email, and generate-a-document-then-email-it), immutable outbox bindings, exact leases, effect/readback evidence, and explicit no-rule completion |
 | Automation-generated documents | `pipeline-automation.ts` -> `document-generation-r2.ts`; the document action mints a scoped `worker`/`ops` service permit per invocation - one tenant, entity, template, action and attempt - so an automation never borrows the owner's route or role, and the delivered mail carries the exact bytes the immutable receipt attests |
 
@@ -156,7 +156,6 @@ src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementati
 src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
 src/app-auth.ts    one-time magic-link/session/CSRF/origin contract; no raw token persistence
 src/app-auth-store.ts D1 app-user/auth/throttle/audit adapter and retention cleanup
-src/frappe-read.ts strict compatibility-only Frappe GET allowlists plus credential-safe upstream adapter
 src/app-read-models.ts screen-shaped Today, Job, Owner Now, bounded office Sales, and source-derived Estimator projections assembled from authoritative/native stores plus named compatibility seams
 src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning and governed approval routes
 src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
@@ -1029,10 +1028,8 @@ shapes are:
 
 The examples show known values; if a source does not provide one, the value is explicitly `null`
 and its path is named in `stale_fields`. The BFF does not fabricate schedule, money, gate-owner,
-due-date, next-action, or required-proof data. Remaining Frappe compatibility requests are GET-only
-and limited to the hard-coded DocType, field, filter, and row allowlists in `frappe-read.ts`. Where
-the legacy assignment seam is still used, the Worker rechecks the returned row instead of trusting
-only the upstream filter. Native D1 read models remain authoritative.
+due-date, next-action, or required-proof data. The BFF sends no request to Frappe: every read model
+is assembled from the native D1 stores, which remain authoritative.
 
 Point website forms, GBP, and approved voice/voicemail handoffs at `/ingest/:source`
 (website → `/ingest/website`, voice/voicemail → `/ingest/phone`, etc.). Feed the daily

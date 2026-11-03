@@ -137,8 +137,8 @@ const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
 /** Optional feature gates must not make the core Worker unready while disabled. */
 export function customerPortalConfigured(env: AppEnv): boolean {
   if (!customerPortalEnabled(env)) return true;
-  // Link revocation belongs to the authenticated office control plane, but portal reads no longer
-  // depend on the separate Frappe adapter used by other office surfaces.
+  // Link revocation belongs to the authenticated office control plane; portal reads do not
+  // depend on Frappe.
   const emailReady =
     gmailConfigured(env) || String(env.APP_ALLOW_INSECURE_LOCAL) === "true";
   return (

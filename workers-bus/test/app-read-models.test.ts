@@ -12,10 +12,6 @@ import {
   mctbStatus,
 } from "../src/app-read-models.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import {
-  FRAPPE_READ_FIELDS,
-  OFFICE_SALES_READ_FIELDS,
-} from "../src/frappe-read.ts";
 import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
@@ -1769,10 +1765,6 @@ test("field Today uses direct and active crew membership assignments, never gene
           (filter) => Array.isArray(filter) && filter[1] === "_assign",
         ),
       ),
-      false,
-    );
-    assert.equal(
-      FRAPPE_READ_FIELDS["Roof Job"].includes("_assign" as never),
       false,
     );
   } finally {
@@ -4720,76 +4712,5 @@ test("assigned proof pages return only native typed evidence", async () => {
     assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
-  }
-});
-
-test("Frappe read allowlist never requests sensitive contact or commercial fields", () => {
-  assert.deepEqual(FRAPPE_READ_FIELDS["Roofing Customer"], [
-    "name",
-    "display_name",
-    "phone",
-    "modified",
-  ]);
-  assert.equal(
-    FRAPPE_READ_FIELDS["Change Order"].includes("notes" as never),
-    false,
-  );
-  assert.equal(
-    FRAPPE_READ_FIELDS["Roof Job"].includes("qb_invoice_ref" as never),
-    false,
-  );
-  for (const financeField of [
-    "recognition_posted_at",
-    "recognition_digest",
-    "recognition_reconciliation",
-  ]) {
-    assert.equal(
-      FRAPPE_READ_FIELDS["Payment Milestone"].includes(financeField as never),
-      true,
-    );
-  }
-  for (const retainedField of ["due_date", "event_ts", "notes"]) {
-    assert.equal(
-      FRAPPE_READ_FIELDS["Payment Milestone"].includes(retainedField as never),
-      true,
-    );
-  }
-  for (const excludedField of ["raw_key", "raw_payload_hash"]) {
-    assert.equal(
-      FRAPPE_READ_FIELDS["Payment Milestone"].includes(excludedField as never),
-      false,
-    );
-  }
-  for (const privateTriageField of [
-    "triaged_by",
-    "triaged_at",
-    "triage_summary",
-  ]) {
-    assert.equal(
-      FRAPPE_READ_FIELDS["Lead Envelope"].includes(privateTriageField as never),
-      false,
-    );
-  }
-  for (const rawField of [
-    "payload_json",
-    "raw_key",
-    "tax_policy_snapshot_json",
-    "source_reference",
-    "notes",
-  ]) {
-    assert.equal(
-      OFFICE_SALES_READ_FIELDS["Lead Envelope"].includes(rawField as never),
-      false,
-    );
-    assert.equal(
-      OFFICE_SALES_READ_FIELDS["Customer Quote"].includes(rawField as never),
-      false,
-    );
-    assert.equal(
-      OFFICE_SALES_READ_FIELDS["Communication Consent"].includes(
-        rawField as never,
-      ),
-      false,
-    );
   }
 });

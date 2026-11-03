@@ -493,7 +493,7 @@ test("readiness scopes isolate Frappe projection failure from the owned and offi
   }
 });
 
-test("Newo production readiness requires credentials, live actor/webhooks, Frappe, and clear owned failures", async (t) => {
+test("Newo production readiness requires credentials, live actor/webhooks, and clear owned failures without calling Frappe", async (t) => {
   const { env } = fakeEnv();
   Object.assign(env, {
     NEWO_PRODUCTION_REQUIRED: "true",
@@ -527,13 +527,18 @@ test("Newo production readiness requires credentials, live actor/webhooks, Frapp
     NEWO_BOOKING_MODE: "request_only",
     NEWO_JOBNIMBUS_BOOKING_PROVEN: "false",
     NEWO_QUEUE: { send: async () => {}, sendBatch: async () => {} },
+    // A configured, enabled Frappe stays in place as a negative control: Newo readiness no
+    // longer pings it, so nothing below may reach this origin.
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://frappe.example.com",
     ERPNEXT_API_KEY: "frappe-key",
     ERPNEXT_API_SECRET: "frappe-secret",
   });
+  const requested: string[] = [];
+  const frappeRequests = () => requested.filter((url) => url.startsWith("https://frappe.example.com"));
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input);
+    requested.push(url);
     if (url.endsWith("/api/v1/auth/api-key/token")) {
       return new Response(JSON.stringify({
         access_token: "access-not-returned",
@@ -551,9 +556,6 @@ test("Newo production readiness requires credentials, live actor/webhooks, Frapp
         { id: "handoff-hook", url: "https://bus.example/webhook/newo/handoff" },
       ]), { headers: { "content-type": "application/json" } });
     }
-    if (url.endsWith("/api/method/ping")) {
-      return new Response(JSON.stringify({ message: "pong" }), { headers: { "content-type": "application/json" } });
-    }
     throw new Error(`unexpected fetch ${url}`);
   });
 
@@ -561,35 +563,33 @@ test("Newo production readiness requires credentials, live actor/webhooks, Frapp
   const body = await response.json() as {
     ok: boolean;
     checks: Record<string, boolean>;
-    newo: { required: boolean; api_authenticated: boolean; frappe_reachable: boolean };
+    newo: { required: boolean; api_authenticated: boolean };
   };
   assert.equal(response.status, 200);
   assert.equal(body.ok, true);
   assert.equal(body.newo.required, true);
   assert.equal(body.newo.api_authenticated, true);
-  assert.equal(body.newo.frappe_reachable, true);
   assert.ok(Object.entries(body.checks).filter(([name]) => name.startsWith("newo_")).every(([, value]) => value));
+  assert.equal("newo_frappe_readiness" in body.checks, false);
+  assert.deepEqual(Object.keys(body.newo).filter((key) => key.startsWith("frappe")), []);
+  assert.deepEqual(frappeRequests(), []);
   assert.equal(JSON.stringify(body).includes("not-returned"), false);
 
   delete (env as { NEWO_WEBHOOK_TOKEN?: string }).NEWO_WEBHOOK_TOKEN;
-  (env as { ERPNEXT_ENABLED?: string }).ERPNEXT_ENABLED = "false";
   const blocked = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const blockedBody = await blocked.json() as {
     ok: boolean;
     projection_rails_ok: boolean;
     checks: Record<string, boolean>;
   };
-  // Default /ready is the office plane. Newo/Frappe leftover failures stay on
-  // the projection scope instead of turning the Worker not-ready.
+  // Default /ready is the office plane, and no readiness scope reads a Newo check: a Newo
+  // failure stays in the diagnostic check map. The projection verdict lost its Newo term
+  // together with the Frappe ping.
   assert.equal(blocked.status, 200);
   assert.equal(blockedBody.ok, true);
   assert.equal(blockedBody.checks.newo_webhook_credentials, false);
-  const projection = await worker.fetch(
-    new Request("https://bus.example/ready?scope=projection"),
-    env as never,
-    ctx,
-  );
-  assert.equal(projection.status, 503);
+  assert.equal(blockedBody.projection_rails_ok, true);
+  assert.deepEqual(frappeRequests(), []);
 });
 
 test("health remains a backward-compatible liveness check when dependencies are unavailable", async () => {

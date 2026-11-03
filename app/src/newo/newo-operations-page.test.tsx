@@ -78,6 +78,7 @@ describe("NewoOperationsPage", () => {
 
     await screen.findByRole("heading", { name: "Reception" });
     expect(screen.getByText("Check")).toBeVisible();
+    expect(screen.getByText(/^1 open issue · Booking:/)).toBeVisible();
     expect(screen.getByRole("heading", { name: "Calls to check" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Call reports missing" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Calls not passed on" })).toBeVisible();

@@ -30,7 +30,6 @@ import {
   BULK_REPLAY_CONFIRMATION,
   executeReplayRequest,
   getOperationalStatus,
-  getNewoOpenIncidentCount,
   getReadiness,
   runOwnerWatchdog,
   sweepDeadLetterAutoReplay,
@@ -1274,20 +1273,19 @@ async function runNewoDailyReconcile(env: Env): Promise<void> {
   };
   if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") return;
   const ranAt = new Date().toISOString();
-  const [readiness, counts, unresolvedIncidents] = await Promise.all([
+  const [readiness, counts] = await Promise.all([
     getReadiness(env),
     newoOperationalCounts(env),
-    getNewoOpenIncidentCount(env),
   ]);
+  // Open callback incidents are the D1 sessions whose handoff failed, the same count /newo shows.
+  const unresolvedIncidents = counts.failed_handoffs;
   const driftReasons = [
     ...readiness.newo.drift_reasons,
     ...(readiness.newo.api_error ? [readiness.newo.api_error] : []),
-    ...(readiness.newo.frappe_error ? [readiness.newo.frappe_error] : []),
   ];
   const usageLimit = Number(runtime.NEWO_USAGE_LIMIT_MINUTES ?? "0");
   const degraded = !readiness.ok || counts.failed_events > 0 || counts.failed_sync > 0 ||
-    counts.missing_reports > 0 || counts.control_failures > 0 ||
-    unresolvedIncidents === null || unresolvedIncidents > 0;
+    counts.missing_reports > 0 || counts.control_failures > 0 || unresolvedIncidents > 0;
   await recordNewoReconciliationRun(env, {
     run_id: `newo:daily:${crypto.randomUUID()}`,
     run_type: "daily",
@@ -1316,7 +1314,7 @@ async function runNewoDailyReconcile(env: Env): Promise<void> {
       "Newo daily reconciliation requires review",
       `<p>Newo readiness or owned landing checks are degraded.</p>
        <p>Missing reports: ${counts.missing_reports}; failed syncs: ${counts.failed_sync};
-       unresolved callback incidents: ${unresolvedIncidents ?? "unavailable"}.</p>
+       unresolved callback incidents: ${unresolvedIncidents}.</p>
        <p>Configuration/API reasons: ${driftReasons.map(escapeHtml).join(", ") || "none"}.</p>`,
     ).catch(() => {});
   }

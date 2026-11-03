@@ -10,7 +10,6 @@ import {
   runExternalEffect,
 } from "./effect-runtime.ts";
 import { facetLaunchIntentSha256, resolveFacetLaunchTarget } from "./facet-launch.ts";
-import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
 import { canonicalJson } from "./facet-design-v2-protocol.ts";
 
 const PROJECTION_METHOD =
@@ -858,6 +857,45 @@ async function currentNativeAuthorityMatches(
     target.acceptanceReceiptHash === candidate.native_source_acceptance_receipt_hash &&
     target.customerPartyRef === candidate.customer_party_ref &&
     target.externalCustomerIdentityLinkId === candidate.external_customer_identity_link_id;
+}
+
+export function frappeBaseUrl(env: AppEnv): string {
+  if (!env.ERPNEXT_BASE_URL) throw new Error("frappe_read_not_configured");
+  let url: URL;
+  try {
+    url = new URL(env.ERPNEXT_BASE_URL);
+  } catch {
+    throw new Error("frappe_read_bad_base_url");
+  }
+  // `*.localhost` counts as loopback here, not just the bare name. Frappe resolves a site
+  // strictly from the Host header, so a second tenant on the local stack is reached at
+  // http://<tenant>.localhost:8000 - and RFC 6761 reserves the whole .localhost TLD to
+  // loopback, so this is the same boundary, not a wider one (ELEC-57).
+  const local =
+    url.hostname === "localhost" ||
+    url.hostname.endsWith(".localhost") ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "[::1]";
+  if (
+    url.protocol !== "https:" &&
+    !(
+      String(env.APP_ALLOW_INSECURE_LOCAL) === "true" &&
+      local &&
+      url.protocol === "http:"
+    )
+  ) {
+    throw new Error("frappe_read_bad_base_url");
+  }
+  if (url.username || url.password || url.search || url.hash)
+    throw new Error("frappe_read_bad_base_url");
+  return url.origin + url.pathname.replace(/\/+$/, "");
+}
+
+function frappeRequestTimeout(raw: string | undefined): number {
+  const parsed = Number(raw ?? "8000");
+  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= 20_000
+    ? parsed
+    : 8_000;
 }
 
 async function sendProjectionRequest(

@@ -13,7 +13,7 @@ flowchart LR
   Tools --> R2["R2 raw/newo"]
   Tools --> D1["D1 receipts and sessions"]
   D1 --> Queue["Retried Newo queue"]
-  Queue --> Frappe["Frappe operating records"]
+  Queue --> Core["D1 operating core"]
   Queue --> JN["JobNimbus temporary bridge"]
   D1 --> Reconcile["Missing report and drift reconciliation"]
 ```
@@ -50,13 +50,13 @@ Confirmed booking is not implemented as production authority until the real JobN
 
 - D1 stores event receipts, provider-neutral session snapshots, control actions, slot reservations, and reconciliation runs.
 - R2 stores validated raw provider events under `raw/newo/`.
-- Frappe stores `Reception Session`, `Appointment Request`, and urgent `Automation Incident` records.
+- A failed handoff stays on its D1 session (`handoff_status = 'failed'`); `/newo` and the daily reconciliation count those sessions as open callback issues.
 - Transcript and recording bodies are not copied. Only approved provider or R2 pointers are stored.
 - The production R2 lifecycle gate is 30 days for `raw/newo/` and remains unproven until Cloudflare evidence is attached.
 
 ## Release truth
 
-The repository proves local code and contract behavior. It does not prove a published production actor, AKB publication, phone connector, Newo-owned number, forwarding, provider webhook configuration, usage alert, Worker deployment, live Frappe/JobNimbus landing, or real-call outcome.
+The repository proves local code and contract behavior. It does not prove a published production actor, AKB publication, phone connector, Newo-owned number, forwarding, provider webhook configuration, usage alert, Worker deployment, live JobNimbus landing, or real-call outcome.
 
 The secret-free expected state is [production.expected.json](../config/newo/production.expected.json). Run:
 

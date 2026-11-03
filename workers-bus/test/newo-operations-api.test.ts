@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
+import worker from "../src/index.ts";
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
@@ -219,6 +220,89 @@ function seedSensitiveOperationsData(db: SqliteD1): void {
     );
 }
 
+/** Every office-plane and Newo check passes; Frappe stays enabled only as a negative control. */
+function readyEnv(db: SqliteD1): Env {
+  return {
+    ...(env(db) as unknown as Record<string, unknown>),
+    APP_TENANT_ID: "ironwrap",
+    MEASUREMENT_QUEUE: { send: async () => {} },
+    OWNER_ALERT_EMAIL: "owner@example.invalid",
+    BACKUP_ALERT_EMAIL: "backup@example.invalid",
+    FROM_EMAIL: "bus@example.invalid",
+    GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"svc@example.invalid"}',
+    NEWO_ENABLED: "true",
+    NEWO_WEBHOOK_TOKEN: "webhook-secret-not-returned",
+    NEWO_BOOKING_TOKEN: "booking-secret-not-returned",
+    NEWO_CONTROL_SIGNING_SECRET: "control-signing-secret-longer-than-thirty-two-characters",
+    NEWO_API_BASE_URL: "https://api.newo.example",
+    NEWO_API_KEY: "provider-secret-not-returned",
+    NEWO_API_TIMEOUT_MS: "1000",
+    NEWO_PROJECT_ID: "project-1",
+    NEWO_AGENT_ID: "agent-1",
+    NEWO_REPORT_WEBHOOK_ID: "report-hook",
+    NEWO_REPORT_WEBHOOK_URL: "https://bus.example/webhook/newo/report",
+    NEWO_HANDOFF_WEBHOOK_ID: "handoff-hook",
+    NEWO_HANDOFF_WEBHOOK_URL: "https://bus.example/webhook/newo/handoff",
+    NEWO_TOOL_SCHEMA_SHA256: "a".repeat(64),
+    NEWO_REPORT_SCHEMA_SHA256: "b".repeat(64),
+    NEWO_KB_VERSION: "ironwrap-receptionist.v1",
+    NEWO_KB_SHA256: "c".repeat(64),
+    NEWO_PHONE_NUMBER: "+14035550100",
+    NEWO_OWNER_TRANSFER_NUMBER: "+17805550101",
+    NEWO_R2_LIFECYCLE_PROVEN: "true",
+    NEWO_USAGE_LIMIT_MINUTES: "1000",
+    NEWO_JOBNIMBUS_BOOKING_PROVEN: "false",
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://frappe.example.invalid",
+    ERPNEXT_API_KEY: "frappe-key",
+    ERPNEXT_API_SECRET: "frappe-secret",
+  } as unknown as Env;
+}
+
+/** Answers the Newo API probes; records every outbound URL so a test can prove what was not called. */
+function mockNewoApi(t: TestContext): string[] {
+  const requested: string[] = [];
+  const json = (value: unknown) =>
+    new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = input instanceof Request ? input.url : String(input);
+    requested.push(url);
+    if (url.endsWith("/api/v1/auth/api-key/token")) {
+      return json({
+        access_token: "access-not-returned",
+        refresh_token: "refresh-not-returned",
+        token_type: "Bearer",
+        expires_in: 900,
+      });
+    }
+    if (url.endsWith("/api/v1/actors/agent/agent-1")) return json({ id: "agent-1" });
+    if (url.endsWith("/api/v1/webhooks")) {
+      return json([
+        { id: "report-hook", url: "https://bus.example/webhook/newo/report" },
+        { id: "handoff-hook", url: "https://bus.example/webhook/newo/handoff" },
+      ]);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  return requested;
+}
+
+/** Drives the real daily cron and waits for all of its work, Newo reconciliation included. */
+async function runDailyCron(runtime: Env): Promise<void> {
+  const pending: Promise<unknown>[] = [];
+  await worker.scheduled(
+    { cron: "0 14 * * *", scheduledTime: Date.now(), noRetry() {} } as never,
+    runtime as never,
+    {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+    } as never,
+  );
+  await Promise.all(pending);
+}
+
 test("Newo operations read is office-only, exception-first, and redacts provider content", async () => {
   const db = new SqliteD1();
   seedSensitiveOperationsData(db);
@@ -239,6 +323,25 @@ test("Newo operations read is office-only, exception-first, and redacts provider
   assert.equal(body.readiness.status, "not_ready");
   assert.equal(body.counts.dlq_items, 1);
   assert.equal(body.counts.failed_handoffs, 1);
+  // The failed handoff is the open callback issue: D1 counts it, not a Frappe incident read.
+  assert.equal(body.counts.unresolved_incidents, 1);
+  assert.deepEqual(
+    body.readiness.checks.map((check: { id: string }) => check.id),
+    [
+      "owned_database",
+      "raw_store",
+      "enabled",
+      "webhook_credentials",
+      "api_authentication",
+      "production_actor",
+      "report_webhooks",
+      "configuration",
+      "queue",
+      "dlq",
+      "jobnimbus",
+      "booking_mode",
+    ],
+  );
   assert.equal(body.exceptions.missing_reports.length, 1);
   assert.equal(body.exceptions.failed_handoffs.length, 1);
   assert.equal(body.exceptions.pending_bookings.length, 1);
@@ -318,6 +421,64 @@ test("Newo operations read is office-only, exception-first, and redacts provider
   );
   assert.equal(field.status, 403);
   assert.deepEqual(await field.json(), { error: "office_role_required" });
+  db.raw.close();
+});
+
+test("Newo reports ready, and its daily run ok, without Frappe; a failed handoff is the open issue", async (t) => {
+  const db = new SqliteD1();
+  const runtime = readyEnv(db);
+  const requested = mockNewoApi(t);
+  const read = async () => {
+    const response = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/newo/operations"),
+      runtime as never,
+      auth("ops"),
+    );
+    assert.equal(response.status, 200);
+    return (await response.json()) as Record<string, any>;
+  };
+  const latestDailyRun = () => ({
+    ...(db.raw
+      .prepare(
+        `SELECT status, failed_handoffs, unresolved_incidents FROM newo_reconciliation_runs
+          WHERE run_type = 'daily' ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get() as Record<string, unknown>),
+  });
+
+  const clean = await read();
+  assert.equal(clean.readiness.status, "ready");
+  assert.equal(clean.status, "ready");
+  assert.equal(clean.counts.unresolved_incidents, 0);
+  await runDailyCron(runtime);
+  assert.deepEqual(latestDailyRun(), { status: "ok", failed_handoffs: 0, unresolved_incidents: 0 });
+
+  db.raw
+    .prepare(
+      `INSERT INTO newo_sessions (
+         session_id, status, outcome, handoff_status, structured_json, raw_key, payload_hash,
+         sync_status, created_at, updated_at
+       ) VALUES (?, 'ended', 'callback_required', 'failed', '{}', ?, ?, 'synced', ?, ?)`,
+    )
+    .run(
+      "session-handoff-1",
+      "raw/newo/session-handoff-1.json",
+      "d".repeat(64),
+      "2026-07-18T18:00:00.000Z",
+      "2026-07-18T18:05:00.000Z",
+    );
+  const handoffFailed = await read();
+  assert.equal(handoffFailed.readiness.status, "ready");
+  assert.equal(handoffFailed.status, "attention");
+  assert.equal(handoffFailed.counts.failed_handoffs, 1);
+  assert.equal(handoffFailed.counts.unresolved_incidents, 1);
+  await runDailyCron(runtime);
+  assert.deepEqual(latestDailyRun(), { status: "degraded", failed_handoffs: 1, unresolved_incidents: 1 });
+
+  assert.deepEqual(
+    requested.filter((url) => url.startsWith("https://frappe.example.invalid")),
+    [],
+  );
   db.raw.close();
 });
 

@@ -1844,8 +1844,18 @@ function appendBinding(manifest, binding, type, resource = {}) {
   manifest.push({ name: binding.binding, type, ...Object.fromEntries(Object.entries(resource).filter(([, value]) => typeof value === "string" && value.length > 0)) });
 }
 
+function versionMetadataBinding(config) {
+  if (config.version_metadata === undefined) return null;
+  const binding = config.version_metadata;
+  if (!isRecord(binding) || Object.keys(binding).length !== 1 ||
+      binding.binding !== "CF_VERSION_METADATA") fail("config_version_metadata_invalid");
+  return { name: "CF_VERSION_METADATA", type: "version_metadata" };
+}
+
 function environmentBindingManifest(config) {
   const manifest = [];
+  const versionMetadata = versionMetadataBinding(config);
+  if (versionMetadata) manifest.push(versionMetadata);
   for (const binding of config.d1_databases ?? []) appendBinding(manifest, binding, "d1", { resource_id: binding.database_id });
   for (const binding of config.r2_buckets ?? []) appendBinding(manifest, binding, "r2_bucket", { resource_name: binding.bucket_name, resource_jurisdiction: binding.jurisdiction });
   for (const binding of config.kv_namespaces ?? []) appendBinding(manifest, binding, "kv_namespace", { resource_id: binding.id });
@@ -1942,8 +1952,9 @@ function providerTargetManifest(config, environment) {
   for (const field of ["alias", "base_dir", "data_blobs", "define", "find_additional_modules", "jsx_factory", "jsx_fragment", "minify", "no_bundle", "pages_build_output_dir", "preserve_file_names", "python_modules", "rules", "site", "text_blobs", "tsconfig", "upload_source_maps", "wasm_modules"]) {
     if (resolved[field] !== undefined) fail("provider_target_local_input_forbidden");
   }
-  const allowedFields = new Set(["$schema", "account_id", "assets", "compatibility_date", "compatibility_flags", "d1_databases", "env", "main", "name", "observability", "queues", "r2_buckets", "route", "routes", "triggers", "vars", "workers_dev"]);
+  const allowedFields = new Set(["$schema", "account_id", "assets", "compatibility_date", "compatibility_flags", "d1_databases", "env", "main", "name", "observability", "queues", "r2_buckets", "route", "routes", "triggers", "vars", "version_metadata", "workers_dev"]);
   if (Object.keys(resolved).some((field) => !allowedFields.has(field))) fail("provider_target_unallowlisted_config");
+  versionMetadataBinding(resolved);
   const allowedEntry = (entry, fields, code) => {
     if (!isRecord(entry) || Object.keys(entry).some((field) => !fields.includes(field))) fail(code);
     return entry;

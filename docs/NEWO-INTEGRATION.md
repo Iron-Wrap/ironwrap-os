@@ -36,7 +36,7 @@ The event adapter rejects extra properties, transcript text, and recording bodie
 
 The typed Worker client covers all 31 operations in the documented Newo API groups. Access and refresh tokens stay in Worker isolate memory. Governed mutations require an exact dry-run receipt, separately signed approval, one-time D1 claim, and applicable runtime gates. There is no raw Newo proxy.
 
-The `newo-mcp` exposes role-filtered Worker operations. It never receives `NEWO_API_KEY` or a Newo bearer token. `owner-operator` receives governed controls, `support-admin` receives operational/configuration reads, and `lead-concierge` receives bounded session/conversation reads. Other roles receive no Newo tools.
+The `newo-mcp` exposes only the Worker operations its launching host lists in `MCP_ALLOWED_TOOLS`; it refuses to start without that list. It never receives `NEWO_API_KEY` or a Newo bearer token.
 
 ## Booking truth
 

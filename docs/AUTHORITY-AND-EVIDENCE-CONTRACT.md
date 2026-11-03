@@ -345,6 +345,45 @@ repeats the rule in D1 for any write. A lift must name an active user of the ten
 raiser and whose own `released` event for that version is already written, and the recorded name
 never changes afterwards.
 
+An active safety-occurrence stop holds every job it names, for every crew, not only the raiser's
+phone. A `tenant` stop holds every job of the tenant, whatever its `scope_id`. A `roof_job` stop
+holds its job. A `work_package` stop holds the complete typed work object of every version of that
+package, Superseded included. A Roof Job object or an explicit `Roof Job` physical context holds
+that job and its other work; an independent Shop context does not acquire that relationship from
+an equal work-object ID or a compatibility `job_id`. Reads, readiness, native events, Safety
+attestations and schedules use these same relationships. A stop on a job or Work Package the tenant does not have may be a typo for any of its
+jobs, so it holds every job until a person lifts it. Migration `0170` latches that unresolved scope
+in immutable history, including active stops still unresolved when the migration is applied.
+Creating or restoring the missing job or package never narrows the hold, including for production
+Safety attestations and scheduling. There is no re-scope
+route in this slice; the existing authorized person release remains required. Shop and vehicle stops hold no job. While a
+stop holds a job, Work Package acknowledge, start and complete are refused with
+`safety_stop_active` (409), and the refusal names each holding stop: `{ occurrence_id, scope:
+"job" | "tenant", reported_at, summary, raiser_display_name }`. Migration `0170` repeats the rule
+in D1 for any write to `work_package_events`. Stopping work, field check-ins and captures are never
+refused, because the photos that release a stop are taken while it holds the job. The crew Today,
+job and typed-work reads carry the same list as `active_stops`, oldest first, and `null` with a
+stale marker when it could not be read. The stop detail and the safety panel name the raiser and
+say whether this viewer may release the stop now (`can_release`, with a named
+`release_unavailable_reason`); the raiser never may, under any identity.
+
+A crew raise may say nothing but "stop": a report with no category is a `hazard`, with no severity
+`high`, and with no words "Work stopped on {job}", naming the job by its number. The Worker applies
+these defaults; the stop is never refused for its summary. Anyone may record an area made safe, but
+a person who is not a field worker records it only with a named on-site confirmer, an active person
+of the tenant who is not the recorder under any identity (`safety_make_safe_confirmer_required`,
+`safety_make_safe_confirmer_unknown`, `safety_make_safe_confirmer_is_recorder`, 400). Migration
+`0170` keeps the confirmer on the `make_safe` event, refuses those records in D1, prevents journal
+replacement under either its event ID or occurrence/version/kind identity, and lets an
+occurrence become `made_safe` only with its own `make_safe` event. "Keep the stop" (`POST
+/api/v1/safety/occurrences/{occurrence}/keep`, CSRF and an `Idempotency-Key`) is the release
+decision's other answer: the same person-session, authority and raiser checks, the version the
+person reviewed, and a reason. It is recorded to the stop's history only
+(`safety_stop_keep_decisions`, append-only, timed by D1's clock) and changes nothing on the stop.
+A release also asks the person to sign in again when their session is more than 5 minutes old
+(`recent_session_required`, 403), checked after every other release check and before anything is
+written. That is the existing session-age check; no passkey is claimed.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's
@@ -577,6 +616,25 @@ External writes must have:
 Examples include customer messages, appointments, supplier orders, permit submissions, invoices,
 payments, refunds, payroll, filings, access changes, machine release, and dispatch.
 
+A readback cited as evidence must come from the action that reads that fact, not from any finished
+effect: an AP invoice line cites a `quickbooks.bill.read` through its own provider, and a
+`supplier_ap` line is refused until a read action exists for it (D1 guard, 0169).
+
+The effect-runtime token (`EFFECT_RUNTIME_TOKEN`, the bearer of `/admin/effects/*`) lets an outside
+runtime claim, settle, reconcile and retry an effect within the configured Worker tenant. Settle,
+reconcile and retry bind the stored effect's immutable tenant to `APP_TENANT_ID` (default
+`ironwrap`) before checking its action; a mismatch returns 403 `effect_tenant_mismatch` without
+returning the effect or changing its row, attempts, events or exceptions. It handles only actions
+named `mcp.*`, the bounded agent tools' provider writes, plus the QA seed's stand-in
+`proposal.publish` on a Worker whose data class is `synthetic`. Every other action is refused by name (403
+`effect_outside_send_token_refused`, `effect_runtime_action_not_allowed` or
+`effect_provider_not_allowed`), so every other side effect is executed by the bus itself. This
+allowlist is enforced in the Worker only. D1 cannot tell a token write from a bus write: neither
+`external_effect_attempts` nor `external_effect_events` records a claimer, and an effect's actor
+and authority references come from the claimer's own envelope. Recording a claimer identity on the
+attempt is a follow-up for B2 (the executor slice), which needs one anyway; until it lands, no D1
+guard can key on the token path.
+
 The current repository uses reviewed dry-run and signed approval receipts for many writes. That is
 the safe implemented baseline. The target may replace routine duplicate human approval with a
 policy-issued machine authority receipt only after the corresponding capability is implemented and
@@ -689,6 +747,13 @@ today, so it holds until it is lifted. Another job's stop, a shop or a vehicle s
 it. The entry names the competency record, D1 checks both rules again at insert with the same
 predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
 reversal, takes D1's clock, as the policy's entries do.
+
+Migration `0170` also retains the named Owner Now exception while an unresolved-scope latch is
+active after its target arrives. The same stop keeps its identity, raiser, summary and time; it
+says "This work stop still holds every job" and explains the earlier unresolved history. It does
+not claim that an existing target is missing. The original missing-target wording stays unchanged
+while a target is still absent. Only an authorized person release removes the active exception;
+the protected latch history remains.
 
 Crew clears only by policy, when a person schedules the job (migration `0159`). The schedule
 (`POST /api/v1/jobs/{job}/schedule`, from the person's own cookie session, never the QA seed owner)

@@ -75,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 147,
+      "count": 149,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -639,14 +639,23 @@ IRO-38 branch-local side-effect substrate:
   intent, but the known lease/result endpoint shapes answer a structured, non-retryable `501` naming
   the missing provider adapter and evidence resolver. They create no external effect, consume no
   attempt, and accept no operator settlement; only historical `uncertain` rows remain reconcilable.
-- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) never claims, settles, reconciles or
-  retries an outside send. `proposal.publish`, `proposal.withdraw`, `customer.email.send` and
-  `operations.email.send` answer 403 `effect_outside_send_token_refused`: only the bus may execute
-  them, and no production path sends a proposal yet. A `qa-synthetic-*` provider passes only on a
-  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local); elsewhere it answers 403
+- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) handles only actions named `mcp.*`, the
+  MCP host's effects, plus the QA seed's `proposal.publish` through `qa-synthetic-publication` on a
+  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local). It never claims, settles,
+  reconciles or retries anything else. `proposal.publish`, `proposal.withdraw`,
+  `customer.email.send` and `operations.email.send` answer 403 `effect_outside_send_token_refused`:
+  only the bus may execute them, and no production path sends a proposal yet. Every other action
+  outside `mcp.*` answers 403 `effect_runtime_action_not_allowed`. A `qa-synthetic-*` provider
+  outside the seed's pair, or on any Worker that is not `synthetic`, answers 403
   `effect_provider_not_allowed`. A proposal send claimed with a retry answers 422
   `effect_outside_send_retry_forbidden`. Settle, reconcile and retry run on the server's clock.
-  The MCP host's `mcp.*` effects keep the token, as do the remaining actions. Migration
+  They bind the stored effect's tenant to `APP_TENANT_ID` (default `ironwrap`) before checking its
+  action: a mismatch answers 403 `effect_tenant_mismatch`, returns no effect data, and preserves
+  its row, attempts, event journal and exceptions. Router tests in
+  `workers-bus/test/outside-send-guards.test.ts` cover all three routes against the full migration
+  chain, including denial of foreign `mcp.*` effects and successful same-tenant transitions.
+  The allowlist is enforced in the Worker only: D1 cannot tell a bearer write from a bus write,
+  because neither an attempt nor an event records who claimed it (a B2 follow-up). Migration
   `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
   never `retry`) and moves an `unknown` proposal send to `succeeded` or `reconciled` only with a
   person's delivery confirmation (0156). That guard is keyed on the action alone, so a proposal send
@@ -879,6 +888,25 @@ stale from before that merge):
   `released` event. The occurrence and its event now commit in one batch. The release by another
   Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
   Proof is repository tests only.
+- An active safety-occurrence stop holds every job it names, for every crew: a job stop holds its
+  job, and a Work Package stop holds its complete typed object (Superseded versions included).
+  A Roof Job object or explicit Roof Job physical context also holds that job's work. Equal bare
+  IDs in independent Shop contexts do not create that relationship. Safety attestations and
+  scheduling use the same relationship and immutable unresolved-scope latch. A tenant stop
+  or a stop on a job or package that doesn't exist holds every job of the tenant. Unresolved scope
+  is latched in immutable D1 history, including active unresolved stops at migration; adding or
+  restoring its target never narrows that hold. Only the existing person-authorized release lifts
+  it. Owner Now retains the same named global-stop exception after target arrival, with accurate
+  history wording, until that release; it never claims that a now-present target is missing.
+  This slice adds no re-scope route. Work Package
+  acknowledge, start and complete answer `safety_stop_active` with the holding stops, and migration
+  `0170` repeats the rule in D1. Stopping work and captures stay open. The crew Today, job and
+  typed-work reads list the holding stops (`active_stops`); the stop detail and safety panel carry
+  the raiser's name, the controlled step and an L06-aware `can_release`. A raise with no category,
+  severity or words is a high hazard that says "Work stopped on {job}". An office made-safe names an
+  on-site confirmer, in the Worker and in D1, and the journal refuses replacement under either its
+  event ID or occurrence/version/kind key. "Keep the stop" is recorded to history only, and a
+  release asks for a sign-in no older than 5 minutes. Proof is repository tests only.
 - `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
   survives having no current work package, no assignment, and no network. Duplicate offline reports
   of the same physical event converge on one occurrence.
@@ -930,7 +958,11 @@ IRO-45 branch-local inventory ledger:
   value-bearing adjustment additionally requires a distinct finance reviewer, and neither the
   counter nor the receiver may approve their own variance or quarantine release.
 - An AP invoice line is admissible only from a succeeded IRO-38 effect whose readback digest
-  matches; a provider webhook is never match proof.
+  matches; a provider webhook is never match proof. Since
+  `0169_inventory_invoice_readback_action.sql` the cited effect must also be a
+  `quickbooks.bill.read` through the line's own provider; a `supplier_ap` line is refused
+  (`inventory_invoice_line_supplier_ap_readback_unsupported`) until a read action exists for that
+  provider. No Worker code writes an AP invoice line yet.
 - An unrecognised offline barcode is captured as `observed_pending_validation` and never
   creates stock; scan replay converges on one observation per device action.
 - The Worker store is `src/inventory-control.ts` with tests in
@@ -1248,8 +1280,10 @@ Remaining autonomous-company model gaps independent of Frappe retirement:
 
 Implemented:
 
-- role-filtered reads, dry-runs, reviewed writes, policy checks, signed receipts, and audit.
-- owner, lead, estimator, production, field, finance-reconciliation, closeout, and support roles.
+- grant-scoped reads (the launching host lists tools in `MCP_ALLOWED_TOOLS`), dry-runs, reviewed
+  writes, policy checks, signed receipts, and audit.
+- owner, lead, estimator, production, field, finance-reconciliation, closeout, and support role
+  identities for audit and the Frappe boundary checks; no role policy file grants tools.
 - no direct accounting mutation.
 - D1/Worker and Newo seams.
 - versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
@@ -1526,9 +1560,9 @@ The program has exactly two product lanes:
 | IronWrap OS | lead/job/customer/property, commercial transitions, production, field, safety, inventory/shop, providers, accounting intent/reconciliation, operating AI | Facet project/design truth |
 | Facet | tenant project, attributable measurement/design, 3D/configuration, visual estimate, customer design-decision evidence, signed evidence delivery | IronWrap quote/publication/contract/deposit/schedule/invoice/accounting truth |
 
-Home Config 3D is retired draft lineage already absorbed into Facet. It has no third workstream,
-repository disposition, parity burden, release, deployment, or proof gate. Any useful historical
-idea becomes an ordinary Facet backlog input.
+Home Config 3D is a separate product, read-only for this program. It has no third workstream,
+repository disposition, parity burden, release, deployment, or proof gate here. Any useful idea
+from it becomes an ordinary Facet backlog input.
 
 ### Program outcome and pre-customer ceiling
 
@@ -1640,7 +1674,7 @@ pre-customer sandbox/reference proof.
 | Core technical design | one writer per fact; versioned schemas/policies; no direct provider or store bypass; invariant and migration checks fail closed | IRO-38, IRO-218–223, IRO-41, IRO-58, IRO-61 |
 | Lead/job/field foundation | native lead/customer/job activation, derived phase, multi-worker offline packages, corrections, evidence slots, authority freshness, and real-device reference drill | IRO-208, IRO-42, IRO-43, IRO-209 |
 | Safety/evidence/accounting controls | current strong source controls survive deployed stop/release, ambiguous effect, mismatch, recovery, fraud/anomaly, and accountant-reviewed sandbox cases | IRO-38, IRO-44, IRO-52, IRO-58 |
-| Repository/migration coherence | two products only; Facet owns absorbed draft lineage; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
+| Repository/migration coherence | two products only; Home Config 3D is separate and read-only; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
 | Configured capability | every required action has a fresh readiness verdict, exact provider/tenant identity, scoped secret, authenticated readback, TTL, fallback, and rollback | IRO-210, IRO-215, IRO-28, IRO-30 |
 | End-to-end commercial closure | no-seed Facet design evidence reaches an IronWrap job and the native quote/publication/acceptance/deposit/work/final-invoice path reconciles without test-only writers | IRO-212, IRO-36, IRO-208, IRO-47, IRO-48, IRO-52 |
 | Production/customer proof | exact deployed technical reference EvidencePack is reproducible; `customer_validated` remains false until later genuine use and acceptance | IRO-30, IRO-31; future Gate 9 |
@@ -1657,13 +1691,13 @@ range, release artifact, or unresolved contract. Do not create all agents first.
 - implementation versus live proof vocabulary;
 - policy, transition, evidence, and human work-package schemas;
 - canonical Job/Facet Project vocabulary and a staged portability contract;
-- exactly two active products, with Facet as the canonical owner of all accepted Home Config 3D
-  draft lineage and no third execution or parity lane;
+- exactly two active products, with Home Config 3D a separate read-only product and no third
+  execution or parity lane;
 - ordered migration manifests, reserved-range handling, authority cutovers, and rollback ownership;
 - map coverage for every open target gap and native blocker edges before implementation claims.
 
 Exit: documentation validation passes in both repositories; IRO-1/IRO-2 contain every active leaf;
-no current document assigns work to retired lineage or promotes a proof class.
+no current document assigns work to Home Config 3D or promotes a proof class.
 
 ### Gate 1: work package and evidence
 

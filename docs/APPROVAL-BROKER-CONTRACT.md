@@ -20,7 +20,7 @@ authority is never removed by this transition.
 | Production schedule | `dry_run_job_assignment` → `request_create_job_assignment` | `production-controller` | `production_schedule_approval_requests` / `production_schedule_approval_request_events` | `/v1/production-schedule/preview`, `/v1/production-schedule/execute` |
 
 The brokers are distinct processes with different private URLs, HMAC secrets,
-key IDs, listener ports, and role-scoped MCP children. Neither is a generic
+key IDs, listener ports, and grant-scoped MCP children. Neither is a generic
 remote-control API, and no browser request can choose its tool, role, actor,
 site, approver, or Frappe path.
 

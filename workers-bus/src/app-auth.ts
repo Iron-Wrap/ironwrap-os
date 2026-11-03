@@ -755,6 +755,8 @@ export interface PersonSession {
   userId: string;
   role: AppRole;
   identities: string[];
+  /** When this person signed in to this session, from the live session row. */
+  sessionCreatedAt: string;
 }
 
 /**
@@ -779,7 +781,12 @@ export async function personCookieSession(
     new Date().toISOString(),
   );
   if (!live || live.user_id !== auth.session.user_id) return null;
-  return { userId: live.user_id, role: live.role, identities: appUserIdentities(live) };
+  return {
+    userId: live.user_id,
+    role: live.role,
+    identities: appUserIdentities(live),
+    sessionCreatedAt: live.session_created_at,
+  };
 }
 
 export function expiredSessionCookie(): string {

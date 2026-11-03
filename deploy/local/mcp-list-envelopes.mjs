@@ -2,13 +2,13 @@
 // Call `list_recent_envelopes` on the real ironwrap-bus MCP server over stdio and print what it
 // returned.
 //
-// Leakage check 7 of docs/WHITE-LABEL-CLONE-PLAYBOOK.md is about what a TENANT HERMES PROFILE
+// Leakage check 7 of docs/WHITE-LABEL-CLONE-PLAYBOOK.md is about what a TENANT MCP PROFILE
 // can see, so asking the bus admin API directly would prove the wrong thing: the MCP server is
-// where the tenant's base URL, admin token and role allowlist are bound together, and it is that
-// binding the check is about. This drives the shipped server exactly as a Hermes client would.
+// where the tenant's base URL, admin token and tool allowlist are bound together, and it is that
+// binding the check is about. This drives the shipped server exactly as an MCP client would.
 //
 // Configuration comes from the environment the server itself reads (IRONWRAP_BUS_BASE_URL,
-// IRONWRAP_ADMIN_TOKEN, HERMES_AGENT_ROLE), so pointing it at a tenant is pointing it at that
+// IRONWRAP_ADMIN_TOKEN, MCP_ALLOWED_TOOLS), so pointing it at a tenant is pointing it at that
 // tenant's Worker with that tenant's token and nothing else.
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";

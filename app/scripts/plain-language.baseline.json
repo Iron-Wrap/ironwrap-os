@@ -121,9 +121,7 @@
     "banned-term": 1
   },
   "src/pairing/device-pairing-settings.tsx": {
-    "banned-term": 1,
-    "unlabelled-code": 2,
-    "agent-name": 4
+    "unlabelled-code": 2
   },
   "src/people/authority-contracts.ts": {
     "banned-term": 3

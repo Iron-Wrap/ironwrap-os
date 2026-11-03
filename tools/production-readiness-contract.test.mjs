@@ -88,8 +88,8 @@ async function capabilityFixture(t, mutate) {
 test("contract mode fails when a retired broker default or deploy unit returns", async (t) => {
   const checkFor = await capabilityFixture(t, (source) =>
     source.replace(
-      /("env":\s*\{[\s\S]*?"APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",)/,
-      '$1 "APP_APPROVAL_BROKER_URL": "http://127.0.0.1:9101",',
+      /("env":\s*\{[\s\S]*?"APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "")/,
+      '$1, "APP_APPROVAL_BROKER_URL": "http://127.0.0.1:9101"',
     ),
   );
   assert.equal(checkFor("contract.retired_brokers.local_config")?.status, "fail");

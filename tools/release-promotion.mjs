@@ -15,6 +15,7 @@ import {
 } from "node:crypto";
 import { lstat, open, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -55,6 +56,14 @@ import {
 } from "./release-permit.mjs";
 
 import { canonicalJson } from "./canonical-json.mjs";
+import {
+  AUTH_PROTOCOL_POLICY_FILES,
+  authorizeAuthControl,
+  commitAuthControlUpdate,
+  preflightAuthSwitch,
+  readAuthControlReleaseConfig,
+  writeAuthProtocolMirror,
+} from "./auth-protocol-control.mjs";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -2033,7 +2042,7 @@ async function policyBoundary(args) {
 // one after it. Nothing compares the two hashes - `assemble` only requires the
 // incoming `previous_generation.policy_hash` to be a well-formed sha256, and
 // records its own alongside it (IRO-264).
-export const RELEASE_POLICY_FILES = [
+export const RELEASE_POLICY_FILES = [...new Set([
   ".github/workflows/ci.yml",
   ".github/workflows/deploy-production.yml",
   ".github/workflows/deploy.yml",
@@ -2046,7 +2055,8 @@ export const RELEASE_POLICY_FILES = [
   "tools/release-permit.test.mjs",
   "tools/release-promotion.mjs",
   "tools/release-promotion.test.mjs",
-];
+  ...AUTH_PROTOCOL_POLICY_FILES,
+])];
 
 export async function computeReleasePolicyHash(repoRoot) {
   const source = await Promise.all(RELEASE_POLICY_FILES.map(async (relative) => ({
@@ -2564,9 +2574,76 @@ async function persistRecoveryRequired(args) {
   await writeJson(arg(args, "output"), result);
 }
 
+async function authProtocolRelease(args, command) {
+  const policyRoot = fileURLToPath(new URL("..", import.meta.url));
+  const environment = arg(args, "environment");
+  const target = await readAuthControlReleaseConfig({
+    repoRoot: arg(args, "repo-root"),
+    policyRoot,
+    environment,
+  });
+  const config = {
+    accountId: target.accountId,
+    bucket: target.bucket,
+    key: target.key,
+    accessKeyId: env("RELEASE_AUTH_CONTROL_R2_ACCESS_KEY_ID"),
+    secretAccessKey: env("RELEASE_AUTH_CONTROL_R2_SECRET_ACCESS_KEY"),
+  };
+  if (command === "auth-switch-preflight") {
+    return writeJson(
+      arg(args, "output"),
+      await preflightAuthSwitch({
+        config,
+        versionId: arg(args, "version-id"),
+        databaseIdentity: target.databaseIdentity,
+        provider: {
+          accountId: target.accountId,
+          workerName: target.workerName,
+          token: env("CLOUDFLARE_API_TOKEN"),
+        },
+      }),
+    );
+  }
+  const proposal = await readJson(
+    arg(args, "input"),
+    "auth_control_proposal_invalid",
+  );
+  const authorization = await authorizeAuthControl({
+    ...proposal,
+    policyRoot,
+    environment,
+    expectedPolicyCommit: arg(args, "policy-commit"),
+    githubToken: env("GH_TOKEN"),
+    providerToken: env("CLOUDFLARE_API_TOKEN"),
+  });
+  if (command === "auth-control-update")
+    return writeJson(
+      arg(args, "output"),
+      await commitAuthControlUpdate({
+        authorization,
+        next: proposal.next,
+        readerAndWriterConfig: config,
+        providerToken: env("CLOUDFLARE_API_TOKEN"),
+      }),
+    );
+  if (command === "auth-protocol-mirror")
+    return writeJson(
+      arg(args, "output"),
+      await writeAuthProtocolMirror({
+        authorization,
+        config,
+        phase: arg(args, "phase"),
+        providerToken: env("CLOUDFLARE_API_TOKEN"),
+      }),
+    );
+  fail("auth_control_command_invalid");
+}
+
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const args = argsFrom(rest);
+  if (["auth-control-update", "auth-protocol-mirror", "auth-switch-preflight"].includes(command))
+    return authProtocolRelease(args, command);
   if (command === "pr-context") return prContext(args);
   if (command === "push-context") return pushContext(args);
   if (command === "source-evidence") return sourceEvidence(args);

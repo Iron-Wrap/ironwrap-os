@@ -13,12 +13,13 @@ import {
 import type { DocumentRow } from "./document-row.ts";
 import type { AuthorityCurrentPrecondition } from "./authority-records.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
-import { holdingSafetyStops, type SafetyBlocker, type SafetyHoldingStop } from "./safety-lifecycle.ts";
+import { holdingSafetyStopsForWorkPackage, type SafetyBlocker, type SafetyHoldingStop } from "./safety-lifecycle.ts";
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
   currentWorkPackageAuthorityResolution,
   hasWorkPackageCompletionAuthority,
+  workPackageScope,
 } from "./work-package.ts";
 import {
   nativeWorkPackageAction,
@@ -547,11 +548,11 @@ export function nativeWorkPackageWriter(env: AppEnv): WorkPackageCommandWriter {
           manifestKey: input.manifestKey,
         });
       } catch (error) {
-        // D1 found a stop holding this job after the Worker's own gate passed (0170).
+        // D1 found a stop after the Worker's own gate passed (0170). Facts use its committed tuple.
         if (error instanceof Error && error.message === "safety_stop_active") {
           throw safetyStopRefusal(
-            await holdingSafetyStops(env, env.APP_TENANT_ID ?? "ironwrap", [input.jobId])
-              .then((byJob) => byJob.get(input.jobId) ?? [])
+            await holdingSafetyStopsForWorkPackage(env, env.APP_TENANT_ID ?? "ironwrap",
+              input.workPackageId, input.workPackageVersion)
               .catch(() => []),
           );
         }
@@ -632,6 +633,7 @@ async function assertCurrentActionAllowed(
           id: submission.payload.work_package_id,
         },
         jobId: submission.jobId,
+        workObjectScope: workPackageScope(workPackage),
         subjectUserIds: [auth.session.user_id],
         consumer: "work_package_release",
         evaluatedByUserId: auth.session.user_id,

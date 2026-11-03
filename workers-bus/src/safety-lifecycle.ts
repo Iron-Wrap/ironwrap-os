@@ -1,5 +1,5 @@
 import { sha256Hex } from "./app-auth.ts";
-import { appUserIdentities, type AppEnv } from "./app-types.ts";
+import { appUserIdentities, type AppEnv, type WorkObjectScope } from "./app-types.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 /**
@@ -1744,6 +1744,8 @@ export interface EvaluateSafetyReadinessInput {
    * guessing a hierarchy it cannot see.
    */
   scopes: SafetyScopeRef[];
+  /** Complete identity of the already-authorized native work object, when present. */
+  workObjectScope?: WorkObjectScope;
   /** App user ids whose individually issued PPE gates this release. */
   subjectUserIds: string[];
   now: string;
@@ -1836,10 +1838,10 @@ export async function evaluateSafetyReadiness(
       .map(() => "(scope_type = ? AND scope_id = ?)")
       .join(" OR ");
     const scopeBindings = scopes.flatMap((scope) => [scope.type, scope.id]);
-    // The jobs this chain stands on: its job level, and the job of its Work Package level.
-    const jobIds = await chainJobIds(env, input.tenantId, scopes);
+    // Native work-object ids are scoped by type and physical context, not a Roof Job alias.
+    const workScopes = await chainWorkObjectScopes(env, input.tenantId, scopes, input.workObjectScope);
     const holding = new Map(
-      (await holdingStopRows(env, input.tenantId, jobIds)).map((row) => [row.occurrence_id, row]),
+      (await holdingStopRows(env, input.tenantId, workScopes)).map((row) => [row.occurrence_id, row]),
     );
     const occurrences = await env.DB.prepare(
       `SELECT occurrence_id, occurrence_kind, state, stop_active, severity
@@ -1983,8 +1985,8 @@ interface ActiveStopRow {
   reported_at: string;
   summary: string;
   raiser_display_name: string | null;
-  /** JSON array of the jobs this stop holds, or NULL when it holds every job of the tenant. */
-  held_job_ids: string | null;
+  /** Complete native identities, or NULL when the stop holds the whole tenant. */
+  held_work_scopes: string | null;
 }
 
 interface HoldingStopRow extends ActiveStopRow {
@@ -1996,16 +1998,16 @@ interface HoldingStopRow extends ActiveStopRow {
 const MAX_ACTIVE_STOPS = 500;
 
 /**
- * Every active stop of the tenant that can hold a job, with the jobs it holds. The rule is A3's
- * Safety-gate predicate, read from the same tables:
+ * Every active stop that can hold native work, with its committed target identities.
  *
  * - a `tenant` stop holds every job, whatever its `scope_id`;
  * - a `roof_job` stop holds its job, or every job when `operating_roof_jobs` has no such job;
- * - a `work_package` stop holds the job of every version of that package, Superseded included,
+ * - a `work_package` stop holds the native object of every version, Superseded included,
  *   or every job when `work_packages` has no such package.
  * - an unresolved scope is latched in D1: a later job/package insert never narrows that hold.
  *
- * Shop and vehicle stops hold no job. A lifted stop holds nothing.
+ * A resolved Roof Job never aliases another work-object type. Shop and vehicle scopes do not
+ * imply a parent relationship. A lifted stop holds nothing.
  */
 async function activeStopRows(env: AppEnv, tenantId: string): Promise<ActiveStopRow[]> {
   const rows = await env.DB.prepare(
@@ -2019,20 +2021,24 @@ async function activeStopRows(env: AppEnv, tenantId: string): Promise<ActiveStop
                    AND latch.occurrence_id = occurrence.occurrence_id
               ) THEN NULL
               WHEN occurrence.scope_type = 'roof_job' THEN (
-                SELECT json_array(job.roof_job_id)
+                SELECT json_array(json_array('Roof Job', job.roof_job_id,
+                                            'Roof Job', job.roof_job_id, job.roof_job_id))
                   FROM operating_roof_jobs job
                  WHERE job.tenant_id = occurrence.tenant_id
                    AND job.roof_job_id = occurrence.scope_id
               )
               WHEN occurrence.scope_type = 'work_package' THEN (
                 SELECT CASE WHEN COUNT(*) = 0 THEN NULL
-                            ELSE json_group_array(DISTINCT package.job_id) END
+                            ELSE json_group_array(DISTINCT json_array(
+                              package.work_object_type, package.work_object_id,
+                              package.physical_context_type, package.physical_context_id,
+                              package.job_id)) END
                   FROM work_packages package
                  WHERE package.tenant_id = occurrence.tenant_id
                    AND package.work_package_id = occurrence.scope_id
               )
               ELSE NULL
-            END AS held_job_ids
+            END AS held_work_scopes
        FROM safety_occurrences occurrence
        LEFT JOIN app_users raiser
          ON raiser.tenant_id = occurrence.tenant_id
@@ -2050,17 +2056,63 @@ async function activeStopRows(env: AppEnv, tenantId: string): Promise<ActiveStop
   return rows.results;
 }
 
-/** The active stops that hold any of `jobIds`, and every stop that holds the whole tenant. */
+/** Validate complete identities without inventing a Roof Job from a compatibility job_id. */
+export function safetyWorkObjectKey(scope: WorkObjectScope): string {
+  const values = [scope.workObjectType, scope.workObjectId,
+    scope.physicalContextType, scope.physicalContextId];
+  if (values.some((value) => typeof value !== "string" ||
+    value.trim().length < 1 || value.length > 140)) {
+    throw new Error("safety_work_object_scope_invalid");
+  }
+  // A Roof Job stop reaches every crew/package on that actual Roof Job. Other native types
+  // have no implicit job relationship: their complete parent/context tuple is authoritative.
+  return JSON.stringify(scope.workObjectType === "Roof Job" ? values.slice(0, 2) : values);
+}
+
+function roofJobWorkScope(jobId: string): WorkObjectScope {
+  return { workObjectType: "Roof Job", workObjectId: jobId,
+    physicalContextType: "Roof Job", physicalContextId: jobId };
+}
+
+function workScopeHoldingKeys(scope: WorkObjectScope): string[] {
+  const keys = [safetyWorkObjectKey(scope)];
+  // This is an explicit typed parent relationship, unlike the compatibility job_id alias.
+  if (scope.workObjectType !== "Roof Job" && scope.physicalContextType === "Roof Job") {
+    keys.push(safetyWorkObjectKey(roofJobWorkScope(scope.physicalContextId)));
+  }
+  return keys;
+}
+
+function storedWorkScope(values: unknown): WorkObjectScope {
+  if (!Array.isArray(values) || values.length !== 5) {
+    throw new Error("safety_work_object_scope_unavailable");
+  }
+  const scope = { workObjectType: values[0], workObjectId: values[1],
+    physicalContextType: values[2], physicalContextId: values[3] } as WorkObjectScope;
+  safetyWorkObjectKey(scope);
+  if (scope.workObjectType === "Roof Job" && scope.workObjectId !== values[4]) {
+    throw new Error("safety_work_object_scope_mismatch");
+  }
+  return scope;
+}
+
+/** The active stops holding any exact native identity, plus every tenant-wide stop. */
 async function holdingStopRows(
   env: AppEnv,
   tenantId: string,
-  jobIds: readonly string[],
+  workScopes: readonly WorkObjectScope[],
 ): Promise<HoldingStopRow[]> {
-  const wanted = new Set(jobIds);
+  const wanted = new Map(workScopes.map((scope) =>
+    [safetyWorkObjectKey(scope), workScopeHoldingKeys(scope)]));
   return (await activeStopRows(env, tenantId)).flatMap((row): HoldingStopRow[] => {
-    if (row.held_job_ids === null) return [{ ...row, hold: "tenant", held: [] }];
-    const held = (JSON.parse(row.held_job_ids) as unknown[])
-      .filter((id): id is string => typeof id === "string" && wanted.has(id));
+    if (row.held_work_scopes === null) return [{ ...row, hold: "tenant", held: [] }];
+    const parsed: unknown = JSON.parse(row.held_work_scopes);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error("safety_work_object_scope_unavailable");
+    }
+    const heldKeys = new Set(parsed.flatMap((value) => workScopeHoldingKeys(storedWorkScope(value))));
+    const held = [...wanted].filter(([, keys]) => keys.some((key) => heldKeys.has(key)))
+      .map(([key]) => key);
     return held.length > 0 ? [{ ...row, hold: "job", held }] : [];
   });
 }
@@ -2075,28 +2127,79 @@ function holdingStop(row: HoldingStopRow): SafetyHoldingStop {
   };
 }
 
-/** The jobs a readiness chain stands on: its `roof_job` level and the job of its package level. */
-async function chainJobIds(
+/** Resolve package identities from committed rows, never from a caller's untyped job alias. */
+async function chainWorkObjectScopes(
   env: AppEnv,
   tenantId: string,
   scopes: readonly SafetyScopeRef[],
-): Promise<string[]> {
-  const jobIds = new Set(
-    scopes.filter((scope) => scope.type === "roof_job").map((scope) => scope.id),
-  );
+  expected?: WorkObjectScope,
+): Promise<WorkObjectScope[]> {
+  const expectedKey = expected ? safetyWorkObjectKey(expected) : null;
+  const resolved = scopes.filter((scope) => scope.type === "roof_job")
+    .map((scope) => roofJobWorkScope(scope.id));
+  if (expected && resolved.some((scope) => !workScopeHoldingKeys(expected).includes(safetyWorkObjectKey(scope)))) {
+    throw new Error("safety_work_object_scope_mismatch");
+  }
+  if (expected) resolved.push(expected);
   const packageIds = scopes
     .filter((scope) => scope.type === "work_package")
     .map((scope) => scope.id);
   if (packageIds.length > 0) {
     const packages = await env.DB.prepare(
-      `SELECT DISTINCT job_id FROM work_packages
+      `SELECT DISTINCT work_package_id, work_object_type, work_object_id,
+                       physical_context_type, physical_context_id, job_id FROM work_packages
         WHERE tenant_id = ? AND work_package_id IN (${packageIds.map(() => "?").join(", ")})`,
     )
       .bind(tenantId, ...packageIds)
-      .all<{ job_id: string }>();
-    for (const row of packages.results) jobIds.add(row.job_id);
+      .all<{ work_package_id: string; work_object_type: string; work_object_id: string;
+        physical_context_type: string; physical_context_id: string; job_id: string }>();
+    const matchingPackages = new Set<string>();
+    for (const row of packages.results) {
+      const scope = storedWorkScope([row.work_object_type, row.work_object_id,
+        row.physical_context_type, row.physical_context_id, row.job_id]);
+      if (!expected || safetyWorkObjectKey(scope) === expectedKey) {
+        resolved.push(scope);
+        matchingPackages.add(row.work_package_id);
+      }
+    }
+    if (expected && packageIds.some((id) => !matchingPackages.has(id))) {
+      throw new Error("safety_work_object_scope_mismatch");
+    }
   }
-  return [...jobIds];
+  return resolved;
+}
+
+/** Exact typed identities for Today/universal consumers; keys come from safetyWorkObjectKey. */
+export async function holdingSafetyStopsForWorkObjects(
+  env: AppEnv,
+  tenantId: string,
+  workScopes: readonly WorkObjectScope[],
+): Promise<Map<string, SafetyHoldingStop[]>> {
+  const keys = [...new Set(workScopes.map(safetyWorkObjectKey))];
+  const byScope = new Map<string, SafetyHoldingStop[]>(keys.map((key) => [key, []]));
+  if (keys.length === 0) return byScope;
+  for (const row of await holdingStopRows(env, tenantId, workScopes)) {
+    for (const key of row.hold === "tenant" ? keys : row.held) {
+      byScope.get(key)?.push(holdingStop(row));
+    }
+  }
+  return byScope;
+}
+
+/** Display facts for a D1 refusal use the committed package version, not submitted aliases. */
+export async function holdingSafetyStopsForWorkPackage(
+  env: AppEnv, tenantId: string, packageId: string, version: number,
+): Promise<SafetyHoldingStop[]> {
+  const row = await env.DB.prepare(
+    `SELECT work_object_type, work_object_id, physical_context_type, physical_context_id, job_id
+       FROM work_packages WHERE tenant_id = ? AND work_package_id = ? AND version = ?`,
+  ).bind(tenantId, packageId, version).first<{ work_object_type: string; work_object_id: string;
+    physical_context_type: string; physical_context_id: string; job_id: string }>();
+  if (!row) throw new Error("safety_work_object_scope_unavailable");
+  const scope = storedWorkScope([row.work_object_type, row.work_object_id,
+    row.physical_context_type, row.physical_context_id, row.job_id]);
+  const stops = await holdingSafetyStopsForWorkObjects(env, tenantId, [scope]);
+  return stops.get(safetyWorkObjectKey(scope)) ?? [];
 }
 
 /**
@@ -2110,13 +2213,10 @@ export async function holdingSafetyStops(
   tenantId: string,
   jobIds: readonly string[],
 ): Promise<Map<string, SafetyHoldingStop[]>> {
-  const byJob = new Map<string, SafetyHoldingStop[]>(jobIds.map((id) => [id, []]));
-  if (jobIds.length === 0) return byJob;
-  for (const row of await holdingStopRows(env, tenantId, jobIds)) {
-    const targets = row.hold === "tenant" ? jobIds : row.held;
-    for (const jobId of targets) byJob.get(jobId)?.push(holdingStop(row));
-  }
-  return byJob;
+  const scopes = jobIds.map(roofJobWorkScope);
+  const byScope = await holdingSafetyStopsForWorkObjects(env, tenantId, scopes);
+  return new Map(jobIds.map((id, index) =>
+    [id, byScope.get(safetyWorkObjectKey(scopes[index]!)) ?? []]));
 }
 
 export interface RecordReadinessSnapshotInput {

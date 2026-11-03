@@ -132,6 +132,10 @@ BEGIN
   WHERE EXISTS (
     SELECT 1
       FROM safety_occurrences occurrence
+      JOIN work_packages current
+        ON current.tenant_id = NEW.tenant_id
+       AND current.work_package_id = NEW.work_package_id
+       AND current.version = NEW.work_package_version
      WHERE occurrence.tenant_id = NEW.tenant_id
        AND occurrence.stop_active = 1
        AND (
@@ -141,7 +145,12 @@ BEGIN
             WHERE latch.tenant_id = occurrence.tenant_id AND latch.occurrence_id = occurrence.occurrence_id
          )
          OR (occurrence.scope_type = 'roof_job' AND (
-           occurrence.scope_id = NEW.job_id
+           -- Only the committed typed object or its explicit Roof Job physical parent can
+           -- stand on this job. A universal object's compatibility job_id is not a relation.
+           occurrence.scope_id = CASE
+             WHEN current.work_object_type = 'Roof Job' THEN current.work_object_id
+             WHEN current.physical_context_type = 'Roof Job' THEN current.physical_context_id
+             ELSE NULL END
            OR NOT EXISTS (
              SELECT 1
                FROM operating_roof_jobs job
@@ -155,7 +164,22 @@ BEGIN
                FROM work_packages package
               WHERE package.tenant_id = occurrence.tenant_id
                 AND package.work_package_id = occurrence.scope_id
-                AND package.job_id = NEW.job_id
+                AND (
+                  (package.work_object_type = current.work_object_type
+                   AND package.work_object_id = current.work_object_id
+                   AND package.physical_context_type = current.physical_context_type
+                   AND package.physical_context_id = current.physical_context_id)
+                  OR (
+                    CASE
+                      WHEN package.work_object_type = 'Roof Job' THEN package.work_object_id
+                      WHEN package.physical_context_type = 'Roof Job' THEN package.physical_context_id
+                      ELSE NULL END
+                    = CASE
+                      WHEN current.work_object_type = 'Roof Job' THEN current.work_object_id
+                      WHEN current.physical_context_type = 'Roof Job' THEN current.physical_context_id
+                      ELSE NULL END
+                  )
+                )
            )
            OR NOT EXISTS (
              SELECT 1

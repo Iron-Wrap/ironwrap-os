@@ -9,8 +9,12 @@ import {
   recordAuthorityReadback,
   type AuthorityCurrentPrecondition,
 } from "../src/authority-records.ts";
-import { buildJobReadModel, buildTodayReadModel } from "../src/app-read-models.ts";
-import { permissionsForRole, type AppEnv, type AuthContext } from "../src/app-types.ts";
+import { activeAssignmentForWorkObject, buildJobReadModel, buildTodayReadModel,
+  buildUniversalWorkPackageReadModel } from "../src/app-read-models.ts";
+import { permissionsForRole, type AppEnv, type AuthContext, type WorkObjectScope } from "../src/app-types.ts";
+import { recordOperatingWorkObjectAssignment } from "../src/operating-work-object-assignment-store.ts";
+import { handleWorkPackageAction, nativeWorkPackageWriter } from "../src/work-package-actions.ts";
+import { FieldActionError } from "../src/field-actions.ts";
 import {
   evaluateSafetyReadiness,
   holdingSafetyStops,
@@ -19,7 +23,7 @@ import {
   reportSafetyOccurrence,
   type SafetyScopeRef,
 } from "../src/safety-lifecycle.ts";
-import { safetyReleaseGate } from "../src/safety-release-gate.ts";
+import { safetyReadinessForScope, safetyReleaseGate } from "../src/safety-release-gate.ts";
 import { bindCrewInLedger, clearScheduleGatesInLedger } from "./production-gate-ledger-fixture.ts";
 import {
   issueNativeWorkPackage,
@@ -571,6 +575,10 @@ async function gate(env: TestEnv, packet: NativeWorkPackageDefinition, actor: Fi
     tenantId: TENANT,
     scope: { type: "work_package", id: packet.workPackageId },
     jobId: packet.jobId,
+    workObjectScope: {
+      workObjectType: packet.workObjectType, workObjectId: packet.workObjectId,
+      physicalContextType: packet.physicalContextType, physicalContextId: packet.physicalContextId,
+    },
     subjectUserIds: [actor.id],
     consumer: "work_package_release",
     evaluatedByUserId: actor.id,
@@ -911,7 +919,7 @@ test("the crew Today and job reads carry each job's holding stops, and never ano
     ...env,
     DB: {
       prepare(sql: string) {
-        if (sql.includes("AS held_job_ids")) throw new Error("synthetic_read_failure");
+        if (sql.includes("AS held_work_scopes")) throw new Error("synthetic_read_failure");
         return env.DB.prepare(sql);
       },
       batch: env.DB.batch.bind(env.DB),
@@ -937,3 +945,136 @@ test("a readiness question about a Work Package alone finds the stops on its job
   assert.deepEqual(await ask(jobA), [onA]);
   assert.deepEqual(await ask(jobB), []);
 });
+
+/** Admit the universal assignment through its real current-owner writer, without Roof Job setup. */
+async function issueTyped(env: TestEnv, scope: WorkObjectScope, suffix: string) {
+  const packet = definition({
+    ...scope, jobId: scope.workObjectId, workPackageId: `wp_typed_${suffix}`,
+  });
+  const written = await recordOperatingWorkObjectAssignment(env, {
+    ...scope, tenantId: TENANT, assignedUsers: [USERS.crew.id],
+    authorityRequirements: packet.authorityRequirements!,
+    scheduledStart: new Date(Date.now() + 3_600_000).toISOString(),
+    authorityUserId: USERS.owner.id, authorityRole: "owner", actorUserId: USERS.owner.id,
+    idempotencyKey: `typed-safety-assignment-${suffix}`,
+  });
+  assert.equal(written.kind, "created");
+  packet.assignmentId = written.assignment.assignment_id;
+  packet.assignmentVersion = written.assignment.assignment_version;
+  packet.assignmentCommandFingerprint = written.assignment.command_fingerprint;
+  packet.assignmentAuthorityRequirementsSha256 = written.assignment.authority_requirements_sha256!;
+  packet.authorityRequirements = written.assignment.authority_requirements!;
+  await issueNativeWorkPackage(env, packet);
+  await seedPacketAuthority(env, packet);
+  return packet;
+}
+
+function packetScope(packet: NativeWorkPackageDefinition): WorkObjectScope {
+  return { workObjectType: packet.workObjectType, workObjectId: packet.workObjectId,
+    physicalContextType: packet.physicalContextType, physicalContextId: packet.physicalContextId };
+}
+
+async function expectTypedSurfaces(
+  env: TestEnv, packet: NativeWorkPackageDefinition, expected: string[],
+) {
+  const auth = fieldAuth(USERS.crew);
+  const universal = await buildUniversalWorkPackageReadModel(env, auth, packetScope(packet));
+  assert.ok(universal, "the actually admitted typed assignment stays readable");
+  assert.deepEqual(universal.work_object, packetScope(packet));
+  assert.deepEqual((universal.active_stops as Array<{ occurrence_id: string }>).map((s) => s.occurrence_id), expected);
+  const today = await buildTodayReadModel(env, auth);
+  const typed = today.work_objects.find((row) => row.assignment.id === packet.assignmentId);
+  assert.ok(typed, "Today retains this admitted non-Roof assignment");
+  assert.deepEqual(typed.active_stops?.map((s) => s.occurrence_id), expected);
+  await expectHeld(env, packet, USERS.crew,
+    expected.map((id) => ({ occurrence_id: id, scope: "job" })), "typed Worker and D1");
+}
+
+/** The real action handler, with the assignment resolved by its complete route scope. */
+async function typedAcknowledgeRoute(env: TestEnv, packet: NativeWorkPackageDefinition) {
+  const auth = fieldAuth(USERS.crew);
+  const scope = packetScope(packet);
+  const assignment = await activeAssignmentForWorkObject(env, auth, scope);
+  assert.ok(assignment);
+  const id = `typed-route-${++nextAction}`;
+  return await handleWorkPackageAction(new Request("https://app.example.invalid/action", {
+    method: "POST", headers: { "content-type": "application/json", "idempotency-key": id,
+      "x-device-action-id": id },
+    body: JSON.stringify({ device_action_id: id, payload: {
+      work_package_id: packet.workPackageId, work_package_version: packet.version,
+      release_attempt_id: packet.releaseAttemptId, work_object_type: scope.workObjectType,
+      work_object_id: scope.workObjectId, physical_context_type: scope.physicalContextType,
+      physical_context_id: scope.physicalContextId,
+    } }),
+  }), env, auth, packet.jobId, assignment, "acknowledge", scope);
+}
+
+for (const reverseTriggers of [false, true]) {
+  test(`typed safety holds preserve full identity and explicit Roof Job parents (${reverseTriggers ? "reversed" : "normal"} triggers)`, async () => {
+    const env = testEnv({ reverseTriggers });
+    const { jobA } = await twoJobs(env);
+    const shop = await issueTyped(env, { workObjectType: "Service Work", workObjectId: jobA.jobId,
+      physicalContextType: "Shop", physicalContextId: "independent-shop-A" }, "shop-A");
+    const otherType = await issueTyped(env, { ...packetScope(shop), workObjectType: "Shop Order" }, "other-type");
+    const otherContext = await issueTyped(env, { ...packetScope(shop), physicalContextId: "independent-shop-B" }, "other-context");
+    const parented = await issueTyped(env, { ...packetScope(shop), workObjectId: "SERVICE-ON-A",
+      physicalContextType: "Roof Job", physicalContextId: jobA.jobId }, "parented");
+    const onRoof = await raise(env, { type: "roof_job", id: jobA.jobId });
+    await expectTypedSurfaces(env, shop, []);
+    await expectTypedSurfaces(env, otherType, []);
+    await expectTypedSurfaces(env, otherContext, []);
+    await expectTypedSurfaces(env, parented, [onRoof]);
+    const onShop = await raise(env, { type: "work_package", id: shop.workPackageId });
+    await expectTypedSurfaces(env, shop, [onShop]);
+    await expectTypedSurfaces(env, otherType, []);
+    await expectTypedSurfaces(env, otherContext, []);
+    await expectTypedSurfaces(env, parented, [onRoof]);
+    // The handler consults the same complete identity before claiming an action.
+    const refused = await typedAcknowledgeRoute(env, shop);
+    assert.equal(refused.status, 409);
+    assert.equal((await refused.json() as { error: string }).error, "safety_stop_active");
+    const admitted = await typedAcknowledgeRoute(env, otherType);
+    assert.equal(admitted.status, 200, await admitted.clone().text());
+    // A direct native writer (the post-read race boundary) reports only the committed scope's stop.
+    await assert.rejects(nativeWorkPackageWriter(env).persistAction({
+      kind: "acknowledge", workPackageId: shop.workPackageId, workPackageVersion: shop.version,
+      jobId: shop.jobId, assignmentId: shop.assignmentId, actorUser: USERS.crew.email, actorRole: "field",
+      deviceActionId: `typed-native-${++nextAction}`, blockerReason: null,
+      releaseAttemptId: shop.releaseAttemptId, ...packetScope(shop),
+      manifestKey: "work-packages/typed-native-race.json",
+      authorityPreconditions: AUTHORITY.get(env.DB)!.get(`${shop.workPackageId}:${shop.version}`)!,
+    }), (error: unknown) => error instanceof FieldActionError && error.code === "safety_stop_active" &&
+      JSON.stringify(error.details).includes(onShop) && !JSON.stringify(error.details).includes(onRoof));
+    // A package stop on a genuine Roof Job child still holds other work on that Roof Job.
+    const onChild = await raise(env, { type: "work_package", id: parented.workPackageId });
+    await expectHeld(env, jobA, USERS.crew,
+      [onRoof, onChild].map((id) => ({ occurrence_id: id, scope: "job" })), "real Roof Job relationship");
+    await expectTypedSurfaces(env, otherContext, []);
+  });
+
+  test(`typed work keeps tenant and unresolved holds conservative (${reverseTriggers ? "reversed" : "normal"} triggers)`, async () => {
+    const env = testEnv({ reverseTriggers });
+    const packet = await issueTyped(env, { workObjectType: "Service Work", workObjectId: "INDEPENDENT-SERVICE",
+      physicalContextType: "Shop", physicalContextId: "independent-shop" }, "unknown-control");
+    await raise(env, { type: "tenant", id: OTHER_TENANT }, OTHER_USERS.crew, { tenantId: OTHER_TENANT });
+    await expectTypedSurfaces(env, packet, []);
+    const tenant = await raise(env, { type: "tenant", id: "tenant-alias" });
+    const missing = await raise(env, { type: "roof_job", id: "JOB-TYPED-LATE" });
+    const expected = [{ occurrence_id: tenant, scope: "tenant" as const },
+      { occurrence_id: missing, scope: "tenant" as const }];
+    await expectHeld(env, packet, USERS.crew, expected, "tenant/unresolved typed work");
+    const late = definition({ jobId: "JOB-TYPED-LATE" });
+    seedAssignmentSnapshot(env, late, { jobOnly: true });
+    await expectHeld(env, packet, USERS.crew, expected, "late target cannot narrow typed hold");
+    const read = await buildUniversalWorkPackageReadModel(env, fieldAuth(USERS.crew), packetScope(packet));
+    assert.deepEqual((read!.active_stops as Array<{ occurrence_id: string; scope: string }>)
+      .map((s) => ({ occurrence_id: s.occurrence_id, scope: s.scope })), expected);
+    const mismatched = await safetyReadinessForScope(env, {
+      tenantId: TENANT, scope: { type: "work_package", id: packet.workPackageId }, jobId: packet.jobId,
+      workObjectScope: { ...packetScope(packet), physicalContextId: "wrong-context" },
+      subjectUserIds: [USERS.crew.id], now: new Date().toISOString(),
+    });
+    assert.equal(mismatched.ready, false);
+    assert.ok(mismatched.blockers.some((b) => b.code === "safety_event_uncontrolled"));
+  });
+}

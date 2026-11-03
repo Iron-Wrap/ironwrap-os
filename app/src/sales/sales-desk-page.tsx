@@ -11,7 +11,6 @@ import {
   FileText,
   KanbanSquare,
   RefreshCw,
-  ShieldCheck,
   TriangleAlert,
   UserPlus,
   type LucideIcon,
@@ -166,7 +165,6 @@ function SalesDeskScreen({
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
-  const canReviewApprovals = model.allowed_actions.includes("approval.read");
   const canCreateLead = model.allowed_actions.includes("sales.lead.create");
   const canPrepareTriage = model.allowed_actions.includes("commercial.lead_triage.record");
   const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
@@ -200,14 +198,6 @@ function SalesDeskScreen({
                   <Link to="/sales/new-lead">
                     <UserPlus aria-hidden="true" />
                     Add a lead
-                  </Link>
-                </Button>
-              ) : null}
-              {canReviewApprovals ? (
-                <Button asChild variant="outline" size="compact">
-                  <Link to="/approvals">
-                    <ShieldCheck aria-hidden="true" />
-                    Open lead reviews
                   </Link>
                 </Button>
               ) : null}

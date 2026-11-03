@@ -30,7 +30,6 @@ const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string, { label: string; to
   [/^\/jobs\/[^/]+/, "Job"],
   [/^\/work-objects\//, "Work"],
   [/^\/check-in\/[^/]+/, "Check-in"],
-  [/^\/estimator\/jobs\/[^/]+\/revision$/, "Draft revision"],
   [/^\/estimator\/jobs\/[^/]+/, "Measurements"],
   [/^\/sales\/leads\/[^/]+\/triage$/, "Lead review"],
   [/^\/sales\/new-lead$/, "New lead"],
@@ -38,8 +37,6 @@ const RECORD_LABELS: ReadonlyArray<readonly [RegExp, string, { label: string; to
   [/^\/marketing\/postiz\//, "Post draft"],
   [/^\/accounting\/intents\//, "Money item"],
   [/^\/accounting\/quickbooks\/final-invoices\//, "Final invoice"],
-  [/^\/quote-revision-approvals\/[^/]+/, "Draft revision"],
-  [/^\/quote-revision-approvals$/, "Draft revisions"],
   [/^\/safety\/corrective-actions\//, "Corrective action"],
   [/^\/safety\/equipment\/[^/]+/, "Equipment item"],
   [/^\/safety\/equipment$/, "Equipment"],
@@ -121,9 +118,7 @@ export function navigationItemForPath(
         ? "/now"
         : pathname.startsWith("/estimator/") || pathname.startsWith("/marketing/")
           ? "/sales"
-          : pathname.startsWith("/quote-revision-approvals")
-            ? "/approvals"
-            : undefined;
+          : undefined;
 
   return (
     items.find((item) => item.to === alias) ??

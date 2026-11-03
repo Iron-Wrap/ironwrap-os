@@ -169,24 +169,6 @@ export const API_PATHS = {
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
   estimatorFacetLaunch: (jobId: string) =>
     `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}/facet-launches`,
-  proposalPublicationApprovals: "/api/v1/proposal-publication-approvals",
-  proposalPublicationApproval: (approvalId: string) =>
-    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}`,
-  proposalPublicationApprovalApprove: (approvalId: string) =>
-    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}/approve`,
-  proposalPublicationApprovalReject: (approvalId: string) =>
-    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}/reject`,
-  proposalPublicationApprovalReconcile: (approvalId: string) =>
-    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}/reconcile`,
-  quoteRevisionApprovals: "/api/v1/quote-revision-approvals",
-  quoteRevisionApproval: (approvalId: string) =>
-    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}`,
-  quoteRevisionApprovalApprove: (approvalId: string) =>
-    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/approve`,
-  quoteRevisionApprovalReject: (approvalId: string) =>
-    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reject`,
-  quoteRevisionApprovalReconcile: (approvalId: string) =>
-    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reconcile`,
   serviceCases: "/api/v1/service-cases",
   serviceCase: (caseId: string) => `/api/v1/service-cases/${encodeURIComponent(caseId)}`,
   serviceCaseTriage: (caseId: string) =>
@@ -210,12 +192,4 @@ export const API_PATHS = {
   // The safety desk: the whole company's equipment and corrective actions, judged by the
   // release gate's own rules. Reads only; every change goes through its own safety command.
   safetyDesk: "/api/v1/safety/desk",
-  approvals: "/api/v1/approvals",
-  approvalLeadTriagePrepare: "/api/v1/approvals/lead-triage",
-  approvalApprove: (approvalId: string) =>
-    `/api/v1/approvals/${encodeURIComponent(approvalId)}/approve`,
-  approvalReject: (approvalId: string) =>
-    `/api/v1/approvals/${encodeURIComponent(approvalId)}/reject`,
-  approvalReconcile: (approvalId: string) =>
-    `/api/v1/approvals/${encodeURIComponent(approvalId)}/reconcile`,
 } as const;

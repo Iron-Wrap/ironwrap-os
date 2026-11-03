@@ -87,7 +87,7 @@ describe("apiRequest", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ value: "recorded" }));
 
     await apiRequest({
-      path: "/api/v1/approvals/approval%3Atest/approve",
+      path: "/api/v1/commercial/lead-triage-decisions",
       schema: z.object({ value: z.literal("recorded") }),
       method: "POST",
       body: { version: 1 },

@@ -1,4 +1,3 @@
-import type { QuoteRevisionApprovalRequest } from "../estimator/quote-revision-approval-contracts";
 import type { JobEconomics, JobEconomicsReadView } from "./job-economics-read-view";
 
 export function economicsFixture(): JobEconomics {
@@ -48,42 +47,5 @@ export function moneyReadFixture(): JobEconomicsReadView {
     source_updated_at: "2026-10-02T10:00:00.000Z",
     partial_sources: ["customer_quotes"],
     stale_fields: [],
-  };
-}
-
-export function revisionFixture(): QuoteRevisionApprovalRequest {
-  return {
-    id: "quote-revision-approval:job-read-001",
-    kind: "quote_revision",
-    state: "pending",
-    version: 1,
-    action: "create_quote_revision_draft",
-    roof_job_id: "JOB-READ-001",
-    source: {
-      customer_quote_id: "QUOTE-READ-001",
-      quote_version: 7,
-      status: "Needs Review",
-      modified: "2026-10-02T09:55:00.000Z",
-    },
-    target: {
-      doctype: "Customer Quote",
-      customer_quote_id: "QUOTE-READ-001-v8",
-      quote_version: 8,
-    },
-    correction_reason: "Check the verified measurement source.",
-    request_text: "Prepare a correction draft for a verified measurement source.",
-    preview: null,
-    expires_at: "2026-10-02T10:05:00.000Z",
-    requested_by: { user_id: "appu_ops", frappe_user: "ops@example.invalid" },
-    approved_by: null,
-    rejection_reason: null,
-    run_id: "run:job-read-001",
-    hermes_run_id: null,
-    outcome: null,
-    error_code: null,
-    reconciliation: null,
-    created_at: "2026-10-02T10:00:00.000Z",
-    updated_at: "2026-10-02T10:00:00.000Z",
-    completed_at: null,
   };
 }

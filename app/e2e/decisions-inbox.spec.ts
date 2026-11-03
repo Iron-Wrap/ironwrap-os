@@ -3,7 +3,6 @@ import { mkdir } from "node:fs/promises";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test as base, type Page } from "@playwright/test";
 import { nowResponseSchema, type DecisionItem, type NowResponse } from "../src/now/now-contracts";
-import type { ApprovalRequest } from "../src/owner/approval-contracts";
 
 // Synthetic API responses qualify the browser presentation only, not live source coverage.
 const estimatorMode = process.env.ACCEPTANCE_MODE === "estimator";
@@ -661,52 +660,16 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     }
   });
 
-  test("redirects only the default legacy route and preserves exact lead review and history", async ({
+  test("redirects every legacy approvals address to Decisions without a broker read", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const lead: ApprovalRequest = {
-      id: items[0].id,
-      kind: "lead_triage",
-      state: "pending",
-      version: 1,
-      action: "mark_lead_triaged",
-      target: {
-        doctype: "Lead Envelope",
-        name: "synthetic-lead",
-        lead_envelope_id: "synthetic-lead",
-      },
-      request_text: "Synthetic lead note awaiting a separate review.",
-      preview: null,
-      expires_at: "2030-09-29T12:15:00.000Z",
-      requested_by: { user_id: "synthetic-owner", frappe_user: "owner@example.invalid" },
-      approved_by: null,
-      rejection_reason: null,
-      run_id: "synthetic-lead-run",
-      hermes_run_id: null,
-      outcome: null,
-      error_code: null,
-      reconciliation: null,
-      created_at: generatedAt,
-      updated_at: generatedAt,
-      completed_at: null,
-    };
-    const envelope = {
-      version: 1,
-      read_model_generated_at: generatedAt,
-      permissions: ["approvals:read"],
-      allowed_actions: [],
-    };
+    // The broker-backed lead-review inbox is retired with its Worker routes; no screen may still
+    // ask `/api/v1/approvals` for anything.
     const reads: string[] = [];
     await page.route("**/api/v1/approvals**", (route) => {
-      const path = new URL(route.request().url()).pathname;
-      reads.push(path);
-      return route.fulfill({
-        json:
-          path === "/api/v1/approvals"
-            ? { ...envelope, approvals: [lead] }
-            : { ...envelope, approval: lead },
-      });
+      reads.push(new URL(route.request().url()).pathname);
+      return route.fulfill({ status: 404, json: { error: "not_found" } });
     });
     await serveNow(page, inboxModel(), "/approvals");
     await expect(page).toHaveURL(/\/now\?show=decide$/);
@@ -733,18 +696,16 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     await navigation.getByRole("link", { name: "Decisions", exact: true }).click();
     await expect(page).toHaveURL(/\/now\?show=decide$/);
     await expect(page.getByRole("heading", { level: 1, name: "Decisions" })).toBeVisible();
-    await page
-      .locator(".now-row")
-      .filter({ hasText: items[0].title })
-      .getByRole("link", { name: "Open review" })
-      .click();
-    await expect(page).toHaveURL(/\/approvals\?review=approval%3Asynthetic-lead-0001$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Review lead note" })).toBeVisible();
-    expect(reads).toEqual(["/api/v1/approvals/approval%3Asynthetic-lead-0001"]);
-    await page.goto("/approvals?view=leads");
-    await expect(page).toHaveURL(/\/approvals\?view=leads$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Lead reviews" })).toBeVisible();
-    expect(reads).toContain("/api/v1/approvals");
+    for (const legacy of [
+      "/approvals?review=approval%3Asynthetic-lead-0001",
+      "/approvals?view=leads",
+    ]) {
+      await page.goto(legacy);
+      await expect(page).toHaveURL(/\/now\?show=decide$/);
+      await expect(page.getByRole("heading", { level: 1, name: "Decisions" })).toBeVisible();
+    }
+    await expect(page.getByRole("link", { name: "Lead review history" })).toHaveCount(0);
+    expect(reads).toEqual([]);
   });
 
   test("does not show another role's decisions", async ({ page }) => {

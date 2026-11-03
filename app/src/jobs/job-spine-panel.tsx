@@ -5,10 +5,7 @@ import { useSession } from "../auth/session-context";
 import { Notice } from "../components/ui/notice";
 import { Status } from "../components/ui/status";
 import { SystemDetails } from "../components/ui/system-details";
-import { loadQuoteRevisionApprovals } from "../estimator/quote-revision-approval-api";
-import { ApprovalReceipt } from "../owner/approval-receipt";
 import { formatOwnerDate } from "../owner/owner-now-utils";
-import { loadProposalPublicationApprovals } from "../proposal/proposal-publication-api";
 import { loadJobEconomics, type JobEconomics } from "./job-economics-read-view";
 
 /** Connections read existing contracts independently; a failed source never becomes an empty ledger. */
@@ -16,7 +13,6 @@ export function JobSpinePanel({ jobId }: { jobId: string }) {
   const session = useSession();
   const offline = isOfflineSession(session);
   const canReadMoney = session.permissions.includes("estimator:read");
-  const canReadApprovals = session.permissions.includes("approvals:read");
   const key = [session.tenant.id, session.user.id, jobId];
   const money = useQuery({
     queryKey: ["job-economics", ...key],
@@ -24,24 +20,6 @@ export function JobSpinePanel({ jobId }: { jobId: string }) {
     retry: false,
     queryFn: () => loadJobEconomics(session.tenant.id, jobId),
   });
-  const revisions = useQuery({
-    queryKey: ["job-quote-approval-history", ...key],
-    enabled: canReadApprovals && !offline,
-    retry: false,
-    queryFn: () => loadQuoteRevisionApprovals(),
-  });
-  const publications = useQuery({
-    queryKey: ["job-publication-approval-history", ...key],
-    enabled: canReadApprovals && !offline,
-    retry: false,
-    queryFn: () => loadProposalPublicationApprovals(jobId),
-  });
-  const revisionsPaused = revisions.fetchStatus === "paused";
-  const publicationsPaused = publications.fetchStatus === "paused";
-  const approvals = [
-    ...(revisions.data?.approvals ?? []).filter((approval) => approval.roof_job_id === jobId),
-    ...(publications.data?.approvals ?? []).filter((approval) => approval.roof_job_id === jobId),
-  ].sort((left, right) => right.created_at.localeCompare(left.created_at));
   const locale = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
 
   return (
@@ -106,127 +84,6 @@ export function JobSpinePanel({ jobId }: { jobId: string }) {
               </Notice>
             ) : null}
             <JobEconomicsSummary model={money.data.economics} locale={session.tenant.locale} />
-          </>
-        )}
-      </section>
-      <section className="grid gap-4" aria-labelledby="job-spine-approvals-heading">
-        <h2
-          className="border-b border-border pb-3 text-xl font-semibold"
-          id="job-spine-approvals-heading"
-        >
-          Approval ledger
-        </h2>
-        {!canReadApprovals ? (
-          <p className="text-sm text-muted">Approval receipts are not available to your role.</p>
-        ) : offline ? (
-          <p className="text-sm text-muted">Reconnect to read the approval receipts.</p>
-        ) : (
-          <>
-            <p className="text-sm leading-6 text-muted">
-              Loaded quote-change and proposal-publication requests for this job. Lead reviews are
-              separate because their records do not carry a job link.
-            </p>
-            {revisions.data || publications.data ? (
-              <p className="text-sm text-muted">
-                {revisions.data
-                  ? `Quote approval read ${formatOwnerDate(revisions.data.read_model_generated_at, locale)}. `
-                  : ""}
-                {publications.data
-                  ? `Publication approval read ${formatOwnerDate(publications.data.read_model_generated_at, locale)}.`
-                  : ""}
-              </p>
-            ) : null}
-            {(revisions.isPending && !revisionsPaused) ||
-            (publications.isPending && !publicationsPaused) ? (
-              <p role="status" className="text-sm text-muted">
-                Reading approval sources…
-              </p>
-            ) : null}
-            {revisionsPaused ? (
-              <Notice tone="warning" title="Quote approval read paused">
-                Reconnect to read the quote approval history. Coverage is unknown until the read
-                completes.
-              </Notice>
-            ) : null}
-            {publicationsPaused ? (
-              <Notice tone="warning" title="Publication approval read paused">
-                Reconnect to read the publication approval history. Coverage is unknown until the
-                read completes.
-              </Notice>
-            ) : null}
-            {revisions.isError ? (
-              <Notice tone="warning" title="Quote approval history unavailable">
-                This is not an empty history.{" "}
-                <button
-                  className="min-h-11 font-semibold underline"
-                  onClick={() => void revisions.refetch()}
-                >
-                  Try again
-                </button>
-              </Notice>
-            ) : null}
-            {publications.isError ? (
-              <Notice tone="warning" title="Publication approval history unavailable">
-                This is not an empty history.{" "}
-                <button
-                  className="min-h-11 font-semibold underline"
-                  onClick={() => void publications.refetch()}
-                >
-                  Try again
-                </button>
-              </Notice>
-            ) : null}
-            {approvals.length ? (
-              <ol className="grid divide-y divide-border" aria-label="Loaded job approval records">
-                {approvals.map((approval) => (
-                  <li key={approval.id} className="grid gap-3 py-5 first:pt-0">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h3 className="font-semibold">
-                        {approval.kind === "quote_revision"
-                          ? "Quote correction draft"
-                          : "Proposal publication"}
-                      </h3>
-                      <Status
-                        kind={
-                          approval.state === "executed" && approval.outcome?.audit_finalized
-                            ? "confirmed"
-                            : approval.state === "pending"
-                              ? "pending"
-                              : "attention"
-                        }
-                      >
-                        {approval.state.replaceAll("_", " ")}
-                      </Status>
-                    </div>
-                    <p className="text-sm leading-6">{approval.request_text}</p>
-                    {/* Two requests are told apart by when they were asked, never by a version. */}
-                    <p className="text-sm text-muted">
-                      Requested {formatOwnerDate(approval.created_at, locale)}
-                    </p>
-                    <ApprovalReceipt approval={approval} locale={locale} />
-                    <a
-                      className="inline-flex min-h-11 items-center justify-self-start text-sm font-semibold underline underline-offset-4"
-                      href={
-                        approval.kind === "quote_revision"
-                          ? `/quote-revision-approvals/${encodeURIComponent(approval.id)}`
-                          : `/estimator/jobs/${encodeURIComponent(jobId)}#proposal-publication`
-                      }
-                    >
-                      {approval.kind === "quote_revision"
-                        ? "Open approval record"
-                        : "Open publication in estimate"}
-                    </a>
-                  </li>
-                ))}
-              </ol>
-            ) : !revisions.isPending &&
-              !publications.isPending &&
-              !revisionsPaused &&
-              !publicationsPaused &&
-              !revisions.isError &&
-              !publications.isError ? (
-              <p className="text-sm text-muted">No matching approvals in the loaded records.</p>
-            ) : null}
           </>
         )}
       </section>

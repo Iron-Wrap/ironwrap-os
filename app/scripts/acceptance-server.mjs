@@ -1244,13 +1244,15 @@ const FIXTURE_CAPABILITY_REFERENCE = [
     audience: ["owner", "ops"],
   },
   {
+    // Retired with the approval brokers: the Worker reports it absent so no surface presents it.
     id: "proposal_publication",
     title: "Proposal publication to the customer",
-    state: "off",
-    reason: "flag_off",
+    state: "absent",
+    reason: "no_source_consumer",
     flag_state: "off",
     configuration_state: "not_evaluated",
     flag_binding: "APP_PROPOSAL_PUBLICATION_ENABLED",
+    presence: "absent",
     audience: ["owner", "ops", "sales"],
   },
   {

@@ -6,7 +6,6 @@ import {
   ChevronDown,
   CircleAlert,
   FileSearch,
-  FileText,
   Layers3,
   Palette,
   RefreshCw,
@@ -28,7 +27,6 @@ import { cn } from "../lib/cn";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
 import { CustomerPortalOfficeAccess } from "../portal/customer-portal-office-access";
-import { ProposalPublicationAction } from "../proposal/proposal-publication-action";
 import {
   createFacetLaunch,
   loadEstimatorWorkbench,
@@ -1466,12 +1464,6 @@ function CommercialRecord({
           </span>
         </summary>
         <div className="border-t border-border bg-surface-raised/35">
-          <ProposalPublicationAction
-            roofJobId={model.job.id}
-            proposalEvidencePackId={proposal?.id ?? null}
-            proposalStatus={proposal?.status ?? null}
-            locale={locale}
-          />
           <CustomerPortalOfficeAccess roofJobId={model.job.id} locale={locale} />
         </div>
       </details>
@@ -1614,13 +1606,12 @@ function QuoteRevisionEntry({
   const facetLaunch = useCapability("facet_launch");
   const facetLaunchUnusable = capabilityPreventsUse(facetLaunch);
   const canLaunch = model.allowed_actions.includes("facet_launch.create");
-  const canRevise = model.allowed_actions.includes("quote_revision_approval.prepare");
   const launch = useMutation({
     retry: false,
     mutationFn: () => createFacetLaunch(model.job.id, session.csrf_token, launchKey.current),
     onSuccess: navigateToFacetLaunch,
   });
-  if (!canLaunch && !canRevise) return null;
+  if (!canLaunch) return null;
   const launchDisabled = !online || isOfflineSession(session) || launch.isPending;
   return (
     <section
@@ -1630,44 +1621,31 @@ function QuoteRevisionEntry({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="max-w-xl">
           <h3 id="revision-request-heading" className="text-sm font-bold text-foreground">
-            {canLaunch ? "Open this approved quote in Facet" : "Fix this quote safely"}
+            Open this approved quote in Facet
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
-            {canLaunch
-              ? "Open the design for this customer and job. IronWrap does not send the address, price, scope, proposal, payment, or a promise to Facet."
-              : "Ask for an empty draft quote. A person must review it. Price, tax, scope, payment, approvals, and customer terms are not copied."}
+            Open the design for this customer and job. IronWrap does not send the address, price,
+            scope, proposal, payment, or a promise to Facet.
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2">
-          {canLaunch ? (
-            <Button
-              type="button"
-              size="default"
-              disabled={launchDisabled || facetLaunchUnusable}
-              onClick={() => launch.mutate(undefined)}
-            >
-              <Palette aria-hidden="true" />
-              {launch.isPending ? "Opening Facet…" : "Design in Facet"}
-            </Button>
-          ) : null}
-          {canRevise ? (
-            <Button asChild variant="outline" size="default">
-              <Link to="/estimator/jobs/$jobId/revision" params={{ jobId: model.job.id }}>
-                <FileText aria-hidden="true" />
-                Request draft revision
-              </Link>
-            </Button>
-          ) : null}
+          <Button
+            type="button"
+            size="default"
+            disabled={launchDisabled || facetLaunchUnusable}
+            onClick={() => launch.mutate(undefined)}
+          >
+            <Palette aria-hidden="true" />
+            {launch.isPending ? "Opening Facet…" : "Design in Facet"}
+          </Button>
         </div>
       </div>
-      {canLaunch && (!online || isOfflineSession(session)) ? (
+      {!online || isOfflineSession(session) ? (
         <p className="mt-3 text-xs font-semibold text-muted">Reconnect to open this design.</p>
       ) : null}
-      {canLaunch ? (
-        <div className="mt-4">
-          <CapabilityUnavailable read={facetLaunch} />
-        </div>
-      ) : null}
+      <div className="mt-4">
+        <CapabilityUnavailable read={facetLaunch} />
+      </div>
       {launch.isError ? (
         <p role="alert" className="mt-3 text-sm font-semibold text-danger">
           {launch.error instanceof ApiError &&

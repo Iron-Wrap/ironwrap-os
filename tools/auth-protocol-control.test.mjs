@@ -24,6 +24,7 @@ import {
   sha,
   memoryS3,
   sourceCapsules,
+  sourceBoundP1Database,
   harness,
   githubToken,
   providerToken,
@@ -619,4 +620,67 @@ test("production floor2 needs completed exact QA qualification; source/CI/bootst
     /completed_qa_qualification_required/,
   );
   assert.equal(h.s3.puts, 0);
+});
+
+test("committed P1 SQL fixture composes with current migrations and the exact writer without deployed qualification", async (t) => {
+  const h = await harness(capsules, t, "qa", sourceBoundP1Database());
+  const created = new Date(0).toISOString(),
+    expires = new Date(Date.now() + 60000).toISOString();
+  const user = "appu_synthetic_writer_owner";
+  h.db
+    .prepare(
+      `INSERT INTO app_users(user_id,tenant_id,email_normalized,display_name,role,access_role,active,created_by,created_at,updated_at)
+    VALUES (?,'ironwrap','writer@example.invalid','Synthetic writer','owner','owner',1,'synthetic',?,?)`,
+    )
+    .run(user, created, created);
+  h.db
+    .prepare(
+      `INSERT INTO app_sessions(session_hash,user_id,tenant_id,created_at,expires_at,last_seen_at,created_ip_hash,created_user_agent_hash)
+    VALUES (?,?,'ironwrap',?,?,?,?,?)`,
+    )
+    .run(
+      "a".repeat(64),
+      user,
+      created,
+      expires,
+      created,
+      "0".repeat(64),
+      "0".repeat(64),
+    );
+  assert.equal(
+    h.db
+      .prepare(
+        "SELECT count(*) AS n FROM app_sessions WHERE revoked_at IS NULL",
+      )
+      .get().n,
+    1,
+  );
+  await h.stage();
+  h.deploymentVersions = [
+    { version_id: versions[1], percentage: 100 },
+    { version_id: versions[2], percentage: 0 },
+  ];
+  const pair = await h.authorize(false);
+  await h.commit(pair, {
+    ...h.head(pair),
+    controlRevision: 2,
+    minProducerProtocol: 2,
+    mode: "closed",
+  });
+  const result = await h.mirror(pair, "cutover");
+  assert.equal(result.mirror.protocol_floor, 2);
+  assert.equal(result.mirror.enrollment_open, 0);
+  assert.equal(result.mirror.legacy_sessions, 0);
+  assert.equal(
+    h.db
+      .prepare(
+        "SELECT count(*) AS n FROM app_auth_audit WHERE event='auth_protocol_cutover' AND outcome='legacy_retired'",
+      )
+      .get().n,
+    1,
+  );
+  assert.throws(
+    () => h.db.exec("UPDATE app_auth_protocol SET protocol_floor=1"),
+    /auth_protocol_floor/,
+  );
 });

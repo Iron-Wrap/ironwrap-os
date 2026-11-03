@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { readdirSync, readFileSync } from "node:fs";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -57,6 +58,31 @@ export function syntheticDatabase() {
   return db;
 }
 
+export function sourceBoundP1Database() {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    const directory = path.join(repo, "workers-bus/migrations");
+    for (const name of readdirSync(directory)
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+      .sort())
+      db.exec(readFileSync(path.join(directory, name), "utf8"));
+    const fixture = readFileSync(
+      new URL("auth-protocol-v2.sql", import.meta.url),
+      "utf8",
+    );
+    const binding = JSON.parse(
+      readFileSync(new URL("auth-protocol-v2.json", import.meta.url), "utf8"),
+    );
+    assert.equal(sha(fixture), binding.sha256);
+    db.exec(fixture);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
 export async function sourceCapsules() {
   const parent = await mkdtemp(path.join(tmpdir(), "ironwrap-auth-control-"));
   const raw = JSON.parse(
@@ -106,7 +132,9 @@ export async function sourceCapsules() {
         });
         await writeFile(
           path.join(root, relative),
-          "// Synthetic P1 source marker; never deployed or compiled.\n",
+          relative.endsWith("/0173_app_auth_protocol_v2.sql")
+            ? await readFile(new URL("auth-protocol-v2.sql", import.meta.url))
+            : "// Synthetic P1 source marker; never deployed or compiled.\n",
         );
       }
     }
@@ -245,7 +273,12 @@ export function memoryS3() {
   };
 }
 
-export async function harness(capsules, t, environment = "qa") {
+export async function harness(
+  capsules,
+  t,
+  environment = "qa",
+  database = null,
+) {
   const { p0, p1 } = capsules;
   const impl = await import(
     pathToFileURL(path.join(p0.root, "tools/auth-protocol-control.mjs"))
@@ -265,7 +298,7 @@ export async function harness(capsules, t, environment = "qa") {
     accessKeyId: credentials.writer.id,
     secretAccessKey: credentials.writer.secret,
   };
-  const db = syntheticDatabase();
+  const db = database ?? syntheticDatabase();
   t.after(() => db.close());
   const s3 = memoryS3(),
     providers = new Map(),

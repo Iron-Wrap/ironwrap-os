@@ -16,10 +16,23 @@ import {
 const MAX_EFFECT_BODY_BYTES = 256 * 1024;
 
 /**
+ * The action prefix this bearer handles: the MCP host's bounded agent tools, each claimed as
+ * `mcp.<tool>` (`mcp/erpnext-roofing-mcp/src/server.mjs`). Every other action is the bus's own.
+ */
+const TOKEN_ACTION_PREFIX = "mcp.";
+/**
+ * The one other effect this bearer handles, and only on a Worker whose data class is exactly
+ * `synthetic`: the QA seed's proposal publish through its stand-in provider, which reaches no one
+ * (`tools/seed-qa-journey.mjs`). No other stand-in pair passes until someone adds it here on purpose.
+ */
+const QA_SEED_ACTION = "proposal.publish";
+const QA_SEED_PROVIDER = "qa-synthetic-publication";
+/**
  * Sends to someone outside the business. The two proposal actions are bound to a person-issued
  * permit (0093); the two email actions run only inside the bus (`google.ts`). This bearer never
- * claims, settles, reconciles or retries one: its holder could write the expected readback itself
- * or report a match nobody observed, so its settlement would be its own word, not the provider's.
+ * claims, settles, reconciles or retries one, the QA seed's stand-in publish aside: its holder could
+ * write the expected readback itself or report a match nobody observed, so its settlement would be
+ * its own word, not the provider's. They keep their own refusal code, which says why.
  */
 const OUTSIDE_SEND_ACTIONS: ReadonlySet<string> = new Set([
   "proposal.publish",
@@ -29,21 +42,27 @@ const OUTSIDE_SEND_ACTIONS: ReadonlySet<string> = new Set([
 ]);
 /** The permit-bound sends run once: never retried, on this route and in D1 (0164). */
 const PERMIT_BOUND_SENDS: ReadonlySet<string> = new Set(["proposal.publish", "proposal.withdraw"]);
-/** The QA seed's stand-in provider, which reaches no one. */
-const SYNTHETIC_PROVIDER = /^qa-synthetic-[a-z0-9-]+$/;
 
 /**
- * Why this bearer may not touch an effect with this action and provider, or null. A
- * `qa-synthetic-*` provider belongs only on a Worker whose data class is exactly `synthetic`:
- * unset reads as business and a misspelling as no class, so both refuse. An outside send passes
- * only as such a synthetic effect on such a Worker.
+ * Why this bearer may not touch an effect with this action and provider, or null. It handles
+ * `mcp.*` actions, and the QA seed's stand-in publish on a synthetic Worker; everything else is
+ * refused, in this order:
+ * - a `qa-synthetic-*` provider on a Worker whose data class is not exactly `synthetic`: unset
+ *   reads as business and a misspelling as no class, so both refuse (`effect_provider_not_allowed`);
+ * - an outside send (`effect_outside_send_token_refused`);
+ * - any other action outside `mcp.*` (`effect_runtime_action_not_allowed`);
+ * - an `mcp.*` action through a stand-in provider (`effect_provider_not_allowed`).
+ * D1 cannot apply this rule: neither an attempt nor an event records who claimed it, so a bearer
+ * write and a bus write look the same there. The rule lives here, on every bearer route.
  */
-function outsideSendRefusal(env: AppEnv, action: string, provider: string): string | null {
+function tokenRefusal(env: AppEnv, action: string, provider: string): string | null {
   const syntheticWorker = agentDataClass(env.AGENT_DATA_CLASS) === "synthetic";
-  if (provider.startsWith("qa-synthetic-") && !syntheticWorker) return "effect_provider_not_allowed";
-  if (OUTSIDE_SEND_ACTIONS.has(action) && !(syntheticWorker && SYNTHETIC_PROVIDER.test(provider))) {
-    return "effect_outside_send_token_refused";
-  }
+  const standIn = provider.startsWith("qa-synthetic-");
+  if (standIn && !syntheticWorker) return "effect_provider_not_allowed";
+  if (syntheticWorker && action === QA_SEED_ACTION && provider === QA_SEED_PROVIDER) return null;
+  if (OUTSIDE_SEND_ACTIONS.has(action)) return "effect_outside_send_token_refused";
+  if (!action.startsWith(TOKEN_ACTION_PREFIX)) return "effect_runtime_action_not_allowed";
+  if (standIn) return "effect_provider_not_allowed";
   return null;
 }
 
@@ -53,19 +72,24 @@ function allowsRetry(effect: Record<string, any>, authority: EffectAuthority): b
   return (effect.retryLimit ?? 0) !== 0 || typeof maxAttempts !== "number" || maxAttempts > 1;
 }
 
-/** The same refusal for an effect that exists; a missing one keeps the runtime's `effect_missing`. */
+/** Bind the stored effect to this Worker before its action; a missing one keeps `effect_missing`. */
 async function existingEffectRefusal(env: AppEnv, effectId: string): Promise<Response | null> {
   const existing = await getExternalEffect(env, effectId);
-  const refusal = existing && outsideSendRefusal(env, existing.action, existing.provider);
+  // The stored tenant is immutable. Do not trust a tenant supplied beside the effect id, or
+  // normalize a stored tenant into another tenant's identity.
+  if (existing && existing.tenant_id !== (env.APP_TENANT_ID?.trim() || "ironwrap")) {
+    return json({ error: "effect_tenant_mismatch" }, 403);
+  }
+  const refusal = existing && tokenRefusal(env, existing.action, existing.provider);
   return refusal ? json({ error: refusal }, effectErrorStatus(refusal)) : null;
 }
 
 /**
  * The MCP host claims its `mcp.*` effects here: it keeps its provider credentials and executes the
- * claimed Frappe request locally. An outside send is never claimed here: only the bus may execute
- * one. The QA seed's `qa-synthetic-*` stand-in is claimed, on a synthetic Worker only. The Worker
- * owns the durable proposal/lease/readback state; this endpoint never accepts provider credentials
- * or performs a provider call.
+ * claimed Frappe request locally. Nothing else is claimed here, the QA seed's stand-in publish on a
+ * synthetic Worker aside: only the bus may execute any other action. The Worker owns the durable
+ * proposal/lease/readback state; this endpoint never accepts provider credentials or performs a
+ * provider call.
  */
 export async function handleExternalEffectClaim(req: Request, env: AppEnv): Promise<Response> {
   const body = await parseJson(req);
@@ -77,7 +101,7 @@ export async function handleExternalEffectClaim(req: Request, env: AppEnv): Prom
     return json({ error: "effect_tenant_mismatch" }, 403);
   }
   const action = String(effect.action ?? "");
-  const refusal = outsideSendRefusal(env, action, String(effect.provider ?? ""))
+  const refusal = tokenRefusal(env, action, String(effect.provider ?? ""))
     ?? (PERMIT_BOUND_SENDS.has(action) && allowsRetry(effect, authority) ? "effect_outside_send_retry_forbidden" : null);
   if (refusal) return json({ error: refusal }, effectErrorStatus(refusal));
   // The claim happens now, by the server's clock: a caller-supplied time could backdate a claim
@@ -216,7 +240,11 @@ function effectErrorStatus(error: unknown): 400 | 403 | 409 | 422 | 500 {
   const code = effectError(error);
   if (code === "proposal_delivery_unconfirmed" || code === "proposal_delivery_answer_may_be_late") return 409;
   if (code === "effect_runtime_error") return 500;
-  if (code === "effect_outside_send_token_refused" || code === "effect_provider_not_allowed") return 403;
+  if (
+    code === "effect_outside_send_token_refused" ||
+    code === "effect_provider_not_allowed" ||
+    code === "effect_runtime_action_not_allowed"
+  ) return 403;
   if (code === "effect_outside_send_retry_forbidden") return 422;
   if (code === "effect_reconciliation_evidence_missing") return 409;
   if (code.includes("conflict") || code.includes("in_flight") || code.includes("lease_lost")) return 409;

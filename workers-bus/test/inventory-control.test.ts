@@ -1742,6 +1742,184 @@ test("an AP invoice line is inadmissible without a succeeded authenticated readb
   assert.equal(stored.count, 1);
 });
 
+// 0169 re-creates 0067's readback guard: the cited effect must be a QuickBooks bill read through the
+// line's own provider, and a supplier_ap line is refused until a read action exists for it.
+const READBACK_GUARD = "inventory_invoice_lines_readback_guard";
+const migrationText = (file: string) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+const guardText = (text: string) =>
+  new RegExp(`CREATE TRIGGER (?:IF NOT EXISTS )?${READBACK_GUARD}\\n[\\s\\S]*?\\nEND`).exec(text)![0];
+/** What 0169 adds to 0067's body, exactly; everything else is 0067's text. */
+const GUARD_ADDITIONS = [
+  "  SELECT RAISE(ABORT, 'inventory_invoice_line_supplier_ap_readback_unsupported')\n" +
+    "  WHERE NEW.provider = 'supplier_ap';\n\n",
+  "\n      AND effect.action = 'quickbooks.bill.read'",
+  "\n      AND effect.provider = NEW.provider",
+];
+
+/** A database with one ordered PO line and a writer for effects and AP lines against it. */
+async function readbackGuardFixture() {
+  const db = new SqliteD1();
+  await seedReceipt(env(db), { commandId: "cmd_receive_0001", quantity: 10, unitCost: 500 });
+  db.raw.prepare(
+    `INSERT INTO inventory_po_lines
+       (po_line_id, tenant_id, supplier_order_id, line_no, item_id, uom_id,
+        ordered_quantity_scaled, unit_price_minor, line_identity_sha256, status, created_at, updated_at)
+     VALUES ('po_line_000001', ?, 'SO-1', 1, ?, ?, 10, 500, ?, 'ordered', ?, ?)`,
+  ).run(TENANT, ITEM_PANEL, UOM_EACH, "e".repeat(64), NOW, NOW);
+  let lines = 0;
+  return {
+    db,
+    effect(effectId: string, overrides: Partial<{ action: string; provider: string; state: string; tenant: string; readback: string }> = {}) {
+      db.raw.prepare(
+        `INSERT INTO external_effects
+           (effect_id, tenant_id, actor_type, actor_id, task_id, authority_ref, policy_ref,
+            policy_version, aggregate_type, aggregate_id, aggregate_version, intent_id, action,
+            request_hash, envelope_hash, provider, idempotency_key, deadline_at, preconditions_json,
+            evidence_refs_json, expected_readback_json, retry_limit, compensation_plan_json,
+            correlation_id, state, readback_hash, created_at, updated_at)
+         VALUES (?, ?, 'agent', 'integration-worker', 'task-1', 'a', 'p', 'v1', 'invoice_line',
+                 'po_line_000001', 1, 'intent-1', ?, ?, ?, ?, ?,
+                 ?, '{}', '[]', '{}', 0, '{}', 'correlation-0001', ?, ?, ?, ?)`,
+      ).run(
+        effectId, overrides.tenant ?? TENANT, overrides.action ?? "quickbooks.bill.read", "1".repeat(64), "2".repeat(64),
+        overrides.provider ?? "quickbooks", `idem-${effectId}`, "2026-08-18T12:00:00.000Z",
+        overrides.state ?? "succeeded", overrides.readback ?? "9".repeat(64), NOW, NOW,
+      );
+    },
+    line(effectId: string, provider = "quickbooks") {
+      lines += 1;
+      db.raw.prepare(
+        `INSERT INTO inventory_invoice_lines
+           (invoice_line_id, tenant_id, provider, provider_invoice_id, provider_vendor_id,
+            po_line_id, line_no, item_id, uom_id, invoiced_quantity_scaled, unit_price_minor,
+            line_identity_sha256, readback_effect_id, readback_hash_sha256, evidence_refs_json, created_at)
+         VALUES (?, ?, ?, ?, 'VENDOR-1', 'po_line_000001', 1, ?, ?, 10, 500, ?, ?, ?, '[]', ?)`,
+      ).run(
+        `il_readback_${String(lines).padStart(4, "0")}`, TENANT, provider, `BILL-${lines}`,
+        ITEM_PANEL, UOM_EACH, "e".repeat(64), effectId, "9".repeat(64), NOW,
+      );
+    },
+    count: () => (db.raw.prepare("SELECT COUNT(*) AS n FROM inventory_invoice_lines").get() as { n: number }).n,
+  };
+}
+
+test("an AP invoice line cites a QuickBooks bill read through its own provider; any other finished effect is refused (0169)", async () => {
+  const f = await readbackGuardFixture();
+  // Each new clause alone: an effect that passes 0067's every clause, but did something else.
+  for (const action of [
+    "mcp.request_create_purchase_invoice",
+    "accounting.invoice.submit",
+    "proposal.publish",
+    "customer.email.send",
+    "quickbooks.bill.create",
+    "quickbooks.bill.read ",
+    "QUICKBOOKS.BILL.READ",
+  ]) {
+    const effectId = `effect_action_${action.replace(/[^a-z]/gi, "").slice(0, 24)}`;
+    f.effect(effectId, { action });
+    assert.throws(() => f.line(effectId), /inventory_invoice_line_authenticated_readback_required/, action);
+  }
+  // The bill read itself, through another provider than the line's.
+  for (const provider of ["frappe", "supplier_ap", "qa-synthetic-publication", "Quickbooks"]) {
+    const effectId = `effect_provider_${provider.replace(/[^a-z]/gi, "")}`;
+    f.effect(effectId, { provider });
+    assert.throws(() => f.line(effectId), /inventory_invoice_line_authenticated_readback_required/, provider);
+  }
+  // A supplier_ap line has no read action yet: refused by name, even citing an effect that
+  // matches it in every other way, or a good QuickBooks read.
+  f.effect("effect_supplier_ap_read", { provider: "supplier_ap" });
+  f.effect("effect_quickbooks_read");
+  for (const effectId of ["effect_supplier_ap_read", "effect_quickbooks_read", "effect_missing_00001"]) {
+    assert.throws(() => f.line(effectId, "supplier_ap"), /inventory_invoice_line_supplier_ap_readback_unsupported/, effectId);
+  }
+  assert.equal(f.count(), 0);
+
+  // 0067's clauses stand: another tenant's read, an unfinished one, or a digest that disagrees.
+  f.effect("effect_other_tenant", { tenant: "tenant-other" });
+  f.effect("effect_still_executing", { state: "executing", readback: "9".repeat(64) });
+  f.effect("effect_wrong_digest", { readback: "8".repeat(64) });
+  for (const effectId of ["effect_other_tenant", "effect_still_executing", "effect_wrong_digest"]) {
+    assert.throws(() => f.line(effectId), /inventory_invoice_line_authenticated_readback_required/, effectId);
+  }
+  assert.equal(f.count(), 0);
+
+  // The legitimate readbacks pass: a succeeded bill read, and a reconciled one (0067 keeps both).
+  f.line("effect_quickbooks_read");
+  f.effect("effect_reconciled_read", { state: "reconciled" });
+  f.line("effect_reconciled_read");
+  assert.equal(f.count(), 2);
+  // The PO identity clause still follows the readback: a line for another item is refused.
+  f.effect("effect_identity_read");
+  assert.throws(
+    () => f.db.raw.prepare(
+      `INSERT INTO inventory_invoice_lines
+         (invoice_line_id, tenant_id, provider, provider_invoice_id, provider_vendor_id,
+          po_line_id, line_no, item_id, uom_id, invoiced_quantity_scaled, unit_price_minor,
+          line_identity_sha256, readback_effect_id, readback_hash_sha256, evidence_refs_json, created_at)
+       VALUES ('il_identity_0001', ?, 'quickbooks', 'BILL-ID', 'VENDOR-1', 'po_line_000001', 1, ?, ?, 10, 500, ?,
+               'effect_identity_read', ?, '[]', ?)`,
+    ).run(TENANT, ITEM_SCREW, UOM_EACH, "e".repeat(64), "9".repeat(64), NOW),
+    /inventory_invoice_line_po_identity_mismatch/,
+  );
+
+  // A cited read cannot be re-pointed after the line is written: its tenant, action and provider
+  // are frozen (0042, re-created by 0156), and the line itself is append-only (0067).
+  for (const change of ["action = 'mcp.synthetic'", "provider = 'frappe'", "tenant_id = 'tenant-other'"]) {
+    assert.throws(
+      () => f.db.raw.prepare(`UPDATE external_effects SET ${change} WHERE effect_id = 'effect_quickbooks_read'`).run(),
+      /external_effect_binding_immutable/,
+      change,
+    );
+  }
+  assert.throws(
+    () => f.db.raw.prepare("UPDATE inventory_invoice_lines SET readback_effect_id = 'effect_other_tenant'").run(),
+    /inventory_invoice_lines_append_only/,
+  );
+});
+
+test("0169's readback guard is 0067's, line for line, plus the three ruled additions, and reads only its pinned columns", async () => {
+  const { db } = await readbackGuardFixture();
+  const live = (db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?").get(READBACK_GUARD) as { sql: string }).sql;
+  const base = guardText(migrationText("0067_inventory_control.sql"));
+  const own = guardText(migrationText("0169_inventory_invoice_readback_action.sql"));
+  // The schema holds 0169's version.
+  assert.equal(live, own);
+  // Each addition appears once; without them the body is 0067's, character for character.
+  let stripped = live;
+  for (const addition of GUARD_ADDITIONS) {
+    assert.equal(live.split(addition).length, 2, `added once: ${addition.trim()}`);
+    stripped = stripped.replace(addition, "");
+  }
+  assert.equal(stripped, base.replace("IF NOT EXISTS ", ""));
+  // The columns it reads, pinned: the line's, the cited effect's and the ordered PO line's.
+  const read = (alias: string) => [...new Set([...live.matchAll(new RegExp(`\\b${alias}\\.([a-z0-9_]+)`, "g"))].map((m) => m[1]))].sort();
+  assert.deepEqual(read("NEW"), ["item_id", "po_line_id", "provider", "readback_effect_id", "readback_hash_sha256", "tenant_id"]);
+  assert.deepEqual(read("effect"), ["action", "effect_id", "provider", "readback_hash", "state", "tenant_id"]);
+  assert.deepEqual(read("ordered"), ["item_id", "po_line_id", "tenant_id"]);
+  const tables = [...new Set([...live.matchAll(/\b(?:FROM|JOIN|ON)\s+([a-z_]+)/gi)].map((m) => m[1]))].sort();
+  assert.deepEqual(tables, ["external_effects", "inventory_invoice_lines", "inventory_po_lines"]);
+  // No clock: the guard reads no time.
+  assert.doesNotMatch(live, /strftime|datetime|julianday|_at\b/);
+  // 0067's guard run again (its IF NOT EXISTS) keeps 0169's version.
+  db.raw.exec(`${base};`);
+  assert.equal((db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?").get(READBACK_GUARD) as { sql: string }).sql, own);
+});
+
+test("only 0067 and 0169 write the readback guard, and no Worker code writes an AP invoice line yet", () => {
+  const migrations = readdirSync(new URL("../migrations/", import.meta.url)).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
+  assert.deepEqual(
+    migrations.filter((name) => migrationText(name).includes(READBACK_GUARD)),
+    ["0067_inventory_control.sql", "0169_inventory_invoice_readback_action.sql"],
+  );
+  // The guard is the only gate an AP line passes: the first Worker writer must cite a
+  // quickbooks.bill.read effect and comes with its own tests, so it updates this list on purpose.
+  const sources = (dir: URL): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? sources(new URL(`${entry.name}/`, dir)) : entry.name.endsWith(".ts") ? [new URL(entry.name, dir).pathname] : []);
+  const writers = sources(new URL("../src/", import.meta.url)).filter((file) => /INSERT\s+(?:OR\s+\w+\s+)?INTO\s+inventory_invoice_lines/i.test(readFileSync(file, "utf8")));
+  assert.deepEqual(writers, []);
+});
+
 test("the movement ledger and every projection stay append-only", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);

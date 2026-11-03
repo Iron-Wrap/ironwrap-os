@@ -577,6 +577,25 @@ External writes must have:
 Examples include customer messages, appointments, supplier orders, permit submissions, invoices,
 payments, refunds, payroll, filings, access changes, machine release, and dispatch.
 
+A readback cited as evidence must come from the action that reads that fact, not from any finished
+effect: an AP invoice line cites a `quickbooks.bill.read` through its own provider, and a
+`supplier_ap` line is refused until a read action exists for it (D1 guard, 0169).
+
+The effect-runtime token (`EFFECT_RUNTIME_TOKEN`, the bearer of `/admin/effects/*`) lets an outside
+runtime claim, settle, reconcile and retry an effect within the configured Worker tenant. Settle,
+reconcile and retry bind the stored effect's immutable tenant to `APP_TENANT_ID` (default
+`ironwrap`) before checking its action; a mismatch returns 403 `effect_tenant_mismatch` without
+returning the effect or changing its row, attempts, events or exceptions. It handles only actions
+named `mcp.*`, the bounded agent tools' provider writes, plus the QA seed's stand-in
+`proposal.publish` on a Worker whose data class is `synthetic`. Every other action is refused by name (403
+`effect_outside_send_token_refused`, `effect_runtime_action_not_allowed` or
+`effect_provider_not_allowed`), so every other side effect is executed by the bus itself. This
+allowlist is enforced in the Worker only. D1 cannot tell a token write from a bus write: neither
+`external_effect_attempts` nor `external_effect_events` records a claimer, and an effect's actor
+and authority references come from the claimer's own envelope. Recording a claimer identity on the
+attempt is a follow-up for B2 (the executor slice), which needs one anyway; until it lands, no D1
+guard can key on the token path.
+
 The current repository uses reviewed dry-run and signed approval receipts for many writes. That is
 the safe implemented baseline. The target may replace routine duplicate human approval with a
 policy-issued machine authority receipt only after the corresponding capability is implemented and

@@ -426,12 +426,14 @@ export async function harness(
       await state.beforeDeployment?.();
       return Response.json({
         success: true,
-        result: [
-          {
-            created_on: new Date(0).toISOString(),
-            versions: state.deploymentVersions,
-          },
-        ],
+        result: {
+          deployments: [
+            {
+              created_on: new Date(0).toISOString(),
+              versions: state.deploymentVersions,
+            },
+          ],
+        },
       });
     }
     assert.equal(

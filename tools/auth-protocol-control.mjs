@@ -921,15 +921,26 @@ async function providerDeployment(account, worker, fetcher, token) {
   if (!response.ok) fail("deployment_unavailable");
   const data = await response.json();
   if (
+    !data ||
+    typeof data !== "object" ||
     data.success !== true ||
-    !Array.isArray(data.result) ||
-    !data.result.length
+    !data.result ||
+    typeof data.result !== "object" ||
+    Array.isArray(data.result) ||
+    !Array.isArray(data.result.deployments) ||
+    !data.result.deployments.length
   )
     fail("deployment_unavailable");
-  const rows = data.result.map((row) => ({
-    ...row,
-    time: Date.parse(row.created_on),
-  }));
+  const rows = data.result.deployments.map((row) => {
+    if (
+      !row ||
+      typeof row !== "object" ||
+      Array.isArray(row) ||
+      typeof row.created_on !== "string"
+    )
+      fail("deployment_order_ambiguous");
+    return { ...row, time: Date.parse(row.created_on) };
+  });
   if (
     rows.some((x) => !Number.isFinite(x.time)) ||
     new Set(rows.map((x) => x.time)).size !== rows.length
@@ -943,6 +954,7 @@ async function providerDeployment(account, worker, fetcher, token) {
       (entry) =>
         !entry ||
         typeof entry !== "object" ||
+        Array.isArray(entry) ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.version_id) ||
         typeof entry.percentage !== "number" ||
         !Number.isFinite(entry.percentage) ||

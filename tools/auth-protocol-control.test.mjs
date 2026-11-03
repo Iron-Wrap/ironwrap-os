@@ -52,6 +52,75 @@ test("P0 release hash includes the complete Node writer closure without absent P
   );
 });
 
+test("documented Cloudflare result.deployments supports authorization and fresh genesis readback", async (t) => {
+  const h = await harness(capsules, t);
+  const authorization = await h.authorize();
+  assert.deepEqual(authorization.membership, [versions[0]]);
+  await h.commit(authorization, h.head(authorization));
+  assert.equal(h.s3.puts, 1);
+  assert.ok(
+    h.requests.filter((request) => request.path.endsWith("/deployments"))
+      .length >= 3,
+  );
+});
+
+test("deployment envelope and timestamp types fail closed before control writes", async (t) => {
+  const row = {
+    created_on: new Date(0).toISOString(),
+    versions: [{ version_id: versions[0], percentage: 100 }],
+  };
+  const wrap = (deployments) => ({ success: true, result: { deployments } });
+  for (const [name, body, expected] of [
+    ["null envelope", null, /deployment_unavailable/],
+    [
+      "failed envelope",
+      { success: false, result: { deployments: [row] } },
+      /deployment_unavailable/,
+    ],
+    [
+      "old array envelope",
+      { success: true, result: [row] },
+      /deployment_unavailable/,
+    ],
+    ["null result", { success: true, result: null }, /deployment_unavailable/],
+    [
+      "missing deployments",
+      { success: true, result: {} },
+      /deployment_unavailable/,
+    ],
+    ["nonarray deployments", wrap({ first: row }), /deployment_unavailable/],
+    ["empty deployments", wrap([]), /deployment_unavailable/],
+    ["null row", wrap([null]), /deployment_order_ambiguous/],
+    ["array row", wrap([[]]), /deployment_order_ambiguous/],
+    [
+      "nonstrings are not timestamps",
+      wrap([{ ...row, created_on: 0 }]),
+      /deployment_order_ambiguous/,
+    ],
+    [
+      "invalid timestamp",
+      wrap([{ ...row, created_on: "not-a-timestamp" }]),
+      /deployment_order_ambiguous/,
+    ],
+    ["ambiguous newest", wrap([row, row]), /deployment_order_ambiguous/],
+  ]) {
+    await t.test(name, async (t) => {
+      const h = await harness(capsules, t);
+      const fetcher = async (input, init) => {
+        if (
+          new URL(new Request(input, init).url).pathname.endsWith(
+            "/deployments",
+          )
+        )
+          return Response.json(body);
+        return h.fetcher(input, init);
+      };
+      await assert.rejects(h.authorize(true, { fetcher }), expected);
+      assert.equal(h.s3.puts, 0);
+    });
+  }
+});
+
 test("fabricated or JSON-roundtripped authorizations cannot write", async (t) => {
   const h = await harness(capsules, t);
   assert.throws(

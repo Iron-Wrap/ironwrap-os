@@ -1,5 +1,9 @@
 # Hermes approval broker contracts
 
+The ERPNext approval broker package and its launch templates are retired. This document records
+legacy request, evidence and reconciliation contracts for the retained Worker adapters. The
+supported local launcher is described in `deploy/local/README.md`.
+
 The approval rail turns one bounded Hermes preview into one human-approved,
 audited mutation. It is deliberately not a generic remote-control API.
 
@@ -207,9 +211,8 @@ broker, migration, authenticated-browser, or operator-acceptance gates below.
    paths have deterministic tests.
 4. A controlled live proof archives the preview, approval decision, protected
    triage result, and executed Hermes Run for one Untriaged lead.
-5. The quote-revision service uses
-   `deploy/quote-revision-approval-broker.service.example` and its own
-   root-readable environment file, secrets, port, role identity, and Frappe
-   credential. A controlled proof must show one Draft shell with matching
+5. The historical quote-revision service required its own root-readable environment
+   file, secrets, port, role identity and Frappe credential. Its controlled proof required
+   one Draft shell with matching
    source/version, redacted queue projection, and executed Hermes Run—without
    price, tax, scope, payment, acceptance, or customer-message mutation.

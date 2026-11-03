@@ -36,7 +36,7 @@ the two tenants standing side by side.
 ```bash
 cp deploy/templates/tenant-answers.example.json my-tenant.json   # then edit every value
 deploy/clone-tenant.sh --tenant <tenant> --answers my-tenant.json \
-  --worker-port 7200 --broker-port-base 9200
+  --worker-port 7200
 
 # start the tenant Worker with the command the script prints, then:
 deploy/tenant-leakage-checks.sh --tenant-a ironwrap --tenant-b <tenant>

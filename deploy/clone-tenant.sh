@@ -17,7 +17,6 @@
 #
 # Options:
 #   --worker-port N        host port the tenant Worker will listen on (default 7200)
-#   --broker-port-base N   base for the tenant's four approval brokers (default 9200)
 #   --skip-site            do not touch the Frappe stack (config and Worker wiring only)
 #   --frappe-port N        host port the shared local Frappe stack answers on (default 8000)
 set -euo pipefail
@@ -28,7 +27,6 @@ COMPOSE_FILE="$ROOT_DIR/deploy/local/docker-compose.yml"
 TENANT=""
 ANSWERS=""
 WORKER_PORT=7200
-BROKER_PORT_BASE=9200
 FRAPPE_PORT="${IRONWRAP_LOCAL_FRAPPE_PORT:-8000}"
 SKIP_SITE=0
 SET_ARGS=()
@@ -39,7 +37,6 @@ while [[ $# -gt 0 ]]; do
     --answers) ANSWERS="$2"; shift 2 ;;
     --set) SET_ARGS+=(--set "$2"); shift 2 ;;
     --worker-port) WORKER_PORT="$2"; shift 2 ;;
-    --broker-port-base) BROKER_PORT_BASE="$2"; shift 2 ;;
     --frappe-port) FRAPPE_PORT="$2"; shift 2 ;;
     --skip-site) SKIP_SITE=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -114,8 +111,7 @@ node "$ROOT_DIR/tools/generate-tenant-worker-config.mjs" \
   --out "$WORKER_CONFIG" \
   --frappe-base-url "$FRAPPE_BASE_URL" \
   --worker-origin "$WORKER_ORIGIN" \
-  --identity-domain "$IDENTITY_DOMAIN" \
-  --broker-port-base "$BROKER_PORT_BASE" | tee "$HANDOFF_LOG"
+  --identity-domain "$IDENTITY_DOMAIN" | tee "$HANDOFF_LOG"
 
 # ---------------------------------------------------------------------------
 step "4/6 tenant Worker secrets: workers-bus/.dev.vars.$TENANT (throwaway local values)"

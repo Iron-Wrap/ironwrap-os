@@ -9,7 +9,7 @@
  *      so ADMIN_TOKEN/INGEST_TOKEN/APP_AUTH_PEPPER are never a hand-added step - and then
  *      carries the Frappe integration, customer-acceptance and Facet design-projection API
  *      key/secret pairs, the throwaway Facet chain keys, and every host-port-bearing local
- *      value (Frappe base URL, Worker origin, broker URLs) so a second isolated stack never
+ *      value (Frappe base URL and Worker origin) so a second isolated stack never
  *      inherits the first one's ports
  *   4. every D1 migration is applied to the local (Miniflare) database
  *
@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyVars, brokerPorts, portBearingVars, scaffoldDevVars } from "./dev-vars.mjs";
+import { applyVars, portBearingVars, retiredBrokerVars, scaffoldDevVars } from "./dev-vars.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -34,23 +34,13 @@ const keysDir = path.join(here, "keys");
 // COMPOSE_PROJECT_NAME so it never touches the first one's containers or volumes.
 const frappePort = process.env.IRONWRAP_LOCAL_FRAPPE_PORT ?? "8000";
 const frappeUrl = `http://localhost:${frappePort}`;
-// The same treatment for the two host ports the Worker side owns. wrangler.jsonc is static JSON
+// The same treatment for the local Worker port. wrangler.jsonc is static JSON
 // and cannot read the environment, so every port-bearing value it pins for the `local` env is
 // re-declared into .dev.vars below, which wrangler dev loads over the config's `vars`. Without
 // this a second stack's Worker silently talked to the FIRST stack's Frappe (ELEC-112 process risk
 // 4) and could not bind its own port at all (risk 5).
 const workerPort = process.env.IRONWRAP_LOCAL_WORKER_PORT ?? "7100";
 const workerOrigin = `http://localhost:${workerPort}`;
-// One base for the four approval brokers, keeping their existing 9101-9104 layout.
-const brokerPortBase = process.env.IRONWRAP_LOCAL_BROKER_PORT_BASE ?? "9100";
-let brokerPort;
-try {
-  brokerPort = brokerPorts(brokerPortBase);
-} catch (error) {
-  console.error(`[predev] ERROR: ${error.message}`);
-  process.exit(1);
-}
-
 const log = (msg) => console.log(`[predev] ${msg}`);
 const fail = (msg) => {
   console.error(`[predev] ERROR: ${msg}`);
@@ -69,19 +59,15 @@ if (!existsSync(path.join(repoRoot, "app/dist/manifest.webmanifest"))) {
   execSync("npm run build", { cwd: path.join(repoRoot, "app"), stdio: "inherit" });
 }
 
-// 1b. Hermes approval key material (throwaway, gitignored) ----------------------
-// The Frappe app verifies broker-signed approval receipts with the PUBLIC key
-// (mounted into the container); brokers hold the private key + dry-run HMAC.
-const privateKeyPath = path.join(keysDir, "hermes-approval-private.pem");
+// 1b. Compatibility receipt verifier public key (throwaway, gitignored) ---------
+// Preserve a configured verifier key. A fresh local stack keeps only the public
+// half of an ephemeral pair, so startup supplies no approval signing material.
 const publicKeyPath = path.join(keysDir, "hermes-approval-public.pem");
-const dryRunKeyPath = path.join(keysDir, "dry-run-signing-key.txt");
-if (!existsSync(privateKeyPath) || !existsSync(publicKeyPath) || !existsSync(dryRunKeyPath)) {
-  log("generating throwaway Hermes approval keys into deploy/local/keys/");
+if (!existsSync(publicKeyPath)) {
+  log("generating a local compatibility verifier public key into deploy/local/keys/");
   mkdirSync(keysDir, { recursive: true });
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-  writeFileSync(publicKeyPath, publicKey.export({ type: "spki", format: "pem" }));
-  writeFileSync(dryRunKeyPath, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
+  const { publicKey } = generateKeyPairSync("ed25519");
+  writeFileSync(publicKeyPath, publicKey.export({ type: "spki", format: "pem" }), { flag: "wx" });
 }
 
 // Facet v2 chain key material (throwaway, gitignored). Three distinct purposes,
@@ -108,44 +94,7 @@ for (const [name, keyPath] of Object.entries(facetKeyFiles)) {
   facetKeys[name] = value;
 }
 
-// The Worker-to-broker secret for the proposal-publication approval rail. It is
-// generated here for the same reason the Facet keys are: without it the local
-// stack cannot traverse step 5 at all, and a hand-invented value is one more
-// undocumented manual step between a fresh checkout and a working chain.
-const proposalPublicationSecretPath = path.join(keysDir, "proposal-publication-broker-secret.txt");
-if (!existsSync(proposalPublicationSecretPath)) {
-  log("generating throwaway proposal-publication broker secret into deploy/local/keys/");
-  mkdirSync(keysDir, { recursive: true });
-  writeFileSync(proposalPublicationSecretPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
-}
-const proposalPublicationBrokerSecret = readFileSync(proposalPublicationSecretPath, "utf8").trim();
-if (!/^[A-Za-z0-9_-]{43}$/.test(proposalPublicationBrokerSecret)) {
-  fail(
-    "proposal-publication broker secret is invalid; remove deploy/local/keys/proposal-publication-broker-secret.txt and retry",
-  );
-}
-
-// The production-schedule broker is the step-6 half of the same story: without
-// its own Worker-to-broker secret the scheduling rail cannot be reached locally
-// at all, and every broker authority keeps a distinct secret.
-const productionScheduleSecretPath = path.join(keysDir, "production-schedule-broker-secret.txt");
-if (!existsSync(productionScheduleSecretPath)) {
-  log("generating throwaway production-schedule broker secret into deploy/local/keys/");
-  mkdirSync(keysDir, { recursive: true });
-  writeFileSync(productionScheduleSecretPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
-}
-const productionScheduleBrokerSecret = readFileSync(productionScheduleSecretPath, "utf8").trim();
-if (!/^[A-Za-z0-9_-]{43}$/.test(productionScheduleBrokerSecret)) {
-  fail(
-    "production-schedule broker secret is invalid; remove deploy/local/keys/production-schedule-broker-secret.txt and retry",
-  );
-}
-
-// The Worker authenticates /admin/effects/* with EFFECT_RUNTIME_TOKEN, not
-// ADMIN_TOKEN (index.ts:606). It is not in .dev.vars.example, so a local stack
-// had no value for it and every broker write that goes through the effect ledger
-// answered 401 - which the broker then reports as broker_mcp_call_ambiguous.
-// Generating it here is what makes an approved write reach Frappe locally.
+// Retain the token for the surviving local Worker effect ledger.
 const effectRuntimeTokenPath = path.join(keysDir, "effect-runtime-token.txt");
 if (!existsSync(effectRuntimeTokenPath)) {
   log("generating throwaway effect-runtime token into deploy/local/keys/");
@@ -316,10 +265,6 @@ const workPackageIssuerCreds = containerCredentials(
   "work-package issuer",
 );
 
-// Broker actor credentials. Each broker process authenticates to Frappe as its
-// own operator identity and refuses to start if the token resolves to anyone
-// else, so these pairs are what make the approval rails bootable by script
-// instead of by hand (ELEC-95 process risk 3).
 function containerCredentials(file, label) {
   let parsed;
   try {
@@ -335,15 +280,6 @@ function containerCredentials(file, label) {
   if (!parsed?.api_key || !parsed?.api_secret) fail(`${label} credentials are empty`);
   return parsed;
 }
-
-const proposalPublicationActorCreds = containerCredentials(
-  ".proposal_publication_broker_credentials",
-  "proposal-publication broker actor",
-);
-const productionScheduleActorCreds = containerCredentials(
-  ".production_schedule_broker_credentials",
-  "production-schedule broker actor",
-);
 
 // A fresh checkout has no .dev.vars at all, so ADMIN_TOKEN, INGEST_TOKEN, APP_AUTH_PEPPER and
 // the rest of the documented local shape used to be a hand-add step every tester rediscovered
@@ -369,7 +305,8 @@ const next = applyVars(vars, [
   // Every value below that carries a host port overrides the port wrangler.jsonc's `local` env
   // hard-codes, so one exported IRONWRAP_LOCAL_* variable is enough to move a whole stack.
   // dev-vars.mjs owns that list; its test asserts it covers every loopback var in wrangler.jsonc.
-  ...portBearingVars({ frappePort, workerPort, brokerPortBase }),
+  ...portBearingVars({ frappePort, workerPort }),
+  ...retiredBrokerVars,
   ["ERPNEXT_API_KEY", creds.api_key],
   ["ERPNEXT_API_SECRET", creds.api_secret],
   ["QB_RECONCILIATION_ISSUER_API_KEY", quickBooksIssuerCreds.api_key],
@@ -384,8 +321,6 @@ const next = applyVars(vars, [
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],
   ["EFFECT_RUNTIME_TOKEN", effectRuntimeToken],
-  ["PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", proposalPublicationBrokerSecret],
-  ["PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET", productionScheduleBrokerSecret],
   ["FACET_LAUNCH_HMAC_KEY", facetKeys.FACET_LAUNCH_HMAC_KEY],
   ["FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY", facetKeys.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY],
   ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY", facetProjectionCreds.api_key],
@@ -404,71 +339,6 @@ const next = applyVars(vars, [
 if (next !== vars) {
   writeFileSync(devVarsPath, next);
   log(".dev.vars updated with local Frappe integration credentials");
-}
-
-// 3b. broker env files ---------------------------------------------------------
-// Steps 5 and 6 of the six-step workflow run through the proposal-publication and
-// production-schedule approval brokers. Before this, nothing scripted started
-// them: `deploy/*.env.example` describes a production systemd unit, and standing
-// the pair up locally meant hand-writing two env files and hand-creating a Frappe
-// user (ELEC-95). These generated files hold only throwaway local values and live
-// in the already-gitignored keys directory; `start-approval-brokers.sh` sources
-// them verbatim.
-
-const brokerCommonEnv = [
-  "# Generated by deploy/local/predev.mjs for the local stack only. Throwaway values.",
-  "# Never copy into a deployed environment; deploy/*.env.example is the production shape.",
-  `ERPNEXT_BASE_URL=${frappeUrl}`,
-  "ERPNEXT_ALLOW_INSECURE_LOCAL=true",
-  "ERPNEXT_TENANT_ID=ironwrap",
-  "ERPNEXT_REQUEST_TIMEOUT_MS=10000",
-  "ERPNEXT_WRITE_ENABLED=true",
-  "IRONWRAP_EFFECT_RUNTIME_ENABLED=true",
-  `IRONWRAP_EFFECT_RUNTIME_URL=${workerOrigin}`,
-  `IRONWRAP_EFFECT_RUNTIME_TOKEN=${effectRuntimeToken}`,
-  `HERMES_DRY_RUN_SIGNING_KEY=${readFileSync(dryRunKeyPath, "utf8").trim()}`,
-  `HERMES_APPROVAL_PUBLIC_KEY_FILE=${publicKeyPath}`,
-  `HERMES_APPROVAL_PRIVATE_KEY_FILE=${privateKeyPath}`,
-  "HERMES_APPROVER_ID=owner@ironwrap.local",
-];
-const brokerEnvFiles = [
-  {
-    file: "proposal-publication-broker.env",
-    lines: [
-      "HERMES_AGENT_ROLE=owner-operator",
-      "HERMES_ACTOR_USER=owner-operator@ironwrap.local",
-      `ERPNEXT_API_KEY=${proposalPublicationActorCreds.api_key}`,
-      `ERPNEXT_API_SECRET=${proposalPublicationActorCreds.api_secret}`,
-      "PROPOSAL_PUBLICATION_BROKER_TENANT_ID=ironwrap",
-      // Must match APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID/URL in wrangler.jsonc's local env.
-      "PROPOSAL_PUBLICATION_BROKER_KEY_ID=local-proposal-publication-broker",
-      `PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=${proposalPublicationBrokerSecret}`,
-      "PROPOSAL_PUBLICATION_BROKER_LISTEN_HOST=127.0.0.1",
-      `PROPOSAL_PUBLICATION_BROKER_PORT=${brokerPort.proposalPublication}`,
-    ],
-  },
-  {
-    file: "production-schedule-broker.env",
-    lines: [
-      "HERMES_AGENT_ROLE=production-controller",
-      "HERMES_ACTOR_USER=production-controller@ironwrap.local",
-      `ERPNEXT_API_KEY=${productionScheduleActorCreds.api_key}`,
-      `ERPNEXT_API_SECRET=${productionScheduleActorCreds.api_secret}`,
-      "PRODUCTION_SCHEDULE_BROKER_TENANT_ID=ironwrap",
-      "PRODUCTION_SCHEDULE_BROKER_KEY_ID=local-production-schedule-broker",
-      `PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET=${productionScheduleBrokerSecret}`,
-      "PRODUCTION_SCHEDULE_BROKER_LISTEN_HOST=127.0.0.1",
-      `PRODUCTION_SCHEDULE_BROKER_PORT=${brokerPort.productionSchedule}`,
-    ],
-  },
-];
-for (const { file, lines } of brokerEnvFiles) {
-  const target = path.join(keysDir, file);
-  const body = `${[...brokerCommonEnv, ...lines].join("\n")}\n`;
-  if (!existsSync(target) || readFileSync(target, "utf8") !== body) {
-    writeFileSync(target, body, { mode: 0o600 });
-    log(`wrote deploy/local/keys/${file}`);
-  }
 }
 
 // 4. local D1 migrations -------------------------------------------------------

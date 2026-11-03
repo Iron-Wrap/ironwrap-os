@@ -85,6 +85,23 @@ async function capabilityFixture(t, mutate) {
   return (id) => result.checks.find((item) => item.id === id);
 }
 
+test("contract mode fails when a retired broker default or deploy unit returns", async (t) => {
+  const checkFor = await capabilityFixture(t, (source) =>
+    source.replace(/("env":\s*\{[\s\S]*?"APP_APPROVAL_BROKER_URL": )""/, '$1"http://127.0.0.1:9101"'),
+  );
+  assert.equal(checkFor("contract.retired_brokers.local_config")?.status, "fail");
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-retired-broker-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "deploy"), { recursive: true });
+  await writeFile(path.join(root, "start-local-runtime.sh"), "#!/bin/bash\n");
+  const status = async () => (await validateContract({ repoRoot: root })).checks
+    .find((item) => item.id === "contract.retired_brokers.launch")?.status;
+  assert.equal(await status(), "pass");
+  await writeFile(path.join(root, "deploy/proposal-publication-approval-broker.service.example"), "");
+  assert.equal(await status(), "fail");
+});
+
 test("contract mode catches a capability flag flipped on without its configuration", async (t) => {
   const checkFor = await capabilityFixture(t, (source) =>
     source.replace('"QB_OAUTH_ENABLED": "false"', '"QB_OAUTH_ENABLED": "true"'),

@@ -22,9 +22,9 @@ x-frappe-env: &frappe-env
   SITE_NAME: ironwrap.localhost
   ADMIN_PASSWORD: ironwrap-local-admin
   DB_ROOT_PASSWORD: ironwrap-local-dbroot
-  # Hermes approved-write boundary (approval_receipt.py): the Frappe app holds
-  # only the ed25519 PUBLIC key; broker-held private key + dry-run HMAC stay out.
-  # deploy/local/predev.mjs generates the throwaway keypair into deploy/local/keys/.
+  # Compatibility approval-receipt verifier (approval_receipt.py). Local preflight
+  # preserves or creates this public key in deploy/local/keys/. Fresh initialization
+  # persists only the public half of an ephemeral pair.
   IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE: /opt/ironwrap-keys/hermes-approval-public.pem
   # The approval receipt binds to this exact site id, so it has to follow the host
   # port a second stack was started on or every approved write fails the receipt's

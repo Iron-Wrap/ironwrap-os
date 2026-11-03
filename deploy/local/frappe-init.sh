@@ -152,14 +152,9 @@ sync_app_source() {
   ./env/bin/pip install --quiet --disable-pip-version-check -e "apps/ironwrap_roofing"
 }
 
-# Broker actor identities.  Unlike the least-privilege service identities below,
-# each of these is the local stand-in for a human operator login a broker process
-# authenticates as: `attestFrappeServicePrincipal` refuses to start a broker whose
-# API token resolves to any user other than its configured HERMES_ACTOR_USER
-# (`mcp/erpnext-roofing-mcp/src/server.mjs`, frappe_service_principal_mismatch).
-# Before this existed, `deploy/*-approval-broker.env.example` named actors nothing
-# provisioned, so steps 5 and 6 of the six-step workflow could only be reached by
-# hand-creating users first (ELEC-95 process risk 3).
+# Local owner-fixture and Worker integration API credentials.
+# Retired broker actors are outside this provisioning path. Existing users and
+# credential files are preserved, including credentials issued by earlier versions.
 #
 # Every key-minting block below imports `generate_keys` by name instead of reaching
 # for `frappe.core.doctype.user.user.generate_keys`.  The dotted path is not a real
@@ -173,12 +168,12 @@ sync_app_source() {
 # `AttributeError: module 'frappe.core.doctype' has no attribute 'user'`, taking
 # every fresh local checkout down on its first boot (ELEC-132 defect A).  An
 # explicit import cannot depend on who ran before it.
-provision_broker_identity() {
+provision_local_api_identity() {
   local email="$1" first_name="$2" creds_file="$3"
   local target="$BENCH_DIR/sites/$SITE/$creds_file"
   local raw; raw="$(site_scratch "${creds_file#.}_raw.json")"
   if [ -s "$target" ] && grep -q '^{' "$target" 2>/dev/null; then return 0; fi
-  log "creating broker actor identity $email with API keys"
+  log "creating local API identity $email with API keys"
   bench --site "$SITE" console > "$raw" <<PYEOF
 import frappe, json
 from frappe.core.doctype.user.user import generate_keys
@@ -198,9 +193,8 @@ PYEOF
   rm -f "$raw"
 }
 
-# The approver the brokers name in every receipt (HERMES_APPROVER_ID) and the
-# crew login the field surfaces use.  Neither holds broker credentials; they only
-# have to exist as real users for the approval and BFF paths to resolve them.
+# The local owner fixture and crew login used by the compatibility and field
+# surfaces must exist as real users for the BFF paths to resolve them.
 #
 # They also need their IronWrap *business* roles, not just System Manager.  A
 # bounded office command checks the domain role `access_control` grants the
@@ -231,7 +225,7 @@ PYEOF
 }
 
 # One dedicated, least-privilege Frappe issuer for a bounded capture rail.  Same file and
-# console pattern as `provision_broker_identity` above, but the role is a parameter and is
+# console pattern as `provision_local_api_identity` above, but the role is a parameter and is
 # never System Manager: that is the whole point of the split.
 provision_rail_issuer() {
   local email="$1" first_name="$2" role="$3" creds_file="$4"
@@ -299,24 +293,20 @@ provision_rail_issuer_identities() {
     .facet_design_projection_credentials
 }
 
-provision_broker_identities() {
+provision_local_operator_identities() {
   provision_operator_users
   # The owner needs API keys, not just a login. Seeding a Verified Authority Record -
   # which every #105 release gate now requires - must be done as a holder of
   # `IronWrap Owner`; `ironwrap-bus@ironwrap.local`, the Worker's own least-privilege
   # integration identity, deliberately does not hold it and must not be widened to.
   # Before this, the only way to act as the owner over REST was to mint a key by hand
-  # in a bench console (ELEC-128 run notes). Same file pattern as the broker actors, so
+  # in a bench console (ELEC-128 run notes). Keep the existing credential file names so
   # `predev`/runbook readers find it where they already look.
-  provision_broker_identity "owner@$IDENTITY_DOMAIN" "Owner Approver" .owner_operator_credentials
-  provision_broker_identity "lead-concierge@$IDENTITY_DOMAIN" "Lead Concierge" .lead_triage_broker_credentials
-  provision_broker_identity "estimator-assistant@$IDENTITY_DOMAIN" "Estimator Assistant" .quote_revision_broker_credentials
-  provision_broker_identity "production-controller@$IDENTITY_DOMAIN" "Production Controller" .production_schedule_broker_credentials
-  provision_broker_identity "owner-operator@$IDENTITY_DOMAIN" "Owner Operator" .proposal_publication_broker_credentials
+  provision_local_api_identity "owner@$IDENTITY_DOMAIN" "Owner Approver" .owner_operator_credentials
   # The Worker BFF's own integration identity.  A System Manager on purpose: it is the
   # single pair the field-evidence and production-gate rails authenticate with, which is
   # exactly why the six rails above hold their own narrower ones instead.
-  provision_broker_identity "ironwrap-bus@$IDENTITY_DOMAIN" "IronWrap Bus" .integration_credentials
+  provision_local_api_identity "ironwrap-bus@$IDENTITY_DOMAIN" "IronWrap Bus" .integration_credentials
 }
 
 cd "$BENCH_DIR" 2>/dev/null || { mkdir -p "$BENCH_DIR"; cd "$BENCH_DIR"; }
@@ -349,7 +339,7 @@ reprovision_site() {
     IDENTITY_DOMAIN="$(cat "$BENCH_DIR/sites/$site/.ironwrap_identity_domain")"
   fi
   provision_rail_issuer_identities || log "WARNING - could not provision rail issuer identities on $site"
-  provision_broker_identities || log "WARNING - could not provision broker actor identities on $site"
+  provision_local_operator_identities || log "WARNING - could not provision local operator identities on $site"
   pin_service_identities || log "WARNING - could not re-apply service identity pins on $site"
   SITE="$saved_site"
   IDENTITY_DOMAIN="$saved_domain"
@@ -505,11 +495,11 @@ if [ "$SITE" = "$DEFAULT_SITE" ]; then
 fi
 
 # 8. every non-interactive identity this site needs ---------------------------
-# Six bounded rails with their own least-privilege role and key pair, five broker actor
-# logins, and the Worker BFF's System Manager pair.  Each writes its credentials into
+# Six bounded rails with their own least-privilege role and key pair, the active owner
+# fixture, and the Worker BFF integration pair. Each writes its credentials into
 # sites/$SITE/, so a second tenant site on this bench mints its own keys rather than
 # sharing the first site's.
-provision_broker_identities
+provision_local_operator_identities
 provision_rail_issuer_identities
 
 # 9. pinned service identities --------------------------------------------------

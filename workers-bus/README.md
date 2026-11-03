@@ -201,7 +201,6 @@ npx wrangler secret put WORK_PACKAGE_FRAPPE_API_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER --env=""  # 32+ random characters
 npx wrangler secret put APP_AUTH_PEPPER --env=""  # 32+ random characters; required before APP_BFF_ENABLED=true
-npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET --env=""  # only when the governed approval broker is enabled
 npx wrangler secret put FACET_DESIGN_INGEST_HMAC_KEY --env=""  # separate Facet event authority
 npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY --env=""  # separate projection HMAC
 npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY --env=""  # dedicated Frappe role
@@ -821,52 +820,14 @@ separate from any website iframe `frame-ancestors` policy: configure each surfac
 not add an iframe parent merely to the Worker CORS allowlist. The browser and Worker never
 calculate or return a price from this intake path.
 
-### Governed approval broker (optional BFF slice)
+### Historical approval records
 
-The ordinary BFF read surfaces do **not** require an approval broker. Enable
-this separate slice only after migration `0016` and the private broker host are
-ready. Set these Worker values (the shared secret is a secret binding):
+The ERPNext approval broker package and host launch examples have been retired. The normal
+local Worker leaves the broker connections off. The retained D1 approval ledgers, compatibility
+adapters and reconciliation continue to apply to historical records. An expired execution lease
+becomes `execution_uncertain` and is reconciled by recorded `run_id`.
 
-```text
-APP_APPROVAL_BROKER_URL=https://<private-access-broker-origin>
-APP_APPROVAL_BROKER_KEY_ID=approval-v1
-APP_APPROVAL_APPROVER_ID=owner@ironwrapexteriors.com
-APP_APPROVAL_MAX_SESSION_AGE_SECONDS=900
-APP_APPROVAL_BROKER_TIMEOUT_MS=15000
-APP_APPROVAL_EXECUTION_LEASE_SECONDS=45
-APPROVAL_BROKER_SHARED_SECRET=<same 32+-byte value held by the broker>
-```
-
-The Worker HMAC-binds timestamp, path, nonce, and raw body in both directions.
-It holds the D1 approval ledger only—not the Ed25519 approval private key or
-Frappe write credentials. The separate loopback-only broker owns those
-credentials and exposes only `/v1/lead-triage/preview` and
-`/v1/lead-triage/execute`; see `docs/APPROVAL-BROKER-CONTRACT.md` and
-`deploy/approval-broker.service.example`. A stale execution lease becomes
-`execution_uncertain` during the frequent Worker sweep and must be reconciled
-by recorded `run_id`, never automatically re-executed.
-
-### Quote-revision approval broker (optional, separate authority)
-
-The append-only Customer Quote revision command is **not** a second route on
-the lead-triage broker. After migration `0017`, enable it only with a separate
-loopback service, HMAC secret, key id, port, and estimator-assistant MCP
-runtime. The Worker needs only these non-secret values plus one secret:
-
-```text
-APP_QUOTE_REVISION_BROKER_URL=https://<private-quote-revision-broker-origin>
-APP_QUOTE_REVISION_BROKER_KEY_ID=quote-revision-v1
-APP_QUOTE_REVISION_BROKER_TIMEOUT_MS=15000
-APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS=45
-APP_FACET_QUOTE_REVISION_PREPARE_ENABLED=false
-QUOTE_REVISION_BROKER_SHARED_SECRET=<different 32+-byte Worker-to-broker secret>
-```
-
-Use [`deploy/quote-revision-approval-broker.service.example`](../deploy/quote-revision-approval-broker.service.example)
-with the dedicated host-only
-[`deploy/quote-revision-approval-broker.env.example`](../deploy/quote-revision-approval-broker.env.example).
-That process binds `HERMES_AGENT_ROLE=estimator-assistant` and exposes only
-`/v1/quote-revision/preview` and `/v1/quote-revision/execute`.
+#### Quote-revision records
 
 Its D1 ledger stores a redacted preview (source identity/version/status/modified,
 empty Draft target/version/supersedes, and correction reason) plus a one-way
@@ -885,39 +846,7 @@ this approval creates a correction draft and does not approve quote terms. Reads
 decisions, replay, failure, and reconciliation use the saved descriptor; legacy
 records without a complete descriptor project `approved_snapshot: null`.
 
-### Proposal-publication approval broker (optional, separate authority)
-
-Publishing a Proposal Evidence Pack is the one command that makes quote terms
-customer-visible on an issued portal link, so it is **not** a second route on any
-existing broker. After migration `0068`, enable it only with a separate loopback
-service, HMAC secret, key id, port, and owner-operator MCP runtime, and only with
-its own capability flag on. The Worker needs these non-secret values plus one
-secret:
-
-```text
-APP_PROPOSAL_PUBLICATION_ENABLED=false
-APP_PROPOSAL_PUBLICATION_BROKER_URL=https://<private-proposal-publication-broker-origin>
-APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID=proposal-publication-v1
-APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS=15000
-APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS=45
-PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=<different 32+-byte Worker-to-broker secret>
-```
-
-Use [`deploy/proposal-publication-approval-broker.service.example`](../deploy/proposal-publication-approval-broker.service.example)
-with the dedicated host-only
-[`deploy/proposal-publication-approval-broker.env.example`](../deploy/proposal-publication-approval-broker.env.example).
-That process binds `HERMES_AGENT_ROLE=owner-operator` and exposes only
-`/v1/proposal-publication/preview` and `/v1/proposal-publication/execute`.
-
-The route is the second door onto the same bounded operation the Owner Operator
-MCP command performs, not a lighter one: the broker re-runs
-`dry_run_publish_proposal_evidence_pack` immediately before signing, so a pack
-that left Draft, changed its quote anchor, or changed its job fails before the
-write; Frappe's `publish_proposal_evidence_pack` still requires the Approved
-Hermes Run, the signed approval receipt, the Draft state, and both record
-anchors. Publication changes only the pack's status and approval facts: it
-issues no portal link, sends no message, renders no PDF, records no acceptance,
-and does not touch the quote.
+#### Proposal-publication records
 
 Its D1 ledger stores a redacted preview (pack identity, job, quote anchor,
 Draft-to-Approved transition, and the three "did not happen" facts) plus a

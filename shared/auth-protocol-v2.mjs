@@ -63,8 +63,21 @@ export function canonicalV2(value) {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") return String(safeCounter(value));
   if (Array.isArray(value)) {
-    if (Object.keys(value).length !== value.length) fail();
-    return `[${value.map(canonicalV2).join(",")}]`;
+    const keys = Reflect.ownKeys(value);
+    if (
+      Object.getPrototypeOf(value) !== Array.prototype ||
+      keys.length !== value.length + 1 ||
+      keys.some((key) => typeof key !== "string")
+    )
+      fail();
+    const items = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const member = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!member || !member.enumerable || !Object.hasOwn(member, "value"))
+        fail();
+      items.push(canonicalV2(member.value));
+    }
+    return `[${items.join(",")}]`;
   }
   if (
     !value ||

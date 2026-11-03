@@ -116,3 +116,78 @@ test("control and exchange wire shapes reject extra fields, duplicate versions a
   assert.throws(() => validateExchange({ ...exchange, baseGeneration: 1 }));
   assert.throws(() => validateExchange({ ...exchange, extra: true }));
 });
+
+test("v2 correction02 preserves ordinary and frozen dense-array canonical bytes", () => {
+  const value = [null, true, "é", 0, Number.MAX_SAFE_INTEGER, [1], { a: 2 }];
+  const expected = '[null,true,"é",0,9007199254740991,[1],{"a":2}]';
+  assert.equal(canonicalV2(value), expected);
+  assert.equal(canonicalV2(Object.freeze(value)), expected);
+  assert.deepEqual(decodeV2(encodeV2(value)), value);
+  assert.equal(canonicalV2(Object.freeze([])), "[]");
+});
+
+test("v2 correction02 refuses holes masked by keys and unsupported array structure", async (t) => {
+  const cases = [
+    [
+      "hole masked by enumerable name",
+      () => Object.assign(new Array(1), { unrelated: 1 }),
+    ],
+    [
+      "interior hole masked by name",
+      () => Object.assign([1, , 3], { unrelated: 2 }),
+    ],
+    [
+      "dense array with symbol",
+      () => Object.assign([1], { [Symbol("extra")]: 2 }),
+    ],
+    [
+      "empty array with hidden member",
+      () => Object.defineProperty([], "hidden", { value: 1 }),
+    ],
+    [
+      "dense array with hidden non-index",
+      () => Object.defineProperty([1], "01", { value: 2 }),
+    ],
+    [
+      "dense array with out-of-range property",
+      () => Object.defineProperty([1], "4294967295", { value: 2 }),
+    ],
+    [
+      "dense array with negative property",
+      () => Object.assign([1], { "-1": 2 }),
+    ],
+    [
+      "non-enumerable index",
+      () => Object.defineProperty(new Array(1), "0", { value: 1 }),
+    ],
+    ["nonstandard array prototype", () => Object.setPrototypeOf([1], null)],
+  ];
+  for (const [name, create] of cases)
+    await t.test(name, () => {
+      assert.throws(() => canonicalV2(create()));
+      assert.throws(() => encodeV2(create()));
+    });
+  await t.test("array accessors are not evaluated", () => {
+    let reads = 0;
+    const value = Object.defineProperty([1], "0", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return 1;
+      },
+    });
+    assert.throws(() => canonicalV2(value));
+    assert.equal(reads, 0);
+  });
+  await t.test("an own map method cannot replace encoding", () => {
+    let calls = 0;
+    const value = Object.defineProperty([1], "map", {
+      value() {
+        calls += 1;
+        return [];
+      },
+    });
+    assert.throws(() => canonicalV2(value));
+    assert.equal(calls, 0);
+  });
+});

@@ -8,8 +8,8 @@
 # and other vendor-specific detections stay armed everywhere in the repository,
 # including tests and fixtures. Only `generic-api-key` and `jwt` - the two entropy
 # heuristics that cannot tell a synthetic constant from a real credential - are
-# relaxed, and only where `docs/DOCUMENTATION-CONTRACT.md` already permits
-# synthetic fixtures.
+# scoped to permitted synthetic fixtures or the exact non-secret resource identifiers
+# documented below. No provider rule is disabled.
 
 title = "IronWrap OS"
 
@@ -71,3 +71,20 @@ targetRules = ["generic-api-key"]
 paths = ['''^deploy/local/predev\.mjs$''']
 regexTarget = "line"
 regexes = ['''path\.join\(keysDir, "[a-z0-9.-]+\.txt"\)''']
+
+
+[[allowlists]]
+description = """
+The auth control account and database identities below exactly duplicate the existing
+non-secret account_id/database_id resource bindings. They are not access keys.
+Match only these reviewed literals in these two fields in the Worker config; a new
+value, another field/file, or any provider-specific token still fails scanning.
+"""
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)workers-bus/wrangler\.jsonc$''']
+regexTarget = "line"
+regexes = [
+  '''^\s*"AUTH_CONTROL_ACCOUNT_ID"\s*:\s*"(?:5023dd227b538fc4238439fd7d52640f|7ee5775bc1ba46f05c5a65235b60e939)",?\s*$''',
+  '''^\s*"AUTH_DATABASE_IDENTITY"\s*:\s*"(?:0339cebc\-d252\-4d67\-b78b\-58c8b4703c6e|a8fd0116\-7af6\-4788\-98bd\-083addbe58bc)",?\s*$''',
+]

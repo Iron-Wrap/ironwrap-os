@@ -8,6 +8,12 @@
  * flattened key set that tools/wrangler-binding-budget.test.mjs pins.
  */
 interface Env {
+  AUTH_CONTROL_ACCOUNT_ID: string;
+  AUTH_CONTROL_BUCKET: string;
+  AUTH_CONTROL_KEY: string;
+  AUTH_DATABASE_IDENTITY: string;
+  AUTH_CONTROL_ENVIRONMENT: string;
+  AUTH_RECOVERY_ENROLLMENT_ENABLED: string;
   APP_DOCUMENT_GENERATION_ENABLED: string;
   /** Reviewed-catalog cutover; false preserves the existing native import path. */
   APP_PRICING_CATALOG_ENABLED: string;
@@ -156,6 +162,12 @@ interface Env {
 
 declare namespace Cloudflare {
   interface Env {
+    AUTH_CONTROL_ACCOUNT_ID: string;
+    AUTH_CONTROL_BUCKET: string;
+    AUTH_CONTROL_KEY: string;
+    AUTH_DATABASE_IDENTITY: string;
+    AUTH_CONTROL_ENVIRONMENT: string;
+    AUTH_RECOVERY_ENROLLMENT_ENABLED: string;
     APP_DOCUMENT_GENERATION_ENABLED: string;
     APP_PRICING_CATALOG_ENABLED: string;
     APP_BFF_ENABLED: string;

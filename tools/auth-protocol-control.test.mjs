@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
+import { flattenWranglerVars } from "./wrangler-vars.mjs";
 import {
   AUTH_CONTROL_WRITER_POLICY_FILES,
   AUTH_PROTOCOL_POLICY_FILES,
@@ -379,7 +380,7 @@ test("real HTTP adapters bind source/CI/provider, conditionally write STAGED, re
       await readFile(path.join(p1.root, "workers-bus/wrangler.jsonc"), "utf8")
     ).replace(/^\s*\/\/.*$/gm, ""),
   );
-  const vars = raw.env.qa.vars.CFG_APP;
+  const vars = flattenWranglerVars(raw.env.qa.vars);
   const config = {
     accountId: vars.AUTH_CONTROL_ACCOUNT_ID,
     bucket: vars.AUTH_CONTROL_BUCKET,

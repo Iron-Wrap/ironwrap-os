@@ -230,14 +230,14 @@ BEGIN
   UPDATE app_device_pairings SET revoked_at=MAX(created_at,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
    WHERE consumed_at IS NULL AND revoked_at IS NULL;
   UPDATE app_auth_issuance SET issuer=NEW.issuer WHERE singleton=1 AND issuer IS NULL AND sequence=0;
-  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM app_auth_issuance WHERE singleton=1 AND issuer=NEW.issuer)
+  SELECT RAISE(ABORT,'auth_cutover_incomplete')
+   WHERE NOT EXISTS (SELECT 1 FROM app_auth_issuance WHERE singleton=1 AND issuer=NEW.issuer)
     OR EXISTS (SELECT 1 FROM app_sessions WHERE revoked_at IS NULL)
     OR EXISTS (SELECT 1 FROM app_magic_links WHERE consumed_at IS NULL)
-    OR EXISTS (SELECT 1 FROM app_device_pairings WHERE consumed_at IS NULL AND revoked_at IS NULL)
-    THEN RAISE(ABORT,'auth_cutover_incomplete') END;
+    OR EXISTS (SELECT 1 FROM app_device_pairings WHERE consumed_at IS NULL AND revoked_at IS NULL);
   INSERT INTO app_auth_audit (created_at,tenant_id,user_id,event,outcome,ip_hash,user_agent_hash,detail_code)
     VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'),NULL,NULL,'auth_protocol_cutover','legacy_retired',
       '0000000000000000000000000000000000000000000000000000000000000000',
       '0000000000000000000000000000000000000000000000000000000000000000','v2');
-  SELECT CASE WHEN changes()!=1 THEN RAISE(ABORT,'auth_cutover_audit_missing') END;
+  SELECT RAISE(ABORT,'auth_cutover_audit_missing') WHERE changes()!=1;
 END;

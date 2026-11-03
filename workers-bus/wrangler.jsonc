@@ -125,14 +125,16 @@
   // 2026-07-02). FROM_EMAIL is the impersonated sender: sales@ for now — switch to quote@ once
   // that mailbox migrates onto the Google Workspace. SMS is JobNimbus Engage's job (no Twilio send).
   "vars": {
-    "CFG_APP": {
+    "CFG_AUTH": {
       // Unprovisioned P1 source proposal. Missing head/config refuses online auth; enrollment stays closed.
       "AUTH_CONTROL_ACCOUNT_ID": "5023dd227b538fc4238439fd7d52640f",
       "AUTH_CONTROL_BUCKET": "ironwrap-auth-control",
       "AUTH_CONTROL_KEY": "auth-control/head-v2",
       "AUTH_DATABASE_IDENTITY": "a8fd0116-7af6-4788-98bd-083addbe58bc",
       "AUTH_CONTROL_ENVIRONMENT": "production",
-      "AUTH_RECOVERY_ENROLLMENT_ENABLED": "false",
+      "AUTH_RECOVERY_ENROLLMENT_ENABLED": "false"
+    },
+    "CFG_APP": {
       "APP_DOCUMENT_GENERATION_ENABLED": "false",
       "APP_PRICING_CATALOG_ENABLED": "false",
       // Authenticated PWA surfaces. Turning this on adds three hard readiness requirements:
@@ -393,14 +395,16 @@
         ]
       },
       "vars": {
-        "CFG_APP": {
+        "CFG_AUTH": {
           // Unprovisioned P1 source proposal. Missing head/config refuses online auth; enrollment stays closed.
           "AUTH_CONTROL_ACCOUNT_ID": "5023dd227b538fc4238439fd7d52640f",
           "AUTH_CONTROL_BUCKET": "ironwrap-local-auth-control",
           "AUTH_CONTROL_KEY": "auth-control/head-v2",
           "AUTH_DATABASE_IDENTITY": "10ca1000-0000-4000-8000-000000000000",
           "AUTH_CONTROL_ENVIRONMENT": "local",
-          "AUTH_RECOVERY_ENROLLMENT_ENABLED": "false",
+          "AUTH_RECOVERY_ENROLLMENT_ENABLED": "false"
+        },
+        "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
           "APP_PRICING_CATALOG_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
@@ -639,14 +643,16 @@
         // client), proposal publication and the four approval brokers (the brokers run through
         // Frappe, which is being retired), Facet quote-revision prepare and Facet design ingest
         // (no consumer in the Worker).
-        "CFG_APP": {
+        "CFG_AUTH": {
           // Unprovisioned P1 source proposal. Missing head/config refuses online auth; enrollment stays closed.
           "AUTH_CONTROL_ACCOUNT_ID": "7ee5775bc1ba46f05c5a65235b60e939",
           "AUTH_CONTROL_BUCKET": "ironwrap-qa-auth-control",
           "AUTH_CONTROL_KEY": "auth-control/head-v2",
           "AUTH_DATABASE_IDENTITY": "0339cebc-d252-4d67-b78b-58c8b4703c6e",
           "AUTH_CONTROL_ENVIRONMENT": "qa",
-          "AUTH_RECOVERY_ENROLLMENT_ENABLED": "false",
+          "AUTH_RECOVERY_ENROLLMENT_ENABLED": "false"
+        },
+        "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "true",
           "APP_PRICING_CATALOG_ENABLED": "false",
           "APP_BFF_ENABLED": "true",

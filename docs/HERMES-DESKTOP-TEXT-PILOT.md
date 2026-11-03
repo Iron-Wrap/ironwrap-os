@@ -61,7 +61,7 @@ The separate desktop MCP server exposes exactly three tools, in order:
 3. `hermes_submit_draft` submits text against the same envelope and context digest and returns a
    `governed_handoff` with `execution_attempted=false`; it does not execute the handoff.
 
-These tools are fixed by the desktop server and are not added to the broad `roles.json` inventory.
+These tools are fixed by the desktop server, which takes no `MCP_ALLOWED_TOOLS` grant.
 Authorization comes from the paired tenant/user/current-role/device credential on every call.
 
 ## Handoff and authority boundary

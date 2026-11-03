@@ -77,6 +77,7 @@ test("proposal-pack dry run needs an explicit approved quote and never emits raw
     writeEnabled: false,
     agentRole: "estimator-assistant",
     actorUser: "estimator@example.com",
+    allowedTools: ["dry_run_proposal_evidence_pack"],
   });
   const quote = {
     name: "QUOTE-A",
@@ -161,6 +162,7 @@ test("proposal-pack approved write re-reads the anchored quote and fails before 
     approverId: "owner@example.com",
     dryRunSigningKey: "p".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_proposal_evidence_pack", "request_create_proposal_evidence_pack"],
   });
   const quote = {
     name: "QUOTE-A",
@@ -248,6 +250,10 @@ test("proposal publication is receipt-bound, audited, and never sends or writes 
     approverId: "owner@example.com",
     dryRunSigningKey: "p".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: [
+      "dry_run_publish_proposal_evidence_pack",
+      "request_publish_proposal_evidence_pack",
+    ],
   });
   const pack = {
     name: "proposal:QUOTE-A",
@@ -356,6 +362,10 @@ test("proposal publication rejects a stale non-Draft pack before it creates a He
     approverId: "owner@example.com",
     dryRunSigningKey: "p".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: [
+      "dry_run_publish_proposal_evidence_pack",
+      "request_publish_proposal_evidence_pack",
+    ],
   });
   const pack = {
     name: "proposal:QUOTE-A",

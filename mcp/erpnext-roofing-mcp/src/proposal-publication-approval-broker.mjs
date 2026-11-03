@@ -135,10 +135,6 @@ export function proposalPublicationBrokerConfigFromEnv(env = process.env) {
   if (!runtime.writeEnabled || runtime.agentRole !== PROPOSAL_PUBLICATION_AGENT_ROLE) {
     throw new Error("proposal_publication_broker_requires_owner_operator_write_runtime");
   }
-  if (!runtime.allowedTools.includes(PROPOSAL_PUBLICATION_DRY_RUN_TOOL) ||
-      !runtime.allowedTools.includes(PROPOSAL_PUBLICATION_WRITE_TOOL)) {
-    throw new Error("proposal_publication_broker_role_tools_missing");
-  }
   const expectedSiteId = digest({ frappe_base_url: runtime.baseUrl });
   const privatePublic = createPublicKey(privateKey).export({ type: "spki", format: "der" });
   const configuredPublic = createPublicKey(runtime.approvalPublicKey).export({ type: "spki", format: "der" });
@@ -157,6 +153,7 @@ export function proposalPublicationBrokerConfigFromEnv(env = process.env) {
       agentRole: PROPOSAL_PUBLICATION_AGENT_ROLE,
       actorUser: runtime.actorUser,
       approverId: runtime.approverId,
+      allowedTools: [PROPOSAL_PUBLICATION_DRY_RUN_TOOL, PROPOSAL_PUBLICATION_WRITE_TOOL],
     }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(

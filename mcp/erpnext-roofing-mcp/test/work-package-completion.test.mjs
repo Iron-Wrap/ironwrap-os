@@ -35,6 +35,7 @@ test("MCP completion preview and execute preserve the exact typed Shop Order sco
     approverId: "owner@example.invalid",
     dryRunSigningKey: "s".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_complete_work_package", "request_complete_work_package"],
   });
   const requests = [];
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {

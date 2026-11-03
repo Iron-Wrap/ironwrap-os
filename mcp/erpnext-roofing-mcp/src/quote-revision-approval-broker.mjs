@@ -144,9 +144,6 @@ export function quoteRevisionBrokerConfigFromEnv(env = process.env) {
   if (!runtime.writeEnabled || runtime.agentRole !== QUOTE_REVISION_AGENT_ROLE) {
     throw new Error("quote_revision_broker_requires_estimator_assistant_write_runtime");
   }
-  if (!runtime.allowedTools.includes(QUOTE_REVISION_DRY_RUN_TOOL) || !runtime.allowedTools.includes(QUOTE_REVISION_WRITE_TOOL)) {
-    throw new Error("quote_revision_broker_role_tools_missing");
-  }
   const expectedSiteId = digest({ frappe_base_url: runtime.baseUrl });
   const privatePublic = createPublicKey(privateKey).export({ type: "spki", format: "der" });
   const configuredPublic = createPublicKey(runtime.approvalPublicKey).export({ type: "spki", format: "der" });
@@ -165,6 +162,7 @@ export function quoteRevisionBrokerConfigFromEnv(env = process.env) {
       agentRole: QUOTE_REVISION_AGENT_ROLE,
       actorUser: runtime.actorUser,
       approverId: runtime.approverId,
+      allowedTools: [QUOTE_REVISION_DRY_RUN_TOOL, QUOTE_REVISION_WRITE_TOOL],
     }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(

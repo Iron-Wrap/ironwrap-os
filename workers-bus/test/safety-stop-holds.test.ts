@@ -280,7 +280,11 @@ async function issue(env: TestEnv, packet: NativeWorkPackageDefinition) {
   await seedPacketAuthority(scoped, packet);
 }
 
-function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinition): void {
+function seedAssignmentSnapshot(
+  env: TestEnv,
+  packet: NativeWorkPackageDefinition,
+  options: { jobOnly?: boolean } = {},
+): void {
   const sqlite = env.DB.sqlite;
   const existing = sqlite
     .prepare("SELECT assignment_id FROM operating_job_assignments WHERE tenant_id = ? AND assignment_id = ?")
@@ -328,6 +332,8 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
     )
     .run(packet.jobId, packet.tenantId, leadId, customerId, envelopeId, rawKey,
       `IW-${suffix.slice(0, 8)}`, now, now);
+  // A job can arrive while work is held. That arrival clears no gate and grants no schedule.
+  if (options.jobOnly) return;
   for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) {
     sqlite
       .prepare(
@@ -633,14 +639,20 @@ for (const scopeType of ["roof_job", "work_package"] as const) {
       const env = testEnv({ reverseTriggers: layer === "D1" });
       const { jobA, jobB } = await twoJobs(env);
       const pending = definition({ jobId: "JOB-HOLD-PENDING" });
+      // Prepare the assignment while work is still allowed, without issuing its package.
+      // Once the stop exists, current Safety refuses any attempt to clear or schedule anew.
+      if (scopeType === "work_package") seedAssignmentSnapshot(env, pending);
       const stop = await raise(env, {
         type: scopeType,
         id: scopeType === "roof_job" ? pending.jobId : pending.workPackageId,
       });
       await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "before target exists");
-      // Create the real missing target through the normal issuance path, with every guard enabled.
-      // No occurrence transition, release event or scope decision is written.
-      await issue(env, pending);
+      const clearances = env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM production_gate_clearances").get();
+      // A job arrives through its guarded inserts; a package is issued against the assignment
+      // prepared before the stop. Every guard stays enabled, and neither path clears a gate.
+      if (scopeType === "roof_job") seedAssignmentSnapshot(env, pending, { jobOnly: true });
+      else await issue(env, pending);
+      assert.deepEqual(env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM production_gate_clearances").get(), clearances);
       assert.deepEqual({ ...env.DB.sqlite.prepare(
         "SELECT state, version, stop_active FROM safety_occurrences WHERE occurrence_id = ?",
       ).get(stop) }, { state: "reported", version: 1, stop_active: 1 });
@@ -672,6 +684,7 @@ for (const scopeType of ["roof_job", "work_package"] as const) {
     const env = testEnv({ beforeStopMigration: true });
     const { jobA, jobB } = await twoJobs(env);
     const pending = definition({ jobId: "JOB-HOLD-MIGRATED" });
+    if (scopeType === "work_package") seedAssignmentSnapshot(env, pending);
     const stop = await raise(env, {
       type: scopeType,
       id: scopeType === "roof_job" ? pending.jobId : pending.workPackageId,
@@ -679,7 +692,10 @@ for (const scopeType of ["roof_job", "work_package"] as const) {
     // A resolved stop remains job-scoped when this migration upgrades an existing database.
     const resolved = await raise(env, { type: "roof_job", id: jobB.jobId });
     env.DB.sqlite.exec(readFileSync(new URL("../migrations/0170_safety_stop_route_gaps.sql", import.meta.url), "utf8"));
-    await issue(env, pending);
+    const clearances = env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM production_gate_clearances").get();
+    if (scopeType === "roof_job") seedAssignmentSnapshot(env, pending, { jobOnly: true });
+    else await issue(env, pending);
+    assert.deepEqual(env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM production_gate_clearances").get(), clearances);
     await expectHeld(env, jobA, USERS.mate, [{ occurrence_id: stop, scope: "tenant" }], "backfilled unresolved scope");
     await lift(env, stop);
     await expectHeld(env, jobA, USERS.mate, [], "resolved stop still holds only its own job");

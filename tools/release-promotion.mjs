@@ -66,6 +66,12 @@ const DOMAIN_HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])
 const DOMAIN_SERVICE_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/;
 const DOMAIN_ZONE_RE = ACCOUNT_RE;
 const FRAPPE_SCOPE_RE = /^(?:in-scope|out-of-scope)$/;
+// computeSourceEvidence lists frappe-apps/ironwrap_roofing. A tree without the Frappe app
+// lists nothing there, so its Frappe source, schema, and migration digests all equal the
+// digest of an empty listing.
+const FRAPPE_APP_ABSENT_DIGEST = sha256("");
+// The wheel digest an artifact records when its source tree had no Frappe app to build.
+const FRAPPE_WHEEL_ABSENT_DIGEST = sha256("frappe-wheel-absent");
 const SERVICE_ADAPTER_MIN_TOKEN_LENGTH = 32;
 const SERVICE_ADAPTER_ARGUMENTS = Object.freeze([
   "service-promotion-receipt",
@@ -891,9 +897,9 @@ async function admissionContext(args) {
     sourceCommit: source.source_commit,
     ciChecks,
   });
-  for (const key of ["frappe_schema_digest", "frappe_migration_digest", "routes_source_digest"]) {
-    if (!SHA256_RE.test(source[key]) || source[key] === sha256("")) fail(`source_${key}_missing`);
-  }
+  requireAdmissibleSourceDigests(source, {
+    frappeScope: hasArg(args, "frappe-scope") ? frappeScope(args) : "in-scope",
+  });
   const context = {
     repository,
     ...source,
@@ -930,6 +936,35 @@ async function admissionContext(args) {
   await writeJson(arg(args, "output"), context);
 }
 
+/**
+ * The routes source and, while the Frappe app is in the tree, its schema and migration
+ * listings must be non-empty. Only an out-of-scope release from a tree without the Frappe
+ * app may carry the empty-listing Frappe digests; a missing scope counts as in scope.
+ */
+export function requireAdmissibleSourceDigests(source, { frappeScope: scope = "in-scope" } = {}) {
+  if (!FRAPPE_SCOPE_RE.test(scope)) fail("frappe_scope_invalid");
+  if (!SHA256_RE.test(source?.routes_source_digest) || source.routes_source_digest === sha256("")) {
+    fail("source_routes_source_digest_missing");
+  }
+  const frappeAppAbsent = scope === "out-of-scope" &&
+    source.component_digests?.frappe === FRAPPE_APP_ABSENT_DIGEST;
+  for (const key of ["frappe_schema_digest", "frappe_migration_digest"]) {
+    if (!SHA256_RE.test(source[key])) fail(`source_${key}_missing`);
+    if (source[key] === FRAPPE_APP_ABSENT_DIGEST && !frappeAppAbsent) fail(`source_${key}_missing`);
+    if (frappeAppAbsent && source[key] !== FRAPPE_APP_ABSENT_DIGEST) fail(`source_${key}_drift`);
+  }
+}
+
+/**
+ * An artifact carries a Frappe wheel exactly when its source tree carries the Frappe app:
+ * the absent-wheel digest is admissible only next to an empty Frappe source listing.
+ */
+export function requireFrappeArtifactMatchesSource(context, artifacts) {
+  const appAbsent = context?.component_digests?.frappe === FRAPPE_APP_ABSENT_DIGEST;
+  const wheelAbsent = artifacts?.frappe_wheel_digest === FRAPPE_WHEEL_ABSENT_DIGEST;
+  if (appAbsent !== wheelAbsent) fail("artifact_frappe_wheel_source_drift");
+}
+
 async function directoryDigest(root) {
   const resolved = path.resolve(root);
   const files = [];
@@ -954,12 +989,19 @@ async function directoryDigest(root) {
 
 async function artifactManifest(args) {
   const workerBytes = await readFile(arg(args, "worker"));
-  const frappeBytes = await readFile(arg(args, "frappe-wheel"));
-  if (workerBytes.length === 0 || frappeBytes.length === 0) fail("artifact_component_empty");
+  // Without a wheel the release must declare Frappe out of scope. It then records the
+  // absent-wheel digest, which bind-artifact and assemble admit only for a source tree
+  // without the Frappe app.
+  if (!hasArg(args, "frappe-wheel") && (!hasArg(args, "frappe-scope") || frappeScope(args) !== "out-of-scope")) {
+    fail("cli_frappe-wheel_required");
+  }
+  const frappeBytes = hasArg(args, "frappe-wheel") ? await readFile(arg(args, "frappe-wheel")) : null;
+  if (workerBytes.length === 0 || frappeBytes?.length === 0) fail("artifact_component_empty");
+  const frappeWheelDigest = frappeBytes ? sha256(frappeBytes) : FRAPPE_WHEEL_ABSENT_DIGEST;
   const manifest = {
     worker_digest: sha256(workerBytes),
     pwa_digest: await directoryDigest(arg(args, "pwa")),
-    frappe_wheel_digest: sha256(frappeBytes),
+    frappe_wheel_digest: frappeWheelDigest,
   };
   await writeJson(arg(args, "output"), {
     ...manifest,
@@ -980,6 +1022,7 @@ async function bindArtifact(args) {
     for (const key of ["worker_digest", "pwa_digest", "frappe_wheel_digest", "artifact_manifest_digest"]) requireHash(manifest[key], `artifact_${key}_invalid`);
     const fields = { worker_digest: manifest.worker_digest, pwa_digest: manifest.pwa_digest, frappe_wheel_digest: manifest.frappe_wheel_digest };
     if (sha256(canonicalJson(fields)) !== manifest.artifact_manifest_digest) fail("artifact_manifest_digest_mismatch");
+    requireFrappeArtifactMatchesSource(context, manifest);
     context.artifacts = manifest;
   }
   await writeJson(file, context);
@@ -2144,6 +2187,7 @@ async function assemblePermit(args) {
     canonicalJson(context.artifacts) !== canonicalJson(artifactComponents)
   )
     fail("artifact_manifest_drift");
+  requireFrappeArtifactMatchesSource(context, artifactComponents);
   const previousGeneration = await readJson(arg(args, "policy"));
   if (!Number.isSafeInteger(previousGeneration.generation) || !SHA256_RE.test(previousGeneration.policy_hash)) fail("policy_state_invalid");
   const policyHash = await computeReleasePolicyHash(repoRoot);

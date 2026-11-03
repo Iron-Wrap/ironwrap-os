@@ -14,6 +14,8 @@ import {
   main,
   RELEASE_POLICY_FILES,
   requestServiceAdapter,
+  requireAdmissibleSourceDigests,
+  requireFrappeArtifactMatchesSource,
   validateProductionDomainRoute,
 } from "./release-promotion.mjs";
 import {
@@ -1469,6 +1471,122 @@ test("admission-context reads the JSON array that ci-checks writes", async (t) =
   // Past the read, the mismatched PR context is what stops it.
   await assert.rejects(() => invoke(checks), /release_promotion_admission_context_invalid/);
   await assert.rejects(async () => invoke(await file("object-checks.json", { checks: [] })), /release_promotion_json_invalid/);
+});
+
+const FRAPPE_APP_ABSENT = sha("");
+const FRAPPE_WHEEL_ABSENT = sha("frappe-wheel-absent");
+
+function sourceDigests({ frappe = sha("frappe-source"), schema = sha("frappe-schema"), migration = sha("frappe-migrations"), routes = sha("routes") } = {}) {
+  return {
+    component_digests: { worker: sha("worker"), pwa: sha("pwa"), frappe, mcp: sha("mcp"), hermes: sha("hermes"), tenant_config: sha("tenant") },
+    frappe_schema_digest: schema,
+    frappe_migration_digest: migration,
+    routes_source_digest: routes,
+  };
+}
+
+test("admission admits empty Frappe source digests only for an out-of-scope tree without the app", () => {
+  const present = sourceDigests();
+  for (const frappeScope of ["in-scope", "out-of-scope"]) {
+    assert.doesNotThrow(() => requireAdmissibleSourceDigests(present, { frappeScope }));
+  }
+  assert.doesNotThrow(() => requireAdmissibleSourceDigests(present));
+
+  // The app is still in the tree, so its schema and migration listings may not be empty in
+  // any scope.
+  for (const frappeScope of ["in-scope", "out-of-scope"]) {
+    assert.throws(
+      () => requireAdmissibleSourceDigests(sourceDigests({ schema: FRAPPE_APP_ABSENT }), { frappeScope }),
+      /release_promotion_source_frappe_schema_digest_missing/,
+    );
+    assert.throws(
+      () => requireAdmissibleSourceDigests(sourceDigests({ migration: FRAPPE_APP_ABSENT }), { frappeScope }),
+      /release_promotion_source_frappe_migration_digest_missing/,
+    );
+  }
+
+  // Without the app every Frappe listing is empty: admissible only when the release says
+  // Frappe is out of scope, and an omitted scope counts as in scope.
+  const absent = sourceDigests({ frappe: FRAPPE_APP_ABSENT, schema: FRAPPE_APP_ABSENT, migration: FRAPPE_APP_ABSENT });
+  assert.doesNotThrow(() => requireAdmissibleSourceDigests(absent, { frappeScope: "out-of-scope" }));
+  assert.throws(() => requireAdmissibleSourceDigests(absent, { frappeScope: "in-scope" }), /release_promotion_source_frappe_schema_digest_missing/);
+  assert.throws(() => requireAdmissibleSourceDigests(absent), /release_promotion_source_frappe_schema_digest_missing/);
+  assert.throws(
+    () => requireAdmissibleSourceDigests({ ...absent, frappe_migration_digest: sha("frappe-migrations") }, { frappeScope: "out-of-scope" }),
+    /release_promotion_source_frappe_migration_digest_drift/,
+  );
+
+  // The non-Frappe source digest stays required in every scope.
+  for (const routes of [FRAPPE_APP_ABSENT, "not-a-digest"]) {
+    assert.throws(
+      () => requireAdmissibleSourceDigests({ ...absent, routes_source_digest: routes }, { frappeScope: "out-of-scope" }),
+      /release_promotion_source_routes_source_digest_missing/,
+    );
+  }
+  assert.throws(() => requireAdmissibleSourceDigests({ ...present, frappe_schema_digest: undefined }), /release_promotion_source_frappe_schema_digest_missing/);
+  assert.throws(() => requireAdmissibleSourceDigests(present, { frappeScope: "maybe" }), /release_promotion_frappe_scope_invalid/);
+});
+
+test("artifact-manifest records the absent-wheel digest only for an out-of-scope release without a wheel", async (t) => {
+  const root = await tempRoot(t);
+  const worker = path.join(root, "index.js");
+  const pwa = path.join(root, "dist");
+  const wheel = path.join(root, "ironwrap_roofing.whl");
+  const emptyWheel = path.join(root, "empty.whl");
+  const output = path.join(root, "components.json");
+  await writeFile(worker, "export default {};\n");
+  await mkdir(pwa);
+  await writeFile(path.join(pwa, "index.html"), "<!doctype html>\n");
+  await writeFile(wheel, "wheel-bytes");
+  await writeFile(emptyWheel, "");
+  const manifest = async (...extra) => {
+    await main(["artifact-manifest", "--worker", worker, "--pwa", pwa, ...extra, "--output", output]);
+    const written = JSON.parse(await readFile(output, "utf8"));
+    const fields = { worker_digest: written.worker_digest, pwa_digest: written.pwa_digest, frappe_wheel_digest: written.frappe_wheel_digest };
+    assert.equal(written.artifact_manifest_digest, sha(canonicalJson(fields)));
+    return written;
+  };
+
+  const withWheel = await manifest("--frappe-wheel", wheel);
+  assert.equal(withWheel.frappe_wheel_digest, sha("wheel-bytes"));
+  assert.equal(withWheel.worker_digest, sha("export default {};\n"));
+  // A built wheel is always bound, whatever the scope says.
+  assert.equal((await manifest("--frappe-wheel", wheel, "--frappe-scope", "out-of-scope")).frappe_wheel_digest, sha("wheel-bytes"));
+  const withoutWheel = await manifest("--frappe-scope", "out-of-scope");
+  assert.equal(withoutWheel.frappe_wheel_digest, FRAPPE_WHEEL_ABSENT);
+  assert.equal(withoutWheel.worker_digest, withWheel.worker_digest);
+  assert.equal(withoutWheel.pwa_digest, withWheel.pwa_digest);
+
+  await assert.rejects(() => manifest(), /release_promotion_cli_frappe-wheel_required/);
+  await assert.rejects(() => manifest("--frappe-scope", "in-scope"), /release_promotion_cli_frappe-wheel_required/);
+  await assert.rejects(() => manifest("--frappe-scope", "maybe"), /release_promotion_frappe_scope_invalid/);
+  await assert.rejects(() => manifest("--frappe-wheel", emptyWheel, "--frappe-scope", "out-of-scope"), /release_promotion_artifact_component_empty/);
+});
+
+test("bind-artifact binds the absent-wheel digest only to a source tree without the Frappe app", async (t) => {
+  const root = await tempRoot(t);
+  const bind = async ({ frappeSource, frappeWheel }) => {
+    const context = path.join(root, "context.json");
+    const components = path.join(root, "components.json");
+    await writeFile(context, JSON.stringify({ component_digests: { frappe: frappeSource } }));
+    const fields = { worker_digest: sha("worker-bundle"), pwa_digest: sha("pwa-dist"), frappe_wheel_digest: frappeWheel };
+    await writeFile(components, JSON.stringify({ ...fields, artifact_manifest_digest: sha(canonicalJson(fields)) }));
+    await main([
+      "bind-artifact", "--context", context, "--artifact-digest", ARTIFACT, "--artifact-id", "1",
+      "--uploaded-digest", ARTIFACT, "--component-manifest", components,
+    ]);
+    return JSON.parse(await readFile(context, "utf8"));
+  };
+
+  assert.equal((await bind({ frappeSource: sha("frappe-source"), frappeWheel: sha("wheel-bytes") })).artifacts.frappe_wheel_digest, sha("wheel-bytes"));
+  assert.equal((await bind({ frappeSource: FRAPPE_APP_ABSENT, frappeWheel: FRAPPE_WHEEL_ABSENT })).artifacts.frappe_wheel_digest, FRAPPE_WHEEL_ABSENT);
+  // A tree that still has the app must ship its wheel, and a tree without it cannot claim one.
+  await assert.rejects(() => bind({ frappeSource: sha("frappe-source"), frappeWheel: FRAPPE_WHEEL_ABSENT }), /release_promotion_artifact_frappe_wheel_source_drift/);
+  await assert.rejects(() => bind({ frappeSource: FRAPPE_APP_ABSENT, frappeWheel: sha("wheel-bytes") }), /release_promotion_artifact_frappe_wheel_source_drift/);
+
+  // assemble repeats the same rule on the production context it re-binds.
+  assert.doesNotThrow(() => requireFrappeArtifactMatchesSource({ component_digests: { frappe: FRAPPE_APP_ABSENT } }, { frappe_wheel_digest: FRAPPE_WHEEL_ABSENT }));
+  assert.throws(() => requireFrappeArtifactMatchesSource({}, { frappe_wheel_digest: FRAPPE_WHEEL_ABSENT }), /release_promotion_artifact_frappe_wheel_source_drift/);
 });
 
 test("cron-readback matches expected qa schedules and fails closed on drift", async (t) => {

@@ -11,6 +11,7 @@ import worker from "../src/index.ts";
 import { SqliteD1, type SqliteStatement, TENANT, USERS, env as baseEnv } from "./company-setup-fixture.ts";
 import { recordDepositPolicy } from "./deposit-policy-fixture.ts";
 import { MemoryR2 } from "./onboarding-fixture.ts";
+import { stagedP1Fetch } from "./auth-protocol-staged-fixture.ts";
 
 // The QA seed's bodies run through the real Worker entry point on SQLite: sign-in with the minted
 // single-use link, every commercial route, the effect claim/settle admin routes and the queue.
@@ -128,9 +129,9 @@ test("the seed publishes one synthetic offer through the governed routes, and a 
   const h = harness();
   const out = mkdtempSync(join(tmpdir(), "qa-seed-journey-"));
   const outbound = globalThis.fetch;
-  globalThis.fetch = (() => {
+  globalThis.fetch = stagedP1Fetch((() => {
     throw new Error("the seed journey must not reach any outside service");
-  }) as typeof fetch;
+  }) as typeof fetch);
   try {
     const first = await run(h, out);
     assert.equal(first.offer_state, "published");

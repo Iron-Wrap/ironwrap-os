@@ -21,6 +21,15 @@ export interface WorkObjectScope {
 }
 
 export type AppEnv = Env & {
+  AUTH_CONTROL_ACCOUNT_ID?: string;
+  AUTH_CONTROL_BUCKET?: string;
+  AUTH_CONTROL_KEY?: string;
+  AUTH_DATABASE_IDENTITY?: string;
+  AUTH_CONTROL_ENVIRONMENT?: string;
+  AUTH_RECOVERY_ENROLLMENT_ENABLED?: string;
+  AUTH_CONTROL_READ_ACCESS_KEY_ID?: string;
+  AUTH_CONTROL_READ_SECRET_ACCESS_KEY?: string;
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   APP_BFF_ENABLED?: string;
   // A separate rollout switch for writing upload receipts and linking them to
   // domain records. Unset/false leaves the legacy evidence paths available.
@@ -214,6 +223,10 @@ export interface AppSessionRecord extends AppUserRecord {
   revoked_at: string | null;
   device_id: string | null;
   device_proof_hash: string | null;
+  auth_protocol?: number;
+  auth_issuer?: string;
+  auth_context_hash?: string;
+  auth_context_generation?: number;
 }
 
 export interface AppDeviceRecord {
@@ -232,6 +245,10 @@ export interface AuthContext {
   rawSessionToken: string;
   csrfToken: string;
   permissions: string[];
+  authProtocol?: {
+    v: 2; issuer: string; contextId: string; generation: number; activationId: string;
+    producerQualificationReceiptHash: string | null;
+  };
 }
 
 /** Every exact user coordinate carried by one authenticated app session. */

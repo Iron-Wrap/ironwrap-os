@@ -1,3 +1,4 @@
+import {stagedP1Env,stagedP1Fetch} from "./auth-protocol-staged-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
@@ -483,7 +484,7 @@ function changed(changes: number) {
 }
 
 function baseEnv(db = new AuthMemoryDb()): AppEnv {
-  return {
+  return stagedP1Env({
     APP_BFF_ENABLED: "true",
     APP_TENANT_ID: "ironwrap",
     APP_TENANT_NAME: "IronWrap OS",
@@ -503,7 +504,7 @@ function baseEnv(db = new AuthMemoryDb()): AppEnv {
     GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
     ADMIN_TOKEN: "admin-token",
     DB: db,
-  } as never;
+  } as never);
 }
 
 function jsonRequest(path: string, body: unknown, headers: Record<string, string> = {}): Request {
@@ -1516,7 +1517,7 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
   assert.equal((await fieldSession.json() as { authenticated: boolean; user: { role: string } }).authenticated, true);
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({ data: [] });
+  globalThis.fetch = stagedP1Fetch(async () => Response.json({ data: [] }));
   try {
     const fieldBootstrap = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
       headers: {
@@ -1731,7 +1732,7 @@ async function fieldBootstrapSession(
   headers: Record<string, string>,
 ): Promise<{ status: number; session: OfficePhoneSession }> {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({ data: [] });
+  globalThis.fetch = stagedP1Fetch(async () => Response.json({ data: [] }));
   try {
     const response = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
       headers: { origin: "https://app.example.com", ...headers },

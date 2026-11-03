@@ -2344,7 +2344,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0160 holds a firm start, Materials attestation and job purchase order lines while the
     // cancellation window is unknown or open, and records receipt of the signed copy.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 147);
+    // 0173 adds the staged auth protocol without activating enrollment.
+    assert.equal(migrations.length, 148);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2512,7 +2513,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // ledger replace guards under their existing names.
     assert.deepEqual(
       { ...counts },
-      { tables: 285, indexes: 382, triggers: 802 },
+      { tables: 289, indexes: 384, triggers: 825 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

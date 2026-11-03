@@ -1,3 +1,4 @@
+import {stagedP1Env} from "./auth-protocol-staged-fixture.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
@@ -164,7 +165,7 @@ export class SqliteStatement {
 }
 
 export function env(db: SqliteD1, overrides: Partial<AppEnv> = {}): AppEnv {
-  return {
+  return stagedP1Env({
     DB: db,
     APP_BFF_ENABLED: "true",
     APP_TENANT_ID: TENANT,
@@ -174,7 +175,7 @@ export function env(db: SqliteD1, overrides: Partial<AppEnv> = {}): AppEnv {
     APP_TIME_ZONE: "America/Edmonton",
     APP_CURRENCY: "CAD",
     ...overrides,
-  } as unknown as AppEnv;
+  } as unknown as AppEnv);
 }
 
 export function auth(role: AppRole, tenantId = TENANT): AuthContext {

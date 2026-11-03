@@ -1,5 +1,5 @@
 import { sha256Hex } from "./app-auth.ts";
-import { canonicalJson } from "./newo-hash.ts";
+import { canonicalJson } from "./canonical.ts";
 import { assertEffectLedgerReady, EffectRuntimeError, runExternalEffect } from "./effect-runtime.ts";
 import type { AppEnv } from "./app-types.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";

@@ -1,5 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { r2ObjectStore, r2ObjectMatches } from "./field-actions.ts";
 
 export const MAX_REPORT_BYTES = 20 * 1024 * 1024;

@@ -35,21 +35,14 @@ import {
   LAUNCH_PROOF_STEP_NAMES,
   PRODUCTION_PROMOTION_SCHEMA,
   PRODUCTION_PROMOTION_TYPE,
-  RELEASE_EVIDENCE_PATH_PREFIX,
-  RELEASE_EVIDENCE_REF_PREFIX,
   RELEASE_MANIFEST_SCHEMA,
   RELEASE_PERMIT_SCHEMA,
-  REVIEW_FINDINGS_SCHEMA,
-  REVIEW_RECEIPT_PATH_PREFIX,
-  REVIEW_RECEIPT_REF_PREFIX,
   parseWranglerVersionId,
   persistRecoveryRequiredOutcome,
   persistRollbackOutcome,
   releasePermitDigest,
   releaseVersionMessage,
-  signReviewGoReceipt,
   signReleasePermit,
-  signExternalReleaseEvidence,
   signServiceAdapterReceipt,
   validateSecretInventoryReadback,
   validateProductionRollbackReceipt,
@@ -57,13 +50,11 @@ import {
   validateSourceMergeReceipt,
   validateWorkerVersionReadback,
   validateDomainReadbackReceipt,
-  verifyReviewGoReceipt,
-  verifyExternalReleaseEvidence,
   verifyServiceAdapterReceipt,
   verifyReleasePermit,
 } from "./release-permit.mjs";
 
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -74,14 +65,6 @@ const ACCOUNT_RE = /^[0-9a-f]{32}$/;
 const DOMAIN_HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const DOMAIN_SERVICE_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/;
 const DOMAIN_ZONE_RE = ACCOUNT_RE;
-const INDEPENDENT_ISSUER_ROUTE = "/v2/independent-issuer";
-const INDEPENDENT_ISSUER_REQUEST_SCHEMA =
-  "ironwrap_independent_issuer_request_v2";
-const ISO_TIMESTAMP_RE =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const INDEPENDENT_ISSUER_MAX_LIFETIME_MS = 10 * 60_000;
-const INDEPENDENT_ISSUER_MAX_FUTURE_SKEW_MS = 60_000;
-const INDEPENDENT_ISSUER_REQUEST_LIFETIME_MS = 5 * 60_000;
 const FRAPPE_SCOPE_RE = /^(?:in-scope|out-of-scope)$/;
 const SERVICE_ADAPTER_MIN_TOKEN_LENGTH = 32;
 const SERVICE_ADAPTER_ARGUMENTS = Object.freeze([
@@ -140,36 +123,6 @@ function requireCommit(value, code) {
 function requireUuid(value, code) {
   if (!UUID_RE.test(value)) fail(code);
   return value;
-}
-
-function requireCanonicalTimestamp(value, code) {
-  if (typeof value !== "string" || !ISO_TIMESTAMP_RE.test(value)) fail(code);
-  const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
-    fail(code);
-  }
-  return milliseconds;
-}
-
-function validateIndependentIssuerFreshness(request, now = Date.now) {
-  const requestedAt = requireCanonicalTimestamp(
-    request.requested_at,
-    "issuer_requested_at_invalid",
-  );
-  const expiresAt = requireCanonicalTimestamp(
-    request.expires_at,
-    "issuer_expires_at_invalid",
-  );
-  const currentTime = now();
-  if (!Number.isFinite(currentTime)) fail("issuer_clock_invalid");
-  if (expiresAt <= requestedAt) fail("issuer_request_time_order_invalid");
-  if (expiresAt - requestedAt > INDEPENDENT_ISSUER_MAX_LIFETIME_MS) {
-    fail("issuer_request_lifetime_invalid");
-  }
-  if (requestedAt > currentTime + INDEPENDENT_ISSUER_MAX_FUTURE_SKEW_MS) {
-    fail("issuer_request_future_invalid");
-  }
-  if (expiresAt <= currentTime) fail("issuer_request_expired");
 }
 
 function json(value, code) {
@@ -708,397 +661,10 @@ function reviewHeaders(token) {
   };
 }
 
-async function fetchReviewReceipt(repository, sourceCommit, token) {
-  const ref = `${REVIEW_RECEIPT_REF_PREFIX}${sourceCommit}`;
-  const relativePath = `${REVIEW_RECEIPT_PATH_PREFIX}${sourceCommit}.json`;
-  const response = await fetch(`https://api.github.com/repos/${repository}/contents/${relativePath}?ref=${encodeURIComponent(ref)}`, {
-    headers: reviewHeaders(token),
-  }).catch(() => null);
-  if (response?.status === 404) return null;
-  if (!response?.ok) fail("review_receipt_unavailable");
-  const body = await response.json().catch(() => null);
-  if (!isRecord(body) || body.path !== relativePath || body.name !== `${sourceCommit}.json` || body.encoding !== "base64" || typeof body.content !== "string") fail("review_receipt_readback_invalid");
-  const encoded = body.content.replace(/\s+/g, "");
-  if (!encoded || !/^[A-Za-z0-9+/]+=*$/.test(encoded) || encoded.length % 4 !== 0) fail("review_receipt_encoding_invalid");
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  if (!decoded.trim()) fail("review_receipt_empty");
-  return decoded.trim();
-}
-
-async function reviewReceipt(args) {
-  const repository = arg(args, "repository");
-  const sourceCommit = requireCommit(arg(args, "source-commit"), "source_commit_invalid");
-  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
-  const decoded = await fetchReviewReceipt(repository, sourceCommit, env("GH_TOKEN"));
-  if (decoded === null) fail("review_receipt_unavailable");
-  await writeFile(arg(args, "output"), `${decoded}\n`, { mode: 0o600 });
-}
-
 function boundedInteger(value, { minimum, maximum, code }) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) fail(code);
   return parsed;
-}
-
-function validateIssuerAcknowledgement(acknowledgement, expected = {}) {
-  exactObjectKeys(acknowledgement, ["schema", "status", "phase", "repository", "source_commit", "request_digest", "issuer_principal", "issuer_task_id", "issuer_run_id", "key_version", "accepted_at"], "issuer_ack_shape_invalid");
-  if (acknowledgement.schema !== "ironwrap_independent_issuer_ack_v1" || acknowledgement.status !== "accepted" || !/^(?:review|release-evidence)$/.test(acknowledgement.phase)) fail("issuer_ack_invalid");
-  if (!REPOSITORY_RE.test(acknowledgement.repository) || !COMMIT_RE.test(acknowledgement.source_commit) || !SHA256_RE.test(acknowledgement.request_digest) || !IDENTITY_RE.test(acknowledgement.issuer_principal)) fail("issuer_ack_identity_invalid");
-  for (const value of [acknowledgement.issuer_task_id, acknowledgement.issuer_run_id, acknowledgement.key_version]) if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/.test(value)) fail("issuer_ack_execution_invalid");
-  if (!Number.isFinite(Date.parse(acknowledgement.accepted_at))) fail("issuer_ack_time_invalid");
-  for (const field of ["phase", "repository", "source_commit", "issuer_principal", "issuer_task_id", "key_version", "request_digest"]) if (expected[field] !== undefined && acknowledgement[field] !== expected[field]) fail(`issuer_ack_${field}_drift`);
-  return acknowledgement;
-}
-
-export function validateIndependentIssuerRequest(request, now = Date.now) {
-  exactObjectKeys(request, ["schema", "phase", "repository", "pr_number", "base_commit", "head_commit", "source_commit", "source_git_tree", "source_tree_sha256", "diff_sha256", "ci_run_id", "candidate_artifact", "publication", "receipt_key", "requested_at", "expires_at", "requested_by", "expected_issuer"], "issuer_request_shape_invalid");
-  exactObjectKeys(request.candidate_artifact, ["actions_run_id", "actions_run_attempt", "name", "content_digest"], "issuer_request_artifact_invalid");
-  exactObjectKeys(request.publication, ["ref", "path"], "issuer_request_publication_invalid");
-  exactObjectKeys(request.receipt_key, ["public_key_sha256", "key_version"], "issuer_request_key_invalid");
-  exactObjectKeys(request.expected_issuer, ["principal", "task_id"], "issuer_request_expected_invalid");
-  if (request.schema !== INDEPENDENT_ISSUER_REQUEST_SCHEMA || !/^(?:review|release-evidence)$/.test(request.phase) || !REPOSITORY_RE.test(request.repository) || !Number.isSafeInteger(request.pr_number) || request.pr_number < 1) fail("issuer_request_invalid");
-  for (const value of [request.base_commit, request.head_commit, request.source_commit, request.source_git_tree]) requireCommit(value, "issuer_request_commit_invalid");
-  const expectedPublicationRef = request.phase === "review" ? `${REVIEW_RECEIPT_REF_PREFIX}${request.source_commit}` : `${RELEASE_EVIDENCE_REF_PREFIX}${request.source_commit}`;
-  const expectedPublicationPath = request.phase === "review" ? `${REVIEW_RECEIPT_PATH_PREFIX}${request.source_commit}.json` : `${RELEASE_EVIDENCE_PATH_PREFIX}${request.source_commit}.json`;
-  if (request.publication.ref !== expectedPublicationRef || request.publication.path !== expectedPublicationPath) fail("issuer_request_publication_invalid");
-  for (const value of [request.source_tree_sha256, request.diff_sha256, request.candidate_artifact.content_digest, request.receipt_key.public_key_sha256]) requireHash(value, "issuer_request_digest_invalid");
-  for (const value of [request.ci_run_id, request.candidate_artifact.actions_run_id, request.candidate_artifact.actions_run_attempt]) if (!/^[1-9][0-9]*$/.test(String(value))) fail("issuer_request_run_invalid");
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(request.candidate_artifact.name) || !IDENTITY_RE.test(request.requested_by) || !IDENTITY_RE.test(request.expected_issuer.principal) || request.requested_by === request.expected_issuer.principal) fail("issuer_request_identity_invalid");
-  for (const value of [request.expected_issuer.task_id, request.receipt_key.key_version]) if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/.test(value)) fail("issuer_request_execution_invalid");
-  validateIndependentIssuerFreshness(request, now);
-  return request;
-}
-
-export async function requestIndependentIssuer({
-  url,
-  apiToken,
-  request,
-  fetchImpl = fetch,
-  now = Date.now,
-} = {}) {
-  let issuerUrl;
-  try { issuerUrl = new URL(requireString(url, "issuer_url_invalid")); } catch { fail("issuer_url_invalid"); }
-  if (issuerUrl.protocol !== "https:"
-    || issuerUrl.pathname !== INDEPENDENT_ISSUER_ROUTE
-    || issuerUrl.search
-    || issuerUrl.username
-    || issuerUrl.password
-    || issuerUrl.hash) fail("issuer_url_invalid");
-  requireString(apiToken, "issuer_token_missing");
-  validateIndependentIssuerRequest(request, now);
-  const requestBody = canonicalJson(request);
-  const requestDigest = sha256(requestBody);
-  const response = await fetchImpl(issuerUrl, {
-    method: "POST",
-    headers: { accept: "application/json", authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-    body: requestBody,
-    signal: AbortSignal.timeout(30_000),
-  }).catch(() => null);
-  if (!response?.ok) fail("issuer_unavailable");
-  const body = await response.json().catch(() => null);
-  exactObjectKeys(body, ["acknowledgement"], "issuer_response_invalid");
-  return validateIssuerAcknowledgement(body.acknowledgement, {
-    phase: request.phase,
-    repository: request.repository,
-    source_commit: request.source_commit,
-    issuer_principal: request.expected_issuer.principal,
-    issuer_task_id: request.expected_issuer.task_id,
-    key_version: request.receipt_key.key_version,
-    request_digest: requestDigest,
-  });
-}
-
-async function issuerRequest(args) {
-  const phase = arg(args, "phase");
-  if (!/^(?:review|release-evidence)$/.test(phase)) fail("issuer_phase_invalid");
-  const source = await readJson(arg(args, "source"), "issuer_source_invalid");
-  const pr = await readJson(arg(args, "pr-context"), "issuer_pr_invalid");
-  const repository = arg(args, "repository");
-  if ((source.repository !== undefined && source.repository !== repository) || pr.repository !== repository || source.source_commit !== pr.ci_merge_commit || source.source_git_tree !== pr.ci_merge_tree || source.base_commit !== pr.base_commit) fail("issuer_source_drift");
-  const publicKey = await readFile(arg(args, "issuer-public-key"), "utf8");
-  const artifactName = arg(args, "artifact-name");
-  const contentDigest = requireHash(arg(args, "artifact-digest"), "issuer_artifact_digest_invalid");
-  const requestedAt = Date.now();
-  const receiptRef = phase === "review" ? `${REVIEW_RECEIPT_REF_PREFIX}${source.source_commit}` : `${RELEASE_EVIDENCE_REF_PREFIX}${source.source_commit}`;
-  const receiptPath = phase === "review" ? `${REVIEW_RECEIPT_PATH_PREFIX}${source.source_commit}.json` : `${RELEASE_EVIDENCE_PATH_PREFIX}${source.source_commit}.json`;
-  const request = {
-    schema: INDEPENDENT_ISSUER_REQUEST_SCHEMA,
-    phase,
-    repository,
-    pr_number: pr.number,
-    base_commit: source.base_commit,
-    head_commit: pr.head_commit,
-    source_commit: source.source_commit,
-    source_git_tree: source.source_git_tree,
-    source_tree_sha256: source.source_tree_sha256,
-    diff_sha256: source.diff_sha256,
-    ci_run_id: pr.ci_run_id,
-    candidate_artifact: {
-      actions_run_id: arg(args, "actions-run-id"),
-      actions_run_attempt: arg(args, "actions-run-attempt"),
-      name: artifactName,
-      content_digest: contentDigest,
-    },
-    publication: { ref: receiptRef, path: receiptPath },
-    receipt_key: { public_key_sha256: sha256(publicKey), key_version: arg(args, "issuer-key-version") },
-    requested_at: new Date(requestedAt).toISOString(),
-    expires_at: new Date(requestedAt + INDEPENDENT_ISSUER_REQUEST_LIFETIME_MS).toISOString(),
-    requested_by: arg(args, "requester-identity"),
-    expected_issuer: { principal: arg(args, "issuer-identity"), task_id: arg(args, "issuer-task-id") },
-  };
-  const acknowledgement = await requestIndependentIssuer({ url: arg(args, "url"), apiToken: env("RELEASE_INDEPENDENT_ISSUER_TOKEN"), request });
-  await writeJson(arg(args, "output"), acknowledgement);
-}
-
-async function reviewWait(args) {
-  const repository = arg(args, "repository");
-  const sourceCommit = requireCommit(arg(args, "source-commit"), "source_commit_invalid");
-  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
-  const attempts = boundedInteger(arg(args, "attempts"), { minimum: 1, maximum: 60, code: "review_wait_attempts_invalid" });
-  const intervalMs = boundedInteger(arg(args, "interval-ms"), { minimum: 0, maximum: 30_000, code: "review_wait_interval_invalid" });
-  if ((attempts - 1) * intervalMs > 10 * 60_000) fail("review_wait_window_invalid");
-  const source = await readJson(arg(args, "source"), "review_source_invalid");
-  if (source.source_commit !== sourceCommit) fail("review_source_commit_drift");
-  const issuerAck = validateIssuerAcknowledgement(await readJson(arg(args, "issuer-ack"), "review_issuer_ack_invalid"), { phase: "review", repository, source_commit: sourceCommit });
-  const publicKey = await readFile(arg(args, "review-public-key"), "utf8");
-  const token = env("GH_TOKEN");
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const receipt = await fetchReviewReceipt(repository, sourceCommit, token);
-    if (receipt !== null) {
-      const payload = verifyReviewGoReceipt(publicKey, receipt, {
-        repository,
-        source_commit: sourceCommit,
-        source_tree_sha256: requireHash(source.source_tree_sha256, "review_source_tree_invalid"),
-        diff_sha256: requireHash(source.diff_sha256, "review_diff_invalid"),
-      });
-      if (payload.reviewer_principal !== issuerAck.issuer_principal || payload.reviewer_task_id !== issuerAck.issuer_task_id || payload.reviewer_run_id !== issuerAck.issuer_run_id || payload.review_key_version !== issuerAck.key_version) fail("review_issuer_ack_drift");
-      await writeFile(arg(args, "output"), `${receipt}\n`, { mode: 0o600 });
-      return;
-    }
-    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  fail("review_receipt_wait_exhausted");
-}
-
-async function reviewSign(args) {
-  const repository = arg(args, "repository");
-  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
-  const source = await computeSourceEvidence({
-    repoRoot: arg(args, "repo-root"),
-    sourceCommit: arg(args, "source-commit"),
-    baseCommit: arg(args, "base-commit"),
-  });
-  const findings = exactObjectKeys(await readJson(arg(args, "findings"), "review_findings_invalid"), [
-    "schema", "repository", "source_commit", "source_tree_sha256", "diff_sha256",
-    "reviewer_principal", "reviewer_task_id", "reviewer_run_id", "review_key_version",
-    "decision", "unresolved_p0", "unresolved_p1", "findings",
-  ], "review_findings_shape_invalid");
-  if (findings.schema !== REVIEW_FINDINGS_SCHEMA
-    || findings.repository !== repository
-    || findings.source_commit !== source.source_commit
-    || findings.source_tree_sha256 !== source.source_tree_sha256
-    || findings.diff_sha256 !== source.diff_sha256) fail("review_findings_source_drift");
-  if (!IDENTITY_RE.test(findings.reviewer_principal) || findings.reviewer_principal === arg(args, "issuer-identity")) fail("reviewer_principal_invalid");
-  for (const value of [findings.reviewer_task_id, findings.reviewer_run_id, findings.review_key_version]) {
-    if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/.test(value)) fail("reviewer_execution_identity_invalid");
-  }
-  if (findings.decision !== "GO" || findings.unresolved_p0 !== 0 || findings.unresolved_p1 !== 0 || !Array.isArray(findings.findings)) fail("review_findings_not_go");
-  const now = Date.now();
-  const payload = {
-    schema: "ironwrap_release_review_v1",
-    type: "ironwrap-release-review",
-    repository,
-    source_commit: source.source_commit,
-    source_tree_sha256: source.source_tree_sha256,
-    diff_sha256: source.diff_sha256,
-    reviewer_principal: findings.reviewer_principal,
-    reviewer_task_id: findings.reviewer_task_id,
-    reviewer_run_id: findings.reviewer_run_id,
-    review_key_version: findings.review_key_version,
-    decision: findings.decision,
-    findings_digest: sha256(canonicalJson(findings)),
-    unresolved_p0: findings.unresolved_p0,
-    unresolved_p1: findings.unresolved_p1,
-    issued_at: new Date(now).toISOString(),
-    expires_at: new Date(now + 110 * 60_000).toISOString(),
-    nonce: randomBytes(48).toString("base64url"),
-  };
-  const receipt = signReviewGoReceipt(await readFile(arg(args, "review-private-key"), "utf8"), payload, { now });
-  await writeFile(arg(args, "output"), `${receipt}\n`, { mode: 0o600 });
-}
-
-async function reviewPublish(args) {
-  const repository = arg(args, "repository");
-  const sourceCommit = requireCommit(arg(args, "source-commit"), "source_commit_invalid");
-  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
-  const receipt = (await readFile(arg(args, "receipt"), "utf8")).trim();
-  verifyReviewGoReceipt(await readFile(arg(args, "review-public-key"), "utf8"), receipt, { repository, source_commit: sourceCommit });
-  const token = env("GH_TOKEN");
-  const headers = reviewHeaders(token);
-  const ref = `${REVIEW_RECEIPT_REF_PREFIX}${sourceCommit}`;
-  const relativePath = `${REVIEW_RECEIPT_PATH_PREFIX}${sourceCommit}.json`;
-  const refUrl = `https://api.github.com/repos/${repository}/git/ref/heads/${encodeURIComponent(ref)}`;
-  const existingRef = await fetch(refUrl, { headers }).catch(() => null);
-  if (!existingRef) fail("review_publish_unavailable");
-  if (existingRef.ok) {
-    const existing = await fetchReviewReceipt(repository, sourceCommit, token);
-    if (existing !== receipt) fail("review_publish_conflict");
-    await writeJson(arg(args, "output"), { status: "matched", repository, source_commit: sourceCommit, ref, path: relativePath, receipt_digest: sha256(receipt) });
-    return;
-  }
-  if (existingRef.status !== 404) fail("review_publish_unavailable");
-  const createdRef = await fetch(`https://api.github.com/repos/${repository}/git/refs`, {
-    method: "POST",
-    headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ ref: `refs/heads/${ref}`, sha: sourceCommit }),
-  }).catch(() => null);
-  const createdRefBody = await createdRef?.json().catch(() => null);
-  if (!createdRef?.ok || createdRefBody?.ref !== `refs/heads/${ref}` || createdRefBody?.object?.sha !== sourceCommit) fail("review_publish_ref_failed");
-  const published = await fetch(`https://api.github.com/repos/${repository}/contents/${relativePath}`, {
-    method: "PUT",
-    headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ message: `review: publish independent GO for ${sourceCommit}`, content: Buffer.from(`${receipt}\n`).toString("base64"), branch: ref }),
-  }).catch(() => null);
-  if (!published?.ok) fail("review_publish_write_failed");
-  const readback = await fetchReviewReceipt(repository, sourceCommit, token);
-  if (readback !== receipt) fail("review_publish_readback_drift");
-  await writeJson(arg(args, "output"), { status: "published", repository, source_commit: sourceCommit, ref, path: relativePath, receipt_digest: sha256(receipt) });
-}
-
-async function fetchReleaseEvidence(repository, sourceCommit, token) {
-  const ref = `${RELEASE_EVIDENCE_REF_PREFIX}${sourceCommit}`;
-  const relativePath = `${RELEASE_EVIDENCE_PATH_PREFIX}${sourceCommit}.json`;
-  const response = await fetch(`https://api.github.com/repos/${repository}/contents/${relativePath}?ref=${encodeURIComponent(ref)}`, {
-    headers: reviewHeaders(token),
-  }).catch(() => null);
-  if (response?.status === 404) return null;
-  if (!response?.ok) fail("release_evidence_unavailable");
-  const body = await response.json().catch(() => null);
-  if (!isRecord(body) || body.path !== relativePath || body.name !== `${sourceCommit}.json` || body.encoding !== "base64" || typeof body.content !== "string") fail("release_evidence_readback_invalid");
-  const encoded = body.content.replace(/\s+/g, "");
-  if (!encoded || !/^[A-Za-z0-9+/]+=*$/.test(encoded) || encoded.length % 4 !== 0) fail("release_evidence_encoding_invalid");
-  const decoded = Buffer.from(encoded, "base64").toString("utf8").trim();
-  if (!decoded) fail("release_evidence_empty");
-  return decoded;
-}
-
-async function releaseEvidenceWait(args) {
-  const repository = arg(args, "repository");
-  const sourceCommit = requireCommit(arg(args, "source-commit"), "source_commit_invalid");
-  const sourceGitTree = requireCommit(arg(args, "source-git-tree"), "source_git_tree_invalid");
-  const artifactDigest = requireHash(arg(args, "artifact-digest"), "artifact_digest_invalid");
-  const prNumber = boundedInteger(arg(args, "pr-number"), { minimum: 1, maximum: 2_147_483_647, code: "pr_number_invalid" });
-  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
-  const attempts = boundedInteger(arg(args, "attempts"), { minimum: 1, maximum: 120, code: "release_evidence_wait_attempts_invalid" });
-  const intervalMs = boundedInteger(arg(args, "interval-ms"), { minimum: 0, maximum: 30_000, code: "release_evidence_wait_interval_invalid" });
-  if ((attempts - 1) * intervalMs > 30 * 60_000) fail("release_evidence_wait_window_invalid");
-  const publicKey = await readFile(arg(args, "evidence-public-key"), "utf8");
-  const issuerIdentity = arg(args, "issuer-identity");
-  const issuerAck = validateIssuerAcknowledgement(await readJson(arg(args, "issuer-ack"), "release_evidence_issuer_ack_invalid"), { phase: "release-evidence", repository, source_commit: sourceCommit });
-  const token = env("GH_TOKEN");
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const receipt = await fetchReleaseEvidence(repository, sourceCommit, token);
-    if (receipt !== null) {
-      const payload = verifyExternalReleaseEvidence(publicKey, receipt, {
-        repository,
-        pr_number: prNumber,
-        source_commit: sourceCommit,
-        source_git_tree: sourceGitTree,
-        artifact_digest: artifactDigest,
-      });
-      if (payload.issuer_principal === issuerIdentity) fail("release_evidence_not_independent");
-      if (payload.issuer_principal !== issuerAck.issuer_principal || payload.issuer_task_id !== issuerAck.issuer_task_id || payload.issuer_run_id !== issuerAck.issuer_run_id || payload.key_version !== issuerAck.key_version) fail("release_evidence_issuer_ack_drift");
-      await writeFile(arg(args, "output"), `${receipt}\n`, { mode: 0o600 });
-      return;
-    }
-    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  fail("release_evidence_wait_exhausted");
-}
-
-async function releaseEvidenceSign(args) {
-  const body = exactObjectKeys(await readJson(arg(args, "input"), "release_evidence_input_invalid"), [
-    "schema",
-    "repository",
-    "pr_number",
-    "source_commit",
-    "source_git_tree",
-    "artifact_digest",
-    "supply_chain",
-    "service_identities",
-    "affected_scopes",
-    "recovery",
-    "provider_reconciliation",
-    "business_evidence",
-    "records",
-    "issuer_principal",
-    "issuer_task_id",
-    "issuer_run_id",
-    "key_version",
-  ], "release_evidence_input_shape_invalid");
-  if (body.schema !== "ironwrap_release_external_evidence_input_v1") fail("release_evidence_input_schema_invalid");
-  const source = await computeSourceEvidence({
-    repoRoot: arg(args, "repo-root"),
-    sourceCommit: arg(args, "source-commit"),
-    baseCommit: arg(args, "base-commit"),
-  });
-  if (body.repository !== arg(args, "repository")
-    || body.source_commit !== source.source_commit
-    || body.source_git_tree !== source.source_git_tree
-    || body.artifact_digest !== requireHash(arg(args, "artifact-digest"), "artifact_digest_invalid")
-    || body.issuer_principal === arg(args, "issuer-identity")) fail("release_evidence_input_identity_drift");
-  const checks = await readJsonArray(arg(args, "checks"), "release_evidence_checks_invalid");
-  const supplyChain = await computeSupplyChainEvidence({ repoRoot: arg(args, "repo-root"), sourceCommit: source.source_commit, ciChecks: checks });
-  if (canonicalJson(body.supply_chain) !== canonicalJson(supplyChain)) fail("release_evidence_supply_chain_drift");
-  const now = Date.now();
-  const payload = {
-    schema: "ironwrap_release_external_evidence_v1",
-    type: "ironwrap-release-external-evidence",
-    ...Object.fromEntries(Object.entries(body).filter(([key]) => key !== "schema")),
-    issued_at: new Date(now).toISOString(),
-    expires_at: new Date(now + 5.5 * 60 * 60_000).toISOString(),
-    nonce: randomBytes(48).toString("base64url"),
-  };
-  const receipt = signExternalReleaseEvidence(await readFile(arg(args, "evidence-private-key"), "utf8"), payload, { now });
-  await writeFile(arg(args, "output"), `${receipt}\n`, { mode: 0o600 });
-}
-
-async function releaseEvidencePublish(args) {
-  const repository = arg(args, "repository");
-  const sourceCommit = requireCommit(arg(args, "source-commit"), "source_commit_invalid");
-  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
-  const receipt = (await readFile(arg(args, "receipt"), "utf8")).trim();
-  verifyExternalReleaseEvidence(await readFile(arg(args, "evidence-public-key"), "utf8"), receipt, { repository, source_commit: sourceCommit });
-  const token = env("GH_TOKEN");
-  const headers = reviewHeaders(token);
-  const ref = `${RELEASE_EVIDENCE_REF_PREFIX}${sourceCommit}`;
-  const relativePath = `${RELEASE_EVIDENCE_PATH_PREFIX}${sourceCommit}.json`;
-  const refUrl = `https://api.github.com/repos/${repository}/git/ref/heads/${encodeURIComponent(ref)}`;
-  const existingRef = await fetch(refUrl, { headers }).catch(() => null);
-  if (!existingRef) fail("release_evidence_publish_unavailable");
-  if (existingRef.ok) {
-    const existing = await fetchReleaseEvidence(repository, sourceCommit, token);
-    if (existing !== receipt) fail("release_evidence_publish_conflict");
-    await writeJson(arg(args, "output"), { status: "matched", repository, source_commit: sourceCommit, ref, path: relativePath, receipt_digest: sha256(receipt) });
-    return;
-  }
-  if (existingRef.status !== 404) fail("release_evidence_publish_unavailable");
-  const createdRef = await fetch(`https://api.github.com/repos/${repository}/git/refs`, {
-    method: "POST",
-    headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ ref: `refs/heads/${ref}`, sha: sourceCommit }),
-  }).catch(() => null);
-  const createdRefBody = await createdRef?.json().catch(() => null);
-  if (!createdRef?.ok || createdRefBody?.ref !== `refs/heads/${ref}` || createdRefBody?.object?.sha !== sourceCommit) fail("release_evidence_publish_ref_failed");
-  const published = await fetch(`https://api.github.com/repos/${repository}/contents/${relativePath}`, {
-    method: "PUT",
-    headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ message: `release: publish external evidence for ${sourceCommit}`, content: Buffer.from(`${receipt}\n`).toString("base64"), branch: ref }),
-  }).catch(() => null);
-  if (!published?.ok) fail("release_evidence_publish_write_failed");
-  const readback = await fetchReleaseEvidence(repository, sourceCommit, token);
-  if (readback !== receipt) fail("release_evidence_publish_readback_drift");
-  await writeJson(arg(args, "output"), { status: "published", repository, source_commit: sourceCommit, ref, path: relativePath, receipt_digest: sha256(receipt) });
 }
 
 async function serviceAdapterSign(args) {
@@ -3004,14 +2570,6 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "pr-context") return prContext(args);
   if (command === "push-context") return pushContext(args);
   if (command === "source-evidence") return sourceEvidence(args);
-  if (command === "issuer-request") return issuerRequest(args);
-  if (command === "review-receipt") return reviewReceipt(args);
-  if (command === "review-wait") return reviewWait(args);
-  if (command === "review-sign") return reviewSign(args);
-  if (command === "review-publish") return reviewPublish(args);
-  if (command === "release-evidence-wait") return releaseEvidenceWait(args);
-  if (command === "release-evidence-sign") return releaseEvidenceSign(args);
-  if (command === "release-evidence-publish") return releaseEvidencePublish(args);
   if (command === "service-adapter-preflight") return serviceAdapterPreflight(args);
   if (command === "service-adapter-sign") return serviceAdapterSign(args);
   if (command === "service-adapter") return serviceAdapter(args);

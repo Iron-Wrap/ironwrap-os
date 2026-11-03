@@ -1,13 +1,9 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const DEFAULT_ROLE_POLICY_PATH = fileURLToPath(
-  new URL("../../../hermes/agents/roles.json", import.meta.url),
-);
+const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
 export function configFromEnv(env = process.env) {
   const baseUrl = normalizeBaseUrl(
@@ -17,11 +13,8 @@ export function configFromEnv(env = process.env) {
   const adminToken = env.IRONWRAP_ADMIN_TOKEN;
   const writeEnabled = env.IRONWRAP_BUS_WRITE_ENABLED === "true";
   const writeToken = env.IRONWRAP_BUS_WRITE_TOKEN ?? env.HERMES_WRITE_TOKEN;
-  const rolePolicy = loadRolePolicy(env.HERMES_ROLE_POLICY_PATH || DEFAULT_ROLE_POLICY_PATH);
-  const agentRole = env.HERMES_AGENT_ROLE;
-  const runtimeRole = rolePolicy.roles?.[agentRole];
   if (!adminToken) throw new Error("IRONWRAP_ADMIN_TOKEN is required");
-  if (!runtimeRole) throw new Error("HERMES_AGENT_ROLE must name a role in roles.json");
+  const allowedTools = allowedToolsFromEnv(env);
   const requestTimeoutMs = boundedInteger(env.IRONWRAP_BUS_REQUEST_TIMEOUT_MS, 10_000, 1_000, 60_000);
   return {
     baseUrl,
@@ -29,23 +22,20 @@ export function configFromEnv(env = process.env) {
     writeEnabled,
     writeToken,
     requestTimeoutMs,
-    agentRole,
-    agentRoleTitle: runtimeRole.title,
-    allowedTools: roleTools(runtimeRole),
+    allowedTools,
   };
 }
 
-export function loadRolePolicy(policyPath = DEFAULT_ROLE_POLICY_PATH) {
-  let policy;
-  try {
-    policy = JSON.parse(readFileSync(policyPath, "utf8"));
-  } catch (error) {
-    throw new Error(`hermes_role_policy_unreadable:${String(error).slice(0, 180)}`);
+/**
+ * The tool names the launching host grants this process. There is no default: without an
+ * explicit list the server does not start, so dropping the variable can never widen access.
+ */
+export function allowedToolsFromEnv(env = process.env) {
+  const names = (env.MCP_ALLOWED_TOOLS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  if (names.length === 0 || names.some((name) => !TOOL_NAME.test(name))) {
+    throw new Error("MCP_ALLOWED_TOOLS must list the tool names the launching host grants");
   }
-  if (!policy || typeof policy !== "object" || !policy.roles || typeof policy.roles !== "object") {
-    throw new Error("hermes_role_policy_invalid");
-  }
-  return policy;
+  return [...new Set(names)];
 }
 
 export async function busGet(config, path) {
@@ -111,7 +101,6 @@ export function assertWriteApproved(config, approvalToken) {
 }
 
 export function buildServer(config) {
-  config = resolveRuntimeConfig(config);
   const mcpServer = new McpServer({ name: "ironwrap-bus-mcp", version: "0.2.0" });
   const server = createAuthorizedRegistrar(mcpServer, config);
 
@@ -221,29 +210,28 @@ export function buildServer(config) {
     },
   );
 
+  server.assertAllowedToolsKnown();
   return mcpServer;
 }
 
-function resolveRuntimeConfig(config = {}) {
-  const rolePolicy = config.rolePolicy ?? loadRolePolicy(config.rolePolicyPath ?? DEFAULT_ROLE_POLICY_PATH);
-  const agentRole = config.agentRole ?? "owner-operator";
-  const role = rolePolicy.roles?.[agentRole];
-  if (!role) throw new Error("hermes_agent_role_unknown");
-  return {
-    ...config,
-    agentRole,
-    agentRoleTitle: config.agentRoleTitle ?? role.title,
-    allowedTools: config.allowedTools ?? roleTools(role),
-  };
-}
-
+// Registers only the tools the launching host granted, and refuses to build a server whose
+// grant is missing or names a tool this server does not have.
 function createAuthorizedRegistrar(mcpServer, config) {
+  if (!Array.isArray(config?.allowedTools) || config.allowedTools.length === 0) {
+    throw new Error("mcp_allowed_tools_required");
+  }
   const allowedTools = new Set(config.allowedTools);
+  const knownTools = new Set();
   const rawRegisterTool = mcpServer.registerTool.bind(mcpServer);
   return {
     registerTool(name, definition, handler) {
+      knownTools.add(name);
       if (!allowedTools.has(name)) return;
       rawRegisterTool(name, definition, handler);
+    },
+    assertAllowedToolsKnown() {
+      const unknown = [...allowedTools].filter((name) => !knownTools.has(name));
+      if (unknown.length > 0) throw new Error(`mcp_allowed_tools_unknown:${unknown.join(",")}`);
     },
   };
 }
@@ -276,14 +264,6 @@ function boundedInteger(raw, fallback, min, max) {
 
 function envelopeIdSchema() {
   return z.string().regex(/^ow_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-}
-
-function roleTools(role) {
-  return [...new Set([
-    ...(role.reads ?? []),
-    ...(role.dry_run ?? []),
-    ...(role.approved_write ?? []),
-  ])];
 }
 
 function safeError(error) {

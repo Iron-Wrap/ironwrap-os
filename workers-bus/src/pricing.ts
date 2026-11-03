@@ -7,7 +7,7 @@
 // review; it is not an approved commercial input.
 
 import type { TakeoffModel } from "./takeoff.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export interface PriceLine {
   kind: "panel" | "trim" | "fastener" | "labor";

@@ -14,7 +14,7 @@
 
 import { isOn, normalizeEmail, normalizePhone, type EnvelopeRecord } from "./core.ts";
 import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 const JN_BASE = "https://app.jobnimbus.com/api1";
 

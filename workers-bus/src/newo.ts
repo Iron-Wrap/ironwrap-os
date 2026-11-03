@@ -22,12 +22,12 @@ import {
   upsertNewoSession,
   type NewoSessionRecord,
 } from "./newo-store.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { handleNewoCallerLookup } from "./newo-caller.ts";
 import { materializeOperatingCore, tenantIdFrom } from "./operating-core.ts";
 import * as store from "./store.ts";
 
-export { canonicalJson, sha256Hex } from "./newo-hash.ts";
+export { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const NEWO_EVENT_SCHEMA_VERSION = "newo.event.v1" as const;
 export const NEWO_AVAILABILITY_SCHEMA_VERSION = "newo.availability.v1" as const;

@@ -25,7 +25,7 @@
  */
 import { validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const FIELD_ITEM_RESOLUTION_REQUEST_ID =
   /^field-item-resolution:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

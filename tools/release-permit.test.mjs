@@ -40,7 +40,7 @@ import {
   verifyServiceAdapterReceipt,
   verifyReleasePermit,
 } from "./release-permit.mjs";
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 
 const run = promisify(execFile);
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -1073,6 +1073,7 @@ test("provider version identity is bound to the upload message and full readback
   assert.throws(() => parseWranglerVersionId(`Worker Version ID: ${QA_VERSION}\nWorker Version ID: ${WORKER_VERSION}`), /release_permit_version_id_ambiguous/);
   const expectedManifest = [
     { name: "ASSETS", type: "assets" },
+    { name: "CF_VERSION_METADATA", type: "version_metadata" },
     { name: "CFG_APP", type: "json", value_digest: sha(canonicalJson({ APP_LOCALE: "en-US", APP_TENANT_ID: "ironwrap" })) },
     { name: "DB", type: "d1", resource_id: "a8fd0116-7af6-4788-98bd-083addbe58bc" },
     { name: "FEATURE_ENABLED", type: "plain_text", value_digest: sha("true") },
@@ -1091,6 +1092,7 @@ test("provider version identity is bound to the upload message and full readback
       script_runtime: runtimeManifest,
       bindings: [
         { name: "ASSETS", type: "assets" },
+        { name: "CF_VERSION_METADATA", type: "version_metadata" },
         { name: "CFG_APP", type: "json", json: { APP_TENANT_ID: "ironwrap", APP_LOCALE: "en-US" } },
         { name: "DB", type: "d1", id: "a8fd0116-7af6-4788-98bd-083addbe58bc" },
         { name: "FEATURE_ENABLED", type: "plain_text", text: "true" },
@@ -1116,6 +1118,9 @@ test("provider version identity is bound to the upload message and full readback
   assert.match(receipt.version_digest, /^[0-9a-f]{64}$/);
   const expected = { versionId: QA_VERSION, sourceCommit: COMMIT, sourceTreeSha256: TREE, artifactDigest: ARTIFACT, configDigest: QA_CONFIG, secretNames: ["INGEST_TOKEN"], bindingManifest: expectedManifest, runtimeManifest };
   const mutateBinding = (name, replacement) => ({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.map((binding) => binding.name === name ? { ...binding, ...replacement } : binding) } });
+  assert.throws(() => validateWorkerVersionReadback(mutateBinding("CF_VERSION_METADATA", { name: "SELECTED_VERSION" }), expected), /release_permit_version_readback_binding_manifest_drift/);
+  assert.throws(() => validateWorkerVersionReadback(mutateBinding("CF_VERSION_METADATA", { type: "plain_text", text: QA_VERSION }), expected), /release_permit_version_readback_binding_manifest_drift/);
+  assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.filter((binding) => binding.name !== "CF_VERSION_METADATA") } }, expected), /release_permit_version_readback_binding_manifest_drift/);
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("FEATURE_ENABLED", { text: "false" }), expected), /release_permit_version_readback_binding_value_digest_drift/);
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("SERVICE_ENDPOINT", { text: "https://wrong.example.invalid" }), expected), /release_permit_version_readback_binding_value_digest_drift/);
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("DB", { id: undefined }), expected), /release_permit_version_readback_binding_resource_id_missing/);
@@ -1551,6 +1556,67 @@ test("the OCR model allowlist is one list shared by the Worker, its config, and 
   const pinned = [...wrangler.matchAll(/"MEASUREMENT_OCR_MODEL":\s*"([^"]+)"/g)].map((match) => match[1]);
   assert.ok(pinned.length > 0, "wrangler.jsonc must pin MEASUREMENT_OCR_MODEL");
   for (const model of pinned) assert.ok(MEASUREMENT_OCR_MODELS.includes(model), `${model} is not an allowed OCR model`);
+});
+
+async function versionMetadataFixture(t) {
+  const candidateRoot = await mkdtemp(path.join(os.tmpdir(), "ironwrap-version-metadata-"));
+  t.after(() => rm(candidateRoot, { recursive: true, force: true }));
+  const policyRoot = path.resolve(import.meta.dirname, "..");
+  const configPath = path.join(candidateRoot, "workers-bus", "wrangler.jsonc");
+  const source = await readFile(path.join(policyRoot, "workers-bus", "wrangler.jsonc"), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  await mkdir(path.join(candidateRoot, "workers-bus", "src"), { recursive: true });
+  await writeFile(path.join(candidateRoot, "workers-bus", "src", "secret-bindings.d.ts"),
+    await readFile(path.join(policyRoot, "workers-bus", "src", "secret-bindings.d.ts")));
+  const writeConfig = (value) => writeFile(configPath, JSON.stringify(value));
+  await writeConfig(config);
+  return { candidateRoot, policyRoot, config, writeConfig };
+}
+
+test("version metadata is admitted explicitly and bound to the selected environment", async (t) => {
+  const { candidateRoot, policyRoot, config, writeConfig } = await versionMetadataFixture(t);
+  const originalQa = await computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment: "qa" });
+  const originalProduction = await computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment: "production" });
+  const originalTargets = await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" });
+  config.env.qa.version_metadata = { binding: "CF_VERSION_METADATA" };
+  await writeConfig(config);
+  assert.deepEqual(await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" }), originalTargets);
+  const qa = await computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment: "qa" });
+  assert.deepEqual(qa.binding_manifest.filter((entry) => entry.type === "version_metadata"),
+    [{ name: "CF_VERSION_METADATA", type: "version_metadata" }]);
+  assert.notEqual(qa.digest, originalQa.digest);
+  assert.deepEqual(qa.secret_names, originalQa.secret_names);
+  const { digest: productionDigest, ...productionBindings } = await computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment: "production" });
+  const { digest: originalProductionDigest, ...originalProductionBindings } = originalProduction;
+  // The digest pins the whole Wrangler source, while effective production bindings stay unchanged.
+  assert.notEqual(productionDigest, originalProductionDigest);
+  assert.deepEqual(productionBindings, originalProductionBindings);
+  config.version_metadata = { binding: "CF_VERSION_METADATA" };
+  await writeConfig(config);
+  assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" })).status, "matched");
+  assert.ok((await computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment: "production" }))
+    .binding_manifest.some((entry) => entry.name === "CF_VERSION_METADATA" && entry.type === "version_metadata"));
+});
+
+test("version metadata refuses malformed configuration and binding collisions", async (t) => {
+  const { candidateRoot, policyRoot, config, writeConfig } = await versionMetadataFixture(t);
+  for (const invalid of [null, [], "CF_VERSION_METADATA", {}, { binding: 7 },
+    { binding: "SELECTED_VERSION" }, { binding: "CF_VERSION_METADATA", extra: true }]) {
+    for (const environment of ["qa", "production"]) {
+      const changed = structuredClone(config);
+      (environment === "qa" ? changed.env.qa : changed).version_metadata = invalid;
+      await writeConfig(changed);
+      await assert.rejects(computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment }),
+        /release_permit_config_version_metadata_invalid/);
+      await assert.rejects(validateProviderTargetPolicy({ candidateRoot, policyRoot, environment }),
+        /release_permit_config_version_metadata_invalid/);
+    }
+  }
+  config.env.qa.version_metadata = { binding: "CF_VERSION_METADATA" };
+  config.env.qa.vars.CF_VERSION_METADATA = "forged-version";
+  await writeConfig(config);
+  await assert.rejects(computeEnvironmentConfigDigest({ repoRoot: candidateRoot, environment: "qa" }),
+    /release_permit_config_binding_duplicate/);
 });
 
 test("generation-N provider policy rejects candidate account and resource substitution", async (t) => {

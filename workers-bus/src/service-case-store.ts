@@ -14,7 +14,7 @@
 // these functions.
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const SERVICE_CASE_STATES = [
   "intake",

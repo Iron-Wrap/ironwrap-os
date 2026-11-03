@@ -50,7 +50,6 @@ deps: $(addsuffix /node_modules/.package-lock.json,$(NODE_PACKAGES) workers-bus)
 
 validate:
 	node tools/validate-erpnext-doctypes.mjs
-	node tools/validate-hermes-config.mjs
 	node tools/validate-tenant-config.mjs
 	node tools/validate-newo-config.mjs
 	node tools/validate-lead-triage-shadow-authority.mjs
@@ -112,9 +111,9 @@ test-tools:
 	  tools/deploy-workflow.test.mjs \
 	  tools/qa-artifact-flow.test.mjs \
 	  tools/qa-dead-letter-workflow.test.mjs \
+	  tools/canonical-json.test.mjs \
 	  tools/release-permit.test.mjs \
 	  tools/release-promotion.test.mjs
-	npm test --prefix release-issuer
 
 mcp: $(addsuffix /node_modules/.package-lock.json,$(filter mcp/%,$(NODE_PACKAGES)))
 	npm test --prefix mcp/erpnext-roofing-mcp
@@ -226,7 +225,7 @@ audit: deps
 static:
 	find deploy workers-bus -path '*/node_modules' -prune -o -type f -name '*.sh' -print0 \
 	  | xargs -0 -r -n1 bash -n
-	if grep -rl $$'—' hermes/ config/ deploy/; then \
+	if grep -rl $$'—' config/ deploy/; then \
 	  echo "em dash found in agent-facing content" >&2; exit 1; \
 	fi
 

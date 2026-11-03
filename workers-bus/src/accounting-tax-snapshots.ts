@@ -17,7 +17,7 @@
 // so this module stays pure and every rule above is testable without a socket.
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   rateDecimal,
   rateUnitsFromDecimal,

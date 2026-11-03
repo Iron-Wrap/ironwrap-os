@@ -16,7 +16,7 @@ the cloneable shape is proven with isolation, export, restore, and negative cros
 | Layer | Per-tenant unit | Repo artifact |
 | --- | --- | --- |
 | Frappe (IronWrap OS) | One plain Frappe site (never install the erpnext app) | `frappe-apps/ironwrap_roofing` installed per site |
-| Hermes | One Hermes profile (own memory, skills, MCP allowlist) | MCP env vars below |
+| MCP clients | One MCP host per tenant with its own `MCP_ALLOWED_TOOLS` grant | MCP env vars below |
 | Cloudflare | One Worker + D1 + R2 + queues + secrets set | `workers-bus/wrangler.jsonc` |
 | Storage | One Drive namespace (Shared Drives) + raw and privacy R2 buckets | `SHARED_DRIVE_ID_*` vars, `RAW` and `PRIVACY_LEDGER` bindings |
 | Accounting | One QuickBooks connection (own realm, verifier, and bounded Frappe issuer) | `QB_EXPECTED_REALM_ID`, `QB_WEBHOOK_TOKEN`, and tenant-only issuer credentials |
@@ -282,12 +282,14 @@ Run tenant-dedicated MCP server processes with tenant-only env:
 - `mcp/newo-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
   `NEWO_MCP_WRITE_ENABLED`, and no provider API key. The tenant Worker owns the Newo key,
   signed receipt ledger, control gates, and provider calls.
+- Every one of these processes also needs its own `MCP_ALLOWED_TOOLS`: the exact tools it may
+  register. A server refuses to start without that list or with a name it does not have.
 
 Defaults for a new tenant: write flags off (`ERPNEXT_WRITE_ENABLED` unset/false) until the
 tenant passes the approved-write proof. `HERMES_DRY_RUN_SIGNING_KEY` is unique per tenant and the
-approval broker public key plus bound approver identity are configured per isolated runtime. The
-Hermes profile (memory, skills, tool allowlist) is created fresh; never point two tenants'
-profiles at the same MCP process or token.
+approval broker public key plus bound approver identity are configured per isolated runtime. Each
+tenant's MCP host and tool grant are created fresh; never point two tenants at the same MCP
+process or token.
 
 ### 7. Brand/template pack
 
@@ -342,7 +344,7 @@ recovery boundaries.
   and the tenant owner has added at least one recipient on the Recipients screen
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
-- [ ] All 147 D1 migrations through `0206_agent_draft_closing.sql` applied to the tenant database.
+- [ ] All 148 D1 migrations through `0206_agent_draft_closing.sql` applied to the tenant database.
 - [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
   unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
   an older snapshot, elapsed time or empty RAW read does not authorize clearing them.

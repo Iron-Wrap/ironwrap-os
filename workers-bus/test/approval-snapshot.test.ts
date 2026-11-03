@@ -8,7 +8,7 @@ import {
   PROPOSAL_PUBLICATION_SNAPSHOT_LABEL,
   quoteRevisionSnapshotLabel,
 } from "../src/approval-snapshot.ts";
-import { canonicalJson } from "../src/newo-hash.ts";
+import { canonicalJson } from "../src/canonical.ts";
 import { canonicalJson as brokerCanonicalJson, digest, semanticPreview } from "../../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
 
 function input() {

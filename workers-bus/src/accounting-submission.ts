@@ -20,7 +20,7 @@
 //     here with their own code rather than being absent from a map and failing as a lookup miss.
 
 import type { AppEnv } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type {
   MoneyActorType,
   MoneyEffectExecutor,

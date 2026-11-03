@@ -22,7 +22,7 @@ import {
   readNativeInitialProviderMapping,
   recordNativeFinalInvoiceProviderBinding,
 } from "../src/native-final-invoice-producer.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 import {
   approveNativeFinalInvoice,
   isNativeFinalInvoiceCurrent,

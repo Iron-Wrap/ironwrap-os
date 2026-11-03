@@ -14,7 +14,7 @@ import { readCommercialJobPhase } from "../commercial-job-phase.ts";
 import { readEstimatorEvidenceHead } from "../estimator-native-store.ts";
 import { getInventoryPosition } from "../inventory-control.ts";
 import { listCurrentJobMeasurements } from "../measurement-intake-store.ts";
-import { canonicalJson, sha256Hex } from "../newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../canonical.ts";
 import type { ObjectModel, ObjectRead } from "./memory.ts";
 import type { AgentDb } from "./store.ts";
 import { delegationRecord } from "./shadow.ts";

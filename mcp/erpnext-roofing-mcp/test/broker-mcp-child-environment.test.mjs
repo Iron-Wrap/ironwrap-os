@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -8,7 +12,16 @@ import {
   BROKER_MCP_CHILD_FORWARDED_KEYS,
   brokerMcpChildEnvironment,
 } from "../src/approval-contract.mjs";
-import { configFromEnv } from "../src/server.mjs";
+import { brokerConfigFromEnv } from "../src/approval-broker.mjs";
+import {
+  PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL,
+  PRODUCTION_SCHEDULE_DRY_RUN_TOOL,
+  PRODUCTION_SCHEDULE_WRITE_TOOL,
+  productionScheduleApprovalBrokerConfigFromEnv,
+} from "../src/production-schedule-approval-broker.mjs";
+import { proposalPublicationBrokerConfigFromEnv } from "../src/proposal-publication-approval-broker.mjs";
+import { quoteRevisionBrokerConfigFromEnv } from "../src/quote-revision-approval-broker.mjs";
+import { allowedToolsFromEnv, configFromEnv } from "../src/server.mjs";
 
 // ELEC-128 defect 1. Three of the four brokers forwarded an allowlist copied from
 // the template that predates the tenant and effect-runtime requirements, so their
@@ -20,6 +33,11 @@ import { configFromEnv } from "../src/server.mjs";
 const AGENT_ROLE = "production-controller";
 const ACTOR_USER = "production-controller@example.com";
 const APPROVER_ID = "owner@example.com";
+const ALLOWED_TOOLS = [
+  PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL,
+  PRODUCTION_SCHEDULE_DRY_RUN_TOOL,
+  PRODUCTION_SCHEDULE_WRITE_TOOL,
+];
 
 /** The env a deployed broker process actually holds, plus noise it must not forward. */
 function brokerProcessEnv() {
@@ -44,7 +62,7 @@ function brokerProcessEnv() {
 function childEnv(overrides = {}) {
   return brokerMcpChildEnvironment(
     { ...brokerProcessEnv(), ...overrides },
-    { agentRole: AGENT_ROLE, actorUser: ACTOR_USER, approverId: APPROVER_ID },
+    { agentRole: AGENT_ROLE, actorUser: ACTOR_USER, approverId: APPROVER_ID, allowedTools: ALLOWED_TOOLS },
   );
 }
 
@@ -76,6 +94,7 @@ test("every env var the child's write runtime requires is on the forwarded allow
           agentRole: AGENT_ROLE,
           actorUser: ACTOR_USER,
           approverId: APPROVER_ID,
+          allowedTools: ALLOWED_TOOLS,
         }),
       );
     } catch {
@@ -103,14 +122,81 @@ test("the child environment forwards the runtime and withholds the broker's own 
     "HERMES_DRY_RUN_SIGNING_KEY",
     "IRONWRAP_EFFECT_RUNTIME_TOKEN",
     "IRONWRAP_EFFECT_RUNTIME_URL",
+    "MCP_ALLOWED_TOOLS",
     "PATH",
   ]);
+  assert.deepEqual(allowedToolsFromEnv(child), ALLOWED_TOOLS);
   assert.equal(child.PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET, undefined);
   assert.equal(child.HERMES_APPROVAL_PRIVATE_KEY, undefined);
   assert.equal(child.AWS_SECRET_ACCESS_KEY, undefined);
 });
 
-test("a real MCP child spawned with exactly this environment boots and serves its tools", async () => {
+test("every broker boots from its environment and grants its child exactly the tools it calls", (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const dir = mkdtempSync(join(tmpdir(), "broker-grant-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const privateKeyFile = join(dir, "approval-private.pem");
+  writeFileSync(privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const brokers = [
+    {
+      configFromEnv: brokerConfigFromEnv,
+      prefix: "APPROVAL_BROKER",
+      role: "lead-concierge",
+      tools: ["dry_run_mark_lead_triaged", "request_mark_lead_triaged"],
+    },
+    {
+      configFromEnv: quoteRevisionBrokerConfigFromEnv,
+      prefix: "QUOTE_REVISION_BROKER",
+      role: "estimator-assistant",
+      tools: ["dry_run_quote_revision", "request_create_quote_revision"],
+    },
+    {
+      configFromEnv: productionScheduleApprovalBrokerConfigFromEnv,
+      prefix: "PRODUCTION_SCHEDULE_BROKER",
+      role: "production-controller",
+      tools: ["get_crew_authority_roster", "dry_run_job_assignment", "request_create_job_assignment"],
+    },
+    {
+      configFromEnv: proposalPublicationBrokerConfigFromEnv,
+      prefix: "PROPOSAL_PUBLICATION_BROKER",
+      role: "owner-operator",
+      tools: ["dry_run_publish_proposal_evidence_pack", "request_publish_proposal_evidence_pack"],
+    },
+  ];
+  for (const broker of brokers) {
+    const config = broker.configFromEnv({
+      ...brokerProcessEnv(),
+      ERPNEXT_WRITE_ENABLED: "true",
+      HERMES_AGENT_ROLE: broker.role,
+      HERMES_ACTOR_USER: ACTOR_USER,
+      HERMES_APPROVER_ID: APPROVER_ID,
+      HERMES_APPROVAL_PUBLIC_KEY: publicKey.export({ type: "spki", format: "pem" }),
+      HERMES_APPROVAL_PRIVATE_KEY_FILE: privateKeyFile,
+      [`${broker.prefix}_TENANT_ID`]: "ironwrap",
+      [`${broker.prefix}_KEY_ID`]: "grant-test-v1",
+      [`${broker.prefix}_SHARED_SECRET`]: "b".repeat(48),
+    });
+    assert.equal(config.agentRole, broker.role);
+    assert.deepEqual(allowedToolsFromEnv(config.mcpEnv), broker.tools, `${broker.prefix} child grant`);
+    assert.equal(config.mcpEnv.HERMES_AGENT_ROLE, broker.role);
+  }
+});
+
+test("a broker cannot build a child environment without an exact tool grant", () => {
+  for (const allowedTools of [undefined, []]) {
+    assert.throws(
+      () => brokerMcpChildEnvironment(brokerProcessEnv(), {
+        agentRole: AGENT_ROLE,
+        actorUser: ACTOR_USER,
+        approverId: APPROVER_ID,
+        allowedTools,
+      }),
+      /broker_mcp_child_allowed_tools_required/,
+    );
+  }
+});
+
+test("a real MCP child spawned with exactly this environment boots and serves only its granted tools", async () => {
   // The end-to-end shape of ELEC-128 defect 1: the failure was never in the tool,
   // it was that the process never reached one. Listing tools proves the child got
   // past `configFromEnv` AND past service-principal attestation, and finished
@@ -143,9 +229,10 @@ test("a real MCP child spawned with exactly this environment boots and serves it
     await client.connect(transport);
     const { tools } = await client.listTools({}, { timeout: 20_000 });
     const names = tools.map((tool) => tool.name);
-    assert.ok(
-      names.includes("dry_run_job_assignment") && names.includes("request_create_job_assignment"),
-      "the child must serve the production-schedule rail's own tools",
+    assert.deepEqual(
+      names.sort(),
+      [...ALLOWED_TOOLS].sort(),
+      "the child must serve the production-schedule rail's own tools and nothing else",
     );
   } finally {
     await client.close().catch(() => {});

@@ -347,8 +347,8 @@ test("real HTTP adapters bind source/CI/provider, conditionally write STAGED, re
       conclusion: "success",
       head_branch: "main",
       head_sha: source.head,
-      repository: { full_name: "Iron-Wrap/ironwrap" },
-      head_repository: { full_name: "Iron-Wrap/ironwrap" },
+      repository: { full_name: "Iron-Wrap/ironwrap-os" },
+      head_repository: { full_name: "Iron-Wrap/ironwrap-os" },
     };
     runs.set(runId, {
       ...common,
@@ -504,6 +504,11 @@ test("real HTTP adapters bind source/CI/provider, conditionally write STAGED, re
   const fetcher = async (input, init) => {
     const request = new Request(input, init);
     const original = new URL(request.url);
+    if (original.hostname === "api.github.com")
+      assert.ok(
+        original.pathname.startsWith("/repos/Iron-Wrap/ironwrap-os/"),
+        "actual canonical repository API target",
+      );
     const headers = new Headers(request.headers);
     headers.set("x-synthetic-signing-host", original.host);
     return fetch(`${local}${original.pathname}${original.search}`, {
@@ -514,7 +519,7 @@ test("real HTTP adapters bind source/CI/provider, conditionally write STAGED, re
       signal: request.signal,
     });
   };
-  const authorization = await impl.authorizeAuthControl({
+  const authorizeInput = {
     policyRoot: p0.root,
     expectedPolicyCommit: p0.head,
     candidateRoots: { [versions[0]]: p0.root, [versions[1]]: p1.root },
@@ -524,7 +529,15 @@ test("real HTTP adapters bind source/CI/provider, conditionally write STAGED, re
     fetcher,
     githubToken: "synthetic-github-token-with-20-characters",
     providerToken: "synthetic-provider-token-with-20-characters",
-  });
+  };
+  const authorization = await impl.authorizeAuthControl(authorizeInput);
+  const firstRun = runs.get("1");
+  firstRun.head_repository = { full_name: "untrusted-fork/ironwrap-os" };
+  await assert.rejects(
+    impl.authorizeAuthControl(authorizeInput),
+    /auth_control_ci_not_successful/,
+  );
+  firstRun.head_repository = { full_name: "Iron-Wrap/ironwrap-os" };
   const head = {
     format: "ironwrap-auth-control-v2",
     controlRevision: 1,

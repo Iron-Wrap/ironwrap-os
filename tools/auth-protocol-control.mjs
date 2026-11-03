@@ -26,6 +26,7 @@ const execFile = promisify(execFileCallback);
 const verified = new WeakSet();
 const HASH = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+const REPOSITORY = "Iron-Wrap/ironwrap-os";
 // Captured tool-only P0 warmup can own this executable closure without pretending that
 // the future candidate's Worker auth runtime already exists in the predecessor tree.
 export const AUTH_CONTROL_WRITER_POLICY_FILES = Object.freeze([
@@ -816,7 +817,7 @@ async function githubRun(id, fetcher, token) {
   )
     fail("ci_credentials_missing");
   const response = await fetcher(
-    `https://api.github.com/repos/Iron-Wrap/ironwrap/actions/runs/${id}`,
+    `https://api.github.com/repos/${REPOSITORY}/actions/runs/${id}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -829,8 +830,8 @@ async function githubRun(id, fetcher, token) {
   const run = record(await response.json());
   if (
     String(run.id) !== String(id) ||
-    run.repository?.full_name !== "Iron-Wrap/ironwrap" ||
-    run.head_repository?.full_name !== "Iron-Wrap/ironwrap" ||
+    run.repository?.full_name !== REPOSITORY ||
+    run.head_repository?.full_name !== REPOSITORY ||
     run.status !== "completed" ||
     run.conclusion !== "success"
   )
@@ -950,7 +951,7 @@ async function verifyQualification(
   // This artifact must be emitted by the future protected producer qualification job. P1
   // supplies no such artifact, so neither CI-only success nor a source/health receipt can open it.
   const response = await fetcher(
-    `https://api.github.com/repos/Iron-Wrap/ironwrap/actions/runs/${q.runId}/artifacts`,
+    `https://api.github.com/repos/${REPOSITORY}/actions/runs/${q.runId}/artifacts`,
     {
       headers: {
         Authorization: `Bearer ${token}`,

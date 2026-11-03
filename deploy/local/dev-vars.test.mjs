@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   PORT_BEARING_KEYS,
   applyVars,
-  brokerPorts,
+  retiredBrokerVars,
   portBearingVars,
   scaffoldDevVars,
   setVar,
@@ -55,33 +55,28 @@ test("every loopback-port-bearing local wrangler var is overridden by predev", (
 
 test("the Worker's Frappe base URL follows IRONWRAP_LOCAL_FRAPPE_PORT", () => {
   const entries = new Map(
-    portBearingVars({ frappePort: "8021", workerPort: "7121", brokerPortBase: "9120" }),
+    portBearingVars({ frappePort: "8021", workerPort: "7121" }),
   );
   assert.equal(entries.get("ERPNEXT_BASE_URL"), "http://localhost:8021");
   assert.equal(entries.get("APP_PUBLIC_ORIGIN"), "http://localhost:7121");
   assert.equal(entries.get("APP_ALLOWED_ORIGINS"), "http://localhost:7121");
   assert.equal(entries.get("PUBLIC_ESTIMATE_ALLOWED_ORIGINS"), "http://localhost:7121");
-  assert.equal(entries.get("APP_APPROVAL_BROKER_URL"), "http://127.0.0.1:9121");
-  assert.equal(entries.get("APP_QUOTE_REVISION_BROKER_URL"), "http://127.0.0.1:9122");
-  assert.equal(entries.get("APP_PRODUCTION_SCHEDULE_BROKER_URL"), "http://127.0.0.1:9123");
-  assert.equal(entries.get("APP_PROPOSAL_PUBLICATION_BROKER_URL"), "http://127.0.0.1:9124");
 });
 
 test("port-bearing entries and the declared key list stay in step", () => {
   const keys = portBearingVars({
     frappePort: "8000",
     workerPort: "7100",
-    brokerPortBase: "9100",
   }).map(([key]) => key);
   assert.deepEqual([...keys].sort(), [...PORT_BEARING_KEYS].sort());
 });
 
 test("two stacks share no port and no default is changed", () => {
   const first = new Map(
-    portBearingVars({ frappePort: "8000", workerPort: "7100", brokerPortBase: "9100" }),
+    portBearingVars({ frappePort: "8000", workerPort: "7100" }),
   );
   const second = new Map(
-    portBearingVars({ frappePort: "8001", workerPort: "7101", brokerPortBase: "9200" }),
+    portBearingVars({ frappePort: "8001", workerPort: "7101" }),
   );
   // The documented single-stack defaults are exactly what wrangler.jsonc already pins.
   const pinned = localWranglerVars();
@@ -89,10 +84,25 @@ test("two stacks share no port and no default is changed", () => {
   for (const key of PORT_BEARING_KEYS) assert.notEqual(first.get(key), second.get(key));
 });
 
-test("a broker port base outside the usable range is refused, not silently coerced", () => {
-  for (const base of ["not-a-port", "80", "70000", "9100.5", ""]) {
-    assert.throws(() => brokerPorts(base), RangeError, `accepted ${JSON.stringify(base)}`);
+test("retired local broker overrides are cleared without dropping unrelated operator values", () => {
+  const retired = Object.fromEntries(retiredBrokerVars);
+  const saved = `APP_PROPOSAL_PUBLICATION_BROKER_URL=http://127.0.0.1:9104
+APP_PROPOSAL_PUBLICATION_ENABLED=true
+PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=synthetic-old
+APP_PROPOSAL_PUBLICATION_ENABLED=true
+CUSTOM_LOCAL_KEY=operator-choice
+`;
+  const updated = applyVars(saved, retiredBrokerVars);
+  const bindings = parseDevVars(updated);
+  for (const [key, value] of Object.entries(retired)) {
+    assert.equal(bindings.get(key), value);
+    if (!key.endsWith("_SHARED_SECRET")) {
+      assert.equal(localWranglerVars()[key], value === '""' ? "" : value);
+    }
   }
+  assert.doesNotMatch(updated, /9104|synthetic-old|APP_PROPOSAL_PUBLICATION_ENABLED=true/);
+  assert.equal(bindings.get("CUSTOM_LOCAL_KEY"), "operator-choice");
+  assert.equal(applyVars(updated, retiredBrokerVars), updated);
 });
 
 // ELEC-112 finding 6, reproduced again in ELEC-120: a fresh checkout has no .dev.vars, so
@@ -133,7 +143,7 @@ test("generated values overwrite the example placeholders, comments intact", () 
   const example = readFileSync(resolve(root, "workers-bus/.dev.vars.example"), "utf8");
   const seeded = scaffoldDevVars({ existing: "", example });
   const written = applyVars(seeded.text, [
-    ...portBearingVars({ frappePort: "8021", workerPort: "7121", brokerPortBase: "9120" }),
+    ...portBearingVars({ frappePort: "8021", workerPort: "7121" }),
     ["ERPNEXT_API_KEY", "generated-key"],
     ["EFFECT_RUNTIME_TOKEN", "generated-token"],
   ]);

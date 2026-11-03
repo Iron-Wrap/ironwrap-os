@@ -58,7 +58,6 @@ async function launchRuntime(t, extraEnvironment = {}) {
     ...process.env,
     PATH: `${workspace}:${dirname(process.execPath)}:${process.env.PATH}`,
     IRONWRAP_ADMIN_TOKEN: "synthetic-local-test-token",
-    IRONWRAP_LOCAL_APPROVAL_BROKERS: "off",
     IRONWRAP_RUNTIME_TEST_RECEIPT: receipt,
     ERPNEXT_STUB_PORT: String(stubPort),
     ERPNEXT_STUB_USER: "owner@example.invalid",
@@ -66,6 +65,7 @@ async function launchRuntime(t, extraEnvironment = {}) {
     ...extraEnvironment,
   };
   delete environment.ERPNEXT_TENANT_ID;
+  delete environment.IRONWRAP_LOCAL_APPROVAL_BROKERS;
   const child = spawn("/bin/bash", [launcherPath], {
     cwd: root,
     detached: true,
@@ -127,6 +127,7 @@ test("the launcher waits for the stub, forwards one Worker port, and leaves stdi
     /erpnext-stub ready[\s\S]*Starting: workers-bus/,
   );
   assert.match(runtime.output(), /All services started\./);
+  assert.doesNotMatch(runtime.output(), /^(Starting: approval-brokers|- brokers:)/m);
 
   let launches = [];
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -184,7 +185,7 @@ test("the opt-in agent host starts on loopback and serves health before the stac
   assert.equal(body.worker.reachable, false);
   assert.equal((await fetch(`http://127.0.0.1:${agentPort}/ready`)).status, 503);
   assert.doesNotMatch(runtime.output(), /synthetic-local-agent-token/);
-  assert.doesNotMatch(launcher, /export AGENT_HOST_WORKER_TOKEN/, "the agent token must not reach the brokers");
+  assert.doesNotMatch(launcher, /export AGENT_HOST_WORKER_TOKEN/, "the agent token must stay scoped to the agent host");
 });
 
 test("a required child exit fails the supervisor with its service name and log", async (t) => {

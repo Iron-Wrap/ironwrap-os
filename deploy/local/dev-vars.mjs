@@ -27,49 +27,34 @@ export const PORT_BEARING_KEYS = Object.freeze([
   "APP_PUBLIC_ORIGIN",
   "APP_ALLOWED_ORIGINS",
   "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
-  "APP_APPROVAL_BROKER_URL",
-  "APP_QUOTE_REVISION_BROKER_URL",
-  "APP_PRODUCTION_SCHEDULE_BROKER_URL",
-  "APP_PROPOSAL_PUBLICATION_BROKER_URL",
 ]);
 
-/** The four approval brokers, as offsets from one base port. */
-export function brokerPorts(brokerPortBase) {
-  const base = Number(brokerPortBase);
-  if (!Number.isInteger(base) || base < 1024 || base > 65_000) {
-    throw new RangeError("IRONWRAP_LOCAL_BROKER_PORT_BASE must be an integer in 1024-65000");
-  }
-  return {
-    approval: base + 1,
-    quoteRevision: base + 2,
-    productionSchedule: base + 3,
-    proposalPublication: base + 4,
-  };
-}
+// Old generated .dev.vars files take precedence over the checked-in local config.
+// Clear the retired broker origins, key IDs, and secrets during local preflight.
+export const retiredBrokerVars = [
+  ...["APPROVAL", "QUOTE_REVISION", "PRODUCTION_SCHEDULE", "PROPOSAL_PUBLICATION"].flatMap((name) => [
+    [`APP_${name}_BROKER_URL`, '""'],
+    [`APP_${name}_BROKER_KEY_ID`, '""'],
+    [`${name}_BROKER_SHARED_SECRET`, '""'],
+  ]),
+  ["APP_FACET_QUOTE_REVISION_PREPARE_ENABLED", "false"],
+  ["APP_PROPOSAL_PUBLICATION_ENABLED", "false"],
+];
 
-/**
- * The `.dev.vars` entries that move a whole stack off the single documented default, derived
- * from the three IRONWRAP_LOCAL_* ports and nothing else.
- */
-export function portBearingVars({ frappePort, workerPort, brokerPortBase }) {
-  const broker = brokerPorts(brokerPortBase);
+export function portBearingVars({ frappePort, workerPort }) {
   return [
     ["ERPNEXT_BASE_URL", `http://localhost:${frappePort}`],
     ["APP_PUBLIC_ORIGIN", `http://localhost:${workerPort}`],
     ["APP_ALLOWED_ORIGINS", `http://localhost:${workerPort}`],
     ["PUBLIC_ESTIMATE_ALLOWED_ORIGINS", `http://localhost:${workerPort}`],
-    ["APP_APPROVAL_BROKER_URL", `http://127.0.0.1:${broker.approval}`],
-    ["APP_QUOTE_REVISION_BROKER_URL", `http://127.0.0.1:${broker.quoteRevision}`],
-    ["APP_PRODUCTION_SCHEDULE_BROKER_URL", `http://127.0.0.1:${broker.productionSchedule}`],
-    ["APP_PROPOSAL_PUBLICATION_BROKER_URL", `http://127.0.0.1:${broker.proposalPublication}`],
   ];
 }
 
-/** Set or replace one `KEY=value` line, leaving every other line (and comment) untouched. */
+/** Update existing `KEY=value` lines or append one, preserving unrelated lines. */
 export function setVar(source, key, value) {
   const line = `${key}=${value}`;
   return source.match(new RegExp(`^${key}=`, "m"))
-    ? source.replace(new RegExp(`^${key}=.*$`, "m"), line)
+    ? source.replace(new RegExp(`^${key}=.*$`, "gm"), () => line)
     : `${source.trimEnd()}\n${line}\n`;
 }
 

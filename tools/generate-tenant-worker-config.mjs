@@ -16,6 +16,7 @@
 //
 // It provisions NOTHING. Real Cloudflare resources (account, D1, R2, queues, routes, secrets)
 // are an owner action; this emits the exact commands and returns them as a hand-off list.
+import { retiredBrokerVars } from "../deploy/local/dev-vars.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +85,9 @@ export function tenantResourceName(name, tenantId, sourceTenantId) {
  * runtime ports and the source value; returning undefined drops the var.
  */
 export const TENANT_SCOPED_VARS = Object.freeze({
+  ...Object.fromEntries(retiredBrokerVars
+    .filter(([name]) => !name.endsWith("_SHARED_SECRET"))
+    .map(([name, value]) => [name, () => value === '""' ? "" : value])),
   APP_TENANT_ID: ({ tenant }) => tenant.tenant.id,
   APP_TENANT_NAME: ({ tenant }) => tenant.runtime.app_tenant_name,
   APP_TENANT_BRAND: ({ tenant }) => tenant.brand.name,
@@ -102,10 +106,6 @@ export const TENANT_SCOPED_VARS = Object.freeze({
   APP_ALLOWED_ORIGINS: ({ runtime }) => runtime.workerOrigin,
   PUBLIC_ESTIMATE_ALLOWED_ORIGINS: ({ runtime }) => runtime.workerOrigin,
   PUBLIC_ESTIMATE_ALLOWED_BRANDS: ({ tenant }) => tenant.brand.brands.map((brand) => brand.key).join(","),
-  APP_APPROVAL_BROKER_URL: ({ runtime }) => `http://127.0.0.1:${runtime.brokerPorts.approval}`,
-  APP_QUOTE_REVISION_BROKER_URL: ({ runtime }) => `http://127.0.0.1:${runtime.brokerPorts.quoteRevision}`,
-  APP_PRODUCTION_SCHEDULE_BROKER_URL: ({ runtime }) => `http://127.0.0.1:${runtime.brokerPorts.productionSchedule}`,
-  APP_PROPOSAL_PUBLICATION_BROKER_URL: ({ runtime }) => `http://127.0.0.1:${runtime.brokerPorts.proposalPublication}`,
   // Facet v2 routes bind a signed delivery to one destination tenant and one public https
   // origin, so a copied route would deliver another tenant's design events here. The rail
   // stays off until the owner registers this tenant's own route (hand-off below).
@@ -295,18 +295,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const out = read("--out", join(root, "workers-bus", `wrangler.${tenantId}.jsonc`));
     const tenant = JSON.parse(readFileSync(join(root, "config", "tenants", `${tenantId}.json`), "utf8"));
     const base = JSON.parse(stripJsonComments(readFileSync(join(root, "workers-bus", "wrangler.jsonc"), "utf8")));
-    const brokerPortBase = Number(read("--broker-port-base", "9200"));
     const sourceEnv = read("--source-env", "local");
     const runtime = {
       frappeBaseUrl: read("--frappe-base-url", `http://${tenantId}.localhost:8000`),
       workerOrigin: read("--worker-origin", `http://localhost:${read("--worker-port", "7200")}`),
       identityDomain: read("--identity-domain", `${tenantId}.local`),
-      brokerPorts: {
-        approval: brokerPortBase + 1,
-        quoteRevision: brokerPortBase + 2,
-        productionSchedule: brokerPortBase + 3,
-        proposalPublication: brokerPortBase + 4,
-      },
     };
     const { config, handoff } = generateTenantWorkerConfig({ base, tenant, runtime, sourceEnv });
     writeFileSync(out, `${JSON.stringify(config, null, 2)}\n`);

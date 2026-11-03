@@ -76,9 +76,6 @@ check_required_services() {
 cleanup() {
   echo
   echo "Stopping local runtime services..."
-  # The brokers record their own pids, so stop them by name rather than relying on
-  # a signal reaching through the wrapper subshell.
-  bash "$ROOT_DIR/deploy/local/start-approval-brokers.sh" stop 2>/dev/null || true
   for i in "${!PIDS[@]}"; do
     pid="${PIDS[$i]}"
     name="${NAMES[$i]}"
@@ -160,7 +157,7 @@ if [[ "${IRONWRAP_LOCAL_AGENT_HOST:-off}" == "on" ]]; then
   if [[ -z "$local_agent_token" ]]; then
     local_agent_token="$(sed -n 's/^AGENT_HOST_TOKEN=//p' "$ROOT_DIR/workers-bus/.dev.vars" 2>/dev/null | head -n 1)"
   fi
-  # Scoped to the agent host alone: assigned for this one call, never exported to the brokers.
+  # Scoped to the agent host alone: assigned for this one call, never exported to other children.
   AGENT_HOST_PORT="$AGENT_HOST_PORT" \
   AGENT_HOST_STATE_DIR="${AGENT_HOST_STATE_DIR:-$LOG_DIR/agent-host-state}" \
   AGENT_HOST_WORKER_URL="$HERMES_BUS_BASE_URL" \
@@ -176,20 +173,6 @@ fi
 # Launching them as background services gives them closed stdin and makes them
 # exit cleanly before any client can connect.
 
-# Approval brokers (proposal publication + production schedule)
-# These are the only path to steps 5 and 6 of the six-step workflow. They talk to
-# the REAL local Frappe stack, not the stub above, because they perform approved
-# writes to operating records. The helper waits for deploy/local/predev.mjs (run by
-# the workers-bus dev server started above) to write their env files, so ordering
-# here is not a race. Set IRONWRAP_LOCAL_APPROVAL_BROKERS=off to skip them.
-if [[ "${IRONWRAP_LOCAL_APPROVAL_BROKERS:-on}" == "off" ]]; then
-  echo "Skipping approval brokers (IRONWRAP_LOCAL_APPROVAL_BROKERS=off): steps 5 and 6 will be unreachable."
-else
-  start_service "approval-brokers" "$ROOT_DIR" "$LOG_DIR/approval-brokers.log" \
-    env IRONWRAP_EFFECT_RUNTIME_URL="$HERMES_BUS_BASE_URL" \
-      bash "$ROOT_DIR/deploy/local/start-approval-brokers.sh" --foreground
-fi
-
 echo
 
 check_required_services || exit 1
@@ -197,7 +180,6 @@ echo "All services started."
 echo "- bus:       $HERMES_BUS_BASE_URL"
 echo "- app:       http://localhost:5173"
 echo "- stub ERP:  http://127.0.0.1:$ERPNEXT_STUB_PORT"
-echo "- brokers:   http://127.0.0.1:9104 (proposal publication), http://127.0.0.1:9103 (production schedule)"
 if [[ "${IRONWRAP_LOCAL_AGENT_HOST:-off}" == "on" ]]; then
   echo "- agent:     http://127.0.0.1:$AGENT_HOST_PORT/health"
 fi

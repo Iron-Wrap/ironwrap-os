@@ -1,6 +1,6 @@
 # Local E2E stack - IronWrap OS (dev only, never production)
 
-One command brings up the whole owned path locally:
+Run the Worker and built PWA against the local compatibility stack:
 
 ```bash
 cd workers-bus && npm run dev
@@ -18,12 +18,12 @@ cd workers-bus && npm run dev
    `.dev.vars.example`, so `ADMIN_TOKEN`, `INGEST_TOKEN` and `APP_AUTH_PEPPER` are already
    there rather than a hand-add step - and carries the local Frappe integration API
    key/secret plus the host-port-bearing values (`ERPNEXT_BASE_URL`, `APP_PUBLIC_ORIGIN` and
-   its allowlist, the broker URLs) that override `wrangler.jsonc`'s single-stack defaults.
-   An existing `.dev.vars` is never rewritten; only the generated values are refreshed
+   its allowlist) that override `wrangler.jsonc`'s single-stack defaults.
+   Existing operator values are preserved outside generated bindings. Preflight also clears
+   retired broker overrides in existing files.
 5. every D1 migration is applied to the local Miniflare database
 6. the bench copy of `ironwrap_roofing` matches the repo (a stale volume is resynced
    and the container restarted; see "App source edits vs the bench copy" below)
-7. `deploy/local/keys/*-broker.env` exist for the two scripted approval brokers
 
 Then `wrangler dev --env local --port 7100 --test-scheduled` starts (the port follows
 `IRONWRAP_LOCAL_WORKER_PORT`): the Worker serves
@@ -77,28 +77,20 @@ The owner action that opens the chain is `POST /api/v1/estimator/jobs/{job}/face
 | Cron sweeps | `GET /__scheduled?cron=0%208%20*%20*%20*` |
 | Dead-letter replay | `POST /admin/replay` (ADMIN_TOKEN + approval context) |
 
-## Approval brokers (Hermes approved writes)
+## Starting the local runtime
 
-Steps 5 and 6 of the six-step workflow (publish a proposal to the customer portal,
-schedule production) are approved writes: the Worker never touches Frappe for them,
-it calls a private broker that holds the Hermes signing material and its own Frappe
-operator identity. **Both of those brokers are started by script.** Nothing has to be
-provisioned or hand-written first:
+`bash start-local-runtime.sh` supervises the Worker, app development server and synthetic ERP
+stub. The optional agent host is enabled with `IRONWRAP_LOCAL_AGENT_HOST=on`. The Worker
+preflight still starts the separate local compatibility stack described above.
 
-```bash
-cd workers-bus && npm run dev          # predev provisions identities + writes broker env
-deploy/local/start-approval-brokers.sh # starts 9104 + 9103, waits until both answer
-```
+The ERPNext approval broker package is retired. Local launchers leave the historical broker
+connections and their feature gates off. Use native Worker paths for supported office and field
+work, including native D1 scheduling. Legacy broker-backed lead triage, quote revision, proposal
+publication and schedule writes are outside this local launch path. The Worker retains historical
+approval records and reconciliation controls.
 
-`start-local-runtime.sh` also starts the approval brokers as one supervised child, so
-a full local write-capable runtime needs no separate broker command. The Hermes MCP
-servers are different: they stay as stdio children of their client process and are
-**not** daemonized by `start-local-runtime.sh`. Set
-`IRONWRAP_LOCAL_APPROVAL_BROKERS=off` to skip the brokers (steps 5 and 6 then have no
-path to Frappe).
-
-When a local MCP client must use the Worker bus, pin one known-free port in the
-parent shell so the launcher and client cannot drift if the default port is busy:
+The surviving MCP servers use stdio and are spawned by their clients. When a local MCP client
+must use the Worker bus, pin one known-free port in the parent shell:
 
 ```bash
 export HERMES_BUS_PORT=8787
@@ -106,48 +98,7 @@ export IRONWRAP_BUS_BASE_URL="http://localhost:$HERMES_BUS_PORT"
 bash start-local-runtime.sh
 ```
 
-The bus MCP still needs the local-development and authentication variables documented
-in `mcp/ironwrap-bus-mcp/README.md`; the client supplies them when it spawns the stdio
-server.
-
-What makes that work:
-
-- `frappe-init.sh` provisions the four broker actor identities
-  (`lead-concierge@`, `estimator-assistant@`, `production-controller@`,
-  `owner-operator@ironwrap.local`) with their own API key pairs, plus the
-  `owner@ironwrap.local` approver and `crew@ironwrap.local` field login. A broker
-  refuses to start when its API token resolves to any user other than its configured
-  actor (`frappe_service_principal_mismatch`), so these are not optional.
-- `predev.mjs` generates the two Worker-to-broker shared secrets and writes
-  `deploy/local/keys/proposal-publication-broker.env` and
-  `production-schedule-broker.env` with matching key ids and ports for
-  `wrangler.jsonc`'s `local` env (`127.0.0.1:9104` and `127.0.0.1:9103`). The keys
-  directory is gitignored; every value in those files is throwaway.
-- `start-approval-brokers.sh start|stop|status` manages both processes, logging to
-  `.runtime-logs/<broker>-broker.log` with pids in `.runtime-logs/<broker>-broker.pid`.
-
-The other two brokers (lead-triage on 9101, quote-revision on 9102) still need a
-hand-written env file; their actor identities and API keys are provisioned for them,
-so only the env file and `node src/<broker>.mjs` remain:
-
-- lead-triage (`src/approval-broker.mjs`): role `lead-concierge`,
-  `APPROVAL_BROKER_{TENANT_ID=ironwrap,KEY_ID=local-approval-broker,SHARED_SECRET,PORT}`
-- quote-revision (`src/quote-revision-approval-broker.mjs`): role
-  `estimator-assistant`, `QUOTE_REVISION_BROKER_*`
-
-Read a generated env file for the exact common shape (`ERPNEXT_*`, `HERMES_*`,
-`IRONWRAP_EFFECT_RUNTIME_*`); `deploy/*-approval-broker.env.example` is the production
-shape and names production hosts and users, not local ones.
-
-### Reading a broker failure
-
-A broker answers `4xx` when it decided against the request and is unreachable when it
-did not answer at all. The Worker keeps that distinction: a signature-verified `422`
-surfaces the broker's own code (for example `broker_proposal_evidence_pack_not_draft`)
-with HTTP 422, other verified `4xx` codes surface with 502, and only a network failure
-or a `5xx` reads `*_broker_unavailable`. Before this, every non-2xx collapsed into
-`*_broker_unavailable`, and finding the real reason meant instrumenting broker source
-(ELEC-95).
+See `mcp/ironwrap-bus-mcp/README.md` for the client's local authentication variables.
 
 ## Fixtures a traverse needs but no product surface builds yet
 
@@ -231,21 +182,19 @@ to detect that edit as drift and put the bench back on the repo revision.
 
 Every host port the stack binds is overridable, so a second stack gets its own containers,
 its own volumes and its own ports instead of resyncing a bench another run is mid-proof on
-- or, worse, quietly answering with the first stack's data. Export the three variables
+- or, worse, quietly answering with the first stack's data. Export the two port variables
 together and run the second stack from its own checkout:
 
 | Variable | Default | Moves |
 |---|---|---|
 | `IRONWRAP_LOCAL_FRAPPE_PORT` | `8000` | Frappe's host port, the compose site base URL, and the Worker's `ERPNEXT_BASE_URL` |
-| `IRONWRAP_LOCAL_WORKER_PORT` | `7100` | `wrangler dev`'s port, `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, `PUBLIC_ESTIMATE_ALLOWED_ORIGINS`, and the brokers' `IRONWRAP_EFFECT_RUNTIME_URL` |
-| `IRONWRAP_LOCAL_BROKER_PORT_BASE` | `9100` | the four approval brokers (`base+1` approval, `+2` quote revision, `+3` production schedule, `+4` proposal publication) and the `APP_*_BROKER_URL` the Worker calls them on |
+| `IRONWRAP_LOCAL_WORKER_PORT` | `7100` | `wrangler dev`'s port, `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, `PUBLIC_ESTIMATE_ALLOWED_ORIGINS` |
 
 ```bash
 export COMPOSE_PROJECT_NAME=ironwrap-scratch
-export IRONWRAP_LOCAL_FRAPPE_PORT=8001 IRONWRAP_LOCAL_WORKER_PORT=7101 IRONWRAP_LOCAL_BROKER_PORT_BASE=9200
+export IRONWRAP_LOCAL_FRAPPE_PORT=8001 IRONWRAP_LOCAL_WORKER_PORT=7101
 docker compose -f deploy/local/docker-compose.yml up -d
 cd workers-bus && npm run dev          # same shell, so predev sees all three
-deploy/local/start-approval-brokers.sh # same shell again
 ```
 
 `wrangler.jsonc` is static JSON and cannot read the environment, so the `local` env still
@@ -273,8 +222,7 @@ leg (`--port 7443`, above - pass a different `--port` and matching `FACET_V2_ROU
 if a second one is needed), and `.wrangler/state` plus `deploy/local/keys/`, which are
 per-checkout rather than per-port. Run the second stack from a second checkout.
 
-Defaults are unchanged: one stack, project `ironwrap-local`, Frappe 8000, Worker 7100,
-brokers 9101-9104.
+Defaults are unchanged: one stack, project `ironwrap-local`, Frappe 8000, and Worker 7100.
 
 ## Reset
 

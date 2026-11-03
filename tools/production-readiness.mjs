@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { createPublicKey } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
+import { retiredBrokerVars } from "../deploy/local/dev-vars.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
 // The capability registry and its evaluator are imported, not restated. G1.3 found this verifier
 // covered none of the eight capabilities spec 9.3 names, so a flag flip on QuickBooks, Newo,
@@ -29,12 +30,6 @@ const REQUIRED_DEPLOY_FILES = [
   "deploy/env.example",
   "deploy/release.env.example",
   "deploy/cloudflared-config.example.yml",
-  "deploy/approval-broker.service.example",
-  "deploy/approval-broker.env.example",
-  "deploy/quote-revision-approval-broker.service.example",
-  "deploy/quote-revision-approval-broker.env.example",
-  "deploy/production-schedule-approval-broker.service.example",
-  "deploy/production-schedule-approval-broker.env.example",
   "deploy/backup-to-r2.sh",
   "deploy/restore-from-r2.sh",
   "deploy/backup-d1-to-r2.sh",
@@ -381,48 +376,6 @@ function normalizedProductionUrl(value) {
   }
 }
 
-function privateBrokerEnvTemplate(text, {
-  role,
-  actor,
-  publicKeyPath,
-  privateKeyPath,
-  prefix,
-  keyId,
-  port,
-}) {
-  const parsed = parseEnvTemplate(text);
-  const { values } = parsed;
-  const expected = {
-    ERPNEXT_REQUEST_TIMEOUT_MS: "10000",
-    ERPNEXT_WRITE_ENABLED: "true",
-    HERMES_AGENT_ROLE: role,
-    HERMES_ACTOR_USER: actor,
-    HERMES_APPROVER_ID: "owner@ironwrapexteriors.com",
-    HERMES_APPROVAL_PUBLIC_KEY_FILE: publicKeyPath,
-    HERMES_APPROVAL_PRIVATE_KEY_FILE: privateKeyPath,
-    [`${prefix}_TENANT_ID`]: "ironwrap",
-    [`${prefix}_KEY_ID`]: keyId,
-    [`${prefix}_LISTEN_HOST`]: "127.0.0.1",
-    [`${prefix}_PORT`]: port,
-    [`${prefix}_MAX_CLOCK_SKEW_MS`]: "60000",
-    [`${prefix}_MAX_APPROVAL_LIFETIME_MS`]: "300000",
-  };
-  const placeholderKeys = [
-    "ERPNEXT_BASE_URL",
-    "ERPNEXT_API_KEY",
-    "ERPNEXT_API_SECRET",
-    "HERMES_DRY_RUN_SIGNING_KEY",
-    `${prefix}_SHARED_SECRET`,
-  ];
-  return {
-    values,
-    ok: parsed.duplicates.size === 0 &&
-      Object.entries(expected).every(([name, value]) => values.get(name) === value) &&
-      placeholderKeys.every((name) => isPlaceholder(values.get(name))) &&
-      values.get(`${prefix}_SHARED_SECRET`) !== values.get("HERMES_DRY_RUN_SIGNING_KEY"),
-  };
-}
-
 export function isPlaceholder(value) {
   if (typeof value !== "string" || value.trim() === "") return true;
   const normalized = value.trim().toLowerCase();
@@ -726,58 +679,6 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   const cloudflared = contents.get("deploy/cloudflared-config.example.yml") ?? "";
   checks.push(check("contract.tunnel.fallback", /- service:\s*http_status:404\s*$/m.test(cloudflared), "Tunnel template has a fail-closed 404 fallback", "Tunnel template must end with an HTTP 404 fallback"));
   checks.push(check("contract.tunnel.local_origin", /service:\s*http:\/\/(?:127\.0\.0\.1|localhost):8080/.test(cloudflared), "Tunnel origin stays on the local host", "Tunnel origin must target localhost port 8080"));
-  const approvalBrokerService = contents.get("deploy/approval-broker.service.example") ?? "";
-  checks.push(check("contract.approval_broker.service", approvalBrokerService.includes("User=ironwrap-broker") && approvalBrokerService.includes("EnvironmentFile=/etc/ironwrap/approval-broker.env") && approvalBrokerService.includes("approval-broker.mjs") && approvalBrokerService.includes("NoNewPrivileges=true") && approvalBrokerService.includes("ProtectSystem=strict") && approvalBrokerService.includes("UMask=0077"), "approval broker service is least-privilege and environment-file scoped", "approval broker service must run under a dedicated account with no-new-privileges, strict filesystem protection, and a root-owned environment file"));
-  const quoteRevisionApprovalBrokerService = contents.get("deploy/quote-revision-approval-broker.service.example") ?? "";
-  checks.push(check("contract.quote_revision_approval_broker.service", quoteRevisionApprovalBrokerService.includes("User=ironwrap-broker") && quoteRevisionApprovalBrokerService.includes("EnvironmentFile=/etc/ironwrap/quote-revision-approval-broker.env") && quoteRevisionApprovalBrokerService.includes("quote-revision-approval-broker.mjs") && !quoteRevisionApprovalBrokerService.includes("EnvironmentFile=/etc/ironwrap/approval-broker.env") && !quoteRevisionApprovalBrokerService.includes("ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/approval-broker.mjs") && quoteRevisionApprovalBrokerService.includes("NoNewPrivileges=true") && quoteRevisionApprovalBrokerService.includes("ProtectSystem=strict") && quoteRevisionApprovalBrokerService.includes("UMask=0077"), "quote-revision approval broker has an isolated least-privilege process and environment file", "quote-revision approval broker must stay a distinct least-privilege process with its own environment file and command"));
-  const productionScheduleApprovalBrokerService = contents.get("deploy/production-schedule-approval-broker.service.example") ?? "";
-  checks.push(check("contract.production_schedule_approval_broker.service", productionScheduleApprovalBrokerService.includes("User=ironwrap-broker") && productionScheduleApprovalBrokerService.includes("EnvironmentFile=/etc/ironwrap/production-schedule-approval-broker.env") && productionScheduleApprovalBrokerService.includes("production-schedule-approval-broker.mjs") && !productionScheduleApprovalBrokerService.includes("ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/approval-broker.mjs") && productionScheduleApprovalBrokerService.includes("NoNewPrivileges=true") && productionScheduleApprovalBrokerService.includes("ProtectSystem=strict") && productionScheduleApprovalBrokerService.includes("UMask=0077"), "production-schedule approval broker has an isolated least-privilege process and environment file", "production-schedule approval broker must stay a distinct least-privilege process with its own environment file and command"));
-
-  const approvalBrokerEnv = privateBrokerEnvTemplate(contents.get("deploy/approval-broker.env.example") ?? "", {
-    role: "lead-concierge",
-    actor: "lead-concierge@ironwrapexteriors.com",
-    publicKeyPath: "/run/secrets/hermes-approval-public.pem",
-    privateKeyPath: "/run/secrets/hermes-approval-private.pem",
-    prefix: "APPROVAL_BROKER",
-    keyId: "approval-v1",
-    port: "8788",
-  });
-  const quoteRevisionBrokerEnv = privateBrokerEnvTemplate(contents.get("deploy/quote-revision-approval-broker.env.example") ?? "", {
-    role: "estimator-assistant",
-    actor: "estimator@ironwrapexteriors.com",
-    publicKeyPath: "/run/secrets/hermes-approval-public.pem",
-    privateKeyPath: "/run/secrets/hermes-approval-private.pem",
-    prefix: "QUOTE_REVISION_BROKER",
-    keyId: "quote-revision-v1",
-    port: "8789",
-  });
-  const productionScheduleBrokerEnv = privateBrokerEnvTemplate(contents.get("deploy/production-schedule-approval-broker.env.example") ?? "", {
-    role: "production-controller",
-    actor: "production-controller@ironwrapexteriors.com",
-    publicKeyPath: "/run/secrets/hermes-production-schedule-approval-public.pem",
-    privateKeyPath: "/run/secrets/hermes-production-schedule-approval-private.pem",
-    prefix: "PRODUCTION_SCHEDULE_BROKER",
-    keyId: "production-schedule-v1",
-    port: "8790",
-  });
-  checks.push(check("contract.approval_broker.env", approvalBrokerEnv.ok, "lead-triage broker environment is complete and placeholder-only", "lead-triage broker environment must be complete, role-bound, and placeholder-only"));
-  checks.push(check("contract.quote_revision_approval_broker.env", quoteRevisionBrokerEnv.ok, "quote-revision broker environment is complete and placeholder-only", "quote-revision broker environment must be complete, role-bound, and placeholder-only"));
-  checks.push(check("contract.production_schedule_approval_broker.env", productionScheduleBrokerEnv.ok, "production-schedule broker environment is complete and placeholder-only", "production-schedule broker environment must be complete, role-bound, and placeholder-only"));
-  checks.push(check(
-    "contract.approval_brokers.isolation",
-    new Set([
-      approvalBrokerEnv.values.get("APPROVAL_BROKER_KEY_ID"),
-      quoteRevisionBrokerEnv.values.get("QUOTE_REVISION_BROKER_KEY_ID"),
-      productionScheduleBrokerEnv.values.get("PRODUCTION_SCHEDULE_BROKER_KEY_ID"),
-    ]).size === 3 && new Set([
-      approvalBrokerEnv.values.get("APPROVAL_BROKER_PORT"),
-      quoteRevisionBrokerEnv.values.get("QUOTE_REVISION_BROKER_PORT"),
-      productionScheduleBrokerEnv.values.get("PRODUCTION_SCHEDULE_BROKER_PORT"),
-    ]).size === 3,
-    "approval broker templates use distinct key IDs and loopback ports",
-    "approval broker templates must keep their key IDs and loopback ports distinct",
-  ));
-
   const backup = contents.get("deploy/backup-to-r2.sh") ?? "";
   checks.push(check("contract.backup.safety", backup.includes("set -euo pipefail") && backup.includes("set +x") && backup.includes("umask 077") && backup.includes("this command accepts no arguments") && backup.includes("mktemp -d") && backup.includes("trap cleanup EXIT") && backup.includes("flock -n"), "backup script uses fail-closed input, temporary-file, and concurrency controls", "backup script lacks fail-closed input, temporary-file, or concurrency controls"));
   checks.push(check("contract.backup.encryption", backup.includes("age --encrypt") && backup.includes("BACKUP_AGE_RECIPIENT"), "backup script encrypts before upload", "backup script must encrypt before upload"));
@@ -969,6 +870,38 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     "every registry capability has a recorded reference state",
     "every registry capability must have a recorded reference state, and the recorded table must name no capability the registry does not",
   ));
+
+  const retiredBrokerAssets = [
+    "deploy/local/start-approval-brokers.sh",
+    "mcp/erpnext-roofing-mcp/package.json",
+    ...["approval", "quote-revision-approval", "production-schedule-approval", "proposal-publication-approval"]
+      .flatMap((name) => ["service", "env"].map((kind) => `deploy/${name}-broker.${kind}.example`)),
+  ];
+  const retiredAssetsAbsent = await Promise.all(retiredBrokerAssets.map(async (relative) => {
+    try {
+      await lstat(path.join(repoRoot, relative));
+      return false;
+    } catch (error) {
+      return error.code === "ENOENT";
+    }
+  }));
+  const launcher = await readText(repoRoot, "start-local-runtime.sh");
+  checks.push(check("contract.retired_brokers.launch", retiredAssetsAbsent.every(Boolean) &&
+    launcher !== null && !/start-approval-brokers|erpnext-roofing-mcp/.test(launcher),
+  "local launcher and deploy examples exclude retired approval brokers",
+  "remove retired approval broker launch references and deploy assets"));
+  let localBrokerBindingsDisabled = false;
+  try {
+    const local = flattenWranglerVars(JSON.parse(stripJsonComments(wranglerSource)).env.local.vars);
+    localBrokerBindingsDisabled = retiredBrokerVars
+      .filter(([name]) => !name.endsWith("_SHARED_SECRET"))
+      .every(([name, value]) => local[name] === (value === '""' ? "" : value));
+  } catch {
+    // A missing or malformed local block cannot prove the retirement boundary.
+  }
+  checks.push(check("contract.retired_brokers.local_config", localBrokerBindingsDisabled,
+    "local Worker defaults leave retired broker connections and feature gates off",
+    "clear retired broker URLs and key IDs and turn their local feature gates off"));
 
   const referenceCapabilities = evaluateReferenceCapabilities(wranglerSource ?? "");
   checks.push(check("contract.capability.parse", referenceCapabilities.ok, "reference capability configuration is readable", referenceCapabilities.error ?? "reference capability configuration is unreadable"));

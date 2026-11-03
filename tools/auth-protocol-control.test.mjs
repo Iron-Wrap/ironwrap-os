@@ -1,7 +1,9 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 import {
   AUTH_CONTROL_WRITER_POLICY_FILES,
@@ -18,6 +20,11 @@ import {
   signedControlRequest,
 } from "../shared/auth-control-s3.mjs";
 import { canonicalV2 } from "../shared/auth-protocol-v2.mjs";
+import {
+  computeSourceEvidence,
+  computeEnvironmentConfigDigest,
+  releaseVersionMessage,
+} from "./release-permit.mjs";
 import {
   credentials,
   versions,
@@ -37,6 +44,155 @@ before(async () => {
 after(async () => {
   await capsules?.cleanup();
 });
+
+const execFile = promisify(execFileCallback);
+
+// These archives and provider/run adapters are synthetic qualification inputs,
+// never evidence that a deployed producer or a protected QA job was qualified.
+async function qualificationArchive(
+  h,
+  { proof: changes = {}, runId = "4" } = {},
+) {
+  const candidate = h.contexts.find((binding) => binding.role === "candidate");
+  const predecessor = h.contexts.find(
+    (binding) => binding.role === "predecessor" && binding.protocol === 2,
+  );
+  const proof = {
+    format: "ironwrap-auth-producer-qualification-v2",
+    status: "completed",
+    environment: "qa",
+    sourceCommit: candidate.sourceCommit,
+    enrollmentShipping: "closed",
+    schemaHash: "c".repeat(64),
+    controlReadOnlyCredentialProbe: "passed",
+    conditionalWriterRace: "passed",
+    nativeD1BarrierOracles: "passed",
+    activePredecessorRollback: "passed",
+    allEntryPointsInventoried: true,
+    isolatedRestore: "passed",
+    candidateVersion: candidate.versionId,
+    predecessorVersion: predecessor.versionId,
+    databaseIdentity: h.head({ bindings: h.contexts }).databaseIdentity,
+    issuer: candidate.issuer,
+    ...changes,
+  };
+  const directory = await mkdtemp(path.join(capsules.parent, "qualification-"));
+  const archivePath = path.join(directory, "qualification.zip");
+  await execFile("python3", [
+    "-c",
+    'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w"); z.writestr("auth-producer-qualification.json",sys.argv[2]); z.close()',
+    archivePath,
+    JSON.stringify(proof),
+  ]);
+  const archiveHash = sha(await readFile(archivePath));
+  const artifact = {
+    name: `auth-producer-qualification-${h.runs.get(runId).head_sha}`,
+    expired: false,
+    digest: `sha256:${archiveHash}`,
+  };
+  const fetcher = async (input, init) => {
+    const request = new Request(input, init);
+    if (
+      request.url ===
+      `https://api.github.com/repos/Iron-Wrap/ironwrap-os/actions/runs/${runId}/artifacts`
+    ) {
+      assert.equal(
+        request.headers.get("authorization"),
+        `Bearer ${githubToken}`,
+      );
+      return Response.json({ artifacts: [artifact] });
+    }
+    return h.fetcher(input, init);
+  };
+  return {
+    proof,
+    artifact,
+    qualification: { runId, archivePath, archiveHash },
+    fetcher,
+  };
+}
+
+async function extraPredecessor(h, distinctSource = false) {
+  let source = capsules.p1;
+  if (distinctSource) {
+    const root = await mkdtemp(path.join(capsules.parent, "other-source-"));
+    await cp(source.root, root, { recursive: true });
+    await writeFile(
+      path.join(root, "synthetic-source-marker.txt"),
+      "Distinct synthetic source; never deployed.\n",
+    );
+    await execFile("git", ["add", "."], { cwd: root });
+    await execFile(
+      "git",
+      [
+        "-c",
+        "user.name=Synthetic fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "distinct synthetic source",
+      ],
+      { cwd: root },
+    );
+    source = {
+      root,
+      head: (
+        await execFile("git", ["rev-parse", "HEAD"], { cwd: root })
+      ).stdout.trim(),
+    };
+  }
+  const binding = {
+    ...h.contexts[2],
+    versionId: versions[3],
+    sourceCommit: source.head,
+    baseCommit: source.head,
+    artifactHash: "b".repeat(64),
+    ciRunId: "7",
+    qaRunId: "8",
+  };
+  const evidence = await computeSourceEvidence({
+    repoRoot: source.root,
+    sourceCommit: source.head,
+    baseCommit: source.head,
+  });
+  const config = await computeEnvironmentConfigDigest({
+    repoRoot: source.root,
+    environment: h.input(false).environment,
+  });
+  const provider = structuredClone(h.providers.get(versions[2]));
+  provider.id = versions[3];
+  provider.annotations["workers/message"] = releaseVersionMessage({
+    sourceCommit: source.head,
+    sourceTreeSha256: evidence.source_tree_sha256,
+    artifactDigest: binding.artifactHash,
+    configDigest: config.digest,
+  });
+  h.providers.set(versions[3], provider);
+  h.runs.set("7", { ...h.runs.get("5"), id: 7, head_sha: source.head });
+  h.runs.set("8", { ...h.runs.get("6"), id: 8, head_sha: source.head });
+  return {
+    binding,
+    source,
+    bindings: [h.contexts[1], h.contexts[2], binding],
+    candidateRoots: {
+      ...h.input(false).candidateRoots,
+      [versions[3]]: source.root,
+    },
+  };
+}
+
+function qualifiedHead(h, authorization) {
+  return {
+    ...h.head(authorization),
+    controlRevision: 2,
+    minProducerProtocol: 2,
+    mode: "closed",
+    qualificationReceiptHash: authorization.qualification.hash,
+  };
+}
 
 test("P0 release hash includes the complete Node writer closure without absent P1 runtime/schema", async () => {
   assert.equal(new Set(RELEASE_POLICY_FILES).size, RELEASE_POLICY_FILES.length);
@@ -752,4 +908,172 @@ test("committed P1 SQL fixture composes with current migrations and the exact wr
     () => h.db.exec("UPDATE app_auth_protocol SET protocol_floor=1"),
     /auth_protocol_floor/,
   );
+});
+
+test("correction02 qualification accepts the exact candidate/run and predecessor pair in isolated QA", async (t) => {
+  const h = await harness(capsules, t);
+  await h.stage();
+  h.deploymentVersions = [
+    { version_id: versions[1], percentage: 100 },
+    { version_id: versions[2], percentage: 0 },
+  ];
+  const evidence = await qualificationArchive(h);
+  const authorization = await h.authorize(false, evidence);
+  assert.deepEqual(authorization.qualification.pair, [
+    versions[1],
+    versions[2],
+  ]);
+  await h.commit(authorization, qualifiedHead(h, authorization));
+  const stored = JSON.parse(h.s3.stored);
+  assert.equal(stored.minProducerProtocol, 2);
+  assert.equal(stored.mode, "closed");
+  assert.deepEqual(
+    stored.allowedProducerBindings.map((binding) => binding.versionId),
+    [versions[1], versions[2]],
+  );
+});
+
+test("correction02 qualification cannot swap candidate and predecessor roles even at the same source", async (t) => {
+  const h = await harness(capsules, t);
+  await h.stage();
+  const evidence = await qualificationArchive(h, {
+    proof: { candidateVersion: versions[2], predecessorVersion: versions[1] },
+  });
+  await assert.rejects(
+    h.authorize(false, evidence),
+    /qualification_pair_drift/,
+  );
+  assert.equal(h.s3.puts, 1);
+});
+
+test("correction02 qualification for two predecessors cannot authorize the actual candidate", async (t) => {
+  const h = await harness(capsules, t);
+  await h.stage();
+  const observed = await extraPredecessor(h);
+  const evidence = await qualificationArchive(h, {
+    proof: { candidateVersion: versions[2], predecessorVersion: versions[3] },
+  });
+  await assert.rejects(
+    h.authorize(false, { ...evidence, ...observed }),
+    /qualification_pair_drift/,
+  );
+  assert.equal(h.s3.puts, 1);
+});
+
+test("correction02 qualification run/source must belong to the actual candidate rather than another observed source", async (t) => {
+  const h = await harness(capsules, t);
+  await h.stage();
+  const observed = await extraPredecessor(h, true);
+  const evidence = await qualificationArchive(h, {
+    runId: "8",
+    proof: { sourceCommit: observed.source.head },
+  });
+  await assert.rejects(
+    h.authorize(false, { ...evidence, ...observed }),
+    /qualification_run_drift/,
+  );
+  assert.equal(h.s3.puts, 1);
+});
+
+test("correction02 qualification covers every admitted producer including an undeployed or zero-percent extra", async (t) => {
+  for (const deployed of [false, true]) {
+    await t.test(
+      deployed ? "zero-percent member" : "not yet deployed",
+      async (t) => {
+        const h = await harness(capsules, t);
+        await h.stage();
+        const observed = await extraPredecessor(h);
+        h.deploymentVersions = [
+          { version_id: versions[1], percentage: 100 },
+          { version_id: versions[2], percentage: 0 },
+        ];
+        if (deployed)
+          h.deploymentVersions.push({ version_id: versions[3], percentage: 0 });
+        const evidence = await qualificationArchive(h);
+        const authorization = await h.authorize(false, {
+          ...evidence,
+          ...observed,
+        });
+        await assert.rejects(
+          h.commit(authorization, qualifiedHead(h, authorization)),
+          /qualification_producer_uncovered/,
+        );
+        assert.equal(h.s3.puts, 1);
+      },
+    );
+  }
+});
+
+test("correction02 qualification does not invent QA-to-production mapping even for matching synthetic IDs", async (t) => {
+  const h = await harness(capsules, t, "production");
+  await h.stage();
+  const evidence = await qualificationArchive(h);
+  await assert.rejects(
+    h.authorize(false, evidence),
+    /qualification_environment_mapping_unproven/,
+  );
+  assert.equal(h.s3.puts, 1);
+});
+
+test("correction02 qualification retains immutable run, source, artifact and archive guards", async (t) => {
+  for (const [name, mutate, expected] of [
+    [
+      "unfinished run",
+      async (h) =>
+        h.runs.set("4", { ...h.runs.get("4"), status: "in_progress" }),
+      /ci_not_successful/,
+    ],
+    [
+      "wrong workflow",
+      async (h) =>
+        h.runs.set("4", {
+          ...h.runs.get("4"),
+          path: ".github/workflows/ci.yml",
+        }),
+      /qualification_run_drift/,
+    ],
+    ["wrong proof source", null, /qualification_incomplete/],
+    [
+      "wrong artifact name",
+      async (_h, evidence) => {
+        evidence.artifact.name = "unrelated-artifact";
+      },
+      /qualification_artifact_drift/,
+    ],
+    [
+      "expired artifact",
+      async (_h, evidence) => {
+        evidence.artifact.expired = true;
+      },
+      /qualification_artifact_drift/,
+    ],
+    [
+      "wrong metadata digest",
+      async (_h, evidence) => {
+        evidence.artifact.digest = `sha256:${"f".repeat(64)}`;
+      },
+      /qualification_artifact_drift/,
+    ],
+    [
+      "changed local archive",
+      async (_h, evidence) => {
+        await writeFile(evidence.qualification.archivePath, "synthetic-tamper");
+      },
+      /qualification_archive_drift/,
+    ],
+  ]) {
+    await t.test(name, async (t) => {
+      const h = await harness(capsules, t);
+      await h.stage();
+      const evidence = await qualificationArchive(
+        h,
+        name === "wrong proof source"
+          ? { proof: { sourceCommit: capsules.p0.head } }
+          : {},
+      );
+      if (mutate) await mutate(h, evidence);
+      await assert.rejects(h.authorize(false, evidence), expected);
+      assert.equal(h.s3.puts, 1);
+    });
+  }
 });

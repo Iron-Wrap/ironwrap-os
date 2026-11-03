@@ -90,7 +90,12 @@ function requireLegacyDeployment(deployment, bindings) {
     fail("legacy_predecessor_not_current");
 }
 
-async function requirePristineBootstrapMirror(account, database, token, fetcher) {
+async function requirePristineBootstrapMirror(
+  account,
+  database,
+  token,
+  fetcher,
+) {
   const mirror = await d1Query(
     account,
     database,
@@ -253,6 +258,7 @@ export async function authorizeAuthControl({
       (environment === "production" ? raw.name : `${raw.name}-${environment}`);
     if (!["candidate", "predecessor"].includes(b.role))
       fail("producer_role_missing");
+    let predecessorRunId = null;
     if (b.role === "predecessor") {
       const qa = await githubRun(b.qaRunId, fetcher, githubToken);
       if (
@@ -261,6 +267,7 @@ export async function authorizeAuthControl({
         qa.event !== "workflow_run"
       )
         fail("predecessor_qualification_missing");
+      predecessorRunId = String(qa.id);
     }
     const provider = await providerVersion(
       account,
@@ -336,6 +343,7 @@ export async function authorizeAuthControl({
       providerReadbackHash: result.version_digest,
       sourceCommit: b.sourceCommit,
       ciRunId: String(run.id),
+      qaRunId: predecessorRunId,
       role: b.role,
       dataClass: vars.AGENT_DATA_CLASS,
       workerName: worker,
@@ -356,6 +364,13 @@ export async function authorizeAuthControl({
     )
   )
     fail("control_target_crossed");
+  if (
+    checked.filter((x) => x.role === "candidate").length !== 1 ||
+    !checked.some((x) => x.role === "predecessor") ||
+    new Set(checked.map((x) => x.versionId)).size !== checked.length ||
+    new Set(checked.map((x) => x.workerName)).size !== 1
+  )
+    fail("candidate_predecessor_pair_required");
   let completed = null;
   if (qualification !== null)
     completed = await verifyQualification(
@@ -365,12 +380,6 @@ export async function authorizeAuthControl({
       fetcher,
       githubToken,
     );
-  if (
-    checked.filter((x) => x.role === "candidate").length !== 1 ||
-    !checked.some((x) => x.role === "predecessor") ||
-    new Set(checked.map((x) => x.workerName)).size !== 1
-  )
-    fail("candidate_predecessor_pair_required");
   const workerName = checked[0].workerName;
   const deployed = await providerDeployment(
     controlConfig.accountId,
@@ -508,6 +517,24 @@ export function validateAuthControlTransition(current, next, authorization) {
     next.qualificationReceiptHash !== authorization.qualification?.hash
   )
     fail("qualification_hash_unproven");
+  if (
+    next.qualificationReceiptHash !== null &&
+    next.allowedProducerBindings.some((entry) => {
+      const covered = authorization.qualification.coveredProducerBindings.find(
+        (binding) => binding.versionId === entry.versionId,
+      );
+      return (
+        !covered ||
+        canonicalV2(entry) !==
+          canonicalV2(
+            Object.fromEntries(
+              Object.keys(entry).map((key) => [key, covered[key]]),
+            ),
+          )
+      );
+    })
+  )
+    fail("qualification_producer_uncovered");
   return next;
 }
 
@@ -772,7 +799,13 @@ export async function writeAuthProtocolMirror({
       WHERE singleton=1 AND protocol_floor=1 AND mode='staged' AND enrollment_open=0
         AND control_revision<=? AND issuer=? AND activation_id=? AND database_identity=?
         AND NOT EXISTS (SELECT 1 FROM app_auth_contexts WHERE generation>0)`;
-    params = [h.controlRevision, h.controlRevision, h.issuer, h.activationId, h.databaseIdentity];
+    params = [
+      h.controlRevision,
+      h.controlRevision,
+      h.issuer,
+      h.activationId,
+      h.databaseIdentity,
+    ];
   } else if (phase === "close") {
     if (h.mode !== "closed") fail("mirror_close_refused");
     sql = `UPDATE app_auth_protocol SET mode='closed',control_revision=?,enrollment_open=0
@@ -955,14 +988,20 @@ async function providerDeployment(account, worker, fetcher, token) {
         !entry ||
         typeof entry !== "object" ||
         Array.isArray(entry) ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.version_id) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+          entry.version_id,
+        ) ||
         typeof entry.percentage !== "number" ||
         !Number.isFinite(entry.percentage) ||
         entry.percentage < 0 ||
         entry.percentage > 100,
     ) ||
-    new Set(latest.versions.map((entry) => entry.version_id)).size !== latest.versions.length ||
-    Math.abs(latest.versions.reduce((total, entry) => total + entry.percentage, 0) - 100) > 1e-9
+    new Set(latest.versions.map((entry) => entry.version_id)).size !==
+      latest.versions.length ||
+    Math.abs(
+      latest.versions.reduce((total, entry) => total + entry.percentage, 0) -
+        100,
+    ) > 1e-9
   )
     fail("deployment_invalid");
   return latest;
@@ -1013,11 +1052,13 @@ async function verifyQualification(
   token,
 ) {
   const q = record(input);
+  const candidate = bindings.find((binding) => binding.role === "candidate");
+  if (!candidate || candidate.protocol !== 2) fail("qualification_pair_drift");
   const run = await githubRun(q.runId, fetcher, token);
   if (
     run.path !== ".github/workflows/deploy.yml" ||
     run.event !== "workflow_run" ||
-    !bindings.some((x) => x.sourceCommit === run.head_sha)
+    run.head_sha !== candidate.sourceCommit
   )
     fail("qualification_run_drift");
   // This artifact must be emitted by the future protected producer qualification job. P1
@@ -1061,6 +1102,7 @@ async function verifyQualification(
     proof.status !== "completed" ||
     proof.environment !== "qa" ||
     proof.sourceCommit !== run.head_sha ||
+    proof.sourceCommit !== candidate.sourceCommit ||
     proof.enrollmentShipping !== "closed" ||
     !HASH.test(proof.schemaHash) ||
     proof.controlReadOnlyCredentialProbe !== "passed" ||
@@ -1072,11 +1114,16 @@ async function verifyQualification(
   )
     fail("qualification_incomplete");
   const pair = [proof.candidateVersion, proof.predecessorVersion];
+  const predecessor = bindings.find(
+    (binding) =>
+      binding.role === "predecessor" &&
+      binding.protocol === 2 &&
+      binding.versionId === proof.predecessorVersion,
+  );
   if (
     new Set(pair).size !== 2 ||
-    pair.some(
-      (v) => !bindings.some((b) => b.versionId === v && b.protocol === 2),
-    ) ||
+    proof.candidateVersion !== candidate.versionId ||
+    !predecessor ||
     bindings.some(
       (b) =>
         b.databaseIdentity !== proof.databaseIdentity ||
@@ -1084,11 +1131,17 @@ async function verifyQualification(
     )
   )
     fail("qualification_pair_drift");
+  // This artifact has only a QA witness. No reviewed cross-environment producer,
+  // version or database mapping exists here; matching synthetic IDs are not one.
+  if (environment !== proof.environment)
+    fail("qualification_environment_mapping_unproven");
   return {
     hash: hash(stdout),
-    environment,
+    environment: proof.environment,
     runId: String(run.id),
+    sourceCommit: candidate.sourceCommit,
     pair,
+    coveredProducerBindings: [candidate, predecessor],
     schemaHash: proof.schemaHash,
   };
 }

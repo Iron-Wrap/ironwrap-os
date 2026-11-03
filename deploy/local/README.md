@@ -10,7 +10,8 @@ cd workers-bus && npm run dev
 
 1. `app/dist` is built (PWA served by the Worker on `http://localhost:7100`, or on
    `IRONWRAP_LOCAL_WORKER_PORT` - see "Two stacks on one machine")
-2. throwaway Hermes approval key material exists in `deploy/local/keys/` (gitignored)
+2. the compatibility receipt verifier public key exists in `deploy/local/keys/` (gitignored).
+   Fresh preflight keeps only the public half of an ephemeral pair. Existing key files are preserved.
 3. the docker-compose Frappe v15 + MariaDB + Redis stack is up and answering on
    `http://localhost:8000` (or `IRONWRAP_LOCAL_FRAPPE_PORT`; the committed DocType contract
    is provisioned by `frappe-init.sh`)
@@ -24,6 +25,10 @@ cd workers-bus && npm run dev
 5. every D1 migration is applied to the local Miniflare database
 6. the bench copy of `ironwrap_roofing` matches the repo (a stale volume is resynced
    and the container restarted; see "App source edits vs the bench copy" below)
+
+Fresh compatibility initialization provisions the active owner fixture, Worker integration and
+bounded rail identities. It preserves existing users and credential files. The retired broker
+actors are excluded from fresh provisioning and resync.
 
 Then `wrangler dev --env local --port 7100 --test-scheduled` starts (the port follows
 `IRONWRAP_LOCAL_WORKER_PORT`): the Worker serves

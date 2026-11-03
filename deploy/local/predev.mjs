@@ -59,19 +59,15 @@ if (!existsSync(path.join(repoRoot, "app/dist/manifest.webmanifest"))) {
   execSync("npm run build", { cwd: path.join(repoRoot, "app"), stdio: "inherit" });
 }
 
-// 1b. Hermes approval key material (throwaway, gitignored) ----------------------
-// The Frappe app verifies broker-signed approval receipts with the PUBLIC key
-// (mounted into the container); brokers hold the private key + dry-run HMAC.
-const privateKeyPath = path.join(keysDir, "hermes-approval-private.pem");
+// 1b. Compatibility receipt verifier public key (throwaway, gitignored) ---------
+// Preserve a configured verifier key. A fresh local stack keeps only the public
+// half of an ephemeral pair, so startup supplies no approval signing material.
 const publicKeyPath = path.join(keysDir, "hermes-approval-public.pem");
-const dryRunKeyPath = path.join(keysDir, "dry-run-signing-key.txt");
-if (!existsSync(privateKeyPath) || !existsSync(publicKeyPath) || !existsSync(dryRunKeyPath)) {
-  log("generating throwaway Hermes approval keys into deploy/local/keys/");
+if (!existsSync(publicKeyPath)) {
+  log("generating a local compatibility verifier public key into deploy/local/keys/");
   mkdirSync(keysDir, { recursive: true });
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-  writeFileSync(publicKeyPath, publicKey.export({ type: "spki", format: "pem" }));
-  writeFileSync(dryRunKeyPath, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
+  const { publicKey } = generateKeyPairSync("ed25519");
+  writeFileSync(publicKeyPath, publicKey.export({ type: "spki", format: "pem" }), { flag: "wx" });
 }
 
 // Facet v2 chain key material (throwaway, gitignored). Three distinct purposes,

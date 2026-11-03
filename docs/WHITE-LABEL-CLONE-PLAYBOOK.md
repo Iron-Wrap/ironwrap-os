@@ -273,10 +273,6 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 
 Run tenant-dedicated MCP server processes with tenant-only env:
 
-- `mcp/erpnext-roofing-mcp`: `ERPNEXT_BASE_URL`, an `ERPNEXT_API_KEY` /
-  `ERPNEXT_API_SECRET` pair belonging to exactly `HERMES_ACTOR_USER`,
-  `ERPNEXT_WRITE_ENABLED`, `HERMES_DRY_RUN_SIGNING_KEY`, and
-  `HERMES_APPROVAL_PUBLIC_KEY_FILE`.
 - `mcp/ironwrap-bus-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
   `IRONWRAP_BUS_WRITE_ENABLED`, `IRONWRAP_BUS_WRITE_TOKEN`.
 - `mcp/newo-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,

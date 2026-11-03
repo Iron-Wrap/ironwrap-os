@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const mcpPackages = ["mcp/erpnext-roofing-mcp", "mcp/ironwrap-bus-mcp", "mcp/newo-mcp"];
+const mcpPackages = ["mcp/ironwrap-bus-mcp", "mcp/newo-mcp"];
 const expectedCalls = [
   "audit --prefix app",
   "audit --prefix workers-bus",

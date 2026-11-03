@@ -608,10 +608,9 @@ separately prove one owner/ops pairing, the device-bound task envelope, optional
 staging, and a draft submission that returns a handoff without sending, booking, or creating
 downstream authority.
 
-Keep the Frappe, bus, and Newo MCP/Worker write flags false for the first read-only smoke test:
+Keep the bus and Newo MCP/Worker write flags false for the first read-only smoke test:
 
 ```bash
-npm test --prefix mcp/erpnext-roofing-mcp
 npm test --prefix mcp/ironwrap-bus-mcp
 npm test --prefix mcp/newo-mcp
 ```

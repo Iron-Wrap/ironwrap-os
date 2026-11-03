@@ -10,7 +10,7 @@ SHELL := bash
 
 # Test logs feed the capability evidence receipt at the end of `check`.
 OUT ?= tmp/check
-NODE_PACKAGES := app mcp/erpnext-roofing-mcp mcp/ironwrap-bus-mcp mcp/newo-mcp agent-host
+NODE_PACKAGES := app mcp/ironwrap-bus-mcp mcp/newo-mcp agent-host
 FRAPPE_APP := frappe-apps/ironwrap_roofing
 FRAPPE_VENV := tmp/frappe-venv
 
@@ -116,7 +116,6 @@ test-tools:
 	  tools/release-promotion.test.mjs
 
 mcp: $(addsuffix /node_modules/.package-lock.json,$(filter mcp/%,$(NODE_PACKAGES)))
-	npm test --prefix mcp/erpnext-roofing-mcp
 	npm test --prefix mcp/ironwrap-bus-mcp
 	npm test --prefix mcp/newo-mcp
 

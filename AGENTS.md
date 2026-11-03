@@ -31,7 +31,7 @@ deployment, runtime verification, business acceptance, or production proof.
 | `workers-bus/` | Cloudflare Worker integration bus and D1/R2 intake spine |
 | `app/` | React PWA for public estimate, field, portal, sales, production, and owner surfaces |
 | `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection during the D1 cutover; no new operating authority |
-| `mcp/` | Bounded agent tools for the bus, compatibility rails, and Newo |
+| `mcp/` | Bounded agent tools for the bus and Newo |
 | `config/tenants/` | White-label tenant contracts; secrets by environment-variable name only |
 | `config/newo/` | Newo release contract, tools, evidence inventory, and versioned AKB |
 | `deploy/` | Local stack and production launch assets |
@@ -229,7 +229,6 @@ node tools/validate-newo-config.mjs
 node tools/applicad-xml-proof.mjs --check
 node tools/production-readiness.mjs contract
 (cd workers-bus && npm test && npm run typecheck)
-(cd mcp/erpnext-roofing-mcp && npm test)
 (cd mcp/ironwrap-bus-mcp && npm test)
 (cd mcp/newo-mcp && npm test)
 ```

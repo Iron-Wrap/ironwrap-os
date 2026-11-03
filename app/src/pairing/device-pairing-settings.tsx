@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   ClipboardCopy,
   Clock3,
-  Laptop,
   QrCode,
   Share2,
   ShieldOff,
@@ -14,19 +13,15 @@ import { useEffect, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
-import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
-import { capabilityPreventsUse, useCapability } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
-import { Textarea } from "../components/ui/textarea";
 import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   issueDevicePairing,
-  issueHermesDesktopPairing,
   listDevicePairings,
   listFieldUsers,
   revokeDevicePairing,
@@ -34,12 +29,10 @@ import {
 import type {
   DevicePairing,
   IssuedDevicePairing,
-  IssuedHermesDesktopPairing,
 } from "./pairing-contracts";
 import {
   formatDateTime,
   pairingExpiryLabel,
-  safeHermesDesktopPairingUrl,
   safePairingUrl,
 } from "./pairing-link";
 
@@ -55,10 +48,6 @@ function OfficeDevicePairingSettings() {
   const session = useSession();
   const queryClient = useQueryClient();
   const canManage = !isOfflineSession(session);
-  // Before this read the desktop pairing button was live whatever the flag said, and a crew lead
-  // learned the pilot was switched off from a generic error after the tap (ELEC-232 audit).
-  const hermesDesktop = useCapability("hermes_desktop");
-  const hermesDesktopUnusable = capabilityPreventsUse(hermesDesktop);
   const fieldUsers = useQuery({
     queryKey: ["field-users", session.tenant.id],
     queryFn: () => listFieldUsers(session),
@@ -71,9 +60,6 @@ function OfficeDevicePairingSettings() {
   });
   const [selectedUserId, setSelectedUserId] = useState("");
   const [issued, setIssued] = useState<IssuedDevicePairing>();
-  const [desktopIssued, setDesktopIssued] = useState<IssuedHermesDesktopPairing>();
-  const [desktopIssueError, setDesktopIssueError] = useState<unknown>();
-  const [desktopIssuing, setDesktopIssuing] = useState(false);
   const [issueError, setIssueError] = useState<unknown>();
   const [issuing, setIssuing] = useState(false);
   const [confirmingDeviceId, setConfirmingDeviceId] = useState<string>();
@@ -92,19 +78,6 @@ function OfficeDevicePairingSettings() {
       setIssueError(error);
     } finally {
       setIssuing(false);
-    }
-  }
-
-  async function issueDesktop() {
-    if (desktopIssuing) return;
-    setDesktopIssuing(true);
-    setDesktopIssueError(undefined);
-    try {
-      setDesktopIssued(await issueHermesDesktopPairing(session));
-    } catch (error) {
-      setDesktopIssueError(error);
-    } finally {
-      setDesktopIssuing(false);
     }
   }
 
@@ -151,9 +124,6 @@ function OfficeDevicePairingSettings() {
   const activeUserId = selectedUserId || fieldUsers.data.users[0]?.id || "";
   const selectedUser = fieldUsers.data.users.find((user) => user.id === activeUserId);
   const pairingUrl = issued ? safePairingUrl(issued.pairing_url) : undefined;
-  const desktopPairingUrl = desktopIssued
-    ? safeHermesDesktopPairingUrl(desktopIssued.pairing_url)
-    : undefined;
 
   return (
     <section className="mx-auto max-w-5xl space-y-6">
@@ -167,78 +137,6 @@ function OfficeDevicePairingSettings() {
           needs a password on the roof.
         </p>
       </header>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Laptop aria-hidden="true" />
-            Hermes desktop text pilot
-          </CardTitle>
-          <CardDescription>
-            Issue a one-time link for this signed-in owner or operations account. The dedicated
-            desktop MCP consumes it without receiving admin, write, or connector credentials.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {desktopIssueError ? (
-            <InlineError message={messageFor(desktopIssueError, pairingRefusals)} />
-          ) : null}
-          <CapabilityUnavailable read={hermesDesktop} />
-          {/*
-            Disabled, never relabelled or hidden: a screen-reader user has to keep hearing WHAT is
-            unavailable, and the panel immediately before it in DOM order supplies WHY. The button
-            also keeps its full height while disabled, so switching the pilot on does not move it.
-          */}
-          <Button
-            type="button"
-            variant="outline"
-            busy={desktopIssuing}
-            disabled={hermesDesktopUnusable}
-            onClick={() => void issueDesktop()}
-          >
-            <Laptop aria-hidden="true" />
-            Issue desktop pairing link
-          </Button>
-          {desktopIssued ? (
-            desktopPairingUrl ? (
-              <>
-                <p className="text-sm font-bold text-warning">
-                  {pairingExpiryLabel(desktopIssued.expires_at)} Paste the bootstrap prompt into the
-                  desktop AI client once, complete pairing, then discard it.
-                </p>
-                <label
-                  className="block text-sm font-bold"
-                  htmlFor="hermes-desktop-bootstrap-prompt"
-                >
-                  Self-configuring Hermes bootstrap prompt
-                </label>
-                <Textarea
-                  id="hermes-desktop-bootstrap-prompt"
-                  className="min-h-48 bg-surface-muted px-3 py-3 font-mono text-xs"
-                  readOnly
-                  value={desktopIssued.bootstrap_prompt}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-                <p className="text-xs text-muted">
-                  Bound API audience: <code>{desktopIssued.api_audience}</code>
-                </p>
-                <label className="block text-sm font-bold" htmlFor="hermes-desktop-pairing-link">
-                  One-time Hermes desktop pairing link
-                </label>
-                <Input
-                  id="hermes-desktop-pairing-link"
-                  className="min-h-14 bg-surface-muted font-mono text-xs"
-                  readOnly
-                  value={desktopPairingUrl}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-              </>
-            ) : (
-              <InlineError message="The server returned an unsafe desktop pairing link. Discard it and check the configured app origin." />
-            )
-          ) : null}
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>

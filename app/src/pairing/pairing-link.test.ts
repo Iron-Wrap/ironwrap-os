@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { pairingExpiryLabel, safeHermesDesktopPairingUrl, safePairingUrl } from "./pairing-link";
+import { pairingExpiryLabel, safePairingUrl } from "./pairing-link";
 
 const token = "a".repeat(43);
 
@@ -12,21 +12,6 @@ describe("safePairingUrl", () => {
         "https://app.example.test",
       ),
     ).toBe(`https://app.example.test/auth/pair#token=${token}`);
-  });
-
-  it("accepts the separate same-origin Hermes desktop fragment path", () => {
-    expect(
-      safeHermesDesktopPairingUrl(
-        `https://app.example.test/auth/hermes-pair#token=${token}`,
-        "https://app.example.test",
-      ),
-    ).toBe(`https://app.example.test/auth/hermes-pair#token=${token}`);
-    expect(
-      safeHermesDesktopPairingUrl(
-        `https://app.example.test/auth/pair#token=${token}`,
-        "https://app.example.test",
-      ),
-    ).toBeUndefined();
   });
 
   it("rejects cross-origin, query-string, and malformed pairing links", () => {

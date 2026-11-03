@@ -68,7 +68,6 @@ vi.mock("../integrations/integration-readiness-api", () => ({
 vi.mock("../newo/newo-operations-api", () => ({ loadNewoOperations: vi.fn() }));
 vi.mock("../pairing/pairing-api", () => ({
   issueDevicePairing: vi.fn(),
-  issueHermesDesktopPairing: vi.fn(),
   listDevicePairings: vi.fn(),
   listFieldUsers: vi.fn(),
   revokeDevicePairing: vi.fn(),
@@ -291,55 +290,6 @@ describe("QuickBooks final-invoice execution", () => {
     ).toBeVisible();
     // The privacy boundary: a non-office role is told the state, never which binding is blank.
     expect(document.body.textContent).not.toMatch(/QB_[A-Z_]+|QBO_[A-Z_]+/);
-  });
-});
-
-describe("Hermes desktop", () => {
-  beforeEach(() => {
-    vi.mocked(listFieldUsers).mockResolvedValue({
-      users: [
-        {
-          id: "appu_crew",
-          display_name: "Crew One",
-          email: "crew@example.invalid",
-          frappe_user_id: null,
-        },
-      ],
-    });
-    vi.mocked(listDevicePairings).mockResolvedValue({ devices: [] });
-  });
-
-  it("disables the pairing link button and says why, instead of failing after the tap", async () => {
-    signalOf("owner", [
-      officeCapability("hermes_desktop", "Hermes desktop pilot", {
-        flag_binding: "APP_HERMES_DESKTOP_ENABLED",
-      }),
-    ]);
-    renderOnAPhone(<DevicePairingSettings />);
-
-    expect(
-      await screen.findByRole("heading", { name: "Hermes desktop pilot is turned off" }),
-    ).toBeVisible();
-    // Disabled, not hidden and not relabelled: the accessible name still says what is
-    // unavailable, and the panel beside it says why.
-    expect(screen.getByRole("button", { name: "Issue desktop pairing link" })).toBeDisabled();
-    expectNoFrappeDesk();
-  });
-
-  it("leaves the button live when the capability is reachable", async () => {
-    signalOf("owner", [
-      officeCapability("hermes_desktop", "Hermes desktop pilot", {
-        state: "available",
-        reason: "flag_on_and_configured",
-        flag_state: "on",
-        configuration_state: "configured",
-      }),
-    ]);
-    renderOnAPhone(<DevicePairingSettings />);
-
-    expect(await screen.findByRole("button", { name: "Issue desktop pairing link" })).toBeEnabled();
-    // Reachable is never rendered as proven, verified or connected.
-    expect(screen.queryByText(/proven|verified/i)).toBeNull();
   });
 });
 

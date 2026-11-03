@@ -48,16 +48,6 @@ export const issueDevicePairingResponseSchema = z.lazy(() =>
   }),
 );
 
-export const issueHermesDesktopPairingResponseSchema = z.lazy(() =>
-  z.object({
-    pairing_url: z.string().url(),
-    expires_at: z.string().min(1),
-    api_audience: z.string().url(),
-    bound_issuer: z.string().url(),
-    bootstrap_prompt: z.string().min(1).max(8_000),
-  }),
-);
-
 export const revokeDevicePairingResponseSchema = z.lazy(() =>
   z.object({
     ok: z.literal(true),
@@ -69,4 +59,3 @@ export const revokeDevicePairingResponseSchema = z.lazy(() =>
 export type FieldUser = z.infer<typeof fieldUserSchema>;
 export type DevicePairing = z.infer<typeof devicePairingSchema>;
 export type IssuedDevicePairing = z.infer<typeof issueDevicePairingResponseSchema>;
-export type IssuedHermesDesktopPairing = z.infer<typeof issueHermesDesktopPairingResponseSchema>;

@@ -9,7 +9,6 @@ import type { AuthenticatedSession } from "../auth/session";
 import { DevicePairingSettings } from "./device-pairing-settings";
 import {
   issueDevicePairing,
-  issueHermesDesktopPairing,
   listDevicePairings,
   listFieldUsers,
 } from "./pairing-api";
@@ -24,7 +23,6 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("./pairing-api", () => ({
   issueDevicePairing: vi.fn(),
-  issueHermesDesktopPairing: vi.fn(),
   listDevicePairings: vi.fn(),
   listFieldUsers: vi.fn(),
   revokeDevicePairing: vi.fn(),
@@ -106,13 +104,6 @@ describe("DevicePairingSettings", () => {
       expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
       field_user: { id: "appu_crew", display_name: "Crew One" },
     });
-    vi.mocked(issueHermesDesktopPairing).mockResolvedValue({
-      pairing_url: `${window.location.origin}/auth/hermes-pair#token=${pairingToken}`,
-      expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
-      api_audience: window.location.origin,
-      bound_issuer: window.location.origin,
-      bootstrap_prompt: `Bind every request to ${window.location.origin}. Pair with token ${pairingToken}.`,
-    });
   });
 
   it("issues a one-time QR flow with a fragment-only no-camera fallback and explicit revoke confirmation", async () => {
@@ -132,22 +123,6 @@ describe("DevicePairingSettings", () => {
     await user.click(screen.getByRole("button", { name: "Revoke lost device" }));
     expect(screen.getByText("Revoke this device now?")).toBeVisible();
     expect(screen.getByRole("button", { name: "Confirm revoke" })).toBeVisible();
-  });
-
-  it("issues a separate fragment-only Hermes desktop pairing link", async () => {
-    const user = userEvent.setup();
-    renderSettings();
-
-    await user.click(await screen.findByRole("button", { name: "Issue desktop pairing link" }));
-    expect(issueHermesDesktopPairing).toHaveBeenCalledWith(ownerSession);
-    const link = await screen.findByLabelText("One-time Hermes desktop pairing link");
-    expect(link).toHaveValue(`${window.location.origin}/auth/hermes-pair#token=${pairingToken}`);
-    expect(String((link as HTMLInputElement).value)).not.toContain("?");
-    expect(
-      (screen.getByLabelText("Self-configuring Hermes bootstrap prompt") as HTMLTextAreaElement)
-        .value,
-    ).toContain(window.location.origin);
-    expect(screen.getByText(/Bound API audience:/)).toHaveTextContent(window.location.origin);
   });
 
   it("lets ops issue pairing on the same Settings surface as owner", async () => {

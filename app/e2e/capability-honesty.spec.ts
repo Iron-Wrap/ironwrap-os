@@ -99,39 +99,6 @@ test.describe("Unavailable capabilities on an accounting phone", () => {
 test.describe("Unavailable capabilities on an office phone", () => {
   test.skip(process.env.ACCEPTANCE_MODE !== "estimator", "requires ACCEPTANCE_MODE=estimator");
 
-  test("the desktop pairing button is disabled and says why, at full thumb size", async ({
-    page,
-  }) => {
-    await page.route("**/api/v1/field-users", async (route) => {
-      await route.fulfill({
-        json: {
-          users: [
-            {
-              id: "appu_crew",
-              display_name: "Crew One",
-              email: "crew@example.invalid",
-              frappe_user_id: null,
-            },
-          ],
-        },
-      });
-    });
-    await page.route("**/api/v1/device-pairings", async (route) => {
-      await route.fulfill({ json: { devices: [] } });
-    });
-
-    await page.goto("/settings/devices");
-
-    await expect(
-      page.getByRole("heading", { name: "Hermes desktop pilot is turned off" }),
-    ).toBeVisible();
-    const issue = page.getByRole("button", { name: "Issue desktop pairing link" });
-    await expect(issue).toBeVisible();
-    await expect(issue).toBeDisabled();
-
-    await proveState(page, "hermes-desktop-off");
-  });
-
   test("an unfinished Facet setup does not look like an empty list", async ({ page }) => {
     await page.route("**/api/v1/facet-design-evidence", async (route) => {
       await route.fulfill({

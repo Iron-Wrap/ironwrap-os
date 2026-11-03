@@ -1214,16 +1214,6 @@ const FIXTURE_CAPABILITY_REFERENCE = [
     audience: ["owner", "ops"],
   },
   {
-    id: "hermes_desktop",
-    title: "Hermes desktop pilot",
-    state: "off",
-    reason: "flag_off",
-    flag_state: "off",
-    configuration_state: "not_evaluated",
-    flag_binding: "APP_HERMES_DESKTOP_ENABLED",
-    audience: ["owner", "ops"],
-  },
-  {
     id: "public_estimator",
     title: "Public website estimator",
     state: "off",

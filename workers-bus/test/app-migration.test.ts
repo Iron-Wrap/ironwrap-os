@@ -3857,11 +3857,14 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
 test("0155, 0158, 0159 and 0160 applied after higher main migrations give the sorted schema", async () => {
   // Existing databases receive the gate-ledger migrations in actual deployment order, after
   // higher-numbered main migrations. Each validate guard follows the guard it replaces.
+  // 0170 composes those actual predecessor guards and must follow them; it cannot be treated
+  // as an unrelated higher migration before the ledger/window guards it preserves exist.
   const late = [
     "0155_od01_deposit_policy.sql",
     "0158_production_gate_attestations.sql",
     "0159_production_gate_crew_policy.sql",
     "0160_production_cancellation_window.sql",
+    "0170_safety_stop_route_gaps.sql",
   ];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));

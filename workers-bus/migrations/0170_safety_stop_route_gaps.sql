@@ -1633,3 +1633,271 @@ BEGIN
        )
   );
 END;
+
+-- Preserve the predecessor firing order after each replaced production guard.
+-- These following guards are recreated byte-for-byte: current principal/roster validation
+-- and cancellation-window refusal still run before the same ledger evidence checks.
+
+DROP TRIGGER production_gate_clearances_cancellation_window_hold;
+
+CREATE TRIGGER production_gate_clearances_cancellation_window_hold
+BEFORE INSERT ON production_gate_clearances
+WHEN NEW.gate = 'Materials' AND NEW.entry_kind = 'clear'
+BEGIN
+  SELECT RAISE(ABORT, 'production_gate_cancellation_window_unknown')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND shown.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
+  )
+    AND NOT EXISTS (
+    SELECT 1
+      FROM production_cancellation_window_receipts receipt
+     WHERE receipt.tenant_id = NEW.tenant_id
+       AND receipt.roof_job_id = NEW.roof_job_id
+       AND receipt.acceptance_binding_id IS (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(receipt.received_at)
+       )
+  );
+  SELECT RAISE(ABORT, 'production_gate_cancellation_window_open')
+  WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND julianday(shown.window_ends_at) > julianday('now')
+  )
+     OR EXISTS (
+    SELECT 1
+      FROM production_cancellation_window_receipts receipt
+     WHERE receipt.tenant_id = NEW.tenant_id
+       AND receipt.roof_job_id = NEW.roof_job_id
+       AND julianday(receipt.window_ends_at) > julianday('now')
+  );
+END;
+
+DROP TRIGGER production_gate_clearances_no_insert_replace;
+
+CREATE TRIGGER production_gate_clearances_no_insert_replace
+BEFORE INSERT ON production_gate_clearances
+BEGIN
+  SELECT RAISE(ABORT, 'production_gate_clearance_append_only')
+  WHERE EXISTS (
+    SELECT 1
+      FROM production_gate_clearances existing
+     WHERE existing.clearance_id = NEW.clearance_id
+        OR (existing.tenant_id = NEW.tenant_id
+            AND existing.idempotency_key_hash = NEW.idempotency_key_hash)
+  );
+  SELECT RAISE(ABORT, 'production_gate_version_conflict')
+  WHERE EXISTS (
+    SELECT 1
+      FROM production_gate_clearances existing
+     WHERE existing.tenant_id = NEW.tenant_id
+       AND existing.gate_id = NEW.gate_id
+       AND existing.from_gate_version = NEW.from_gate_version
+  );
+END;
+
+DROP TRIGGER operating_job_assignments_cancellation_window_hold;
+
+CREATE TRIGGER operating_job_assignments_cancellation_window_hold
+BEFORE INSERT ON operating_job_assignments
+BEGIN
+  SELECT RAISE(ABORT, 'operating_job_assignment_cancellation_window_unknown')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND shown.acceptance_binding_id = (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = shown.tenant_id
+            AND contract.roof_job_id = shown.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
+  )
+    AND NOT EXISTS (
+    SELECT 1
+      FROM production_cancellation_window_receipts receipt
+     WHERE receipt.tenant_id = NEW.tenant_id
+       AND receipt.roof_job_id = NEW.roof_job_id
+       AND receipt.acceptance_binding_id IS (
+         SELECT contract.acceptance_binding_id
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+          ORDER BY contract.accepted_at DESC, contract.acceptance_binding_id DESC
+          LIMIT 1
+       )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM commercial_acceptance_bindings contract
+          WHERE contract.tenant_id = receipt.tenant_id
+            AND contract.roof_job_id = receipt.roof_job_id
+            AND julianday(contract.accepted_at) > julianday(receipt.received_at)
+       )
+  );
+  SELECT RAISE(ABORT, 'operating_job_assignment_cancellation_window_open')
+  WHERE EXISTS (
+    SELECT 1
+      FROM contract_signed_copy_events shown
+      JOIN contract_signed_copy_served served ON served.event_id = shown.event_id
+     WHERE shown.tenant_id = NEW.tenant_id
+       AND shown.roof_job_id = NEW.roof_job_id
+       AND julianday(shown.window_ends_at) > julianday('now')
+  )
+     OR EXISTS (
+    SELECT 1
+      FROM production_cancellation_window_receipts receipt
+     WHERE receipt.tenant_id = NEW.tenant_id
+       AND receipt.roof_job_id = NEW.roof_job_id
+       AND julianday(receipt.window_ends_at) > julianday('now')
+  );
+END;
+
+DROP TRIGGER operating_job_assignments_validate_insert;
+
+CREATE TRIGGER operating_job_assignments_validate_insert
+BEFORE INSERT ON operating_job_assignments
+BEGIN
+  SELECT RAISE(ABORT, 'operating_job_assignment_job_invalid')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM operating_roof_jobs job
+     WHERE job.tenant_id = NEW.tenant_id
+       AND job.roof_job_id = NEW.roof_job_id
+       AND job.version = NEW.roof_job_version
+       AND job.job_status NOT IN ('complete', 'cancelled')
+  );
+
+  SELECT RAISE(ABORT, 'operating_job_assignment_gates_blocked')
+  WHERE (
+    SELECT COUNT(*)
+      FROM operating_production_gates gate
+     WHERE gate.tenant_id = NEW.tenant_id
+       AND gate.roof_job_id = NEW.roof_job_id
+       AND gate.gate IN ('Deposit', 'Materials', 'Safety', 'Access', 'Weather', 'Crew')
+       AND gate.state IN ('ready', 'complete', 'waived')
+  ) != 6;
+
+  SELECT RAISE(ABORT, 'operating_job_assignment_crew_invalid')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM fleet_crews crew
+     WHERE crew.tenant_id = NEW.tenant_id
+       AND crew.crew_id = NEW.crew_id
+       AND crew.version = NEW.crew_version
+       AND crew.status = 'Active'
+  );
+
+  SELECT RAISE(ABORT, 'operating_job_assignment_actor_invalid')
+  WHERE NOT EXISTS (
+    SELECT 1
+      FROM app_users actor
+     WHERE actor.tenant_id = NEW.tenant_id
+       AND actor.user_id = NEW.actor_user_id
+       AND actor.active = 1
+       AND actor.access_role IN ('owner', 'ops', 'production')
+  );
+
+  SELECT RAISE(ABORT, 'operating_job_assignment_roster_invalid')
+  WHERE EXISTS (
+    SELECT 1
+      FROM json_each(NEW.assigned_users_json) member
+     WHERE member.type != 'text'
+        OR length(trim(member.value)) NOT BETWEEN 8 AND 200
+  )
+     OR EXISTS (
+       SELECT 1
+         FROM json_each(NEW.assigned_users_json) member
+        GROUP BY lower(trim(member.value))
+       HAVING COUNT(*) > 1
+     )
+     OR json_array_length(NEW.assigned_users_json) != (
+       SELECT COUNT(*)
+         FROM fleet_crew_members membership
+        WHERE membership.tenant_id = NEW.tenant_id
+          AND membership.crew_id = NEW.crew_id
+          AND membership.active = 1
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM fleet_crew_members membership
+         LEFT JOIN app_users worker
+           ON worker.tenant_id = membership.tenant_id
+          AND worker.user_id = membership.user_id
+        WHERE membership.tenant_id = NEW.tenant_id
+          AND membership.crew_id = NEW.crew_id
+          AND membership.active = 1
+          AND (
+            worker.user_id IS NULL
+            OR worker.active != 1
+            OR worker.access_role != 'field'
+            OR NOT EXISTS (
+              SELECT 1
+                FROM json_each(NEW.assigned_users_json) member
+               WHERE member.value = membership.user_id
+            )
+          )
+     );
+
+  SELECT RAISE(ABORT, 'operating_job_assignment_chain_conflict')
+  WHERE (
+    NEW.supersedes_assignment_id IS NULL
+    AND EXISTS (
+      SELECT 1
+        FROM operating_job_assignments current
+       WHERE current.tenant_id = NEW.tenant_id
+         AND current.roof_job_id = NEW.roof_job_id
+         AND NOT EXISTS (
+           SELECT 1
+             FROM operating_job_assignments successor
+            WHERE successor.tenant_id = current.tenant_id
+              AND successor.supersedes_assignment_id = current.assignment_id
+         )
+    )
+  ) OR (
+    NEW.supersedes_assignment_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1
+        FROM operating_job_assignments current
+       WHERE current.tenant_id = NEW.tenant_id
+         AND current.roof_job_id = NEW.roof_job_id
+         AND current.assignment_id = NEW.supersedes_assignment_id
+         AND current.assignment_version + 1 = NEW.assignment_version
+         AND NOT EXISTS (
+           SELECT 1
+             FROM operating_job_assignments successor
+            WHERE successor.tenant_id = current.tenant_id
+              AND successor.supersedes_assignment_id = current.assignment_id
+         )
+    )
+  );
+END;

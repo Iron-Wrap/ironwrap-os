@@ -88,6 +88,10 @@ import {
   type OperatingWorkObjectAssignmentRecord,
 } from "./operating-work-object-assignment-store.ts";
 import { safetyReadinessForScope } from "./safety-release-gate.ts";
+import {
+  holdingSafetyStops, holdingSafetyStopsForWorkObjects, safetyWorkObjectKey,
+  type SafetyHoldingStop,
+} from "./safety-lifecycle.ts";
 import { facetLaunchConfigured } from "./facet-launch.ts";
 import { commercialActionConfigured } from "./commercial-authority.ts";
 import {
@@ -311,6 +315,8 @@ interface NativeOwnerUnknownStopRow {
   reported_by_name: string | null;
   summary: string;
   updated_at: string;
+  /** Internal query fact only; the public exception keeps the same DTO. */
+  target_exists: number;
 }
 
 /**
@@ -329,6 +335,10 @@ export const STOP_JOB_UNKNOWN_WHY =
  */
 export const STOP_WORK_PACKAGE_UNKNOWN_TITLE = "This work stop names a job plan that doesn’t exist";
 export const STOP_WORK_PACKAGE_UNKNOWN_WHY = STOP_JOB_UNKNOWN_WHY;
+
+const STOP_SCOPE_LATCHED_TITLE = "This work stop still holds every job";
+const STOP_SCOPE_LATCHED_WHY =
+  "An earlier unresolved scope remains in this stop’s history. Safety and scheduling stay held on every job until an authorized person lifts the stop.";
 
 interface NativeOwnerEffectExceptionRow {
   exception_id: string;
@@ -427,6 +437,13 @@ export interface TodayReadModel extends ReadModelEnvelope {
     scheduled_start: string | null;
     scheduled_end: string | null;
     blocked_gate_count: number;
+    /**
+     * The active safety stops that hold this job, oldest first: the stops on the job or any of its
+     * Work Packages (`scope: "job"`) and every stop that holds the whole tenant (`scope: "tenant"`).
+     * Null when they could not be read (`jobs.active_stops_unavailable` is stale then), never an
+     * empty list that would look like no stop.
+     */
+    active_stops: SafetyHoldingStop[] | null;
     next_action: string;
     assignment: AssignmentReadModel | null;
   }>;
@@ -438,6 +455,8 @@ export interface TodayReadModel extends ReadModelEnvelope {
     physical_context_id: string;
     scheduled_start: string | null;
     scheduled_end: string | null;
+    /** Stops on the complete typed object or its explicit Roof Job parent, as on `jobs`. */
+    active_stops: SafetyHoldingStop[] | null;
     next_action: string;
     assignment: AssignmentReadModel | null;
   }>;
@@ -527,6 +546,8 @@ export interface JobReadModel extends ReadModelEnvelope {
     status: string | null;
     address: string | null;
     current_gate_state: string | null;
+    /** As on Today: the active stops holding this job, oldest first, or null when unread. */
+    active_stops: SafetyHoldingStop[] | null;
   };
   assignment: AssignmentReadModel | null;
   gates: Array<{
@@ -1319,6 +1340,7 @@ export async function buildUniversalWorkPackageReadModel(
           tenantId: auth.session.tenant_id,
           scope: { type: "work_package", id: workPackage.id },
           jobId: scope.workObjectId,
+          workObjectScope: scope,
           subjectUserIds: [auth.session.user_id],
           now: evaluatedAt,
         }).then((readiness) => readiness.blockers),
@@ -1363,6 +1385,7 @@ export async function buildUniversalWorkPackageReadModel(
     scope,
   });
   const officeContact = await officeContactForRead(env, auth.session.tenant_id);
+  const stopsByScope = await holdingWorkObjectStopsForRead(env, auth.session.tenant_id, [scope]);
   return {
     ...envelope(
       auth,
@@ -1370,6 +1393,7 @@ export async function buildUniversalWorkPackageReadModel(
       [
         ...(fieldMeasurements === null ? ["field_measurements.native_unavailable"] : []),
         ...(officeContact.unavailable ? ["office_contact.unavailable"] : []),
+        ...(stopsByScope ? [] : ["work_object.active_stops_unavailable"]),
       ],
     ),
     field_measurements: fieldMeasurementReadItems(
@@ -1381,10 +1405,43 @@ export async function buildUniversalWorkPackageReadModel(
     field_measurements_more: fieldMeasurements?.more ?? false,
     office_contact: officeContact.contact,
     work_object: scope,
+    /** Stops on the exact work object or its explicit Roof Job parent, or null when unread. */
+    active_stops: stopsByScope ? (stopsByScope.get(safetyWorkObjectKey(scope)) ?? []) : null,
     assignment: assignmentModel(assignment),
     work_package: projection.work_package,
     allowed_actions: [...new Set(allowedActions)],
   };
+}
+
+/** The stops holding each job, or null when they cannot be read: the read still serves. */
+async function holdingStopsForRead(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: string[],
+): Promise<Map<string, SafetyHoldingStop[]> | null> {
+  try {
+    return await holdingSafetyStops(env, tenantId, [...new Set(jobIds)]);
+  } catch {
+    return null;
+  }
+}
+
+async function holdingWorkObjectStopsForRead(
+  env: AppEnv, tenantId: string, scopes: WorkObjectScope[],
+): Promise<Map<string, SafetyHoldingStop[]> | null> {
+  try {
+    return await holdingSafetyStopsForWorkObjects(env, tenantId, scopes);
+  } catch {
+    return null;
+  }
+}
+
+function typedAssignmentSafetyScope(row: DocumentRow): WorkObjectScope | null {
+  const scope = assignmentWorkObjectScope(row);
+  return scope ? {
+    workObjectType: scope.work_object_type, workObjectId: scope.work_object_id,
+    physicalContextType: scope.physical_context_type, physicalContextId: scope.physical_context_id,
+  } : null;
 }
 
 export async function buildTodayReadModel(
@@ -1412,9 +1469,15 @@ export async function buildTodayReadModel(
   const propertyIds = jobs
     .map((row) => text(row.roofing_property))
     .filter(notNull);
-  const [gateSource, propertySource] = await Promise.all([
+  const [gateSource, propertySource, stopsByJob, stopsByWorkObject] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, jobIds, "blocked"),
     nativeProperties(env, auth.session.tenant_id, propertyIds),
+    holdingStopsForRead(env, auth.session.tenant_id, jobIds),
+    holdingWorkObjectStopsForRead(env, auth.session.tenant_id,
+      typedAssignments.flatMap((row) => {
+        const scope = typedAssignmentSafetyScope(row);
+        return scope ? [scope] : [];
+      })),
   ]);
   const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const properties = propertySource.rows
@@ -1439,6 +1502,7 @@ export async function buildTodayReadModel(
           scheduled_start: assignment?.scheduled_start ?? null,
           scheduled_end: assignment?.scheduled_end ?? null,
           blocked_gate_count: blocked.length,
+          active_stops: stopsByJob ? (stopsByJob.get(id) ?? []) : null,
           next_action:
             assignment?.blocker_reason ??
             text(blocked[0]?.blocker_reason) ??
@@ -1460,6 +1524,9 @@ export async function buildTodayReadModel(
           ...scope,
           scheduled_start: assignment.scheduled_start,
           scheduled_end: assignment.scheduled_end,
+          active_stops: stopsByWorkObject
+            ? (stopsByWorkObject.get(safetyWorkObjectKey(typedAssignmentSafetyScope(assignmentRow)!)) ?? [])
+            : null,
           next_action: assignment.blocker_reason ?? "See job plan",
           assignment,
         },
@@ -1477,6 +1544,8 @@ export async function buildTodayReadModel(
   if (gateSource.partial) stale.push("jobs.blocked_gates_partial");
   if (propertySource.partial) stale.push("jobs.address_partial");
   if (properties.length < new Set(propertyIds).size) stale.push("jobs.address");
+  if (!stopsByJob) stale.push("jobs.active_stops_unavailable");
+  if (!stopsByWorkObject) stale.push("work_objects.active_stops_unavailable");
   return {
     ...envelope(
       auth,
@@ -1761,7 +1830,7 @@ export async function buildJobReadModel(
   if (!ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
 
   const propertyId = text(job.roofing_property);
-  const [gateSource, workPackage, measurementRows, fieldMeasurements, officeContact] =
+  const [gateSource, workPackage, measurementRows, fieldMeasurements, officeContact, stopsByJob] =
     await Promise.all([
       nativeProductionGates(env, auth.session.tenant_id, [jobName]),
       assignmentRow
@@ -1785,6 +1854,7 @@ export async function buildJobReadModel(
         jobId: jobName,
       }),
       officeContactForRead(env, auth.session.tenant_id),
+      holdingStopsForRead(env, auth.session.tenant_id, [jobName]),
     ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
@@ -1867,6 +1937,7 @@ export async function buildJobReadModel(
   if (!assignmentRow || !workPackage)
     stale.push("proof_stream.native_scope_unavailable");
   if (officeContact.unavailable) stale.push("office_contact.unavailable");
+  if (!stopsByJob) stale.push("job.active_stops_unavailable");
   const readEnvelope = envelope(
     auth,
     [
@@ -1918,6 +1989,7 @@ export async function buildJobReadModel(
       status: text(job.job_status),
       address: address(property ?? undefined),
       current_gate_state: text(job.current_gate_state),
+      active_stops: stopsByJob ? (stopsByJob.get(jobName) ?? []) : null,
     },
     assignment: assignmentRow ? assignmentModel(assignmentRow) : null,
     gates: gates.flatMap((row) => gateModel(row, readMode === "assigned")),
@@ -2638,8 +2710,8 @@ export async function buildOwnerNowReadModel(
         id: row.occurrence_id,
         kind: "stop_job_unknown",
         severity: null,
-        title: STOP_JOB_UNKNOWN_TITLE,
-        why: STOP_JOB_UNKNOWN_WHY,
+        title: row.target_exists ? STOP_SCOPE_LATCHED_TITLE : STOP_JOB_UNKNOWN_TITLE,
+        why: row.target_exists ? STOP_SCOPE_LATCHED_WHY : STOP_JOB_UNKNOWN_WHY,
         jobId: null,
         occurredAt: row.reported_at,
         reportedByName: text(row.reported_by_name),
@@ -2652,8 +2724,8 @@ export async function buildOwnerNowReadModel(
         id: row.occurrence_id,
         kind: "stop_work_package_unknown",
         severity: null,
-        title: STOP_WORK_PACKAGE_UNKNOWN_TITLE,
-        why: STOP_WORK_PACKAGE_UNKNOWN_WHY,
+        title: row.target_exists ? STOP_SCOPE_LATCHED_TITLE : STOP_WORK_PACKAGE_UNKNOWN_TITLE,
+        why: row.target_exists ? STOP_SCOPE_LATCHED_WHY : STOP_WORK_PACKAGE_UNKNOWN_WHY,
         jobId: null,
         occurredAt: row.reported_at,
         reportedByName: text(row.reported_by_name),
@@ -3611,9 +3683,8 @@ async function nativeOwnerFieldBlockers(
 }
 
 /**
- * Active safety stops that name a job this tenant does not have. Recording a stop never fails, so
- * a mistyped job is caught here: such a stop holds Safety on every job (0158) until it is opened
- * and fixed or lifted.
+ * Active missing-target or historically unresolved job stops. A target's later arrival never
+ * removes this named exception while the immutable latch still holds Safety and scheduling.
  */
 async function nativeOwnerUnknownJobStops(
   env: AppEnv,
@@ -3622,7 +3693,10 @@ async function nativeOwnerUnknownJobStops(
   return await boundedNativeRows<NativeOwnerUnknownStopRow>(
     env,
     `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
-            reporter.display_name AS reported_by_name, occurrence.updated_at
+            reporter.display_name AS reported_by_name, occurrence.updated_at,
+            EXISTS (SELECT 1 FROM operating_roof_jobs AS job
+                     WHERE job.tenant_id = occurrence.tenant_id
+                       AND job.roof_job_id = occurrence.scope_id) AS target_exists
        FROM safety_occurrences AS occurrence
        LEFT JOIN app_users AS reporter
          ON reporter.tenant_id = occurrence.tenant_id
@@ -3630,10 +3704,14 @@ async function nativeOwnerUnknownJobStops(
       WHERE occurrence.tenant_id = ?
         AND occurrence.stop_active = 1
         AND occurrence.scope_type = 'roof_job'
-        AND NOT EXISTS (
+        AND (EXISTS (
+          SELECT 1 FROM safety_stop_unresolved_scopes AS latch
+           WHERE latch.tenant_id = occurrence.tenant_id
+             AND latch.occurrence_id = occurrence.occurrence_id
+        ) OR NOT EXISTS (
           SELECT 1 FROM operating_roof_jobs AS job
            WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
-        )
+        ))
       ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
     [tenantId],
     OWNER_NOW_SOURCE_LIMIT,
@@ -3641,9 +3719,7 @@ async function nativeOwnerUnknownJobStops(
 }
 
 /**
- * Active safety stops that name a Work Package this tenant does not have, with who raised each.
- * Like a stop on a job that doesn't exist, such a stop is recorded and holds Safety and every
- * schedule on every job (0159) until it is lifted.
+ * The same immutable uncertainty for a Work Package, retaining its raiser, summary and time.
  */
 async function nativeOwnerUnknownWorkPackageStops(
   env: AppEnv,
@@ -3652,7 +3728,10 @@ async function nativeOwnerUnknownWorkPackageStops(
   return await boundedNativeRows<NativeOwnerUnknownStopRow>(
     env,
     `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
-            reporter.display_name AS reported_by_name, occurrence.updated_at
+            reporter.display_name AS reported_by_name, occurrence.updated_at,
+            EXISTS (SELECT 1 FROM work_packages AS package
+                     WHERE package.tenant_id = occurrence.tenant_id
+                       AND package.work_package_id = occurrence.scope_id) AS target_exists
        FROM safety_occurrences AS occurrence
        LEFT JOIN app_users AS reporter
          ON reporter.tenant_id = occurrence.tenant_id
@@ -3660,11 +3739,15 @@ async function nativeOwnerUnknownWorkPackageStops(
       WHERE occurrence.tenant_id = ?
         AND occurrence.stop_active = 1
         AND occurrence.scope_type = 'work_package'
-        AND NOT EXISTS (
+        AND (EXISTS (
+          SELECT 1 FROM safety_stop_unresolved_scopes AS latch
+           WHERE latch.tenant_id = occurrence.tenant_id
+             AND latch.occurrence_id = occurrence.occurrence_id
+        ) OR NOT EXISTS (
           SELECT 1 FROM work_packages AS package
            WHERE package.tenant_id = occurrence.tenant_id
              AND package.work_package_id = occurrence.scope_id
-        )
+        ))
       ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
     [tenantId],
     OWNER_NOW_SOURCE_LIMIT,

@@ -475,7 +475,7 @@ export async function authorizeFieldEvidence(
   };
 }
 
-function workPackageScope(workPackage: FieldWorkPackage): {
+export function workPackageScope(workPackage: FieldWorkPackage): {
   workObjectType: string;
   workObjectId: string;
   physicalContextType: string;

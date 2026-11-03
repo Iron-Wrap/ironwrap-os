@@ -903,6 +903,12 @@ function env(
                   };
                 }
                 if (sql.includes("FROM work_packages")) {
+                  if (sql.includes("SELECT DISTINCT work_package_id, work_object_type")) {
+                    return {
+                      results: nativeRows.workPackages.filter((row) =>
+                        row.tenant_id === ids[0] && ids.slice(1).includes(row.work_package_id)),
+                    };
+                  }
                   if (
                     sql.includes("SELECT version") &&
                     sql.includes("work_package_id = ?")

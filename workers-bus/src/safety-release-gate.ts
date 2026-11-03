@@ -1,8 +1,9 @@
 import { sha256Hex } from "./app-auth.ts";
-import type { AppEnv } from "./app-types.ts";
+import type { AppEnv, WorkObjectScope } from "./app-types.ts";
 import {
   evaluateSafetyReadiness,
   recordSafetyReadinessSnapshot,
+  safetyWorkObjectKey,
   type SafetyBlocker,
   type SafetyReadiness,
   type SafetyReadinessConsumer,
@@ -27,6 +28,8 @@ export interface SafetyGateScopeInput {
   scope: SafetyScopeRef;
   /** Parent job, when the scope is narrower than the job it belongs to. */
   jobId: string | null;
+  /** Complete committed/authorized identity; jobId alone is not a universal parent relation. */
+  workObjectScope?: WorkObjectScope;
   /** App user ids whose individually issued PPE gates this release. */
   subjectUserIds: string[];
   now: string;
@@ -48,10 +51,16 @@ export function safetyScopeChain(
   tenantId: string,
   scope: SafetyScopeRef,
   jobId: string | null,
+  workObjectScope?: WorkObjectScope,
 ): SafetyScopeRef[] {
   const chain: SafetyScopeRef[] = [{ type: "tenant", id: tenantId }];
-  if (jobId && SCOPE_ID.test(jobId) && scope.type !== "roof_job") {
-    chain.push({ type: "roof_job", id: jobId });
+  if (workObjectScope) safetyWorkObjectKey(workObjectScope);
+  const roofJobId = !workObjectScope ? jobId
+    : workObjectScope.workObjectType === "Roof Job" ? workObjectScope.workObjectId
+    : workObjectScope.physicalContextType === "Roof Job" ? workObjectScope.physicalContextId
+    : null;
+  if (roofJobId && SCOPE_ID.test(roofJobId) && scope.type !== "roof_job") {
+    chain.push({ type: "roof_job", id: roofJobId });
   }
   if (scope.type !== "tenant" && SCOPE_ID.test(scope.id)) chain.push(scope);
   return chain;
@@ -65,10 +74,13 @@ export async function safetyReadinessForScope(
   env: AppEnv,
   input: SafetyGateScopeInput,
 ): Promise<SafetyReadiness> {
+  let scopes: SafetyScopeRef[] = [{ type: "tenant", id: input.tenantId }];
   try {
+    scopes = safetyScopeChain(input.tenantId, input.scope, input.jobId, input.workObjectScope);
     return await evaluateSafetyReadiness(env, {
       tenantId: input.tenantId,
-      scopes: safetyScopeChain(input.tenantId, input.scope, input.jobId),
+      scopes,
+      workObjectScope: input.workObjectScope,
       subjectUserIds: input.subjectUserIds,
       now: input.now,
     });
@@ -83,7 +95,7 @@ export async function safetyReadinessForScope(
           detail: "Current safety state could not be read, so release stays blocked.",
         },
       ],
-      scopes: safetyScopeChain(input.tenantId, input.scope, input.jobId),
+      scopes,
       evaluated_at: input.now,
     };
   }

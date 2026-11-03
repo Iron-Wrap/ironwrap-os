@@ -2338,6 +2338,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (L06) or one without its own `released` event.
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
+    // 0170 adds durable unresolved safety scope, made-safe confirmer history and keep decisions.
     // 0153 lands after 0154-0206 on deployed databases, and 0155 after 0153 and 0156-0206; neither
     // touches an object a later-numbered migration touches, so both orders give the same schema.
     // 0159 binds Crew by policy in the scheduling batch and checks current gate evidence.
@@ -2345,7 +2346,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // cancellation window is unknown or open, and records receipt of the signed copy.
     // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 148);
+    assert.equal(migrations.length, 149);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2504,6 +2505,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
     // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
     // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
+    // 0170 adds two safety-history tables, one index and fourteen guards.
     // evidence and readback-conflict guards under their names.
     // 0158 re-creates the ledger validate and replace guards; object counts stay unchanged.
     // 0159 adds one schedule evidence guard and re-creates three existing guards.
@@ -2514,7 +2516,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0169 re-creates 0067's AP invoice line readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 285, indexes: 382, triggers: 802 },
+      { tables: 287, indexes: 383, triggers: 816 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3855,11 +3857,14 @@ test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with ev
 test("0155, 0158, 0159 and 0160 applied after higher main migrations give the sorted schema", async () => {
   // Existing databases receive the gate-ledger migrations in actual deployment order, after
   // higher-numbered main migrations. Each validate guard follows the guard it replaces.
+  // 0170 composes those actual predecessor guards and must follow them; it cannot be treated
+  // as an unrelated higher migration before the ledger/window guards it preserves exist.
   const late = [
     "0155_od01_deposit_policy.sql",
     "0158_production_gate_attestations.sql",
     "0159_production_gate_crew_policy.sql",
     "0160_production_cancellation_window.sql",
+    "0170_safety_stop_route_gaps.sql",
   ];
   const migrations = await d1MigrationNames();
   assert.ok(migrations.includes(late[0]!));
@@ -4220,5 +4225,31 @@ test("a database that already applied the shipped 0028 reaches complete_work thr
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally {
     db.close();
+  }
+});
+
+test("0170 applied after all higher migrations preserves the sorted schema and per-table trigger order", async () => {
+  const late = "0170_safety_stop_route_gaps.sql";
+  const migrations = await d1MigrationNames();
+  assert.ok(migrations.includes(late));
+  assert.ok(migrations.some((name) => name > late));
+  const sorted = new DatabaseSync(":memory:");
+  const deployed = new DatabaseSync(":memory:");
+  try {
+    for (const db of [sorted, deployed]) db.exec("PRAGMA foreign_keys = ON");
+    for (const name of migrations) await applyD1Migration(sorted, name);
+    for (const name of migrations.filter((name) => name !== late)) await applyD1Migration(deployed, name);
+    await applyD1Migration(deployed, late);
+    const schema = (db: DatabaseSync) => db.prepare(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name",
+    ).all().map((row) => ({ ...row }));
+    const triggers = (db: DatabaseSync) => db.prepare(
+      "SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, rowid",
+    ).all().map((row) => ({ ...row }));
+    assert.deepEqual(schema(deployed), schema(sorted));
+    assert.deepEqual(triggers(deployed), triggers(sorted));
+  } finally {
+    sorted.close();
+    deployed.close();
   }
 });

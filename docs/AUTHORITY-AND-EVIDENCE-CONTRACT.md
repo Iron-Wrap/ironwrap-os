@@ -347,11 +347,15 @@ never changes afterwards.
 
 An active safety-occurrence stop holds every job it names, for every crew, not only the raiser's
 phone. A `tenant` stop holds every job of the tenant, whatever its `scope_id`. A `roof_job` stop
-holds its job, and a `work_package` stop holds the job of every version of that package, Superseded
-included. A stop on a job or Work Package the tenant does not have may be a typo for any of its
+holds its job. A `work_package` stop holds the complete typed work object of every version of that
+package, Superseded included. A Roof Job object or an explicit `Roof Job` physical context holds
+that job and its other work; an independent Shop context does not acquire that relationship from
+an equal work-object ID or a compatibility `job_id`. Reads, readiness, native events, Safety
+attestations and schedules use these same relationships. A stop on a job or Work Package the tenant does not have may be a typo for any of its
 jobs, so it holds every job until a person lifts it. Migration `0170` latches that unresolved scope
 in immutable history, including active stops still unresolved when the migration is applied.
-Creating or restoring the missing job or package never narrows the hold. There is no re-scope
+Creating or restoring the missing job or package never narrows the hold, including for production
+Safety attestations and scheduling. There is no re-scope
 route in this slice; the existing authorized person release remains required. Shop and vehicle stops hold no job. While a
 stop holds a job, Work Package acknowledge, start and complete are refused with
 `safety_stop_active` (409), and the refusal names each holding stop: `{ occurrence_id, scope:

@@ -15,6 +15,7 @@ import { permissionsForRole, type AppEnv, type AuthContext, type WorkObjectScope
 import { recordOperatingWorkObjectAssignment } from "../src/operating-work-object-assignment-store.ts";
 import { handleWorkPackageAction, nativeWorkPackageWriter } from "../src/work-package-actions.ts";
 import { FieldActionError } from "../src/field-actions.ts";
+import { safetyStopActive, unknownJobStop } from "../src/production-job-stops.ts";
 import {
   evaluateSafetyReadiness,
   holdingSafetyStops,
@@ -24,7 +25,8 @@ import {
   type SafetyScopeRef,
 } from "../src/safety-lifecycle.ts";
 import { safetyReadinessForScope, safetyReleaseGate } from "../src/safety-release-gate.ts";
-import { bindCrewInLedger, clearScheduleGatesInLedger } from "./production-gate-ledger-fixture.ts";
+import { attestGateInLedger, bindCrewInLedger, clearScheduleGatesInLedger,
+  reverseGateInLedger } from "./production-gate-ledger-fixture.ts";
 import {
   issueNativeWorkPackage,
   nativeWorkPackageAction,
@@ -1009,6 +1011,37 @@ async function typedAcknowledgeRoute(env: TestEnv, packet: NativeWorkPackageDefi
   }), env, auth, packet.jobId, assignment, "acknowledge", scope);
 }
 
+function productionGuardRefusals(env: TestEnv, packet: NativeWorkPackageDefinition) {
+  const db = env.DB.sqlite;
+  const probe = (run: () => void) => {
+    db.exec("SAVEPOINT typed_production_probe");
+    try { run(); return null; }
+    catch (error) { return error instanceof Error ? error.message : String(error); }
+    finally { db.exec("ROLLBACK TO typed_production_probe; RELEASE typed_production_probe"); }
+  };
+  const safety = probe(() => {
+    reverseGateInLedger(db, { tenantId: TENANT, roofJobId: packet.jobId,
+      gate: "Safety", actorUserId: USERS.owner.id, actorRole: "owner" });
+    attestGateInLedger(db, { tenantId: TENANT, roofJobId: packet.jobId,
+      gate: "Safety", actorUserId: USERS.owner.id, actorRole: "owner" });
+  });
+  const schedule = probe(() => {
+    const row = { ...db.prepare(
+      "SELECT * FROM operating_job_assignments WHERE tenant_id = ? AND assignment_id = ?",
+    ).get(TENANT, packet.assignmentId) };
+    row.supersedes_assignment_id = row.assignment_id;
+    row.assignment_id = `assignment-typed-probe-${++nextAction}`;
+    row.assignment_version = Number(row.assignment_version) + 1;
+    row.correction_reason = "Synthetic typed hold discriminator";
+    row.command_fingerprint = sha256(String(row.assignment_id));
+    row.idempotency_key_hash = sha256(`key:${row.assignment_id}`);
+    const names = Object.keys(row);
+    db.prepare(`INSERT INTO operating_job_assignments (${names.join(",")})
+      VALUES (${names.map(() => "?").join(",")})`).run(...Object.values(row) as never[]);
+  });
+  return { safety, schedule };
+}
+
 for (const reverseTriggers of [false, true]) {
   test(`typed safety holds preserve full identity and explicit Roof Job parents (${reverseTriggers ? "reversed" : "normal"} triggers)`, async () => {
     const env = testEnv({ reverseTriggers });
@@ -1076,5 +1109,32 @@ for (const reverseTriggers of [false, true]) {
     });
     assert.equal(mismatched.ready, false);
     assert.ok(mismatched.blockers.some((b) => b.code === "safety_event_uncontrolled"));
+  });
+
+  test(`production guards use typed relationships and never narrow latched stops (${reverseTriggers ? "reversed" : "normal"} triggers)`, async () => {
+    const env = testEnv({ reverseTriggers });
+    const { jobA, jobB } = await twoJobs(env);
+    const shop = await issueTyped(env, { workObjectType: "Service Work", workObjectId: jobA.jobId,
+      physicalContextType: "Shop", physicalContextId: "independent-shop" }, "production-shop");
+    const child = await issueTyped(env, { workObjectType: "Service Work", workObjectId: "SERVICE-REAL-CHILD",
+      physicalContextType: "Roof Job", physicalContextId: jobA.jobId }, "production-child");
+    await raise(env, { type: "work_package", id: shop.workPackageId });
+    assert.equal(await safetyStopActive(env, TENANT, jobA.jobId), false);
+    assert.deepEqual(productionGuardRefusals(env, jobA), { safety: null, schedule: null },
+      "a valid attestation and direct schedule stay admitted across an unrelated equal-ID Shop stop");
+    await raise(env, { type: "work_package", id: child.workPackageId });
+    assert.equal(await safetyStopActive(env, TENANT, jobA.jobId), true);
+    assert.deepEqual(productionGuardRefusals(env, jobA), {
+      safety: "production_gate_safety_stop_active", schedule: "operating_job_assignment_stop_active",
+    }, "an explicit Roof Job physical relationship holds both D1 consumers");
+    assert.equal(await safetyStopActive(env, TENANT, jobB.jobId), false);
+    assert.deepEqual(productionGuardRefusals(env, jobB), { safety: null, schedule: null });
+    const unresolved = await raise(env, { type: "roof_job", id: "JOB-PRODUCTION-LATE" });
+    seedAssignmentSnapshot(env, definition({ jobId: "JOB-PRODUCTION-LATE" }), { jobOnly: true });
+    assert.equal(await unknownJobStop(env, TENANT), unresolved);
+    assert.equal(await safetyStopActive(env, TENANT, jobB.jobId), true);
+    assert.deepEqual(productionGuardRefusals(env, jobB), {
+      safety: "production_gate_stop_job_unknown", schedule: "operating_job_assignment_stop_job_unknown",
+    }, "late target arrival cannot narrow the attestation or scheduling hold");
   });
 }

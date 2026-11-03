@@ -893,7 +893,10 @@ stale from before that merge):
   Staff member or a named outside person when nobody else can lift the stop (Q7) is not built.
   Proof is repository tests only.
 - An active safety-occurrence stop holds every job it names, for every crew: a job stop holds its
-  job, a Work Package stop holds every package of its job (Superseded included), and a tenant stop
+  job, and a Work Package stop holds its complete typed object (Superseded versions included).
+  A Roof Job object or explicit Roof Job physical context also holds that job's work. Equal bare
+  IDs in independent Shop contexts do not create that relationship. Safety attestations and
+  scheduling use the same relationship and immutable unresolved-scope latch. A tenant stop
   or a stop on a job or package that doesn't exist holds every job of the tenant. Unresolved scope
   is latched in immutable D1 history, including active unresolved stops at migration; adding or
   restoring its target never narrows that hold. Only the existing person-authorized release lifts

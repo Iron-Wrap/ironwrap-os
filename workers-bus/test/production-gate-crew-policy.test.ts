@@ -1076,6 +1076,37 @@ const triggerText = (sql: string, name: string): string => {
   return match[0];
 };
 
+/** Every predecessor byte remains after reversing only the reviewed typed/latch predicates. */
+function assert0170PreservesPriorGuard(name: string, compiled: string) {
+  const prior = triggerText(read("0159_production_gate_crew_policy.sql"), name)
+    .replace("CREATE TRIGGER IF NOT EXISTS ", "CREATE TRIGGER ");
+  const current = triggerText(read("0170_safety_stop_route_gaps.sql"), name);
+  assert.equal(`${compiled};`, current, "the final database uses the exact committed 0170 guard");
+  let restored = current;
+  const typed = "(CASE WHEN package.work_object_type = 'Roof Job' THEN package.work_object_id\n" +
+    "                          WHEN package.physical_context_type = 'Roof Job' THEN package.physical_context_id\n" +
+    "                          ELSE NULL END) = NEW.roof_job_id";
+  assert.equal(restored.split(typed).length - 1, 2, "both package predicates use typed relationships");
+  restored = restored.replaceAll(typed, "package.job_id = NEW.roof_job_id");
+  const latch = "EXISTS (SELECT 1 FROM safety_stop_unresolved_scopes latch\n" +
+    "                      WHERE latch.tenant_id = occurrence.tenant_id\n" +
+    "                        AND latch.occurrence_id = occurrence.occurrence_id)";
+  for (const kind of ["roof_job", "work_package"]) {
+    const matches = [...prior.matchAll(new RegExp(
+      "(AND occurrence\\.scope_type = '" + kind + "'\\s+)AND (NOT EXISTS \\([\\s\\S]*?\\n\\s*\\))", "g",
+    ))];
+    assert.equal(matches.length, 1, "the predecessor has one named unknown-scope predicate");
+    const match = matches[0]!;
+    const replaced = match[1] + "AND (" + latch + " OR " + match[2] + ")";
+    assert.equal(restored.split(replaced).length - 1, 1, "the named hold retains the immutable latch");
+    restored = restored.replace(replaced, match[0]);
+  }
+  const tenant = "occurrence.scope_type = 'tenant'\n             OR " + latch;
+  assert.equal(restored.split(tenant).length - 1, 1, "the general hold also retains the latch");
+  restored = restored.replace(tenant, "occurrence.scope_type = 'tenant'");
+  assert.equal(restored, prior, "every other A1–A4 byte and assertion is unchanged");
+}
+
 test("0159 re-creates the validate guard with every 0158 line carried, in order", () => {
   const lines = (sql: string) => sql.split("\n").map((line) => line.trim());
   const validate = "production_gate_clearances_validate_insert";
@@ -1166,7 +1197,7 @@ test("the triggers after every migration hold A1's to A4's clauses", () => {
   ]) {
     assert.ok(validate.includes(clause), `the final validate trigger keeps ${clause}`);
   }
-  assert.equal(`${validate};`, triggerText(read("0159_production_gate_crew_policy.sql"), "production_gate_clearances_validate_insert"));
+  assert0170PreservesPriorGuard("production_gate_clearances_validate_insert", validate);
   const guard = sql("operating_job_assignments_gate_evidence_guard");
   for (const clause of [
     "operating_job_assignment_seed_identity_refused",
@@ -1183,6 +1214,7 @@ test("the triggers after every migration hold A1's to A4's clauses", () => {
   ]) {
     assert.ok(guard.includes(clause), `the assignment guard keeps ${clause}`);
   }
+  assert0170PreservesPriorGuard("operating_job_assignments_gate_evidence_guard", guard);
   assert.ok(!guard.includes("NEW.created_at"), "the guard reads D1's clock, never the row's created_at");
   assert.ok(sql("operating_job_assignments_validate_insert").includes("operating_job_assignment_gates_blocked"));
 });

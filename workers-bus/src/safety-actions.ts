@@ -44,7 +44,10 @@ export interface SafetyDeviceActionPayload {
   equipment_id?: string;
   occurrence_kind?: SafetyOccurrenceKind;
   severity?: SafetySeverity;
-  detail: string;
+  /** `make_safe` only: the person on site who confirmed it, when someone else records it. */
+  on_site_confirmer_user_id?: string;
+  /** Optional on `report_occurrence`: the Worker writes "Work stopped on {job}" when absent. */
+  detail?: string;
   evidence_refs_json?: string;
   evidence_sha256?: string;
 }
@@ -174,13 +177,21 @@ function parsePayload(
 ): SafetyDeviceActionPayload {
   const envelopeKeys = ["captured_at", "kind", "scope_id", "scope_type"];
   const evidenceKeys = ["evidence_refs_json", "evidence_sha256"];
+  // A crew raise may say nothing but "stop": the Worker supplies the category, severity and
+  // summary it leaves out (P33 raise defaults).
   const required: Record<SafetyDeviceActionKind, string[]> = {
-    report_occurrence: ["detail", "occurrence_kind", "severity"],
+    report_occurrence: [],
     make_safe: ["detail", "occurrence_id"],
     equipment_defect: ["detail", "equipment_id"],
     rescue_request: ["detail"],
   };
-  const allowed = [...required[kind], ...evidenceKeys, ...envelopeKeys];
+  const optional: Record<SafetyDeviceActionKind, string[]> = {
+    report_occurrence: ["detail", "occurrence_kind", "severity"],
+    make_safe: ["on_site_confirmer_user_id"],
+    equipment_defect: [],
+    rescue_request: [],
+  };
+  const allowed = [...required[kind], ...optional[kind], ...evidenceKeys, ...envelopeKeys];
   const supplied = Object.keys(payload).filter((key) => !envelopeKeys.includes(key));
   if (
     !required[kind].every((key) => supplied.includes(key)) ||
@@ -188,7 +199,10 @@ function parsePayload(
   ) {
     throw invalidSafetyAction();
   }
-  const detail = boundedText(payload.detail, 3, MAX_DETAIL_LENGTH);
+  const detail =
+    kind === "report_occurrence" && payload.detail === undefined
+      ? undefined
+      : boundedText(payload.detail, 3, MAX_DETAIL_LENGTH);
   const evidenceRefsJson = payload.evidence_refs_json;
   const evidenceSha256 = payload.evidence_sha256;
   if ((evidenceRefsJson === undefined) !== (evidenceSha256 === undefined)) throw invalidSafetyAction();
@@ -206,22 +220,33 @@ function parsePayload(
     const occurrenceKind = payload.occurrence_kind;
     const severity = payload.severity;
     if (
-      typeof occurrenceKind !== "string" ||
-      !SAFETY_OCCURRENCE_KINDS.includes(occurrenceKind as SafetyOccurrenceKind) ||
-      typeof severity !== "string" ||
-      !SAFETY_SEVERITIES.includes(severity as SafetySeverity)
+      (occurrenceKind !== undefined &&
+        (typeof occurrenceKind !== "string" ||
+          !SAFETY_OCCURRENCE_KINDS.includes(occurrenceKind as SafetyOccurrenceKind))) ||
+      (severity !== undefined &&
+        (typeof severity !== "string" ||
+          !SAFETY_SEVERITIES.includes(severity as SafetySeverity)))
     ) {
       throw invalidSafetyAction();
     }
     return {
-      detail,
-      occurrence_kind: occurrenceKind as SafetyOccurrenceKind,
-      severity: severity as SafetySeverity,
+      ...(detail === undefined ? {} : { detail }),
+      ...(occurrenceKind === undefined
+        ? {}
+        : { occurrence_kind: occurrenceKind as SafetyOccurrenceKind }),
+      ...(severity === undefined ? {} : { severity: severity as SafetySeverity }),
       ...evidence,
     };
   }
   if (kind === "make_safe") {
-    return { detail, occurrence_id: boundedId(payload.occurrence_id, 3, 140), ...evidence };
+    return {
+      detail,
+      occurrence_id: boundedId(payload.occurrence_id, 3, 140),
+      ...(payload.on_site_confirmer_user_id === undefined
+        ? {}
+        : { on_site_confirmer_user_id: boundedId(payload.on_site_confirmer_user_id, 3, 140) }),
+      ...evidence,
+    };
   }
   if (kind === "equipment_defect") {
     return { detail, equipment_id: boundedId(payload.equipment_id, 3, 140), ...evidence };
@@ -373,21 +398,25 @@ async function applySafetyAction(
   const evidence = submissionEvidence(submission);
   if (submission.kind === "report_occurrence" || submission.kind === "rescue_request") {
     const occurrenceId = await derivedOccurrenceId(submission.deviceActionId);
+    // P33 raise defaults: a raise that names no category is a hazard, no severity is high, and no
+    // words say which job stopped. A rescue call is always an emergency of critical severity.
     const result = await reportSafetyOccurrence(env, {
       occurrenceId,
       tenantId: identity.tenantId,
       occurrenceKind:
         submission.kind === "rescue_request"
           ? "emergency"
-          : (submission.payload.occurrence_kind as SafetyOccurrenceKind),
+          : (submission.payload.occurrence_kind ?? "hazard"),
       severity:
         submission.kind === "rescue_request"
           ? "critical"
-          : (submission.payload.severity as SafetySeverity),
+          : (submission.payload.severity ?? "high"),
       scope: submission.scope,
       reportedByUserId: identity.userId,
       reportedAt: occurredAt,
-      summary: submission.payload.detail,
+      summary:
+        submission.payload.detail ??
+        (await defaultStopSummary(env, identity.tenantId, submission.scope)),
       rescueRequired: submission.kind === "rescue_request",
       evidence,
       capturedOffline: true,
@@ -406,7 +435,8 @@ async function applySafetyAction(
       tenantId: identity.tenantId,
       occurrenceId: submission.payload.occurrence_id as string,
       actorUserId: identity.userId,
-      detail: submission.payload.detail,
+      confirmerUserId: submission.payload.on_site_confirmer_user_id ?? null,
+      detail: submission.payload.detail as string,
       evidence,
       capturedOffline: true,
       deviceActionId: submission.deviceActionId,
@@ -422,7 +452,7 @@ async function applySafetyAction(
     tenantId: identity.tenantId,
     equipmentId: submission.payload.equipment_id as string,
     actorUserId: identity.userId,
-    detail: submission.payload.detail,
+    detail: submission.payload.detail as string,
     evidence,
     deviceActionId: submission.deviceActionId,
     occurredAt,
@@ -432,6 +462,44 @@ async function applySafetyAction(
     serverRef: equipment.equipment_id,
     cursor: `${equipment.equipment_id}:${equipment.version}`,
   };
+}
+
+/**
+ * The summary a raise with no words gets: "Work stopped on {job}", naming the job by its number as
+ * the crew phone does (the job's id when it has none). A Work Package names its job; a job or
+ * package the tenant does not have, a shop or a vehicle is named by the id the raise gave; a
+ * tenant-wide stop says "every job". A lookup that fails falls back to the id: the stop is never
+ * refused or delayed for its summary.
+ */
+async function defaultStopSummary(
+  env: AppEnv,
+  tenantId: string,
+  scope: SafetyScopeRef,
+): Promise<string> {
+  if (scope.type === "tenant") return "Work stopped on every job";
+  let label: string | null = null;
+  try {
+    if (scope.type === "roof_job") {
+      label = (await env.DB.prepare(
+        `SELECT COALESCE(NULLIF(trim(job_number), ''), roof_job_id) AS label
+           FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?`,
+      ).bind(tenantId, scope.id).first<{ label: string }>())?.label ?? null;
+    } else if (scope.type === "work_package") {
+      label = (await env.DB.prepare(
+        `SELECT COALESCE(NULLIF(trim(job.job_number), ''), package.job_id) AS label
+           FROM work_packages package
+           LEFT JOIN operating_roof_jobs job
+             ON job.tenant_id = package.tenant_id AND job.roof_job_id = package.job_id
+          WHERE package.tenant_id = ? AND package.work_package_id = ?
+          ORDER BY package.version DESC
+          LIMIT 1`,
+      ).bind(tenantId, scope.id).first<{ label: string }>())?.label ?? null;
+    }
+  } catch (error) {
+    console.error("safety_stop_summary_lookup_failed", { scope_type: scope.type }, error);
+  }
+  const subject = label ?? scope.id;
+  return `Work stopped on ${scope.type === "shop" ? "shop " : scope.type === "vehicle" ? "vehicle " : ""}${subject}`.slice(0, 4000);
 }
 
 /** Where a stop's job and Work Package live: the native job, and any version of the package. */

@@ -20,6 +20,9 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { SystemDetails } from "../components/ui/system-details";
 import { RoleGuard } from "../components/role-guard";
+import { Notice } from "../components/ui/notice";
+import { officeStamp } from "../production/gates/gate-time";
+import { ownerStopCopy } from "./owner-stop-copy";
 import type {
   MeasurementIntakeOwnerException,
   MeasurementIntakeOwnerExceptionsResponse,
@@ -407,7 +410,7 @@ function DecisionSummary({ model }: { model: OwnerNowResponse }) {
             <dd className={`mt-2 text-2xl font-bold tracking-[-0.03em] ${signal.tone}`}>
               {signal.value}
             </dd>
-            <p className="mt-1 text-sm leading-5 text-muted">{signal.detail}</p>
+            <dd className="mt-1 text-sm leading-5 text-muted">{signal.detail}</dd>
           </div>
         ))}
       </dl>
@@ -736,12 +739,16 @@ function DecisionRow({
                 {state.label}
               </span>
             </div>
-            {exception.why ? (
+            {isUnknownScopeStop(exception) ? (
+              <UnknownScopeStop exception={exception} locale={locale} />
+            ) : exception.why ? (
               <p className="mt-1.5 max-w-3xl text-sm leading-6 text-muted">{exception.why}</p>
             ) : null}
             <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm leading-5 text-muted">
               {jobIsAvailable ? <Metadata label="Job" value={jobLabel} /> : null}
-              {occurredAt ? <Metadata label="Recorded" value={occurredAt} /> : null}
+              {occurredAt && !isUnknownScopeStop(exception) ? (
+                <Metadata label="Recorded" value={occurredAt} />
+              ) : null}
               {receivedAt && receivedAt !== occurredAt ? (
                 <Metadata label="Received" value={receivedAt} />
               ) : null}
@@ -763,6 +770,59 @@ function DecisionRow({
         ) : null}
       </div>
     </li>
+  );
+}
+
+function isUnknownScopeStop(exception: OwnerException): boolean {
+  return exception.kind === "stop_job_unknown" || exception.kind === "stop_work_package_unknown";
+}
+
+/**
+ * N1 and N1b: a work stop that names a job or job plan that doesn't exist holds Safety and
+ * scheduling on every job. The item has no control: the read names who raised it, when, and what
+ * they wrote, and the app cannot release or re-raise it yet.
+ */
+function UnknownScopeStop({
+  exception,
+  locale,
+}: {
+  exception: OwnerException;
+  locale: OwnerDateFormatOptions;
+}) {
+  const stamp = officeStamp(exception.occurred_at, {
+    timeZone: locale.timeZone ?? "America/Edmonton",
+    now: new Date(),
+  });
+  return (
+    <div className="mt-3 grid max-w-3xl gap-3">
+      <Notice tone="danger" title={ownerStopCopy.scopeReport(exception.reported_by_name ?? null)}>
+        {exception.why}
+      </Notice>
+      <dl className="grid gap-2 text-sm leading-6">
+        <div>
+          <dt className="font-semibold text-muted">{ownerStopCopy.job}</dt>
+          <dd>{ownerStopCopy.jobUnknown}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold text-muted">{ownerStopCopy.raisedBy}</dt>
+          <dd>{ownerStopCopy.raisedByLine(exception.reported_by_name ?? null, stamp)}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold text-muted">{ownerStopCopy.reason}</dt>
+          <dd className="break-words">
+            {exception.summary?.trim() ? exception.summary : ownerStopCopy.reasonMissing}
+          </dd>
+        </div>
+      </dl>
+      <Notice
+        tone="info"
+        title={
+          exception.kind === "stop_work_package_unknown"
+            ? ownerStopCopy.notInAppPlan
+            : ownerStopCopy.notInAppJob
+        }
+      />
+    </div>
   );
 }
 
@@ -1006,6 +1066,8 @@ function stateFor(exception: OwnerException): {
   dot: string;
 } {
   switch (exception.kind) {
+    case "stop_job_unknown":
+    case "stop_work_package_unknown":
     case "field_blocker":
     case "blocked_gate":
       return {

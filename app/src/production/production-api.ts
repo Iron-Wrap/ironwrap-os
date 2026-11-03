@@ -12,11 +12,13 @@ import {
 
 export async function loadProductionRunway(
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<ProductionRunwayResponse> {
   return await apiRequest({
     path: API_PATHS.production,
     schema: productionRunwayResponseSchema,
     fetcher,
+    signal,
   });
 }
 

@@ -55,8 +55,14 @@ function assertAdmissibleJobNames(file, names, jobs) {
   const admissible = jobs.map((job) => job.name);
   const matrixNames = jobs.filter((job) => job.isMatrix).map((job) => job.name);
   for (const requestedName of names) {
-    assert.ok(admissible.includes(requestedName), `${file}: ${requestedName} is not a ci.yml job name`);
-    assert.ok(!matrixNames.includes(requestedName), `${file}: ${requestedName} is a matrix job`);
+    assert.ok(
+      admissible.includes(requestedName),
+      `${file}: ${requestedName} is not a ci.yml job name`,
+    );
+    assert.ok(
+      !matrixNames.includes(requestedName),
+      `${file}: ${requestedName} is a matrix job`,
+    );
   }
 }
 
@@ -64,7 +70,11 @@ function assertAdmissibleJobNames(file, names, jobs) {
 // and by the negative tests.
 function assertJobNamesCaller(file, names, jobs) {
   assertAdmissibleJobNames(file, names, jobs);
-  assert.deepEqual(names, ["paired-device-lighthouse", "gate", "validate-and-test"], file);
+  assert.deepEqual(
+    names,
+    ["paired-device-lighthouse", "gate", "validate-and-test"],
+    file,
+  );
 }
 
 function section(workflow, heading) {
@@ -78,23 +88,27 @@ function jobNames(workflow) {
   const jobsStart = workflow.indexOf("\njobs:\n");
   assert.ok(jobsStart >= 0, "missing jobs: block");
   const jobsBlock = workflow.slice(jobsStart);
-  return [...jobsBlock.matchAll(/^  ([a-z0-9_-]+):\n/gm)].map((match) => match[1]);
+  return [...jobsBlock.matchAll(/^  ([a-z0-9_-]+):\n/gm)].map(
+    (match) => match[1],
+  );
 }
 
 // The e2e matrix's suite groups: one quoted, space-separated list per leg.
 function e2eGroups(workflow) {
   const e2e = section(workflow, "e2e");
-  const matrixSection = e2e.slice(e2e.indexOf("group:"), e2e.indexOf("runs-on:"));
-  return [...matrixSection.matchAll(/^ {10}- "([^"]+)"$/gm)].map((match) => match[1].split(" "));
+  const matrixSection = e2e.slice(
+    e2e.indexOf("group:"),
+    e2e.indexOf("runs-on:"),
+  );
+  return [...matrixSection.matchAll(/^ {10}- "([^"]+)"$/gm)].map((match) =>
+    match[1].split(" "),
+  );
 }
 
 function makefileSuites(makefile) {
   const suitesMatch = makefile.match(/E2E_SUITES := ([\s\S]*?)\n\n/);
   assert.ok(suitesMatch, "Makefile: E2E_SUITES not found");
-  return suitesMatch[1]
-    .replace(/\\\n/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+  return suitesMatch[1].replace(/\\\n/g, " ").split(/\s+/).filter(Boolean);
 }
 
 // Jobs `changes` may legitimately skip, by the scope output that decides each.
@@ -154,7 +168,10 @@ test("gate aggregates every job except itself and validate-and-test, and both ru
   const expectedGateNeeds = names.filter(
     (name) => name !== "gate" && name !== "validate-and-test",
   );
-  assert.ok(expectedGateNeeds.length >= 8, "expected at least 8 jobs for gate to aggregate");
+  assert.ok(
+    expectedGateNeeds.length >= 8,
+    "expected at least 8 jobs for gate to aggregate",
+  );
 
   const gate = section(workflow, "gate");
   const gateNeedsMatch = gate.match(/needs:\s*\n?\s*\[([\s\S]*?)\]/);
@@ -186,7 +203,12 @@ test("only dependency-scan, gate, validate-and-test and the scoped jobs carry a 
   }
   assert.deepEqual(
     [...jobLevelIfJobs].sort(),
-    ["dependency-scan", "gate", "validate-and-test", ...Object.keys(SCOPED_JOBS)].sort(),
+    [
+      "dependency-scan",
+      "gate",
+      "validate-and-test",
+      ...Object.keys(SCOPED_JOBS),
+    ].sort(),
   );
 });
 
@@ -196,9 +218,19 @@ test("each scoped job's only condition is its own scope output from changes", as
   const workflow = await readFile(workflowUrl, "utf8");
   for (const [job, scope] of Object.entries(SCOPED_JOBS)) {
     const jobText = section(workflow, job);
-    const conditions = [...jobText.matchAll(/^ {4}if: (.+)$/gm)].map((match) => match[1]);
-    assert.deepEqual(conditions, [`needs.changes.outputs.${scope} == 'true'`], job);
-    assert.match(jobText, /^ {4}needs: \[changes(, [a-z-]+)*\]$/m, `${job} must need changes`);
+    const conditions = [...jobText.matchAll(/^ {4}if: (.+)$/gm)].map(
+      (match) => match[1],
+    );
+    assert.deepEqual(
+      conditions,
+      [`needs.changes.outputs.${scope} == 'true'`],
+      job,
+    );
+    assert.match(
+      jobText,
+      /^ {4}needs: \[changes(, [a-z-]+)*\]$/m,
+      `${job} must need changes`,
+    );
   }
   const changes = section(workflow, "changes");
   assert.match(changes, /app: \$\{\{ steps\.scope\.outputs\.app \}\}/);
@@ -245,41 +277,94 @@ test("gate's shell passes only when every job succeeded or was skipped where its
   assert.equal(runGate(allSuccess), 0, "all success must pass");
 
   const workerSkipped = { ...allSuccess, worker: { result: "skipped" } };
-  assert.equal(runGate(workerSkipped), 1, "a skipped non-exempt job must fail gate");
+  assert.equal(
+    runGate(workerSkipped),
+    1,
+    "a skipped non-exempt job must fail gate",
+  );
 
-  const dependencyScanSkipped = { ...allSuccess, "dependency-scan": { result: "skipped" } };
-  assert.equal(runGate(dependencyScanSkipped), 0, "a skipped dependency-scan must still pass gate");
+  const dependencyScanSkipped = {
+    ...allSuccess,
+    "dependency-scan": { result: "skipped" },
+  };
+  assert.equal(
+    runGate(dependencyScanSkipped),
+    0,
+    "a skipped dependency-scan must still pass gate",
+  );
 
   const oneFailure = { ...allSuccess, contracts: { result: "failure" } };
   assert.equal(runGate(oneFailure), 1, "a real failure must fail gate");
 
   const skipped = (needs, jobs) =>
     Object.fromEntries(
-      Object.entries(needs).map(([job, value]) => [job, jobs.includes(job) ? { result: "skipped" } : value]),
+      Object.entries(needs).map(([job, value]) => [
+        job,
+        jobs.includes(job) ? { result: "skipped" } : value,
+      ]),
     );
-  const appJobs = Object.keys(SCOPED_JOBS).filter((job) => SCOPED_JOBS[job] === "app");
-  const codeJobs = Object.keys(SCOPED_JOBS).filter((job) => SCOPED_JOBS[job] === "code");
-  const scoped = (app, code) => ({ ...allSuccess, changes: { result: "success", outputs: { app, code } } });
+  const appJobs = Object.keys(SCOPED_JOBS).filter(
+    (job) => SCOPED_JOBS[job] === "app",
+  );
+  const codeJobs = Object.keys(SCOPED_JOBS).filter(
+    (job) => SCOPED_JOBS[job] === "code",
+  );
+  const scoped = (app, code) => ({
+    ...allSuccess,
+    changes: { result: "success", outputs: { app, code } },
+  });
 
-  assert.equal(runGate(skipped(scoped("false", "true"), appJobs)), 0, "a Worker-only change may skip the bundle legs");
   assert.equal(
-    runGate(skipped(scoped("false", "false"), [...appJobs, ...codeJobs, "dependency-scan"])),
+    runGate(skipped(scoped("false", "true"), appJobs)),
+    0,
+    "a Worker-only change may skip the bundle legs",
+  );
+  assert.equal(
+    runGate(
+      skipped(scoped("false", "false"), [
+        ...appJobs,
+        ...codeJobs,
+        "dependency-scan",
+      ]),
+    ),
     0,
     "a markdown-only change may skip every suite",
   );
   for (const job of Object.keys(SCOPED_JOBS)) {
-    assert.equal(runGate(skipped(allSuccess, [job])), 1, `${job} skipped while its scope said run must fail gate`);
+    assert.equal(
+      runGate(skipped(allSuccess, [job])),
+      1,
+      `${job} skipped while its scope said run must fail gate`,
+    );
   }
   assert.equal(
     runGate(skipped(scoped("false", "true"), codeJobs)),
     1,
     "a test suite skipped while code is in scope must fail gate",
   );
-  assert.equal(runGate(skipped(scoped("false", "false"), ["contracts"])), 1, "contracts is never scoped");
-  assert.equal(runGate(skipped(scoped("false", "false"), ["secret-scan"])), 1, "secret-scan is never scoped");
-  const changesFailed = { ...skipped(allSuccess, [...appJobs, ...codeJobs]), changes: { result: "failure", outputs: {} } };
-  assert.equal(runGate(changesFailed), 1, "a failed changes job fails gate, whatever it skipped");
-  const unset = skipped({ ...allSuccess, changes: { result: "success", outputs: {} } }, appJobs);
+  assert.equal(
+    runGate(skipped(scoped("false", "false"), ["contracts"])),
+    1,
+    "contracts is never scoped",
+  );
+  assert.equal(
+    runGate(skipped(scoped("false", "false"), ["secret-scan"])),
+    1,
+    "secret-scan is never scoped",
+  );
+  const changesFailed = {
+    ...skipped(allSuccess, [...appJobs, ...codeJobs]),
+    changes: { result: "failure", outputs: {} },
+  };
+  assert.equal(
+    runGate(changesFailed),
+    1,
+    "a failed changes job fails gate, whatever it skipped",
+  );
+  const unset = skipped(
+    { ...allSuccess, changes: { result: "success", outputs: {} } },
+    appJobs,
+  );
   assert.equal(runGate(unset), 1, "a skip with no scope output fails gate");
 });
 
@@ -289,7 +374,10 @@ test("gate's skip map is exactly the scoped jobs and their scopes", async () => 
   const mapMatch = script.match(/\{([^{}]*)\} as \$scoped/);
   assert.ok(mapMatch, "gate's $scoped map not found");
   const map = Object.fromEntries(
-    [...mapMatch[1].matchAll(/"([a-z0-9-]+)": "([a-z]+)"/g)].map((match) => [match[1], match[2]]),
+    [...mapMatch[1].matchAll(/"([a-z0-9-]+)": "([a-z]+)"/g)].map((match) => [
+      match[1],
+      match[2],
+    ]),
   );
   assert.deepEqual(map, SCOPED_JOBS);
 });
@@ -297,7 +385,10 @@ test("gate's skip map is exactly the scoped jobs and their scopes", async () => 
 test("ci.yml job names: dependency-scan's override, worker and e2e as matrix jobs", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   const jobs = ciJobs(workflow);
-  assert.equal(jobs.find((job) => job.id === "dependency-scan")?.name, "dependency scan");
+  assert.equal(
+    jobs.find((job) => job.id === "dependency-scan")?.name,
+    "dependency scan",
+  );
   assert.deepEqual(
     [...jobs.filter((job) => job.isMatrix).map((job) => job.id)].sort(),
     ["e2e", "worker"],
@@ -310,7 +401,10 @@ test("every --job-names caller in .github/workflows requests only the three non-
   const callers = await jobNamesCallers();
   // A prose mention (lighthouse-harness-ab.yml) must never surface as a caller, and
   // an empty read here would make every assertion below pass vacuously.
-  assert.ok(callers.length >= 2, `expected at least two --job-names callers, found ${callers.length}`);
+  assert.ok(
+    callers.length >= 2,
+    `expected at least two --job-names callers, found ${callers.length}`,
+  );
   for (const { file, names } of callers) {
     assertJobNamesCaller(file, names, jobs);
   }
@@ -329,7 +423,12 @@ test("a caller requesting the deleted make check job, or any matrix job, fails t
     /make check is not a ci\.yml job name/,
   );
   assert.throws(
-    () => assertAdmissibleJobNames("synthetic", ["worker", "gate", "validate-and-test"], jobs),
+    () =>
+      assertAdmissibleJobNames(
+        "synthetic",
+        ["worker", "gate", "validate-and-test"],
+        jobs,
+      ),
     /worker is a matrix job/,
   );
 });
@@ -348,7 +447,10 @@ test("removing a requested job from ci.yml fails validation for every caller tha
   const callers = await jobNamesCallers();
   assert.ok(callers.length >= 2);
   for (const { file, names } of callers) {
-    assert.throws(() => assertJobNamesCaller(file, names, jobs), `${file}: gate missing from ci.yml must be caught`);
+    assert.throws(
+      () => assertJobNamesCaller(file, names, jobs),
+      `${file}: gate missing from ci.yml must be caught`,
+    );
   }
 });
 
@@ -365,20 +467,30 @@ test("the worker matrix shard count matches WORKER_SHARDS", async () => {
     shards,
     Array.from({ length: shardCount }, (_, index) => index + 1),
   );
-  assert.match(worker, /make worker-shard SHARD=\$\{\{ matrix\.shard \}\}\/\$\{\{ env\.WORKER_SHARDS \}\}/);
+  assert.match(
+    worker,
+    /make worker-shard SHARD=\$\{\{ matrix\.shard \}\}\/\$\{\{ env\.WORKER_SHARDS \}\}/,
+  );
 });
 
 test("the e2e matrix runs every one of the Makefile's E2E_SUITES exactly once, grouped, through make", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   const makefile = await readFile(makefileUrl, "utf8");
   const suites = makefileSuites(makefile);
-  assert.equal(suites.length, 17);
+  assert.equal(suites.length, 18);
 
   const groups = e2eGroups(workflow);
-  assert.ok(groups.length >= 2, `expected at least two e2e groups, found ${groups.length}`);
+  assert.ok(
+    groups.length >= 2,
+    `expected at least two e2e groups, found ${groups.length}`,
+  );
   for (const group of groups) assert.ok(group.length >= 1);
   const matrixSuites = groups.flat();
-  assert.equal(new Set(matrixSuites).size, matrixSuites.length, "a suite appears in two groups");
+  assert.equal(
+    new Set(matrixSuites).size,
+    matrixSuites.length,
+    "a suite appears in two groups",
+  );
   assert.deepEqual([...matrixSuites].sort(), [...suites].sort());
   // One step, through make, so the build/suite split can never drift out of sync
   // with e2e-suite's own recipe (IRO-267 revision 1, step 14).
@@ -393,7 +505,11 @@ test("e2e and e2e-suite fail when any suite fails, not only the last", async () 
   for (const loop of loops) {
     assert.match(loop, /\|\| status=1; done; exit \$\$status$/);
   }
-  assert.doesNotMatch(makefile, /^\tfor suite in .*; done$/m, "a bare for loop masks earlier failures");
+  assert.doesNotMatch(
+    makefile,
+    /^\tfor suite in .*; done$/m,
+    "a bare for loop masks earlier failures",
+  );
 });
 
 test("the worker-contract job restores the typecheck and deploy dry-run checks CI used to drop", async () => {
@@ -406,11 +522,17 @@ test("evidence needs both pwa and worker, and merges the shard TAPs before the r
   const workflow = await readFile(workflowUrl, "utf8");
   const evidence = section(workflow, "evidence");
   assert.match(evidence, /needs: \[changes, pwa, worker\]/);
-  assert.match(evidence, /merge-worker-tap\.mjs --shards \$\{\{ env\.WORKER_SHARDS \}\}/);
+  assert.match(
+    evidence,
+    /merge-worker-tap\.mjs --shards \$\{\{ env\.WORKER_SHARDS \}\}/,
+  );
   // IRO-267 revision 2: the shard TAP names no test file, so the merge step
   // must also carry the summed-test floor - otherwise four well-formed but
   // short shard TAPs still produce an accepted capability evidence receipt.
-  assert.match(evidence, /merge-worker-tap\.mjs --shards \$\{\{ env\.WORKER_SHARDS \}\} --min-tests \$\{\{ env\.WORKER_TEST_FLOOR \}\}/);
+  assert.match(
+    evidence,
+    /merge-worker-tap\.mjs --shards \$\{\{ env\.WORKER_SHARDS \}\} --min-tests \$\{\{ env\.WORKER_TEST_FLOOR \}\}/,
+  );
   assert.match(evidence, /make evidence-receipt/);
 });
 
@@ -435,7 +557,13 @@ test("every job gate depends on exists in the workflow", async () => {
 // Jobs whose run: steps are not make invocations by design: a timing budget
 // with its own conditional steps, a scanner with no Makefile target, the scope
 // decision every scoped job reads, and the two aggregator jobs' pass/fail shells.
-const NON_MAKE_JOBS = new Set(["changes", "paired-device-lighthouse", "dependency-scan", "gate", "validate-and-test"]);
+const NON_MAKE_JOBS = new Set([
+  "changes",
+  "paired-device-lighthouse",
+  "dependency-scan",
+  "gate",
+  "validate-and-test",
+]);
 
 test("every run: step in ci.yml is a make invocation, or on an explicit allowlist", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
@@ -446,7 +574,9 @@ test("every run: step in ci.yml is a make invocation, or on an explicit allowlis
       // The evidence job's own merge step: it feeds worker-shard artifacts into
       // one TAP before `make evidence-receipt` can read it, so it cannot itself
       // be a make target without also owning the download steps.
-      const isMergeWorkerTap = command.startsWith("node tools/merge-worker-tap.mjs");
+      const isMergeWorkerTap = command.startsWith(
+        "node tools/merge-worker-tap.mjs",
+      );
       assert.ok(
         isMake || isMergeWorkerTap,
         `${job}: run step "${command}" is neither a make invocation nor on the allowlist`,
@@ -514,7 +644,10 @@ test("CI's make invocations, expanded across the worker and e2e matrices, reach 
     } else if (invocation.includes("${{ matrix.group }}")) {
       for (const group of groups) {
         const suiteList = group.join(" ");
-        expanded.push([`make e2e-suite SUITE="${suiteList}"`, ["e2e-suite", `SUITE=${suiteList}`]]);
+        expanded.push([
+          `make e2e-suite SUITE="${suiteList}"`,
+          ["e2e-suite", `SUITE=${suiteList}`],
+        ]);
       }
     } else {
       expanded.push([invocation, invocation.split(" ").slice(1)]);
@@ -548,7 +681,10 @@ test("CI's make invocations, expanded across the worker and e2e matrices, reach 
   // - `pwa` also runs `npm run build --prefix app`, so a union-only
   // assertion on that line would pass even if worker-contract dropped it.
   const workerContractLines = linesByInvocation.get("make worker-contract");
-  assert.ok(workerContractLines, "make worker-contract not found among CI's invocations");
+  assert.ok(
+    workerContractLines,
+    "make worker-contract not found among CI's invocations",
+  );
   assert.ok(workerContractLines.includes("npm run build --prefix app"));
   assert.ok(
     workerContractLines.some((line) =>
@@ -557,7 +693,9 @@ test("CI's make invocations, expanded across the worker and e2e matrices, reach 
   );
   assert.ok(
     workerContractLines.some((line) =>
-      line.startsWith("grep -Eq 'Read [1-9][0-9]* files from the assets directory'"),
+      line.startsWith(
+        "grep -Eq 'Read [1-9][0-9]* files from the assets directory'",
+      ),
     ),
   );
 
@@ -601,7 +739,11 @@ test("the paired-device Lighthouse leg measures with the pinned Chrome for Testi
   const workflow = await readFile(workflowUrl, "utf8");
   assert.equal(PIN_PATH, "app/scripts/chrome-for-testing.json");
   assert.equal(pin.browser, "chrome");
-  assert.match(pin.buildId, /^\d+\.\d+\.\d+\.\d+$/, "an exact build, never a channel or milestone");
+  assert.match(
+    pin.buildId,
+    /^\d+\.\d+\.\d+\.\d+$/,
+    "an exact build, never a channel or milestone",
+  );
 
   const job = section(workflow, "paired-device-lighthouse");
   assert.doesNotMatch(job, /playwright install/);
@@ -609,7 +751,10 @@ test("the paired-device Lighthouse leg measures with the pinned Chrome for Testi
   const install = commands.indexOf("node app/scripts/lighthouse-chrome.mjs");
   const measure = commands.indexOf("npm run test:lighthouse --prefix app");
   assert.ok(install >= 0, "the job must install the pinned build");
-  assert.ok(measure > install, "the pinned build must be installed before the measurement");
+  assert.ok(
+    measure > install,
+    "the pinned build must be installed before the measurement",
+  );
 
   // Cached under the pin alone, in the directory lighthouse-chrome.mjs installs into.
   const cachePath = job.match(/^ {10}path: (~\/\.cache\/chrome-for-testing)$/m);
@@ -632,10 +777,16 @@ test("a change to the browser pin alone still runs the paired-device Lighthouse 
 });
 
 test("the Lighthouse harness A/B measures with the same pinned build and reruns when the pin moves", async () => {
-  const ab = await readFile(new URL("lighthouse-harness-ab.yml", workflowsDirUrl), "utf8");
+  const ab = await readFile(
+    new URL("lighthouse-harness-ab.yml", workflowsDirUrl),
+    "utf8",
+  );
   assert.doesNotMatch(ab, /playwright install/);
   assert.match(ab, /^ {8}run: node app\/scripts\/lighthouse-chrome\.mjs$/m);
   for (const path of [PIN_PATH, "app/scripts/lighthouse-chrome.mjs"]) {
-    assert.ok(ab.includes(`\n      - ${path}\n`), `lighthouse-harness-ab.yml must rerun when ${path} changes`);
+    assert.ok(
+      ab.includes(`\n      - ${path}\n`),
+      `lighthouse-harness-ab.yml must rerun when ${path} changes`,
+    );
   }
 });

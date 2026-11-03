@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export type MeasurementIntakeStatus =
   "processing" | "matched" | "unmatched" | "retryable_error";

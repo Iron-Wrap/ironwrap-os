@@ -222,6 +222,16 @@ is GitOps (owner decision, 2026-10-21). The version it runs is declared in
 production gate, and that repository's `promote-production.yml` is the only caller of this
 workflow. The contract is `docs/PRODUCTION-PROMOTION.md` in `iron-wrap-infra`.
 
+Production and qa live in different Cloudflare accounts (decision of 2026-10-30, IRO-221).
+Production — the Worker `ironwrap-bus`, D1 `ironwrap-bus` (`a8fd0116-7af6-4788-98bd-083addbe58bc`),
+R2 `ironwrap-bus-raw` / `ironwrap-bus-privacy` and the six `ironwrap-*` queues — is in the Mindburn
+Labs account `5023dd227b538fc4238439fd7d52640f` and is published as `ironwrap.mindburn.org` (zone
+`mindburn.org`). qa stays in IronWrap's account `7ee5775bc1ba46f05c5a65235b60e939`;
+`workers-bus/wrangler.jsonc` pins it in `env.qa.account_id`, and
+`deploy/release-provider-policy.json` (schema v2) records the account per environment. Production
+mail runs on the mindburn.org Workspace, like qa: sender `sergeyap@mindburn.org`, the shared-drive
+ids empty.
+
 `validateMergePolicy` requires `allow_merge_commit: false` with `allow_squash_merge` and
 `allow_rebase_merge` `true` on `main`, and the repository is set that way (owner change of
 2026-10-01). `readMergePolicy` reads those three settings through GraphQL (`mergeCommitAllowed`,
@@ -248,9 +258,9 @@ takes effect from the first push after the commit that introduces it.
   provider and smoke inputs" and at the `^[0-9a-f]{32}$` zone-format check. The zone waits for the
   domain (IRO-221).
 - The first production release writes a generation-0 row to `release-policy:Iron-Wrap/ironwrap-os`
-  and then fails closed before any promotion (step 7 below, "Capture the current production
+  and then fails closed before any promotion (step 4 below, "Capture the current production
   revision" fails `deployment_list_empty` on a Worker that has never been deployed). Any later
-  release whose base tree hashes differently across the 13 `RELEASE_POLICY_FILES` then fails
+  release whose base tree hashes differently across the 12 `RELEASE_POLICY_FILES` then fails
   `policy_genesis_drift` with no override. Clearing or resetting that row is a D1 write with
   `RELEASE_POLICY_LEDGER_API_TOKEN`, owner only.
 
@@ -260,40 +270,27 @@ takes effect from the first push after the commit that introduces it.
   0153/0155/0158/0159/0160) until (1) PR-C, the office UI for A1–A5, (2) the P33 stop
   raise/release UI and (3) Sergey's production pre-flight have all landed. On QA, today's office
   UI shows the gate refusals without explanation; that is acceptable on QA only. Once 0153 is on
-  `main`, every later release commit carries it, so the person merging the release pull request
-  (step 3 below) leaves it unmerged until all three have landed.
+  `main`, every later commit carries it, so the maintainer tags no commit that contains 0153
+  (step 2 below) until all three have landed.
 
 The release path, end to end:
 
-1. **Conventional commits land on `main`.** `.github/workflows/release-please.yml` fails the
-   `pr-title` check on any pull request whose landing subject release-please cannot parse. Because
-   `squash_merge_commit_title` is `COMMIT_OR_PR_TITLE`, a single-commit pull request lands its
-   **commit** subject, so that subject is validated too whenever the PR has exactly one commit.
-2. **release-please keeps one release pull request open** on the `release-please--branches--main`
-   branch, updating `CHANGELOG.md` and `.release-please-manifest.json` with the next version.
-3. **A person merges that release pull request.** This is the documented default and the only
-   configured behaviour: releasing is the one decision a human still makes. The alternative is to
-   let an automation merge it (a scheduled job, or GitHub auto-merge). Changing that costs the last
-   human checkpoint in front of production: every green release pull request would then tag and
-   promote itself, so a bad change reaches customers without anyone choosing to ship it. Do not
-   change it without a recorded owner decision.
-   **No auto-merge is configured** for the release pull request. Note, however, that
-   `allow_auto_merge` is still **enabled at the repository level** (read back 2026-10-01), so anyone
-   with write access can enable auto-merge on an individual pull request. Disabling it is an
-   owner-only repository setting and is *not* changed by this work.
-4. **Deploy proves `qa` on the release commit**, exactly as for any other push to `main`, and
-   publishes `iro41-release-artifact-<sha>` and `iro41-qa-proof-<sha>` (retained 30 days, so a
-   production re-run days after the tag still finds the bytes).
-5. **`github-release` tags that commit.** The job runs on a successful Deploy of `main` and exits
-   without tagging unless that Deploy's head SHA is the merge commit of the newest merged release
-   pull request. Every other successful Deploy is an ordinary commit and is not a release.
-6. **A promotion PR in `iron-wrap-infra` starts the production workflow.** The tag does not:
-   `deploy-production.yml` has no `push` trigger. `github-release` pushes the tag with
-   `RELEASE_TAG_TOKEN`, a fine-grained PAT (`Contents` and `Pull requests` read and write,
-   `ironwrap-os` only) held in the `release` GitHub Environment, which deploys from `main` only;
-   `release-pr` uses the same token, so CI runs on the release pull request without an approval
-   click. A missing secret stops either job at `release_tag_token_missing`; an expired token
-   answers 401. The owner then opens a PR in `iron-wrap-infra` that sets
+1. **Deploy proves `qa` on every push to `main`** and publishes `iro41-release-artifact-<sha>` and
+   `iro41-qa-proof-<sha>` (retained 30 days, so a production run days after the tag still finds the
+   bytes; a commit older than that cannot be released).
+2. **A maintainer pushes the release tag** (owner decision 2026-11-01, ironwrap-tracker#68; the
+   contract is `iron-wrap-infra` `docs/PRODUCTION-PROMOTION.md` "Release tags"). Pick a commit on
+   `main` whose CI run (push to `main`) and Deploy run both succeeded, choose `vMAJOR.MINOR.PATCH`
+   from what changed since the last tag, write the `CHANGELOG.md` entry by hand, and push:
+   `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. Tagging an unproven commit is harmless but
+   useless: step 3 refuses it with `release_production_missing_ci_run`,
+   `release_production_missing_qa_run` or `release_production_qa_proof_foreign`. `v*` tags cannot
+   be moved or deleted; a mistake is fixed with the next version. Do not tag the merge commit of the
+   pull request that removed release-please: its parent's enforcer still lists
+   `.github/workflows/release-please.yml` in `RELEASE_POLICY_FILES`, so `assemble` fails reading it.
+   Any later commit is fine.
+3. **A promotion PR in `iron-wrap-infra` starts the production workflow.** The tag does not:
+   `deploy-production.yml` has no `push` trigger. The owner opens a PR in `iron-wrap-infra` that sets
    `components.ironwrap-os.ref: vX.Y.Z` in `environments/production/stand.yml`, and merges it.
    `promote-production.yml` there checks the tag exists and dispatches this workflow on the tag with
    `tag` and `declaration_sha` (the merge commit), using `RELEASE_PROMOTION_DISPATCH_TOKEN`. The job
@@ -304,7 +301,7 @@ The release path, end to end:
    on `main` still names this tag. A re-run uses **Re-run jobs** on the `promote-production.yml`
    run; a hand dispatch must pass the same two inputs and meets the same check. A rollback is a
    revert of the promotion PR.
-7. **Production promotes the qa-proven bytes behind the permit and the ledger.** The job re-verifies
+4. **Production promotes the qa-proven bytes behind the permit and the ledger.** The job re-verifies
    the artifact digest against the qa proof, re-reads the merged source with
    `--source-policy reachable` (the tagged commit must still be *on* `main`, not necessarily its
    tip), assembles the signed short-lived permit from that evidence, consumes it exactly once
@@ -593,13 +590,13 @@ Archive only redacted request ids and the release evidence.
 ## 8. Configure The Optional Hermes And MCP Compatibility Surface
 
 If the broad compatibility surface is enabled, install Hermes at the tag and commit in
-`deploy/runtime-lock.json`. Register the four entries in
-`hermes/mcp-servers.json`. The bus, Frappe, and Newo tool filters come from
-`hermes/agents/roles.json`; the separate desktop pilot server is outside that inventory and must
+`deploy/runtime-lock.json`. Launch each bus, Frappe, and Newo MCP process with its own
+`MCP_ALLOWED_TOOLS` list; a server registers only those tools and refuses to start without the
+list or with a name it does not have. The separate desktop pilot server takes no such list and must
 remain fixed at `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. MCP base
 URLs must be production HTTPS URLs. Plain HTTP is accepted only for explicit localhost development.
 
-Keep `APP_HERMES_DESKTOP_ENABLED=false` during the broad role smoke test. The checked-in desktop
+Keep `APP_HERMES_DESKTOP_ENABLED=false` during the first MCP smoke test. The checked-in desktop
 surface is a narrow `lead_follow_up_draft` pilot, not a resident company coordinator or operating
 authority. For first pairing, issue
 the one-time fragment link from PWA Settings and pass it only as
@@ -614,10 +611,12 @@ downstream authority.
 Keep the Frappe, bus, and Newo MCP/Worker write flags false for the first read-only smoke test:
 
 ```bash
-node tools/validate-hermes-config.mjs
+npm test --prefix mcp/erpnext-roofing-mcp
+npm test --prefix mcp/ironwrap-bus-mcp
+npm test --prefix mcp/newo-mcp
 ```
 
-Ask the owner-operator profile for bus readiness, operational status, and blocked jobs. Confirm
+Ask an MCP client granted the bus read tools for bus readiness, operational status, and blocked jobs. Confirm
 that no mutation or `Hermes Run` was created. For the approved-write proof, enable only the one
 required write surface, use a stable unique `run_id`, execute the matching dry-run, obtain human
 approval, and invoke the request tool with the approval token. Repeating the same completed
@@ -898,8 +897,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 ```
 
 `backup-d1-to-r2.sh` is bound to Cloudflare account
-`7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
-`8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d` (created empty in WNAM on 2026-10-21; the earlier WEUR
+`5023dd227b538fc4238439fd7d52640f`, database `ironwrap-bus`, and UUID
+`a8fd0116-7af6-4788-98bd-083addbe58bc` (created empty in WNAM on 2026-10-21; the earlier WEUR
 database `f0674848…` was exported and deleted the same day). It runs locked Wrangler `d1 export --remote`, imports
 the SQL into isolated SQLite, checks integrity and the complete migration-derived table, index,
 and invariant-trigger inventories, packages manifest plus SQL, encrypts
@@ -935,7 +934,7 @@ with the locally verified SQLite export:
 
 ```bash
 export D1_RESTORE_MODE=remote
-export D1_RESTORE_TARGET_ACCOUNT_ID=7ee5775bc1ba46f05c5a65235b60e939
+export D1_RESTORE_TARGET_ACCOUNT_ID=5023dd227b538fc4238439fd7d52640f
 export D1_RESTORE_TARGET_DATABASE_NAME='ironwrap-restore-drill-launch'
 export D1_RESTORE_TARGET_DATABASE_ID='<different-non-production-d1-uuid>'
 export D1_RESTORE_API_TOKEN='<just-in-time-d1-drill-write-token>'

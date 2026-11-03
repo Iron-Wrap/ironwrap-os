@@ -20,7 +20,6 @@ From the repository root:
 ```bash
 node tools/validate-newo-config.mjs
 node tools/validate-erpnext-doctypes.mjs
-node tools/validate-hermes-config.mjs
 npm test --prefix workers-bus
 npm run typecheck --prefix workers-bus
 npm test --prefix mcp/newo-mcp

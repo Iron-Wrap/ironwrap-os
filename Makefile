@@ -50,7 +50,6 @@ deps: $(addsuffix /node_modules/.package-lock.json,$(NODE_PACKAGES) workers-bus)
 
 validate:
 	node tools/validate-erpnext-doctypes.mjs
-	node tools/validate-hermes-config.mjs
 	node tools/validate-tenant-config.mjs
 	node tools/validate-newo-config.mjs
 	node tools/validate-lead-triage-shadow-authority.mjs
@@ -109,13 +108,12 @@ test-tools:
 	  tools/ci-workflow.test.mjs \
 	  tools/ci-scope.test.mjs \
 	  tools/launch-proof.test.mjs \
-	  tools/conventional-pr-title.test.mjs \
 	  tools/deploy-workflow.test.mjs \
 	  tools/qa-artifact-flow.test.mjs \
 	  tools/qa-dead-letter-workflow.test.mjs \
+	  tools/canonical-json.test.mjs \
 	  tools/release-permit.test.mjs \
 	  tools/release-promotion.test.mjs
-	npm test --prefix release-issuer
 
 mcp: $(addsuffix /node_modules/.package-lock.json,$(filter mcp/%,$(NODE_PACKAGES)))
 	npm test --prefix mcp/erpnext-roofing-mcp
@@ -138,7 +136,10 @@ app: app/node_modules/.package-lock.json
 
 worker: worker-contract worker-tests
 
-# The typegen/typecheck/dry-run contract, plus the migration smoke. Nothing under
+# The typegen/typecheck/dry-run contract, plus the migration smoke and, on the
+# database it migrates, tools/d1-gate-ledger-probe.mjs: the Worker suite runs the
+# migrations on node:sqlite, so the probe repeats 0158's JSON evidence rule on
+# wrangler's local D1, the engine they ship to. Nothing under
 # workers-bus/src imports from app/ (IRO-267 blocker 9), but the dry-run below
 # validates the real app/dist bundle, so this target needs app's node_modules too.
 # typecheck needs worker-configuration.d.ts, which typegen generates (blocker 10),
@@ -158,6 +159,7 @@ worker-contract: workers-bus/node_modules/.package-lock.json app/node_modules/.p
 	npm run typegen --prefix workers-bus
 	rm -rf $(OUT)/d1
 	npm run db:migrate:local --prefix workers-bus -- --persist-to "$(abspath $(OUT))/d1"
+	node tools/d1-gate-ledger-probe.mjs --persist-to "$(abspath $(OUT))/d1"
 	npm run typecheck --prefix workers-bus
 	npm run build --prefix app
 	npm run deploy --prefix workers-bus -- --dry-run 2>&1 | tee $(OUT)/worker-dry-run.log
@@ -223,7 +225,7 @@ audit: deps
 static:
 	find deploy workers-bus -path '*/node_modules' -prune -o -type f -name '*.sh' -print0 \
 	  | xargs -0 -r -n1 bash -n
-	if grep -rl $$'—' hermes/ config/ deploy/; then \
+	if grep -rl $$'—' config/ deploy/; then \
 	  echo "em dash found in agent-facing content" >&2; exit 1; \
 	fi
 

@@ -31,7 +31,7 @@
 // Backward compatible by construction: an intent that bound a complete envelope, which is every
 // intent that exists today, has `omits_identity = 0` and is compared exactly as before.
 
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import type { AppEnv } from "./app-types.ts";
 // Type-only, and deliberately so: `accounting-intents.ts` calls this module at derivation, so a
 // value import back into it would be a runtime cycle. A type import is erased and cannot be one.

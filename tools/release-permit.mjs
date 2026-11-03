@@ -21,7 +21,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { canonicalJson } from "./canonical-json.mjs";
 import { flattenWranglerVars } from "./wrangler-vars.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -1844,8 +1844,18 @@ function appendBinding(manifest, binding, type, resource = {}) {
   manifest.push({ name: binding.binding, type, ...Object.fromEntries(Object.entries(resource).filter(([, value]) => typeof value === "string" && value.length > 0)) });
 }
 
+function versionMetadataBinding(config) {
+  if (config.version_metadata === undefined) return null;
+  const binding = config.version_metadata;
+  if (!isRecord(binding) || Object.keys(binding).length !== 1 ||
+      binding.binding !== "CF_VERSION_METADATA") fail("config_version_metadata_invalid");
+  return { name: "CF_VERSION_METADATA", type: "version_metadata" };
+}
+
 function environmentBindingManifest(config) {
   const manifest = [];
+  const versionMetadata = versionMetadataBinding(config);
+  if (versionMetadata) manifest.push(versionMetadata);
   for (const binding of config.d1_databases ?? []) appendBinding(manifest, binding, "d1", { resource_id: binding.database_id });
   for (const binding of config.r2_buckets ?? []) appendBinding(manifest, binding, "r2_bucket", { resource_name: binding.bucket_name, resource_jurisdiction: binding.jurisdiction });
   for (const binding of config.kv_namespaces ?? []) appendBinding(manifest, binding, "kv_namespace", { resource_id: binding.id });
@@ -1942,8 +1952,9 @@ function providerTargetManifest(config, environment) {
   for (const field of ["alias", "base_dir", "data_blobs", "define", "find_additional_modules", "jsx_factory", "jsx_fragment", "minify", "no_bundle", "pages_build_output_dir", "preserve_file_names", "python_modules", "rules", "site", "text_blobs", "tsconfig", "upload_source_maps", "wasm_modules"]) {
     if (resolved[field] !== undefined) fail("provider_target_local_input_forbidden");
   }
-  const allowedFields = new Set(["$schema", "account_id", "assets", "compatibility_date", "compatibility_flags", "d1_databases", "env", "main", "name", "observability", "queues", "r2_buckets", "route", "routes", "triggers", "vars", "workers_dev"]);
+  const allowedFields = new Set(["$schema", "account_id", "assets", "compatibility_date", "compatibility_flags", "d1_databases", "env", "main", "name", "observability", "queues", "r2_buckets", "route", "routes", "triggers", "vars", "version_metadata", "workers_dev"]);
   if (Object.keys(resolved).some((field) => !allowedFields.has(field))) fail("provider_target_unallowlisted_config");
+  versionMetadataBinding(resolved);
   const allowedEntry = (entry, fields, code) => {
     if (!isRecord(entry) || Object.keys(entry).some((field) => !fields.includes(field))) fail(code);
     return entry;
@@ -2033,15 +2044,17 @@ export async function validateProviderTargetPolicy({ candidateRoot, policyRoot, 
   const candidate = providerTargetManifest(parseJsonc(candidateSource), environment);
   let policy;
   try { policy = JSON.parse(policySource); } catch { fail("provider_target_policy_invalid"); }
-  exactKeys(policy, ["schema", "account_id", "environments"], "provider_target_policy_shape_invalid");
-  equal("ironwrap_release_provider_policy_v1", policy.schema, "provider_target_policy_schema_invalid");
-  text(policy.account_id, "provider_target_policy_account_invalid", /^[0-9a-f]{32}$/);
+  // v2: each environment names its own Cloudflare account. qa lives in IronWrap's account and
+  // production in the Mindburn Labs account (IRO-221, 2026-10-30).
+  exactKeys(policy, ["schema", "environments"], "provider_target_policy_shape_invalid");
+  equal("ironwrap_release_provider_policy_v2", policy.schema, "provider_target_policy_schema_invalid");
   exactKeys(policy.environments, ["qa", "production"], "provider_target_policy_environment_shape_invalid");
   const expected = policy.environments[environment];
-  exactKeys(expected, ["credential_secret", "worker_name", "workers_dev", "compatibility_date", "compatibility_flags", "observability", "assets", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"], "provider_target_policy_environment_invalid");
+  exactKeys(expected, ["account_id", "credential_secret", "worker_name", "workers_dev", "compatibility_date", "compatibility_flags", "observability", "assets", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"], "provider_target_policy_environment_invalid");
+  text(expected.account_id, "provider_target_policy_account_invalid", /^[0-9a-f]{32}$/);
   const expectedCredential = environment === "qa" ? "RELEASE_QA_CLOUDFLARE_API_TOKEN" : "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN";
   equal(expectedCredential, expected.credential_secret, "provider_target_credential_scope_invalid");
-  const expectedManifest = { account_id: policy.account_id, ...Object.fromEntries(Object.entries(expected).filter(([key]) => key !== "credential_secret")) };
+  const expectedManifest = Object.fromEntries(Object.entries(expected).filter(([key]) => key !== "credential_secret"));
   for (const key of ["compatibility_flags", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"]) {
     if (!Array.isArray(expectedManifest[key])) fail("provider_target_policy_environment_invalid");
     expectedManifest[key] = [...expectedManifest[key]].sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
@@ -2096,7 +2109,7 @@ export async function validateReleaseEnvironmentPreflight({ repoRoot, environmen
   return { ...fields, evidence_digest: sha256(canonicalJson(fields)) };
 }
 
-/** Sign the independent reviewer GO receipt used by the release issuer. */
+/** Sign an independent reviewer GO receipt. */
 export function signReviewGoReceipt(privateKey, payload, options = {}) {
   if (!privateKey) fail("review_private_key_required");
   const normalized = validateReviewGoReceipt(payload, options);

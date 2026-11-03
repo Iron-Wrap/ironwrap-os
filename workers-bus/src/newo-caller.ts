@@ -1,6 +1,6 @@
 import type { AppEnv } from "./app-types.ts";
 import { normalizePhone } from "./core.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   claimNewoReceipt,
   completeNewoReceipt,

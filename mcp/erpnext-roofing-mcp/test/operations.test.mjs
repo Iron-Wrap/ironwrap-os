@@ -187,8 +187,43 @@ test("strict read tools use bounded schemas and redact sensitive fields", async 
     apiKey: "key",
     apiSecret: "secret",
     writeEnabled: false,
+    allowedTools: [
+      "get_contract_acceptance",
+      "get_crew_profile",
+      "get_tenant_export_run",
+      "get_insurance_supplement",
+      "dry_run_supplier_order_transition",
+      "request_transition_supplier_order",
+      "dry_run_record_final_shop_quality",
+      "request_record_final_shop_quality",
+      "dry_run_record_shop_handover",
+      "request_record_shop_handover",
+      "dry_run_record_shop_billing_basis",
+      "request_record_shop_billing_basis",
+      "dry_run_complete_work_package",
+      "request_complete_work_package",
+      "dry_run_authority_record",
+      "request_authority_record",
+    ],
   });
-  assert.equal(Object.keys(server._registeredTools).length, 164);
+  assert.deepEqual(Object.keys(server._registeredTools).sort(), [
+    "dry_run_authority_record",
+    "dry_run_complete_work_package",
+    "dry_run_record_final_shop_quality",
+    "dry_run_record_shop_billing_basis",
+    "dry_run_record_shop_handover",
+    "dry_run_supplier_order_transition",
+    "get_contract_acceptance",
+    "get_crew_profile",
+    "get_insurance_supplement",
+    "get_tenant_export_run",
+    "request_authority_record",
+    "request_complete_work_package",
+    "request_record_final_shop_quality",
+    "request_record_shop_billing_basis",
+    "request_record_shop_handover",
+    "request_transition_supplier_order",
+  ], "the server registers exactly the granted tools");
   assert.ok(server._registeredTools.dry_run_supplier_order_transition);
   assert.ok(server._registeredTools.request_transition_supplier_order);
   assert.ok(server._registeredTools.dry_run_record_final_shop_quality);
@@ -295,6 +330,7 @@ test("insurance supplement preview verifies evidence but never returns claim or 
     apiKey: "key",
     apiSecret: "secret",
     writeEnabled: false,
+    allowedTools: ["dry_run_insurance_supplement"],
   });
   t.mock.method(globalThis, "fetch", async (url) => {
     const target = String(url);
@@ -370,7 +406,7 @@ test("insurance supplement preview verifies evidence but never returns claim or 
   ]) assert.equal(serialized.includes(privateValue), false);
 });
 
-test("runtime role filtering and field assignment scoping are enforced in the MCP server", async (t) => {
+test("host tool grants and field assignment scoping are enforced in the MCP server", async (t) => {
   const server = buildServer({
     baseUrl: "https://erp.example",
     apiKey: "key",
@@ -378,6 +414,7 @@ test("runtime role filtering and field assignment scoping are enforced in the MC
     writeEnabled: false,
     agentRole: "field-companion",
     actorUser: "tech@example.com",
+    allowedTools: ["get_roof_job", "request_record_safety_acknowledgement"],
   });
   assert.ok(server._registeredTools.get_roof_job);
   assert.ok(server._registeredTools.request_record_safety_acknowledgement);
@@ -423,6 +460,7 @@ test("field visual-model reads resolve the declared visual_model_id before assig
     writeEnabled: false,
     agentRole: "field-companion",
     actorUser: "tech@example.com",
+    allowedTools: ["get_visual_property_model"],
   });
   let modelReads = 0;
   t.mock.method(globalThis, "fetch", async (url) => {
@@ -467,6 +505,7 @@ test("a write requires an unmodified server preview and separately signed human 
     approverId: "owner@example.com",
     dryRunSigningKey: "d".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_update_gate", "request_update_gate"],
   });
   let gateWrites = 0;
   let hermesRunPosts = 0;
@@ -565,6 +604,7 @@ test("production scheduling rechecks the signed gate preview before any write", 
     approverId: "owner@example.com",
     dryRunSigningKey: "s".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_job_assignment", "request_create_job_assignment"],
   });
   let gatesStillEligible = true;
   let assignmentCreateAttempts = 0;
@@ -701,6 +741,7 @@ test("field completion write rechecks assignment immediately before the mutation
     approverId: "owner@example.com",
     dryRunSigningKey: "f".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_completion_packet", "request_create_completion_packet"],
   });
   let assignmentQueries = 0;
   let completionWrites = 0;
@@ -1589,6 +1630,7 @@ test("the Frappe authority rail refuses an internal Worker Competency and still 
     approverId: "owner@authority.example.invalid",
     dryRunSigningKey: "s".repeat(32),
     approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_authority_record", "request_authority_record"],
   });
   const requests = [];
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {

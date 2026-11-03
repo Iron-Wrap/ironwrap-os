@@ -3,7 +3,7 @@ import {
   readCommercialJobPhase,
   type CommercialJobPhaseReadModel,
 } from "./commercial-job-phase.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 /**
  * What a person or an agent needs to know about one job before writing to its customer.

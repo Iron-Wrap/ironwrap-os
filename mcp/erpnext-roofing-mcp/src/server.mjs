@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { createHmac, verify as verifySignature } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -44,9 +43,20 @@ export {
   JobCostEventInputSchema,
 };
 
-const DEFAULT_ROLE_POLICY_PATH = fileURLToPath(
-  new URL("../../../hermes/agents/roles.json", import.meta.url),
-);
+// The eight agent role identities, by id and by the title recorded on every Hermes Run. Frappe's
+// shop commands check that title at their own boundary. Identity only: which tools a process may
+// call comes from the launching host's explicit grant (MCP_ALLOWED_TOOLS), never from the role.
+const AGENT_ROLE_TITLES = Object.freeze({
+  "owner-operator": "Owner Operator",
+  "lead-concierge": "Lead Concierge",
+  "estimator-assistant": "Estimator Assistant",
+  "production-controller": "Production Controller",
+  "field-companion": "Field Companion",
+  "finance-reconciler": "Finance Reconciler",
+  "closeout-agent": "Closeout Agent",
+  "support-admin": "Support/Admin Agent",
+});
+const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
 const REQUEST_TO_DRY_RUN = Object.freeze({
   request_update_gate: "dry_run_update_gate",
@@ -1062,15 +1072,14 @@ export function configFromEnv(env = process.env) {
   const apiKey = env.ERPNEXT_API_KEY;
   const apiSecret = env.ERPNEXT_API_SECRET;
   const writeEnabled = env.ERPNEXT_WRITE_ENABLED === "true";
-  const rolePolicy = loadRolePolicy(env.HERMES_ROLE_POLICY_PATH || DEFAULT_ROLE_POLICY_PATH);
   const agentRole = env.HERMES_AGENT_ROLE;
   const actorUser = env.HERMES_ACTOR_USER;
   const approverId = env.HERMES_APPROVER_ID;
   const tenantId = env.ERPNEXT_TENANT_ID;
-  const runtimeRole = rolePolicy.roles?.[agentRole];
+  const agentRoleTitle = agentRoleTitleFor(agentRole);
   if (!apiKey) throw new Error("ERPNEXT_API_KEY is required");
   if (!apiSecret) throw new Error("ERPNEXT_API_SECRET is required");
-  if (!runtimeRole) throw new Error("HERMES_AGENT_ROLE must name a role in roles.json");
+  if (!agentRoleTitle) throw new Error("HERMES_AGENT_ROLE must name a canonical agent role");
   if (!actorUser) throw new Error("HERMES_ACTOR_USER is required");
   if (!tenantId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(tenantId)) {
     throw new Error("ERPNEXT_TENANT_ID is required and must be a stable tenant id");
@@ -1106,7 +1115,7 @@ export function configFromEnv(env = process.env) {
     writeEnabled,
     requestTimeoutMs,
     agentRole,
-    agentRoleTitle: runtimeRole.title,
+    agentRoleTitle,
     actorUser,
     approverId,
     tenantId,
@@ -1116,7 +1125,6 @@ export function configFromEnv(env = process.env) {
     // retained for read-only/preview hosts, while write-enabled hosts are enabled
     // by configuration and cannot fall back to a direct provider mutation.
     effectRuntimeEnabled: writeEnabled && !!effectRuntimeUrl && !!effectRuntimeToken,
-    allowedTools: roleTools(runtimeRole),
     dryRunSigningKey: env.HERMES_DRY_RUN_SIGNING_KEY,
     approvalPublicKey,
     authorityBusBaseUrl,
@@ -1161,25 +1169,24 @@ function normalizeAuthorityBusBaseUrl(raw, allowInsecureLocal = false) {
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
-export function loadRolePolicy(policyPath = DEFAULT_ROLE_POLICY_PATH) {
-  let policy;
-  try {
-    policy = JSON.parse(readFileSync(policyPath, "utf8"));
-  } catch (err) {
-    throw new Error(`hermes_role_policy_unreadable:${String(err).slice(0, 180)}`);
+/**
+ * The tool names the launching host grants this process. There is no default: without an
+ * explicit list the server does not start, so dropping the variable can never widen access.
+ * `configFromEnv` does not read it because the approval brokers share that runtime config
+ * without serving tools; each broker hands its child an exact list instead.
+ */
+export function allowedToolsFromEnv(env = process.env) {
+  const names = (env.MCP_ALLOWED_TOOLS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  if (names.length === 0 || names.some((name) => !TOOL_NAME.test(name))) {
+    throw new Error("MCP_ALLOWED_TOOLS must list the tool names the launching host grants");
   }
-  if (!policy || typeof policy !== "object" || !policy.roles || typeof policy.roles !== "object") {
-    throw new Error("hermes_role_policy_invalid");
-  }
-  return policy;
+  return [...new Set(names)];
 }
 
-function roleTools(role) {
-  return [...new Set([
-    ...(role.reads ?? []),
-    ...(role.dry_run ?? []),
-    ...(role.approved_write ?? []),
-  ])];
+function agentRoleTitleFor(agentRole) {
+  return typeof agentRole === "string" && Object.hasOwn(AGENT_ROLE_TITLES, agentRole)
+    ? AGENT_ROLE_TITLES[agentRole]
+    : undefined;
 }
 
 export async function erpRequest(config, method, path, body) {
@@ -4235,10 +4242,9 @@ export function redactApprovalArgs(args) {
 }
 
 function resolveRuntimeConfig(config = {}) {
-  const rolePolicy = config.rolePolicy ?? loadRolePolicy(config.rolePolicyPath ?? DEFAULT_ROLE_POLICY_PATH);
   const agentRole = config.agentRole ?? "owner-operator";
-  const role = rolePolicy.roles?.[agentRole];
-  if (!role) throw new Error("hermes_agent_role_unknown");
+  const roleTitle = agentRoleTitleFor(agentRole);
+  if (!roleTitle) throw new Error("hermes_agent_role_unknown");
   const baseUrl = config.baseUrl
     ? normalizeFrappeBaseUrl(config.baseUrl, config.allowInsecureLocal === true)
     : config.baseUrl;
@@ -4249,22 +4255,31 @@ function resolveRuntimeConfig(config = {}) {
     ...config,
     baseUrl,
     agentRole,
-    agentRoleTitle: config.agentRoleTitle ?? role.title,
+    agentRoleTitle: config.agentRoleTitle ?? roleTitle,
     actorUser: config.actorUser ?? "test-owner@example.com",
     approverId: config.approverId ?? "test-owner@example.com",
-    allowedTools: config.allowedTools ?? roleTools(role),
     siteId: config.siteId ?? digest({ frappe_base_url: baseUrl ?? "" }),
     authorityBusBaseUrl,
     authorityIssuerPublicKeys: config.authorityIssuerPublicKeys ?? {},
   };
 }
 
+// Registers only the tools the launching host granted, and refuses to build a server whose
+// grant is missing or names a tool this server does not have. Every handler is still kept,
+// because an approved write reruns its paired dry run through that map.
 function createAuthorizedRegistrar(mcpServer, config) {
+  if (!Array.isArray(config.allowedTools) || config.allowedTools.length === 0) {
+    throw new Error("mcp_allowed_tools_required");
+  }
   const handlers = new Map();
   const allowedTools = new Set(config.allowedTools);
   const rawRegisterTool = mcpServer.registerTool.bind(mcpServer);
 
   return {
+    assertAllowedToolsKnown() {
+      const unknown = [...allowedTools].filter((name) => !handlers.has(name));
+      if (unknown.length > 0) throw new Error(`mcp_allowed_tools_unknown:${unknown.join(",")}`);
+    },
     registerTool(name, definition, handler) {
       handlers.set(name, handler);
       if (!allowedTools.has(name)) return;
@@ -8711,6 +8726,7 @@ export function buildServer(config) {
     },
   );
 
+  server.assertAllowedToolsKnown();
   return mcpServer;
 }
 
@@ -12853,7 +12869,7 @@ function text(data) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const config = configFromEnv();
+  const config = { ...configFromEnv(), allowedTools: allowedToolsFromEnv() };
   await attestFrappeServicePrincipal(config);
   const server = buildServer(config);
   const transport = new StdioServerTransport();

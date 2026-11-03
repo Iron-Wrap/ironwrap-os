@@ -1,5 +1,5 @@
 import { isVoiceNoteUri } from "./core.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { tenantIdFrom } from "./operating-core.ts";
 
 export interface NativePhotoEvidenceRef {

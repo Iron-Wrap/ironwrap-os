@@ -1,6 +1,6 @@
 # Newo MCP
 
-Role-filtered Hermes access to IronWrap's bounded Newo Worker routes. This server never receives a
+Allowlisted MCP access to IronWrap's bounded Newo Worker routes. This server never receives a
 Newo API key and never exposes a raw provider proxy. The Worker owns token exchange, API timeouts,
 configuration gates, D1 control evidence, and provider calls.
 
@@ -19,9 +19,10 @@ send operations additionally require Worker-side `NEWO_OUTBOUND_ENABLED=true`.
 ```bash
 IRONWRAP_BUS_BASE_URL=https://... \
 IRONWRAP_ADMIN_TOKEN=... \
-HERMES_AGENT_ROLE=owner-operator \
+MCP_ALLOWED_TOOLS=get_newo_health,list_newo_sessions \
 NEWO_MCP_WRITE_ENABLED=false \
 node src/server.mjs
 ```
 
-The canonical grants are in `hermes/agents/roles.json`.
+The server registers only the tools named in `MCP_ALLOWED_TOOLS` and refuses to start without the
+list or with a name it does not have. There is no default grant.

@@ -5,7 +5,7 @@ import {
   listJobEvidenceItemsFromD1,
   r2ObjectStore,
 } from "./field-actions.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { RESPONSE_AUTHORITY_ROLES } from "./safety-lifecycle.ts";
 
 /**

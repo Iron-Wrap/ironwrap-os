@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import { recordLegacyGateStates, SCHEDULING_GATES } from "./production-gate-ledger-fixture.ts";
+import { endCancellationWindow, SCHEDULING_GATES } from "./production-gate-ledger-fixture.ts";
 
 // Synthetic fixtures only: reserved example.invalid identities.
 const TENANT = "ironwrap";
@@ -122,6 +122,9 @@ function ledger(): DatabaseSync {
   insertUser(db, SEED_OWNER, "owner", "owner", SEED_CREATED_BY);
   seedJob(db);
   for (const gate of SCHEDULING_GATES) insertGate(db, gate);
+  // The OD-01 cancellation window holds every `clear` on Materials until it ends (0160). It ended
+  // here, so each rule below answers by its own code.
+  endCancellationWindow(db, { tenantId: TENANT, roofJobId: JOB });
   return db;
 }
 
@@ -569,6 +572,34 @@ test("waiver entries carry no attestation, contract or evidence fields", () => {
   );
 });
 
+// A person's `clear` names its money receipt only: each contract field the matrix holds NULL is
+// refused on its own, and the same settlement without it is appended (0153, kept by 0155).
+for (const [field, value] of [
+  ["policy_version", "ironwrap.deposit-gate.v1"],
+  ["terms_hash", "a".repeat(64)],
+  ["contract_binding_id", "binding:synthetic:0001"],
+] as const) {
+  test(`a person's settlement clear carrying ${field} is refused`, () => {
+    const db = ledger();
+    const intentId = seedReconciledDeposit(db);
+    const settlement = {
+      gate: "Deposit",
+      entry_kind: "clear",
+      basis: "deposit_settlement",
+      to_state: "complete",
+      reason: null,
+      evidence_refs_json: JSON.stringify({ money_intent_id: intentId }),
+    };
+    refused(() => append(db, { ...settlement, [field]: value }), "production_gate_clearance_basis_invalid");
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM production_gate_clearances").get() as { n: number }).n,
+      0,
+    );
+    append(db, settlement);
+    assert.equal(gateRow(db, "Deposit").state, "complete");
+  });
+}
+
 test("the QA seed owner is refused on every person entry", () => {
   const db = ledger();
   const intentId = seedReconciledDeposit(db);
@@ -770,36 +801,6 @@ test("the backfill records each gate already out of blocked as one legacy entry"
   assert.equal(gateRow(db, "Access").version, 2);
 });
 
-test("a fixture's legacy write restores every guard exactly as it was", () => {
-  const db = ledger();
-  const triggers = () => db.prepare(
-    "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
-  ).all().map((row) => ({ ...row }));
-  const before = triggers();
-  recordLegacyGateStates(db, { tenantId: TENANT, roofJobId: JOB, at: LATER });
-  assert.deepEqual(triggers(), before);
-  for (const gate of SCHEDULING_GATES) {
-    assert.deepEqual({ state: gateRow(db, gate).state, version: gateRow(db, gate).version }, { state: "ready", version: 2 }, gate);
-  }
-  const legacy = db.prepare(
-    "SELECT clearance_id FROM production_gate_clearances WHERE entry_kind = 'legacy'",
-  ).all() as Array<{ clearance_id: string }>;
-  assert.equal(legacy.length, SCHEDULING_GATES.length);
-  for (const { clearance_id: id } of legacy) {
-    assert.equal(
-      (db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE run_id = ?").get(id) as { n: number }).n,
-      1,
-    );
-  }
-  refused(
-    () => db.prepare(
-      "UPDATE operating_production_gates SET state = 'blocked', version = version + 1 WHERE gate_id = ?",
-    ).run(gateId("Weather")),
-    "operating_production_gates_ledger_required",
-  );
-  refused(() => append(db, { gate: "Access", entry_kind: "legacy", actor_kind: null, request_sha256: null, idempotency_key_hash: null }), "production_gate_clearance_legacy_closed");
-});
-
 test("both D1 recovery inventories carry the ledger, its index and every guard", () => {
   const db = ledger();
   const objects = db.prepare(
@@ -819,6 +820,7 @@ test("both D1 recovery inventories carry the ledger, its index and every guard",
       "trigger:production_gate_clearances_append_only_delete",
       "trigger:production_gate_clearances_append_only_update",
       "trigger:production_gate_clearances_apply",
+      "trigger:production_gate_clearances_cancellation_window_hold",
       "trigger:production_gate_clearances_no_insert_replace",
       "trigger:production_gate_clearances_validate_insert",
     ],

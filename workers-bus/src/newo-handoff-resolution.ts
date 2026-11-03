@@ -1,6 +1,6 @@
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { newoTenantId } from "./newo-store.ts";
 
 /**

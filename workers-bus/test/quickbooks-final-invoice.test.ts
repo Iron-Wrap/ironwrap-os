@@ -43,7 +43,7 @@ import {
   nativeQuickBooksWebhookProjectionPort,
   QuickBooksNativeWebhookError,
 } from "../src/quickbooks-native-webhook.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 
 const TENANT = "ironwrap";
 const REALM = "1234567890";

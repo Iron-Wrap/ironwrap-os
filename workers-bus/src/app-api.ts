@@ -46,11 +46,13 @@ import {
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
+  accessConflictBody,
   authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
   closeRoleDrafts,
   createUserInvite,
+  type AccessConflict,
   listAppUsersForOffice,
   listUserInvitesForOffice,
   resendUserInviteForOffice,
@@ -164,7 +166,7 @@ import {
   handleFieldAction,
   r2ObjectStore,
 } from "./field-actions.ts";
-import { type FrappeRow } from "./frappe-read.ts";
+import type { DocumentRow } from "./document-row.ts";
 import { handleFleetAction, type FleetActionKind } from "./fleet-actions.ts";
 import {
   handleFleetCollisionCollection,
@@ -172,7 +174,7 @@ import {
 } from "./fleet-collision-api.ts";
 import { handleFleetPhotoUpload } from "./fleet-photo-evidence.ts";
 import { buildFleetPanelReadModel } from "./fleet-panel.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import {
   handleWorkPackageAction,
   replayVerifiedWorkPackageAction,
@@ -204,6 +206,8 @@ import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-dispos
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import {
   handleProductionGateClearance,
+  handleProductionGateReversal,
+  handleProductionGatesRead,
   handleProductionGateWaiverDecision,
 } from "./production-gate-clearance.ts";
 import {
@@ -275,6 +279,11 @@ import {
 } from "./commercial-deposit.ts";
 import { readAccountingIntent } from "./accounting-intents.ts";
 import { readCommercialJobPhase } from "./commercial-job-phase.ts";
+import { depositTermsRefusal, handleTenantDepositPolicy } from "./deposit-policy.ts";
+import {
+  handleCancellationWindowSignedCopy,
+  handleCancellationWindowSignedCopyMissing,
+} from "./production-cancellation-window.ts";
 import { readCommercialContext } from "./commercial-context.ts";
 import {
   OperatingJobAssignmentError,
@@ -453,18 +462,59 @@ export async function handleAdminAppUserProvision(
   );
   const authority = authorizeAppUserMutation(auth, target, validated.value.role);
   if (authority) return appJson({ error: authority.error }, authority.status);
+  // A change to an existing person names the access version it was decided on; a new person has
+  // none yet (0157).
+  const { expected_access_version: expectedAccessVersion, ...provision } = validated.value;
+  if (target && expectedAccessVersion === null) {
+    return appJson({ error: "expected_access_version_required" }, 400);
+  }
+  if (
+    (target && Number(target.access_version ?? 1) !== expectedAccessVersion) ||
+    (!target && expectedAccessVersion !== null)
+  ) {
+    return appJson({
+      error: "access_version_conflict",
+      conflict: await accessConflictBody(appEnv, auth, target, expectedAccessVersion ?? 0),
+    }, 409);
+  }
   const user = await provisionAppUser(appEnv, {
-    ...validated.value,
+    ...provision,
     provisioned_by: auth.session.email_normalized,
   }, req, {
     actorUserId: auth.session.user_id,
     actorRole: auth.session.role,
     expectedTarget: target,
   });
-  if (!user) return appJson({ error: "app_user_state_changed" }, 409);
-  // An existing person's new role answers the AI team's open role-change drafts for them.
-  if (target && target.role !== user.role)
-    await closeRoleDrafts(appEnv, req, user.tenant_id, user.user_id, user.role, auth.session.user_id);
+  if (!user) {
+    const current = await appAuthStore.findAppUserByEmail(
+      appEnv,
+      provision.tenant_id,
+      provision.email_normalized,
+    );
+    const moved = target
+      ? Number(current?.access_version ?? 1) !== expectedAccessVersion
+      : current !== null;
+    return moved
+      ? appJson({
+        error: "access_version_conflict",
+        conflict: await accessConflictBody(appEnv, auth, current, expectedAccessVersion ?? 0),
+      }, 409)
+      : appJson({ error: "app_user_state_changed" }, 409);
+  }
+  // An existing person's new role answers the AI team's role-change drafts for them that were
+  // prepared against an older access version. The close names what this request wrote, not the row
+  // read back after it: the write held only at `expectedAccessVersion`, so it produced the next one.
+  if (target && expectedAccessVersion !== null && target.role !== provision.role) {
+    await closeRoleDrafts(
+      appEnv,
+      req,
+      user.tenant_id,
+      user.user_id,
+      provision.role,
+      auth.session.user_id,
+      expectedAccessVersion + 1,
+    );
+  }
   return appJson({
     user: {
       user_id: user.user_id,
@@ -474,7 +524,14 @@ export async function handleAdminAppUserProvision(
       role: user.role,
       frappe_user_id: user.frappe_user_id,
       active: user.active === 1,
+      access_version: Number(user.access_version ?? 1),
       updated_at: user.updated_at,
+      // Whether removing their access unpaired a crew phone; never which one (0157).
+      crew_phone_unpaired: (await appAuthStore.usersWithCrewPhoneUnpairedByRemoval(
+        appEnv,
+        user.tenant_id,
+        user.user_id,
+      )).has(user.user_id),
     },
   });
 }
@@ -632,7 +689,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserRole(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   const appUserAccessMatch = url.pathname.match(
     /^\/api\/v1\/admin\/app-users\/([^/]+)\/access$/,
@@ -643,7 +700,7 @@ export async function handleAuthenticatedRoute(
     const changed = await changeAppUserAccess(req, env, auth, userId);
     return changed.ok
       ? privateAppJson(changed.body)
-      : privateAppJson({ error: changed.error }, changed.status);
+      : privateAppJson(accessChangeFailureBody(changed), changed.status);
   }
   if (url.pathname === "/api/v1/admin/user-invites") {
     if (req.method === "GET") {
@@ -1876,6 +1933,10 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  // The owner's deposit policy (0155): payment on completion (OD-01) or a deposit (MD-13).
+  if (url.pathname === "/api/v1/owner/deposit-policy") {
+    return await handleTenantDepositPolicy(req, env, auth);
+  }
   if (req.method === "GET" && url.pathname === "/api/v1/owner/now") {
     if (auth.session.role !== "owner" && auth.session.role !== "ops") {
       return appJson({ error: "forbidden" }, 403);
@@ -1985,15 +2046,38 @@ export async function handleAuthenticatedRoute(
   // under the job on purpose: a gate has no identity apart from the job it locks, and
   // the path says which job's schedule is being unlocked.
   const productionGateLedgerMatch = url.pathname.match(
-    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions)$/,
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/gates\/([^/]+)\/(clearance|waiver-decisions|reversals)$/,
   );
   if (req.method === "POST" && productionGateLedgerMatch) {
     const roofJobId = decodedPathSegment(productionGateLedgerMatch[1]);
     const gate = decodedPathSegment(productionGateLedgerMatch[2]);
     if (!roofJobId || !gate) return privateAppJson({ error: "not_found" }, 404);
-    return productionGateLedgerMatch[3] === "clearance"
-      ? await handleProductionGateClearance(req, env, auth, roofJobId, gate)
-      : await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate);
+    const action = productionGateLedgerMatch[3];
+    if (action === "clearance") {
+      return await handleProductionGateClearance(req, env, auth, roofJobId, gate);
+    }
+    return action === "waiver-decisions"
+      ? await handleProductionGateWaiverDecision(req, env, auth, roofJobId, gate)
+      : await handleProductionGateReversal(req, env, auth, roofJobId, gate);
+  }
+  const productionGatesMatch = url.pathname.match(/^\/api\/v1\/production\/jobs\/([^/]+)\/gates$/);
+  if (req.method === "GET" && productionGatesMatch) {
+    const roofJobId = decodedPathSegment(productionGatesMatch[1]);
+    if (!roofJobId) return privateAppJson({ error: "not_found" }, 404);
+    return await handleProductionGatesRead(env, auth, roofJobId);
+  }
+  // The OD-01 cancellation window (migration 0160): when the customer received their copy of the
+  // signed contract, recorded by an owner or ops person, and the jobs still missing that time.
+  const signedCopyMatch = url.pathname.match(
+    /^\/api\/v1\/production\/jobs\/([^/]+)\/cancellation-window\/signed-copy$/,
+  );
+  if (req.method === "POST" && signedCopyMatch) {
+    const roofJobId = decodedPathSegment(signedCopyMatch[1]);
+    if (!roofJobId) return privateAppJson({ error: "not_found" }, 404);
+    return await handleCancellationWindowSignedCopy(req, env, auth, roofJobId);
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/production/cancellation-window/signed-copy-missing") {
+    return await handleCancellationWindowSignedCopyMissing(env, auth);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
     if (!hasPermission(auth, "production:read")) {
@@ -4006,6 +4090,12 @@ async function reconcileProposalPublicationApproval(
   }
 }
 
+/**
+ * `production.schedule`: a person (owner, ops or production) schedules a roof job. A schedule clears
+ * Crew by policy (0159), so it is people-only like every gate write: the CSRF token, then the
+ * person's own cookie session and their live role. Agents, connectors, service tokens and the
+ * effect runtime never schedule.
+ */
 async function createOperatingJobAssignment(
   req: Request,
   env: AppEnv,
@@ -4020,6 +4110,11 @@ async function createOperatingJobAssignment(
   }
   if (!validAppCsrf(req, auth)) {
     return privateAppJson({ error: "csrf_failed" }, 403);
+  }
+  const person = await personCookieSession(env, auth);
+  if (!person) return privateAppJson({ error: "person_session_required" }, 403);
+  if (!["owner", "ops", "production"].includes(person.role)) {
+    return privateAppJson({ error: "production_role_required" }, 403);
   }
   const requestIdempotencyKey = idempotencyKey(req);
   if (!requestIdempotencyKey) {
@@ -4047,7 +4142,7 @@ async function createOperatingJobAssignment(
       scheduledEnd: input.scheduledEnd,
       supersedesAssignmentId: input.supersedesAssignmentId,
       correctionReason: input.correctionReason,
-      actorUserId: auth.session.user_id,
+      actorUserId: person.userId,
       idempotencyKey: requestIdempotencyKey,
     });
     const assignment = result.assignment;
@@ -4552,6 +4647,12 @@ async function createCommercialQuoteRevision(
         200,
       );
     }
+    // An approved quote can reach the customer, so it carries only terms the tenant's deposit
+    // policy allows (0155); acceptance would refuse anything else.
+    if (input.status === "approved") {
+      const refusal = await depositTermsRefusal(env, auth.session.tenant_id, input.terms);
+      if (refusal) return privateAppJson(refusal, 409);
+    }
     const binding = await readCommercialJobBinding(
       env,
       auth.session.tenant_id,
@@ -4887,7 +4988,8 @@ async function prepareCommercialProposalPublication(
     const proposal = await env.DB.prepare(
       `SELECT proposal.proposal_revision_id, proposal.proposal_pack_id,
               proposal.quote_revision_id, proposal.roof_job_id, proposal.customer_id,
-              proposal.terms_hash, quote.customer_quote_id, quote.status AS quote_status,
+              proposal.terms_hash, proposal.terms_json,
+              quote.customer_quote_id, quote.status AS quote_status,
               quote.revision_number AS quote_revision_number,
               quote.supersedes_quote_revision_id,
               job.version AS job_version, customer.version AS customer_version,
@@ -4963,6 +5065,12 @@ async function prepareCommercialProposalPublication(
         !(proposal.lead_status === "converted" && proposalCorrection))
     ) {
       return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
+    }
+    // Publishing is what puts terms in front of the customer: only terms the tenant's deposit
+    // policy allows (0155). Withdrawal is always allowed, and a replay keeps its original permit.
+    if (input.state === "published" && !replayedPermit) {
+      const refusal = await depositTermsRefusal(env, auth.session.tenant_id, proposal.terms_json);
+      if (refusal) return privateAppJson(refusal, 409);
     }
     const sourceFacts = {
       schema_version: "ironwrap.commercial-publication-source.v1",
@@ -5188,6 +5296,10 @@ async function createCommercialProposalRevision(
         200,
       );
     }
+    // A proposal is what the customer reads and accepts: its terms must be ones the tenant's
+    // deposit policy allows (0155).
+    const refusal = await depositTermsRefusal(env, auth.session.tenant_id, input.terms);
+    if (refusal) return privateAppJson(refusal, 409);
     const binding = await readCommercialJobBinding(
       env,
       auth.session.tenant_id,
@@ -7137,7 +7249,7 @@ function workPackageOfficeManifestKey(
 }
 
 function officeWorkPackageIssueManifest(
-  document: FrappeRow,
+  document: DocumentRow,
   auth: AuthContext,
   deviceActionId: string,
   jobName: string,
@@ -7226,7 +7338,7 @@ async function officeWorkPackageIssueResponse(
 }
 
 function officeWorkPackageIssueScope(
-  assignment: FrappeRow,
+  assignment: DocumentRow,
   jobId: string,
   routeScope?: WorkObjectScope,
 ): WorkObjectScope | null {
@@ -7269,7 +7381,7 @@ function officeWorkPackageIssueScope(
 }
 
 function officeWorkPackageAssignmentRoster(
-  assignment: FrappeRow,
+  assignment: DocumentRow,
 ): NativeWorkPackageWorker[] | null {
   const roster = new Map<
     string,
@@ -7777,6 +7889,7 @@ interface CommercialPublicationFacts {
   roof_job_id: string;
   customer_id: string;
   terms_hash: string;
+  terms_json: string;
   customer_quote_id: string;
   quote_revision_number: number;
   supersedes_quote_revision_id: string | null;
@@ -7922,10 +8035,16 @@ function operatingJobAssignmentErrorResponse(error: unknown): Response {
   if (!code) {
     return privateAppJson({ error: "operating_job_assignment_unavailable" }, 502);
   }
-  if (code === "operating_job_assignment_actor_invalid") {
+  if (
+    code === "operating_job_assignment_actor_invalid" ||
+    code === "operating_job_assignment_seed_identity_refused"
+  ) {
     return privateAppJson({ error: code }, 403);
   }
-  return privateAppJson({ error: code }, 409);
+  // Every other refusal is named, including the gate ledger's own code when a gate moved while
+  // the schedule was written (0159), with the stop to open when a stop names no job or package.
+  const detail = error instanceof OperatingJobAssignmentError ? error.detail : {};
+  return privateAppJson({ ...detail, error: code }, 409);
 }
 
 function operatingWorkObjectAssignmentErrorResponse(error: unknown): Response {
@@ -7971,6 +8090,15 @@ function decodedPathSegment(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A refused role or access change; a version conflict also says what moved (0157). */
+function accessChangeFailureBody(
+  failure: { error: string; conflict?: AccessConflict | null },
+): Record<string, unknown> {
+  return failure.conflict === undefined
+    ? { error: failure.error }
+    : { error: failure.error, conflict: failure.conflict };
 }
 
 function decodeWorkObjectScope(

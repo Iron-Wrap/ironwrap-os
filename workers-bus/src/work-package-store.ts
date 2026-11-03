@@ -4,7 +4,7 @@ import {
   type AuthorityCurrentPrecondition,
   type AuthorityRequirement,
 } from "./authority-records.ts";
-import type { FrappeRow } from "./frappe-read.ts";
+import type { DocumentRow } from "./document-row.ts";
 
 const CURRENT_STATUSES = ["Released", "Acknowledged", "In Progress", "Blocked"] as const;
 const ROLE_LABELS: Record<AppRole, string> = {
@@ -82,10 +82,10 @@ export interface NativeWorkPackageDefinition {
 }
 
 export interface NativeWorkPackageRead {
-  document: FrappeRow;
-  holdReleases: FrappeRow[];
-  acknowledgements: FrappeRow[];
-  evidence: FrappeRow[];
+  document: DocumentRow;
+  holdReleases: DocumentRow[];
+  acknowledgements: DocumentRow[];
+  evidence: DocumentRow[];
 }
 
 export interface NativeWorkPackageVersionHead {
@@ -663,7 +663,7 @@ export async function nativeWorkPackageDocumentById(
   env: AppEnv,
   tenantId: string,
   workPackageId: string,
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   const versions = await env.DB.prepare(
     `SELECT version
        FROM work_packages
@@ -698,7 +698,7 @@ export async function nativeAssignments(
     };
     actorUsers?: readonly string[];
   } = {},
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   const clauses = [
     "tenant_id = ?",
     "status IN ('Released', 'Acknowledged', 'In Progress', 'Blocked')",
@@ -775,7 +775,7 @@ export async function nativeAssignmentForWorkObject(
     physicalContextType?: string;
     physicalContextId?: string;
   },
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   const rows = await nativeAssignments(env, tenantId, {
     jobId,
     ...(scope?.workObjectType
@@ -792,7 +792,7 @@ export async function nativeAssignmentForWorkObject(
   return rows.length === 1 ? rows[0] : null;
 }
 
-function assignmentDocument(row: NativePackageRow): FrappeRow {
+function assignmentDocument(row: NativePackageRow): DocumentRow {
   return {
     name: row.assignment_id,
     assignment_id: row.assignment_id,
@@ -1232,7 +1232,7 @@ export async function reconcileNativeWorkPackageActions(
 }
 
 export function nativeWorkPackageCompletionAuthority(
-  document: FrappeRow | null,
+  document: DocumentRow | null,
   actorUser: string | readonly string[] | null,
   actorRole: AppRole,
 ): boolean {
@@ -1514,8 +1514,8 @@ async function nativeCompletionReady(env: AppEnv, row: NativePackageRow, definit
   });
 }
 
-function nativeEvidenceLedgerValid(captures: FrappeRow[], definition: ReturnType<typeof parseDefinitionPayload> & object): boolean {
-  const events = new Map<string, FrappeRow>();
+function nativeEvidenceLedgerValid(captures: DocumentRow[], definition: ReturnType<typeof parseDefinitionPayload> & object): boolean {
+  const events = new Map<string, DocumentRow>();
   const devices = new Set<string>();
   const correctionTargets = new Set<string>();
   const workers = new Map(definition.assigned_workers.map((worker) => [worker.workerUser.toLowerCase(), worker.workerRole]));
@@ -1583,7 +1583,7 @@ function nativeEvidenceLedgerValid(captures: FrappeRow[], definition: ReturnType
   return [...events.keys()].every(visit);
 }
 
-async function nativeEvidenceRows(env: AppEnv, row: NativePackageRow): Promise<FrappeRow[]> {
+async function nativeEvidenceRows(env: AppEnv, row: NativePackageRow): Promise<DocumentRow[]> {
   let result: { results?: NativeEvidenceRow[] };
   try {
     result = await env.DB.prepare(
@@ -1732,7 +1732,7 @@ function eventStatement(env: AppEnv, event: NativeEventInsert) {
     );
 }
 
-function packageDocument(row: NativePackageRow, payload: ReturnType<typeof parseDefinitionPayload> & object): FrappeRow {
+function packageDocument(row: NativePackageRow, payload: ReturnType<typeof parseDefinitionPayload> & object): DocumentRow {
   return {
     name: row.work_package_id,
     source_system: "ironwrap-d1",
@@ -1792,7 +1792,7 @@ function packageDocument(row: NativePackageRow, payload: ReturnType<typeof parse
   };
 }
 
-function eventDocument(row: NativeEventRow): FrappeRow {
+function eventDocument(row: NativeEventRow): DocumentRow {
   const payload = parseJson(row.payload_json) ?? {};
   const eventType: Record<string, string> = {
     issued: "Issued",

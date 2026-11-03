@@ -198,17 +198,31 @@ and its approval stay with the two named testers. The job is not scheduled to th
 needs all six production gates cleared, and a gate clears only by an entry in the gate ledger
 (migration `0153`). Deposit clears on the job's reconciled deposit invoice, and a waiver, on
 Deposit, Materials or Access only, is the owner's decision. Safety and Weather are never waivable,
-and Crew has no waiver. D1 refuses every such entry from the seed identity, so the seed clears no
-gate. It never writes D1 directly, calls only an
+and Crew has no waiver: it clears by policy when a person schedules the job (migration `0159`). D1
+refuses every such entry from the seed identity, and a schedule from it, so the seed clears no
+gate. The job's OD-01 cancellation window reads unknown (migration `0160`): nothing shows the tester
+a signed copy, and D1 refuses the seed identity's record of one, so the window holds the schedule,
+the Materials attestation and the job's D1 purchase order lines, as intended. It does not hold a
+Frappe Supplier Order (written through the ERPNext MCP, outside D1); that hold is required before
+supplier send opens. Nor does it hold a Shop Order's `scheduled_start` on the typed work-object
+assignment; that hold comes with the shop-run contract rule. It never writes D1 directly,
+calls only an
 allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
 identity outside `example.invalid` and the two testers.
 
-`EFFECT_RUNTIME_TOKEN` serves the MCP host's `mcp.*` effects and never an outside send: a proposal
-publish or withdrawal and a customer or operations email may be executed only by the bus, and the
-token's claim, settle, reconcile and retry answer 403 for them. The seed's
-`qa-synthetic-publication` stand-in passes only because qa's `AGENT_DATA_CLASS` is `synthetic`. On
-production (`business`) the same claim answers 403 `effect_provider_not_allowed`, and the seed
-stops before anything is published.
+`EFFECT_RUNTIME_TOKEN` handles only actions named `mcp.*`, the MCP host's and approval brokers'
+bounded tools, plus one QA pair: the seed's `proposal.publish` through `qa-synthetic-publication`,
+and only because qa's `AGENT_DATA_CLASS` is `synthetic`. Its claim, settle, reconcile and retry
+answer 403 for everything else: `effect_outside_send_token_refused` for a proposal publish or
+withdrawal and a customer or operations email, which only the bus executes;
+`effect_runtime_action_not_allowed` for any other action outside `mcp.*` (Drive, Docs, document,
+QuickBooks, accounting, Frappe and JobNimbus adapters, Postiz, Newo control, Facet projection); and
+`effect_provider_not_allowed` for a `qa-synthetic-*` provider outside the seed's pair, or on a
+Worker that is not `synthetic`. On production (`business`) the seed's claim answers 403
+`effect_provider_not_allowed`, and the seed stops before anything is published. A runtime that
+needs another action on this token needs a code change and its review, not a new secret: the
+allowlist is in `workers-bus/src/effect-runtime-admin.ts`, and the Worker is its only enforcement
+point (D1 does not record who claimed an attempt).
 
 ```bash
 node tools/qa-seed-owner.mjs --sql-out output/qa/owner-access/qa-seed-owner.sql \
@@ -453,8 +467,8 @@ deploy/backup-to-r2.sh
 
 `deploy/backup-d1-to-r2.sh` accepts no arguments. It uses only the locked
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
-`7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
-`8aa15acc-e8e6-4ca9-87c2-fc481ad0df7d`. It performs `d1 export --remote`, imports the SQL into an
+`5023dd227b538fc4238439fd7d52640f`, database `ironwrap-bus`, UUID
+`a8fd0116-7af6-4788-98bd-083addbe58bc`. It performs `d1 export --remote`, imports the SQL into an
 isolated SQLite file, runs integrity checks, and requires the complete migration-derived table,
 index, and invariant-trigger inventories before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
@@ -520,7 +534,7 @@ Monthly isolated restore drill:
 
 ```bash
 export D1_RESTORE_MODE=remote
-export D1_RESTORE_TARGET_ACCOUNT_ID=7ee5775bc1ba46f05c5a65235b60e939
+export D1_RESTORE_TARGET_ACCOUNT_ID=5023dd227b538fc4238439fd7d52640f
 export D1_RESTORE_TARGET_DATABASE_NAME='ironwrap-restore-drill-monthly'
 export D1_RESTORE_TARGET_DATABASE_ID='<different-non-production-d1-uuid>'
 export D1_RESTORE_API_TOKEN='<just-in-time-d1-drill-write-token>'

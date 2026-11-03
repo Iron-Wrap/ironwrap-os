@@ -612,6 +612,25 @@ External writes must have:
 Examples include customer messages, appointments, supplier orders, permit submissions, invoices,
 payments, refunds, payroll, filings, access changes, machine release, and dispatch.
 
+A readback cited as evidence must come from the action that reads that fact, not from any finished
+effect: an AP invoice line cites a `quickbooks.bill.read` through its own provider, and a
+`supplier_ap` line is refused until a read action exists for it (D1 guard, 0169).
+
+The effect-runtime token (`EFFECT_RUNTIME_TOKEN`, the bearer of `/admin/effects/*`) lets an outside
+runtime claim, settle, reconcile and retry an effect within the configured Worker tenant. Settle,
+reconcile and retry bind the stored effect's immutable tenant to `APP_TENANT_ID` (default
+`ironwrap`) before checking its action; a mismatch returns 403 `effect_tenant_mismatch` without
+returning the effect or changing its row, attempts, events or exceptions. It handles only actions
+named `mcp.*`, the bounded agent tools' provider writes, plus the QA seed's stand-in
+`proposal.publish` on a Worker whose data class is `synthetic`. Every other action is refused by name (403
+`effect_outside_send_token_refused`, `effect_runtime_action_not_allowed` or
+`effect_provider_not_allowed`), so every other side effect is executed by the bus itself. This
+allowlist is enforced in the Worker only. D1 cannot tell a token write from a bus write: neither
+`external_effect_attempts` nor `external_effect_events` records a claimer, and an effect's actor
+and authority references come from the claimer's own envelope. Recording a claimer identity on the
+attempt is a follow-up for B2 (the executor slice), which needs one anyway; until it lands, no D1
+guard can key on the token path.
+
 The current repository uses reviewed dry-run and signed approval receipts for many writes. That is
 the safe implemented baseline. The target may replace routine duplicate human approval with a
 policy-issued machine authority receipt only after the corresponding capability is implemented and
@@ -657,7 +676,9 @@ free-text reason. Gates cleared before the ledger existed are recorded as `legac
 new one can be added.
 
 - Deposit clears on settlement only from the money lane's reconciled deposit invoice for the same
-  job, stored as an immutable receipt that the entry names.
+  job, stored as an immutable receipt that the entry names. When the job's latest accepted contract
+  has its own deposit derivation, only that contract's invoice settles it; an earlier contract's
+  payment never does.
 - A waiver is the owner's decision. A person holding `production.gates.clear` (owner, production)
   requests one on Deposit, Materials or Access
   (`POST /api/v1/production/jobs/{job}/gates/{gate}/clearance`), holding at most one open request
@@ -666,8 +687,152 @@ new one can be added.
   Materials and Access, both carried by the owner today. The decider is never the requester, except
   that the only active holder may approve their own item with a reason, recorded as a
   self-approval (`only_holder`). Safety and Weather are never waivable, and Crew has no waiver.
-- Every entry is a person's, made from their own cookie session. The QA seed owner identity is
-  refused and never counts as a holder.
+- Every entry is a person's, made from their own cookie session, except the Deposit entries the
+  deposit policy records below. The QA seed owner identity is refused and never counts as a holder.
+
+The tenant's deposit policy (migration `0155`) is the owner's append-only, versioned setting, read
+and changed by the owner only (`GET`/`POST /api/v1/owner/deposit-policy`). A change comes from the
+owner's own cookie session, names the version it read, carries a reason and writes one `audit_log`
+row. The latest revision is in force, and a tenant with none takes payment on completion. The
+revision and the policy's Deposit entries take D1's clock, not the Worker's:
+
+- `od01_payment_on_completion` (OD-01): a contract has no deposit, `deposit_percent: 0` with
+  `payment_schedule: ["completion"]`. After the customer's acceptance commits, the policy appends
+  `contract_no_deposit` to Deposit, with the signed contract version as evidence, and no deposit
+  invoice is derived. Deposit then reads as a system state, "No deposit under this contract": it
+  is not a waiver, not a payment and not a person's decision. The append never fails the
+  acceptance; the five-minute sweep appends any that is missing, once per contract. The final
+  invoice bills the whole contract: it subtracts only earlier invoices that stand (reconciled or
+  partly settled), never a rejected one, and stops for a person on any other state.
+- `md13_deposit` (MD-13): a contract carries a deposit of 1 to 100 percent, and Deposit clears as
+  above. A later accepted contract that carries a deposit makes the policy reverse
+  `contract_no_deposit` (`contract_superseded`); Deposit is blocked again and clears only on that
+  contract's own reconciled deposit invoice, or by the owner's waiver. No person reverses
+  `contract_no_deposit`.
+- Terms the policy does not allow are refused by name, `deposit_terms_not_allowed_by_policy`,
+  where an approved quote, a proposal, a publication or an acceptance is recorded. The staff routes
+  name the policy and the term to change; the customer gets the code and plain words only, and the
+  log keeps the policy and the term. D1 aborts such an acceptance as the backstop.
+
+Materials, Access, Weather and Safety also clear on a person's attestation (migration `0158`): one
+small typed record per gate, by an active owner or production person who is on no crew, whose only
+free text is an optional note of at most 300 characters kept in the redactable reason. Its evidence
+is 0 to 10 references to verified, stored Work Package captures of the job or, for Materials, live
+stock reservations of the job; the Worker resolves each reference and records its checksum, so a
+client never supplies a hash. Safety is its own operation set, `production.gates.safety`, carried
+today by owner and production. Its proof answers the permit: needed and held, with the permit
+number, or not needed; an unknown answer is refused as `production_gate_safety_permit_unknown`, so
+the person changes the answer. Safety also needs the attester's current internal Worker Competency
+(`authority.record`) in site safety: `authority_scope` exactly `site_safety`, a closed token in a
+field that is otherwise free text, so an empty, foreign or near value does not count; verified by an
+internal assessment, neither revoked nor superseded, in force today and not bound to another job.
+Safety is refused while a stop applies to the job: an active stop on the tenant, the job or any of
+its Work Packages in any status, Superseded included; a crew `stop_work` on one of them that no
+release has lifted; or an active stop whose scope cannot be resolved, meaning an unknown scope type
+or a Work Package id that maps to no job. An active stop that names a job the tenant does not have
+holds Safety on every job of the tenant, refused as `production_gate_stop_job_unknown` with the
+stop's id. The owner's exception list shows it as "This work stop names a job that doesn’t exist",
+with who raised it, when and what they wrote, never the raw job id, and with no controls. An active
+stop that names a Work Package the tenant does not have is treated the same way (migration
+`0159`): `production_gate_stop_work_package_unknown` with the stop's id, and the owner's item "This
+work stop names a job plan that doesn’t exist" with the same fields; the screen says job plan, never
+work package. From `0159` both stops also hold every schedule, so both items say "Safety and
+scheduling stay held on every job while this work stop is active." Nothing refuses such a stop when
+it is recorded, because a person may always stop work, and a stop's scope cannot be corrected
+today, so it holds until it is lifted. Another job's stop, a shop or a vehicle stop does not hold
+it. The entry names the competency record, D1 checks both rules again at insert with the same
+predicate, and no agent or policy ever attests Safety. A person's entry, an attestation or a
+reversal, takes D1's clock, as the policy's entries do.
+
+Crew clears only by policy, when a person schedules the job (migration `0159`). The schedule
+(`POST /api/v1/jobs/{job}/schedule`, from the person's own cookie session, never the QA seed owner)
+appends `crew_assignment` to Crew in the same D1 batch as the assignment, bound to the crew it names
+at that crew's version, so the two commit together or not at all. A schedule naming another crew or
+crew version first appends the policy's `crew_superseded` reversal of the entry Crew stands on. Crew
+has no waiver and no person clear. The schedule rests on the gate evidence as it stands when it is
+written, read with D1's own clock, and each refusal is named on the route and repeated in D1:
+
+- no stop applies to the job, read exactly as a Safety attestation reads it, so a Safety gate
+  attested before a new stop schedules nothing; a stop naming a job or a Work Package the tenant
+  does not have holds every schedule of the tenant, answered by its own code with the stop's id;
+- Deposit does not stand on a contract with no deposit while the job's latest contract is another
+  one with other terms: the window before the policy's `contract_superseded` lands;
+- Weather stands on a person's attestation whose window has not ended and holds the scheduled work
+  (a schedule with no end is held to its start), so a Weather gate left `ready` after its window
+  ended (`operating_job_assignment_weather_window_ended`), or one recorded before the ledger, which
+  names no window (`operating_job_assignment_weather_window_missing`), schedules nothing until it
+  is attested again;
+- no member of the crew shares a login (user id, email or Frappe user) with the person whose
+  attestation Materials, Safety, Access or Weather stands on.
+
+### OD-01 cancellation window
+
+The customer may cancel until 10 days after they receive their copy of the signed contract
+(owner's register OD-01; counsel confirms the wording through the owner). The register says that
+inside that window nothing is ordered from a supplier, no shop work starts and no start is
+confirmed; what is held today is listed below, with what is not. The register scopes it to private
+dwellings; D1 cannot tell a private dwelling from a commercial job, so the window applies to every
+contract. It is a System state next to the gates (`cancellation_window` on
+`GET /api/v1/production/jobs/{job}/gates`), not a gate: it has no ledger and no waiver, and a
+Materials waiver lifts none of its holds (migration `0160`).
+
+- It starts from the copy the portal served at signing, which counts as received. Only after the
+  acceptance has committed and the Worker has built the copy, for a client that renders it on that
+  screen (`signed_copy: true`), does the confirm route append a `contract_signed_copy_events` row,
+  in its own statement conditional on the committed binding. The Worker then appends its
+  confirmation that it served the copy (`contract_signed_copy_served`, append-only, D1's clock,
+  within a minute of the event) and only then sends it. **Only a confirmed event counts**, in every
+  hold, every guard that reads a previous start or end, and every read: the window starts at that
+  event's D1 write time (`shown_at`). Each write returns its row (`RETURNING`), and a failed or
+  unanswered step starts the attempt again, up to three times, never reusing an event left
+  unconfirmed. A copy that cannot be built starts no window, and the answer claims none: the window
+  stays unknown until ops records the receipt. An event left unconfirmed (the Worker stopped, or D1
+  failed past the retries) starts and ends nothing either: the answer claims no copy, the window
+  reads unknown (`signed_copy_unconfirmed`) and every hold holds past that event's would-be end,
+  and the job is on the work queue below until a copy of that contract is confirmed served or a
+  person records the receipt. An exact replay serves the confirmed copy as it stands, or records a new
+  event then and confirms it, so a copy sent later never carries a back-dated start. Once a copy of
+  a contract is confirmed served, no further event is appended for it. Nothing else writes or moves
+  these rows. A response lost between the Worker and the browser after the confirmation cannot be
+  seen; the exact replay returns the same copy.
+- Otherwise an owner or ops person records when the customer received the copy
+  (`POST /api/v1/production/jobs/{job}/cancellation-window/signed-copy`), from their own cookie
+  session, with a reason and an evidence reference. The time is not before the job's latest contract
+  signature (equal is allowed), not after D1's now, and never earlier than one already recorded or
+  shown: no record moves a previous start or end earlier. The same time for the same binding is a
+  no-op; a different latest binding records its own receipt provenance even at that same instant.
+  A job with no contract in D1 records with no floor, and its record says so. D1 stamps the record
+  with its own clock and writes its audit row in the same statement; each refusal has its own code.
+- Interim, pending counsel: it ends at the end of the 10th local calendar day after the day it
+  starts on, in the business time zone, the start's own day being day 0 (a copy received Tuesday
+  18:26 holds through the end of Friday the following week). `ends_at` is the first instant of the
+  11th local day, an exclusive bound. The day is read by the runtime's time zone rules and across
+  every UTC offset the zone has kept in the last five years, and the latest reading wins: for
+  Edmonton, the day the start falls on at UTC-6 and the 11th day's midnight at UTC-7. So the end
+  does not rest on the runtime's time zone data matching the real rule: a release that falls back to
+  UTC-7 each autumn and one that keeps UTC-6 all year both end the window no earlier than the real
+  calendar reading. It is never before the start + 240 hours nor before the job's previous end, so
+  it is never earlier than either reading of "10 days", across DST too. D1 holds every end to
+  [start + 240 hours, start + 266 hours]: with no time zone database, a reading is at most 264 hours
+  after a start at local midnight plus the span of the zone's offsets (one hour for Edmonton), and
+  D1 allows a span of two.
+- It is unknown until the job's actual latest binding has a confirmed copy or its own receipt at
+  or after its signature. Latest means signature time, then binding id, including tied times. A
+  receipt naming no binding counts only while the job has no D1 contract. Historical ends still
+  hold later windows to their monotonic floor. It is open until it ends, then ended. While it is
+  unknown or open, D1 and the routes refuse,
+  each by name: a schedule (the firm start), the Materials attestation, and a D1 purchase order line
+  for the job or one moving back to `ordered`. A line with no job (stock) is never held.
+- Not held (gaps): the Frappe Supplier Order path (the ERPNext MCP's
+  `request_create_supplier_order`, and `request_transition_supplier_order` moving a Supplier Order
+  to Ordered) writes Frappe directly, outside D1 and the Worker; the window hold is required on that
+  path before supplier send opens. A Shop Order's `scheduled_start` on the typed work-object
+  assignment is not held either; that hold comes with the shop-run contract rule.
+- `GET /api/v1/production/cancellation-window/signed-copy-missing` lists, for owner and ops, the open
+  signed jobs whose window is unknown, in two categories with a count for each: `window_unknown`,
+  and `signed_copy_unconfirmed` (a copy of the latest contract recorded as shown at `copy_shown_at`
+  that the Worker never confirmed served). Signed means a contract in D1, or a Deposit gate that has
+  cleared for a contract signed outside D1.
 
 ## Stop taxonomy
 

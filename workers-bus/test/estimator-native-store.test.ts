@@ -30,7 +30,7 @@ import {
   recordEstimatorEvidenceRevision,
   type EstimatorEvidencePayloadV1,
 } from "../src/estimator-native-store.ts";
-import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
+import { canonicalJson, sha256Hex } from "../src/canonical.ts";
 
 const TENANT = "ironwrap";
 const OTHER_TENANT = "iroof";
@@ -1146,11 +1146,11 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     );
     // Pinned through 0200, including privacy, crew-stop guards, the stop release record, durable
     // writer claims and the AI team tables,
-    // durable office intake receipts, manual measurement history, the safety stop release guard
-    // and the 0153 gate ledger.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=283/);
+    // durable office intake receipts, manual measurement history, the safety stop release guard,
+    // the 0153 gate ledger, the 0155 tenant deposit policy and the 0205 step pair index.
+    assert.match(contract, /REQUIRED_TABLE_COUNT=287/);
     assert.match(contract, /REQUIRED_INDEX_COUNT=396/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=795/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=816/);
   }
 });
 

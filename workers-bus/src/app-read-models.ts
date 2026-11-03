@@ -35,12 +35,11 @@ import {
 } from "./pipeline-board-store.ts";
 import { approvalDecisionConfig } from "./approval-broker-client.ts";
 import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
-import {
-  type FrappeRow,
-} from "./frappe-read.ts";
+import type { DocumentRow } from "./document-row.ts";
 import { parseBody } from "./core.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
 import { publicCompanyContact } from "./company-profile.ts";
+import { NO_DEPOSIT_UNDER_CONTRACT } from "./deposit-policy.ts";
 import {
   listCurrentJobMeasurements,
   type JobMeasurementSummary,
@@ -275,6 +274,8 @@ interface NativeProductionGateRow {
   assigned_at: string;
   due_at: string;
   updated_at: string;
+  /** The basis of the ledger entry the gate stands on (0153), when one does. */
+  basis_in_force: string | null;
 }
 
 interface NativeProductionCrewRow {
@@ -304,6 +305,31 @@ interface NativeOwnerFieldBlockerRow {
   manifest_key: string | null;
   updated_at: string;
 }
+
+interface NativeOwnerUnknownStopRow {
+  occurrence_id: string;
+  reported_at: string;
+  reported_by_name: string | null;
+  summary: string;
+  updated_at: string;
+}
+
+/**
+ * The owner's exception for an active work stop that names a job the tenant does not have (Track
+ * B's final copy). The stop's raw job id is not shown. The item has no controls and no link. From
+ * 0159 such a stop holds every schedule as well as Safety, so the item says both.
+ */
+export const STOP_JOB_UNKNOWN_TITLE = "This work stop names a job that doesn’t exist";
+export const STOP_JOB_UNKNOWN_WHY =
+  "Safety and scheduling stay held on every job while this work stop is active.";
+
+/**
+ * Its twin for an active work stop that names a Work Package the tenant does not have (0159), in
+ * Track B's final copy: the screen says "job plan", never "work package", and the stop's raw
+ * package id is not shown. The same fields, no controls and no link.
+ */
+export const STOP_WORK_PACKAGE_UNKNOWN_TITLE = "This work stop names a job plan that doesn’t exist";
+export const STOP_WORK_PACKAGE_UNKNOWN_WHY = STOP_JOB_UNKNOWN_WHY;
 
 interface NativeOwnerEffectExceptionRow {
   exception_id: string;
@@ -660,6 +686,17 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
     bus_status: string | null;
     triage_status: string | null;
     mctb: MctbStatus | null;
+    /**
+     * Who raised the work stop (`stop_job_unknown`, `stop_work_package_unknown`): their display
+     * name in this tenant, or null when they have none. When it was raised is `occurred_at`. Null
+     * on every other kind.
+     */
+    reported_by_name: string | null;
+    /**
+     * The work stop's own summary, raw as it was written (`stop_job_unknown`,
+     * `stop_work_package_unknown`); the UI wraps and truncates it. Null on every other kind.
+     */
+    summary: string | null;
   }>;
   /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
   partial_sources: string[];
@@ -1116,7 +1153,7 @@ export async function activeAssignmentForJob(
   env: AppEnv,
   auth: AuthContext,
   jobName: string,
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   if (!validJobName(jobName)) return null;
   const tenantId = (env.APP_TENANT_ID ?? "ironwrap").trim();
   if (
@@ -1132,7 +1169,7 @@ async function activeNativeAssignmentForJob(
   auth: AuthContext,
   jobName: string,
   readMode: "any" | "assigned" = jobReadMode(auth),
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   if (!validJobName(jobName) || typeof env.DB?.prepare !== "function")
     return null;
   const actorUsers =
@@ -1231,7 +1268,7 @@ export async function activeAssignmentForWorkObject(
   env: AppEnv,
   auth: AuthContext,
   scope: WorkObjectScope,
-): Promise<FrappeRow | null> {
+): Promise<DocumentRow | null> {
   const values = [
     scope.workObjectType,
     scope.workObjectId,
@@ -1418,7 +1455,7 @@ export async function buildTodayReadModel(
   const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const properties = propertySource.rows
     .map(nativePropertyFrappeRow)
-    .filter((row): row is FrappeRow => row !== null);
+    .filter((row): row is DocumentRow => row !== null);
   const propertyById = new Map(properties.map((row) => [text(row.name), row]));
   const blockedByJob = groupBy(blockedGates, "roof_job");
   const shaped = jobs
@@ -1577,7 +1614,7 @@ export async function buildProductionRunwayReadModel(
       const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map(
         (name) => ({
           name,
-          state: nativeGateStateLabel(text(latestGatesByName.get(name)?.state)),
+          state: productionGateStateLabel(latestGatesByName.get(name)),
         }),
       );
       const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] =
@@ -1598,8 +1635,9 @@ export async function buildProductionRunwayReadModel(
           .length,
         waived: schedulingGates.filter((gate) => text(gate.state) === "waived")
           .length,
-        done: schedulingGates.filter((gate) => text(gate.state) === "complete")
-          .length,
+        done: schedulingGates.filter(
+          (gate) => text(gate.state) === "complete" && !depositNotRequiredByContract(gate),
+        ).length,
       };
       const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap(
         (row) => {
@@ -1970,7 +2008,7 @@ export async function buildJobReadModel(
           slot,
           label: `${slot} proof`,
           state: text(row.state) ?? "Blocked",
-          blocker_reason: text(row.blocker_reason),
+          blocker_reason: productionGateReason(row),
         },
       ];
     }),
@@ -2269,6 +2307,8 @@ export async function buildOwnerNowReadModel(
     untriagedLeadSource,
     materialExceptionSource,
     quoteSource,
+    unknownJobStopSource,
+    unknownWorkPackageStopSource,
   ] = await Promise.all([
     nativeOwnerFieldBlockers(env, auth.session.tenant_id, jobIds),
     nativeProductionGates(
@@ -2290,6 +2330,8 @@ export async function buildOwnerNowReadModel(
       OWNER_NOW_SOURCE_LIMIT,
     ),
     nativeOwnerCommercialQuotes(env, auth.session.tenant_id, jobIds),
+    nativeOwnerUnknownJobStops(env, auth.session.tenant_id),
+    nativeOwnerUnknownWorkPackageStops(env, auth.session.tenant_id),
   ]);
 
   const fieldBlockers = fieldBlockerSource.rows.map(
@@ -2303,7 +2345,7 @@ export async function buildOwnerNowReadModel(
     nativeMaterialExceptionFrappeRow,
   );
   const untriagedLeads = untriagedLeadSource.rows.map(nativeOwnerLeadFrappeRow);
-  const unknownTriageLeads: FrappeRow[] = [];
+  const unknownTriageLeads: DocumentRow[] = [];
 
   const reconciliationByIntent = new Map<
     string,
@@ -2403,7 +2445,7 @@ export async function buildOwnerNowReadModel(
           intent.error_code ??
           (money ? null : "accounting_money_sign_invalid"),
         modified: intent.updated_at,
-      } satisfies FrappeRow,
+      } satisfies DocumentRow,
     ];
   });
   const economicsReconciliations = accountingIntentSource.rows.flatMap(
@@ -2425,7 +2467,7 @@ export async function buildOwnerNowReadModel(
               source_payload_hash: reconciliation.observed_sha256,
               detected_at: reconciliation.decided_at,
               modified: reconciliation.decided_at,
-            } satisfies FrappeRow,
+            } satisfies DocumentRow,
           ]
         : [];
     },
@@ -2434,8 +2476,8 @@ export async function buildOwnerNowReadModel(
   const explicitFinanceIntentIds = new Set(
     accountingExceptionSource.rows.map((row) => row.intent_id).filter(notNull),
   );
-  const payments: FrappeRow[] = [
-    ...accountingExceptionSource.rows.map((row): FrappeRow => ({
+  const payments: DocumentRow[] = [
+    ...accountingExceptionSource.rows.map((row): DocumentRow => ({
       name: row.exception_id,
       payment_milestone_id: row.exception_id,
       roof_job: row.roof_job_id,
@@ -2452,7 +2494,7 @@ export async function buildOwnerNowReadModel(
           (OWNER_FINANCE_ATTENTION_STATES.has(row.state) ||
             (row.state === "reconciled" && !matchedReconciliation(row))),
       )
-      .map((row): FrappeRow => ({
+      .map((row): DocumentRow => ({
         name: row.intent_id,
         payment_milestone_id: row.intent_id,
         roof_job: row.roof_job_id,
@@ -2493,7 +2535,7 @@ export async function buildOwnerNowReadModel(
       ? ["economics.accounting_reconciliations"]
       : []),
   ];
-  const rowsForEconomicsJob = (rows: FrappeRow[], jobId: string) =>
+  const rowsForEconomicsJob = (rows: DocumentRow[], jobId: string) =>
     rows.filter((row) => text(row.roof_job) === jobId);
   const economics = jobIds.map((jobId) => {
     const quoteCandidates = currentQuotesByJob.get(jobId) ?? [];
@@ -2582,7 +2624,7 @@ export async function buildOwnerNowReadModel(
     receiptsByEnvelope.set(receipt.envelope_id, current);
   }
   const leadException = (
-    row: FrappeRow,
+    row: DocumentRow,
     kind: "untriaged_lead" | "lead_triage_unknown",
   ) => {
     const id = text(row.envelope_id) ?? text(row.name);
@@ -2629,6 +2671,35 @@ export async function buildOwnerNowReadModel(
         why: text(row.blocker_summary),
         jobId: text(row.roof_job),
         occurredAt: text(row.submitted_at),
+      }),
+    ),
+    // The stop holds Safety on every job while it is active; the item names who raised it, when,
+    // and what they wrote.
+    ...unknownJobStopSource.rows.flatMap((row) =>
+      exceptionRow({}, {
+        id: row.occurrence_id,
+        kind: "stop_job_unknown",
+        severity: null,
+        title: STOP_JOB_UNKNOWN_TITLE,
+        why: STOP_JOB_UNKNOWN_WHY,
+        jobId: null,
+        occurredAt: row.reported_at,
+        reportedByName: text(row.reported_by_name),
+        summary: row.summary,
+      }),
+    ),
+    // So does a stop naming a Work Package the tenant does not have (0159), with the same fields.
+    ...unknownWorkPackageStopSource.rows.flatMap((row) =>
+      exceptionRow({}, {
+        id: row.occurrence_id,
+        kind: "stop_work_package_unknown",
+        severity: null,
+        title: STOP_WORK_PACKAGE_UNKNOWN_TITLE,
+        why: STOP_WORK_PACKAGE_UNKNOWN_WHY,
+        jobId: null,
+        occurredAt: row.reported_at,
+        reportedByName: text(row.reported_by_name),
+        summary: row.summary,
       }),
     ),
     ...gates.flatMap((row) =>
@@ -2686,6 +2757,8 @@ export async function buildOwnerNowReadModel(
   const partialSources = [
     ...(jobSource.partial ? ["active_jobs"] : []),
     ...(fieldBlockerSource.partial ? ["field_blockers"] : []),
+    ...(unknownJobStopSource.partial ? ["unknown_job_stops"] : []),
+    ...(unknownWorkPackageStopSource.partial ? ["unknown_work_package_stops"] : []),
     ...(gateSource.partial ? ["blocked_gates"] : []),
     ...(incidentSource.partial ? ["automation_incidents"] : []),
     ...(accountingIntentSource.partial ||
@@ -2717,6 +2790,10 @@ export async function buildOwnerNowReadModel(
       [
         ...jobs,
         ...fieldBlockers,
+        ...[...unknownJobStopSource.rows, ...unknownWorkPackageStopSource.rows].map((row) => ({
+          name: row.occurrence_id,
+          modified: row.updated_at,
+        })),
         ...gates,
         ...incidents,
         ...payments,
@@ -3179,7 +3256,7 @@ export async function buildEstimatorWorkbenchReadModel(
     staleFields.push("proposal.assumptions.native_unavailable");
     staleFields.push("proposal.exclusions.native_unavailable");
   }
-  const insuranceSupplementDetails = new Map<string, FrappeRow | null>();
+  const insuranceSupplementDetails = new Map<string, DocumentRow | null>();
   for (const { name, read } of insuranceSupplementReads) {
     if (!name) continue;
     const detail = matchesInsuranceSupplementDetail(read.row, name, jobId)
@@ -3194,7 +3271,7 @@ export async function buildEstimatorWorkbenchReadModel(
     }
   }
 
-  const sourceRows: Array<readonly [string, FrappeRow[]]> = [
+  const sourceRows: Array<readonly [string, DocumentRow[]]> = [
     ["measurement_reports", measurementRows],
     ["material_takeoffs", takeoffRows],
     ["customer_quotes", quoteRows],
@@ -3410,7 +3487,7 @@ export async function buildEstimatorWorkbenchReadModel(
 function emptyToday(
   env: AppEnv,
   auth: AuthContext,
-  rows: FrappeRow[] = [],
+  rows: DocumentRow[] = [],
 ): TodayReadModel {
   return {
     ...envelope(auth, rows, []),
@@ -3466,13 +3543,16 @@ async function nativeProductionGates(
   if (selected.length === 0) return { rows: [], partial: false };
   return await boundedNativeRows<NativeProductionGateRow>(
     env,
-    `SELECT gate_id, roof_job_id, gate, state, blocker_reason, owner_user,
-            assigned_at, due_at, updated_at
-       FROM operating_production_gates
-      WHERE tenant_id = ?
-        AND roof_job_id IN (${selected.map(() => "?").join(", ")})
-        ${state ? "AND state = ?" : ""}
-      ORDER BY roof_job_id ASC, gate ASC, updated_at DESC, gate_id ASC`,
+    `SELECT gate.gate_id, gate.roof_job_id, gate.gate, gate.state, gate.blocker_reason,
+            gate.owner_user, gate.assigned_at, gate.due_at, gate.updated_at,
+            entry.basis AS basis_in_force
+       FROM operating_production_gates gate
+       LEFT JOIN production_gate_clearances entry
+         ON entry.tenant_id = gate.tenant_id AND entry.clearance_id = gate.clearance_decision_id
+      WHERE gate.tenant_id = ?
+        AND gate.roof_job_id IN (${selected.map(() => "?").join(", ")})
+        ${state ? "AND gate.state = ?" : ""}
+      ORDER BY gate.roof_job_id ASC, gate.gate ASC, gate.updated_at DESC, gate.gate_id ASC`,
     [tenantId, ...selected, ...(state ? [state] : [])],
     limit,
   );
@@ -3568,6 +3648,67 @@ async function nativeOwnerFieldBlockers(
         AND package.job_id IN (${selected.map(() => "?").join(", ")})
       ORDER BY package.updated_at DESC, package.work_package_id ASC`,
     [tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+/**
+ * Active safety stops that name a job this tenant does not have. Recording a stop never fails, so
+ * a mistyped job is caught here: such a stop holds Safety on every job (0158) until it is opened
+ * and fixed or lifted.
+ */
+async function nativeOwnerUnknownJobStops(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerUnknownStopRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerUnknownStopRow>(
+    env,
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            reporter.display_name AS reported_by_name, occurrence.updated_at
+       FROM safety_occurrences AS occurrence
+       LEFT JOIN app_users AS reporter
+         ON reporter.tenant_id = occurrence.tenant_id
+        AND reporter.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'roof_job'
+        AND NOT EXISTS (
+          SELECT 1 FROM operating_roof_jobs AS job
+           WHERE job.tenant_id = occurrence.tenant_id AND job.roof_job_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
+    [tenantId],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+/**
+ * Active safety stops that name a Work Package this tenant does not have, with who raised each.
+ * Like a stop on a job that doesn't exist, such a stop is recorded and holds Safety and every
+ * schedule on every job (0159) until it is lifted.
+ */
+async function nativeOwnerUnknownWorkPackageStops(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerUnknownStopRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerUnknownStopRow>(
+    env,
+    `SELECT occurrence.occurrence_id, occurrence.reported_at, occurrence.summary,
+            reporter.display_name AS reported_by_name, occurrence.updated_at
+       FROM safety_occurrences AS occurrence
+       LEFT JOIN app_users AS reporter
+         ON reporter.tenant_id = occurrence.tenant_id
+        AND reporter.user_id = occurrence.reported_by_user_id
+      WHERE occurrence.tenant_id = ?
+        AND occurrence.stop_active = 1
+        AND occurrence.scope_type = 'work_package'
+        AND NOT EXISTS (
+          SELECT 1 FROM work_packages AS package
+           WHERE package.tenant_id = occurrence.tenant_id
+             AND package.work_package_id = occurrence.scope_id
+        )
+      ORDER BY occurrence.reported_at ASC, occurrence.occurrence_id ASC`,
+    [tenantId],
     OWNER_NOW_SOURCE_LIMIT,
   );
 }
@@ -3701,7 +3842,7 @@ async function nativeOwnerAccountingExceptions(
   );
 }
 
-function nativeOperatingJobRow(row: NativeProductionJobRow): FrappeRow {
+function nativeOperatingJobRow(row: NativeProductionJobRow): DocumentRow {
   return {
     name: row.roof_job_id,
     roof_job_id: row.roof_job_id,
@@ -3719,7 +3860,7 @@ function nativeOperatingJobRow(row: NativeProductionJobRow): FrappeRow {
 
 function nativeOperatingAssignmentRow(
   row: OperatingJobAssignmentRecord,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.assignment_id,
     assignment_id: row.assignment_id,
@@ -3752,7 +3893,7 @@ function nativeOperatingAssignmentRow(
 async function nativeTodayAssignments(
   env: AppEnv,
   auth: AuthContext,
-): Promise<FrappeRow[]> {
+): Promise<DocumentRow[]> {
   const actorUsers =
     jobReadMode(auth) === "assigned"
       ? appUserIdentities(auth.session)
@@ -3768,7 +3909,7 @@ async function nativeTodayAssignments(
       ...(actorUsers ? { actorUsers } : {}),
     }),
   ]);
-  const assignments = new Map<string, FrappeRow>();
+  const assignments = new Map<string, DocumentRow>();
   for (const row of scheduled.map(nativeOperatingAssignmentRow)) {
     const id = text(row.name);
     if (id) assignments.set(id, row);
@@ -3787,7 +3928,7 @@ async function nativeTodayAssignments(
 
 function nativeOperatingWorkObjectAssignmentRow(
   row: OperatingWorkObjectAssignmentRecord,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.assignment_id,
     assignment_id: row.assignment_id,
@@ -3821,7 +3962,7 @@ function nativeOperatingWorkObjectAssignmentRow(
 
 function nativeProductionGateFrappeRow(
   row: NativeProductionGateRow,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.gate_id,
     gate_id: row.gate_id,
@@ -3833,12 +3974,13 @@ function nativeProductionGateFrappeRow(
     assigned_at: row.assigned_at,
     due_at: row.due_at,
     modified: row.updated_at,
+    basis_in_force: row.basis_in_force,
   };
 }
 
 function nativeMaterialExceptionFrappeRow(
   row: NativeMaterialExceptionRow,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.exception_id,
     roof_job: row.aggregate_id,
@@ -3852,7 +3994,7 @@ function nativeMaterialExceptionFrappeRow(
 
 function nativeOwnerFieldBlockerFrappeRow(
   row: NativeOwnerFieldBlockerRow,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.stop_event_id ?? row.work_package_id,
     checkin_id: row.stop_event_id ?? row.work_package_id,
@@ -3866,7 +4008,7 @@ function nativeOwnerFieldBlockerFrappeRow(
 
 function nativeOwnerEffectExceptionFrappeRow(
   row: NativeOwnerEffectExceptionRow,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.exception_id,
     incident_id: row.exception_id,
@@ -3879,7 +4021,7 @@ function nativeOwnerEffectExceptionFrappeRow(
   };
 }
 
-function nativeOwnerLeadFrappeRow(row: OperatingSalesLeadRecord): FrappeRow {
+function nativeOwnerLeadFrappeRow(row: OperatingSalesLeadRecord): DocumentRow {
   return {
     name: row.lead_id,
     envelope_id: row.source_envelope_id,
@@ -3892,7 +4034,7 @@ function nativeOwnerLeadFrappeRow(row: OperatingSalesLeadRecord): FrappeRow {
   };
 }
 
-function nativeOwnerQuoteFrappeRow(row: CommercialQuoteRecord): FrappeRow {
+function nativeOwnerQuoteFrappeRow(row: CommercialQuoteRecord): DocumentRow {
   return {
     name: row.quote_revision_id,
     customer_quote_id: row.customer_quote_id,
@@ -3942,7 +4084,7 @@ function nativeOwnerAccountingMagnitude(
 
 function nativeProductionCrewFrappeRow(
   row: NativeProductionCrewRow,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.crew_id,
     crew_name: row.display_name,
@@ -3969,13 +4111,34 @@ function nativeGateStateLabel(value: string | null): string | null {
   return value;
 }
 
+/**
+ * OD-01 (0155): the policy recorded that the signed contract has no deposit. That gate is
+ * complete, but nothing was done or paid: it reads as a system state, "No deposit under this
+ * contract", and never reads or counts as done.
+ */
+function depositNotRequiredByContract(row: DocumentRow | undefined): boolean {
+  return text(row?.gate) === "Deposit" && text(row?.state) === "complete" &&
+    text(row?.basis_in_force) === "contract_no_deposit";
+}
+
+function productionGateStateLabel(row: DocumentRow | undefined): string | null {
+  return depositNotRequiredByContract(row)
+    ? NO_DEPOSIT_UNDER_CONTRACT
+    : nativeGateStateLabel(text(row?.state));
+}
+
+/** The gate's recorded reason, or the system state when the contract has no deposit. */
+function productionGateReason(row: DocumentRow): string | null {
+  return depositNotRequiredByContract(row) ? NO_DEPOSIT_UNDER_CONTRACT : text(row.blocker_reason);
+}
+
 function jobReadMode(auth: AuthContext): "any" | "assigned" {
   if (auth.permissions.includes("jobs:read:any")) return "any";
   if (auth.permissions.includes("jobs:read:assigned")) return "assigned";
   throw new Error("job_scope_required");
 }
 
-function assignmentModel(row: FrappeRow): AssignmentReadModel {
+function assignmentModel(row: DocumentRow): AssignmentReadModel {
   return {
     id: text(row.name)!,
     assignment_id: text(row.assignment_id),
@@ -3991,7 +4154,7 @@ function assignmentModel(row: FrappeRow): AssignmentReadModel {
 
 function officeWorkPackageActions(
   role: AppRole,
-  assignment: FrappeRow | null,
+  assignment: DocumentRow | null,
   workPackage: FieldWorkPackage | null,
 ): string[] {
   if (!assignment || !["owner", "ops", "production"].includes(role)) return [];
@@ -4004,7 +4167,7 @@ function officeWorkPackageActions(
 }
 
 function productionAssignmentModel(
-  row: FrappeRow,
+  row: DocumentRow,
 ): NonNullable<ProductionRunwayReadModel["jobs"][number]["assignment"]> {
   return {
     id: text(row.name)!,
@@ -4019,7 +4182,7 @@ function productionAssignmentModel(
   };
 }
 
-function preferredAssignmentsByJob(rows: FrappeRow[]): Map<string, FrappeRow> {
+function preferredAssignmentsByJob(rows: DocumentRow[]): Map<string, DocumentRow> {
   const grouped = groupBy(rows, "roof_job");
   return new Map(
     [...grouped.entries()].flatMap(([job, assignments]) => {
@@ -4030,7 +4193,7 @@ function preferredAssignmentsByJob(rows: FrappeRow[]): Map<string, FrappeRow> {
 }
 
 function assignmentWorkObjectScope(
-  row: FrappeRow,
+  row: DocumentRow,
 ): Pick<
   TodayReadModel["work_objects"][number],
   | "work_object_type"
@@ -4059,8 +4222,8 @@ function assignmentWorkObjectScope(
   };
 }
 
-function preferredAssignmentsByWorkObject(rows: FrappeRow[]): FrappeRow[] {
-  const grouped = new Map<string, FrappeRow[]>();
+function preferredAssignmentsByWorkObject(rows: DocumentRow[]): DocumentRow[] {
+  const grouped = new Map<string, DocumentRow[]>();
   for (const row of rows) {
     const scope = assignmentWorkObjectScope(row);
     if (!scope) continue;
@@ -4081,11 +4244,11 @@ function preferredAssignmentsByWorkObject(rows: FrappeRow[]): FrappeRow[] {
       .map((candidates) =>
         candidates.length === 1 ? (candidates[0] ?? null) : null,
       )
-      .filter((row): row is FrappeRow => row !== null)
+      .filter((row): row is DocumentRow => row !== null)
   );
 }
 
-function preferredAssignment(rows: FrappeRow[]): FrappeRow | null {
+function preferredAssignment(rows: DocumentRow[]): DocumentRow | null {
   return (
     [...rows].sort((left, right) => {
       const priority = (value: unknown) =>
@@ -4102,7 +4265,7 @@ function preferredAssignment(rows: FrappeRow[]): FrappeRow | null {
 }
 
 function gateModel(
-  row: FrappeRow,
+  row: DocumentRow,
   redactOwner: boolean,
 ): JobReadModel["gates"] {
   const gateId = text(row.gate_id) ?? text(row.name);
@@ -4111,8 +4274,8 @@ function gateModel(
         {
           id: gateId,
           name: text(row.gate),
-          state: nativeGateStateLabel(text(row.state)),
-          blocker_reason: text(row.blocker_reason),
+          state: productionGateStateLabel(row),
+          blocker_reason: productionGateReason(row),
           owner: redactOwner ? null : text(row.owner_user),
           due_at: text(row.due_at),
         },
@@ -4120,7 +4283,7 @@ function gateModel(
     : [];
 }
 
-function evidenceProofItem(row: FrappeRow): ProofStreamItem | null {
+function evidenceProofItem(row: DocumentRow): ProofStreamItem | null {
   const id = text(row.evidence_id) ?? text(row.name);
   return id
     ? {
@@ -4153,7 +4316,7 @@ async function nativeWorkPackageProofRows(
   jobId: string,
   assignmentId: string,
   workPackage: FieldWorkPackage,
-): Promise<FrappeRow[] | null> {
+): Promise<DocumentRow[] | null> {
   if (!workPackage.releaseAttemptId) return [];
   const evidence = await listFieldWorkPackageEvidenceFromD1(env, {
     tenantId,
@@ -4178,7 +4341,7 @@ async function nativeWorkPackageProofRows(
 
 function nativeWorkPackageEvidenceRow(
   row: FieldWorkPackageEvidenceD1Row,
-): FrappeRow {
+): DocumentRow {
   return {
     name: row.eventId,
     evidence_id: row.evidenceItem,
@@ -4195,7 +4358,7 @@ function nativeWorkPackageEvidenceRow(
 
 function nativeCustomerFrappeRow(
   row: NativeCustomerRecord | null | undefined,
-): FrappeRow | null {
+): DocumentRow | null {
   if (!row) return null;
   return {
     name: row.customer_id,
@@ -4207,7 +4370,7 @@ function nativeCustomerFrappeRow(
 
 function nativePropertyFrappeRow(
   row: NativePropertyRecord | null | undefined,
-): FrappeRow | null {
+): DocumentRow | null {
   if (!row) return null;
   return {
     name: row.property_id,
@@ -4221,8 +4384,8 @@ function nativePropertyFrappeRow(
 }
 
 function compareEvidenceRowsByProofOrder(
-  left: FrappeRow,
-  right: FrappeRow,
+  left: DocumentRow,
+  right: DocumentRow,
 ): number {
   const leftItem = evidenceProofItem(left);
   const rightItem = evidenceProofItem(right);
@@ -4239,7 +4402,7 @@ function parseProofCursor(value: string | null): number | null {
 
 function envelope(
   auth: AuthContext,
-  rows: FrappeRow[],
+  rows: DocumentRow[],
   staleFields: string[],
   generatedAt: string = new Date().toISOString(),
 ): ReadModelEnvelope {
@@ -4265,7 +4428,7 @@ function envelope(
 }
 
 function exceptionRow(
-  _row: FrappeRow,
+  _row: DocumentRow,
   input: {
     id: string | null;
     kind: string;
@@ -4279,6 +4442,8 @@ function exceptionRow(
     busStatus?: string | null;
     triageStatus?: string | null;
     mctb?: MctbStatus | null;
+    reportedByName?: string | null;
+    summary?: string | null;
   },
 ): OwnerNowReadModel["exceptions"] {
   return input.id
@@ -4297,6 +4462,8 @@ function exceptionRow(
           bus_status: input.busStatus ?? null,
           triage_status: input.triageStatus ?? null,
           mctb: input.mctb ?? null,
+          reported_by_name: input.reportedByName ?? null,
+          summary: input.summary ?? null,
         },
       ]
     : [];
@@ -4366,7 +4533,7 @@ function mctbMissedSla(mctb: MctbStatus | null): boolean {
   );
 }
 
-function newestModified(rows: FrappeRow[]): string | null {
+function newestModified(rows: DocumentRow[]): string | null {
   let newest: string | null = null;
   for (const row of rows) {
     if (
@@ -4380,8 +4547,8 @@ function newestModified(rows: FrappeRow[]): string | null {
   return newest;
 }
 
-function groupBy(rows: FrappeRow[], field: string): Map<string, FrappeRow[]> {
-  const grouped = new Map<string, FrappeRow[]>();
+function groupBy(rows: DocumentRow[], field: string): Map<string, DocumentRow[]> {
+  const grouped = new Map<string, DocumentRow[]>();
   for (const row of rows) {
     const key = text(row[field]);
     if (!key) continue;
@@ -4393,11 +4560,11 @@ function groupBy(rows: FrappeRow[], field: string): Map<string, FrappeRow[]> {
 }
 
 function latestRowsByReference(
-  rows: FrappeRow[],
+  rows: DocumentRow[],
   field: string,
   versionField?: string,
-): Map<string, FrappeRow> {
-  const latest = new Map<string, FrappeRow>();
+): Map<string, DocumentRow> {
+  const latest = new Map<string, DocumentRow>();
   for (const row of rows) {
     const key = text(row[field]);
     if (!key) continue;
@@ -4409,16 +4576,16 @@ function latestRowsByReference(
 }
 
 function latestRecord(
-  rows: FrappeRow[],
+  rows: DocumentRow[],
   versionField?: string,
-): FrappeRow | null {
-  let latest: FrappeRow | null = null;
+): DocumentRow | null {
+  let latest: DocumentRow | null = null;
   for (const row of rows)
     if (!latest || recordIsNewer(row, latest, versionField)) latest = row;
   return latest;
 }
 
-function newestFirst(rows: FrappeRow[]): FrappeRow[] {
+function newestFirst(rows: DocumentRow[]): DocumentRow[] {
   return [...rows].sort((left, right) => {
     if (recordIsNewer(left, right)) return -1;
     if (recordIsNewer(right, left)) return 1;
@@ -4427,8 +4594,8 @@ function newestFirst(rows: FrappeRow[]): FrappeRow[] {
 }
 
 function recordIsNewer(
-  candidate: FrappeRow,
-  current: FrappeRow,
+  candidate: DocumentRow,
+  current: DocumentRow,
   versionField?: string,
 ): boolean {
   if (versionField) {
@@ -4512,7 +4679,7 @@ function nativeSalesQuote(
 
 function nativeCommercialQuoteRows(
   packet: NativeCommercialJobPacket,
-): FrappeRow[] {
+): DocumentRow[] {
   const acceptancesByQuote = firstRowsBy(
     packet.acceptances,
     (row) => row.quote_revision_id,
@@ -4558,8 +4725,8 @@ function nativeEstimatorCommercialSelection(
   packet: NativeCommercialJobPacket,
   asOf: Date,
 ): {
-  quoteRows: FrappeRow[];
-  proposalRows: FrappeRow[];
+  quoteRows: DocumentRow[];
+  proposalRows: DocumentRow[];
   staleFields: string[];
 } {
   if (
@@ -4645,7 +4812,7 @@ function nativeSalesProposal(
 
 function nativeCommercialProposalRows(
   packet: NativeCommercialJobPacket,
-): FrappeRow[] {
+): DocumentRow[] {
   const publicationsByPack = firstRowsBy(
     packet.publications,
     (row) => row.proposal_pack_id,
@@ -4725,7 +4892,7 @@ function moneyFromCents(value: number | null): number | null {
   return value === null ? null : value / 100;
 }
 
-function nativeSalesEnvelopeRows(sources: CommercialSalesSources): FrappeRow[] {
+function nativeSalesEnvelopeRows(sources: CommercialSalesSources): DocumentRow[] {
   return [
     ...sources.leads.map((row) => ({
       name: row.lead_id,
@@ -4785,7 +4952,7 @@ function compareSalesLead(
 }
 
 function estimatorMeasurementSummary(
-  row: FrappeRow,
+  row: DocumentRow,
 ): EstimatorWorkbenchReadModel["measurements"]["reports"] {
   const id = text(row.measurement_id) ?? text(row.name);
   return id
@@ -4802,7 +4969,7 @@ function estimatorMeasurementSummary(
 }
 
 function matchesMeasurementDetail(
-  row: FrappeRow | null,
+  row: DocumentRow | null,
   expectedName: string | null,
   jobName: string,
 ): boolean {
@@ -4815,7 +4982,7 @@ function matchesMeasurementDetail(
 }
 
 function matchesVisualModelDetail(
-  row: FrappeRow | null,
+  row: DocumentRow | null,
   expectedName: string | null,
   jobName: string,
 ): boolean {
@@ -4828,7 +4995,7 @@ function matchesVisualModelDetail(
 }
 
 function matchesTakeoffDetail(
-  row: FrappeRow | null,
+  row: DocumentRow | null,
   expectedName: string | null,
   jobName: string,
   measurementName: string | null,
@@ -4844,7 +5011,7 @@ function matchesTakeoffDetail(
 }
 
 function matchesInsuranceSupplementDetail(
-  row: FrappeRow | null,
+  row: DocumentRow | null,
   expectedName: string | null,
   jobName: string,
 ): boolean {
@@ -4857,9 +5024,9 @@ function matchesInsuranceSupplementDetail(
 }
 
 function measurementToTakeoffLineage(
-  measurement: FrappeRow | null,
-  takeoff: FrappeRow | null,
-  takeoffs: FrappeRow[],
+  measurement: DocumentRow | null,
+  takeoff: DocumentRow | null,
+  takeoffs: DocumentRow[],
 ): EstimatorWorkbenchReadModel["lineage"]["measurement_to_takeoff"] {
   if (!measurement) return "no_measurement";
   if (takeoff) return "linked";
@@ -4868,9 +5035,9 @@ function measurementToTakeoffLineage(
 }
 
 function quoteToProposalLineage(
-  quote: FrappeRow | null,
-  proposal: FrappeRow | null,
-  proposals: FrappeRow[],
+  quote: DocumentRow | null,
+  proposal: DocumentRow | null,
+  proposals: DocumentRow[],
 ): EstimatorWorkbenchReadModel["lineage"]["quote_to_proposal"] {
   if (!quote) return "no_quote";
   if (proposal) return "linked";
@@ -4880,10 +5047,10 @@ function quoteToProposalLineage(
 
 function estimatorVisualModel(
   env: AppEnv,
-  row: FrappeRow | null,
-  detail: FrappeRow | null,
-  roofAreas: FrappeRow[],
-  selectedMeasurement: FrappeRow | null,
+  row: DocumentRow | null,
+  detail: DocumentRow | null,
+  roofAreas: DocumentRow[],
+  selectedMeasurement: DocumentRow | null,
 ): EstimatorWorkbenchReadModel["visual_model"] {
   if (!row || !detail) return row ? unavailableVisualModel() : null;
   const modelName = text(row.name);
@@ -4957,8 +5124,8 @@ function unavailableVisualModel(): NonNullable<
 
 function visualMeasurementLink(
   visualModelName: string,
-  roofAreas: FrappeRow[],
-  selectedMeasurement: FrappeRow | null,
+  roofAreas: DocumentRow[],
+  selectedMeasurement: DocumentRow | null,
 ): NonNullable<
   EstimatorWorkbenchReadModel["visual_model"]
 >["measurement_link"] {
@@ -5353,8 +5520,8 @@ function estimatorComputedEstimate(
 }
 
 function estimatorMeasurementSelection(
-  row: FrappeRow | null,
-  detail: FrappeRow | null,
+  row: DocumentRow | null,
+  detail: DocumentRow | null,
   geometry: EstimatorGeometryProjection,
   roofGraph: EstimatorRoofGraphProjection | null,
   computedTakeoff: EstimatorComputedTakeoffProjection,
@@ -5392,7 +5559,7 @@ function estimatorMeasurementSelection(
 }
 
 function estimatorTakeoffSummary(
-  row: FrappeRow,
+  row: DocumentRow,
 ): EstimatorWorkbenchReadModel["takeoffs"]["records"] {
   const id = text(row.takeoff_id) ?? text(row.name);
   return id
@@ -5409,8 +5576,8 @@ function estimatorTakeoffSummary(
 }
 
 function estimatorTakeoffSelection(
-  row: FrappeRow | null,
-  detail: FrappeRow | null,
+  row: DocumentRow | null,
+  detail: DocumentRow | null,
 ): EstimatorWorkbenchReadModel["takeoffs"]["selected"] {
   if (!row) return null;
   const [summary] = estimatorTakeoffSummary(row);
@@ -5437,7 +5604,7 @@ function estimatorTakeoffSelection(
 }
 
 function estimatorQuote(
-  row: FrappeRow | null,
+  row: DocumentRow | null,
 ): EstimatorQuoteProjection | null {
   const id = row ? (text(row.customer_quote_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
@@ -5505,8 +5672,8 @@ function estimatorPricingSnapshot(
 }
 
 function estimatorQuoteRevision(
-  current: FrappeRow | null,
-  quotes: FrappeRow[],
+  current: DocumentRow | null,
+  quotes: DocumentRow[],
 ): EstimatorWorkbenchReadModel["quote_revision"] {
   if (!current) return { state: "no_quote", prior_quote: null, delta: null };
   const supersedes = text(current.supersedes);
@@ -5552,8 +5719,8 @@ function estimatorQuoteRevision(
 }
 
 function estimatorQuoteRevisionDelta(
-  current: FrappeRow,
-  prior: FrappeRow,
+  current: DocumentRow,
+  prior: DocumentRow,
 ): EstimatorQuoteRevisionDelta {
   return {
     subtotal: numberDelta(current.subtotal, prior.subtotal),
@@ -5583,9 +5750,9 @@ function estimatorQuoteRevisionDelta(
 }
 
 function estimatorScopeChange(
-  row: FrappeRow,
+  row: DocumentRow,
   selectedQuoteName: string | null,
-  quoteRows: FrappeRow[],
+  quoteRows: DocumentRow[],
 ): EstimatorWorkbenchReadModel["scope_changes"] {
   const id = text(row.change_order_id) ?? text(row.name);
   if (!id) return [];
@@ -5622,9 +5789,9 @@ function estimatorScopeChange(
 
 function estimatorInsuranceSupplement(
   presentationKey: string,
-  row: FrappeRow,
-  detail: FrappeRow | null,
-  measurementRows: FrappeRow[],
+  row: DocumentRow,
+  detail: DocumentRow | null,
+  measurementRows: DocumentRow[],
 ): EstimatorWorkbenchReadModel["insurance_supplements"] {
   const measurementName = text(row.measurement_report);
   const measurement = measurementName
@@ -5740,9 +5907,9 @@ function estimatorProposalReadiness({
   staleFields,
 }: {
   geometry: EstimatorGeometryProjection;
-  measurement: FrappeRow | null;
-  takeoff: FrappeRow | null;
-  takeoffDetail: FrappeRow | null;
+  measurement: DocumentRow | null;
+  takeoff: DocumentRow | null;
+  takeoffDetail: DocumentRow | null;
   takeoffLineage: EstimatorWorkbenchReadModel["lineage"]["measurement_to_takeoff"];
   quote: EstimatorQuoteProjection | null;
   pricingSnapshot: EstimatorWorkbenchReadModel["pricing_snapshot"];
@@ -5810,7 +5977,7 @@ function estimatorProposalReadiness({
 }
 
 function estimatorProposal(
-  row: FrappeRow | null,
+  row: DocumentRow | null,
 ): EstimatorWorkbenchReadModel["proposal"] {
   const id = row ? (text(row.pack_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
@@ -5827,7 +5994,7 @@ function estimatorProposal(
 }
 
 function estimatorScopeClause(
-  row: FrappeRow,
+  row: DocumentRow,
 ): EstimatorWorkbenchReadModel["scope_clauses"] {
   const id = text(row.scope_clause_id) ?? text(row.name);
   return id
@@ -5852,7 +6019,7 @@ function estimatorScopeClause(
  * raw key and SHA-256 revision stay in Frappe/R2; the UI only gets safe geometry and review facts.
  */
 function estimatorRoofGraphProjection(
-  detail: FrappeRow | null,
+  detail: DocumentRow | null,
 ): EstimatorRoofGraphProjection | null {
   const serialized = detail?.roof_graph_json;
   if (serialized === null || serialized === undefined || serialized === "")
@@ -6074,9 +6241,9 @@ function unavailableEstimatorRoofGraph(): EstimatorRoofGraphProjection {
   };
 }
 
-function roofGraphObject(value: unknown): FrappeRow | null {
+function roofGraphObject(value: unknown): DocumentRow | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as FrappeRow)
+    ? (value as DocumentRow)
     : null;
 }
 
@@ -6248,16 +6415,16 @@ function boundedGeometryText(value: string, maximum: number): string {
     : compact;
 }
 
-function recordRows(value: unknown): FrappeRow[] {
+function recordRows(value: unknown): DocumentRow[] {
   return Array.isArray(value)
     ? value.filter(
-        (row): row is FrappeRow =>
+        (row): row is DocumentRow =>
           !!row && typeof row === "object" && !Array.isArray(row),
       )
     : [];
 }
 
-function address(row: FrappeRow | undefined): string | null {
+function address(row: DocumentRow | undefined): string | null {
   if (!row) return null;
   const locality = [text(row.city), text(row.province), text(row.postal_code)]
     .filter(notNull)
@@ -6569,14 +6736,14 @@ function pipelineSummary(
   };
 }
 
-function pipelineEnvelopeRows(pipelines: readonly PipelineRecord[]): FrappeRow[] {
+function pipelineEnvelopeRows(pipelines: readonly PipelineRecord[]): DocumentRow[] {
   return pipelines.map((pipeline) => ({
     name: pipeline.pipeline_id,
     modified: pipeline.updated_at,
   }));
 }
 
-function stageEnvelopeRows(stages: readonly PipelineStageRecord[]): FrappeRow[] {
+function stageEnvelopeRows(stages: readonly PipelineStageRecord[]): DocumentRow[] {
   return stages.map((stage) => ({ name: stage.stage_id, modified: stage.updated_at }));
 }
 

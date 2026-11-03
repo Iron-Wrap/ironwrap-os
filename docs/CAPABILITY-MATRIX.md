@@ -75,7 +75,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 143,
+      "count": 149,
       "latest": "0206_agent_draft_closing.sql"
     }
   },
@@ -430,26 +430,27 @@ or any live stage/promote/readback/rollback receipt.
 
 Retired for release admission on 2026-09-24: `deploy.yml` no longer calls the independent issuer or
 the Frappe adapter, so this chain and the shared release-control code are history, not release
-requirements.
+requirements. The issuer Worker and the enforcer's issuer, review, and release-evidence subcommands
+have since been removed from this repository.
 
 [IRO-223](https://linear.app/mindburn/issue/IRO-223) resolved the human and infrastructure boundary:
 
 - the shared code must run as separate IronWrap and Facet deployments with product-scoped keys,
   receipts, policy ledgers, and promotion authority;
 - Ivan owns business approval and GitHub merge authority; Sergey owns provider, Cloudflare, DNS,
-  and the Frappe adapter host; Andrei owns the independent issuer/reviewer; Ilya owns permit signing,
+  and the Frappe adapter host; Andrei owned the independent issuer/reviewer; Ilya owns permit signing,
   the policy ledger, and business counter-approval;
 - all four may participate in the repository and business process, but participation grants no
   protected credential by implication;
-- the issuer runs in a separately controlled Cloudflare account outside the product account, while
-  the Frappe adapter runs on the Frappe VPS under a dedicated OS/service identity; and
-- IRO-219's implemented v2 trigger accepts only the exact canonical request freshness window
-  (`issuer-request` creates five minutes; the trigger caps lifetime at ten minutes and rejects
-  expired replays). It only queues the independently controlled issuer work: it has no findings,
-  provider evidence, or receipt-signing/publication authority. The existing `review-sign`,
-  `review-publish`, `release-evidence-sign`, and `release-evidence-publish` primitives remain
-  the independent custodian's separate boundary; this repository does not claim their external
-  credentials or runtime provisioning; and
+- the issuer was to run in a separately controlled Cloudflare account outside the product account
+  (it was never deployed), while the Frappe adapter runs on the Frappe VPS under a dedicated
+  OS/service identity; and
+- IRO-219's v2 trigger accepted only the exact canonical request freshness window (the enforcer's
+  request lived five minutes; the trigger capped lifetime at ten minutes and rejected expired
+  replays). It only queued the independently controlled issuer work, with no findings, provider
+  evidence, or receipt-signing/publication authority. The trigger, its enforcer client, and the
+  `review-sign`, `review-publish`, `release-evidence-sign`, and `release-evidence-publish`
+  primitives are retired and removed; and
 - recovery is a dormant, logged 2-of-3 ceremony among non-primary custodians. Ivan may hold one
   share but cannot recover authority alone. Every path fails closed and rollback may select only a
   previously admitted durable claim.
@@ -460,7 +461,7 @@ The native blocker graph is deliberate:
 flowchart LR
     D["IRO-223 resolved custody and hosts"]
     A["IRO-218 Frappe adapter and identities"]
-    I["IRO-219 independent issuer"]
+    I["IRO-219 independent issuer (retired)"]
     C["IRO-220 scoped GitHub/provider credentials"]
     R["IRO-221 custody and recovery ceremony"]
     P["IRO-222 exact candidate rehearsal"]
@@ -642,14 +643,23 @@ IRO-38 branch-local side-effect substrate:
   Frappe credentials and provider call; the Worker owns the durable lease and settlement state.
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
   live provider, deployment, or business-acceptance proof.
-- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) never claims, settles, reconciles or
-  retries an outside send. `proposal.publish`, `proposal.withdraw`, `customer.email.send` and
-  `operations.email.send` answer 403 `effect_outside_send_token_refused`: only the bus may execute
-  them, and no production path sends a proposal yet. A `qa-synthetic-*` provider passes only on a
-  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local); elsewhere it answers 403
+- The `/admin/effects/*` bearer (`EFFECT_RUNTIME_TOKEN`) handles only actions named `mcp.*`, the
+  MCP host's effects, plus the QA seed's `proposal.publish` through `qa-synthetic-publication` on a
+  Worker whose `AGENT_DATA_CLASS` is `synthetic` (qa and local). It never claims, settles,
+  reconciles or retries anything else. `proposal.publish`, `proposal.withdraw`,
+  `customer.email.send` and `operations.email.send` answer 403 `effect_outside_send_token_refused`:
+  only the bus may execute them, and no production path sends a proposal yet. Every other action
+  outside `mcp.*` answers 403 `effect_runtime_action_not_allowed`. A `qa-synthetic-*` provider
+  outside the seed's pair, or on any Worker that is not `synthetic`, answers 403
   `effect_provider_not_allowed`. A proposal send claimed with a retry answers 422
   `effect_outside_send_retry_forbidden`. Settle, reconcile and retry run on the server's clock.
-  The MCP host's `mcp.*` effects keep the token, as do the remaining actions. Migration
+  They bind the stored effect's tenant to `APP_TENANT_ID` (default `ironwrap`) before checking its
+  action: a mismatch answers 403 `effect_tenant_mismatch`, returns no effect data, and preserves
+  its row, attempts, event journal and exceptions. Router tests in
+  `workers-bus/test/outside-send-guards.test.ts` cover all three routes against the full migration
+  chain, including denial of foreign `mcp.*` effects and successful same-tenant transitions.
+  The allowlist is enforced in the Worker only: D1 cannot tell a bearer write from a bus write,
+  because neither an attempt nor an event records who claimed it (a B2 follow-up). Migration
   `0164_outside_send_effect_guards.sql` holds a proposal send to one attempt in D1 (retry limit 0,
   never `retry`) and moves an `unknown` proposal send to `succeeded` or `reconciled` only with a
   person's delivery confirmation (0156). That guard is keyed on the action alone, so a proposal send
@@ -947,7 +957,11 @@ IRO-45 branch-local inventory ledger:
   value-bearing adjustment additionally requires a distinct finance reviewer, and neither the
   counter nor the receiver may approve their own variance or quarantine release.
 - An AP invoice line is admissible only from a succeeded IRO-38 effect whose readback digest
-  matches; a provider webhook is never match proof.
+  matches; a provider webhook is never match proof. Since
+  `0169_inventory_invoice_readback_action.sql` the cited effect must also be a
+  `quickbooks.bill.read` through the line's own provider; a `supplier_ap` line is refused
+  (`inventory_invoice_line_supplier_ap_readback_unsupported`) until a read action exists for that
+  provider. No Worker code writes an AP invoice line yet.
 - An unrecognised offline barcode is captured as `observed_pending_validation` and never
   creates stock; scan replay converges on one observation per device action.
 - The Worker store is `src/inventory-control.ts` with tests in
@@ -1265,8 +1279,10 @@ Remaining autonomous-company model gaps independent of Frappe retirement:
 
 Implemented:
 
-- role-filtered reads, dry-runs, reviewed writes, policy checks, signed receipts, and audit.
-- owner, lead, estimator, production, field, finance-reconciliation, closeout, and support roles.
+- grant-scoped reads (the launching host lists tools in `MCP_ALLOWED_TOOLS`), dry-runs, reviewed
+  writes, policy checks, signed receipts, and audit.
+- owner, lead, estimator, production, field, finance-reconciliation, closeout, and support role
+  identities for audit and the Frappe boundary checks; no role policy file grants tools.
 - no direct accounting mutation.
 - D1/Worker, temporary Frappe compatibility, and Newo seams.
 - versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
@@ -1473,7 +1489,7 @@ in `make check` (the `contracts` CI job); their passing result is a source gate,
 | Design | Source-present, Partial. Scope Clause, Option Package, and proposal evidence records exist and pass the DocType/permission and domain-policy contract checks (`frappe-apps/ironwrap_roofing/tests/test_schema_contract.py`, `test_document_validation.py`, `test_domain_policy.py`), and the Facet design ingest/projection seam is locally validated (`workers-bus/test/facet-design-ingest.test.ts`, `facet-design-projection.test.ts`, `facet-design-v2-protocol.test.ts`). The row's own subject — controlled assemblies, details, bulletins, and engineer/permit propagation — has no object, no route, and no check anywhere in the tree, so the row records the class its weakest named scope earns. | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | Locally-validated, Partial. Takeoff, governed D1 pricing revisions and activation receipts, immutable estimator import pins, quote authoring, and revision approval pass focused checks (`workers-bus/test/takeoff.test.ts`, `pricing.test.ts`, `pricing-catalog.test.ts`, `estimator-native-store.test.ts`, `estimator-workbench.test.ts`, `quote-revision-approval-api.test.ts`, `quote-revision-approval-store.test.ts`). The catalog UI is pending Figma extraction; hosted gates, restore and a real pricing/estimate journey are unverified. Shop, labour, equipment, and risk costing remain Target; no estimate has been closed against a real job's actuals. | Figma-derived catalog UI, complete shop/labour/equipment/risk costing, live restore and estimate journey | estimate-to-actual closed job |
 | Contract | Locally-validated, Partial, Blocked: provider/tax configuration and QuickBooks keys. Authenticated native quote/publication routes, exact customer acceptance, and an acceptance-created durable deposit derivation queue pass focused checks (`workers-bus/test/commercial-proposal-api.test.ts`, `proposal-publication-approval-api.test.ts`, `customer-contract-acceptance.test.ts`, `portal-decision-confirmation.test.ts`, `iro208-commercial-reference.test.ts`; `app/src/portal/customer-contract-acceptance-page.test.tsx`). QuickBooks execution is off in every environment and no tax or accounting readback has run, so configured delivery/readback publication, correct agreement selection, cancellation, e-sign determination, and live business proof stay open. | configured delivery/readback publication, successful provider/tax/accounting reconciliation, correct agreement selection, cancellation, legal/commercial e-sign determination, and live business proof | deterministic quote-to-deposit reference path plus residential/commercial customer scenarios |
-| Preconstruction | Locally-validated, Partial. Seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only. Checks: `workers-bus/test/production-gate-clearance.test.ts` (an ops session reads the runway but never clears a gate; an owner with no Frappe identity clears on D1; a clearance without CSRF or an idempotency key is refused before any read; a waiver persists attributed to the app user), `frappe-apps/ironwrap_roofing/tests/test_production_gate_api.py`; `app/e2e/production-plan.spec.ts`. No live issuer freshness and no stale permit/WCB/weather injection has been run. | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
+| Preconstruction | Locally-validated, Partial. Seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only. A person attests Materials, Access, Weather and Safety through the gate ledger (`0158`, `workers-bus/test/production-gate-attestation.test.ts`). Safety needs a permit answer that is held (with its number) or not needed, an unknown answer being refused as `production_gate_safety_permit_unknown`; a current internal Worker Competency whose `authority_scope` is exactly the closed token `site_safety`, the value `0158` names for "checks site safety"; no active stop on the tenant, the job or any of its Work Packages (Superseded included); no crew `stop_work` on them that no release has lifted; and no active stop whose scope cannot be resolved (an unknown scope type, or a Work Package id that maps to no job). An active stop naming a job the tenant does not have holds Safety on every job (`production_gate_stop_job_unknown`, with the stop's id) and is on the owner's exception list until it is lifted; so does one naming a Work Package the tenant does not have (`0159`, `production_gate_stop_work_package_unknown`); a stop's scope cannot be corrected today. The OD-01 cancellation window (`0160`) holds a schedule, the Materials attestation and a job's D1 purchase order lines until it ends; it starts at the D1 write time of the signed copy the portal records as shown at signing, once the copy is built and confirmed served (a copy never confirmed served starts nothing: the window stays unknown and the job is on the owner and ops work queue) or from an owner's or ops person's record of when the customer received it, and, interim pending counsel, it ends at the end of the 10th local day read across the zone's offsets, never before 240 hours (`workers-bus/test/production-cancellation-window.test.ts`, `customer-contract-acceptance.test.ts`). The Frappe Supplier Order path and a Shop Order's schedule are not held. No surface shows it yet. Checks: `workers-bus/test/production-gate-clearance.test.ts` (an ops session reads the runway but never clears a gate; an owner with no Frappe identity clears on D1; a clearance without CSRF or an idempotency key is refused before any read; a waiver persists attributed to the app user), `frappe-apps/ironwrap_roofing/tests/test_production_gate_api.py`; `app/e2e/production-plan.spec.ts`. No live issuer freshness and no stale permit/WCB/weather injection has been run. | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | Locally-validated, Partial. Supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only. Checks: `workers-bus/test/supplier-send-closed.test.ts` (supplier send stays an internal packet with `external_supplier_contact` false), and the supplier record contracts in `frappe-apps/ironwrap_roofing/tests/test_domain_policy.py` and `test_schema_contract.py`. No supplier is contacted from any code path; versioned catalog sync, substitution, three-way match, and provider reconciliation are Target. | versioned catalog sync, vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, and provider reconciliation | catalog drift/unit mismatch plus duplicate/short/backorder test |
 | Inventory | Locally-validated, Partial. Signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals. Checks: `workers-bus/test/inventory-control.test.ts`, `inventory-control-api.test.ts`. No warehouse or receiving PWA surface, no provider AP adapter, and no live reconciliation exist, so transition-specific route authority and verified authority/policy binding remain Target. | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Locally-validated, Partial. Signed release, reservation, setup route, independent first-piece and final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness. Check: `frappe-apps/ironwrap_roofing/tests/test_shop_fabrication_api.py` — 29 cases covering release with source locking, sorted-lot reservation conserving balance and rejecting authoritative drift, setup-route derivation with hold/resume, first-piece pass and failure hold with self-inspection refused, final QC yield/bundle/remnant lineage, handover custody with generic evidence refused and replay/stale state rejected, and billing basis rebinding against re-checked handoff evidence. That suite runs in `make check`, so it is a merge gate, not live proof. Shop travelers and controlled assemblies are a different scope and remain Target: no `shop_traveler` or assembly DocType exists and "traveler" appears nowhere in the tree — which is exactly what the "Sep 1 remaining honesty" note says, so the two sections do not conflict. Cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation are Target. | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
@@ -1544,9 +1560,9 @@ The program has exactly two product lanes:
 | IronWrap OS | lead/job/customer/property, commercial transitions, production, field, safety, inventory/shop, providers, accounting intent/reconciliation, operating AI | Facet project/design truth |
 | Facet | tenant project, attributable measurement/design, 3D/configuration, visual estimate, customer design-decision evidence, signed evidence delivery | IronWrap quote/publication/contract/deposit/schedule/invoice/accounting truth |
 
-Home Config 3D is retired draft lineage already absorbed into Facet. It has no third workstream,
-repository disposition, parity burden, release, deployment, or proof gate. Any useful historical
-idea becomes an ordinary Facet backlog input.
+Home Config 3D is a separate product, read-only for this program. It has no third workstream,
+repository disposition, parity burden, release, deployment, or proof gate here. Any useful idea
+from it becomes an ordinary Facet backlog input.
 
 ### Program outcome and pre-customer ceiling
 
@@ -1658,7 +1674,7 @@ pre-customer sandbox/reference proof.
 | Core technical design | one writer per fact; versioned schemas/policies; no direct provider or store bypass; invariant and migration checks fail closed | IRO-38, IRO-218–223, IRO-41, IRO-58, IRO-61 |
 | Lead/job/field foundation | native lead/customer/job activation, derived phase, multi-worker offline packages, corrections, evidence slots, authority freshness, and real-device reference drill | IRO-208, IRO-42, IRO-43, IRO-209 |
 | Safety/evidence/accounting controls | current strong source controls survive deployed stop/release, ambiguous effect, mismatch, recovery, fraud/anomaly, and accountant-reviewed sandbox cases | IRO-38, IRO-44, IRO-52, IRO-58 |
-| Repository/migration coherence | two products only; Facet owns absorbed draft lineage; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
+| Repository/migration coherence | two products only; Home Config 3D is separate and read-only; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
 | Configured capability | every required action has a fresh readiness verdict, exact provider/tenant identity, scoped secret, authenticated readback, TTL, fallback, and rollback | IRO-210, IRO-215, IRO-28, IRO-30 |
 | End-to-end commercial closure | no-seed Facet design evidence reaches an IronWrap job and the native quote/publication/acceptance/deposit/work/final-invoice path reconciles without test-only writers | IRO-212, IRO-36, IRO-208, IRO-47, IRO-48, IRO-52 |
 | Production/customer proof | exact deployed technical reference EvidencePack is reproducible; `customer_validated` remains false until later genuine use and acceptance | IRO-30, IRO-31; future Gate 9 |
@@ -1675,13 +1691,13 @@ range, release artifact, or unresolved contract. Do not create all agents first.
 - implementation versus live proof vocabulary;
 - policy, transition, evidence, and human work-package schemas;
 - canonical Job/Facet Project vocabulary and a staged portability contract;
-- exactly two active products, with Facet as the canonical owner of all accepted Home Config 3D
-  draft lineage and no third execution or parity lane;
+- exactly two active products, with Home Config 3D a separate read-only product and no third
+  execution or parity lane;
 - ordered migration manifests, reserved-range handling, authority cutovers, and rollback ownership;
 - map coverage for every open target gap and native blocker edges before implementation claims.
 
 Exit: documentation validation passes in both repositories; IRO-1/IRO-2 contain every active leaf;
-no current document assigns work to retired lineage or promotes a proof class.
+no current document assigns work to Home Config 3D or promotes a proof class.
 
 ### Gate 1: work package and evidence
 
@@ -1755,10 +1771,11 @@ creating a second orchestration authority.
 
 ### Gate 7: configured reference environment
 
-- [IRO-218](https://linear.app/mindburn/issue/IRO-218) through
-  [IRO-221](https://linear.app/mindburn/issue/IRO-221): deploy separately authenticated Frappe and
-  issuer services, scoped GitHub/provider credentials, product-isolated keys/ledgers, and the logged
-  custody/recovery ceremony resolved by IRO-223;
+- [IRO-218](https://linear.app/mindburn/issue/IRO-218),
+  [IRO-220](https://linear.app/mindburn/issue/IRO-220), and
+  [IRO-221](https://linear.app/mindburn/issue/IRO-221): deploy a separately authenticated Frappe
+  service, scoped GitHub/provider credentials, product-isolated keys/ledgers, and the logged
+  custody/recovery ceremony resolved by IRO-223 (the IRO-219 independent issuer is retired);
 - [IRO-210](https://linear.app/mindburn/issue/IRO-210) and
   [IRO-215](https://linear.app/mindburn/issue/IRO-215): named providers, non-secret configuration,
   secret identities, authenticated readback, versioned integration manifests, readiness/proof TTL,
@@ -1809,12 +1826,10 @@ readback. A passing screen or CI run in one column never fills another.
 
 | Slice | Design | Source | Runtime | Live |
 |---|---|---|---|---|
-| Safety equipment inspection, corrective-action evidence/verification/closure, offline evidence queue, reconnect drain, held-session policy, revision-bound inspection verdict (IRO-253) | Sep 2 candidate `ironwrap-os-redesign` boards `Safety equipment`, `Corrective action` (occurrence-centric; runtime is action-centric and offers no stop release); acceptance lineage not established | `codex/iro-253-safety-completion` up to `84f00ce9` (PR #266): `workers-bus/test/safety-lifecycle.test.ts` 27/27, `app/src/safety/*.test.tsx`, `outbox.test.ts`, `auth-boundary.test.tsx`; before/after regressions recorded in the review-ready packets | `app/e2e/safety-desk.spec.ts` 7/7 against the acceptance fixture at 390 and 1440 px, axe clean, light and dark; hosted CI run 34767340614 SUCCESS | none; `deploy.yml` admission blocked on release provisioning (IRO-219/220/221) |
+| Safety equipment inspection, corrective-action evidence/verification/closure, offline evidence queue, reconnect drain, held-session policy, revision-bound inspection verdict (IRO-253) | Sep 2 candidate `ironwrap-os-redesign` boards `Safety equipment`, `Corrective action` (occurrence-centric; runtime is action-centric and offers no stop release); acceptance lineage not established | `codex/iro-253-safety-completion` up to `84f00ce9` (PR #266): `workers-bus/test/safety-lifecycle.test.ts` 27/27, `app/src/safety/*.test.tsx`, `outbox.test.ts`, `auth-boundary.test.tsx`; before/after regressions recorded in the review-ready packets | `app/e2e/safety-desk.spec.ts` 7/7 against the acceptance fixture at 390 and 1440 px, axe clean, light and dark; hosted CI run 34767340614 SUCCESS | none; `deploy.yml` admission blocked on release provisioning (IRO-220/221) |
 | Make a document from the job shelf (owner): `POST /api/v1/document-generations` with CSRF + idempotency key, receipt shown per outcome (`succeeded`, `unknown`, `not_executed`, `manual_exception`, `failed`), off state when the capability is off, no control for other roles, offline disables the control, retry replays the same key | Sep 2 board `Make a document` (NDocument) describes a completion-packet preview with withheld fields; runtime is the existing shelf plus one action and a receipt, no preview of the rendered file | this branch: `app/src/documents/document-{contracts,api,section}.ts(x)`, `document-section.test.tsx` (owner success, three roles refused, capability off, refused outcome with same-key retry, unavailable) 33/33; Worker: latest-receipt recovery read by idempotency key and bounded, digest-checked, sandboxed file retrieval (`schema-forms-api.ts`, from #268); `workers-bus/test/document-generation-r2-api.test.ts` proves D1/R2 attempt, receipt, replay, reconciliation, recovery read and retrieval bounds; the recovery client (`document-request.ts`) has no screen consumer until Phase 3 | `app/e2e/job-document-generation.spec.ts` (owner session, committed flag off: off panel, no control, direct command refused 503) plus `job-documents.spec.ts` 3/3; render pass at 390/768/1440 light, dark, reduced motion (transitions collapse to 0), axe 0 on 6 states | none; `APP_DOCUMENT_GENERATION_ENABLED` is `false` in production and local and `true` only in qa for owner testing, so the live production success path is unproven by definition |
 | Office resolution of an unconfirmed crew item: `POST /api/v1/field-item-resolutions` (owner or ops person session, CSRF + `field-item-resolution:<uuid>` idempotency key; exact replay returns the original, changed intent conflicts; machine credentials refused) binds `arrived`/`duplicate` to the settled stored crew write by device action id, item kind, stored request hash and canonical record, and writes `not_arrived` only while no crew write exists; an AI field coordinator proposal reference is checked and recorded beside the confirming person; `GET /api/v1/field-item-resolutions?device_action_id=` returns a field session its own answers; the outbox settles `arrived`/`duplicate` without a resend ("The office confirmed it has this.") and resends once on `not_arrived`. Collision reports and corrective-action evidence stay unbound (`field_item_kind_unbound`) | none; no new screen, the existing saved-work guidance shows the answer | `claude/field-item-resolution`: migration `0150_field_item_resolutions.sql`, `workers-bus/test/field-item-resolutions.test.ts`, `app/src/storage/outbox-office-resolution.test.ts`, `app/src/storage/outbox-failure.test.ts` | none | none |
 | Failed Newo handoff resolution: `POST/GET /api/v1/newo/operations/handoffs/{session_id}/resolution` (owner or ops person session, CSRF + Idempotency-Key; exact replay returns the stored record, changed intent conflicts; machine actors refused) | A person records `called_back`, `unreachable` or `not_needed` with `resolved_by` and `resolved_at`; the Newo reconcile and the operations exception list count only failed handoffs with no resolution, never by age; Newo stays disabled | `claude/newo-handoff-resolution`: migration `0151_newo_handoff_resolutions.sql`, `workers-bus/test/newo-handoff-resolution.test.ts` | none | none |
-
-| Independent release issuer (IRO-219): `/v2/independent-issuer` accepts the admission job's canonical trigger, validates it independently, refuses foreign repository/requester/reviewer/task/key-version, ledgers one acknowledgement per request digest, replays it inside the window and refuses it after, and publishes no receipt | none; the service has no design board, it is an authority contract from `docs/LAUNCH-RUNBOOK.md` | `release-issuer/` on this branch: 18 node tests, of which one runs thirty request shapes through both this validator and the enforcer's exported `validateIndependentIssuerRequest` and fails on any disagreement; the handler suite runs against a real SQLite ledger built from the shipped migration, including the append-only triggers | none; the Worker has never been deployed and no live trigger has reached it. The enforcer's own suite covers the caller half | none; `RELEASE_INDEPENDENT_ISSUER_URL` and `_TOKEN` are unset, so every `Deploy` run still stops at `release_admission_missing_external_secret` |
 
 Finite missing states for these two slices, to be closed or explicitly excluded: (a) the live
 "on" state of document generation on a real R2 bucket. Closed on this branch: (b) readback of the

@@ -12,7 +12,7 @@ import {
   parseOfficeLead,
   type OfficeLeadInput,
 } from "./lead-intake.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export const OFFICE_LEAD_REQUEST_ID =
   /^office-lead:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

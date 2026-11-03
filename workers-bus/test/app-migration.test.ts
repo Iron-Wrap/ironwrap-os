@@ -4,6 +4,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
 import { flattenEnv } from "../src/env-bindings.ts";
+import { facetV2StaticRoutes } from "../src/facet-design-ingest.ts";
+import { facetLaunchConfigured } from "../src/facet-launch.ts";
 
 // IRO-268: wrangler.jsonc groups vars into CFG_* JSON bindings. Flatten each parsed environment's
 // `vars` in place, the same way flattenEnv restores them at the Worker's entry points, so the
@@ -1784,13 +1786,42 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
     assert.equal("FACET_LAUNCH_HMAC_KEY" in environment.vars, false);
   }
 
-  // Deployed environments still carry no route table and no launch identity: the real Facet
-  // production tenant id, issuer and origin are not in this repository. Until they are, the
-  // rail is enabled and provably unreachable rather than enabled and guessing.
-  for (const environment of [config, config.env.qa]) {
-    assert.equal(environment.vars.FACET_V2_ROUTES_JSON, "[]");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_BASE_URL, "");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+  // Production still carries no route table and no launch identity: the real Facet production
+  // tenant id, issuer and origin are not in this repository. Until they are, the rail is
+  // enabled and provably unreachable rather than enabled and guessing.
+  assert.equal(config.vars.FACET_V2_ROUTES_JSON, "[]");
+  assert.equal(config.vars.APP_FACET_LAUNCH_BASE_URL, "");
+  assert.equal(config.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+
+  // qa is wired to the single QA Facet on netcup_arm (ironwrap-tracker#74): one route from its
+  // `qa` tenant to this qa Worker's own ingest URL, and a launch identity naming the same tenant.
+  // It must never point at the local namespace or at production.
+  const qa = config.env.qa.vars;
+  const qaRoutes = JSON.parse(qa.FACET_V2_ROUTES_JSON);
+  assert.equal(qaRoutes.length, 1);
+  // Identifiers need at least three characters, so the QA Facet's environment is `qa-arm`, not `qa`.
+  assert.equal(qaRoutes[0].source_environment, "qa-arm");
+  // Shape checks alone let a route the real parser rejects reach qa once (`qa` was too short):
+  // the configured route must pass the parser, and launch must resolve with any well-formed key.
+  assert.ok(
+    facetV2StaticRoutes({ FACET_V2_ROUTES_JSON: qa.FACET_V2_ROUTES_JSON }),
+    "the qa route must pass facetV2StaticRoutes",
+  );
+  assert.equal(
+    facetLaunchConfigured({ ...qa, FACET_LAUNCH_HMAC_KEY: "A".repeat(43) }, qa.APP_TENANT_ID),
+    true,
+  );
+  assert.equal(qaRoutes[0].destination_tenant_id, qa.APP_TENANT_ID);
+  assert.equal(qaRoutes[0].source_tenant_id, qa.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
+  // Facet delivers straight to the Worker's own workers.dev host: behind the qa-iwrap proxy the
+  // Worker sees that URL, and delivery verification signs the destination it receives.
+  const destinationOrigin = new URL(qaRoutes[0].destination_url).origin;
+  assert.match(new URL(destinationOrigin).hostname, /^ironwrap-bus-qa\.[a-z0-9-]+\.workers\.dev$/);
+  assert.ok(qa.APP_ALLOWED_ORIGINS.split(",").includes(destinationOrigin));
+  assert.equal(new URL(qaRoutes[0].destination_url).pathname, "/ingest/facet-design");
+  assert.equal(qa.APP_FACET_LAUNCH_BASE_URL, "https://facet.mindburn.org");
+  for (const url of [qaRoutes[0].destination_url, qa.APP_FACET_LAUNCH_BASE_URL]) {
+    assert.doesNotMatch(new URL(url).hostname, /\.test$/);
   }
 
   // The local stack carries a complete, self-consistent route so `npm run dev` can drive the
@@ -2293,10 +2324,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // to be captured after the stop. 0153 moves production gate clearance onto an append-only
     // ledger whose apply trigger is the only writer of a gate row. 0154 adds four tenant-scoped
     // lookup indexes for a lead's jobs, a job's deposit derivation and the current quote and
-    // proposal revision checks. 0156 lets a person record whether an unconfirmed proposal send
-    // reached the customer. 0161 records what
-    // people found about a send, and their corrections, without changing it; holds the late-answer
-    // wait in D1 with a window per provider; and names the permit holder of each new publication.
+    // proposal revision checks. 0155 adds the owner's deposit policy (OD-01 payment on completion
+    // or MD-13 deposits), which acceptance and the Deposit gate's policy entries follow. 0156 lets
+    // a person record whether an unconfirmed proposal send reached the customer. 0157 adds a
+    // version to a person's access, so role/access changes apply against the version read.
+    // 0161 records what people found about a send, and their corrections, without changing it;
+    // holds the late-answer wait in D1 with a window per provider; and names the permit holder
+    // of each new publication.
     // 0163 keeps the first time a customer's portal link opened a published proposal.
     // 0164 holds a proposal send to one attempt, settles an unknown one only from a person's record,
     // and keeps a conflicting readback from being recorded as not delivered.
@@ -2304,12 +2338,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (L06) or one without its own `released` event.
     // 0167 keeps each check a person runs on a proposal send's delivery, and lets a conflicting
     // readback be recorded as not delivered only by citing a complete-scan "not found" check.
-    // 0170 lets no crew acknowledge, start or complete work on a job an active safety stop holds,
-    // latches unresolved scope, protects made-safe journal history, and keeps each "Keep the stop" decision.
-    // 0153 lands after 0154-0206 on deployed databases; it touches no object a later-numbered
-    // migration touches, so both orders give the same schema.
+    // 0170 adds durable unresolved safety scope, made-safe confirmer history and keep decisions.
+    // 0153 lands after 0154-0206 on deployed databases, and 0155 after 0153 and 0156-0206; neither
+    // touches an object a later-numbered migration touches, so both orders give the same schema.
+    // 0159 binds Crew by policy in the scheduling batch and checks current gate evidence.
+    // 0160 holds a firm start, Materials attestation and job purchase order lines while the
+    // cancellation window is unknown or open, and records receipt of the signed copy.
+    // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 143);
+    assert.equal(migrations.length, 149);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2457,22 +2494,29 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0152 re-creates the stop release insert and replace guards under their names, so counts are
     // unchanged. 0153 adds the production gate clearance ledger, one named index, and seven guards:
     // validate, apply, and three append-only on the ledger, and two state guards on the gate row.
-    // 0154 adds four named indexes. 0156 adds the proposal delivery confirmation ledger,
-    // one named index, four guards and the proposal publish single-flight guard, and re-creates the external effect binding guard under its
-    // name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
+    // 0154 adds four named indexes. 0155 adds the tenant deposit policy table and its four guards
+    // (validate, audit, two append-only), and re-creates 0116's enqueue trigger and two 0153 guards
+    // under their names. 0156 adds the proposal delivery confirmation ledger, one named
+    // index, four guards and the proposal publish single-flight guard, and re-creates the external
+    // effect binding guard under its name. 0161 adds three tables (late-answer windows, delivery findings, publication permit
     // holders), one named index and twelve guards, and re-creates nothing. 0163 adds the customer
     // portal first-open table, one named index and four validation, update, age-gated delete and
     // no-replace guards. 0164 adds three outside-send guards (retry limit, no retry, settle
     // evidence) and a readback-conflict guard on the delivery confirmations, and no table or index.
     // 0165 adds one column and one safety stop release guard. 0167 adds the delivery check table, one
     // named index and four guards (validation, audit, two append-only), and re-creates 0164's settle
-    // evidence and readback-conflict guards under their names. 0170 adds the made-safe confirmer
-    // column, the keep-decision and unresolved-scope tables, one named index and fourteen guards
-    // (the Work Package stop hold, made-safe confirmer/event, journal no-replace, keep-decision
-    // guards, and scope-latch validation, immutability and automatic capture).
+    // 0170 adds two safety-history tables, one index and fourteen guards.
+    // evidence and readback-conflict guards under their names.
+    // 0158 re-creates the ledger validate and replace guards; object counts stay unchanged.
+    // 0159 adds one schedule evidence guard and re-creates three existing guards.
+    // 0160 adds signed-copy event, served-confirmation and manual-receipt tables with four guards
+    // each, plus four cancellation-window holds: three tables and sixteen triggers, no named index.
+    // It also adds a job link to purchase order lines and re-creates the assignment validate and
+    // ledger replace guards under their existing names.
+    // 0169 re-creates 0067's AP invoice line readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 283, indexes: 383, triggers: 795 },
+      { tables: 287, indexes: 383, triggers: 816 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),
@@ -3741,29 +3785,109 @@ test("0145 and 0152 applied after 0202 on a database already through 0146-0202 g
   }
 });
 
-test("0170 applied after all higher migrations preserves the sorted schema and per-table trigger order", async () => {
-  const late = "0170_safety_stop_route_gaps.sql";
+test("0155 re-creates the 0153 validate guard and 0116's enqueue trigger with every earlier rule carried", async () => {
+  const migration = async (name: string) =>
+    await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8");
+  const trigger = (sql: string, name: string): string => {
+    const match = sql.match(new RegExp(`CREATE TRIGGER (?:IF NOT EXISTS )?${name}\\n[\\s\\S]*?\\nEND;`));
+    assert.ok(match, name);
+    return match[0];
+  };
+  const code = (line: string) => line.trim();
+  // Every line of the shipped trigger is carried, in order, verbatim or as one of the scoped
+  // forms 0155 names for it.
+  const carried = (shipped: string, recreated: string, scoped: Record<string, string[]>) => {
+    const target = recreated.split("\n").map(code);
+    let at = 0;
+    for (const line of shipped.split("\n").map(code).filter((value) => value && !value.startsWith("--"))) {
+      if (line.startsWith("CREATE TRIGGER")) continue;
+      const found = Math.min(
+        ...[line, ...(scoped[line] ?? [])]
+          .map((candidate) => target.indexOf(candidate, at))
+          .filter((index) => index >= 0),
+      );
+      assert.ok(Number.isFinite(found), `carried in order: ${line}`);
+      at = found + 1;
+    }
+  };
+  const ledger = await migration("0153_production_gate_clearances.sql");
+  const acceptance = await migration("0116_native_commercial_deposit_derivation.sql");
+  const forward = await migration("0155_od01_deposit_policy.sql");
+  const validate = "production_gate_clearances_validate_insert";
+  const replace = "production_gate_clearances_no_insert_replace";
+  const enqueue = "commercial_acceptance_enqueue_deposit_derivation";
+
+  carried(trigger(ledger, validate), trigger(forward, validate), {
+    // The person matrix, the blocked-gate rule and the person-actor rule are scoped away from
+    // the policy entries the [0155] matrix checks.
+    "WHERE NOT (": ["WHERE NEW.actor_kind IS NOT 'policy' AND (NOT ("],
+    "AND NEW.evidence_refs_json IS NOT NULL);": ["AND NEW.evidence_refs_json IS NOT NULL));"],
+    "WHERE NOT EXISTS (": [
+      "WHERE NEW.entry_kind IS NOT 'reverse' AND NOT EXISTS (",
+      "WHERE NEW.actor_kind = 'person' AND NOT EXISTS (",
+    ],
+  });
+  const shippedCodes = [...trigger(ledger, validate).matchAll(/RAISE\(ABORT, '([a-z_]+)'\)/g)].map((m) => m[1]);
+  const forwardCodes = [...trigger(forward, validate).matchAll(/RAISE\(ABORT, '([a-z_]+)'\)/g)].map((m) => m[1]);
+  assert.deepEqual(
+    forwardCodes.filter((value) => !shippedCodes.includes(value)),
+    [
+      "production_gate_contract_no_deposit_not_reversible",
+      "production_gate_contract_no_deposit_not_observed",
+      "deposit_terms_not_allowed_by_policy",
+      "production_gate_contract_superseded_not_observed",
+    ],
+  );
+  // Triggers on one table fire newest first: the replace guard, unchanged, is re-created after
+  // the insert guard so a replayed entry still reports itself before validation.
+  assert.equal(
+    trigger(forward, replace).replace("CREATE TRIGGER ", ""),
+    trigger(ledger, replace).replace("CREATE TRIGGER IF NOT EXISTS ", ""),
+  );
+  assert.ok(forward.indexOf(`CREATE TRIGGER ${validate}`) < forward.indexOf(`CREATE TRIGGER ${replace}`));
+
+  carried(trigger(acceptance, enqueue), trigger(forward, enqueue), {
+    // The 1-100 rule is MD-13's, and only a contract with a deposit has one to derive.
+    "WHERE NOT EXISTS (": ["AND NOT EXISTS ("],
+    "AND publication.occurred_at <= NEW.accepted_at;": ["AND publication.occurred_at <= NEW.accepted_at"],
+  });
+  assert.match(trigger(forward, enqueue), /RAISE\(ABORT, 'deposit_terms_not_allowed_by_policy'\)/);
+});
+
+test("0155, 0158, 0159 and 0160 applied after higher main migrations give the sorted schema", async () => {
+  // Existing databases receive the gate-ledger migrations in actual deployment order, after
+  // higher-numbered main migrations. Each validate guard follows the guard it replaces.
+  const late = [
+    "0155_od01_deposit_policy.sql",
+    "0158_production_gate_attestations.sql",
+    "0159_production_gate_crew_policy.sql",
+    "0160_production_cancellation_window.sql",
+  ];
   const migrations = await d1MigrationNames();
-  assert.ok(migrations.includes(late));
-  assert.ok(migrations.some((name) => name > late));
+  assert.ok(migrations.includes(late[0]!));
+  assert.ok(migrations.indexOf(late[0]!) < migrations.indexOf("0156_proposal_delivery_confirmations.sql"));
   const sorted = new DatabaseSync(":memory:");
-  const deployed = new DatabaseSync(":memory:");
+  const qa = new DatabaseSync(":memory:");
   try {
-    for (const db of [sorted, deployed]) db.exec("PRAGMA foreign_keys = ON");
+    for (const db of [sorted, qa]) db.exec("PRAGMA foreign_keys = ON");
     for (const name of migrations) await applyD1Migration(sorted, name);
-    for (const name of migrations.filter((name) => name !== late)) await applyD1Migration(deployed, name);
-    await applyD1Migration(deployed, late);
-    const schema = (db: DatabaseSync) => db.prepare(
-      "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name",
-    ).all().map((row) => ({ ...row }));
-    const triggers = (db: DatabaseSync) => db.prepare(
-      "SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, rowid",
-    ).all().map((row) => ({ ...row }));
-    assert.deepEqual(schema(deployed), schema(sorted));
-    assert.deepEqual(triggers(deployed), triggers(sorted));
+    for (const name of migrations.filter((candidate) => !late.includes(candidate))) {
+      await applyD1Migration(qa, name);
+    }
+    for (const name of late) await applyD1Migration(qa, name);
+    const schema = (db: DatabaseSync) =>
+      db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all()
+        .map((row) => ({ ...row }));
+    assert.deepEqual(schema(qa), schema(sorted));
+    const firing = (db: DatabaseSync) =>
+      db.prepare("SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, rowid")
+        .all()
+        .map((row) => ({ ...row }));
+    assert.deepEqual(firing(qa), firing(sorted));
   } finally {
     sorted.close();
-    deployed.close();
+    qa.close();
   }
 });
 
@@ -4098,5 +4222,31 @@ test("a database that already applied the shipped 0028 reaches complete_work thr
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally {
     db.close();
+  }
+});
+
+test("0170 applied after all higher migrations preserves the sorted schema and per-table trigger order", async () => {
+  const late = "0170_safety_stop_route_gaps.sql";
+  const migrations = await d1MigrationNames();
+  assert.ok(migrations.includes(late));
+  assert.ok(migrations.some((name) => name > late));
+  const sorted = new DatabaseSync(":memory:");
+  const deployed = new DatabaseSync(":memory:");
+  try {
+    for (const db of [sorted, deployed]) db.exec("PRAGMA foreign_keys = ON");
+    for (const name of migrations) await applyD1Migration(sorted, name);
+    for (const name of migrations.filter((name) => name !== late)) await applyD1Migration(deployed, name);
+    await applyD1Migration(deployed, late);
+    const schema = (db: DatabaseSync) => db.prepare(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name",
+    ).all().map((row) => ({ ...row }));
+    const triggers = (db: DatabaseSync) => db.prepare(
+      "SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, rowid",
+    ).all().map((row) => ({ ...row }));
+    assert.deepEqual(schema(deployed), schema(sorted));
+    assert.deepEqual(triggers(deployed), triggers(sorted));
+  } finally {
+    sorted.close();
+    deployed.close();
   }
 });

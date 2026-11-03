@@ -79,6 +79,45 @@ async function git(root, args) {
   ).stdout.trim();
 }
 
+function requireLegacyDeployment(deployment, bindings) {
+  const legacy = bindings.filter((binding) => binding.protocol === 1);
+  if (
+    legacy.length !== 1 ||
+    deployment.versions.length !== 1 ||
+    deployment.versions[0].version_id !== legacy[0].versionId ||
+    deployment.versions[0].percentage !== 100
+  )
+    fail("legacy_predecessor_not_current");
+}
+
+async function requirePristineBootstrapMirror(account, database, token, fetcher) {
+  const mirror = await d1Query(
+    account,
+    database,
+    `SELECT p.*,
+      (SELECT count(*) FROM app_auth_contexts WHERE generation>0) AS enrolled_contexts
+      FROM app_auth_protocol p WHERE singleton=1`,
+    [],
+    token,
+    fetcher,
+  );
+  const row = mirror.results?.[0];
+  // A one-time genesis authorization is not recovery from a missing external head.
+  // Any prior D1 lineage must use the reviewed isolated-restore procedure instead.
+  if (
+    !row ||
+    row.protocol_floor !== 1 ||
+    row.mode !== "staged" ||
+    row.control_revision !== 0 ||
+    row.issuer !== null ||
+    row.activation_id !== null ||
+    row.database_identity !== null ||
+    row.enrollment_open !== 0 ||
+    row.enrolled_contexts !== 0
+  )
+    fail("genesis_not_preactivation");
+}
+
 export async function authProtocolComponentManifest(
   root,
   sourceCommit = "HEAD",
@@ -343,24 +382,13 @@ export async function authorizeAuthControl({
     if (checked.filter((x) => x.protocol === 1).length !== 1)
       fail("bootstrap_legacy_predecessor_required");
     const db = checked.find((x) => x.protocol === 2).databaseIdentity;
-    const mirror = await d1Query(
+    requireLegacyDeployment(deployed, checked);
+    await requirePristineBootstrapMirror(
       controlConfig.accountId,
       db,
-      `SELECT p.*,
-      (SELECT count(*) FROM app_auth_contexts WHERE generation>0) AS enrolled_contexts
-      FROM app_auth_protocol p WHERE singleton=1`,
-      [],
       providerToken,
       fetcher,
     );
-    const row = mirror.results?.[0];
-    if (
-      !row ||
-      row.protocol_floor !== 1 ||
-      row.enrollment_open !== 0 ||
-      row.enrolled_contexts !== 0
-    )
-      fail("genesis_not_preactivation");
   }
   const authorization = deepFreeze({
     environment,
@@ -503,6 +531,15 @@ export async function commitAuthControlUpdate({
     fetcher,
     providerToken,
   );
+  if (!current) {
+    requireLegacyDeployment(membership, authorization.bindings);
+    await requirePristineBootstrapMirror(
+      config.accountId,
+      next.databaseIdentity,
+      providerToken,
+      fetcher,
+    );
+  }
   if (
     next.minProducerProtocol === 2 &&
     membership.versions.some(
@@ -694,7 +731,10 @@ export async function writeAuthProtocolMirror({
       fail("mirror_stage_refused");
     sql = `UPDATE app_auth_protocol SET issuer=?,activation_id=?,database_identity=?,control_revision=?,enrollment_open=0
       WHERE singleton=1 AND protocol_floor=1 AND mode='staged' AND control_revision<=?
-        AND (issuer IS NULL OR issuer=?) AND (database_identity IS NULL OR database_identity=?)`;
+        AND enrollment_open=0
+        AND NOT EXISTS (SELECT 1 FROM app_auth_contexts WHERE generation>0)
+        AND ((control_revision=0 AND issuer IS NULL AND activation_id IS NULL AND database_identity IS NULL)
+          OR (control_revision>0 AND issuer=? AND activation_id=? AND database_identity=?))`;
     params = [
       h.issuer,
       h.activationId,
@@ -702,6 +742,7 @@ export async function writeAuthProtocolMirror({
       h.controlRevision,
       h.controlRevision,
       h.issuer,
+      h.activationId,
       h.databaseIdentity,
     ];
   } else if (phase === "cutover") {
@@ -728,8 +769,10 @@ export async function writeAuthProtocolMirror({
     )
       fail("unsafe_deployment_member");
     sql = `UPDATE app_auth_protocol SET protocol_floor=2,mode='closed',control_revision=?,enrollment_open=0
-      WHERE singleton=1 AND protocol_floor=1 AND issuer=? AND activation_id=? AND database_identity=?`;
-    params = [h.controlRevision, h.issuer, h.activationId, h.databaseIdentity];
+      WHERE singleton=1 AND protocol_floor=1 AND mode='staged' AND enrollment_open=0
+        AND control_revision<=? AND issuer=? AND activation_id=? AND database_identity=?
+        AND NOT EXISTS (SELECT 1 FROM app_auth_contexts WHERE generation>0)`;
+    params = [h.controlRevision, h.controlRevision, h.issuer, h.activationId, h.databaseIdentity];
   } else if (phase === "close") {
     if (h.mode !== "closed") fail("mirror_close_refused");
     sql = `UPDATE app_auth_protocol SET mode='closed',control_revision=?,enrollment_open=0
@@ -793,6 +836,7 @@ export async function writeAuthProtocolMirror({
     row.mode !== h.mode ||
     row.control_revision !== h.controlRevision ||
     row.enrollment_open !== 0 ||
+    (phase === "stage" && row.enrolled_contexts !== 0) ||
     (phase === "cutover" &&
       (row.legacy_sessions || row.legacy_magic || row.legacy_pair))
   )
@@ -892,7 +936,23 @@ async function providerDeployment(account, worker, fetcher, token) {
   )
     fail("deployment_order_ambiguous");
   const latest = rows.sort((a, b) => b.time - a.time)[0];
-  if (!Array.isArray(latest.versions)) fail("deployment_invalid");
+  if (
+    !Array.isArray(latest.versions) ||
+    latest.versions.length === 0 ||
+    latest.versions.some(
+      (entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.version_id) ||
+        typeof entry.percentage !== "number" ||
+        !Number.isFinite(entry.percentage) ||
+        entry.percentage < 0 ||
+        entry.percentage > 100,
+    ) ||
+    new Set(latest.versions.map((entry) => entry.version_id)).size !== latest.versions.length ||
+    Math.abs(latest.versions.reduce((total, entry) => total + entry.percentage, 0) - 100) > 1e-9
+  )
+    fail("deployment_invalid");
   return latest;
 }
 function deepFreeze(value) {

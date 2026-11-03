@@ -60,8 +60,56 @@ function payload() {
 
 describe("Production runway read model contract", () => {
   it("accepts the narrow operational projection", () => {
-    expect(productionRunwayResponseSchema.safeParse(payload()).success).toBe(true);
+    const parsed = productionRunwayResponseSchema.parse(payload());
+    expect(parsed.jobs[0]).toMatchObject({ customer_display_name: null, address: null });
   });
+
+  it.each([
+    { customer_display_name: "Synthetic Customer A", address: "2 - 100 Example Street" },
+    { customer_display_name: null, address: null },
+    { customer_display_name: "  ", address: "" },
+  ])("accepts only the optional nullable job identity additions: %j", (identity) => {
+    const legacy = payload();
+    const parsed = productionRunwayResponseSchema.parse({
+      ...legacy,
+      jobs: [{ ...legacy.jobs[0], ...identity }],
+    });
+
+    expect(parsed.jobs[0]).toMatchObject({
+      customer_display_name: identity.customer_display_name?.trim() || null,
+      address: identity.address?.trim() || null,
+    });
+    expect(parsed.jobs[0]?.id).toBe("JOB-A");
+    expect(parsed.jobs[0]?.job_number).toBe("IW-1001");
+  });
+
+  it.each([0, false, [], {}, ["Synthetic Customer A"]])(
+    "rejects malformed identity rather than treating it as missing: %j",
+    (value) => {
+      const legacy = payload();
+      for (const field of ["customer_display_name", "address"]) {
+        expect(
+          productionRunwayResponseSchema.safeParse({
+            ...legacy,
+            jobs: [{ ...legacy.jobs[0], [field]: value }],
+          }).success,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it.each(["roof_job_id", "customer_name", "customer_phone", "site_address"])(
+    "keeps unagreed identity fields outside the strict contract: %s",
+    (field) => {
+      const legacy = payload();
+      expect(
+        productionRunwayResponseSchema.safeParse({
+          ...legacy,
+          jobs: [{ ...legacy.jobs[0], [field]: "not-admitted" }],
+        }).success,
+      ).toBe(false);
+    },
+  );
 
   it("rejects a response that attempts to widen the browser contract", () => {
     const widened = payload();

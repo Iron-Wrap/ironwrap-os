@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -68,6 +68,14 @@ function EstimatorWorkbenchContent() {
   if (!query.data && query.isError)
     return <EstimatorWorkbenchError onRetry={() => void query.refetch()} />;
   if (!query.data) return <EstimatorWorkbenchSkeleton />;
+  if (query.data.job.id !== jobId) {
+    return (
+      <ErrorState
+        title="These details belong to another job"
+        message="Return to sales and open the job again."
+      />
+    );
+  }
 
   return (
     <EstimatorWorkbenchScreen
@@ -93,12 +101,45 @@ function EstimatorWorkbenchScreen({
   refreshFailed: boolean;
   onRetry: () => void;
 }) {
-  const { measurementRequest } = useSearch({ strict: false }) as { measurementRequest?: string };
-  const selectedMeasurement = model.measurements.selected;
+  const { measurementRequest, read: view } = useSearch({ strict: false }) as {
+    measurementRequest?: string;
+    read?: EstimatorReadView;
+  };
+  const previousView = useRef(view);
+  useEffect(() => {
+    const previous = previousView.current;
+    previousView.current = view;
+    const targetId =
+      view === "proposal"
+        ? window.location.hash === "#proposal-readiness-heading"
+          ? "proposal-readiness-heading"
+          : "proposal-heading"
+        : view === "saved"
+          ? "review-workspace-heading"
+          : previous
+            ? "next-safe-step-heading"
+            : null;
+    if (targetId) document.getElementById(targetId)?.focus({ preventScroll: true });
+  }, [view]);
   const bounded =
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
+
+  if (view) {
+    return (
+      <section className="mx-auto max-w-3xl space-y-4 overflow-x-hidden pb-8">
+        {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
+        {bounded ? <DataBoundary model={model} /> : null}
+        <EstimatorReadDestination
+          model={model}
+          locale={locale}
+          view={view}
+          measurementRequest={measurementRequest}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="mx-auto max-w-[86rem] space-y-6 overflow-x-hidden pb-8 sm:space-y-8">
@@ -110,69 +151,185 @@ function EstimatorWorkbenchScreen({
       <CommercialSnapshot model={model} locale={locale} tenantCurrency={tenantCurrency} />
 
       <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-8">
-        <section
-          className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface"
-          aria-labelledby="review-workspace-heading"
-        >
-          <header className="border-b border-border px-5 py-5 sm:px-6">
-            <h2
-              id="review-workspace-heading"
-              tabIndex={-1}
-              className="scroll-mt-24 text-lg font-bold tracking-[-0.02em]"
-            >
-              What needs review
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-muted">
-              Open a section only when you need its evidence.
-            </p>
-          </header>
-          <div className="divide-y divide-border">
-            <ReviewGroup
-              title="Roof details"
-              reveal={measurementRequest}
-              description="Property drawing, roof graph, checks, and saved measurements."
-              status={
-                selectedMeasurement
-                  ? (humanize(selectedMeasurement.review_status) ?? "Check needed")
-                  : "No roof data"
-              }
-              tone={
-                selectedMeasurement
-                  ? reviewTone(selectedMeasurement.review_status)
-                  : "bg-surface-muted text-muted"
-              }
-            >
-              <VisualEvidence visual={model.visual_model} locale={locale} />
-              <RoofGraphEvidence
-                roofGraph={selectedMeasurement?.roof_graph ?? null}
-                locale={locale}
-              />
-              <MeasurementSource model={model} locale={locale} />
-              <ManualMeasurementPanel jobId={model.job.id} />
-            </ReviewGroup>
-
-            <ReviewGroup
-              title="Materials and insurance"
-              description="Material list and any insurance proof for this job."
-              status={
-                model.takeoffs.selected
-                  ? (humanize(model.takeoffs.selected.status) ?? "Check needed")
-                  : "No material list"
-              }
-              tone={
-                model.takeoffs.selected
-                  ? reviewTone(model.takeoffs.selected.status)
-                  : "bg-surface-muted text-muted"
-              }
-            >
-              <TakeoffReview model={model} locale={locale} />
-              <InsuranceEvidenceRail supplements={model.insurance_supplements} />
-            </ReviewGroup>
-          </div>
-        </section>
+        <ReviewWorkspace model={model} locale={locale} measurementRequest={measurementRequest} />
         <CommercialRecord model={model} locale={locale} tenantCurrency={tenantCurrency} />
       </div>
     </section>
+  );
+}
+
+type EstimatorReadView = "proposal" | "saved";
+
+function ReviewWorkspace({
+  model,
+  locale,
+  measurementRequest,
+}: {
+  model: EstimatorWorkbenchResponse;
+  locale: string;
+  measurementRequest?: string;
+}) {
+  const selectedMeasurement = model.measurements.selected;
+  return (
+    <section
+      className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface"
+      aria-labelledby="review-workspace-heading"
+    >
+      <header className="border-b border-border px-5 py-5 sm:px-6">
+        <h2
+          id="review-workspace-heading"
+          tabIndex={-1}
+          className="scroll-mt-24 text-lg font-bold tracking-[-0.02em]"
+        >
+          What needs review
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          Open a section only when you need its evidence.
+        </p>
+      </header>
+      <div className="divide-y divide-border">
+        <ReviewGroup
+          title="Roof details"
+          reveal={measurementRequest}
+          description="Property drawing, roof graph, checks, and saved measurements."
+          status={
+            selectedMeasurement
+              ? (humanize(selectedMeasurement.review_status) ?? "Check needed")
+              : "No roof data"
+          }
+          tone={
+            selectedMeasurement
+              ? reviewTone(selectedMeasurement.review_status)
+              : "bg-surface-muted text-muted"
+          }
+        >
+          <VisualEvidence visual={model.visual_model} locale={locale} />
+          <RoofGraphEvidence roofGraph={selectedMeasurement?.roof_graph ?? null} locale={locale} />
+          <MeasurementSource model={model} locale={locale} />
+          <ManualMeasurementPanel jobId={model.job.id} />
+        </ReviewGroup>
+
+        <ReviewGroup
+          title="Materials and insurance"
+          description="Material list and any insurance proof for this job."
+          status={
+            model.takeoffs.selected
+              ? (humanize(model.takeoffs.selected.status) ?? "Check needed")
+              : "No material list"
+          }
+          tone={
+            model.takeoffs.selected
+              ? reviewTone(model.takeoffs.selected.status)
+              : "bg-surface-muted text-muted"
+          }
+        >
+          <TakeoffReview model={model} locale={locale} />
+          <InsuranceEvidenceRail supplements={model.insurance_supplements} />
+        </ReviewGroup>
+      </div>
+    </section>
+  );
+}
+
+function ReadViewLink({
+  model,
+  view,
+  target,
+  children,
+  ...linkProps
+}: {
+  model: EstimatorWorkbenchResponse;
+  view?: EstimatorReadView;
+  target: string;
+  children: ReactNode;
+} & Omit<ComponentPropsWithoutRef<"a">, "children">) {
+  return (
+    <Link
+      {...linkProps}
+      to="/estimator/jobs/$jobId"
+      params={{ jobId: model.job.id }}
+      search={(search) => ({ ...search, read: view })}
+      hash={target}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function EstimatorReadDestination({
+  model,
+  locale,
+  view,
+  measurementRequest,
+}: {
+  model: EstimatorWorkbenchResponse;
+  locale: string;
+  view: EstimatorReadView;
+  measurementRequest?: string;
+}) {
+  return (
+    <>
+      <nav className="flex flex-wrap items-center gap-x-5 gap-y-3" aria-label="Job review views">
+        <Button asChild variant="ghost" size="compact" className="-ml-2">
+          <ReadViewLink model={model} target="next-safe-step-heading">
+            <ArrowLeft aria-hidden="true" />
+            Back to roof and quote review
+          </ReadViewLink>
+        </Button>
+        <Button asChild variant="outline" size="compact">
+          <ReadViewLink
+            model={model}
+            view={view === "proposal" ? "saved" : "proposal"}
+            target={view === "proposal" ? "review-workspace-heading" : "proposal-heading"}
+          >
+            {view === "proposal" ? "Saved job details" : "Proposal details"}
+          </ReadViewLink>
+        </Button>
+      </nav>
+      <p className="text-sm font-semibold text-muted">
+        Ref: {model.job.job_number ?? "Not recorded"}
+        {model.job.service_type ? ` · ${model.job.service_type}` : ""}
+      </p>
+      {model.quote ? (
+        <p className="text-sm text-muted">
+          Customer quote prepared {formatDate(model.quote.prepared_at, locale) ?? "Not recorded"}
+        </p>
+      ) : (
+        <p className="text-sm text-muted">No customer quote was returned.</p>
+      )}
+      {view === "proposal" ? (
+        <section
+          className="overflow-hidden rounded-xl border border-border bg-surface"
+          aria-labelledby="proposal-heading"
+        >
+          <header className="px-5 py-5">
+            <h1
+              id="proposal-heading"
+              tabIndex={-1}
+              className="scroll-mt-24 text-2xl font-bold tracking-[-0.03em]"
+            >
+              Proposal
+            </h1>
+            <ProposalStatus model={model} />
+          </header>
+          <div className="border-t border-border px-5 pb-5">
+            <ProposalContent
+              model={model}
+              locale={locale}
+              readinessFirst={
+                model.proposal_readiness.state === "blocked" ||
+                model.proposal_readiness.state === "review_required"
+              }
+            />
+          </div>
+        </section>
+      ) : (
+        <>
+          <h1 className="text-2xl font-bold tracking-[-0.03em]">Saved job details</h1>
+          <ReviewWorkspace model={model} locale={locale} measurementRequest={measurementRequest} />
+        </>
+      )}
+    </>
   );
 }
 
@@ -211,7 +368,11 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
         className={cn("self-end rounded-xl border border-border/80 p-4 sm:p-6", decision.surface)}
         aria-labelledby="next-safe-step-heading"
       >
-        <h2 id="next-safe-step-heading" className="text-sm font-bold text-muted">
+        <h2
+          id="next-safe-step-heading"
+          tabIndex={-1}
+          className="scroll-mt-24 text-sm font-bold text-muted"
+        >
           Next step
         </h2>
         <p
@@ -223,14 +384,11 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
           {decision.title}
         </p>
         <p className="mt-2 text-sm leading-6 text-muted sm:mt-3">{decision.detail}</p>
-        <div className="mt-3 flex flex-wrap items-center gap-3 sm:mt-5">
-          <StatusChip label={decision.label} tone={decision.tone} />
-          <span className="sr-only text-xs font-semibold text-muted sm:not-sr-only">
-            Review before acting
-          </span>
-        </div>
-        <Button asChild variant="outline" className="mt-3 w-full sm:hidden">
-          <a href="#review-workspace-heading">Open review sections</a>
+        <p className="mt-3 text-xs font-semibold text-muted sm:mt-5">Status: {decision.label}</p>
+        <Button asChild variant="outline" className="mt-3 w-full">
+          <ReadViewLink model={model} view={decision.view} target={decision.targetId}>
+            {decision.action}
+          </ReadViewLink>
         </Button>
       </section>
     </header>
@@ -250,16 +408,20 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
   title: string;
   detail: string;
   label: string;
-  tone: string;
+  action: string;
+  targetId: string;
+  view: EstimatorReadView;
   surface: string;
   titleTone: string;
 } {
   if (model.proposal_readiness.state === "blocked") {
     return {
       title: "Fix the blocked items",
-      detail: "Fix the marked items before you review the proposal. The reason is shown below.",
+      detail: "Open the proposal check to see what is blocking this job before you act.",
       label: "Work is blocked",
-      tone: "bg-warning-soft text-warning",
+      action: "See blocked items",
+      targetId: "proposal-readiness-heading",
+      view: "proposal",
       surface: "bg-warning-soft/35",
       titleTone: "text-warning",
     };
@@ -267,9 +429,12 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
   if (model.proposal_readiness.state === "review_required") {
     return {
       title: "Review the roof and quote",
-      detail: "Check the marked items before the proposal can move on.",
+      detail:
+        "Open the proposal check to see what needs attention. Use the sections below to inspect the saved details.",
       label: "Review needed",
-      tone: "bg-warning-soft text-warning",
+      action: "See what needs review",
+      targetId: "proposal-readiness-heading",
+      view: "proposal",
       surface: "bg-warning-soft/28",
       titleTone: "text-foreground",
     };
@@ -279,7 +444,9 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
       title: "Review the proposal",
       detail: "No system check is stopping this job. A person must still make the final choice.",
       label: "Ready for review",
-      tone: "bg-ok-soft text-ok",
+      action: "Open proposal details",
+      targetId: "proposal-heading",
+      view: "proposal",
       surface: "bg-ok-soft/28",
       titleTone: "text-foreground",
     };
@@ -288,7 +455,9 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
     title: "Use the saved details only",
     detail: "Some details are missing. A blank field does not mean no record exists.",
     label: "Some details are missing",
-    tone: "bg-surface-muted text-muted",
+    action: "Open saved details",
+    targetId: "review-workspace-heading",
+    view: "saved",
     surface: "bg-surface-muted/55",
     titleTone: "text-foreground",
   };
@@ -1309,7 +1478,6 @@ function CommercialRecord({
 }) {
   const quote = model.quote;
   const proposal = model.proposal;
-  const proposalLineage = model.lineage.quote_to_proposal;
   const quoteCurrency = quote?.currency ?? tenantCurrency;
   return (
     <aside
@@ -1347,12 +1515,7 @@ function CommercialRecord({
               </span>
             ) : null}
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border px-5 pb-5">
           {!quote ? (
@@ -1377,69 +1540,19 @@ function CommercialRecord({
       <details className="group border-t border-border" aria-labelledby="proposal-heading">
         <summary className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <h3 id="proposal-heading" className="text-base font-bold tracking-[-0.02em]">
+            <h3
+              id="proposal-heading"
+              tabIndex={-1}
+              className="scroll-mt-24 text-base font-bold tracking-[-0.02em]"
+            >
               Proposal
             </h3>
-            <span className="mt-2 flex flex-wrap gap-2">
-              {proposal ? (
-                <StatusChip
-                  label={humanize(proposal.status) ?? "State unavailable"}
-                  tone={proposalTone(proposal.status)}
-                />
-              ) : (
-                <StatusChip
-                  label={
-                    proposalLineage === "mismatch"
-                      ? "No proposal links to this quote"
-                      : "No proposal"
-                  }
-                  tone={
-                    proposalLineage === "mismatch"
-                      ? "bg-warning-soft text-warning"
-                      : "bg-surface-muted text-muted"
-                  }
-                />
-              )}
-              <StatusChip
-                label={humanize(model.proposal_readiness.state) ?? "Readiness unavailable"}
-                tone={proposalDecisionStep(model.proposal_readiness).tone}
-              />
-            </span>
+            <ProposalStatus model={model} />
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border px-5 pb-5">
-          {!proposal ? (
-            <EmptyInline message={proposalEmptyMessage(quote, model.proposal, proposalLineage)} />
-          ) : (
-            <div className="mt-5 text-sm leading-6">
-              <dl className="divide-y divide-border border-y border-border">
-                <RecordLine
-                  label="Prepared"
-                  value={formatDate(proposal.prepared_at, locale) ?? "Not recorded"}
-                />
-                <RecordLine
-                  label="Approved"
-                  value={formatDate(proposal.approved_at, locale) ?? "Not recorded"}
-                />
-                <RecordLine
-                  label="Signed"
-                  value={formatDate(proposal.signed_at, locale) ?? "Not recorded"}
-                />
-              </dl>
-              <AssumptionLedger
-                assumptions={proposal.assumptions}
-                exclusions={proposal.exclusions}
-                compact
-              />
-            </div>
-          )}
-          <ProposalReadiness readiness={model.proposal_readiness} />
+          <ProposalContent model={model} locale={locale} />
         </div>
       </details>
 
@@ -1458,12 +1571,7 @@ function CommercialRecord({
                 : "Finish review first"}
             </span>
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border bg-surface-raised/35">
           <ProposalPublicationAction
@@ -1486,12 +1594,7 @@ function CommercialRecord({
               {model.scope_clauses.length} clauses · {model.scope_changes.length} changes
             </span>
           </span>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
-            <ChevronDown
-              className="size-4 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </span>
+          <DisclosureCue />
         </summary>
         <div className="border-t border-border px-5 pb-5">
           <ScopeClauses clauses={model.scope_clauses} locale={locale} />
@@ -1503,6 +1606,79 @@ function CommercialRecord({
         </div>
       </details>
     </aside>
+  );
+}
+
+function ProposalStatus({ model }: { model: EstimatorWorkbenchResponse }) {
+  const proposal = model.proposal;
+  const proposalLineage = model.lineage.quote_to_proposal;
+  return (
+    <span className="mt-2 flex flex-wrap gap-2">
+      {proposal ? (
+        <StatusChip
+          label={humanize(proposal.status) ?? "State unavailable"}
+          tone={proposalTone(proposal.status)}
+        />
+      ) : (
+        <StatusChip
+          label={proposalLineage === "mismatch" ? "No proposal links to this quote" : "No proposal"}
+          tone={
+            proposalLineage === "mismatch"
+              ? "bg-warning-soft text-warning"
+              : "bg-surface-muted text-muted"
+          }
+        />
+      )}
+      <StatusChip
+        label={humanize(model.proposal_readiness.state) ?? "Readiness unavailable"}
+        tone={proposalDecisionStep(model.proposal_readiness).tone}
+      />
+    </span>
+  );
+}
+
+function ProposalContent({
+  model,
+  locale,
+  readinessFirst = false,
+}: {
+  model: EstimatorWorkbenchResponse;
+  locale: string;
+  readinessFirst?: boolean;
+}) {
+  const quote = model.quote;
+  const proposal = model.proposal;
+  const proposalLineage = model.lineage.quote_to_proposal;
+  return (
+    <>
+      {readinessFirst ? <ProposalReadiness readiness={model.proposal_readiness} /> : null}
+      {!proposal ? (
+        <EmptyInline message={proposalEmptyMessage(quote, model.proposal, proposalLineage)} />
+      ) : (
+        <div className="mt-5 text-sm leading-6">
+          <dl className="divide-y divide-border border-y border-border">
+            <RecordLine
+              label="Prepared"
+              value={formatDate(proposal.prepared_at, locale) ?? "Not recorded"}
+            />
+            <RecordLine
+              label="Approved"
+              value={formatDate(proposal.approved_at, locale) ?? "Not recorded"}
+            />
+            <RecordLine
+              label="Signed"
+              value={formatDate(proposal.signed_at, locale) ?? "Not recorded"}
+            />
+          </dl>
+          <AssumptionLedger
+            assumptions={proposal.assumptions}
+            exclusions={proposal.exclusions}
+            compact
+          />
+        </div>
+      )}
+      {!readinessFirst ? <ProposalReadiness readiness={model.proposal_readiness} /> : null}
+    </>
   );
 }
 
@@ -1984,7 +2160,11 @@ function ProposalReadiness({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 id="proposal-readiness-heading" className="text-sm font-bold text-foreground">
+          <h3
+            id="proposal-readiness-heading"
+            tabIndex={-1}
+            className="scroll-mt-24 text-sm font-bold text-foreground"
+          >
             Proposal check
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
@@ -2074,6 +2254,19 @@ function AssumptionLedger({
   );
 }
 
+function DisclosureCue() {
+  return (
+    <span className="flex shrink-0 items-center gap-2 text-xs font-bold text-accent">
+      <span className="group-open:hidden">Show details</span>
+      <span className="hidden group-open:inline">Hide details</span>
+      <ChevronDown
+        className="size-4 transition-transform group-open:rotate-180"
+        aria-hidden="true"
+      />
+    </span>
+  );
+}
+
 function ReviewGroup({
   title,
   description,
@@ -2104,10 +2297,7 @@ function ReviewGroup({
         </span>
         <span className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
           <StatusChip label={status} tone={tone} />
-          <ChevronDown
-            className="size-5 text-muted transition-transform group-open:rotate-180"
-            aria-hidden="true"
-          />
+          <DisclosureCue />
         </span>
       </summary>
       <div className="space-y-6 border-t border-border bg-surface-muted/30 p-3 sm:p-4">

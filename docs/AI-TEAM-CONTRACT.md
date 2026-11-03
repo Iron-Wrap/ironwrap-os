@@ -31,9 +31,8 @@ The contract refines, and never overrides:
   stops.
 
 If this contract and one of them disagree, that document wins until both change in the same
-commit. The approval rails in [`APPROVAL-BROKER-CONTRACT.md`](./APPROVAL-BROKER-CONTRACT.md) and the
-desktop pilot in [`HERMES-DESKTOP-TEXT-PILOT.md`](./HERMES-DESKTOP-TEXT-PILOT.md) keep their
-boundaries until a replacement is implemented and proven.
+commit. The approval rails in [`APPROVAL-BROKER-CONTRACT.md`](./APPROVAL-BROKER-CONTRACT.md) keep
+their boundaries until a replacement is implemented and proven.
 
 Codes in this document (`A0` to `A3`, `H`, `asks_first`, `within_limits`, `shadow`, specialist,
 action and watch ids) are for builders. People never see a code: every screen shows only the words
@@ -905,9 +904,8 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 - **Reviewer**: who decides when the step asks first; for `H`, who acts.
 - **Effect and readback**: what changes, and what confirms it.
 - **Binds to**: the Worker route or MCP tool the permit binds to. `bus:` names a tool of
-  `mcp/ironwrap-bus-mcp`; `desktop:` names a tool of its desktop pilot server. "new" means no binding
-  exists yet and the runtime adds a Worker command for it. A "predecessor" is what does the
-  equivalent today. A predecessor `erp:` tool is the Frappe compatibility tool and is never the
+  `mcp/ironwrap-bus-mcp`. "new" means no binding exists yet and the runtime adds a Worker command
+  for it. A "predecessor" is what does the equivalent today. A predecessor `erp:` tool is the Frappe compatibility tool and is never the
   binding, because new operating workflows may not depend on Frappe; predecessor Worker code may be
   reused behind the new command. Today each MCP process registers only the tools its launching
   host lists in `MCP_ALLOWED_TOOLS`.
@@ -961,7 +959,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `inquiry.close` | A3 | Asks first | Decline, disqualify or move an inquiry to nurture. | Qualification facts; reason codes | `qualification` | Sales | Lead transition → lead version read back | new |
 | `inbound.quarantine` | A2 | Acts within your limits | Protective. Hold suspected spam, scam or injected inbound content in which nothing valid remains: no reply, and no tool acts on it. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Raw inbound receipt hash; reason codes | — | Never asks first | Inbound held → hold read back | new |
 | `inbound.release` | A3 | Asks first | Always asks first. Release quarantined content into normal handling. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Quarantine record and its reason codes | — | The proposing specialist's reviewer | Hold released → read back | new |
-| `customer_message.draft` | A1 | — | Draft a message to a prospect or customer for a registered purpose. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Commercial context hash or conversation facts; consent state | `no_commitment`, `claims`, `purpose` | — | Draft (proposed) | `desktop:hermes_submit_draft` for lead follow-up drafts; new for the other purposes |
+| `customer_message.draft` | A1 | — | Draft a message to a prospect or customer for a registered purpose. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Commercial context hash or conversation facts; consent state | `no_commitment`, `claims`, `purpose` | — | Draft (proposed) | new |
 | `customer_message.send` | A3 | Asks first | Always asks first. Send the approved message by email or SMS. Owners: `lead_concierge`, `scheduler_dispatcher`, `billing_reconciliation`, `customer_care_warranty`, `marketing_reputation`, `field_safety`. | Approved draft hash; commercial context hash read again before sending; consent version | `consent`, `quiet_hours`, `recipient`, `disclosure`, `no_commitment`, `claims`, `frequency`, `purpose` | The proposing specialist's reviewer | Send through the effect runtime → provider message id and delivery status | new (communication effect); predecessor `erp:request_record_communication_event` records only |
 | `followup.pause` | A2 | Acts within your limits | Pause a case's follow-up schedule because the customer asked for time, a dispute is open, or a person took over. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The fact behind the pause | — | The proposing specialist's reviewer | Follow-up schedule paused → read back | new |
 | `followup.resume` | A2 | Acts within your limits | Resume a paused follow-up schedule from where it stopped. Owners: `lead_concierge`, `billing_reconciliation`, `customer_care_warranty`. | The pause and the fact that lifts it | `frequency` | The proposing specialist's reviewer | Follow-up schedule resumed → read back | new |

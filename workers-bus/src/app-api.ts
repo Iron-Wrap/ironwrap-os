@@ -294,11 +294,6 @@ import {
   recordOperatingWorkObjectAssignment,
 } from "./operating-work-object-assignment-store.ts";
 import {
-  handleHermesDesktopNativeRoute,
-  handleHermesDesktopPairingIssue,
-  isHermesDesktopNativeRoute,
-} from "./hermes-desktop.ts";
-import {
   POSTIZ_PROVIDERS,
   approvePostizIntent,
   getPostizIntent,
@@ -337,11 +332,6 @@ export async function handleAppApi(
     return unavailableAppRoute();
   if (!appBffConfigured(appEnv))
     return unavailableAppRoute();
-
-  // Native desktop requests prove their own short-lived bearer + device
-  // binding and intentionally do not depend on a browser Origin header.
-  if (isHermesDesktopNativeRoute(req))
-    return await handleHermesDesktopNativeRoute(req, appEnv);
 
   const url = new URL(req.url);
   // Every method that can change state, not just POST. While POST was the only
@@ -661,12 +651,6 @@ export async function handleAuthenticatedRoute(
   }
   if (url.pathname.startsWith("/api/v1/agent-team/")) {
     return await handleAgentTeamAppRoute(req, env, auth);
-  }
-  if (
-    req.method === "POST" &&
-    url.pathname === "/api/v1/hermes/desktop-pairings"
-  ) {
-    return await handleHermesDesktopPairingIssue(req, env, auth);
   }
   if (url.pathname === "/api/v1/admin/app-users") {
     if (req.method === "POST") {

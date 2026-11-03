@@ -893,8 +893,8 @@ does.
   devices), the CSRF token and an `Idempotency-Key` of the form `field-item-resolution:<uuid>`. An
   exact replay returns the original answer; the same key with a changed request conflicts; a second
   answer for the same item conflicts. Any request carrying a machine credential (an
-  `Authorization` header, or the Hermes desktop headers) is refused as `person_session_required`,
-  and so is any in-process actor that is not a person.
+  `Authorization` header, or any `x-ironwrap-hermes-*` header) is refused as
+  `person_session_required`, and so is any in-process actor that is not a person.
 - The answer is bound to the exact saved item: the device action id the phone used as its
   `Idempotency-Key`, the item kind, and `payload_sha256`, which is the Worker's own stored request
   hash for that crew write (`payload_hash`, an inventory `request_fingerprint_sha256`, or a

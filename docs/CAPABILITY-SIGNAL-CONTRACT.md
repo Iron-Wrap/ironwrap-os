@@ -161,8 +161,6 @@ capability cannot leak to a role that could never use it, and a new capability r
 |---|---|---|---|---|
 | `quickbooks_oauth` | `QB_OAUTH_ENABLED` | `quickbooks:read`, `accounting:read` | owner, ops, accounting | `off` |
 | `quickbooks_final_invoice` | `QB_FINAL_INVOICE_ENABLED` | `quickbooks:read`, `accounting:read` | owner, ops, accounting | `off` |
-| `hermes_desktop` | `APP_HERMES_DESKTOP_ENABLED` | `owner:read` | owner, ops | `off` |
-| `hermes_hosted_reference` | `APP_HERMES_HOSTED_REFERENCE_ENABLED` | `owner:read` | owner, ops | `off` (flag undeclared) |
 | `public_estimator` | `PUBLIC_ESTIMATE_ENABLED` | `sales:read` | owner, ops, sales | `off` |
 | `newo` | `NEWO_ENABLED` | `owner:read` | owner, ops | `off` |
 | `postiz` | `POSTIZ_ENABLED` | `owner:read` | owner, ops | `off` |

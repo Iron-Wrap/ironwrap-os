@@ -433,7 +433,7 @@ Customer-validated: ни у одной возможности флаги, сек
 | Customer portal/public estimator | Клиент безопасно принимает решение и самообслуживается | Locally-validated (`app/e2e/customer-portal-materials.spec.ts` прогоняет сравнение и decision на viewport Pixel 5 с проверками no-horizontal-scroll и 44px-target). Public estimator выключен в production и staging (машинно-проверяемый снимок `docs/AI-NATIVE-ARCHITECTURE.md`). Нет deployment, runtime, business-acceptance или customer proof. | Accessibility, identity, real customer scenarios, public config proof |
 | Pipeline/form/document configuration | Операционные views меняются без обхода authority | Source-present. Read model документов достигает Locally-validated (`workers-bus/test/record-documents-api.test.ts`); поверхности PWA для администратора — drag-and-drop, schema-form, document-generation — не построены, а флаг document-generation равен false во всех checked-in средах. | Merged UI, typed command proof, runtime document generation/readback |
 | Provider manifests и readiness | Capabilities ломаются явно и безопасно | Source-present. Это repository capability only: ни один tenant не сконфигурирован и не доказан, пока governed внешний путь не добавит approved manifests и свежие provider readbacks; прошедшая проверка для самого readiness evaluator не процитирована. | Named-environment dependency health, proof TTL, degraded/recovery drills |
-| Hermes/MCP/AI coordination | Bounded drafting и proposals уменьшают routine work | Source-present. Hermes — выключенный, single-pilot draft-путь без resident context-plan-policy-permit-action-readback-reconciliation координатора; прошедшая проверка для самого coordination claim не процитирована. | Deterministic reference journey до model-assisted trials |
+| Hermes/MCP/AI coordination | Bounded drafting и proposals уменьшают routine work | Source-present. Hermes — конфигурация ролей и инструментов без resident context-plan-policy-permit-action-readback-reconciliation координатора; прошедшая проверка для самого coordination claim не процитирована. | Deterministic reference journey до model-assisted trials |
 | Frappe compatibility и retirement | Legacy projection не возвращает себе authority | Source-present. Frappe остается опциональной, не блокирующей проекцией; release-admission chain прямо называет недоказанными «no reachable adapter, provider command, staging/production Frappe identity, or live receipt»; cutover не завершен. | Consumer inventory, parity/cutover proof, restore/rebuild, disabled writes |
 | White label / Operating Packs | Повторяемая безопасная настройка tenant без drift | Source-present. В matrix есть только одна строка сводной таблицы и одно упоминание DocType; narrative-реализация или прошедшая проверка не процитированы. | Second real tenant, isolation, upgrade/rollback compatibility |
 | Governance, workforce, facility, insurance, compliance | Whole-company controls соединяются с operating facts | Source-present. У legal/licence (Authority Records) и workforce (Crew Profile projections) есть реальный субстрат; governance, facility и insurance остаются почти полностью target/absent. Прошедшая проверка не процитирована ни для одной под-области. | Owning objects, issuer readbacks, drills, accountable signoffs |
@@ -487,8 +487,6 @@ Customer-validated: ни у одной возможности флаги, сек
 |---|---|---|---|---|
 | QuickBooks OAuth | `workers-bus/wrangler.jsonc:183` `QB_OAUTH_ENABLED` | `"false"` (local `:383`, staging `:565` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Не подключено; подключение — действие администратора, требующее учётных данных Intuit |
 | QuickBooks final-invoice execution | `workers-bus/wrangler.jsonc:184` `QB_FINAL_INVOICE_ENABLED` | `"false"` (local `:384`, staging `:566` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Выключено — ни один счёт не уходит в QuickBooks; одобренный intent ждёт |
-| Hermes desktop | `workers-bus/wrangler.jsonc:209` `APP_HERMES_DESKTOP_ENABLED` | `"false"` (local `:403`, staging `:585` тоже `"false"`) | present, default-off | Недоступно |
-| Hermes hosted reference execution | `workers-bus/src/hermes-desktop.ts:1629` `APP_HERMES_HOSTED_REFERENCE_ENABLED` | не объявлен ни в одной среде | present, default-off по факту отсутствия | Недоступно |
 | Public estimator | `workers-bus/wrangler.jsonc:194` `PUBLIC_ESTIMATE_ENABLED` | `"false"` в production и staging (`:574`); `"true"` в `env.local` (`:392`) | present, default-off в развёрнутой конфигурации | Выключено в production; локальный стенд не является доказательством для него |
 | Newo | `workers-bus/wrangler.jsonc:130` `NEWO_ENABLED` | `"false"` (local `:339`, staging `:526` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Выключено |
 | Postiz | `workers-bus/wrangler.jsonc:224` `POSTIZ_ENABLED` | `"false"` (local `:418`, staging `:600` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Выключено |
@@ -512,11 +510,6 @@ Code paths и поведение отказа за каждой строкой:
   `QB_TOKEN_ENCRYPTION_KEY_VERSION`, который равен `""` в
   `workers-bus/wrangler.jsonc:188`, плюс секреты `QB_CLIENT_ID` / `QB_CLIENT_SECRET` /
   `QB_TOKEN_ENCRYPTION_KEY`.
-- **Hermes desktop.** Все desktop-маршруты отказывают `404` в
-  `workers-bus/src/hermes-desktop.ts:220`, `:307` и `:334`; pairing-маршрут подключён в
-  `workers-bus/src/app-api.ts:553`. Reference execution требует второго флага и
-  `APP_HERMES_PROVIDER_MODEL` (`workers-bus/src/hermes-desktop.ts:1633`); ни одно из этих имён не
-  встречается ни в одной среде `wrangler.jsonc`.
 - **Public estimator.** Флаг читается в `workers-bus/src/public-estimator.ts:226`; readiness
   считает выключенное состояние здоровым (`:210`). Включение в production дополнительно требует
   allowed origins, allowed brands, consent jurisdiction, Turnstile site key и пустой legacy-список
@@ -570,10 +563,10 @@ JobNimbus, Google, Newo, Postiz, Frappe и Facet projection. Его схема �
   компании (`workers-bus/src/company-setup-api.ts:448`) и отсутствие пункта в `allowed_actions` для
   proposal publication (`workers-bus/src/app-api.ts:5497`).
 - `GET /api/v1/session` (`workers-bus/src/app-api.ts:640`) не несёт флагов возможностей вообще,
-  поэтому не-office роль не имеет runtime-способа узнать, что Hermes desktop, proposal template или
-  Facet routes недоступны; эти поверхности узнают об этом только из `404`/`503` при первом
-  использовании. Hermes desktop, proposal-template configuration и Facet ingest routes также не
-  представлены в readiness read model.
+  поэтому не-office роль не имеет runtime-способа узнать, что proposal template или Facet routes
+  недоступны; эти поверхности узнают об этом только из `404`/`503` при первом использовании.
+  Proposal-template configuration и Facet ingest routes также не представлены в readiness read
+  model.
 
 **Неизвестно из репозитория.** Каждому из этих пунктов нужен readback в названной среде, а не ещё
 один документ: установлен ли фактически хоть один Worker secret (`QB_*`, `NEWO_*`,
@@ -714,7 +707,7 @@ external contract. Ни одна command не может использоват�
 - **Frappe:** временная compatibility projection, планируемая к evidence-backed retirement; она не должна снова получить writes или authority.
 - **Google Drive:** human-readable controlled archive при наличии конфигурации, но не operating database.
 - **Email/SMS/voice, Postiz, Newo, JobNimbus/imports, suppliers и authorities:** bounded adapters или sources под manifests, identity mapping, idempotency, readback и retirement rules.
-- **Hermes/MCP:** bounded read, dry-run и proposal adapters плюс default-off narrow drafting pilot; никогда не resident operating authority.
+- **Hermes/MCP:** bounded read, dry-run и proposal adapters; никогда не resident operating authority.
 
 ### 12.2 Границы доверия
 

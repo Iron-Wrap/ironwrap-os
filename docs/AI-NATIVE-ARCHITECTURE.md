@@ -161,7 +161,6 @@ The machine-checked snapshot is intentionally conservative:
     "effect_runtime_enabled": true,
     "quickbooks_oauth_enabled": false,
     "quickbooks_final_invoice_enabled": false,
-    "hermes_desktop_enabled": false,
     "public_estimator_enabled": false,
     "newo_enabled": false,
     "postiz_enabled": false,

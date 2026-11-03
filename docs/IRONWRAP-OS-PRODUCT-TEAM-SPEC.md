@@ -499,7 +499,7 @@ a named accountable human's acceptance of the capability itself, or real custome
 | Customer portal/public estimator | Customer can decide and self-serve safely | Locally-validated (`app/e2e/customer-portal-materials.spec.ts` drives the comparison and decision on a Pixel 5 viewport with no-horizontal-scroll and 44px-target assertions). Public estimator is off in production and staging (`docs/AI-NATIVE-ARCHITECTURE.md` machine-checked snapshot). No deployment, runtime, business-acceptance, or customer proof. | Accessibility, identity, real customer scenarios, public config proof |
 | Pipeline/form/document configuration | Operating views evolve without bypassing authority | Source-present. The documents read model reaches Locally-validated (`workers-bus/test/record-documents-api.test.ts`); the administrator-facing drag-and-drop, schema-form, and document-generation PWA surfaces are not built, and the document-generation flag is false in every checked-in environment. | Merged UI, typed command proof, runtime document generation/readback |
 | Provider manifests and readiness | Capabilities fail visibly and safely | Source-present. This is repository capability only: no tenant is configured or proven until a governed external path appends approved manifests and fresh provider readbacks, and no named passing check is cited for the readiness evaluator's own claims. | Named-environment dependency health, proof TTL, degraded/recovery drills |
-| Hermes/MCP/AI coordination | Bounded drafting and proposals reduce routine work | Source-present. Hermes is a disabled, single-pilot draft path with no resident context-plan-policy-permit-action-readback-reconciliation coordinator; no named passing check is cited for the coordination claim itself. | Deterministic reference journey before model-assisted trials |
+| Hermes/MCP/AI coordination | Bounded drafting and proposals reduce routine work | Source-present. Hermes is role/tool configuration with no resident context-plan-policy-permit-action-readback-reconciliation coordinator; no named passing check is cited for the coordination claim itself. | Deterministic reference journey before model-assisted trials |
 | Frappe compatibility and retirement | Legacy projection does not regain authority | Source-present. Frappe remains an optional, non-blocking projection; the release-admission chain names "no reachable adapter, provider command, staging/production Frappe identity, or live receipt" as proven; cutover is incomplete. | Consumer inventory, parity/cutover proof, restore/rebuild, disabled writes |
 | White label / Operating Packs | Repeat safe tenant setup without drift | Source-present. Only a single maturity-table line and one DocType mention exist in the matrix; no narrative implementation or named passing check is cited. | Second real tenant, isolation, upgrade/rollback compatibility |
 | Governance, workforce, facility, insurance, compliance | Whole-company controls join operating facts | Source-present. Legal/licence (Authority Records) and workforce (Crew Profile projections) sub-areas have real substrate; governance, facility, and insurance sub-areas are almost entirely target/absent. No named passing check is cited for any sub-area. | Owning objects, issuer readbacks, drills, accountable signoffs |
@@ -551,8 +551,6 @@ Three states, and they never merge:
 |---|---|---|---|---|
 | QuickBooks OAuth | `workers-bus/wrangler.jsonc:183` `QB_OAUTH_ENABLED` | `"false"` (local `:383`, staging `:565` also `"false"`) | present, default-off; unconfigured underneath | Not connected; connecting is an administrator action that needs Intuit credentials |
 | QuickBooks final-invoice execution | `workers-bus/wrangler.jsonc:184` `QB_FINAL_INVOICE_ENABLED` | `"false"` (local `:384`, staging `:566` also `"false"`) | present, default-off; unconfigured underneath | Off — no invoice reaches QuickBooks; approved intent waits |
-| Hermes desktop | `workers-bus/wrangler.jsonc:209` `APP_HERMES_DESKTOP_ENABLED` | `"false"` (local `:403`, staging `:585` also `"false"`) | present, default-off | Not available |
-| Hermes hosted reference execution | `workers-bus/src/hermes-desktop.ts:1629` `APP_HERMES_HOSTED_REFERENCE_ENABLED` | undeclared in every environment | present, default-off by omission | Not available |
 | Public estimator | `workers-bus/wrangler.jsonc:194` `PUBLIC_ESTIMATE_ENABLED` | `"false"` production and staging (`:574`); `"true"` in `env.local` (`:392`) | present, default-off in the deployed configuration | Off in production; the local stack is not evidence for it |
 | Newo | `workers-bus/wrangler.jsonc:130` `NEWO_ENABLED` | `"false"` (local `:339`, staging `:526` also `"false"`) | present, default-off; unconfigured underneath | Off |
 | Postiz | `workers-bus/wrangler.jsonc:224` `POSTIZ_ENABLED` | `"false"` (local `:418`, staging `:600` also `"false"`) | present, default-off; unconfigured underneath | Off |
@@ -576,11 +574,6 @@ Code paths and refusal behaviour behind each row:
   `QB_TOKEN_ENCRYPTION_KEY_VERSION`, which is `""` at
   `workers-bus/wrangler.jsonc:188`, and the `QB_CLIENT_ID` / `QB_CLIENT_SECRET` /
   `QB_TOKEN_ENCRYPTION_KEY` secrets.
-- **Hermes desktop.** Every desktop route refuses with `404` at
-  `workers-bus/src/hermes-desktop.ts:220`, `:307` and `:334`; the pairing route is wired at
-  `workers-bus/src/app-api.ts:553`. Reference execution needs a second flag and
-  `APP_HERMES_PROVIDER_MODEL` (`workers-bus/src/hermes-desktop.ts:1633`); neither name appears in
-  any environment of `wrangler.jsonc`.
 - **Public estimator.** `workers-bus/src/public-estimator.ts:226` reads the flag; readiness treats
   deactivated as healthy (`:210`). Enabling it in production additionally requires allowed origins,
   allowed brands, a consent jurisdiction, a Turnstile site key, an empty legacy range list — all
@@ -637,10 +630,9 @@ automatic:
   (`workers-bus/src/company-setup-api.ts:448`) and `allowed_actions` omission for proposal
   publication (`workers-bus/src/app-api.ts:5497`).
 - `GET /api/v1/session` (`workers-bus/src/app-api.ts:640`) carries no capability flags at all, so a
-  non-office role has no runtime way to learn that Hermes desktop, the proposal template or the
-  Facet routes are unavailable; those surfaces discover it only from a `404`/`503` at first use.
-  Hermes desktop, proposal-template configuration and the Facet ingest routes have no entry in the
-  readiness read model either.
+  non-office role has no runtime way to learn that the proposal template or the Facet routes are
+  unavailable; those surfaces discover it only from a `404`/`503` at first use. Proposal-template
+  configuration and the Facet ingest routes have no entry in the readiness read model either.
 
 **Unknown from the repository.** Each of these needs a named-environment readback, not another
 document: whether any Worker secret is actually set (`QB_*`, `NEWO_*`, `POSTIZ_API_KEY`,
@@ -825,8 +817,7 @@ No command may use the projection as its source of authority.
 - **Google Drive:** human-readable controlled archive where configured, not an operating database.
 - **Email/SMS/voice, Postiz, Newo, JobNimbus/imports, suppliers, authorities:** bounded adapters or
   sources under manifests, identity mapping, idempotency, readback, and retirement rules.
-- **Hermes/MCP:** bounded read/dry-run/proposal adapters and a default-off narrow drafting pilot;
-  never the resident operating authority.
+- **Hermes/MCP:** bounded read/dry-run/proposal adapters; never the resident operating authority.
 
 ### 12.2 Trust boundaries
 

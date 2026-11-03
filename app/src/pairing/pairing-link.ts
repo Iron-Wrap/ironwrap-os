@@ -9,24 +9,9 @@ export function safePairingUrl(
   value: string,
   origin: string = window.location.origin,
 ): string | undefined {
-  return safePairingUrlForPath(value, "/auth/pair", origin);
-}
-
-export function safeHermesDesktopPairingUrl(
-  value: string,
-  origin: string = window.location.origin,
-): string | undefined {
-  return safePairingUrlForPath(value, "/auth/hermes-pair", origin);
-}
-
-function safePairingUrlForPath(
-  value: string,
-  pathname: "/auth/pair" | "/auth/hermes-pair",
-  origin: string,
-): string | undefined {
   try {
     const url = new URL(value);
-    if (url.origin !== origin || url.pathname !== pathname || url.search) return undefined;
+    if (url.origin !== origin || url.pathname !== "/auth/pair" || url.search) return undefined;
     const fragment = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
     const params = new URLSearchParams(fragment);
     const token = params.get("token")?.trim();

@@ -49,7 +49,6 @@ const REFERENCE_VARS: Record<string, string> = {
   PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX: "",
   PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX: "",
   PUBLIC_ESTIMATE_RANGE_RULES_JSON: "",
-  APP_HERMES_DESKTOP_ENABLED: "false",
   FACET_DESIGN_INGEST_ENABLED: "false",
   FACET_V2_INGEST_ENABLED: "true",
   FACET_V2_ROUTES_JSON: "[]",
@@ -115,8 +114,6 @@ test("the reference configuration produces the exact state table G1.3 audited", 
       facet_launch: "unconfigured:configuration_incomplete",
       facet_native_projection: "dependency_blocked:dependency_unavailable",
       facet_quote_revision_prepare: "absent:no_source_consumer",
-      hermes_desktop: "off:flag_off",
-      hermes_hosted_reference: "off:flag_undeclared",
       newo: "off:flag_off",
       postiz: "off:flag_off",
       proposal_publication: "off:flag_off",
@@ -135,7 +132,7 @@ test("every state in the vocabulary is reachable and none of them is a boolean i
 
   const observed = new Set([
     reference.facet_design_ingest_v1.state,
-    reference.hermes_desktop.state,
+    reference.newo.state,
     reference.facet_design_ingest.state,
     reference.facet_native_projection.state,
     reference.effect_runtime.state,
@@ -146,9 +143,9 @@ test("every state in the vocabulary is reachable and none of them is a boolean i
     ["absent", "available", "dependency_blocked", "off", "unconfigured", "unknown"],
   );
 
-  // The three the acceptance criteria name explicitly, side by side, from one configuration.
+  // The three states the acceptance criteria name explicitly, side by side, from one configuration.
   assert.equal(reference.facet_design_ingest_v1.state, "absent");
-  assert.equal(reference.hermes_desktop.state, "off");
+  assert.equal(reference.newo.state, "off");
   assert.equal(on.quickbooks_oauth.state, "unconfigured");
 });
 
@@ -185,12 +182,12 @@ test("flag state and readiness state are separate fields and never substitute fo
 });
 
 test("an undeclared flag and an unparseable flag value are distinct from a declared false", () => {
-  const undeclared = signals().hermes_hosted_reference;
+  const undeclared = signals({ NEWO_ENABLED: undefined }).newo;
   assert.equal(undeclared.flag.state, "undeclared");
   assert.equal(undeclared.flag.declared, null);
   assert.equal(undeclared.reason, "flag_undeclared");
 
-  const declaredFalse = signals().hermes_desktop;
+  const declaredFalse = signals().newo;
   assert.equal(declaredFalse.flag.state, "off");
   assert.equal(declaredFalse.flag.declared, "false");
   assert.equal(declaredFalse.reason, "flag_off");
@@ -198,7 +195,7 @@ test("an undeclared flag and an unparseable flag value are distinct from a decla
   // `"1"` is not the literal any Worker gate accepts. Reporting it as a plain `off` would hide an
   // operator error that reads, to the operator, like it worked.
   for (const value of ["1", "yes", "TRUE", "True"]) {
-    const invalid = signals({ APP_HERMES_DESKTOP_ENABLED: value }).hermes_desktop;
+    const invalid = signals({ NEWO_ENABLED: value }).newo;
     assert.equal(invalid.flag.state, "invalid", value);
     assert.equal(invalid.state, "off", value);
     assert.equal(invalid.reason, "flag_value_invalid", value);
@@ -310,7 +307,7 @@ test("an absent capability is reported as absent and never as a disabled one", (
   }
 });
 
-test("the registry covers the eight capabilities spec 9.3 names and every id is presentable", () => {
+test("the registry covers every named reference capability and every id is presentable", () => {
   for (const id of NAMED_REFERENCE_CAPABILITY_IDS) {
     assert.ok(CAPABILITY_SIGNAL_IDS.includes(id), `${id} missing from the registry`);
   }
@@ -461,14 +458,14 @@ test("the state is derived per request, never from a client value or a cached co
 
   const before = buildCapabilitySignalReadModel(mutable, auth("owner"));
   assert.equal(
-    before.capabilities.find((item) => item.id === "hermes_desktop")!.state,
+    before.capabilities.find((item) => item.id === "document_generation")!.state,
     "off",
   );
 
-  mutable.APP_HERMES_DESKTOP_ENABLED = "true";
+  mutable.APP_DOCUMENT_GENERATION_ENABLED = "true";
   const after = buildCapabilitySignalReadModel(mutable, auth("owner"));
   assert.equal(
-    after.capabilities.find((item) => item.id === "hermes_desktop")!.state,
+    after.capabilities.find((item) => item.id === "document_generation")!.state,
     "available",
   );
 
@@ -476,7 +473,7 @@ test("the state is derived per request, never from a client value or a cached co
   const injected = await handleAuthenticatedRoute(
     new Request(
       "https://app.example.invalid/api/v1/capabilities?tenant_id=other-tenant" +
-        "&hermes_desktop=off&projection=office",
+        "&document_generation=off&projection=office",
       { headers: { "x-capability-state": "available" } },
     ),
     appEnv(db),

@@ -594,21 +594,9 @@ Archive only redacted request ids and the release evidence.
 If the broad compatibility surface is enabled, install Hermes at the tag and commit in
 `deploy/runtime-lock.json`. Launch each bus, Frappe, and Newo MCP process with its own
 `MCP_ALLOWED_TOOLS` list; a server registers only those tools and refuses to start without the
-list or with a name it does not have. The separate desktop pilot server takes no such list and must
-remain fixed at `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. MCP base
+list or with a name it does not have. MCP base
 URLs must be production HTTPS URLs. Plain HTTP is accepted only for explicit localhost development.
 
-Keep `APP_HERMES_DESKTOP_ENABLED=false` during the first MCP smoke test. The checked-in desktop
-surface is a narrow `lead_follow_up_draft` pilot, not a resident company coordinator or operating
-authority. For first pairing, issue
-the one-time fragment link from PWA Settings and pass it only as
-`IRONWRAP_HERMES_DESKTOP_PAIRING_URL` to the local desktop MCP child process; it removes the link
-after parsing and retains the 15-minute credentials only in memory. A native launcher may instead
-resolve the paired access token and device proof from desktop OS secure storage. Never give this
-server an admin/write token or native connector credential. Enabling the flag is not launch proof:
-separately prove one owner/ops pairing, the device-bound task envelope, optional untrusted context
-staging, and a draft submission that returns a handoff without sending, booking, or creating
-downstream authority.
 
 Keep the bus and Newo MCP/Worker write flags false for the first read-only smoke test:
 

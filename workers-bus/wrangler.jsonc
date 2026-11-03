@@ -134,7 +134,6 @@
       "APP_BFF_ENABLED": "true",
       "APP_READINESS_ADMISSION_ENABLED": "false",
       "APP_EVIDENCE_UPLOADS_ENABLED": "false",
-      "APP_HERMES_DESKTOP_ENABLED": "false",
       "APP_CUSTOMER_PORTAL_ENABLED": "true",
       "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
       "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
@@ -388,7 +387,6 @@
           "APP_BFF_ENABLED": "true",
           "APP_READINESS_ADMISSION_ENABLED": "false",
           "APP_EVIDENCE_UPLOADS_ENABLED": "false",
-          "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "true",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
           "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",
@@ -615,17 +613,15 @@
         // generation and evidence uploads write only qa R2/D1, readiness admission writes only
         // qa D1, and the customer page family (portal, contract acceptance, material decision)
         // mails only the customer address on the qa record, which is synthetic or a tester's
-        // own. Still off here, each for a missing dependency: Hermes desktop (needs the desktop
-        // client), proposal publication and the four approval brokers (the brokers run through
-        // Frappe, which is being retired), Facet quote-revision prepare and Facet design ingest
-        // (no consumer in the Worker).
+        // own. Still off here, each for a missing dependency: proposal publication and the four
+        // approval brokers (the brokers run through Frappe, which is being retired), Facet
+        // quote-revision prepare and Facet design ingest (no consumer in the Worker).
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "true",
           "APP_PRICING_CATALOG_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
           "APP_READINESS_ADMISSION_ENABLED": "true",
           "APP_EVIDENCE_UPLOADS_ENABLED": "true",
-          "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "true",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
           "APP_CUSTOMER_PORTAL_DECISION_ENABLED": "true",

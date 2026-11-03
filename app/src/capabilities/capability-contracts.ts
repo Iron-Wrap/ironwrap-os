@@ -38,8 +38,6 @@ export type CapabilityState = (typeof capabilityStates)[number];
 export const KNOWN_CAPABILITY_IDS = [
   "quickbooks_oauth",
   "quickbooks_final_invoice",
-  "hermes_desktop",
-  "hermes_hosted_reference",
   "public_estimator",
   "newo",
   "postiz",

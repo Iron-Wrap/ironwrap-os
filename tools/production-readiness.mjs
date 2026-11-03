@@ -268,8 +268,6 @@ const CAPABILITY_REFERENCE_STATE = {
   facet_launch: "unconfigured",
   facet_native_projection: "dependency_blocked",
   facet_quote_revision_prepare: "absent",
-  hermes_desktop: "off",
-  hermes_hosted_reference: "off",
   newo: "off",
   postiz: "off",
   proposal_publication: "off",

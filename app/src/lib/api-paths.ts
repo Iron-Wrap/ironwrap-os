@@ -30,7 +30,6 @@ export const API_PATHS = {
   magicLinkRequest: "/api/v1/auth/magic-link/request",
   magicLinkConsume: "/api/v1/auth/magic-link/consume",
   devicePairingConsume: "/api/v1/auth/device-pairing/consume",
-  hermesDesktopPairings: "/api/v1/hermes/desktop-pairings",
   customerPortalResolve: "/api/v1/customer-portal/resolve",
   customerPortalAcceptanceChallenge: "/api/v1/customer-portal/acceptance/challenge",
   customerPortalAcceptancePreview: "/api/v1/customer-portal/acceptance/preview",

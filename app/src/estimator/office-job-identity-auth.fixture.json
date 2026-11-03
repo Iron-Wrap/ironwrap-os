@@ -1,0 +1,52 @@
+{
+  "legacyQuote": {
+    "version": 1,
+    "read_model_generated_at": "2026-07-12T12:00:00.000Z",
+    "permissions": ["estimator.read"],
+    "allowed_actions": ["quote_revision_approval.read"],
+    "approval": {
+      "id": "quote-revision-approval:test-001",
+      "kind": "quote_revision",
+      "state": "pending",
+      "version": 1,
+      "action": "create_quote_revision_draft",
+      "roof_job_id": "RJ-FACET-0001",
+      "source": {
+        "customer_quote_id": "CUSTOMER-QUOTE-001",
+        "quote_version": 1,
+        "status": "Needs Review",
+        "modified": "2026-07-12T12:00:00.000Z"
+      },
+      "target": {
+        "doctype": "Customer Quote",
+        "customer_quote_id": "CUSTOMER-QUOTE-001-v2",
+        "quote_version": 2
+      },
+      "correction_reason": "Correct the measurement source before new commercial terms are entered.",
+      "request_text": "Prepare an append-only Draft Customer Quote revision shell after human review. Reason: Correct the measurement source before new commercial terms are entered.",
+      "preview": null,
+      "expires_at": "2026-07-12T12:05:00.000Z",
+      "requested_by": {
+        "user_id": "appu_owner",
+        "frappe_user": "synthetic-owner@example.invalid"
+      },
+      "approved_by": null,
+      "rejection_reason": null,
+      "run_id": "run:quote-revision:test-001",
+      "hermes_run_id": null,
+      "outcome": null,
+      "error_code": null,
+      "reconciliation": null,
+      "created_at": "2026-07-12T12:00:00.000Z",
+      "updated_at": "2026-07-12T12:00:00.000Z",
+      "completed_at": null
+    }
+  },
+  "identity": {
+    "id": "RJ-FACET-0001",
+    "roof_job_id": "RJ-FACET-0001",
+    "job_number": "IW-SYNTHETIC-D5",
+    "customer_display_name": "Synthetic Cedar Household",
+    "address": "118 Example Way NW, Edmonton, AB, CA"
+  }
+}

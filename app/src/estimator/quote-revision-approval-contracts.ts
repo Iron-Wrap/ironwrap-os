@@ -6,6 +6,10 @@ const boundedText = (min: number, max: number) => z.string().trim().min(min).max
 const nullableText = (min: number, max: number) => boundedText(min, max).nullable();
 const identifier = boundedText(1, 140);
 const positiveVersion = z.number().int().positive();
+const displayText = z
+  .string()
+  .nullable()
+  .transform((value) => value?.trim() || null);
 
 const noCommercialEffectsSchema = z
   .object({
@@ -210,8 +214,30 @@ export const quoteRevisionApprovalListResponseSchema = approvalReadEnvelopeSchem
 export const quoteRevisionApprovalDetailResponseSchema = approvalReadEnvelopeSchema
   .extend({
     approval: quoteRevisionApprovalRequestSchema,
+    // Current native job identity is read context, never part of the frozen approval or a write.
+    job: z
+      .object({
+        id: identifier,
+        roof_job_id: identifier,
+        job_number: displayText,
+        customer_display_name: displayText,
+        address: displayText,
+      })
+      .strict()
+      .nullable()
+      .optional()
+      .transform((job) => job ?? null),
   })
-  .strict();
+  .strict()
+  .superRefine(({ approval, job }, context) => {
+    if (job && (job.id !== approval.roof_job_id || job.roof_job_id !== approval.roof_job_id)) {
+      context.addIssue({
+        code: "custom",
+        message: "Job identity does not match the quote revision approval.",
+        path: ["job"],
+      });
+    }
+  });
 
 export const quoteRevisionApprovalMutationResponseSchema = z
   .object({

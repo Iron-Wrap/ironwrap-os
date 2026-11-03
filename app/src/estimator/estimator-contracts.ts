@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const nullableText = z.string().min(1).nullable();
+const optionalDisplayText = z
+  .string()
+  .nullable()
+  .optional()
+  .transform((value) => value?.trim() || null);
 const nullableNumber = z.number().finite().nullable();
 const nullablePercentage = z.number().finite().min(0).max(100).nullable();
 
@@ -401,6 +406,8 @@ export const estimatorWorkbenchResponseSchema = envelopeSchema
         id: z.string().min(1),
         roof_job_id: nullableText,
         job_number: nullableText,
+        customer_display_name: optionalDisplayText,
+        address: optionalDisplayText,
         brand: nullableText,
         service_type: nullableText,
         status: nullableText,

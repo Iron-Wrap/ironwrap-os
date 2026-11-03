@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -14,7 +14,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -23,7 +23,6 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { PageHeader } from "../components/ui/page-header";
-import { RefTag } from "../components/ui/ref-tag";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { Status, type StatusKind } from "../components/ui/status";
@@ -31,8 +30,15 @@ import { SystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { jobLabelParts } from "../lib/job-label";
 import { ApprovalReceipt } from "../owner/approval-receipt";
 import { loadEstimatorWorkbench } from "./estimator-api";
+import {
+  estimatorWorkbenchQueryKey,
+  officeJobIdentityScope,
+  quoteRevisionApprovalDetailQueryKey,
+  type OfficeJobIdentityScope,
+} from "./office-job-identity-query";
 import {
   approveQuoteRevisionApproval,
   loadQuoteRevisionApproval,
@@ -52,7 +58,12 @@ import type {
 
 type ReconciliationOutcome = "executed" | "not_executed" | "inconclusive";
 
-type RevisionDecisionAction =
+type RevisionReviewScope = {
+  session: OfficeJobIdentityScope;
+  approvalId: string;
+};
+
+type RevisionDecisionAction = (
   | { kind: "approve"; approval: QuoteRevisionApprovalRequest }
   | { kind: "reject"; approval: QuoteRevisionApprovalRequest; reason: string }
   | {
@@ -60,7 +71,15 @@ type RevisionDecisionAction =
       approval: QuoteRevisionApprovalRequest;
       outcome: ReconciliationOutcome;
       evidence: string;
-    };
+    }
+) & { scope: RevisionReviewScope };
+
+const decisionMutationKey = ["quote-revision-approval-decision"] as const;
+
+const detailKeyFor = (scope: RevisionReviewScope) =>
+  quoteRevisionApprovalDetailQueryKey(scope.session, scope.approvalId);
+const queueKeyFor = (scope: RevisionReviewScope) =>
+  ["quote-revision-approvals", scope.session.tenantId, scope.session.userId] as const;
 
 const statePresentation: Record<
   QuoteRevisionApprovalRequest["state"],
@@ -291,13 +310,20 @@ function QuoteRevisionApprovalDetailContent() {
   const session = useSession();
   const queryClient = useQueryClient();
   const offline = isOfflineSession(session);
-  const queryKey = [
-    "quote-revision-approval",
-    session.tenant.id,
-    session.user.id,
-    approvalId,
-  ] as const;
-  const queueKey = ["quote-revision-approvals", session.tenant.id, session.user.id] as const;
+  // An opaque session identity keeps credentials out of mutation variables and cache keys.
+  const sessionScope = useMemo(() => officeJobIdentityScope(session), [session]);
+  const scope = useMemo(
+    () => ({ session: sessionScope, approvalId: approvalId ?? "" }),
+    [sessionScope, approvalId],
+  );
+  const visibleScope = useRef<RevisionReviewScope | null>(scope);
+  useLayoutEffect(() => {
+    visibleScope.current = scope;
+    return () => {
+      visibleScope.current = null;
+    };
+  }, [scope]);
+  const queryKey = detailKeyFor(scope);
   const query = useQuery({
     queryKey,
     enabled: Boolean(approvalId),
@@ -314,60 +340,100 @@ function QuoteRevisionApprovalDetailContent() {
   const [actionError, setActionError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [requiresFreshRead, setRequiresFreshRead] = useState(false);
+  const [feedbackScope, setFeedbackScope] = useState(scope);
+  if (feedbackScope !== scope) {
+    setFeedbackScope(scope);
+    setRejecting(false);
+    setRejectionReason("");
+    setReconciling(false);
+    setReconciliationOutcome("inconclusive");
+    setReconciliationEvidence("");
+    setActionError(undefined);
+    setNotice(undefined);
+    setRequiresFreshRead(false);
+  }
 
   async function refreshCurrentRequest() {
     try {
       const result = await query.refetch();
-      if (!result.error && result.data) setRequiresFreshRead(false);
+      if (!result.error && result.data && visibleScope.current === scope) {
+        setRequiresFreshRead(false);
+      }
     } catch {
       // The visible read-state warning remains the source of truth until a current response arrives.
     }
   }
 
   const mutation = useMutation({
+    mutationKey: decisionMutationKey,
     retry: false,
     mutationFn: async (action: RevisionDecisionAction) => {
+      let result: QuoteRevisionApprovalMutationResponse;
       if (action.kind === "reconcile") {
-        return await reconcileQuoteRevisionApproval(
+        result = await reconcileQuoteRevisionApproval(
           session,
           action.approval.id,
           action.approval.version,
           action.outcome,
           action.evidence,
         );
+      } else {
+        const keyName = JSON.stringify([
+          action.scope.session.tenantId,
+          action.scope.session.userId,
+          action.kind,
+          action.approval.id,
+        ]);
+        const idempotencyKey = keys.current.get(keyName) ?? newQuoteRevisionApprovalDecisionKey();
+        keys.current.set(keyName, idempotencyKey);
+        result =
+          action.kind === "approve"
+            ? await approveQuoteRevisionApproval(
+                session,
+                action.approval.id,
+                action.approval.version,
+                idempotencyKey,
+              )
+            : await rejectQuoteRevisionApproval(
+                session,
+                action.approval.id,
+                action.approval.version,
+                action.reason,
+                idempotencyKey,
+              );
       }
-      const keyName = `${action.kind}:${action.approval.id}`;
-      const idempotencyKey = keys.current.get(keyName) ?? newQuoteRevisionApprovalDecisionKey();
-      keys.current.set(keyName, idempotencyKey);
-      return action.kind === "approve"
-        ? await approveQuoteRevisionApproval(
-            session,
-            action.approval.id,
-            action.approval.version,
-            idempotencyKey,
-          )
-        : await rejectQuoteRevisionApproval(
-            session,
-            action.approval.id,
-            action.approval.version,
-            action.reason,
-            idempotencyKey,
-          );
+      if (!sameReviewBinding(action.approval, result.approval)) {
+        throw new ApiError({
+          status: 502,
+          code: "quote_revision_approval_binding_mismatch",
+          message: "The decision result does not match the reviewed request.",
+        });
+      }
+      return result;
     },
     onSuccess: (result: QuoteRevisionApprovalMutationResponse, action: RevisionDecisionAction) => {
-      queryClient.setQueryData<QuoteRevisionApprovalDetailResponse>(queryKey, (current) =>
-        current ? { ...current, approval: result.approval } : current,
+      if (visibleScope.current?.session !== action.scope.session) return;
+      queryClient.setQueryData<QuoteRevisionApprovalDetailResponse>(
+        detailKeyFor(action.scope),
+        (current) =>
+          // Keep the current identity only with the same immutable request/job/source-quote binding.
+          current && sameReviewBinding(current.approval, result.approval)
+            ? { ...current, approval: result.approval }
+            : current,
       );
-      queryClient.setQueryData<QuoteRevisionApprovalListResponse>(queueKey, (current) =>
-        current
-          ? {
-              ...current,
-              approvals: current.approvals.map((approval) =>
-                approval.id === result.approval.id ? result.approval : approval,
-              ),
-            }
-          : current,
+      queryClient.setQueryData<QuoteRevisionApprovalListResponse>(
+        queueKeyFor(action.scope),
+        (current) =>
+          current
+            ? {
+                ...current,
+                approvals: current.approvals.map((approval) =>
+                  approval.id === result.approval.id ? result.approval : approval,
+                ),
+              }
+            : current,
       );
+      if (visibleScope.current !== action.scope) return;
       setActionError(undefined);
       setRejecting(false);
       setRejectionReason("");
@@ -385,15 +451,43 @@ function QuoteRevisionApprovalDetailContent() {
               : "The saved state changed. Check it before you do more.",
       );
     },
-    onError: (error) => {
+    onError: (error, action) => {
+      if (visibleScope.current !== action.scope) return;
       setActionError(messageFor(error));
       setNotice(undefined);
       setRequiresFreshRead(true);
     },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queueKey });
-      void refreshCurrentRequest();
+    onSettled: (_result, _error, action) => {
+      const sameSession = visibleScope.current?.session === action.scope.session;
+      void queryClient.invalidateQueries({
+        queryKey: queueKeyFor(action.scope),
+        refetchType: sameSession ? "active" : "none",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: detailKeyFor(action.scope),
+        exact: true,
+        refetchType: "none",
+      });
+      // Never issue an old session's read using the current session's credentials.
+      if (!sameSession) return;
+      void queryClient
+        .fetchQuery({
+          queryKey: detailKeyFor(action.scope),
+          queryFn: () => loadQuoteRevisionApproval(action.scope.approvalId),
+        })
+        .then(() => {
+          if (visibleScope.current === action.scope) setRequiresFreshRead(false);
+        })
+        .catch(() => {
+          // Retain the originating read/error state until an authoritative read succeeds.
+        });
     },
+  });
+
+  const pendingDecisions = useMutationState({
+    filters: { mutationKey: decisionMutationKey, status: "pending" },
+    // Mutation instances preserve the opaque session reference through structural sharing.
+    select: (decision) => decision,
   });
 
   if (!approvalId) {
@@ -436,26 +530,40 @@ function QuoteRevisionApprovalDetailContent() {
     !offline &&
     !decisionReadStale &&
     model.allowed_actions.includes("quote_revision_approval.reconcile");
-  const pendingAction = mutation.isPending;
+  function pendingForCurrentScope(variables: unknown) {
+    const pendingScope = (variables as RevisionDecisionAction | undefined)?.scope;
+    return pendingScope?.session === scope.session && pendingScope.approvalId === scope.approvalId;
+  }
+  const pendingAction = pendingDecisions.some(
+    (decision) =>
+      decision.state.status === "pending" && pendingForCurrentScope(decision.state.variables),
+  );
+  function hasPendingDecision() {
+    return queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: decisionMutationKey, status: "pending" })
+      .some((decision) => pendingForCurrentScope(decision.state.variables));
+  }
 
   function approve() {
-    if (!canApprove || pendingAction || approval.state !== "pending") return;
+    if (!canApprove || hasPendingDecision() || approval.state !== "pending") return;
     setActionError(undefined);
-    mutation.mutate({ kind: "approve", approval });
+    mutation.mutate({ kind: "approve", approval, scope });
   }
 
   function reject() {
     const reason = rejectionReason.trim();
-    if (!canReject || pendingAction || approval.state !== "pending" || reason.length < 3) return;
+    if (!canReject || hasPendingDecision() || approval.state !== "pending" || reason.length < 3)
+      return;
     setActionError(undefined);
-    mutation.mutate({ kind: "reject", approval, reason });
+    mutation.mutate({ kind: "reject", approval, reason, scope });
   }
 
   function reconcile() {
     const evidence = reconciliationEvidence.trim();
     if (
       !canReconcile ||
-      pendingAction ||
+      hasPendingDecision() ||
       approval.state !== "execution_uncertain" ||
       evidence.length < 3
     ) {
@@ -465,6 +573,7 @@ function QuoteRevisionApprovalDetailContent() {
     mutation.mutate({
       kind: "reconcile",
       approval,
+      scope,
       outcome: reconciliationOutcome,
       evidence,
     });
@@ -482,12 +591,7 @@ function QuoteRevisionApprovalDetailContent() {
             Quote change reviews
           </Link>
         }
-        eyebrow={
-          <RefTag
-            id={approval.roof_job_id}
-            className="h-auto! min-h-6 max-w-full whitespace-normal! py-1! leading-4!"
-          />
-        }
+        eyebrow={<RevisionJobIdentity job={model.job} />}
         title="Review the new empty draft"
       />
 
@@ -612,7 +716,7 @@ function QuoteRevisionApprovalPrepareContent() {
   const offline = isOfflineSession(session);
   const navigate = useNavigate();
   const query = useQuery({
-    queryKey: ["estimator-workbench", session.tenant.id, session.user.id, jobId],
+    queryKey: estimatorWorkbenchQueryKey(officeJobIdentityScope(session), jobId),
     enabled: Boolean(jobId),
     queryFn: () => loadEstimatorWorkbench(jobId!),
     retry: false,
@@ -721,6 +825,9 @@ function QuoteRevisionApprovalPrepareContent() {
                 <FilePlus2 className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
+                <p className="text-sm font-semibold text-muted">
+                  <RevisionJobIdentity job={model.job} />
+                </p>
                 <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   Ask for a new quote
                 </h1>
@@ -1412,6 +1519,46 @@ function QueueSkeleton() {
   );
 }
 
+function RevisionJobIdentity({
+  job,
+}: {
+  job: {
+    customer_display_name?: string | null;
+    address?: string | null;
+    job_number?: string | null;
+  } | null;
+}) {
+  const { lead, code } = jobLabelParts({
+    customer: job?.customer_display_name,
+    address: job?.address,
+    code: job?.job_number,
+  });
+  return (
+    <span aria-label="Job identity" className="break-words">
+      {lead}
+      {lead && code ? " · " : null}
+      {code ? <span className="whitespace-nowrap">{`Job ${code}`}</span> : null}
+      {!lead && !code ? "Job details unavailable" : null}
+    </span>
+  );
+}
+
+function sameReviewBinding(
+  left: QuoteRevisionApprovalRequest,
+  right: QuoteRevisionApprovalRequest,
+) {
+  return (
+    left.id === right.id &&
+    left.roof_job_id === right.roof_job_id &&
+    left.source.customer_quote_id === right.source.customer_quote_id &&
+    left.source.quote_version === right.source.quote_version &&
+    left.source.status === right.source.status &&
+    left.source.modified === right.source.modified &&
+    left.target.customer_quote_id === right.target.customer_quote_id &&
+    left.target.quote_version === right.target.quote_version
+  );
+}
+
 function DetailSkeleton() {
   return (
     <section
@@ -1458,6 +1605,8 @@ function messageFor(error: unknown): string {
       return "This review ended before you chose. Start a new review from the quote.";
     case "quote_revision_approval_version_conflict":
       return "This request changed. Load it again before you choose.";
+    case "quote_revision_approval_binding_mismatch":
+      return "The result did not match this review. Load the saved request before you choose again.";
     case "execution_uncertain":
       return "We could not tell if the draft was made. Do not try again. Check the saved result.";
     case "quote_revision_approval_not_pending":

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  quoteRevisionApprovalDetailResponseSchema,
   quoteRevisionApprovalListResponseSchema,
+  quoteRevisionApprovalMutationResponseSchema,
   quoteRevisionApprovalRequestSchema,
 } from "./quote-revision-approval-contracts";
 
@@ -73,6 +75,104 @@ function approvalPayload() {
 }
 
 describe("quote revision approval browser contract", () => {
+  const detailPayload = () => ({
+    version: 1,
+    read_model_generated_at: "synthetic-read",
+    permissions: ["estimator:read"],
+    allowed_actions: ["quote_revision_approval.read"],
+    approval: approvalPayload(),
+  });
+  const jobIdentity = () => ({
+    id: "ROOF-JOB-001",
+    roof_job_id: "ROOF-JOB-001",
+    job_number: "IW-SYNTHETIC-101",
+    customer_display_name: "Synthetic Cedar Household",
+    address: "Unit 4, 118 Example Way NW, Edmonton, AB, CA",
+  });
+
+  it("normalizes an older or explicitly unavailable detail identity to null", () => {
+    expect(quoteRevisionApprovalDetailResponseSchema.parse(detailPayload()).job).toBeNull();
+    expect(
+      quoteRevisionApprovalDetailResponseSchema.parse({ ...detailPayload(), job: null }).job,
+    ).toBeNull();
+  });
+
+  it("accepts current identity only in the detail envelope for its exact roof job", () => {
+    const parsed = quoteRevisionApprovalDetailResponseSchema.parse({
+      ...detailPayload(),
+      job: jobIdentity(),
+    });
+    expect(parsed.job).toEqual(jobIdentity());
+    expect(parsed.approval).not.toHaveProperty("job");
+    const { approval, ...envelope } = detailPayload();
+    const list = { ...envelope, approvals: [approval] };
+    expect(quoteRevisionApprovalListResponseSchema.safeParse(list).success).toBe(true);
+    expect(
+      quoteRevisionApprovalListResponseSchema.safeParse({
+        ...list,
+        job: jobIdentity(),
+      }).success,
+    ).toBe(false);
+    expect(
+      quoteRevisionApprovalMutationResponseSchema.safeParse({ approval: approvalPayload() })
+        .success,
+    ).toBe(true);
+    expect(
+      quoteRevisionApprovalMutationResponseSchema.safeParse({
+        approval: approvalPayload(),
+        job: jobIdentity(),
+      }).success,
+    ).toBe(false);
+    expect(
+      quoteRevisionApprovalRequestSchema.safeParse({ ...approvalPayload(), job: jobIdentity() })
+        .success,
+    ).toBe(false);
+  });
+
+  it.each(["id", "roof_job_id"] as const)(
+    "rejects a detail identity when %s belongs to another job",
+    (field) => {
+      expect(
+        quoteRevisionApprovalDetailResponseSchema.safeParse({
+          ...detailPayload(),
+          job: { ...jobIdentity(), [field]: "ROOF-JOB-OTHER" },
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it("keeps distinct same-tenant jobs separate and normalizes partial or blank display fields", () => {
+    const first = quoteRevisionApprovalDetailResponseSchema.parse({
+      ...detailPayload(),
+      job: jobIdentity(),
+    });
+    const second = quoteRevisionApprovalDetailResponseSchema.parse({
+      ...detailPayload(),
+      approval: { ...approvalPayload(), roof_job_id: "ROOF-JOB-OTHER" },
+      job: {
+        id: "ROOF-JOB-OTHER",
+        roof_job_id: "ROOF-JOB-OTHER",
+        job_number: "  ",
+        customer_display_name: null,
+        address: "\t",
+      },
+    });
+    expect(first.job?.customer_display_name).toBe("Synthetic Cedar Household");
+    expect(second.job).toEqual({
+      id: "ROOF-JOB-OTHER",
+      roof_job_id: "ROOF-JOB-OTHER",
+      job_number: null,
+      customer_display_name: null,
+      address: null,
+    });
+    expect(
+      quoteRevisionApprovalDetailResponseSchema.safeParse({
+        ...detailPayload(),
+        job: { ...jobIdentity(), customer_email: "synthetic@example.invalid" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts the frozen approved snapshot from newer servers and its absence from older ones", () => {
     const snapshot = {
       snapshot_id: `approval-snapshot:${"a".repeat(64)}`,

@@ -2,12 +2,23 @@ import { mkdir } from "node:fs/promises";
 
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { QuoteRevisionApprovalRequest } from "../src/estimator/quote-revision-approval-contracts";
+import type {
+  QuoteRevisionApprovalDetailResponse,
+  QuoteRevisionApprovalRequest,
+} from "../src/estimator/quote-revision-approval-contracts";
 import { expectTouchTarget } from "./touch-target";
 
 const quoteReviewMode = process.env.ACCEPTANCE_MODE === "estimator";
 const approvalId = "quote-revision-approval:e2e-001";
 const shotDir = ".playwright-mobile";
+// Synthetic current native-job identity; it never enters an approval or mutation payload.
+const syntheticJob = {
+  id: "JOB-ESTIMATOR-ACCEPTANCE",
+  roof_job_id: "JOB-ESTIMATOR-ACCEPTANCE",
+  job_number: "IW-SYNTHETIC-101",
+  customer_display_name: "Synthetic Cedar Household",
+  address: "Unit 4, 118 Example Way NW, Edmonton, AB",
+};
 
 const approval: QuoteRevisionApprovalRequest = {
   id: approvalId,
@@ -75,13 +86,19 @@ const approval: QuoteRevisionApprovalRequest = {
 async function serveApproval(
   page: Page,
   initial = structuredClone(approval),
-  options: { readOnly?: boolean; uncertain?: boolean; responseGate?: Promise<void> } = {},
+  options: {
+    readOnly?: boolean;
+    uncertain?: boolean;
+    responseGate?: Promise<void>;
+    job?: QuoteRevisionApprovalDetailResponse["job"];
+  } = {},
 ) {
   let current = initial;
   const writes: { action: string; body: unknown; idempotencyKey: string | undefined }[] = [];
   await page.route("**/api/v1/quote-revision-approvals/**", async (route) => {
     const request = route.request();
     if (request.method() === "POST") {
+      expect(new URL(request.url()).search).toBe("");
       expect(request.headers()["x-csrf-token"]).toBe("estimator-acceptance-csrf");
       const action = new URL(request.url()).pathname.split("/").at(-1)!;
       const body = request.postDataJSON();
@@ -134,6 +151,7 @@ async function serveApproval(
       await route.fulfill({ json: { approval: current } });
       return;
     }
+    expect(new URL(request.url()).searchParams.getAll("include_job_identity")).toEqual(["1"]);
     await route.fulfill({
       json: {
         version: 1,
@@ -150,6 +168,7 @@ async function serveApproval(
                 : []),
         ],
         approval: current,
+        ...(Object.hasOwn(options, "job") ? { job: options.job } : {}),
       },
     });
   });
@@ -171,6 +190,81 @@ test.describe("Quote change review acceptance", () => {
 
   test.beforeAll(async () => {
     await mkdir(shotDir, { recursive: true });
+  });
+
+  test("reads detail identity from its own envelope and retains it across a bound decision", async ({
+    page,
+  }) => {
+    const writes = await serveApproval(page, structuredClone(approval), { job: syntheticJob });
+    await expect(page.getByLabel("Job identity")).toHaveText(
+      "Synthetic Cedar Household · Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101",
+    );
+    await page.getByRole("button", { name: "Make empty draft" }).click();
+    await expect(page.getByRole("heading", { name: "Draft is ready" })).toBeVisible();
+    await expect(page.getByLabel("Job identity")).toHaveText(
+      "Synthetic Cedar Household · Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101",
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0].body).toEqual({ version: 1 });
+    await expectNoOverflow(page);
+  });
+
+  test("shows missing identity for an older detail instead of an internal job code", async ({
+    page,
+  }) => {
+    await serveApproval(page);
+    await expect(page.getByLabel("Job identity")).toHaveText("Job details unavailable");
+    await expect(page.getByLabel("Job identity")).not.toContainText(approval.roof_job_id);
+  });
+
+  test("rejects a detail identity for another job before showing decision controls", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/quote-revision-approvals/**", (route) =>
+      route.fulfill({
+        json: {
+          version: 1,
+          read_model_generated_at: "synthetic-read",
+          permissions: ["estimator:read"],
+          allowed_actions: ["quote_revision_approval.read", "quote_revision_approval.approve"],
+          approval,
+          job: { ...syntheticJob, roof_job_id: "JOB-SYNTHETIC-OTHER" },
+        },
+      }),
+    );
+    await page.goto(`/quote-revision-approvals/${encodeURIComponent(approval.id)}`);
+    await expect(page.getByRole("heading", { name: "Quote review could not load" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Make empty draft" })).toHaveCount(0);
+    await expect(page.getByText(syntheticJob.customer_display_name)).toHaveCount(0);
+  });
+
+  test("names the selected estimator job on the preparation route when that action is granted", async ({
+    page,
+  }) => {
+    await page.route(
+      (url) => url.pathname === `/api/v1/estimator/jobs/${syntheticJob.id}`,
+      async (route) => {
+        expect(new URL(route.request().url()).searchParams.getAll("include_job_identity")).toEqual([
+          "1",
+        ]);
+        const response = await route.fetch();
+        const model = await response.json();
+        await route.fulfill({
+          response,
+          json: {
+            ...model,
+            allowed_actions: [...model.allowed_actions, "quote_revision_approval.prepare"],
+            job: { ...model.job, ...syntheticJob },
+          },
+        });
+      },
+    );
+    await page.goto(`/estimator/jobs/${syntheticJob.id}/revision`);
+    await expect(page.getByRole("heading", { name: "Ask for a new quote" })).toBeVisible();
+    await expect(page.getByLabel("Job identity")).toHaveText(
+      "Synthetic Cedar Household · Unit 4, 118 Example Way NW · Job IW-SYNTHETIC-101",
+    );
+    await expectNoOverflow(page);
   });
 
   test("keeps the choice clear and system IDs out of the first view", async ({

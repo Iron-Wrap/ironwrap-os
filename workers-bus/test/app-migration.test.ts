@@ -2343,8 +2343,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0159 binds Crew by policy in the scheduling batch and checks current gate evidence.
     // 0160 holds a firm start, Materials attestation and job purchase order lines while the
     // cancellation window is unknown or open, and records receipt of the signed copy.
+    // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 147);
+    assert.equal(migrations.length, 148);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2510,6 +2511,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // each, plus four cancellation-window holds: three tables and sixteen triggers, no named index.
     // It also adds a job link to purchase order lines and re-creates the assignment validate and
     // ledger replace guards under their existing names.
+    // 0169 re-creates 0067's AP invoice line readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
       { tables: 285, indexes: 382, triggers: 802 },

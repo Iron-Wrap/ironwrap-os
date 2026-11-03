@@ -1565,6 +1565,10 @@ async function versionMetadataFixture(t) {
   const configPath = path.join(candidateRoot, "workers-bus", "wrangler.jsonc");
   const source = await readFile(path.join(policyRoot, "workers-bus", "wrangler.jsonc"), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  // Admission compares an explicit no-metadata baseline with the new binding, even when
+  // the repository's own serving configuration already declares that binding.
+  delete config.version_metadata;
+  for (const selected of Object.values(config.env ?? {})) delete selected.version_metadata;
   await mkdir(path.join(candidateRoot, "workers-bus", "src"), { recursive: true });
   await writeFile(path.join(candidateRoot, "workers-bus", "src", "secret-bindings.d.ts"),
     await readFile(path.join(policyRoot, "workers-bus", "src", "secret-bindings.d.ts")));

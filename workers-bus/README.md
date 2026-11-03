@@ -685,6 +685,50 @@ deployment/session isolation boundary: provisioning rejects any other tenant, ev
 back to an active user on that tenant, and the BFF rejects a session whose tenant differs. If a
 Frappe compatibility site is enabled, it is dedicated to that same tenant. A reseller tenant gets a
 separate deployment and credential set until record-level tenant isolation is proven.
+
+The P1 auth producer is a staged-closed bridge. Migration `0173_app_auth_protocol_v2.sql`
+expands the schema at protocol floor 1 without enrolling contexts or retiring legacy credentials.
+All serving configurations keep `AUTH_RECOVERY_ENROLLMENT_ENABLED=false`; the shipping PWA
+recovery client is unchanged. The legacy bodies and session examples below describe STAGED
+floor-1 behavior, rather than an active v2 client contract.
+
+P1 reads the dedicated external `auth-control/head-v2` object without caching for each protected
+auth exchange and again before returning a receipt. Its actual `CF_VERSION_METADATA.id`, configured
+database identity, allowed producer binding and D1 mirror must agree with that head. Missing or
+unavailable control, a closed head, or a mismatched revision refuses protected admission without a
+successful cookie or private response. The source names `AUTH_CONTROL_ACCOUNT_ID`,
+`AUTH_CONTROL_BUCKET`, `AUTH_CONTROL_KEY`, `AUTH_DATABASE_IDENTITY` and
+`AUTH_CONTROL_ENVIRONMENT`; application Workers receive only the separate
+`AUTH_CONTROL_READ_ACCESS_KEY_ID` / `AUTH_CONTROL_READ_SECRET_ACCESS_KEY` identities. Bucket,
+permission and provider bindings remain provisioning gates, not consequences of these source values.
+
+The v2 wire codec and exact vectors are in `shared/auth-protocol-v2.contract.json` and
+`shared/auth-protocol-v2.vectors.json`. An independently pinned context and immutable exchange
+headers bind the request to the actual response receipt. Active-protocol `POST /api/v1/session`
+provides non-authorizing enrollment preparation and same-principal recovery; magic/pair consume
+and logout use fenced SQL batches. Enrollment preparation cannot authenticate, and an issuance
+sequence newer than its saved challenge floor is required for a grant to replace a context.
+The final database-clock, current-pointer, user and device checks belong to the same atomic batch
+as the claim, session, retirement and required audit. Recovery preserves the original session expiry.
+At floor 2, schema guards reject legacy session/grant revival and preserve context tombstones;
+legacy role and withdrawal writes also fence the current context.
+
+The captured trusted predecessor owns `auth-control-update`, `auth-protocol-mirror` and
+`auth-switch-preflight` in `tools/release-promotion.mjs`. These commands bind the reviewed source,
+main CI, actual provider versions, policy closure and conditional external-head writer. They do not
+grant a deployment or enroll a client. P1 supplies the adapters with enrollment closed; the later
+protected workflow must invoke floor preflight before candidate, predecessor and failure-cleanup
+switches. Active operation requires two compatible protocol-2 versions, including zero-percent
+deployment members. A null qualification hash is limited to explicitly synthetic QA probes;
+production activation requires the completed exact producer/schema/active-predecessor artifact.
+No such qualification artifact is emitted by P1.
+
+Backup and isolated restore inventories include all four auth metadata tables, both indexes and
+all 23 guard triggers, with semantic checks that reject weakened guards under the same names.
+The external control head is never part of a database snapshot. Restoring a previously active
+snapshot still needs the separately qualified closed-gate/new-target/new-issuer procedure; these
+mechanical inventory checks do not qualify auth freshness or reopen an old issuer.
+
 The magic-link request body is `{ "email": "…" }`; the Worker infers its configured tenant. A
 legacy caller may also send `tenant_id`, but a mismatch still receives the same generic `202` and
 never selects another tenant.

@@ -8,11 +8,12 @@
 //
 // Most cases drive the script with a stub scanner, so they assert what the script
 // controls - which tree it exports and how it maps a scanner's exit status - on a
-// machine with no gitleaks. The last two cases need the real pinned binary and
+// machine with no gitleaks. The real scanner cases need the pinned binary and
 // skip without it; CI runs this file inside the `secret-scan` job, where it is
 // installed, so they do run on every push.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -172,3 +173,87 @@ test("the real scanner passes a clean ref", { skip: needsGitleaks }, () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, new RegExp(`^ok no secrets detected in the tracked tree at ${ref}$`, "m"));
 });
+
+test(
+  "auth resource identifiers are scoped exactly; new values, other fields/files and vendor tokens still bite",
+  { skip: needsGitleaks },
+  () => {
+    const source = readFileSync(
+      join(root, "workers-bus", "wrangler.jsonc"),
+      "utf8",
+    );
+    const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+    const known = [
+      ["AUTH_CONTROL_ACCOUNT_ID", config.account_id],
+      ["AUTH_CONTROL_ACCOUNT_ID", config.env.qa.account_id],
+      ["AUTH_DATABASE_IDENTITY", config.d1_databases[0].database_id],
+      ["AUTH_DATABASE_IDENTITY", config.env.qa.d1_databases[0].database_id],
+    ];
+    const configTree = (content) => {
+      const child = scratchTree([{ name: "wrangler.jsonc", content }]);
+      const result = spawnSync("git", ["mktree"], {
+        cwd: root,
+        encoding: "utf8",
+        input: `040000 tree ${child}\tworkers-bus\n`,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    const body = (field, value) =>
+      `${JSON.stringify({ [field]: value }, null, 2)}\n`;
+    for (const [field, value] of known) {
+      const result = runScan({
+        ref: configTree(body(field, value)),
+        bin: gitleaks,
+      });
+      assert.equal(
+        result.status,
+        0,
+        "reviewed public resource identity must not be a credential finding",
+      );
+    }
+    // Generated deterministic fixtures are not credentials and are never sent to a provider.
+    const generic = createHash("sha256")
+      .update("scanner-only deterministic fixture, never a credential")
+      .digest("base64url");
+    const provider = `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`;
+    const rejected = [
+      {
+        name: "new account value",
+        ref: configTree(body("AUTH_CONTROL_ACCOUNT_ID", generic)),
+      },
+      {
+        name: "new database value",
+        ref: configTree(body("AUTH_DATABASE_IDENTITY", generic)),
+      },
+      {
+        name: "other field",
+        ref: configTree(
+          body("AUTH_CONTROL_READ_SECRET_ACCESS_KEY", known[0][1]),
+        ),
+      },
+      {
+        name: "other file",
+        ref: scratchTree([
+          {
+            name: "other-config.json",
+            content: body(known[0][0], known[0][1]),
+          },
+        ]),
+      },
+      {
+        name: "provider token",
+        ref: configTree(body("AUTH_CONTROL_ACCOUNT_ID", provider)),
+      },
+    ];
+    for (const { name, ref } of rejected) {
+      const result = runScan({ ref, bin: gitleaks });
+      assert.equal(
+        result.status,
+        1,
+        `a value outside the exact resource identity exception must be refused: ${name}`,
+      );
+      assert.match(result.stderr, /findings in the tracked tree/);
+    }
+  },
+);

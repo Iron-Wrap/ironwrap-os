@@ -1,3 +1,4 @@
+import {stagedP1Env} from "./auth-protocol-staged-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -886,6 +887,7 @@ test("the raw file and request read reject a missing browser session before stor
       APP_AUTH_PEPPER:
         "synthetic-local-auth-pepper-at-least-thirty-two-characters",
     });
+    stagedP1Env(harness.env);
     let reads = 0;
     bucket.get = async () => {
       reads += 1;

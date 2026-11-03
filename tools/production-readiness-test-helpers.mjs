@@ -24,6 +24,32 @@ export const HERMES_DESKTOP_MIGRATION = await readFile(
   path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations/0036_hermes_desktop_pilot.sql"),
   "utf8",
 );
+const AUTH_PROTOCOL_MIGRATION = await readFile(
+  path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations/0173_app_auth_protocol_v2.sql"),
+  "utf8",
+);
+// Operator fixtures use the installed auth guards, not same-name placeholders.
+// Their surrounding legacy tables remain synthetic; real auth behavior is tested
+// against every migration in workers-bus/test/auth-protocol-p1.test.ts.
+const AUTH_D1_TABLE_SQL = new Map(
+  [...AUTH_PROTOCOL_MIGRATION.matchAll(/CREATE TABLE (app_auth_[a-z_]+) \([\s\S]*?\n\);/g)]
+    .map(([sql, name]) => [name, sql]),
+);
+const AUTH_D1_INDEX_SQL = new Map(
+  [...AUTH_PROTOCOL_MIGRATION.matchAll(/CREATE (?:UNIQUE )?INDEX (idx_app_[a-z_]+)\b[\s\S]*?;/g)]
+    .map(([sql, name]) => [name, sql]),
+);
+const AUTH_D1_TRIGGER_SQL = new Map(
+  [...AUTH_PROTOCOL_MIGRATION.matchAll(/CREATE TRIGGER (app_auth_v2_[a-z_]+)\b[\s\S]*?\bEND;/g)]
+    .map(([sql, name]) => [name, sql]),
+);
+const AUTH_LEGACY_FIXTURE_COLUMNS = {
+  app_sessions: "tenant_id TEXT, session_hash TEXT, user_id TEXT, device_id TEXT, created_at TEXT, expires_at TEXT, revoked_at TEXT",
+  app_magic_links: "tenant_id TEXT, user_id TEXT, token_hash TEXT, created_at TEXT, expires_at TEXT, consumed_at TEXT",
+  app_device_pairings: "tenant_id TEXT, user_id TEXT, token_hash TEXT, created_at TEXT, expires_at TEXT, consumed_at TEXT, revoked_at TEXT",
+  app_devices: "tenant_id TEXT, user_id TEXT, device_id TEXT, device_proof_hash TEXT, revoked_at TEXT",
+  app_auth_audit: "created_at TEXT, tenant_id TEXT, user_id TEXT, event TEXT, outcome TEXT, ip_hash TEXT, user_agent_hash TEXT, detail_code TEXT",
+};
 export const APPROVAL_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
   type: "spki",
   format: "pem",
@@ -669,6 +695,7 @@ export function hermesIndexSql(name) {
 }
 
 export function d1IndexSql(name, table) {
+  if (AUTH_D1_INDEX_SQL.has(name)) return AUTH_D1_INDEX_SQL.get(name);
   if (HERMES_D1_INDEXES.has(name)) return hermesIndexSql(name);
   if (name === "idx_app_users_tenant_access_role_active")
     return `CREATE INDEX ${name} ON ${table}(tenant_id, active, access_role, updated_at);`;
@@ -700,8 +727,20 @@ export function d1IndexSql(name, table) {
 }
 
 export function d1GenericTableSql(name, index) {
+  if (AUTH_D1_TABLE_SQL.has(name)) {
+    const seed = AUTH_PROTOCOL_MIGRATION.match(new RegExp(`INSERT INTO ${name} VALUES[^;]*;`));
+    return `${AUTH_D1_TABLE_SQL.get(name)}\n${seed?.[0] ?? ""}`;
+  }
+  if (Object.hasOwn(AUTH_LEGACY_FIXTURE_COLUMNS, name)) {
+    const additions = [...AUTH_PROTOCOL_MIGRATION.matchAll(
+      new RegExp(`ALTER TABLE ${name} ADD COLUMN[\\s\\S]*?;`, "g"),
+    )].map(([sql]) => sql);
+    return `CREATE TABLE ${name} (id TEXT PRIMARY KEY, ${AUTH_LEGACY_FIXTURE_COLUMNS[name]});
+      INSERT INTO ${name} (id) VALUES ('row-${index}');\n${additions.join("\n")}`;
+  }
   if (name === "app_users") return `CREATE TABLE app_users (
     id TEXT PRIMARY KEY,
+    user_id TEXT,
     tenant_id TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     role TEXT NOT NULL,
@@ -946,6 +985,7 @@ export function d1TriggerSql(name, table, {
   wrongTimingApprovalTrigger = "",
   weakAccessRoleTrigger = false,
 } = {}) {
+  if (AUTH_D1_TRIGGER_SQL.has(name)) return AUTH_D1_TRIGGER_SQL.get(name);
   if (HERMES_D1_TRIGGERS.has(name)) return hermesTriggerSql(name);
   if (name === "native_measurement_revisions_receipt_guard") {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
@@ -1714,6 +1754,7 @@ if (( json == 1 )); then
     IFS="'" read -r _ table_name _ <<< "$command"
     result_table="$table_name"
     row_count=1
+    if [[ "$table_name" == 'app_auth_contexts' || "$table_name" == 'app_auth_enrollment_intents' ]]; then row_count=0; fi
     success=true
     results_mode=one
     if [[ "$MOCK_ROW_MISMATCH" == '1' && "$table_name" == '${REQUIRED_D1_TABLES[0]}' ]]; then row_count=2; fi

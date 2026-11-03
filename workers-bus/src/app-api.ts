@@ -323,6 +323,8 @@ import {
   validQuickBooksIntentId,
   type QuickBooksRejectionReason,
 } from "./quickbooks-final-invoice.ts";
+import { admitAuthProtocol, recheckAuthProtocol, unconfirmedAuthResponse } from "./auth-protocol-control.ts";
+import { handleActiveAuthProtocol } from "./auth-protocol-api.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 const MAX_COMMERCIAL_BODY_BYTES = 64 * 1024;
@@ -359,6 +361,22 @@ export async function handleAppApi(
   if (req.method === "OPTIONS")
     return withCors(new Response(null, { status: 204 }), origin.origin);
 
+  let protocol;
+  try {
+    protocol = await admitAuthProtocol(appEnv);
+  } catch {
+    return withCors(unconfirmedAuthResponse(), origin.origin);
+  }
+  if (protocol.mode === "active") {
+    return withCors(await handleActiveAuthProtocol(req,appEnv,protocol,ctx,
+      (auth) => handleAuthenticatedRoute(req,appEnv,auth,{ctx}),
+      async () => {
+        const accepted = await acceptUserInvite(req,appEnv,ctx,{protocol});
+        return accepted.ok ? privateAppJson({version:APP_API_VERSION,...accepted.body})
+          : privateAppJson({error:accepted.error},accepted.status);
+      }),origin.origin);
+  }
+
   let response: Response;
   if (
     req.method === "POST" &&
@@ -392,6 +410,11 @@ export async function handleAppApi(
     } else {
       response = await handleAuthenticatedRoute(req, appEnv, outcome.auth, { ctx });
     }
+  }
+  try {
+    await recheckAuthProtocol(appEnv, protocol);
+  } catch {
+    return withCors(unconfirmedAuthResponse(), origin.origin);
   }
   return withCors(response, origin.origin);
 }
@@ -8073,8 +8096,9 @@ function withCors(response: Response, origin: string | null): Response {
   headers.set("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
   headers.set(
     "access-control-allow-headers",
-    "Content-Type, X-CSRF-Token, X-IronWrap-Device-Proof, X-Device-Action-Id, Idempotency-Key, X-Request-ID, X-Correlation-ID",
+    "Content-Type, X-CSRF-Token, X-IronWrap-Device-Proof, X-Device-Action-Id, Idempotency-Key, X-Request-ID, X-Correlation-ID, X-IronWrap-Auth-Context, X-IronWrap-Auth-Exchange",
   );
+  headers.set("access-control-expose-headers", "X-IronWrap-Auth-Receipt, X-Request-ID, X-Correlation-ID, Retry-After");
   headers.set("access-control-max-age", "600");
   headers.append("vary", "Origin");
   return new Response(response.body, {

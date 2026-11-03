@@ -1,3 +1,4 @@
+import {stagedP1Env} from "./auth-protocol-staged-fixture.ts";
 // app-user-invites.test.ts — the office invitation credential, end to end through the real Worker.
 //
 // Every case here drives `worker.fetch` against a D1 built from the committed migration chain, so
@@ -132,7 +133,7 @@ interface Harness {
 function harness(): Harness {
   const db = new SqliteD1();
   const pending: Promise<unknown>[] = [];
-  const env = {
+  const env = stagedP1Env({
     APP_BFF_ENABLED: "true",
     APP_TENANT_ID: TENANT,
     APP_TENANT_NAME: "IronWrap OS",
@@ -149,7 +150,7 @@ function harness(): Harness {
     APP_AUTH_PEPPER: "test-only-pepper-which-is-longer-than-thirty-two-characters",
     ADMIN_TOKEN: "admin-token",
     DB: db,
-  } as never as AppEnv;
+  } as never as AppEnv);
   return {
     env,
     db,

@@ -52,6 +52,9 @@ interface Env {
   PUBLIC_ESTIMATE_TURNSTILE_SECRET: string;
   PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: string;
   APP_AUTH_PEPPER: string;
+  /** Dedicated bucket-scoped object-read credentials. Release writer credentials never bind here. */
+  AUTH_CONTROL_READ_ACCESS_KEY_ID: string;
+  AUTH_CONTROL_READ_SECRET_ACCESS_KEY: string;
   FACET_DESIGN_INGEST_HMAC_KEY: string;
   FACET_DESIGN_INGEST_TENANT_MAP_JSON: string;
   /** Rotating Facet v2 verification keys. Secret JSON; never a Wrangler var. */
@@ -101,6 +104,8 @@ declare namespace Cloudflare {
     PUBLIC_ESTIMATE_TURNSTILE_SECRET: string;
     PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: string;
     APP_AUTH_PEPPER: string;
+    AUTH_CONTROL_READ_ACCESS_KEY_ID: string;
+    AUTH_CONTROL_READ_SECRET_ACCESS_KEY: string;
     FACET_DESIGN_INGEST_HMAC_KEY: string;
     FACET_DESIGN_INGEST_TENANT_MAP_JSON: string;
     FACET_V2_KEYS_JSON: string;

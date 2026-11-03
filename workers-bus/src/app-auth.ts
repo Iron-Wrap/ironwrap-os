@@ -1,5 +1,8 @@
 import { gmailConfigured, sendGmail } from "./google.ts";
 import * as authStore from "./app-auth-store.ts";
+import { subjectDigestV2 } from "../../shared/auth-protocol-v2.mjs";
+import { issueGrantV2, findFencedSessionV2, type FencedSessionV2 } from "./auth-protocol-store.ts";
+import { admitAuthProtocol, type AuthProtocolAdmission } from "./auth-protocol-control.ts";
 import {
   APP_DEVICE_PROOF_HEADER,
   APP_SESSION_COOKIE,
@@ -33,6 +36,7 @@ const GENERIC_LINK_RESPONSE = {
 export interface AuthDependencies {
   sendMagicLink?: (env: AppEnv, user: AppUserRecord, rawToken: string) => Promise<void>;
   now?: () => Date;
+  protocol?: AuthProtocolAdmission;
 }
 
 export interface DevicePairingDependencies {
@@ -328,13 +332,15 @@ export async function deliverMagicLink(
   const rawToken = randomToken();
   const createdAt = now.toISOString();
   const expiresAt = new Date(now.getTime() + MAGIC_LINK_TTL_SECONDS * 1000).toISOString();
-  await authStore.replaceMagicLink(env, {
-    tokenHash: await sha256Hex(rawToken),
-    user,
-    createdAt,
-    expiresAt,
-    request,
-  });
+  if (deps.protocol?.mode === "active") {
+    await issueGrantV2(env, { admission:deps.protocol,kind:"magic",
+      tokenHash:await protocolTokenHashFor(env,deps.protocol.head.issuer,"magic",rawToken),
+      user,now:createdAt,expiresAt,request });
+  } else {
+    await authStore.replaceMagicLink(env, {
+      tokenHash: await sha256Hex(rawToken),user,createdAt,expiresAt,request,
+    });
+  }
   await authStore.recordAuthAudit(env, {
     tenantId: user.tenant_id,
     userId: user.user_id,
@@ -464,7 +470,15 @@ export async function issueDevicePairing(
   const rawToken = randomToken();
   const expiresAt = new Date(now.getTime() + DEVICE_PAIRING_TTL_SECONDS * 1000).toISOString();
   const request = await authRequestContext(req, env);
-  await authStore.replaceDevicePairing(env, {
+  if (auth.authProtocol) {
+    const protocol = await admitAuthProtocol(env);
+    if (protocol.mode !== "active" || protocol.head.issuer !== auth.authProtocol.issuer) {
+      return {ok:false,error:"auth_control_unavailable",status:503};
+    }
+    await issueGrantV2(env,{admission:protocol,kind:"pair",
+      tokenHash:await protocolTokenHashFor(env,protocol.head.issuer,"pair",rawToken),
+      user:fieldUser,actor:auth.session as FencedSessionV2,now:now.toISOString(),expiresAt,request});
+  } else await authStore.replaceDevicePairing(env, {
     tokenHash: await sha256Hex(rawToken),
     user: fieldUser,
     issuedByUserId: auth.session.user_id,
@@ -701,13 +715,18 @@ export async function sessionPayload(
   auth: AuthContext,
   env: AppEnv,
 ): Promise<Record<string, unknown>> {
-  return await sessionEnvelopeForUser(
+  const payload = await sessionEnvelopeForUser(
     env,
     auth.session,
     auth.session.session_expires_at,
     auth.csrfToken,
     auth.session.updated_at,
   );
+  if (auth.authProtocol) {
+    payload.auth_context = {...auth.authProtocol,status:"current",
+      subjectDigest:await subjectDigestV2(payload,auth.session.role === "field" ? auth.session.device_proof_hash : null)};
+  }
+  return payload;
 }
 
 export function unauthenticatedSessionPayload(env: AppEnv): Record<string, unknown> {
@@ -770,9 +789,11 @@ export async function personCookieSession(
 ): Promise<PersonSession | null> {
   const token = auth.rawSessionToken;
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
-  if ((await sessionHashFor(env, token)) !== auth.session.session_hash) return null;
+  if ((await sessionHashFor(env, token,auth.authProtocol?.issuer)) !== auth.session.session_hash) return null;
   if ((await csrfTokenFor(env, token)) !== auth.csrfToken) return null;
-  const live = await authStore.findActiveSession(
+  const live = auth.authProtocol
+    ? await findFencedSessionV2(env,await admitAuthProtocol(env),auth.session.tenant_id,auth.authProtocol.contextId,auth.session.session_hash)
+    : await authStore.findActiveSession(
     env,
     auth.session.session_hash,
     auth.session.tenant_id,
@@ -795,8 +816,28 @@ export async function authRequestContext(req: Request, env: AppEnv): Promise<Aut
   };
 }
 
-export async function sessionHashFor(env: AppEnv, rawSessionToken: string): Promise<string> {
-  return await hmacHex(env, `session:${rawSessionToken}`);
+export async function sessionHashFor(env: AppEnv, rawSessionToken: string, issuer?: string): Promise<string> {
+  return await hmacHex(env, issuer ? `session:v2:${issuer}:${rawSessionToken}` : `session:${rawSessionToken}`);
+}
+
+export async function protocolTokenHashFor(env: AppEnv, issuer: string, kind: "magic" | "pair", token: string): Promise<string> {
+  return hmacHex(env,`grant:v2:${issuer}:${kind}:${token}`);
+}
+export async function protocolContextHashFor(env: AppEnv, tenant: string, secret: string): Promise<string> {
+  return hmacHex(env,`auth-context:v2:${tenant}:${secret}`);
+}
+export async function validProtocolDeviceProof(proof: string,expectedHash: string): Promise<boolean> {
+  return constantTimeEqual(await sha256Hex(proof),expectedHash);
+}
+export function protocolSessionCookie(token: string, expiresAt: string): string {
+  const remaining = Math.max(0,Math.floor((Date.parse(expiresAt)-Date.now())/1000));
+  return sessionCookie(token,expiresAt).replace(`Max-Age=${SESSION_TTL_SECONDS}`,`Max-Age=${remaining}`);
+}
+export async function allowProtocolConsume(req: Request,env: AppEnv,kind: "magic" | "pair"): Promise<boolean> {
+  const request = await authRequestContext(req,env);const now = new Date();
+  return authStore.claimThrottle(env,{keyHash:await hmacHex(env,`throttle:${kind === "pair" ? "pairing_consume_ip" : "consume_ip"}:${request.ip_hash}`),
+    scope:"consume_ip",now:now.toISOString(),windowExpiresAt:new Date(now.getTime()+AUTH_THROTTLE_WINDOW_SECONDS*1000).toISOString(),
+    limit:MAGIC_LINK_CONSUME_IP_LIMIT});
 }
 
 export async function csrfTokenFor(env: AppEnv, rawSessionToken: string): Promise<string> {

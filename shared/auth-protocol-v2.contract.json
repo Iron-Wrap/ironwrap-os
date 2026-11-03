@@ -1,0 +1,44 @@
+{
+  "format": "ironwrap-auth-protocol-v2-contract",
+  "runtimeCodec": "shared/auth-protocol-v2.mjs",
+  "declarations": "shared/auth-protocol-v2.d.mts",
+  "vectors": "shared/auth-protocol-v2.vectors.json",
+  "consumers": {
+    "producer": "workers-bus/src/auth-protocol-api.ts",
+    "trustedWriter": "tools/auth-protocol-control.mjs",
+    "client": "Reserved contract only; shipping PR73 recovery is not implemented or enabled by P1."
+  },
+  "encoding": {
+    "keys": "UTF-16 code-unit order",
+    "values": "JSON null/boolean/valid Unicode strings/nonnegative safe integers/dense arrays/plain objects",
+    "reject": [
+      "duplicates or escaped duplicates",
+      "noncanonical encodings",
+      "unknown schema members",
+      "negative/fractional/overflow counters",
+      "minus zero",
+      "unpaired surrogates",
+      "padded or noncanonical base64url",
+      "oversize headers"
+    ],
+    "utf8": true,
+    "unpaddedBase64url": true
+  },
+  "limits": {
+    "exchangeHeader": 1024,
+    "receiptHeader": 4096,
+    "controlHead": 65536,
+    "authBody": 4096,
+    "identifierAscii": 128,
+    "reasonAscii": 64
+  },
+  "tokenDomains": {
+    "session": "HMAC-SHA256(pepper, session:v2:issuer:rawToken)",
+    "magicGrant": "HMAC-SHA256(pepper, grant:v2:issuer:magic:rawToken)",
+    "pairGrant": "HMAC-SHA256(pepper, grant:v2:issuer:pair:rawToken)",
+    "context": "HMAC-SHA256(pepper, auth-context:v2:tenant:independentPin)",
+    "legacy": "No aliases or historical digest rewrites"
+  },
+  "enrollment": "CLOSED in all serving P1 configurations",
+  "qualification": "Null during isolated QA probes; completed exact producer/schema/active-predecessor artifact required for production activation. No such qualification supplied by this contract."
+}

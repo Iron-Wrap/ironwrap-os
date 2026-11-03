@@ -1,0 +1,9 @@
+{
+  "format": "ironwrap-auth-control-source-bound-sql-fixture-v1",
+  "sourceCommit": "aa72544a4469985a9e2a39786b44bc648b88c858",
+  "sourcePath": "workers-bus/migrations/0173_app_auth_protocol_v2.sql",
+  "sha256": "58abdf189efe2eb47fc6840950473d2b5be6560a2d31f2cdc8affef4b589592a",
+  "controllerSha256": "02e412e81980c9c038c76737b2a83592911cee3f1be08091cda8777d720133cc",
+  "scope": "Committed SQL consumer fixture only; not installed by this P0 change, not a deployed/schema/provider qualification",
+  "installedMigration": false
+}

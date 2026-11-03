@@ -7,11 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider } from "../auth/session-context";
 import type { AuthenticatedSession } from "../auth/session";
 import { DevicePairingSettings } from "./device-pairing-settings";
-import {
-  issueDevicePairing,
-  listDevicePairings,
-  listFieldUsers,
-} from "./pairing-api";
+import { issueDevicePairing, listDevicePairings, listFieldUsers } from "./pairing-api";
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (

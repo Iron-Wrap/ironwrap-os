@@ -26,15 +26,8 @@ import {
   listFieldUsers,
   revokeDevicePairing,
 } from "./pairing-api";
-import type {
-  DevicePairing,
-  IssuedDevicePairing,
-} from "./pairing-contracts";
-import {
-  formatDateTime,
-  pairingExpiryLabel,
-  safePairingUrl,
-} from "./pairing-link";
+import type { DevicePairing, IssuedDevicePairing } from "./pairing-contracts";
+import { formatDateTime, pairingExpiryLabel, safePairingUrl } from "./pairing-link";
 
 export function DevicePairingSettings() {
   return (

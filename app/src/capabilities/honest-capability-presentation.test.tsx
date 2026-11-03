@@ -21,8 +21,6 @@ import { IntegrationReadinessPage } from "../integrations/integration-readiness-
 import { loadNewoOperations } from "../newo/newo-operations-api";
 import { newoOperationsFixture } from "../newo/newo-operations-test-fixture";
 import { NewoOperationsPage } from "../newo/newo-operations-page";
-import { listDevicePairings, listFieldUsers } from "../pairing/pairing-api";
-import { DevicePairingSettings } from "../pairing/device-pairing-settings";
 import { loadPostizIntent } from "../postiz/postiz-api";
 import { PostizPage } from "../postiz/postiz-page";
 import { postizIntentFixture } from "../postiz/postiz-test-fixture";

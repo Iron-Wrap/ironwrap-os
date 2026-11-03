@@ -20,7 +20,7 @@ import {
   type SafetyScopeRef,
 } from "../src/safety-lifecycle.ts";
 import { safetyReleaseGate } from "../src/safety-release-gate.ts";
-import { recordLegacyGateStates } from "./production-gate-ledger-fixture.ts";
+import { bindCrewInLedger, clearScheduleGatesInLedger } from "./production-gate-ledger-fixture.ts";
 import {
   issueNativeWorkPackage,
   nativeWorkPackageAction,
@@ -339,7 +339,16 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
       .run(`gate:wp:${suffix}:${gate.toLowerCase()}`, packet.tenantId, packet.jobId, envelopeId,
         rawKey, gate, owner.id, now, packet.expiresAt, now, now);
   }
-  recordLegacyGateStates(sqlite, { tenantId: packet.tenantId, roofJobId: packet.jobId, at: now });
+  // Current gate evidence is recorded by people outside the assigned crew. The helper also
+  // records the signed-copy receipt whose cancellation window permits Materials and scheduling.
+  const attester = packet.tenantId === TENANT ? USERS.production : owner;
+  clearScheduleGatesInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    ownerUserId: owner.id,
+    attesterUserId: attester.id,
+    attesterRole: attester === owner ? "owner" : "production",
+  });
   sqlite
     .prepare(
       `INSERT OR IGNORE INTO fleet_crews
@@ -362,6 +371,13 @@ function seedAssignmentSnapshot(env: TestEnv, packet: NativeWorkPackageDefinitio
       )
       .run(`membership:wp:${suffix}:${index + 1}`, packet.tenantId, crewId, workerId, now, now);
   }
+  // Crew is a policy receipt bound to this exact assignment and current crew, as in 0159.
+  bindCrewInLedger(sqlite, {
+    tenantId: packet.tenantId,
+    roofJobId: packet.jobId,
+    crewId,
+    assignmentId: packet.assignmentId,
+  });
   sqlite
     .prepare(
       `INSERT INTO operating_job_assignments

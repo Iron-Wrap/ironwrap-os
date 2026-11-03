@@ -75,7 +75,6 @@ const ROLE_APPS = {
       "/today",
       "/inventory",
       "/approvals",
-      "/quote-revision-approvals",
       "/accounting",
       "/accounting/exceptions",
       "/accounting/quickbooks",

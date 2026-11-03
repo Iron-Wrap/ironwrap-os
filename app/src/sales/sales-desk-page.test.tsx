@@ -231,10 +231,7 @@ describe("SalesDeskPage", () => {
     expect(screen.getByText("Not shown to customer")).toBeVisible();
     expect(screen.getByText(/cannot show quote terms to the customer/i)).toBeVisible();
     expect(screen.getByText("Email · Estimate Follow-up · Granted")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Open lead reviews" })).toHaveAttribute(
-      "href",
-      "/approvals",
-    );
+    expect(screen.queryByRole("link", { name: "Open lead reviews" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /start lead check/i })).not.toBeInTheDocument();
     expect(screen.getByText("lead_a")).not.toBeVisible();
     await userEvent.setup().click(screen.getByText("System details"));

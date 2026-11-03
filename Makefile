@@ -266,7 +266,7 @@ secret-scan:
 E2E_SUITES := test:pwa test:pwa:board test:pwa:owner-configuration test:pwa:people \
   test:pwa:safety test:pwa:documents test:pwa:job-history test:pwa:placement \
   test:pwa:capabilities test:pwa:capabilities:accounting test:pwa:accounting \
-  test:pwa:onboarding test:pwa:quote-revision test:pwa:decisions test:pwa:sales-intake \
+  test:pwa:onboarding test:pwa:decisions test:pwa:sales-intake \
   test:pwa:manual-measurements test:pwa:service-calls
 
 # Every suite runs even after one fails, and the recipe fails if any did: a bare

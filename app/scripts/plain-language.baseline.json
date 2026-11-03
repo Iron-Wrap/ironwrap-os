@@ -44,9 +44,6 @@
   "src/estimator/manual-measurement-panel.tsx": {
     "banned-term": 3
   },
-  "src/estimator/quote-revision-approval-page.tsx": {
-    "unlabelled-code": 1
-  },
   "src/estimator/roof-graph-evidence.tsx": {
     "unlabelled-code": 1
   },
@@ -95,7 +92,7 @@
   },
   "src/jobs/job-spine-panel.tsx": {
     "banned-term": 7,
-    "machine-name": 2
+    "machine-name": 1
   },
   "src/newo/newo-operations-page.tsx": {
     "banned-term": 1,
@@ -109,13 +106,6 @@
     "unlabelled-code": 2,
     "machine-name": 1,
     "agent-name": 1
-  },
-  "src/owner/approval-inbox-page.tsx": {
-    "banned-term": 1
-  },
-  "src/owner/approval-receipt.tsx": {
-    "banned-term": 6,
-    "machine-name": 1
   },
   "src/owner/owner-now-page.tsx": {
     "banned-term": 1

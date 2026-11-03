@@ -35,9 +35,6 @@ const NowPage = lazy(async () => ({
 const OwnerNowPage = lazy(async () => ({
   default: (await import("./owner/owner-now-page")).OwnerNowPage,
 }));
-const ApprovalInboxPage = lazy(async () => ({
-  default: (await import("./owner/approval-inbox-page")).ApprovalInboxPage,
-}));
 const SalesDeskPage = lazy(async () => ({
   default: (await import("./sales/sales-desk-page")).SalesDeskPage,
 }));
@@ -124,18 +121,6 @@ const LeadTriagePreparePage = lazy(async () => ({
 }));
 const EstimatorWorkbenchPage = lazy(async () => ({
   default: (await import("./estimator/estimator-workbench-page")).EstimatorWorkbenchPage,
-}));
-const QuoteRevisionApprovalQueuePage = lazy(async () => ({
-  default: (await import("./estimator/quote-revision-approval-page"))
-    .QuoteRevisionApprovalQueuePage,
-}));
-const QuoteRevisionApprovalDetailPage = lazy(async () => ({
-  default: (await import("./estimator/quote-revision-approval-page"))
-    .QuoteRevisionApprovalDetailPage,
-}));
-const QuoteRevisionApprovalPreparePage = lazy(async () => ({
-  default: (await import("./estimator/quote-revision-approval-page"))
-    .QuoteRevisionApprovalPreparePage,
 }));
 const loadFieldPages = () => import("./field/field-pages");
 const loadTodayPage = () => import("./field/today-page");
@@ -548,37 +533,21 @@ const ownerRoute = createRoute({
   component: OwnerRoute,
 });
 
+// "Decisions" is a view of Now. The broker-backed lead-review inbox that once answered
+// `/approvals?review=` and `/approvals?view=leads` is retired with its Worker routes, so every
+// `/approvals` link lands on the live decision list.
 const approvalsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/approvals",
-  validateSearch: (search: Record<string, unknown>): { review?: string; view?: "leads" } => ({
-    review:
-      typeof search.review === "string" && search.review.length > 0 && search.review.length <= 160
-        ? search.review
-        : undefined,
-    view: search.view === "leads" ? "leads" : undefined,
-  }),
-  beforeLoad: ({ search }) => {
-    if (!search.review && search.view !== "leads") {
-      throw redirect({ to: "/now", search: { show: "decide" }, replace: true });
-    }
+  beforeLoad: () => {
+    throw redirect({ to: "/now", search: { show: "decide" }, replace: true });
   },
-  component: ApprovalsRoute,
 });
 
 function OwnerRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <OwnerNowPage />
-    </Suspense>
-  );
-}
-
-function ApprovalsRoute() {
-  const { review } = approvalsRoute.useSearch();
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <ApprovalInboxPage key={review ?? "history"} reviewId={review} />
     </Suspense>
   );
 }
@@ -714,24 +683,6 @@ const leadTriagePrepareRoute = createRoute({
   component: LeadTriagePrepareRoute,
 });
 
-const quoteRevisionApprovalQueueRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/quote-revision-approvals",
-  component: QuoteRevisionApprovalQueueRoute,
-});
-
-const quoteRevisionApprovalDetailRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/quote-revision-approvals/$approvalId",
-  component: QuoteRevisionApprovalDetailRoute,
-});
-
-const quoteRevisionApprovalPrepareRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/estimator/jobs/$jobId/revision",
-  component: QuoteRevisionApprovalPrepareRoute,
-});
-
 function SalesRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -856,30 +807,6 @@ function LeadTriagePrepareRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <LeadTriagePreparePage />
-    </Suspense>
-  );
-}
-
-function QuoteRevisionApprovalQueueRoute() {
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <QuoteRevisionApprovalQueuePage />
-    </Suspense>
-  );
-}
-
-function QuoteRevisionApprovalDetailRoute() {
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <QuoteRevisionApprovalDetailPage />
-    </Suspense>
-  );
-}
-
-function QuoteRevisionApprovalPrepareRoute() {
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <QuoteRevisionApprovalPreparePage />
     </Suspense>
   );
 }
@@ -1106,9 +1033,6 @@ const routeTree = rootRoute.addChildren([
     newLeadRoute,
     leadTriagePrepareRoute,
     estimatorWorkbenchRoute,
-    quoteRevisionApprovalQueueRoute,
-    quoteRevisionApprovalDetailRoute,
-    quoteRevisionApprovalPrepareRoute,
     settingsRoute,
     settingsCompanyRoute,
     settingsTeamRoute,

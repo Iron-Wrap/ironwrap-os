@@ -331,13 +331,9 @@ function NowScreen({
         }
         actions={
           <>
-            {showDecisions ? (
-              sessionCanReviewLeads(model) ? (
-                <Button asChild variant="quiet">
-                  <a href="/approvals?view=leads">Lead review history</a>
-                </Button>
-              ) : null
-            ) : model.decisions?.sources.some((source) => source.state !== "retired") ? (
+            {showDecisions ? null : model.decisions?.sources.some(
+                (source) => source.state !== "retired",
+              ) ? (
               <Button asChild variant="secondary">
                 <a href="/now?show=decide">
                   Decisions{" "}
@@ -856,10 +852,6 @@ function NowCardDetails({
       )}
     </div>
   );
-}
-
-function sessionCanReviewLeads(model: NowResponse) {
-  return model.role === "owner" || model.role === "ops";
 }
 
 function NowEvidenceSummary({

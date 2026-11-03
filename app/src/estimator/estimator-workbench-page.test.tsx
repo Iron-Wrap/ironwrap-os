@@ -806,7 +806,7 @@ describe("EstimatorWorkbenchPage", () => {
     expect(loadEstimatorWorkbench).not.toHaveBeenCalled();
   });
 
-  it("opens the isolated draft-revision request only when the BFF grants that action", async () => {
+  it("offers no draft-revision request now that its approval broker is retired", async () => {
     vi.mocked(loadEstimatorWorkbench).mockResolvedValue(
       workbenchModel({
         allowed_actions: ["job.read", "estimator.read", "quote_revision_approval.prepare"],
@@ -814,11 +814,9 @@ describe("EstimatorWorkbenchPage", () => {
     );
     renderWorkbench();
 
-    const request = await screen.findByRole("link", { name: /request draft revision/i });
-    expect(request).toHaveAttribute("href", "/estimator/jobs/$jobId/revision");
-    expect(
-      screen.getByText(/price, tax, scope, payment, approvals, and customer terms are not copied/i),
-    ).toBeVisible();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    expect(screen.queryByRole("link", { name: /request draft revision/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Fix this quote safely")).not.toBeInTheDocument();
   });
 
   it("opens the exact signed Facet launch only when the BFF grants that action", async () => {

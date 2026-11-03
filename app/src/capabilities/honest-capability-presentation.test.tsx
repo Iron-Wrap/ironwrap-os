@@ -24,8 +24,6 @@ import { NewoOperationsPage } from "../newo/newo-operations-page";
 import { loadPostizIntent } from "../postiz/postiz-api";
 import { PostizPage } from "../postiz/postiz-page";
 import { postizIntentFixture } from "../postiz/postiz-test-fixture";
-import { ProposalPublicationAction } from "../proposal/proposal-publication-action";
-import { loadProposalPublicationApprovals } from "../proposal/proposal-publication-api";
 import { setMobileViewport } from "../test/mobile-viewport";
 import { loadCapabilitySignal } from "./capability-api";
 import type { Capability } from "./capability-contracts";
@@ -78,14 +76,6 @@ vi.mock("../postiz/postiz-api", () => ({
   stopPostizIntent: vi.fn(),
   reconcilePostizIntent: vi.fn(),
   newPostizActionKey: vi.fn(() => "postiz:test:key"),
-}));
-vi.mock("../proposal/proposal-publication-api", () => ({
-  approveProposalPublication: vi.fn(),
-  loadProposalPublicationApprovals: vi.fn(),
-  newProposalPublicationDecisionKey: vi.fn(() => "decision:key"),
-  newProposalPublicationPrepareKey: vi.fn(() => "prepare:key"),
-  prepareProposalPublication: vi.fn(),
-  rejectProposalPublication: vi.fn(),
 }));
 vi.mock("@tanstack/react-router", () => ({
   useParams: () => ({ intentId: "qbo_final_01JEXAMPLE0001" }),
@@ -403,85 +393,6 @@ describe("Facet design delivery", () => {
 
     expect(await screen.findByText("No signed Facet decisions yet")).toBeVisible();
     expect(screen.queryByText("Setup not finished")).toBeNull();
-  });
-});
-
-describe("Proposal publication and the proposal document template", () => {
-  const approvalsResponse = {
-    version: 1 as const,
-    read_model_generated_at: "2026-08-31T00:00:00.000Z",
-    permissions: ["jobs:read:any"],
-    allowed_actions: ["proposal_publication_approval.read"] as never,
-    approvals: [],
-  };
-
-  function renderAction(role: AuthenticatedSession["user"]["role"] = "owner") {
-    return renderOnAPhone(
-      <ProposalPublicationAction
-        roofJobId="JOB-A"
-        proposalEvidencePackId="proposal:customer-quote:JOB-A-v1"
-        proposalStatus="Draft"
-        locale="en-CA"
-      />,
-      role,
-    );
-  }
-
-  beforeEach(() => {
-    vi.mocked(loadProposalPublicationApprovals).mockResolvedValue(approvalsResponse);
-  });
-
-  it("names publication as the blocking step when publication is off and the template is unfinished", async () => {
-    signalOf("owner", [
-      officeCapability("proposal_publication", "Proposal publication to the customer", {
-        flag_binding: "APP_PROPOSAL_PUBLICATION_ENABLED",
-      }),
-      unconfiguredOfficeCapability("proposal_template", "Proposal document template", [
-        "PROPOSAL_TEMPLATE_DOC_ID",
-      ]),
-    ]);
-    renderAction();
-
-    expect(
-      await screen.findByRole("heading", {
-        name: "Proposal publication to the customer is turned off",
-      }),
-    ).toBeVisible();
-    // Two flags, two different fixes. Leading with the template would send an owner to finish a
-    // setup that cannot matter until publication is on.
-    expect(screen.queryByText(/Proposal document template is not set up yet/)).toBeNull();
-    expect(screen.queryByText("Publication is not available on this runtime.")).toBeNull();
-  });
-
-  it("names the template when publication is on and only the document is missing", async () => {
-    signalOf("owner", [
-      officeCapability("proposal_publication", "Proposal publication to the customer", {
-        state: "available",
-        reason: "flag_on_and_configured",
-        flag_state: "on",
-        configuration_state: "configured",
-      }),
-      unconfiguredOfficeCapability("proposal_template", "Proposal document template", [
-        "PROPOSAL_TEMPLATE_DOC_ID",
-      ]),
-    ]);
-    renderAction();
-
-    expect(
-      await screen.findByRole("heading", { name: "Proposal document template is not set up yet" }),
-    ).toBeVisible();
-    expect(screen.getByText(/PROPOSAL_TEMPLATE_DOC_ID/)).toBeVisible();
-  });
-
-  it("tells a non-office role that publishing is not theirs, instead of rendering nothing at all", async () => {
-    signalOf("sales", []);
-    renderAction("sales");
-
-    expect(
-      await screen.findByRole("heading", { name: "Publishing to the customer is not your role" }),
-    ).toBeVisible();
-    expect(screen.getByText("Not your role")).toBeVisible();
-    expect(screen.getByText(/Ask your owner or operations lead/)).toBeVisible();
   });
 });
 

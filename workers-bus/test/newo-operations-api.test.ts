@@ -513,7 +513,6 @@ test("Owner runtime read is office-only and excludes privileged diagnostic detai
       "provider_delivery",
       "office_bff",
       "customer_portal",
-      "production_schedule",
       "public_estimate",
       "newo",
     ],

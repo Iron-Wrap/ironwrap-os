@@ -11,7 +11,6 @@ import {
   recordOperatingJobAssignment,
   type RecordOperatingJobAssignmentInput,
 } from "../src/operating-job-assignment-store.ts";
-import { createProductionScheduleApprovalRequest } from "../src/production-schedule-approval-store.ts";
 import { clearScheduleGatesInLedger, fixtureSchedule } from "./production-gate-ledger-fixture.ts";
 
 const NOW = "2026-08-21T08:00:00.000Z";
@@ -267,34 +266,46 @@ async function portal(appEnv: AppEnv) {
   return customerPortalResponseSchema.parse(await response.json());
 }
 
-async function proposeSchedule(appEnv: AppEnv, job: SeededJob) {
-  return await createProductionScheduleApprovalRequest(appEnv, {
-    id: "psapproval_portal_0001",
-    tenantId: "ironwrap",
-    prepareIdempotencyKey: "portal:tentative:0001",
-    intentFingerprint: "f".repeat(64),
-    actorUser: "production@example.invalid",
-    siteId: "https://legacy.example.invalid",
-    roofJobId: job.roofJobId,
-    targetAssignmentId: "legacy-assignment-portal-0001",
-    crewProfileId: "legacy-crew-portal-0001",
-    scheduledStart: START,
-    scheduledEnd: END,
-    supersedesAssignmentId: null,
-    correctionReason: null,
-    requestText: "Synthetic uncommitted schedule proposal",
-    writeArgsJson: "{}",
-    previewJson: "{}",
-    argsDigest: "a".repeat(64),
-    previewDigest: "b".repeat(64),
-    receiptPreviewDigest: "c".repeat(64),
-    dryRunReceipt: "synthetic-private-receipt-".repeat(2),
-    expiresAt: "2099-12-31T00:00:00.000Z",
-    requestedByUserId: job.ownerId,
-    requestedByFrappeUser: null,
-    runId: "portal-schedule-run-0001",
-    now: NOW,
-  });
+// A tentative legacy schedule proposal, written straight into the retained D1 ledger. The
+// execution store that used to write it retired with the Frappe approval brokers; the table and
+// any historical rows remain, and the portal must keep ignoring them.
+function proposeSchedule(raw: DatabaseSync, job: SeededJob): { state: string } {
+  raw.prepare(
+    `INSERT INTO production_schedule_approval_requests (
+       production_schedule_approval_id, tenant_id, request_kind, state, version, prepare_idempotency_key,
+       intent_fingerprint, write_tool, dry_run_tool, agent_role, actor_user, site_id,
+       target_doctype, target_name, roof_job_id, target_assignment_id, crew_profile_id, scheduled_start,
+       scheduled_end, supersedes_assignment_id, correction_reason, request_text, write_args_json, preview_json,
+       args_digest, preview_digest, receipt_preview_digest, dry_run_receipt, expires_at, requested_by_user_id,
+       requested_by_frappe_user, run_id, transition_actor_kind, transition_actor_id, transition_actor_frappe_user,
+       transition_detail_code, created_at, updated_at
+     ) VALUES (
+       'psapproval_portal_0001', 'ironwrap', 'production_schedule', 'pending', 1, 'portal:tentative:0001',
+       ?, 'request_create_job_assignment', 'dry_run_job_assignment', 'production-controller',
+       'production@example.invalid', 'https://legacy.example.invalid',
+       'Job Assignment', 'legacy-assignment-portal-0001', ?, 'legacy-assignment-portal-0001',
+       'legacy-crew-portal-0001', ?, ?, NULL, NULL, 'Synthetic uncommitted schedule proposal', '{}', '{}',
+       ?, ?, ?, ?, '2099-12-31T00:00:00.000Z', ?,
+       NULL, 'portal-schedule-run-0001', 'app_user', ?, NULL,
+       'production_schedule_approval_prepared', ?, ?
+     )`,
+  ).run(
+    "f".repeat(64),
+    job.roofJobId,
+    START,
+    END,
+    "a".repeat(64),
+    "b".repeat(64),
+    "c".repeat(64),
+    "synthetic-private-receipt-".repeat(2),
+    job.ownerId,
+    job.ownerId,
+    NOW,
+    NOW,
+  );
+  return raw.prepare(
+    "SELECT state FROM production_schedule_approval_requests WHERE production_schedule_approval_id = 'psapproval_portal_0001'",
+  ).get() as { state: string };
 }
 
 test("portal returns the office-committed native install window without crew or approval details", async () => {
@@ -380,9 +391,8 @@ test("missing and tentative legacy approval data never becomes a customer instal
   const { db, job, appEnv } = fixture();
   try {
     assert.equal((await portal(appEnv)).install_window, null);
-    const proposal = await proposeSchedule(appEnv, job);
-    assert.equal(proposal.kind, "created");
-    assert.equal(proposal.request.state, "pending");
+    const proposal = proposeSchedule(db.raw, job);
+    assert.equal(proposal.state, "pending");
     const model = await portal(appEnv);
     assert.equal(model.install_window, null);
     assert.equal(model.source_updated_at, NOW);

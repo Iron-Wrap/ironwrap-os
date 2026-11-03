@@ -53,24 +53,8 @@ test("the shipped wrangler config clones onto a tenant with no reference left to
   assert.equal(vars.ERPNEXT_INTEGRATION_USER, "ironwrap-bus@northline-metal.local");
   assert.equal(vars.QB_RECONCILIATION_ISSUER_USER, "ironwrap-quickbooks-issuer@northline-metal.local");
   assert.equal(vars.APP_PUBLIC_ORIGIN, "http://localhost:7200");
-  for (const rail of ["APPROVAL", "QUOTE_REVISION", "PRODUCTION_SCHEDULE", "PROPOSAL_PUBLICATION"]) {
-    assert.equal(vars[`APP_${rail}_BROKER_URL`], "");
-    assert.equal(vars[`APP_${rail}_BROKER_KEY_ID`], "");
-  }
   assert.equal(vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED, "false");
   assert.equal(vars.APP_PROPOSAL_PUBLICATION_ENABLED, "false");
-});
-
-test("a clone clears retired broker settings from an older source config", () => {
-  const prior = structuredClone(base);
-  const approvals = Object.values(prior.env.local.vars)
-    .find((group) => Object.hasOwn(group, "APP_PROPOSAL_PUBLICATION_BROKER_URL"));
-  approvals.APP_PROPOSAL_PUBLICATION_BROKER_URL = "http://127.0.0.1:9104";
-  approvals.APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID = "old-local-broker";
-  const { config } = generateTenantWorkerConfig({ base: prior, tenant, runtime: RUNTIME });
-  const vars = flattenWranglerVars(config.vars);
-  assert.equal(vars.APP_PROPOSAL_PUBLICATION_BROKER_URL, "");
-  assert.equal(vars.APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID, "");
 });
 
 test("the cloned config groups vars the same way wrangler.jsonc does", () => {

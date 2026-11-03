@@ -16,7 +16,6 @@
 //
 // It provisions NOTHING. Real Cloudflare resources (account, D1, R2, queues, routes, secrets)
 // are an owner action; this emits the exact commands and returns them as a hand-off list.
-import { retiredBrokerVars } from "../deploy/local/dev-vars.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,9 +84,6 @@ export function tenantResourceName(name, tenantId, sourceTenantId) {
  * runtime ports and the source value; returning undefined drops the var.
  */
 export const TENANT_SCOPED_VARS = Object.freeze({
-  ...Object.fromEntries(retiredBrokerVars
-    .filter(([name]) => !name.endsWith("_SHARED_SECRET"))
-    .map(([name, value]) => [name, () => value === '""' ? "" : value])),
   APP_TENANT_ID: ({ tenant }) => tenant.tenant.id,
   APP_TENANT_NAME: ({ tenant }) => tenant.runtime.app_tenant_name,
   APP_TENANT_BRAND: ({ tenant }) => tenant.brand.name,
@@ -100,8 +96,6 @@ export const TENANT_SCOPED_VARS = Object.freeze({
   ERPNEXT_BASE_URL: ({ runtime }) => runtime.frappeBaseUrl,
   ERPNEXT_INTEGRATION_USER: ({ runtime }) => `ironwrap-bus@${runtime.identityDomain}`,
   QB_RECONCILIATION_ISSUER_USER: ({ runtime }) => `ironwrap-quickbooks-issuer@${runtime.identityDomain}`,
-  APP_APPROVAL_APPROVER_ID: ({ runtime }) => `owner@${runtime.identityDomain}`,
-  APP_PRODUCTION_SCHEDULE_APPROVER_ID: ({ runtime }) => `owner@${runtime.identityDomain}`,
   APP_PUBLIC_ORIGIN: ({ runtime }) => runtime.workerOrigin,
   APP_ALLOWED_ORIGINS: ({ runtime }) => runtime.workerOrigin,
   PUBLIC_ESTIMATE_ALLOWED_ORIGINS: ({ runtime }) => runtime.workerOrigin,

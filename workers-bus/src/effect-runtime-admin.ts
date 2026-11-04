@@ -16,8 +16,9 @@ import {
 const MAX_EFFECT_BODY_BYTES = 256 * 1024;
 
 /**
- * The action prefix this bearer handles: the MCP host's bounded agent tools, each claimed as
- * `mcp.<tool>` (`mcp/erpnext-roofing-mcp/src/server.mjs`). Every other action is the bus's own.
+ * The action prefix this bearer handles: bounded agent tools, each claimed as `mcp.<tool>`.
+ * The ERPNext roofing MCP host that used to claim them is retired, so no in-repo caller uses
+ * this prefix today. Every other action is the bus's own.
  */
 const TOKEN_ACTION_PREFIX = "mcp.";
 /**

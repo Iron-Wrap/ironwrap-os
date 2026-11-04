@@ -2,13 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import {
-  claimApprovalExecution,
-  createApprovalRequest,
-  finalizeApprovalExecution,
-  reconcileApprovalUncertainty,
-  type CreateApprovalRequestInput,
-} from "../src/approval-store.ts";
 import type { AppEnv } from "../src/app-types.ts";
 import {
   claimGovernedTransitionOutbox,
@@ -60,55 +53,132 @@ function env(db = new SqliteD1()): AppEnv {
   return { DB: db as never } as AppEnv;
 }
 
-function input(overrides: Partial<CreateApprovalRequestInput> = {}): CreateApprovalRequestInput {
-  return {
-    id: "approval_request_0001",
-    tenantId: "ironwrap",
-    prepareIdempotencyKey: "prepare-key-0001",
-    intentFingerprint: "a".repeat(64),
-    agentRole: "lead-concierge",
-    actorUser: "concierge@example.com",
-    siteId: "site-ironwrap",
-    leadEnvelopeId: "lead:001",
-    requestText: "Approve the local triage annotation after review.",
-    writeArgsJson: JSON.stringify({ secret: "must-never-enter-transition-kernel" }),
-    previewJson: JSON.stringify({ would_write: false }),
-    argsDigest: "b".repeat(64),
-    previewDigest: "c".repeat(64),
-    dryRunReceipt: "d".repeat(32),
-    expiresAt: EXPIRES,
-    requestedByUserId: "appu_owner_0001",
-    requestedByFrappeUser: "owner@example.com",
-    runId: "run-lead-triage-0001",
-    now: CREATED,
-    ...overrides,
-  };
+// The approval execution store that used to drive these rows retired with the Frappe approval
+// brokers. The transition kernel and its D1 triggers (0027) remain, so these helpers drive the
+// approval_requests ledger through the same guarded statements that store issued, and every
+// assertion below still proves the triggers and the kernel, not a re-implementation of them.
+const APPROVAL_REQUEST_ID = "approval_request_0001";
+
+function changes(result: { changes: number | bigint }): number {
+  return Number(result.changes);
 }
 
-async function createAndClaimApproval(appEnv: AppEnv, overrides: Partial<CreateApprovalRequestInput> = {}) {
-  const created = await createApprovalRequest(appEnv, input(overrides));
-  assert.equal(created.kind, "created");
-  const claimed = await claimApprovalExecution(appEnv, {
-    tenantId: "ironwrap",
-    requestId: created.request.approval_request_id,
-    expectedVersion: 1,
-    decisionIdempotencyKey: `decision-${created.request.approval_request_id}`,
-    approvedByUserId: "appu_owner_0001",
-    approvedByFrappeUser: "owner@example.com",
-    now: "2026-07-30T10:01:00.000Z",
-    leaseExpiresAt: "2026-07-30T10:03:00.000Z",
-  });
-  assert.equal(claimed.kind, "claimed");
-  return {
-    approvalRequestId: created.request.approval_request_id,
-    decisionIdempotencyKey: `decision-${created.request.approval_request_id}`,
-  };
+function seedPendingApproval(db: SqliteD1): string {
+  db.raw.prepare(
+    `INSERT INTO approval_requests (
+       approval_request_id, tenant_id, request_kind, state, version, prepare_idempotency_key,
+       intent_fingerprint, write_tool, dry_run_tool, agent_role, actor_user, site_id,
+       target_doctype, target_name, lead_envelope_id, request_text, write_args_json, preview_json,
+       args_digest, preview_digest, dry_run_receipt, expires_at, requested_by_user_id,
+       requested_by_frappe_user, run_id, transition_actor_kind, transition_actor_id,
+       transition_actor_frappe_user, transition_detail_code, created_at, updated_at
+     ) VALUES (
+       ?, 'ironwrap', 'lead_triage', 'pending', 1, 'prepare-key-0001',
+       ?, 'request_mark_lead_triaged', 'dry_run_mark_lead_triaged', 'lead-concierge',
+       'concierge@example.com', 'site-ironwrap',
+       'Lead Envelope', 'lead:001', 'lead:001', 'Approve the local triage annotation after review.', ?, ?,
+       ?, ?, ?, ?, 'appu_owner_0001',
+       'owner@example.com', 'run-lead-triage-0001', 'app_user', 'appu_owner_0001',
+       'owner@example.com', 'approval_prepared', ?, ?
+     )`,
+  ).run(
+    APPROVAL_REQUEST_ID,
+    "a".repeat(64),
+    JSON.stringify({ secret: "must-never-enter-transition-kernel" }),
+    JSON.stringify({ would_write: false }),
+    "b".repeat(64),
+    "c".repeat(64),
+    "d".repeat(32),
+    EXPIRES,
+    CREATED,
+    CREATED,
+  );
+  return APPROVAL_REQUEST_ID;
+}
+
+function claimApproval(db: SqliteD1, approvalRequestId: string, decisionIdempotencyKey: string): void {
+  const result = db.raw.prepare(
+    `UPDATE approval_requests
+     SET state = 'executing', version = version + 1,
+         approved_by_user_id = 'appu_owner_0001', approved_by_frappe_user = 'owner@example.com',
+         approved_at = ?, decision_idempotency_key = ?, execution_lease_expires_at = ?,
+         transition_actor_kind = 'app_user', transition_actor_id = 'appu_owner_0001',
+         transition_actor_frappe_user = 'owner@example.com',
+         transition_detail_code = 'approval_execute_claimed', updated_at = ?
+     WHERE tenant_id = 'ironwrap' AND approval_request_id = ? AND state = 'pending'
+       AND version = 1 AND expires_at > ?`,
+  ).run(
+    "2026-07-30T10:01:00.000Z",
+    decisionIdempotencyKey,
+    "2026-07-30T10:03:00.000Z",
+    "2026-07-30T10:01:00.000Z",
+    approvalRequestId,
+    "2026-07-30T10:01:00.000Z",
+  );
+  assert.ok(changes(result) >= 1, "the guarded claim must land");
+}
+
+function finalizeApproval(
+  db: SqliteD1,
+  input: {
+    approvalRequestId: string;
+    decisionIdempotencyKey: string;
+    state: "executed" | "execution_uncertain";
+    detailCode: string;
+    hermesRunId?: string | null;
+    resultJson?: string | null;
+    errorCode?: string | null;
+    now: string;
+  },
+): void {
+  const result = db.raw.prepare(
+    `UPDATE approval_requests
+     SET state = ?, version = version + 1, hermes_run_id = ?, result_json = ?, error_code = ?,
+         execution_lease_expires_at = NULL, completed_at = ?,
+         transition_actor_kind = 'approval_broker', transition_actor_id = 'lead-triage-broker',
+         transition_actor_frappe_user = NULL, transition_detail_code = ?, updated_at = ?
+     WHERE tenant_id = 'ironwrap' AND approval_request_id = ? AND state = 'executing'
+       AND decision_idempotency_key = ?`,
+  ).run(
+    input.state,
+    input.hermesRunId ?? null,
+    input.resultJson ?? null,
+    input.errorCode ?? null,
+    input.now,
+    input.detailCode,
+    input.now,
+    input.approvalRequestId,
+    input.decisionIdempotencyKey,
+  );
+  assert.ok(changes(result) >= 1, "the guarded finalization must land");
+}
+
+function reconcileApproval(db: SqliteD1, approvalRequestId: string, now: string): void {
+  const result = db.raw.prepare(
+    `UPDATE approval_requests
+     SET version = version + 1, reconciled_at = ?, reconciled_by_user_id = 'appu_owner_0001',
+         reconciled_by_frappe_user = 'owner@example.com', reconciliation_outcome = 'inconclusive',
+         reconciliation_evidence = 'A human compared the canonical run reference; no retry was issued.',
+         transition_actor_kind = 'app_user', transition_actor_id = 'appu_owner_0001',
+         transition_actor_frappe_user = 'owner@example.com',
+         transition_detail_code = 'execution_uncertainty_reconciled', updated_at = ?
+     WHERE tenant_id = 'ironwrap' AND approval_request_id = ? AND state = 'execution_uncertain'
+       AND version = 3 AND reconciled_at IS NULL`,
+  ).run(now, now, approvalRequestId);
+  assert.ok(changes(result) >= 1, "the guarded reconciliation must land");
+}
+
+function createAndClaimApproval(db: SqliteD1) {
+  const approvalRequestId = seedPendingApproval(db);
+  const decisionIdempotencyKey = `decision-${approvalRequestId}`;
+  claimApproval(db, approvalRequestId, decisionIdempotencyKey);
+  return { approvalRequestId, decisionIdempotencyKey };
 }
 
 test("approval claim atomically records a redacted transition and never-attempted outbox intent", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const { approvalRequestId, decisionIdempotencyKey } = await createAndClaimApproval(appEnv);
+  const { approvalRequestId, decisionIdempotencyKey } = createAndClaimApproval(db);
 
   const outbox = await getGovernedTransitionOutbox(appEnv, {
     tenantId: "ironwrap",
@@ -155,7 +225,7 @@ test("approval claim atomically records a redacted transition and never-attempte
 test("only a pending intent can be leased, then approval terminal and reconciliation state project without retry", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const { approvalRequestId, decisionIdempotencyKey } = await createAndClaimApproval(appEnv);
+  const { approvalRequestId, decisionIdempotencyKey } = createAndClaimApproval(db);
 
   const next = await claimNextPendingGovernedTransitionOutbox(appEnv, {
     tenantId: "ironwrap",
@@ -176,15 +246,14 @@ test("only a pending intent can be leased, then approval terminal and reconcilia
   });
   assert.equal(same.kind, "already_leased");
 
-  const final = await finalizeApprovalExecution(appEnv, {
-    tenantId: "ironwrap",
-    requestId: approvalRequestId,
+  finalizeApproval(db, {
+    approvalRequestId,
     decisionIdempotencyKey,
     state: "execution_uncertain",
+    detailCode: "broker_execution_uncertain",
     errorCode: "broker_response_timeout",
     now: "2026-07-30T10:03:01.000Z",
   });
-  assert.equal(final.kind, "finalized");
 
   const uncertain = await getGovernedTransitionOutbox(appEnv, {
     tenantId: "ironwrap",
@@ -205,17 +274,7 @@ test("only a pending intent can be leased, then approval terminal and reconcilia
   });
   assert.equal(blocked.kind, "terminal");
 
-  const reconciled = await reconcileApprovalUncertainty(appEnv, {
-    tenantId: "ironwrap",
-    requestId: approvalRequestId,
-    expectedVersion: 3,
-    reconciledByUserId: "appu_owner_0001",
-    reconciledByFrappeUser: "owner@example.com",
-    outcome: "inconclusive",
-    evidence: "A human compared the canonical run reference; no retry was issued.",
-    now: "2026-07-30T10:04:30.000Z",
-  });
-  assert.equal(reconciled.kind, "reconciled");
+  reconcileApproval(db, approvalRequestId, "2026-07-30T10:04:30.000Z");
 
   const outbox = await getGovernedTransitionOutbox(appEnv, {
     tenantId: "ironwrap",
@@ -240,18 +299,17 @@ test("only a pending intent can be leased, then approval terminal and reconcilia
 test("a pre-kernel dispatcher terminal result becomes an inferred, non-retryable outbox attempt", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const { approvalRequestId, decisionIdempotencyKey } = await createAndClaimApproval(appEnv);
+  const { approvalRequestId, decisionIdempotencyKey } = createAndClaimApproval(db);
 
-  const final = await finalizeApprovalExecution(appEnv, {
-    tenantId: "ironwrap",
-    requestId: approvalRequestId,
+  finalizeApproval(db, {
+    approvalRequestId,
     decisionIdempotencyKey,
     state: "executed",
+    detailCode: "broker_execution_succeeded",
     hermesRunId: "run-lead-triage-0001",
     resultJson: "{}",
     now: "2026-07-30T10:01:10.000Z",
   });
-  assert.equal(final.kind, "finalized");
 
   const outbox = await getGovernedTransitionOutbox(appEnv, {
     tenantId: "ironwrap",

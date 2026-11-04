@@ -999,9 +999,6 @@ function sessionAllowedActions(role: AppUserRecord["role"]): string[] {
       "sales.read",
       "estimator.read",
       "approval.read",
-      "approval.prepare",
-      "quote_revision_approval.read",
-      "quote_revision_approval.prepare",
     ];
   }
   if (role === "production") {

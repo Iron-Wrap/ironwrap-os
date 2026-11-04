@@ -389,19 +389,6 @@ function enableAppBff(env: Record<string, unknown>): void {
   });
 }
 
-function enableProductionScheduleApproval(env: Record<string, unknown>): void {
-  enableAppBff(env);
-  Object.assign(env, {
-    APP_PRODUCTION_SCHEDULE_BROKER_URL: "https://schedule-broker.example.com",
-    APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID: "production-schedule-v1",
-    APP_PRODUCTION_SCHEDULE_APPROVER_ID: "owner@example.com",
-    APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS: "900",
-    APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS: "15000",
-    APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS: "45",
-    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: "production-schedule-shared-secret-longer-than-thirty-two-bytes",
-  });
-}
-
 const ctx = {} as never;
 const adminHeaders = { authorization: "Bearer admin-secret", "content-type": "application/json" };
 
@@ -444,9 +431,6 @@ test("public readiness exposes only a generic state while admins receive the dia
   assert.ok(Object.values(diagnostic.checks).every(Boolean));
   const schemaQuery = sqlCalls.find((call) => call.sql.includes("sqlite_master"));
   assert.ok(schemaQuery, "D1 was queried");
-  assert.match(schemaQuery.sql, /production_schedule_approval_requests/);
-  assert.match(schemaQuery.sql, /prevent_production_schedule_approval_binding_rewrite/);
-  assert.equal(diagnostic.checks.production_schedule_configuration, true, "blank primary schedule inputs keep the rail intentionally disabled");
   assert.equal(diagnostic.checks.public_estimate_configuration, true, "blank public-estimate config keeps the route intentionally disabled");
   assert.equal(JSON.stringify(diagnostic).includes("ingest-secret"), false);
   assert.equal(JSON.stringify(diagnostic).includes("jobnimbus-secret"), false);
@@ -736,47 +720,6 @@ test("readiness fails closed when measurement OCR is enabled without its secret"
   assert.equal(omniReady.status, 200);
   assert.equal(omniBody.checks.measurement_ocr_configuration, true);
   assert.equal(JSON.stringify(omniBody).includes("not-returned"), false);
-});
-
-test("readiness accepts a complete enabled production-schedule approval rail", async () => {
-  const { env } = fakeEnv();
-  enableProductionScheduleApproval(env as Record<string, unknown>);
-
-  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
-  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
-
-  assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
-  assert.equal(body.checks.production_schedule_configuration, true);
-});
-
-test("readiness fails closed when production scheduling is partially configured", async () => {
-  const { env } = fakeEnv();
-  (env as Record<string, unknown>).APP_PRODUCTION_SCHEDULE_BROKER_URL = "https://schedule-broker.example.com";
-
-  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
-  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
-
-  assert.equal(response.status, 503);
-  assert.equal(body.ok, false);
-  assert.equal(body.checks.production_schedule_configuration, false);
-});
-
-test("readiness requires the BFF before an otherwise complete production-schedule rail is ready", async () => {
-  const { env } = fakeEnv();
-  Object.assign(env as Record<string, unknown>, {
-    APP_PRODUCTION_SCHEDULE_BROKER_URL: "https://schedule-broker.example.com",
-    APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID: "production-schedule-v1",
-    APP_PRODUCTION_SCHEDULE_APPROVER_ID: "owner@example.com",
-    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: "production-schedule-shared-secret-longer-than-thirty-two-bytes",
-  });
-
-  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
-  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
-
-  assert.equal(response.status, 503);
-  assert.equal(body.ok, false);
-  assert.equal(body.checks.production_schedule_configuration, false);
 });
 
 test("readiness fails closed when the redundant alert path is not configured", async () => {

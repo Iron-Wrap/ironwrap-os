@@ -739,7 +739,10 @@ test("sales sessions receive only their bounded desk and preparation capabilitie
   assert.equal(body.permissions.includes("owner:read"), false);
   assert.equal(body.permissions.includes("jobs:read:any"), false);
   assert.equal(body.permissions.includes("approvals:decide"), false);
-  assert.equal(body.allowed_actions.includes("approval.prepare"), true);
+  assert.equal(body.allowed_actions.includes("approval.read"), true);
+  // The broker-backed approval families are retired, so nothing offers to prepare one.
+  assert.equal(body.allowed_actions.includes("approval.prepare"), false);
+  assert.equal(body.allowed_actions.includes("quote_revision_approval.prepare"), false);
   assert.equal(body.allowed_actions.includes("approval.approve"), false);
 });
 

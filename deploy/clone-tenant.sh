@@ -169,8 +169,6 @@ const entries = [
   ["AUTHORITY_RECORD_EXECUTOR_HMAC_KEY", fresh()],
   ["PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER", fresh()],
   ["FACET_LAUNCH_HMAC_KEY", fresh()],
-  ["PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", fresh()],
-  ["PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET", fresh()],
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", process.env.CLONE_ACCEPTANCE_HMAC],
   ["FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY", process.env.CLONE_FACET_PROJECTION_HMAC],
   // Turnstile's documented always-pass test secret; the local stack never calls the provider.

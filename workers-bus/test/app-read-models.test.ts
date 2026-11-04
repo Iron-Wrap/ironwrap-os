@@ -3700,7 +3700,6 @@ test("production runway HTTP route is private and starts no upstream read for fi
       ["/api/v1/today", "today_read_required"],
       ["/api/v1/owner/now", "forbidden"],
       ["/api/v1/sales", "office_role_required"],
-      ["/api/v1/approvals", "office_role_required"],
     ] as const) {
       const callsBeforeDeniedRead = mock.requests.length;
       const deniedRead = await handleAuthenticatedRoute(

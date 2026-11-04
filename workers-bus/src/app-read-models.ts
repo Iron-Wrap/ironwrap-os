@@ -33,8 +33,6 @@ import {
   listStages,
   resolveCardRelations,
 } from "./pipeline-board-store.ts";
-import { approvalDecisionConfig } from "./approval-broker-client.ts";
-import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
 import type { DocumentRow } from "./document-row.ts";
 import { parseBody } from "./core.ts";
 import { getCompanyProfile } from "./company-setup-store.ts";
@@ -3395,15 +3393,6 @@ export async function buildEstimatorWorkbenchReadModel(
     staleFields,
     readModelGeneratedAt,
   );
-  const quoteRevisionPreparationAvailable = Boolean(
-    quote &&
-    quote.id &&
-    quote.version !== null &&
-    quote.version > 0 &&
-    quote.status !== "Accepted" &&
-    quoteRevisionApprovalBrokerConfig(env) &&
-    approvalDecisionConfig(env),
-  );
   const facetLaunchAvailable = Boolean(
     auth.permissions.includes("facet:launch") &&
     quote &&
@@ -3422,9 +3411,6 @@ export async function buildEstimatorWorkbenchReadModel(
       "estimator.read",
       ...(auth.session.role === "owner" && env.DB && env.RAW
         ? ["estimator.import"]
-        : []),
-      ...(quoteRevisionPreparationAvailable
-        ? ["quote_revision_approval.prepare"]
         : []),
       ...(facetLaunchAvailable ? ["facet_launch.create"] : []),
     ],

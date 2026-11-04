@@ -8,7 +8,17 @@ export type DecisionKind =
   | "postiz"
   | "quickbooks_final_invoice";
 
-type LiveDecisionKind = Exclude<DecisionKind, "production_schedule">;
+type LiveDecisionKind = Extract<
+  DecisionKind,
+  "postiz" | "quickbooks_final_invoice"
+>;
+
+const retiredApprovalKinds = [
+  "lead_triage",
+  "quote_revision",
+  "proposal_publication",
+  "production_schedule",
+] as const;
 
 export interface DecisionItem {
   key: string;
@@ -42,18 +52,7 @@ export interface DecisionsReadModel {
 
 export const DECISION_SOURCE_LIMIT = 25;
 
-const approvalStates = [
-  "pending",
-  "executing",
-  "failed",
-  "audit_failed",
-  "execution_uncertain",
-] as const;
-
 const states: Record<LiveDecisionKind, readonly string[]> = {
-  lead_triage: approvalStates,
-  quote_revision: approvalStates,
-  proposal_publication: approvalStates,
   postiz: [
     "connection_required",
     "pending_review",
@@ -75,26 +74,14 @@ const states: Record<LiveDecisionKind, readonly string[]> = {
 };
 
 const nativeIds: Record<LiveDecisionKind, RegExp> = {
-  lead_triage: /^approval:[A-Za-z0-9_-]{16,64}$/,
-  quote_revision: /^quote-revision-approval:[A-Za-z0-9_-]{16,64}$/,
-  proposal_publication: /^proposal-publication-approval:[A-Za-z0-9_-]{16,64}$/,
   postiz:
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   quickbooks_final_invoice: /^[A-Za-z0-9:_-]{16,160}$/,
 };
 
-// This projection never calls the legacy list helpers: those helpers expire requests
-// and execution leases while reading. Browsing this inbox must only SELECT owned state.
+// Only current owned review flows are queried. Retired broker ledgers remain in D1;
+// a stored request is neither a current task nor authority to resume execution.
 const queries: Record<LiveDecisionKind, string> = {
-  lead_triage: `SELECT approval_request_id AS id, state, version, request_text AS summary,
-      NULL AS job_id, updated_at, expires_at
-    FROM approval_requests`,
-  quote_revision: `SELECT quote_revision_approval_id AS id, state, version,
-      correction_reason AS summary, roof_job_id AS job_id, target_quote_version,
-      updated_at, expires_at FROM quote_revision_approval_requests`,
-  proposal_publication: `SELECT proposal_publication_approval_id AS id, state, version,
-      request_text AS summary, roof_job_id AS job_id, updated_at, expires_at
-    FROM proposal_publication_approval_requests`,
   postiz: `SELECT intent_id AS id, state, version, title AS summary,
       NULL AS job_id, updated_at, NULL AS expires_at FROM postiz_intents`,
   quickbooks_final_invoice: `SELECT intent_id AS id, state, version,
@@ -127,18 +114,6 @@ export interface DecisionPageRequest {
 
 function visibleKinds(auth: AuthContext): LiveDecisionKind[] {
   const kinds: LiveDecisionKind[] = [];
-  if (
-    auth.permissions.includes("approvals:read") &&
-    ["owner", "ops", "sales"].includes(auth.session.role)
-  ) {
-    if (auth.session.role === "owner" || auth.session.role === "ops")
-      kinds.push("lead_triage");
-    kinds.push("quote_revision");
-    // Sales can open the estimator job, but its nested ProposalPublicationAction
-    // only loads publication requests for owner/ops. Match that narrower guard.
-    if (auth.session.role === "owner" || auth.session.role === "ops")
-      kinds.push("proposal_publication");
-  }
   if (auth.session.role === "owner") kinds.push("postiz");
   if (
     auth.permissions.includes("quickbooks:read") &&
@@ -325,16 +300,23 @@ export async function buildDecisionsReadModel(
     };
   });
   if (canReadApprovals && !page) {
-    // The native scheduling cutover retired this entire API family. Its old
-    // ledger is not a source of current decisions and must never be queried here.
-    sources.splice(3, 0, {
-      kind: "production_schedule",
-      state: "retired",
-      loaded_count: 0,
-      has_more: null,
-      next_cursor: null,
-      read_model_generated_at: null,
-    });
+    sources.unshift(
+      ...retiredApprovalKinds
+        .filter(
+          (kind) =>
+            auth.session.role !== "sales" ||
+            kind === "quote_revision" ||
+            kind === "production_schedule",
+        )
+        .map((kind): DecisionSource => ({
+          kind,
+          state: "retired",
+          loaded_count: 0,
+          has_more: null,
+          next_cursor: null,
+          read_model_generated_at: null,
+        })),
+    );
   }
   return {
     version: 1,
@@ -361,14 +343,7 @@ function projectDecision(
     throw new Error("decision_state_invalid");
   const version = positiveInteger(row.version);
   const jobId = row.job_id === null ? null : text(row.job_id, 160);
-  if (
-    [
-      "quote_revision",
-      "proposal_publication",
-      "quickbooks_final_invoice",
-    ].includes(kind) &&
-    !jobId
-  ) {
+  if (kind === "quickbooks_final_invoice" && !jobId) {
     throw new Error("decision_job_missing");
   }
   if (jobId && (jobId === "." || jobId === ".." || jobId !== jobId.trim()))
@@ -376,19 +351,6 @@ function projectDecision(
   let title: string;
   let href: string;
   switch (kind) {
-    case "lead_triage":
-      title = "Review lead note";
-      href = `/approvals?review=${encodeURIComponent(id)}`;
-      break;
-    case "quote_revision":
-      title = `Review empty draft V${positiveInteger(row.target_quote_version)}`;
-      href = `/quote-revision-approvals/${encodeURIComponent(id)}`;
-      break;
-    case "proposal_publication":
-      if (!jobId) throw new Error("decision_job_missing");
-      title = "Review proposal publication";
-      href = `/estimator/jobs/${encodeURIComponent(jobId)}`;
-      break;
     case "postiz":
       title = "Review marketing publication";
       href = `/marketing/postiz/${encodeURIComponent(id)}`;

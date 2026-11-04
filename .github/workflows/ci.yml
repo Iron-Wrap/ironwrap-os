@@ -7,8 +7,8 @@
 #
 # `make check` (IRO-267: 34-40 minutes end to end, budget was 60) is split into
 # parallel jobs that together cover exactly what it covers:
-#   contracts         `make check-contracts` (validators, tool/MCP tests, Frappe,
-#                     audit, static checks).
+#   contracts         `make check-contracts` (validators, tool/MCP tests, audit,
+#                     static checks).
 #   pwa               `make check-pwa` (the app: typecheck, lint, vitest, build).
 #   worker            a 4-way matrix, one `make worker-shard` each; no shard reads
 #                     or writes D1, so shards need no shared state or ordering.
@@ -139,11 +139,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: '**/package-lock.json'
-
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
 
       - name: Install pinned SQLite CLI for complete recovery proofs
         run: make ci-sqlite
@@ -347,7 +342,7 @@ jobs:
         run: make secret-scan
 
   # The paired-device budget is a timing measurement, so it gets a runner of its
-  # own. Sharing one with the validator, unit, Playwright and Python suites left
+  # own. Sharing one with the validator, unit and Playwright suites left
   # ~10 minutes of prior work on the machine before Lighthouse started and
   # pushed the job into its own 20-minute timeout on slower runners.
   paired-device-lighthouse:

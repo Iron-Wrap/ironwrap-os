@@ -15,7 +15,6 @@ the cloneable shape is proven with isolation, export, restore, and negative cros
 
 | Layer | Per-tenant unit | Repo artifact |
 | --- | --- | --- |
-| Frappe (IronWrap OS) | One plain Frappe site (never install the erpnext app) | `frappe-apps/ironwrap_roofing` installed per site |
 | MCP clients | One MCP host per tenant with its own `MCP_ALLOWED_TOOLS` grant | MCP env vars below |
 | Cloudflare | One Worker + D1 + R2 + queues + secrets set | `workers-bus/wrangler.jsonc` |
 | Storage | One Drive namespace (Shared Drives) + raw and privacy R2 buckets | `SHARED_DRIVE_ID_*` vars, `RAW` and `PRIVACY_LEDGER` bindings |
@@ -28,9 +27,9 @@ Site/profile/namespace isolation is the control.
 ## The Automated Path
 
 Everything below that a laptop can prove is now a script. `deploy/clone-tenant.sh` renders the
-tenant config, provisions the tenant's own Frappe site on the local compose stack, derives the
-tenant's Worker config and secrets, applies the migration chain to the tenant's local D1, and
-runs the validators. `deploy/tenant-leakage-checks.sh` then runs the eight checks below against
+tenant config, derives the tenant's Worker config and secrets, applies the migration chain to the
+tenant's local D1, and runs the validators. Frappe is decommissioned, not migrated, so a tenant
+gets no Frappe site. `deploy/tenant-leakage-checks.sh` then runs the seven checks below against
 the two tenants standing side by side.
 
 ```bash
@@ -48,7 +47,7 @@ What it produces, and where the manual steps below still apply:
 | --- | --- | --- |
 | 1 tenant config | `tools/generate-tenant-config.mjs` renders `config/tenants/<tenant>.json` from `deploy/templates/tenant-config.template.json` and refuses a tenant id or sender domain another tenant already owns | the answers themselves (brand, service areas, supplier, review links) |
 | 2 Cloudflare namespace | `tools/generate-tenant-worker-config.mjs` derives `workers-bus/wrangler.<tenant>.jsonc` from the shipped config, re-points every binding onto `<tenant>-*` resources, and fails if any var still names the source tenant | creating the real account resources, pasting the D1 `database_id`, and `wrangler secret put` (step 2 below) |
-| 3 Frappe site | one `bench new-site` on the local compose stack, with all thirteen identities on the tenant's own `@<tenant>.local` domain and every site-config pin applied | a production Frappe host, and the tenant's own blessed workflow-profile and locale-policy values |
+| 3 Worker secrets | `workers-bus/.dev.vars.<tenant>` seeded from `.dev.vars.example` with every token minted fresh for the tenant | the tenant's real secrets in its own Cloudflare account (step 2.7) |
 | 4 Drive | nothing: the tenant Worker ships with no Shared Drive id at all | all of step 4 |
 | 5 QuickBooks | nothing: `QB_EXPECTED_REALM_ID` ships empty | all of step 5 |
 | 6 Hermes / MCP | nothing | all of step 6 |
@@ -56,31 +55,12 @@ What it produces, and where the manual steps below still apply:
 The script provisions **no infrastructure**. It calls no Cloudflare, Google or Intuit API; the
 owner steps are printed as a `HAND-OFF` list at the end of the run and are exactly the rows above.
 
-Two facts about the local stack that the script depends on, and that a hand-run should know:
+One fact about the local stack that the script depends on, and that a hand-run should know:
 
-- **One bench, one site per tenant.** The tenant site is `<tenant>.localhost` on the same
-  compose stack and the same host port; Frappe v15 resolves the site from the Host header, and
-  every `*.localhost` name resolves to loopback without touching `/etc/hosts`. Separate
-  databases, separate users, separate API keys. Only the default site owns the bare `localhost`
-  alias, so a clone can never move the first tenant's Worker onto the second tenant's Frappe.
-- **`IRONWRAP_LOCAL_IDENTITY_DOMAIN`** selects the domain a site's non-interactive identities
-  live on (default `ironwrap.local`). A clone uses `<tenant>.local`, which is what keeps the
-  tenant's `ERPNEXT_INTEGRATION_USER` and `QB_RECONCILIATION_ISSUER_USER` from naming another
-  tenant's identity.
-- **The compose stack is profile-gated, so every command that starts it passes
-  `--profile frappe`.** All five services in `deploy/local/docker-compose.yml` carry
-  `profiles: [frappe]`, and `docker compose up -d` without the flag selects nothing and exits
-  with `no service selected`. `deploy/clone-tenant.sh` and `deploy/local/predev.mjs` both pass
-  it; a hand-run has to as well:
-
-  ```bash
-  docker compose -f deploy/local/docker-compose.yml --profile frappe up -d
-  docker compose -f deploy/local/docker-compose.yml --profile frappe logs -f frappe-init
-  ```
-
-  `docker compose exec` and `restart` reach an already-running service by name and do not need
-  the flag. Do not reach for `COMPOSE_PROFILES=frappe` in the environment instead: it works,
-  but it makes the requirement invisible to the next reader of the script.
+- **`<tenant>.local`** is the identity domain the tenant Worker config names for its
+  non-interactive identities (default `ironwrap.local`), which is what keeps the tenant's
+  `ERPNEXT_INTEGRATION_USER` and `QB_RECONCILIATION_ISSUER_USER` from naming another tenant's
+  identity. Both stay inert while `ERPNEXT_ENABLED` is false.
 
 ## Clone Steps
 
@@ -153,104 +133,12 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    A deliberate deployment in the tenant's Cloudflare account and separate live health/origin checks
    remain required before treating this step as complete.
 
-### 3. Frappe site
+### 3. Frappe site (retired)
 
-1. Create a fresh plain Frappe site for the tenant: `bench new-site <tenant-site>`
-   (own database, own users). Never install the erpnext app; the site is Frappe-only.
-2. Install the custom app: `bench get-app frappe-apps/ironwrap_roofing` then
-   `bench --site <tenant-site> install-app ironwrap_roofing`.
-3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the 79-DocType
-   pack shape; on the site, confirm the IronWrap Roofing DocTypes exist.
-4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
-   Hermes MCP actor. Each MCP pair must be issued to exactly that process's
-   `HERMES_ACTOR_USER`; never use the bus pair to attest an actor action.
-5. Create a third non-interactive QuickBooks issuer user with only the IronWrap QuickBooks
-   Reconciliation Issuer role and its own API key/secret. Set
-   `ironwrap_quickbooks_reconciliation_issuer_user` to that exact user. Do not grant it a
-   human finance role, System Manager, or the general bus/MCP roles.
-6. Pin every bounded-rail issuer identity in the site config. Each rail refuses to run
-   until its own key is set, so a key left unset is a rail that is dead on this tenant
-   even though the app ships it and CI is green — this is how fleet capture reached a
-   real site broken (IRO-54). `node tools/validate-site-config-pins.mjs` fails when a
-   key the app reads is missing from this list.
-
-   The Worker BFF authenticates its field-evidence and production-gate rails with the
-   single bus API pair from step 4, so those two issuer keys name that same bus user:
-
-   ```
-   bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user  '<worker-api-user-email>'
-   bench --site <tenant-site> set-config ironwrap_production_gate_issuer_user '<worker-api-user-email>'
-   ```
-
-   Fleet capture and work package do NOT. The bus pair is a System Manager, so issuing
-   those two rails with it meant one leaked key reached the whole site instead of one
-   rail's narrow grant (ELEC-48 audit section 3). Each holds its own non-interactive user,
-   its own least-privilege role, and its own API key/secret pair — and re-pinning the site
-   config to that user is also what revokes the bus pair's access, because the app compares
-   the session user against the pin and fails closed with `*_issuer_auth_mismatch`:
-
-   ```
-   bench --site <tenant-site> set-config ironwrap_fleet_capture_issuer_user '<fleet-capture-issuer-email>'
-   bench --site <tenant-site> set-config ironwrap_work_package_issuer_user  '<work-package-issuer-email>'
-   ```
-
-   | rail | user role | Worker secrets |
-   |---|---|---|
-   | fleet capture | `IronWrap Fleet Capture Issuer` (create Asset Inspection + Asset Defect, read Fleet Asset) | `FLEET_CAPTURE_FRAPPE_API_KEY` / `FLEET_CAPTURE_FRAPPE_API_SECRET` |
-   | work package | `IronWrap Work Package Issuer` (read Work Package, create Work Package Event) | `WORK_PACKAGE_FRAPPE_API_KEY` / `WORK_PACKAGE_FRAPPE_API_SECRET` |
-
-   Neither pair may hold the bus key/secret values. The Worker rejects that arrangement
-   outright (`*_frappe_shared_credential_rejected`) rather than accepting a binding name
-   that carries a shared identity, and `/ready`'s `rail_credential_isolation` check goes
-   red for it. `node tools/validate-rail-credential-isolation.mjs` proves the whole chain
-   — role, user, provisioner, Worker binding, config surface — is present in the repo.
-
-   The Frappe app rejects `Verified` evidence, submitted pre/post-trip inspections and
-   field-issued Work Package events through ordinary Desk/REST writes, so these
-   site-local pins are required before any of those can become gate-eligible.
-   `ironwrap_production_gate_issuer_user` is the same shape for the six scheduling
-   gates: without it the office has no way to clear Deposit, Materials, Safety,
-   Access, Weather or Crew, and every Won job stays unschedulable on this site.
-
-   The remaining identities are deliberately NOT the bus user — each holds its own
-   least-privilege role and its own API key/secret pair:
-
-   | site config key | identity | provisioned in |
-   |---|---|---|
-   | `ironwrap_fleet_capture_issuer_user` | IronWrap Fleet Capture Issuer | dedicated user, own key pair (this step) |
-   | `ironwrap_work_package_issuer_user` | IronWrap Work Package Issuer | dedicated user, own key pair (this step) |
-   | `ironwrap_quickbooks_reconciliation_issuer_user` | IronWrap QuickBooks Reconciliation Issuer | step 3.5 |
-   | `ironwrap_facet_design_projection_service_user` | IronWrap Facet Design Projection Service | set with `FACET_DESIGN_FRAPPE_PROJECTION_*` in step 2.7 |
-   | `ironwrap_launch_proof_reader_user` | IronWrap Launch Proof Reader | leftover Frappe lookup identity only. `tools/launch-proof.mjs` proves D1/Worker identity with `INGEST_TOKEN` / `ADMIN_TOKEN` and ignores `FRAPPE_*` (IRO-189). Do not treat this pin as a release-wire gate. |
-
-   Customer portal decisions are not one of those Frappe-issued rails. The authoritative write is
-   the native D1 intent plus immutable R2 receipt in `0069_customer_portal_decision_intents.sql`;
-   no Frappe decision issuer is provisioned for clones.
-
-   Three further pins are tenant *constants* rather than identities. A Roof Job cannot
-   reach `Won` without a workflow profile and the locale-policy pair, and the customer
-   contract acceptance command is what stamps them, so a site that skips these accepts
-   no contracts at all — it fails closed rather than stamping a jurisdiction fact
-   nobody blessed. Pin the tenant's own blessed values, not IronWrap Exteriors':
-
-   ```
-   bench --site <tenant-site> set-config ironwrap_default_workflow_profile     '<Roof Job workflow profile>'
-   bench --site <tenant-site> set-config ironwrap_locale_policy_version        '<blessed locale policy version>'
-   bench --site <tenant-site> set-config ironwrap_locale_policy_snapshot_json  '<blessed locale policy JSON object>'
-   ```
-
-   `ironwrap_default_workflow_profile` must be one of the Roof Job `workflow_profile`
-   options (`Residential Retail`, `Insurance Restoration`, `Commercial`, `Service`,
-   `Warranty`, `Custom`) and is the tenant default only: a profile an operator already
-   set on a job is never overwritten. `ironwrap_locale_policy_version` and
-   `ironwrap_locale_policy_snapshot_json` (a non-empty JSON object) are the tenant's
-   jurisdiction facts, blessed by whoever owns legal/compliance for that tenant and
-   re-pinned when its jurisdiction rules change. Retirement: these three pins belong to
-   the Frappe compatibility-projection era (IRO-195 / ELEC-115 Path A) and go away with
-   it when the D1-native acceptance transition ships.
-
-7. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
-   stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
+Frappe is decommissioned, not migrated: the compatibility app is gone from the tree and a new
+tenant gets no Frappe site, DocTypes, or site-config pins. Never adopt frappe/press (AGPL, Frappe
+Cloud's control plane): per-tenant provisioning stays on IronWrap's own scripts
+(`config/tenants/` + validators + this playbook).
 
 ### 4. Drive / evidence namespace
 
@@ -315,17 +203,9 @@ counts it as a pass. Any `FAIL` exits non-zero.
 4. R2: demo raw payloads land only in `<tenant>-bus-raw`; spot-check the IronWrap bucket
    for the same timestamps. A manual evidence disposition creates a marker only in
    `<tenant>-bus-privacy`; verify that the IronWrap privacy bucket is unchanged.
-5. Frappe site: the demo lead exists only on the tenant site. Search **every doctype the app
-   ships**, not just `Lead Envelope` — the ingest fan-out writes the same contact into several
-   (`Roofing Customer.email` among them), so a single-doctype search reports zero hits while a
-   leaked customer record sits on the other site. `deploy/local/frappe-marker-sweep.mjs` does
-   this from the app's own doctype JSONs, and reports a query that failed to run as an error
-   rather than as an absence of rows; `tools/validate-ingest-doctype-coverage.mjs` fails CI if a
-   doctype `workers-bus/src/erpnext.ts` names ever falls outside the sweep.
-6. Drive: the demo job folder exists only in the tenant's Shared Drive.
-7. MCP: from the tenant Hermes profile, `list_recent_envelopes` returns only tenant data;
-   attempting the other tenant's `ERPNEXT_BASE_URL` credentials fails.
-8. Email: the demo instant-ack sends from the tenant's `FROM_EMAIL`, never from an
+5. Drive: the demo job folder exists only in the tenant's Shared Drive.
+6. MCP: from the tenant Hermes profile, `list_recent_envelopes` returns only tenant data.
+7. Email: the demo instant-ack sends from the tenant's `FROM_EMAIL`, never from an
    ironwrapexteriors.com or iroofalberta.ca mailbox.
 
 ## Acceptance Checklist
@@ -352,17 +232,9 @@ recovery boundaries.
 - [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
   unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
   an older snapshot, elapsed time or empty RAW read does not authorize clearing them.
-- [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
-  `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
-  to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and
-  `ironwrap_work_package_issuer_user` bound to their OWN least-privilege users with their own
-  key pairs in `FLEET_CAPTURE_FRAPPE_API_*` / `WORK_PACKAGE_FRAPPE_API_*`; and a separate
-  QuickBooks issuer user/role/key pair bound through `ironwrap_quickbooks_reconciliation_issuer_user`.
-  Every key in the step 3.6 table is either set or consciously deferred; `node
-  tools/validate-site-config-pins.mjs` passes.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks expected realm and signed webhook verified: receipt/outbox and exactly one Pending Frappe reconciliation exist; provider accounting facts are still read-back/reconciliation work.
 - [ ] Tenant Hermes profile answers a read-only question from tenant data via all granted MCP servers.
-- [ ] A test lead flows source -> bus envelope -> tenant ERPNext record -> tenant-branded ack email.
-- [ ] All 8 tenant-leakage checks above pass.
+- [ ] A test lead flows source -> bus envelope -> tenant D1 record -> tenant-branded ack email.
+- [ ] All 7 tenant-leakage checks above pass.
 - [ ] No secret value appears in the repo, the tenant config, or this checklist's evidence.

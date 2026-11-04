@@ -1,6 +1,6 @@
 # Local E2E stack - IronWrap OS (dev only, never production)
 
-Run the Worker and built PWA against the local compatibility stack:
+Run the Worker and built PWA against local D1/R2/queue state:
 
 ```bash
 cd workers-bus && npm run dev
@@ -12,23 +12,17 @@ cd workers-bus && npm run dev
    `IRONWRAP_LOCAL_WORKER_PORT` - see "Two stacks on one machine")
 2. the compatibility receipt verifier public key exists in `deploy/local/keys/` (gitignored).
    Fresh preflight keeps only the public half of an ephemeral pair. Existing key files are preserved.
-3. the docker-compose Frappe v15 + MariaDB + Redis stack is up and answering on
-   `http://localhost:8000` (or `IRONWRAP_LOCAL_FRAPPE_PORT`; the committed DocType contract
-   is provisioned by `frappe-init.sh`)
-4. `workers-bus/.dev.vars` exists - on a fresh checkout it is scaffolded from
+3. `workers-bus/.dev.vars` exists - on a fresh checkout it is scaffolded from
    `.dev.vars.example`, so `ADMIN_TOKEN`, `INGEST_TOKEN` and `APP_AUTH_PEPPER` are already
-   there rather than a hand-add step - and carries the local Frappe integration API
-   key/secret plus the host-port-bearing values (`ERPNEXT_BASE_URL`, `APP_PUBLIC_ORIGIN` and
-   its allowlist) that override `wrangler.jsonc`'s single-stack defaults.
+   there rather than a hand-add step - and carries the throwaway local keys plus the
+   host-port-bearing values (`APP_PUBLIC_ORIGIN` and its allowlist, and the inert
+   `ERPNEXT_BASE_URL`) that override `wrangler.jsonc`'s single-stack defaults.
    Existing operator values are preserved outside generated bindings. Preflight also clears
    retired broker overrides in existing files.
-5. every D1 migration is applied to the local Miniflare database
-6. the bench copy of `ironwrap_roofing` matches the repo (a stale volume is resynced
-   and the container restarted; see "App source edits vs the bench copy" below)
+4. every D1 migration is applied to the local Miniflare database
 
-Fresh compatibility initialization provisions the active owner fixture, Worker integration and
-bounded rail identities. It preserves existing users and credential files. The retired broker
-actors are excluded from fresh provisioning and resync.
+Frappe is decommissioned, not migrated: there is no local Frappe stack, Docker is not needed, and
+the `local` env keeps `ERPNEXT_ENABLED` and the Frappe projection off.
 
 Then `wrangler dev --env local --port 7100 --test-scheduled` starts (the port follows
 `IRONWRAP_LOCAL_WORKER_PORT`): the Worker serves
@@ -40,16 +34,14 @@ test keys, and captures magic-link **and customer contract-acceptance** email in
 
 `local` has native Facet v2 ingest/launch and the customer portal switched on:
 `FACET_V2_INGEST_ENABLED`, `APP_FACET_LAUNCH_ENABLED`, `APP_CUSTOMER_PORTAL_ENABLED`, and
-`APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED`. The canonical compatibility flag is
-`FACET_DESIGN_FRAPPE_PROJECTION_ENABLED`; it is default-off (`false`) in every checked-in
-environment, including local. `predev.mjs`
-generates the three throwaway Facet keys into `deploy/local/keys/`, provisions the scoped
-`ironwrap-facet-projection@ironwrap.local` service identity, and pins the matching
-`ironwrap_facet_design_projection_hmac_key` into the Frappe site config so a controlled proof can
-opt in explicitly. For `approved`/`corrected`, that endpoint creates a blank, non-customer-safe
-`Draft` Customer Quote; on every chain advance it marks the predecessor projected quote `Rejected`
-and creates a replacement only for an active decision. The compatibility draft supplies no price,
-line items, taxes, payment schedule, or commercial terms.
+`APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED`. The Frappe projection flag
+`FACET_DESIGN_FRAPPE_PROJECTION_ENABLED` is default-off (`false`) in every checked-in
+environment, including local, and no local Frappe site exists to receive it. `predev.mjs`
+generates the three throwaway Facet keys into `deploy/local/keys/`. The Worker still carries the
+projection code until its own removal: for `approved`/`corrected` it would create a blank,
+non-customer-safe `Draft` Customer Quote; on every chain advance it marks the predecessor projected quote
+`Rejected` and creates a replacement only for an active decision. The
+compatibility draft supplies no price, line items, taxes, payment schedule, or commercial terms.
 
 ## Driving the Facet v2 ingest leg
 
@@ -73,11 +65,11 @@ The owner action that opens the chain is `POST /api/v1/estimator/jobs/{job}/face
 
 | Flow | Entry point |
 |---|---|
-| Estimate spine (D1/R2 → Frappe Lead Envelope + Roof Job + gates) | `POST /ingest/estimate` (INGEST_TOKEN) |
+| Estimate spine (D1/R2 native records) | `POST /ingest/estimate` (INGEST_TOKEN) |
 | Public estimator-review intake (Turnstile test keys, no online price) | `POST /public/instant-estimate` |
 | Magic-link sign-in (dev outbox instead of email) | `POST /api/v1/auth/magic-link/request` → `GET /admin/dev-outbox` (ADMIN_TOKEN) |
 | Owner → field QR pairing → device-bound field session | `POST /api/v1/device-pairings` → `POST /api/v1/auth/device-pairing/consume` |
-| Field check-in + evidence (R2 + Frappe Evidence Item) | `POST /api/v1/jobs/{job}/check-ins` (multipart) |
+| Field check-in + evidence (R2 + D1) | `POST /api/v1/jobs/{job}/check-ins` (multipart) |
 | Photo bridge | `POST /ingest/photo` (INGEST_TOKEN) |
 | Cron sweeps | `GET /__scheduled?cron=0%208%20*%20*%20*` |
 | Dead-letter replay | `POST /admin/replay` (ADMIN_TOKEN + approval context) |
@@ -85,8 +77,7 @@ The owner action that opens the chain is `POST /api/v1/estimator/jobs/{job}/face
 ## Starting the local runtime
 
 `bash start-local-runtime.sh` supervises the Worker, app development server and synthetic ERP
-stub. The optional agent host is enabled with `IRONWRAP_LOCAL_AGENT_HOST=on`. The Worker
-preflight still starts the separate local compatibility stack described above.
+stub. The optional agent host is enabled with `IRONWRAP_LOCAL_AGENT_HOST=on`.
 
 The ERPNext approval broker package is retired. Local launchers leave the historical broker
 connections and their feature gates off. Use native Worker paths for supported office and field
@@ -105,136 +96,40 @@ bash start-local-runtime.sh
 
 See `mcp/ironwrap-bus-mcp/README.md` for the client's local authentication variables.
 
-## Fixtures a traverse needs but no product surface builds yet
-
-Nothing in the product prices a quote or approves it - that is an office estimator's job today
-(`CAPABILITY-MATRIX.md`). Every end-to-end run that needs a signable, approved quote therefore
-had to build one by hand, and ELEC-95, ELEC-112 and ELEC-120 each rebuilt the same fixture and
-rediscovered the same wrinkles. That construction is now one tool:
-
-```bash
-# a real Roof Job first, through the owned intake spine
-curl -sS -X POST http://localhost:7100/ingest/estimate \
-  -H "authorization: Bearer $INGEST_TOKEN" -H 'content-type: application/json' \
-  -d '{"project_id":"DEMO-01","customer":"Dana Demo","email":"demo@example.invalid", ...}'
-
-# then the Approved Customer Quote (credentials read from workers-bus/.dev.vars)
-node tools/local-approved-quote-fixture.mjs --roof-job job:DEMO-01 --prefix demo
-node tools/local-approved-quote-fixture.mjs --roof-job job:DEMO-01 --json   # machine-readable
-```
-
-It writes a Price Book Rule (Draft -> Approved) and a Customer Quote
-(Draft -> Needs Review -> Approved) over REST, through `domain_policy`'s full validation chain
-- no raw SQL, no `frappe.db.set_value`, no bypass. It is still a **fixture**: the act of pricing
-and approving stands in for a surface that does not exist yet, and it says so in its own header.
-
-Two wrinkles it exists to stop rediscovering, both worth knowing if you write a quote-lifecycle
-path by hand:
-
-- **A price-rule snapshot can only be bound while the quote is Draft or Needs Review**, and every
-  frozen field in it must match its live source exactly as *Frappe* reads that source back - a
-  Currency of `0` reads as blank, and an integral Currency stringifies Python-side as `"1250.0"`.
-  Build the snapshot from a read-back of the rule, never from the values you sent.
-- **`qb_terms_due_days` is an `Int`, and Frappe stores an unset `Int` as `0`, not `NULL`.** That
-  used to make `enforce_write_once` refuse the field's first legitimate write, because a stored
-  zero nobody wrote looked like a value already set (ELEC-120 finding 2). `domain_policy`'s
-  `WRITE_ONCE_ZERO_IS_UNSET` now names that field, so the write is accepted while a real value
-  stays write-once. If you add another write-once `Int` whose zero means "never written", name it
-  there too - and do not widen the rule to every numeric: `Evidence Item.latitude` `0.0` is a real
-  coordinate and `Job Cost Event.amount_cents` `0` is a real amount.
-
-## App source edits vs the bench copy (stale volumes)
-
-The bench runs a **copy** of `frappe-apps/ironwrap_roofing`, not the repo mount: the
-init container tars the source into `apps/ironwrap_roofing` and pip-installs that copy
-as editable. A volume therefore keeps serving whatever the copy held when it was made,
-which is how a seven-hour-old volume once ran a bench missing a Role that had shipped
-hours earlier, with nothing in the boot output saying so (ELEC-95).
-
-`frappe-init.sh` now compares the two trees on every start and says what it found:
-
-- hashes agree: `app source in sync (<hash>) - no resync needed`
-- hashes differ: a `STALE VOLUME DETECTED` banner naming both hashes, then a full
-  resync (recopy, `pip install -e`, `bench migrate`, re-pin service identities) and a
-  `RESYNC COMPLETE` banner. `predev.mjs` restarts the `frappe` container afterwards so
-  the running bench actually loads the new code.
-
-Controls, all through `IRONWRAP_LOCAL_APP_RESYNC`:
-
-```bash
-docker compose -f deploy/local/docker-compose.yml up -d frappe-init                      # detect + resync (default)
-IRONWRAP_LOCAL_APP_RESYNC=force docker compose -f deploy/local/docker-compose.yml up -d frappe-init   # resync regardless
-IRONWRAP_LOCAL_APP_RESYNC=off   docker compose -f deploy/local/docker-compose.yml up -d frappe-init   # refuse to boot on drift
-```
-
-`off` is for a run that must never have its bench changed underneath it: on drift the
-init container exits 1 with a `REFUSING TO BOOT` banner and `frappe` does not start.
-A boot that sees drift either fixes it or says so; it never continues quietly.
-
-Any claim of the form "verified against a real site" is only as fresh as the boot that
-produced it. Reading `app source in sync` or `RESYNC COMPLETE` in the `frappe-init` log
-is what makes it a claim about the checkout under test:
-
-```bash
-docker compose -f deploy/local/docker-compose.yml logs frappe-init | tail -20
-```
-
-For a single-file iteration loop during debugging, `docker cp` plus
-`docker restart ironwrap-local-frappe-1` is still faster - just expect the next start
-to detect that edit as drift and put the bench back on the repo revision.
-
 ## Two stacks on one machine
 
-Every host port the stack binds is overridable, so a second stack gets its own containers,
-its own volumes and its own ports instead of resyncing a bench another run is mid-proof on
-- or, worse, quietly answering with the first stack's data. Export the two port variables
-together and run the second stack from its own checkout:
+Every host port the Worker binds is overridable, so a second stack gets its own port instead
+of answering with the first stack's data. Export the port variable and run the second stack
+from its own checkout:
 
 | Variable | Default | Moves |
 |---|---|---|
-| `IRONWRAP_LOCAL_FRAPPE_PORT` | `8000` | Frappe's host port, the compose site base URL, and the Worker's `ERPNEXT_BASE_URL` |
 | `IRONWRAP_LOCAL_WORKER_PORT` | `7100` | `wrangler dev`'s port, `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, `PUBLIC_ESTIMATE_ALLOWED_ORIGINS` |
+| `IRONWRAP_LOCAL_FRAPPE_PORT` | `8000` | only the inert `ERPNEXT_BASE_URL` (no Frappe stack runs) |
 
 ```bash
-export COMPOSE_PROJECT_NAME=ironwrap-scratch
-export IRONWRAP_LOCAL_FRAPPE_PORT=8001 IRONWRAP_LOCAL_WORKER_PORT=7101
-docker compose -f deploy/local/docker-compose.yml up -d
-cd workers-bus && npm run dev          # same shell, so predev sees all three
+export IRONWRAP_LOCAL_WORKER_PORT=7101
+cd workers-bus && npm run dev          # same shell, so predev sees it
 ```
 
 `wrangler.jsonc` is static JSON and cannot read the environment, so the `local` env still
 pins the single-stack defaults. `predev.mjs` re-declares every port-bearing value into
-`workers-bus/.dev.vars`, which `wrangler dev` loads **over** the config's `vars` - that
-override is what makes the second Worker talk to the second Frappe.
-
-The bindings table `wrangler dev` prints at start-up is how you check it, though it shows
-the override by *hiding* the value rather than by printing it: a var still coming from
-`wrangler.jsonc` prints in the clear, and one shadowed by `.dev.vars` prints `(hidden)`.
-
-```
-env.ERPNEXT_BASE_URL ("(hidden)")        <- overridden, this stack has its own Frappe
-env.ERPNEXT_ENABLED ("true")             <- still straight from wrangler.jsonc
-```
-
-So `env.ERPNEXT_BASE_URL ("http://localhost:8000")` printed in the clear is the failure to
-look for: it means `.dev.vars` has no override and this Worker is pointed at the FIRST
-stack's Frappe. The usual cause is that the variables were not exported in the shell that
-ran `npm run dev`; re-export and re-run rather than hand-editing `.dev.vars` (predev
-rewrites those lines on every boot).
+`workers-bus/.dev.vars`, which `wrangler dev` loads **over** the config's `vars`. The bindings
+table `wrangler dev` prints at start-up shows an overridden var as `(hidden)`; one still printed
+in the clear comes straight from `wrangler.jsonc`. If `APP_PUBLIC_ORIGIN` prints in the clear,
+the variable was not exported in the shell that ran `npm run dev`; re-export and re-run rather
+than hand-editing `.dev.vars` (predev rewrites those lines on every boot).
 
 Two things stay single-stack on purpose: the optional TLS Worker for the Facet v2 ingest
 leg (`--port 7443`, above - pass a different `--port` and matching `FACET_V2_ROUTES_JSON`
 if a second one is needed), and `.wrangler/state` plus `deploy/local/keys/`, which are
 per-checkout rather than per-port. Run the second stack from a second checkout.
 
-Defaults are unchanged: one stack, project `ironwrap-local`, Frappe 8000, and Worker 7100.
-
 ## Reset
 
 ```bash
-docker compose -f deploy/local/docker-compose.yml down -v   # wipe Frappe + MariaDB
 rm -rf workers-bus/.wrangler/state                          # wipe local D1/R2/queues
 ```
 
-`npm run dev` then reprovisions from scratch (init container re-runs, fresh keys only
-if `deploy/local/keys/` is also removed).
+`npm run dev` then reapplies every migration (fresh keys only if `deploy/local/keys/` is also
+removed).

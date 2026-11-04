@@ -570,15 +570,6 @@
       ]
     },
     {
-      "path": "frappe-apps/ironwrap_roofing/README.md",
-      "class": "component",
-      "authority": [
-        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
-        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
-        "docs/CAPABILITY-MATRIX.md"
-      ]
-    },
-    {
       "path": "mcp/ironwrap-bus-mcp/README.md",
       "class": "component",
       "authority": [

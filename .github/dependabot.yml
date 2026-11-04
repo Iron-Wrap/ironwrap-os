@@ -1,5 +1,5 @@
-# Dependabot for the ecosystems this repository has: GitHub Actions, npm (every
-# package-lock.json), and pip (frappe-apps/ironwrap_roofing/pyproject.toml).
+# Dependabot for the ecosystems this repository has: GitHub Actions and npm (every
+# package-lock.json).
 #
 # Patch and minor updates arrive as one grouped PR per ecosystem; majors come
 # one PR each. Version updates run monthly: each one costs a full CI run, and
@@ -61,17 +61,4 @@ updates:
       include: scope
     groups:
       server-patch-and-minor:
-        update-types: [patch, minor]
-
-  - package-ecosystem: pip
-    directories: ['**/*']
-    schedule:
-      interval: monthly
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: fix
-      prefix-development: chore
-      include: scope
-    groups:
-      patch-and-minor:
         update-types: [patch, minor]

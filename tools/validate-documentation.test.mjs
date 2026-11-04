@@ -101,14 +101,14 @@ test("documentation gate rejects a deliberately stale capability count", () => {
   const temp = mkdtempSync(join(tmpdir(), "ironwrap-capability-stale-"));
   try {
     const current = readFileSync(matrix, "utf8");
-    // Derive the contract's own DocType total instead of hard-coding it. Every
+    // Derive the contract's own migration count instead of hard-coding it. Every
     // capability lane changes that number, and a hard-coded literal makes this
     // gate fail on the lane rather than on the staleness it is meant to catch.
-    const declared = Number(/"total":\s*(\d+)/.exec(current)?.[1]);
-    assert.ok(Number.isInteger(declared) && declared > 1, "contract must declare a DocType total");
+    const declared = Number(/"count":\s*(\d+)/.exec(current)?.[1]);
+    assert.ok(Number.isInteger(declared) && declared > 1, "contract must declare a migration count");
     const stale = current.replace(
-      `"total": ${declared}`,
-      `"total": ${declared - 1}`,
+      `"count": ${declared}`,
+      `"count": ${declared - 1}`,
     );
     assert.notEqual(stale, current);
     const stalePath = join(temp, "CAPABILITY-MATRIX.md");
@@ -126,7 +126,7 @@ test("documentation gate rejects a deliberately stale capability count", () => {
     assert.match(
       result.stderr,
       new RegExp(
-        `Frappe DocTypes total: stale value; expected ${declared - 1}, actual ${declared}`,
+        `D1 migrations count: stale value; expected ${declared - 1}, actual ${declared}`,
       ),
     );
   } finally {
@@ -317,30 +317,42 @@ test("documentation gate rejects claiming Frappe receipts gate an out-of-scope r
   }
 });
 
+test("documentation gate rejects a capability contract that still pins Frappe DocTypes", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-capability-frappe-"));
+  try {
+    const current = readFileSync(matrix, "utf8");
+    const stale = current.replace(
+      '"expected": {\n',
+      '"expected": {\n    "frappe_doctypes": { "total": 79, "top_level": 60, "child": 19 },\n',
+    );
+    assert.notEqual(stale, current);
+    const stalePath = join(temp, "CAPABILITY-MATRIX.md");
+    writeFileSync(stalePath, stale);
+    const result = spawnSync(process.execPath, [validator, "--capability-matrix", stalePath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /capability contract pins Frappe DocTypes/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("documentation gate rejects a count the clone playbook restates staler than the repository", () => {
   // Derive the live numbers rather than hard-coding them, for the same reason the
-  // capability test does: a lane that adds a DocType or a migration must fail on
-  // its own drift, not on this test.
+  // capability test does: a lane that adds a migration must fail on its own drift,
+  // not on this test.
   const current = readFileSync(playbook, "utf8");
-  const doctypes = Number(/\b(\d+)-DocType\s+pack\b/.exec(current)?.[1]);
   const migrations = Number(/\bAll (\d+) D1 migrations\b/.exec(current)?.[1]);
-  assert.ok(Number.isInteger(doctypes) && doctypes > 1, "playbook must state a DocType pack size");
   assert.ok(Number.isInteger(migrations) && migrations > 1, "playbook must state a migration count");
 
   withPlaybookCopy(
     "ironwrap-playbook-stale-",
     (content) =>
-      content
-        .replace(`${doctypes}-DocType`, `${doctypes - 1}-DocType`)
-        .replace(`All ${migrations} D1 migrations`, `All ${migrations - 1} D1 migrations`),
+      content.replace(`All ${migrations} D1 migrations`, `All ${migrations - 1} D1 migrations`),
     (result) => {
       assert.notEqual(result.status, 0);
-      assert.match(
-        result.stderr,
-        new RegExp(
-          `stale DocType pack size; document "${doctypes - 1}", repository "${doctypes}"`,
-        ),
-      );
       assert.match(
         result.stderr,
         new RegExp(
@@ -354,10 +366,10 @@ test("documentation gate rejects a count the clone playbook restates staler than
 test("documentation gate rejects deleting a restated count instead of correcting it", () => {
   withPlaybookCopy(
     "ironwrap-playbook-missing-",
-    (content) => content.replace(/\b\d+-DocType(\s+)pack\b/, "DocType$1pack"),
+    (content) => content.replace(/\bAll \d+ D1 migrations\b/g, "All D1 migrations"),
     (result) => {
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /missing DocType pack size claim/);
+      assert.match(result.stderr, /missing migration chain length claim/);
     },
   );
 });

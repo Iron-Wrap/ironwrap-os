@@ -15,17 +15,15 @@ export function decisionStatus(item: DecisionItem): { label: string; kind: Statu
   if (state.includes("uncertain") || state.includes("reconciliation")) {
     return { label: "Check the result", kind: "attention" };
   }
-  if (state === "failed" || state === "audit_failed" || state === "blocked") {
+  if (state === "failed" || state === "blocked") {
     return {
-      label: state === "audit_failed" ? "Save record failed" : "Needs a check",
+      label: "Needs a check",
       kind: "stopped",
     };
   }
   if (state === "connection_required") return { label: "Connect account", kind: "attention" };
-  if (state === "executing" || state === "submission_pending")
-    return { label: "In progress", kind: "pending" };
-  if (state === "pending" || state === "pending_review")
-    return { label: "Needs review", kind: "attention" };
+  if (state === "submission_pending") return { label: "In progress", kind: "pending" };
+  if (state === "pending_review") return { label: "Needs review", kind: "attention" };
   return {
     label: state.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase()),
     kind: "neutral",

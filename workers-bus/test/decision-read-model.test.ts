@@ -1,19 +1,16 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
-import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import {
-  permissionsForRole,
-  type AppEnv,
-  type AppRole,
-} from "../src/app-types.ts";
+import { type AppEnv, type AppRole } from "../src/app-types.ts";
 import {
   buildDecisionsReadModel,
   parseDecisionPageRequest,
 } from "../src/decision-read-model.ts";
-import { auth, setup } from "./pipeline-board-fixture.ts";
+import { setup } from "./pipeline-board-fixture.ts";
+import { actor, fixture, NOW, tables } from "./decision-read-model-fixture.ts";
+import { permissionsForRole } from "../src/app-types.ts";
 
 // The app uses bundler resolution. Keep this exact, temporary resolver in the test
 // so a real handler response is validated by the shipped app schema under Node.
@@ -32,88 +29,7 @@ const { decisionsReadModelSchema, nowResponseSchema } =
   await import("../../app/src/now/now-contracts.ts");
 resolver.deregister();
 
-const NOW = new Date("2026-09-29T12:00:00.000Z");
-const tables = [
-  ["lead_triage", "approval_requests", "approval_request_id"],
-  [
-    "quote_revision",
-    "quote_revision_approval_requests",
-    "quote_revision_approval_id",
-  ],
-  [
-    "proposal_publication",
-    "proposal_publication_approval_requests",
-    "proposal_publication_approval_id",
-  ],
-  ["postiz", "postiz_intents", "intent_id"],
-  ["quickbooks_final_invoice", "quickbooks_final_invoice_intents", "intent_id"],
-] as const;
-
-function actor(role: AppRole, tenant = "ironwrap") {
-  const result = auth("owner", tenant);
-  result.session.role = role;
-  result.permissions = permissionsForRole(role);
-  return result;
-}
-
-// Minimal tables exercise the real projection SQL with controllable source failures.
-// A separate all-migrations handler test below verifies the actual deployed columns.
-function fixture() {
-  const db = new DatabaseSync(":memory:");
-  const reads: string[] = [];
-  const unavailable = new Set<string>();
-  for (const [, table, id] of tables)
-    db.exec(`CREATE TABLE ${table} (
-    ${id} TEXT, tenant_id TEXT, state TEXT, version INTEGER,
-    request_text TEXT, correction_reason TEXT, roof_job_id TEXT, target_quote_version INTEGER,
-    updated_at TEXT, expires_at TEXT, title TEXT, currency TEXT, final_balance TEXT,
-    dry_run_receipt TEXT, write_args_json TEXT)`);
-  const env = {
-    DB: {
-      prepare(sql: string) {
-        assert.match(sql.trim(), /^SELECT /);
-        assert.doesNotMatch(sql, /production_schedule_approval_requests/);
-        reads.push(sql);
-        if ([...unavailable].some((table) => sql.includes(`FROM ${table}`)))
-          throw new Error("fixture source unavailable");
-        return {
-          bind: (...args: unknown[]) => ({
-            all: async () => ({
-              success: true,
-              results: db.prepare(sql).all(...(args as never[])),
-            }),
-          }),
-        };
-      },
-    },
-  } as unknown as AppEnv;
-  function seed(
-    index: number,
-    suffix = "1",
-    state = index < 3 ? "pending" : "pending_review",
-    tenant = "ironwrap",
-  ) {
-    const [, table, id] = tables[index]!;
-    const value =
-      index === 3
-        ? `11111111-1111-4111-8111-${suffix.padStart(12, "0")}`
-        : index === 4
-          ? `request:fixture:${index}:${suffix}`
-          : `${["approval", "quote-revision-approval", "proposal-publication-approval"][index]}:${suffix.padStart(16, "0")}`;
-    db.prepare(
-      `INSERT INTO ${table} (${id}, tenant_id, state, version, request_text,
-      correction_reason, roof_job_id, target_quote_version, updated_at, expires_at,
-      title, currency, final_balance, dry_run_receipt, write_args_json)
-      VALUES (?, ?, ?, 2, 'Review captured note', 'Correct measurement', 'job:fixture:1', 3,
-        ?, '2026-09-28T12:00:00.000Z', 'Roof update', 'CAD', '1200.00',
-        'withheld fixture receipt', '{"fixture":"withheld arguments"}')`,
-    ).run(value, tenant, state, NOW.toISOString());
-    return value;
-  }
-  return { db, env, reads, unavailable, seed };
-}
-
-test("all five live sources are tenant-bound read-only projections with native destinations", async () => {
+test("current sources are tenant-bound read-only projections with native destinations", async () => {
   const f = fixture();
   try {
     for (let index = 0; index < tables.length; index++) {
@@ -125,35 +41,16 @@ test("all five live sources are tenant-bound read-only projections with native d
       await buildDecisionsReadModel(f.env, actor("owner"), NOW),
     );
     assert.equal(model.state, "ready");
-    assert.equal(model.items.length, 5);
+    assert.equal(model.items.length, 2);
     assert.equal(model.sources.length, 6);
-    assert.deepEqual(
-      model.sources.find((source) => source.kind === "production_schedule"),
-      {
-        kind: "production_schedule",
-        state: "retired",
-        loaded_count: 0,
-        has_more: null,
-        next_cursor: null,
-        read_model_generated_at: null,
-      },
-    );
     assert.deepEqual(
       model.items.map((item) => item.review_href),
       [
-        "/approvals?review=approval%3A0000000000000001",
-        "/quote-revision-approvals/quote-revision-approval%3A0000000000000001",
-        "/estimator/jobs/job%3Afixture%3A1",
         "/marketing/postiz/11111111-1111-4111-8111-000000000001",
         "/accounting/quickbooks/final-invoices/request%3Afixture%3A4%3A1",
       ],
     );
-    assert.equal(
-      model.items[0]!.native_state,
-      "pending",
-      "browsing must not run expiry maintenance",
-    );
-    assert.equal(model.items[0]!.expires_at, "2026-09-28T12:00:00.000Z");
+    assert.equal(model.items[0]!.native_state, "pending_review");
     assert.doesNotMatch(
       JSON.stringify(model),
       /withheld|dry_run_receipt|write_args_json|allowed_actions/,
@@ -202,7 +99,9 @@ test("visible sources follow both native API permissions and detail screen roles
       );
       assert.equal(
         f.reads.length,
-        expected[role].filter((kind) => kind !== "production_schedule").length,
+        expected[role].filter(
+          (kind) => kind === "postiz" || kind === "quickbooks_final_invoice",
+        ).length,
       );
     }
     const widenedGrant = actor("production");
@@ -219,20 +118,16 @@ test("visible sources follow both native API permissions and detail screen roles
 test("a malformed native identity fails its whole source instead of advertising a dead link", async () => {
   const f = fixture();
   try {
-    f.seed(0);
-    f.seed(1);
-    f.db
-      .prepare(
-        "UPDATE quote_revision_approval_requests SET quote_revision_approval_id = '..'",
-      )
-      .run();
+    f.seed(3);
+    f.seed(4);
+    f.db.prepare("UPDATE postiz_intents SET intent_id = '..'").run();
     const model = decisionsReadModelSchema.parse(
       await buildDecisionsReadModel(f.env, actor("owner"), NOW),
     );
     assert.equal(model.state, "limited");
     assert.equal(model.items.length, 1);
     assert.equal(
-      model.sources.find((source) => source.kind === "quote_revision")!.state,
+      model.sources.find((source) => source.kind === "postiz")!.state,
       "unavailable",
     );
   } finally {
@@ -244,14 +139,14 @@ test("one failed source retains other sources, while all failed sources never me
   const f = fixture();
   try {
     for (let index = 0; index < tables.length; index++) f.seed(index);
-    f.unavailable.add(tables[1][1]);
+    f.unavailable.add(tables[3][1]);
     let model = decisionsReadModelSchema.parse(
       await buildDecisionsReadModel(f.env, actor("owner"), NOW),
     );
     assert.equal(model.state, "limited");
-    assert.equal(model.items.length, 4);
-    assert.deepEqual(model.sources[1], {
-      kind: "quote_revision",
+    assert.equal(model.items.length, 1);
+    assert.deepEqual(model.sources[4], {
+      kind: "postiz",
       state: "unavailable",
       loaded_count: 0,
       has_more: null,
@@ -274,27 +169,25 @@ test("keyset pages reach every open request without terminal history consuming t
   try {
     for (let index = 1; index <= 58; index++) {
       const id = f.seed(
-        0,
+        3,
         String(index),
         index % 3 === 0
-          ? "execution_uncertain"
+          ? "reconciliation_required"
           : index % 3 === 1
-            ? "pending"
-            : "executing",
+            ? "pending_review"
+            : "submission_pending",
       );
       f.db
-        .prepare(
-          "UPDATE approval_requests SET updated_at = ? WHERE approval_request_id = ?",
-        )
+        .prepare("UPDATE postiz_intents SET updated_at = ? WHERE intent_id = ?")
         .run(new Date(NOW.getTime() - (index % 5) * 1000).toISOString(), id);
     }
     for (let index = 100; index < 170; index++)
-      f.seed(0, String(index), ["executed", "denied", "expired"][index % 3]);
-    f.seed(0, "999", "pending", "another-tenant");
+      f.seed(3, String(index), ["published", "rejected"][index % 2]);
+    f.seed(3, "999", "pending_review", "another-tenant");
     const ids: string[] = [];
     let cursor: string | null = null;
     do {
-      const params = new URLSearchParams({ decision_source: "lead_triage" });
+      const params = new URLSearchParams({ decision_source: "postiz" });
       if (cursor) params.set("decision_cursor", cursor);
       const parsed = parseDecisionPageRequest(params, actor("owner"));
       assert.equal(parsed.ok, true);
@@ -313,7 +206,7 @@ test("keyset pages reach every open request without terminal history consuming t
     } while (cursor);
     assert.equal(ids.length, 58);
     assert.equal(new Set(ids).size, 58);
-    assert.ok(ids.every((id) => Number(id.split(":").at(-1)) < 100));
+    assert.ok(ids.every((id) => Number(id.split("-").at(-1)) < 100));
   } finally {
     f.db.close();
   }
@@ -409,8 +302,8 @@ test("the real Now handler preserves legacy shape and opts into decisions withou
       ),
     );
     for (const query of [
-      "decision_source=quote_revision",
-      "include_decisions=1&decision_source=quote_revision",
+      "decision_source=postiz",
+      "include_decisions=1&decision_source=postiz",
     ]) {
       const pageResponse = await handleAuthenticatedRoute(
         new Request(`https://app.example.invalid/api/v1/now?${query}`),
@@ -421,7 +314,7 @@ test("the real Now handler preserves legacy shape and opts into decisions withou
       const page = nowResponseSchema.parse(await pageResponse.json());
       assert.deepEqual(
         page.decisions!.sources.map((source) => source.kind),
-        ["quote_revision"],
+        ["postiz"],
       );
     }
     assert.equal(
@@ -445,13 +338,16 @@ test("invalid, retired and unauthorized cursor requests stop before any database
     ["owner", "include_decisions=0", 400],
     ["owner", "include_decisions=1&include_decisions=1", 400],
     ["owner", "decision_cursor=bad", 400],
-    ["owner", "decision_source=lead_triage&decision_cursor=bad", 400],
+    ["owner", "decision_source=postiz&decision_cursor=bad", 400],
     [
       "owner",
       "decision_source=lead_triage&decision_source=quote_revision",
       400,
     ],
     ["owner", "decision_source=production_schedule", 404],
+    ["owner", "decision_source=lead_triage", 404],
+    ["owner", "decision_source=quote_revision", 404],
+    ["owner", "decision_source=proposal_publication", 404],
     ["sales", "decision_source=lead_triage", 404],
     ["sales", "decision_source=proposal_publication", 404],
     ["ops", "decision_source=postiz", 404],
@@ -466,13 +362,15 @@ test("invalid, retired and unauthorized cursor requests stop before any database
   }
   const f = fixture();
   try {
-    for (let index = 0; index < 26; index++) f.seed(0, String(index));
+    for (let index = 0; index < 26; index++) f.seed(3, String(index));
     const model = await buildDecisionsReadModel(f.env, actor("owner"), NOW);
-    const cursor = model.sources[0]!.next_cursor!;
+    const cursor = model.sources.find(
+      (source) => source.kind === "postiz",
+    )!.next_cursor!;
     assert.deepEqual(
       parseDecisionPageRequest(
         new URLSearchParams({
-          decision_source: "quote_revision",
+          decision_source: "quickbooks_final_invoice",
           decision_cursor: cursor,
         }),
         actor("owner"),
@@ -482,7 +380,7 @@ test("invalid, retired and unauthorized cursor requests stop before any database
     assert.deepEqual(
       parseDecisionPageRequest(
         new URLSearchParams({
-          decision_source: "lead_triage",
+          decision_source: "postiz",
           decision_cursor: cursor,
         }),
         actor("owner", "another-tenant"),
@@ -505,13 +403,67 @@ test("invalid, retired and unauthorized cursor requests stop before any database
       );
       const response = await handleAuthenticatedRoute(
         new Request(
-          `https://app.example.invalid/api/v1/now?decision_source=lead_triage&decision_cursor=${malformed}`,
+          `https://app.example.invalid/api/v1/now?decision_source=postiz&decision_cursor=${malformed}`,
         ),
         env,
         actor("owner"),
       );
       assert.equal(response.status, 400);
     }
+  } finally {
+    f.db.close();
+  }
+});
+
+test("retired broker rows remain stored without current Decisions invitations", async () => {
+  const f = fixture();
+  try {
+    for (const index of [0, 1, 2]) {
+      f.seed(index, "1", "pending");
+      f.seed(index, "2", "execution_uncertain");
+      f.seed(index, "3", "pending", "another-tenant");
+    }
+    const currentId = f.seed(3, "1", "pending_review");
+    f.seed(3, "2", "pending_review", "another-tenant");
+    const before = tables.map(([, table]) =>
+      f.db.prepare(`SELECT * FROM ${table}`).all(),
+    );
+    const model = decisionsReadModelSchema.parse(
+      await buildDecisionsReadModel(f.env, actor("owner"), NOW),
+    );
+    assert.deepEqual(
+      model.items.map((item) => item.id),
+      [currentId],
+    );
+    for (const kind of [
+      "lead_triage",
+      "quote_revision",
+      "proposal_publication",
+      "production_schedule",
+    ])
+      assert.deepEqual(
+        model.sources.find((source) => source.kind === kind),
+        {
+          kind,
+          state: "retired",
+          loaded_count: 0,
+          has_more: null,
+          next_cursor: null,
+          read_model_generated_at: null,
+        },
+      );
+    assert.ok(
+      f.reads.every(
+        (sql) =>
+          !/FROM (approval_requests|quote_revision_approval_requests|proposal_publication_approval_requests)/.test(
+            sql,
+          ),
+      ),
+    );
+    assert.deepEqual(
+      tables.map(([, table]) => f.db.prepare(`SELECT * FROM ${table}`).all()),
+      before,
+    );
   } finally {
     f.db.close();
   }

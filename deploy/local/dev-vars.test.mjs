@@ -97,7 +97,7 @@ CUSTOM_LOCAL_KEY=operator-choice
   for (const [key, value] of Object.entries(retired)) {
     assert.equal(bindings.get(key), value);
     if (!key.endsWith("_SHARED_SECRET")) {
-      assert.equal(localWranglerVars()[key], value === '""' ? "" : value);
+      assert.equal(localWranglerVars()[key], value === '""' ? undefined : value);
     }
   }
   assert.doesNotMatch(updated, /9104|synthetic-old|APP_PROPOSAL_PUBLICATION_ENABLED=true/);

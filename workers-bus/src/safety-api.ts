@@ -1,5 +1,4 @@
 import { personCookieSession, validAppCsrf } from "./app-auth.ts";
-import { sessionIsRecentForApproval } from "./approval-broker-client.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { assertCurrentEvidenceReader, evidenceFilesForDetail, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedEvidenceFilesForRefs, resolveEvidenceUploads } from "./evidence-uploads.ts";
 import {
@@ -58,6 +57,12 @@ const MAX_BODY_BYTES = 32 * 1024;
 /** P33 step-up: a release needs a sign-in no older than this (no passkey is claimed). */
 const RELEASE_MAX_SESSION_AGE_SECONDS = 5 * 60;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,139}$/;
+
+/** True when the session row's sign-in time is no older than the release window, and not in the future. */
+function sessionSignedInRecently(sessionCreatedAt: string, maxSessionAgeSeconds: number, now = Date.now()): boolean {
+  const createdAt = Date.parse(sessionCreatedAt);
+  return Number.isFinite(createdAt) && createdAt <= now && now - createdAt <= maxSessionAgeSeconds * 1000;
+}
 const SAFETY_RESPONSE_COMMANDS = [
   "rescue_dispatched",
   "rescue_completed",
@@ -460,9 +465,7 @@ export async function handleSafetyRoute(
         // The existing session-age check, on the live session row's sign-in time.
         ...(person
           ? {
-              sessionRecent: sessionIsRecentForApproval(person.sessionCreatedAt, {
-                maxSessionAgeSeconds: RELEASE_MAX_SESSION_AGE_SECONDS,
-              }),
+              sessionRecent: sessionSignedInRecently(person.sessionCreatedAt, RELEASE_MAX_SESSION_AGE_SECONDS),
             }
           : {}),
       });

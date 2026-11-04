@@ -114,12 +114,12 @@
   //   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY,
   //   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET,
   //   PUBLIC_ESTIMATE_TURNSTILE_SECRET, PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
-  //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET,
-  //   PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET,
-  //   PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET, AUTHORITY_RECORD_EXECUTOR_HMAC_KEY.
-  //   Broker and authority-executor secrets
-  //   are Worker-to-private-broker only; never expose either through the PWA or a public
-  //   environment variable.
+  //   AUTHORITY_RECORD_EXECUTOR_HMAC_KEY.
+  //   The authority-executor secret is Worker-to-private-executor only; never expose it through
+  //   the PWA or a public environment variable.
+  //   PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET. The approval brokers are gone and nothing reads
+  //   them; they stay in src/secret-bindings.d.ts until the provider secrets are deleted, because
+  //   the release secret-inventory readback is an exact match.
   // Email/Drive = Google Workspace via service account + domain-wide delegation (live-verified
   // 2026-07-02). FROM_EMAIL is the impersonated sender: sales@ for now — switch to quote@ once
   // that mailbox migrates onto the Google Workspace. SMS is JobNimbus Engage's job (no Twilio send).
@@ -159,27 +159,7 @@
       "APP_ALLOW_INSECURE_LOCAL": "false",
       "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
       "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-      "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
-      "APP_APPROVAL_BROKER_URL": "",
-      "APP_APPROVAL_BROKER_KEY_ID": "",
-      "APP_APPROVAL_APPROVER_ID": "",
-      "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
-      "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
-      "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
-      "APP_QUOTE_REVISION_BROKER_URL": "",
-      "APP_QUOTE_REVISION_BROKER_KEY_ID": "",
-      "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
-      "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
-      "APP_PROPOSAL_PUBLICATION_BROKER_URL": "",
-      "APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID": "",
-      "APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS": "15000",
-      "APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS": "45",
-      "APP_PRODUCTION_SCHEDULE_BROKER_URL": "",
-      "APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID": "",
-      "APP_PRODUCTION_SCHEDULE_APPROVER_ID": "",
-      "APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS": "900",
-      "APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS": "15000",
-      "APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS": "45"
+      "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": ""
     },
     "CFG_NEWO": {
       "NEWO_PRODUCTION_REQUIRED": "false",
@@ -407,27 +387,7 @@
           "APP_ALLOW_INSECURE_LOCAL": "true",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
-          "APP_APPROVAL_BROKER_URL": "",
-          "APP_APPROVAL_BROKER_KEY_ID": "",
-          "APP_APPROVAL_APPROVER_ID": "owner@ironwrap.local",
-          "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
-          "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
-          "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
-          "APP_QUOTE_REVISION_BROKER_URL": "",
-          "APP_QUOTE_REVISION_BROKER_KEY_ID": "",
-          "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
-          "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
-          "APP_PROPOSAL_PUBLICATION_BROKER_URL": "",
-          "APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID": "",
-          "APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS": "15000",
-          "APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS": "45",
-          "APP_PRODUCTION_SCHEDULE_BROKER_URL": "",
-          "APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID": "",
-          "APP_PRODUCTION_SCHEDULE_APPROVER_ID": "owner@ironwrap.local",
-          "APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS": "900",
-          "APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS": "15000",
-          "APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS": "45"
+          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": ""
         },
         "CFG_NEWO": {
           "NEWO_PRODUCTION_REQUIRED": "false",
@@ -514,8 +474,8 @@
           "ERPNEXT_ENABLED": "true",
           // Default single-stack ports only. This file is static JSON and cannot read the
           // environment, so predev.mjs re-declares every port-bearing local value into
-          // .dev.vars from IRONWRAP_LOCAL_FRAPPE_PORT / IRONWRAP_LOCAL_WORKER_PORT /
-          // IRONWRAP_LOCAL_BROKER_PORT_BASE, and wrangler dev loads those over these.
+          // .dev.vars from IRONWRAP_LOCAL_FRAPPE_PORT / IRONWRAP_LOCAL_WORKER_PORT, and
+          // wrangler dev loads those over these.
           // Editing a port here moves only the default; see deploy/local/README.md.
           "ERPNEXT_BASE_URL": "http://localhost:8000",
           "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
@@ -642,27 +602,7 @@
           "APP_ALLOW_INSECURE_LOCAL": "false",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
-          "APP_APPROVAL_BROKER_URL": "",
-          "APP_APPROVAL_BROKER_KEY_ID": "",
-          "APP_APPROVAL_APPROVER_ID": "",
-          "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
-          "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
-          "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
-          "APP_QUOTE_REVISION_BROKER_URL": "",
-          "APP_QUOTE_REVISION_BROKER_KEY_ID": "",
-          "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
-          "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
-          "APP_PROPOSAL_PUBLICATION_BROKER_URL": "",
-          "APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID": "",
-          "APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS": "15000",
-          "APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS": "45",
-          "APP_PRODUCTION_SCHEDULE_BROKER_URL": "",
-          "APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID": "",
-          "APP_PRODUCTION_SCHEDULE_APPROVER_ID": "",
-          "APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS": "900",
-          "APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS": "15000",
-          "APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS": "45"
+          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": ""
         },
         "CFG_NEWO": {
           // Newo is not required in qa until it is enabled there separately (owner

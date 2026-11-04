@@ -62,6 +62,14 @@ interface Env {
   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: string;
   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: string;
   POSTIZ_API_KEY: string;
+  /**
+   * RETIRED: the three approval-broker signing secrets below have no reader in the Worker. The
+   * Frappe approval brokers they signed for are gone. The names stay declared only because the
+   * release enforcer derives the expected secret inventory from this file and requires an exact
+   * match with `wrangler secret list` on qa and production; dropping a name before the provider
+   * secret is deleted would fail `secret_inventory_drift` on the next deploy. Remove these three
+   * lines in the same change that deletes the provider secrets in both environments.
+   */
   APPROVAL_BROKER_SHARED_SECRET: string;
   QUOTE_REVISION_BROKER_SHARED_SECRET: string;
   PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: string;

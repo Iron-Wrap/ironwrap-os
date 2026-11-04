@@ -338,16 +338,12 @@ export const CAPABILITY_SIGNAL_REGISTRY: Readonly<
   proposal_publication: {
     id: "proposal_publication",
     title: "Proposal publication to the customer",
-    presence: "present",
+    presence: "absent",
     flagBinding: "APP_PROPOSAL_PUBLICATION_ENABLED",
-    requires: [
-      binding("APP_PROPOSAL_PUBLICATION_BROKER_URL"),
-      binding("APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID"),
-      binding("PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", { secret: true }),
-    ],
+    requires: [],
     dependsOn: [],
     audience: ["estimator:read", "approvals:read"],
-    note: "The only step that makes quote terms customer-visible. Today the app learns it is off from an omitted `allowed_actions` entry, which reads identically to a permission refusal.",
+    note: "Retired with the Frappe approval brokers: `/api/v1/proposal-publication-approvals` answers 404 and the flag has no consumer in `workers-bus/src`. Reported so a surface can prove it is deliberately not presented.",
   },
   document_generation: {
     id: "document_generation",

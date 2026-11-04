@@ -270,7 +270,7 @@ const CAPABILITY_REFERENCE_STATE = {
   facet_quote_revision_prepare: "absent",
   newo: "off",
   postiz: "off",
-  proposal_publication: "off",
+  proposal_publication: "absent",
   proposal_template: "unconfigured",
   public_estimator: "off",
   quickbooks_final_invoice: "off",
@@ -893,13 +893,13 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     const local = flattenWranglerVars(JSON.parse(stripJsonComments(wranglerSource)).env.local.vars);
     localBrokerBindingsDisabled = retiredBrokerVars
       .filter(([name]) => !name.endsWith("_SHARED_SECRET"))
-      .every(([name, value]) => local[name] === (value === '""' ? "" : value));
+      .every(([name, value]) => local[name] === (value === '""' ? undefined : value));
   } catch {
     // A missing or malformed local block cannot prove the retirement boundary.
   }
   checks.push(check("contract.retired_brokers.local_config", localBrokerBindingsDisabled,
-    "local Worker defaults leave retired broker connections and feature gates off",
-    "clear retired broker URLs and key IDs and turn their local feature gates off"));
+    "local Worker defaults declare no retired broker connections and leave their feature gates off",
+    "delete retired broker URL and key id vars and turn their local feature gates off"));
 
   const referenceCapabilities = evaluateReferenceCapabilities(wranglerSource ?? "");
   checks.push(check("contract.capability.parse", referenceCapabilities.ok, "reference capability configuration is readable", referenceCapabilities.error ?? "reference capability configuration is unreadable"));

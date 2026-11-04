@@ -96,7 +96,6 @@ import { ensureJobFolder, googleConfigured } from "./google.ts";
 import {
   handleAdminFirstOwnerBootstrap,
   handleAppApi,
-  recoverPendingLeadTriageOutbox,
 } from "./app-api.ts";
 import { handleAuthorityRecordExecutorRoute } from "./authority-record-executor-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
@@ -126,7 +125,6 @@ import {
   listMeasurementDeltas,
   measurementCalibrationReport,
 } from "./measurement-deltas-store.ts";
-import { markExpiredExecutionLeases } from "./approval-store.ts";
 import {
   handleExternalEffectClaim,
   handleExternalEffectReconciliation,
@@ -136,9 +134,6 @@ import {
 import { recoverExpiredExternalEffects } from "./effect-runtime.ts";
 import { escalateStaleProposalDeliveries } from "./proposal-delivery-checks.ts";
 import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
-import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
-import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
-import { markExpiredProposalPublicationApprovalExecutionLeases } from "./proposal-publication-approval-store.ts";
 import {
   handleNewoQueueMessage,
   handleNewoWebhook,
@@ -176,22 +171,6 @@ type BusQueueMessage =
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
-
-async function recoverLeadTriageOutboxThenExpireLeases(env: Env): Promise<void> {
-  try {
-    await recoverPendingLeadTriageOutbox(env);
-  } catch (error) {
-    log({ at: "approval_outbox_recovery", error: String(error) });
-  }
-  // A broker timeout must never trigger a second write. Recovery runs first
-  // only for a provably never-attempted outbox; every other lease expires into
-  // owner-visible reconciliation work.
-  try {
-    await markExpiredExecutionLeases(env, new Date().toISOString());
-  } catch (error) {
-    log({ at: "approval_lease_sweep", error: String(error) });
-  }
-}
 
 async function reconcileFacetDesignSurfaces(env: Env): Promise<void> {
   try {
@@ -506,52 +485,11 @@ export default {
             log({ at: "customer_portal_decision_reconcile", error: String(error) }),
           ),
           reconcileFacetDesignSurfaces(env),
-          recoverLeadTriageOutboxThenExpireLeases(env),
           recoverPostizControlPlane(env as import("./app-types.ts").AppEnv).then((result) => {
             if (result.effects_processed > 0 || result.intents_reconciled > 0)
               log({ at: "postiz_control_plane_recovery", ...result });
           }).catch((error) =>
             log({ at: "postiz_control_plane_recovery", error: String(error) })
-          ),
-          // Quote-revision execution has an independent ledger and broker. Its
-          // lease therefore becomes explicit reconciliation work independently of
-          // the lead-triage authority.
-          markExpiredQuoteRevisionApprovalExecutionLeases(
-            env,
-            new Date().toISOString(),
-          ).catch((error) =>
-            log({
-              at: "quote_revision_approval_lease_sweep",
-              error: String(error),
-            }),
-          ),
-          // A lost publication broker response requires human reconciliation;
-          // expire only this runtime tenant's claims without dispatching again.
-          (async () => {
-            const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            if (!tenantId) return;
-            await markExpiredProposalPublicationApprovalExecutionLeases(
-              env,
-              new Date().toISOString(),
-              tenantId,
-            );
-          })().catch((error) =>
-            log({
-              at: "proposal_publication_approval_lease_sweep",
-              error: String(error),
-            }),
-          ),
-          // Scheduling has an independent append-only assignment ledger. An
-          // orphaned execution lease must likewise become reconciliation work,
-          // never a second dispatch attempt.
-          markExpiredProductionScheduleApprovalExecutionLeases(
-            env,
-            new Date().toISOString(),
-          ).catch((error) =>
-            log({
-              at: "production_schedule_approval_lease_sweep",
-              error: String(error),
-            }),
           ),
           // IRO-52. The money-plane dispatcher: it is what turns an accountant's approve into a
           // provider mutation and an authorized compensation into a reversal. `submission_pending`

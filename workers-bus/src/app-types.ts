@@ -59,7 +59,7 @@ export type AppEnv = Env & {
   APP_VISUAL_PREVIEW_ALLOWED_ORIGINS?: string;
   APP_AUTH_PEPPER?: string;
   // Dedicated shared secret for the narrow customer-contract preparation/commit methods.
-  // It must never be reused for browser sessions, portal links, or approval brokers.
+  // It must never be reused for browser sessions or portal links.
   APP_CUSTOMER_ACCEPTANCE_HMAC_KEY?: string;
   // Dedicated Frappe service credentials for customer-contract preparation/commit only. These
   // must not fall back to the broad ERPNEXT_API_KEY/ERPNEXT_API_SECRET used by the app BFF.
@@ -70,33 +70,13 @@ export type AppEnv = Env & {
   // out of range (1000..30000) falls back to google.ts's default; a present-but-wrong Google
   // credential must cost one bounded wait, never an open-ended one.
   APP_GOOGLE_REQUEST_TIMEOUT_MS?: string;
-  APP_APPROVAL_BROKER_URL?: string;
-  APP_APPROVAL_BROKER_KEY_ID?: string;
-  APP_APPROVAL_APPROVER_ID?: string;
-  APP_APPROVAL_MAX_SESSION_AGE_SECONDS?: string;
-  APP_APPROVAL_BROKER_TIMEOUT_MS?: string;
-  APP_APPROVAL_EXECUTION_LEASE_SECONDS?: string;
-  APPROVAL_BROKER_SHARED_SECRET?: string;
   // Native commercial proposal revisions are permit-admitted by the Worker from
   // this exact server-owned policy snapshot. Browsers and D1 never originate or
   // mutate the policy itself.
   COMMERCIAL_AUTHORITY_POLICY_JSON?: string;
-  // Quote revisions have their own broker, signing secret, and execution
-  // lease. Never route them through the fixed lead-triage authority.
-  APP_QUOTE_REVISION_BROKER_URL?: string;
-  APP_QUOTE_REVISION_BROKER_KEY_ID?: string;
-  APP_QUOTE_REVISION_BROKER_TIMEOUT_MS?: string;
-  APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS?: string;
-  QUOTE_REVISION_BROKER_SHARED_SECRET?: string;
-  // Proposal publication is the only step that makes quote terms customer-visible.
-  // It gets its own broker, signing secret, and execution lease: the owner-operator
-  // publication authority must never ride the estimator or lead-triage rails.
+  // Proposal publication flag. Its broker-backed approval rail is retired, so the flag has no
+  // consumer; the capability signal reports it absent rather than silently dropping it.
   APP_PROPOSAL_PUBLICATION_ENABLED?: string;
-  APP_PROPOSAL_PUBLICATION_BROKER_URL?: string;
-  APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID?: string;
-  APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS?: string;
-  APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS?: string;
-  PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET?: string;
   // A durable Facet association may prepare the existing quote-revision approval rail only
   // after this separate, false-by-default capability is explicitly enabled.
   APP_FACET_QUOTE_REVISION_PREPARE_ENABLED?: string;
@@ -155,16 +135,6 @@ export type AppEnv = Env & {
   QB_TOKEN_ENCRYPTION_KEY_VERSION?: string;
   QB_FINAL_INVOICE_FRAPPE_API_KEY?: string;
   QB_FINAL_INVOICE_FRAPPE_API_SECRET?: string;
-  // Production scheduling is a separate high-consequence authority from lead
-  // triage and commercial quote revisions. Its broker identity, approver, and
-  // recent-session limit must never inherit another mutation rail by default.
-  APP_PRODUCTION_SCHEDULE_BROKER_URL?: string;
-  APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID?: string;
-  APP_PRODUCTION_SCHEDULE_APPROVER_ID?: string;
-  APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS?: string;
-  APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS?: string;
-  APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS?: string;
-  PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET?: string;
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;

@@ -3,8 +3,6 @@
 import * as store from "./store.ts";
 import { appBffConfigured } from "./app-auth.ts";
 import { customerPortalConfigured } from "./customer-portal.ts";
-import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
-import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
 import { publicEstimateConfigured, type PublicEstimatorEnv } from "./public-estimator.ts";
 import type { AppEnv } from "./app-types.ts";
 import { quickBooksFinalInvoiceOperationalCounts } from "./quickbooks-final-invoice.ts";
@@ -87,7 +85,6 @@ export interface ReadinessReport {
     frappe_configuration: boolean;
     app_bff_configuration: boolean;
     customer_portal_configuration: boolean;
-    production_schedule_configuration: boolean;
     /** Fleet-capture and work-package rails each hold their OWN Frappe issuer pair. */
     rail_credential_isolation: boolean;
     public_estimate_configuration: boolean;
@@ -122,7 +119,6 @@ const OFFICE_OPERATING_PLANE_CHECKS = [
   "jobnimbus_configuration",
   "app_bff_configuration",
   "customer_portal_configuration",
-  "production_schedule_configuration",
   "public_estimate_configuration",
   "measurement_ocr_configuration",
 ] as const satisfies readonly ReadinessCheckName[];
@@ -205,7 +201,6 @@ export type OwnerRuntimeCheckId =
   | "provider_delivery"
   | "office_bff"
   | "customer_portal"
-  | "production_schedule"
   | "public_estimate"
   | "newo";
 
@@ -269,7 +264,6 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     ),
     app_bff_configuration: appBffConfigured(extended),
     customer_portal_configuration: customerPortalConfigured(extended),
-    production_schedule_configuration: productionScheduleConfigured(extended),
     // A rail whose dedicated credential was never issued answers a driver's pre-trip
     // inspection with a 502 while every other check stays green - the ELEC-40 dead-rail
     // class one level down. Surface it here instead.
@@ -449,7 +443,6 @@ export async function buildOwnerRuntimeReadModel(
       ok: readiness.checks.app_bff_configuration && readiness.checks.rail_credential_isolation,
     },
     { id: "customer_portal", ok: readiness.checks.customer_portal_configuration },
-    { id: "production_schedule", ok: readiness.checks.production_schedule_configuration },
     { id: "public_estimate", ok: readiness.checks.public_estimate_configuration },
     {
       id: "newo",
@@ -647,24 +640,6 @@ function webhookMatches(webhooks: Array<Record<string, NewoJson>>, id: string, u
 function safeNewoError(error: unknown): string {
   const value = error instanceof Error ? error.message : "newo_api_error";
   return /^newo_[a-z0-9_:.-]+$/.test(value) ? value : "newo_api_error";
-}
-
-function productionScheduleConfigured(env: AppEnv): boolean {
-  // Numeric schedule values have safe defaults in wrangler.jsonc. A rail is
-  // intentionally disabled only when every primary credential/identity input
-  // is blank; any supplied primary input must form a complete, enabled BFF
-  // configuration before /ready can be green.
-  const primaryInputs = [
-    env.APP_PRODUCTION_SCHEDULE_BROKER_URL,
-    env.APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID,
-    env.APP_PRODUCTION_SCHEDULE_APPROVER_ID,
-    env.PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET,
-  ];
-  if (!primaryInputs.some(nonEmpty)) return true;
-  return String(env.APP_BFF_ENABLED) === "true" &&
-    appBffConfigured(env) &&
-    productionScheduleApprovalBrokerConfig(env) !== null &&
-    productionScheduleApprovalDecisionConfig(env) !== null;
 }
 
 export async function getOperationalStatus(

@@ -88,90 +88,21 @@ and does not print the environment. Do not continue until every host check passe
 The distribution `nodejs` package may be older than the lock; install an approved Node.js 22.12.0+
 runtime before running the preflight.
 
-## 3. Compatibility Track: Publish A Tagged Frappe App Release
+## 3. Compatibility Track: Publish A Tagged Frappe App Release (retired)
 
-The application repository must be private, credential-free in `apps.json`, and addressed by
-an immutable release tag. Split the monorepo app, inspect the resulting commit, test it, and tag
-that exact commit in the app repository:
+Frappe is decommissioned, not migrated. The `ironwrap_roofing` app source is removed from this
+repository, together with the split script that published it, so there is no app release to tag.
 
-```bash
-APP_REPO_URL=https://github.com/ironwrap/ironwrap_roofing.git deploy/split-app-repo.sh
-```
+## 4. Compatibility Track: Build And Publish The Locked Frappe-Only Image (retired)
 
-Copy `deploy/apps.example.json` to a secret file outside the checkout and replace
-`<IRONWRAP_APP_RELEASE_TAG>` with the release tag. The JSON URL must stay
-`https://github.com/ironwrap/ironwrap_roofing.git`; private-repository credentials belong in
-an optional BuildKit credential file, never in the URL or Git history.
+With no app source, no new IronWrap Frappe image is built. `deploy/Containerfile.frappe`,
+`deploy/build-production-image.sh`, `deploy/apps.example.json`, and the compose overlay remain in
+`deploy/` only until the Frappe host tooling is removed with its readiness contract checks.
 
-## 4. Compatibility Track: Build And Publish The Locked Frappe-Only Image
+## 5. Compatibility Track: Create The Frappe Projection Site (retired)
 
-Check out frappe_docker at the exact commit in `deploy/runtime-lock.json` and leave that checkout
-pristine. The build script refuses a dirty or mismatched checkout and rejects ERPNext:
-
-```bash
-export FRAPPE_DOCKER_DIR=/opt/src/frappe_docker
-export APPS_JSON_FILE=/run/secrets/ironwrap-apps.json
-export GIT_CREDENTIALS_FILE=/run/secrets/github.credentials
-export IRONWRAP_APP_COMMIT=<40-character-app-commit>
-export IRONWRAP_IMAGE_REF=registry.example.com/ironwrap/os:2026.07.10.1
-deploy/build-production-image.sh
-docker push "$IRONWRAP_IMAGE_REF"
-```
-
-Record the pushed image as a registry digest such as
-`registry.example.com/ironwrap/os@sha256:...`. Deployment and backup evidence must use this
-digest, never `latest` or an unqualified tag.
-
-## 5. Compatibility Track: Create The Frappe Projection Site
-
-Use the exact pinned frappe_docker compose topology plus the checked-in IronWrap overlay. It replaces
-the image for configurator, backend, frontend, websocket, both queues, and scheduler; replacing only
-backend/frontend leaves app processes on the upstream image. Validate the rendered topology before
-starting it, then persist MariaDB, sites, logs, and Redis according to the pinned upstream configuration:
-
-```bash
-export FRAPPE_DOCKER_DIR=/opt/src/frappe_docker
-export IRONWRAP_OS_IMAGE=registry.example.com/ironwrap/os@sha256:<64-hex-digest>
-deploy/validate-frappe-compose.sh
-docker compose --project-directory "$FRAPPE_DOCKER_DIR" \
-  -f "$FRAPPE_DOCKER_DIR/compose.yaml" \
-  -f "$FRAPPE_DOCKER_DIR/overrides/compose.mariadb.yaml" \
-  -f "$FRAPPE_DOCKER_DIR/overrides/compose.redis.yaml" \
-  -f /opt/ironwrap/deploy/frappe-compose.override.yml up -d
-```
-
-Create the site and install only the proprietary app:
-
-```bash
-docker exec <backend> bench new-site os.ironwrapexteriors.com --admin-password '<from-secret-store>'
-docker exec <backend> bench --site os.ironwrapexteriors.com install-app ironwrap_roofing
-docker exec <backend> bench --site os.ironwrapexteriors.com list-apps
-```
-
-Log in with each compatibility role, open the `IronWrap OS` Workspace and `IronWrap Control Center`,
-and prove the role sees only permitted records. Exercise a populated job, no-job empty state,
-unreachable Worker readiness state, and source-record navigation. The cockpit is read-only; a
-button or network call that mutates a business record blocks launch.
-
-`list-apps` must contain `frappe` and `ironwrap_roofing` and must not contain `erpnext`.
-Create a dedicated non-interactive API user for each enabled projection/MCP path with the minimum
-compatibility roles required by its tools. Do not reuse the Administrator account. Store its API
-key and secret only in the applicable Worker or MCP secret store. This identity cannot authorize a
-native D1 commercial, safety, evidence, scheduling, or accounting transition.
-
-For QuickBooks projection, create a second non-interactive Frappe user with only the IronWrap
-QuickBooks Reconciliation Issuer role and its own API key/secret. It must not hold the general
-Worker/MCP roles, a human finance role, or System Manager. Set the Frappe site config key
-ironwrap_quickbooks_reconciliation_issuer_user to that exact user.
-
-Bind the Field Companion evidence issuer to that exact Worker user before enabling the Worker
-bridge. This is a site-local allowlist, not a Worker variable; it prevents ordinary Desk/REST
-writes from creating or promoting gate-eligible `Verified` evidence:
-
-```bash
-docker exec <backend> bench --site os.ironwrapexteriors.com set-config \
-  ironwrap_field_evidence_issuer_user '<worker-api-user-email>'
-```
+No Frappe projection site is created for a launch. The Worker's Frappe projection flags stay
+false in every checked-in profile.
 
 ## 6. Compatibility Track: Configure Frappe HTTPS Ingress
 
@@ -332,13 +263,12 @@ Dependabot PR, never starts a release or merges anything; the release follows wh
   placed in the permit or receipts.
 
 The name-only inventory is in `deploy/release.env.example`. The train is Worker/PWA/D1 only
-(`RELEASE_FRAPPE_SCOPE: out-of-scope`): the leftover Frappe wheel is built and digest-bound into
-the artifact but not promoted, because the Frappe candidate identities came from the retired
-issuer and the Frappe adapter is an external signer. Both workflows pass that scope to
-`admission-context` and `artifact-manifest`. Out of scope, the enforcer also admits a source tree
-without the Frappe app: its Frappe source, schema, and migration digests are then the digest of an
-empty listing, and the artifact records a fixed absent-wheel digest in place of a wheel. A tree
-that still has the app must ship its wheel, and a release without the scope gets no exception.
+(`RELEASE_FRAPPE_SCOPE: out-of-scope`): Frappe is decommissioned, the source tree carries no
+Frappe app, and no wheel is built. Both workflows pass that scope to `admission-context` and
+`artifact-manifest`. Out of scope, the enforcer admits a source tree without the Frappe app: its
+Frappe source, schema, and migration digests are then the digest of an empty listing, and the
+artifact records a fixed absent-wheel digest in place of a wheel. A tree that still had the app
+would have to ship its wheel, and a release without the scope gets no exception.
 
 Generation N enforcement is loaded from the PR base, not from candidate source, so a candidate
 cannot weaken and approve its own release boundary. That predecessor enforcer atomically
@@ -371,8 +301,7 @@ the temporary runner and is never uploaded. A failed rollback smoke stops before
 re-promotion, and the failure cleanup must prove the previous revision.
 This diagnostic artifact explains a failure; it never satisfies the successful qa proof gate.
 
-The release builds one deterministic aggregate containing the Worker bundle, PWA assets, and the
-leftover Frappe wheel. It records each component digest and uploads the aggregate once. Wrangler uploads
+The release builds one deterministic aggregate containing the Worker bundle and PWA assets. It records each component digest and uploads the aggregate once. Wrangler uploads
 the same bytes separately to the distinct qa and production Worker services; their provider
 version IDs are therefore different and both IDs, version readbacks, environment config digests,
 and secret-name inventory digests are bound into the permit. On every push the qa job proves active
@@ -500,7 +429,8 @@ atomic safety acknowledgement command cannot impersonate a field actor.
 
 Before QuickBooks cutover, apply migration `0031_quickbooks_projection_outbox.sql` to the intended
 D1 database. Set `QB_EXPECTED_REALM_ID` to the one approved Intuit company realm and set
-`QB_RECONCILIATION_ISSUER_USER` to the separate Frappe user configured above. Put
+`QB_RECONCILIATION_ISSUER_USER` to its separate issuer identity (no Frappe site is created now that
+Frappe is decommissioned). Put
 `QB_WEBHOOK_TOKEN` and the issuer API key/secret only in Worker secrets. The issuer pair must be
 distinct from `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET` and every human or MCP credential.
 

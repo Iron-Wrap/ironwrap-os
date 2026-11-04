@@ -30,7 +30,6 @@ deployment, runtime verification, business acceptance, or production proof.
 |---|---|
 | `workers-bus/` | Cloudflare Worker integration bus and D1/R2 intake spine |
 | `app/` | React PWA for public estimate, field, portal, sales, production, and owner surfaces |
-| `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection during the D1 cutover; no new operating authority |
 | `mcp/` | Bounded agent tools for the bus and Newo |
 | `config/tenants/` | White-label tenant contracts; secrets by environment-variable name only |
 | `config/newo/` | Newo release contract, tools, evidence inventory, and versioned AKB |
@@ -43,11 +42,10 @@ deployment, runtime verification, business acceptance, or production proof.
 
 - D1 plus the Worker is the sole owned operating authority for normalized state, transitions,
   policy enforcement, audit, and reconciliation; R2 retains raw immutable evidence.
-- Frappe is a temporary compatibility projection and administrative export surface. It may mirror
-  D1 state while consumers migrate, but it may not originate or authorize new operating truth.
-- Do not add a new Frappe DocType, direct Worker dependency, readiness dependency, or release
-  dependency. Retire existing dependencies workflow by workflow after reconciliation and rollback
-  proof.
+- Frappe is decommissioned, not migrated: the compatibility app is gone from the tree. The Worker
+  keeps a default-off Frappe projection rail and leftover readiness checks until their own removal.
+- Do not add a Frappe DocType, direct Worker dependency, readiness dependency, or release
+  dependency. Retire the remaining Worker Frappe code workflow by workflow.
 - Hermes currently supplies one default-off drafting pilot. The target coordinator is the bounded
   loop in `docs/AI-NATIVE-ARCHITECTURE.md`; neither is a database or grant of authority.
 - The PWA is the owned human work, customer, estimator, and supervisory surface.
@@ -211,7 +209,7 @@ outflow, Urgent count, `In Progress` items with no linked PR for 7 days, merged 
 
 ## Validation ladder
 
-CI runs what `make check` (validators, tool/MCP/app/Worker/Frappe suites, npm audits, capability
+CI runs what `make check` (validators, tool/MCP/app/Worker suites, npm audits, capability
 evidence receipt), `make e2e` (Playwright PWA suites), and `make secret-scan` cover, split across
 parallel jobs that together reach exactly the same checks (`.github/workflows/ci.yml`); the
 required check is `gate`. On a pull request, `tools/ci-scope.mjs` skips the Playwright and
@@ -223,7 +221,6 @@ make check
 make e2e
 make secret-scan   # set GITLEAKS_BIN off linux x64
 node tools/validate-documentation.mjs
-node tools/validate-erpnext-doctypes.mjs
 node tools/validate-tenant-config.mjs
 node tools/validate-newo-config.mjs
 node tools/applicad-xml-proof.mjs --check
@@ -233,7 +230,7 @@ node tools/production-readiness.mjs contract
 (cd mcp/newo-mcp && npm test)
 ```
 
-Run component-specific app, Playwright, Lighthouse, Frappe, deployment, and live proof checks when
+Run component-specific app, Playwright, Lighthouse, deployment, and live proof checks when
 the touched surface warrants them. Report skipped or blocked checks explicitly.
 
 A push to `main` deploys `qa` only (`.github/workflows/deploy.yml`, IRO-260); production releases

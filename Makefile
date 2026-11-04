@@ -11,20 +11,18 @@ SHELL := bash
 # Test logs feed the capability evidence receipt at the end of `check`.
 OUT ?= tmp/check
 NODE_PACKAGES := app mcp/ironwrap-bus-mcp mcp/newo-mcp agent-host
-FRAPPE_APP := frappe-apps/ironwrap_roofing
-FRAPPE_VENV := tmp/frappe-venv
 
 .PHONY: check check-contracts check-pwa check-worker deps validate test-tools mcp agent-host app \
-  worker worker-contract worker-tests worker-shard frappe audit static evidence \
+  worker worker-contract worker-tests worker-shard audit static evidence \
   evidence-receipt e2e e2e-suite secret-scan seed ci-sqlite
 
-check: validate test-tools mcp agent-host app worker frappe audit static evidence
+check: validate test-tools mcp agent-host app worker audit static evidence
 
 # Per-area sub-targets for CI's parallel jobs. Together they cover exactly what
 # `check` covers, minus `evidence` (which needs both the pwa and worker legs merged
 # onto one filesystem, so it runs in its own CI job instead): `make -n check-contracts
 # check-pwa check-worker` and `make -n check` list the same set of commands.
-check-contracts: validate test-tools mcp agent-host frappe audit static
+check-contracts: validate test-tools mcp agent-host audit static
 check-pwa: app
 check-worker: worker
 
@@ -49,16 +47,10 @@ agent-host/node_modules/.package-lock.json: agent-host/package-lock.json
 deps: $(addsuffix /node_modules/.package-lock.json,$(NODE_PACKAGES) workers-bus)
 
 validate:
-	node tools/validate-erpnext-doctypes.mjs
 	node tools/validate-tenant-config.mjs
 	node tools/validate-newo-config.mjs
-	node tools/validate-lead-triage-shadow-authority.mjs
 	node tools/validate-documentation.mjs
 	node agent-host/evals/validate.mjs --require-complete
-	node tools/validate-site-config-pins.mjs
-	node tools/validate-rail-credential-isolation.mjs
-	node tools/validate-facet-blank-quote-contract.mjs
-	node tools/validate-ingest-doctype-coverage.mjs
 	IRONWRAP_TENANT_CONFIG=ironwrap APP_TENANT_ID=ironwrap APP_TENANT_NAME="IronWrap OS" \
 	  APP_TENANT_BRAND=IronWrap APP_LOCALE=en-CA APP_TIME_ZONE=America/Edmonton \
 	  APP_CURRENCY=CAD FROM_EMAIL=sales@ironwrapexteriors.com \
@@ -72,9 +64,6 @@ test-tools:
 	  tools/make-audit.test.mjs \
 	  tools/ghl-api-to-crm-import.test.mjs \
 	  tools/d1-migrations-splitter.test.mjs \
-	  tools/validate-site-config-pins.test.mjs \
-	  tools/validate-rail-credential-isolation.test.mjs \
-	  tools/validate-facet-blank-quote-contract.test.mjs \
 	  tools/validate-documentation.test.mjs \
 	  agent-host/evals/validate.test.mjs \
 	  agent-host/evals/score.test.mjs \
@@ -83,7 +72,6 @@ test-tools:
 	  agent-host/evals/history.test.mjs \
 	  agent-host/evals/history-build.test.mjs \
 	  tools/validate-newo-config.test.mjs \
-	  tools/validate-lead-triage-shadow-authority.test.mjs \
 	  tools/validate-tenant-runtime.test.mjs \
 	  tools/seed-pipeline.test.mjs \
 	  tools/seed-env.test.mjs \
@@ -91,11 +79,8 @@ test-tools:
 	  tools/generate-tenant-config.test.mjs \
 	  tools/generate-tenant-worker-config.test.mjs \
 	  tools/start-local-runtime.test.mjs \
-	  tools/validate-ingest-doctype-coverage.test.mjs \
 	  tools/wrangler-binding-budget.test.mjs \
-	  deploy/local/dev-vars.test.mjs \
-	  deploy/local/frappe-marker-sweep.test.mjs \
-	  deploy/local/frappe-init.test.mjs
+	  deploy/local/dev-vars.test.mjs
 	node --test \
 	  tools/production-readiness-contract.test.mjs \
 	  tools/production-readiness-live-env.test.mjs \
@@ -185,17 +170,6 @@ worker-shard: workers-bus/node_modules/.package-lock.json app/node_modules/.pack
 	npm run typegen --prefix workers-bus
 	cd workers-bus && node --test --test-shard=$(SHARD) 2>&1 \
 	  | tee "$(abspath $(OUT))/worker-tests-$(subst /,-,$(SHARD)).tap"
-
-# The leftover Frappe compatibility app: unit contracts without a site, lint,
-# and the wheel the release artifact carries.
-frappe:
-	python3 -m venv $(FRAPPE_VENV)
-	$(FRAPPE_VENV)/bin/python -m pip install --quiet --disable-pip-version-check \
-	  setuptools ruff==0.13.0 build==1.4.0 ./$(FRAPPE_APP)
-	cd $(FRAPPE_APP) && ../../$(FRAPPE_VENV)/bin/python -m unittest discover -s tests -t .
-	cd $(FRAPPE_APP) && ../../$(FRAPPE_VENV)/bin/ruff check ironwrap_roofing tests
-	cd $(FRAPPE_APP) && ../../$(FRAPPE_VENV)/bin/python -m compileall -q ironwrap_roofing tests
-	$(FRAPPE_VENV)/bin/python -m build --wheel --outdir $(OUT)/frappe-dist $(FRAPPE_APP)
 
 # Seed a non-production environment (tools/seed-env.mjs, IRO-263). Refuses production on its own;
 # ADMIN_TOKEN/INGEST_TOKEN come from workers-bus/.dev.vars for a loopback target so neither token

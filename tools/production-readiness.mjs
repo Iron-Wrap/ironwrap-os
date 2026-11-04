@@ -38,7 +38,6 @@ const REQUIRED_DEPLOY_FILES = [
   "deploy/frappe-compose.override.yml",
   "deploy/validate-frappe-compose.sh",
   "deploy/host-preflight.sh",
-  "deploy/split-app-repo.sh",
 ];
 
 const REQUIRED_ENV_NAMES = [
@@ -827,22 +826,20 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   const composeOverlay = contents.get("deploy/frappe-compose.override.yml") ?? "";
   const composeValidator = contents.get("deploy/validate-frappe-compose.sh") ?? "";
   const hostScript = contents.get("deploy/host-preflight.sh") ?? "";
-  const splitAppRepo = contents.get("deploy/split-app-repo.sh") ?? "";
-  checks.push(check("contract.scripts.strict", [buildScript, composeValidator, hostScript, splitAppRepo].every((script) => script.includes("set -euo pipefail") && script.includes("set +x")), "deployment scripts use strict mode with tracing disabled", "deployment scripts must use strict mode and disable tracing"));
+  checks.push(check("contract.scripts.strict", [buildScript, composeValidator, hostScript].every((script) => script.includes("set -euo pipefail") && script.includes("set +x")), "deployment scripts use strict mode with tracing disabled", "deployment scripts must use strict mode and disable tracing"));
   checks.push(check("contract.build.lock", buildScript.includes("deploy/runtime-lock.json") && buildScript.includes("Containerfile does not consume the exact non-overridable runtime lock") && buildScript.includes("status --porcelain=v1 --untracked-files=all"), "image build validates the complete lock and a pristine pinned context", "image build must validate the lock, Containerfile, and pinned context"));
   checks.push(check("contract.build.secrets", buildScript.includes("--secret \"id=apps_json,src=$APPS_JSON_FILE\"") && !/--build-arg\s+[^\n]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(buildScript), "image build passes secret material only through BuildKit secret mounts", "image build must not pass secrets through arguments"));
   checks.push(check("contract.build.no_erpnext", buildScript.includes('architecture !== "d1-worker"') && buildScript.includes('erpnext !== "forbidden"') && buildScript.includes("/erpnext/i.test(JSON.stringify(apps))"), "image build fails closed unless lock and app set are D1/Worker without ERPNext", "image build does not enforce the D1/Worker no-ERPNext policy"));
   checks.push(check("contract.host.argv", hostScript.includes("no configuration values are accepted as arguments") && !/eval\s|printenv|\benv\b\s*$/m.test(hostScript), "host preflight refuses configuration in argv and does not dump the environment", "host preflight must refuse configuration arguments and avoid environment dumps"));
   checks.push(check("contract.host.lock", hostScript.includes("deploy/runtime-lock.json") && hostScript.includes('.policy.architecture == "d1-worker"') && hostScript.includes("CPU_MINIMUM") && hostScript.includes("NODE_VERSION_MINIMUM") && hostScript.includes("version_at_least"), "host preflight consumes the D1/Worker runtime lock", "host preflight must consume and validate runtime-lock host policy"));
   checks.push(check("contract.host.dependencies", hostScript.includes("cloudflared") && hostScript.includes("sqlite3") && hostScript.includes("tar"), "host preflight checks ingress and recovery dependencies", "host preflight must check cloudflared, sqlite3, and tar"));
-  checks.push(check("contract.split_app_repo", splitAppRepo.includes('EXPECTED_APP_REPO_URL="https://github.com/ironwrap/ironwrap_roofing.git"') && splitAppRepo.includes("git check-ref-format --branch") && splitAppRepo.includes('git push "$APP_REPO_URL" "$BRANCH:main"') && !splitAppRepo.includes('pushed to $APP_REPO_URL'), "app split requires the canonical credential-free repository URL", "app split must reject credential-bearing or non-canonical repository URLs and avoid printing them"));
   const appProcessNames = ["configurator", "backend", "frontend", "websocket", "queue-short", "queue-long", "scheduler"];
   const overlayAppliesEveryImage = appProcessNames.every((name) => new RegExp("^  " + name + ":\\n    image: \\$\\{IRONWRAP_OS_IMAGE:\\?", "m").test(composeOverlay));
   const overlayAppliesEveryPlatform = appProcessNames.every((name) => new RegExp(`^  ${name}:\\n(?:    .+\\n)*?    platform: linux/amd64`, "m").test(composeOverlay));
   checks.push(check("contract.frappe_compose.overlay", overlayAppliesEveryImage && overlayAppliesEveryPlatform, "Frappe overlay pins every app process to the x86_64 IronWrap image", "Frappe overlay must replace configurator, backend, frontend, websocket, queues, and scheduler with the x86_64 IronWrap image"));
   checks.push(check("contract.frappe_compose.validation", composeValidator.includes("config --quiet") && composeValidator.includes("config --format json") && composeValidator.includes("overrides/compose.mariadb.yaml") && composeValidator.includes("overrides/compose.redis.yaml") && appProcessNames.every((name) => composeValidator.includes(`\"${name}\"`)), "compose validation renders the exact locked Frappe topology and every app process", "compose validation must render the locked base and overrides then verify every app process image"));
 
-  for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/backup-d1-to-r2.sh", "deploy/restore-d1-from-r2.sh", "deploy/build-production-image.sh", "deploy/validate-frappe-compose.sh", "deploy/host-preflight.sh", "deploy/split-app-repo.sh"]) {
+  for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/backup-d1-to-r2.sh", "deploy/restore-d1-from-r2.sh", "deploy/build-production-image.sh", "deploy/validate-frappe-compose.sh", "deploy/host-preflight.sh"]) {
     let executable = false;
     try { executable = Boolean((await stat(path.join(repoRoot, relative))).mode & 0o111); } catch { /* missing reported above */ }
     checks.push(check(`contract.executable.${relative}`, executable, `${relative} is executable`, `${relative} must be executable`));

@@ -130,7 +130,6 @@ the new read fields and enqueue the structured object before the joined workflow
 | Safe dead-letter recovery | targeted replay by `envelope_id`; confirmed bulk replay; recovery is marked only after that envelope completes |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing | `core.ts:classifyIntent` |
-| Optional Frappe compatibility projection | `erpnext.ts` creates/updates bounded legacy records when enabled; failures do not rewrite authoritative D1 state |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + native D1 records plus any enabled compatibility projection, without JobNimbus/GHL dependency |
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
 | Facet review projection | `facet-design-frappe-projection.ts` reads only current native v2 heads with exact project, identity, quote, proposal, publication, and acceptance authority. The default-off Frappe endpoint creates a blank non-customer-safe Draft Customer Quote for active decisions, rejects the predecessor projected quote on chain advance, and appends Evidence Item plus Integration Reconciliation records without supplying commercial terms. |
@@ -145,7 +144,6 @@ the new read fields and enqueue the structured object before the joined workflow
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   Config-gated JobNimbus push adapter
-src/erpnext.ts     Optional Frappe compatibility projection for bounded legacy records
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
 src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe or commercial mutation
 src/facet-design-projection.ts Scheduled review-only D1-anchor projection through a separately authenticated Frappe command
@@ -1142,31 +1140,11 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    remain leased/retryable with capped backoff and escalate after five attempts; only the documented
    immutable identity conflict is terminal. This is not accounting authority: amounts, payment,
    posting, and reconciliation facts require authenticated QuickBooks read-back.
-5. **Frappe compatibility projection** — configured false in the checked-in top-level
-   (production, owner decision 2026-09-27) and qa profiles and true only in the local
-   development profile; none of those values is live proof. Before treating
-   `ERPNEXT_ENABLED=true` as ready, apply
-   migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
-   Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,
-   Material Takeoff, Supplier Order, Production Gate State, Evidence Item, Field Check-in, and
-   Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
-   `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
-   instant estimate sessions by `estimate_session_id` when estimate/range/total fields are present
-   or `/ingest/estimate` receives a configurator payload,
-   and measurement reports by `measurement_id`. Estimate sessions are captured as
-   non-binding and review-required; `/ingest/estimate` stores configurator totals, project links,
-   selected services, material choices, the stable estimator submission key, and the ERPNext
-   Instant Estimate Session id when present. The Worker does not generate final pricing.
-   Measurement sync creates a linked Evidence Item for the raw/report artifact. An unmatched
-   measurement is intentionally unlinked and `Needs Review`, so dispatch can attach it to the
-   correct Roof Job instead of accepting a false match. Photo sync creates one photo Evidence
-   Item per submitted Jotform photo, links Drive file ids/URLs when available, and
-   creates a Field Check-in summary row for the submission. QuickBooks webhook
-   sync creates only Pending reconciliation work and may create immutable Payment Milestone
-   event rows when `qb_invoice_ref` matches; it never asserts provider accounting truth.
-   Roof Job sync also creates missing initial production gate rows without resetting
-   existing gate state. Frappe is a compatibility consumer/projection, not raw intake or native
-   operating authority.
+5. **Frappe** — decommissioned, not migrated. The Frappe app, its DocTypes and the Worker's
+   envelope-to-Frappe consumer (`erpnext.ts`) are removed. `ERPNEXT_ENABLED` is false in every
+   checked-in profile; what remains is the default-off Facet review projection above and the
+   leftover readiness checks in `operations.ts`, both scheduled for their own removal. Frappe is
+   not raw intake or native operating authority.
 
 ## Operating authority
 

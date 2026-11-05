@@ -6,9 +6,9 @@ every handler it reaches; it is a code inventory, not a claim that a run has hap
 
 Source of truth for behaviour: `tools/launch-proof.mjs`, `workers-bus/src/index.ts`,
 `workers-bus/src/estimates.ts`, `workers-bus/src/store.ts`, `workers-bus/src/notify.ts`,
-`workers-bus/src/google.ts`, `workers-bus/src/jobnimbus.ts`, `workers-bus/src/erpnext.ts`,
-`workers-bus/src/operations.ts`,
-`frappe-apps/ironwrap_roofing/ironwrap_roofing/launch_proof_api.py` (historical Frappe lookup; **not** the IRO-189 gate).
+`workers-bus/src/google.ts`, `workers-bus/src/jobnimbus.ts`,
+`workers-bus/src/operations.ts`. The historical Frappe lookup API left the tree with the
+decommissioned Frappe app; it was never the IRO-189 gate.
 
 ## 1. Modes
 

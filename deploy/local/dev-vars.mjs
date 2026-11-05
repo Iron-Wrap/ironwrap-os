@@ -1,8 +1,8 @@
 /**
  * The composable half of `predev.mjs`: how `workers-bus/.dev.vars` is built.
  *
- * `predev.mjs` itself needs Docker, a booted Frappe, and a live bench to run at all, so the
- * rules that decide what lands in `.dev.vars` could never be tested. They are here instead,
+ * `predev.mjs` itself builds the PWA and applies D1 migrations through wrangler, so the
+ * rules that decide what lands in `.dev.vars` could not be tested there. They are here instead,
  * as pure functions over text, and `dev-vars.test.mjs` pins them. Two ELEC-112 findings were
  * reproduced twice each (ELEC-112, then ELEC-120) precisely because nothing checked them:
  *

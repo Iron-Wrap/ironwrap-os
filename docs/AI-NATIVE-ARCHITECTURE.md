@@ -55,7 +55,6 @@ flowchart LR
     Queue["Queues and scheduled recovery"]
     Effects["External-effect ledger<br/>attempt · readback · reconciliation"]
     Providers["QuickBooks · JobNimbus · communications · issuers"]
-    Frappe["Frappe<br/>Compatibility projection"]
 
     Channels --> App
     App --> Worker
@@ -68,7 +67,6 @@ flowchart LR
     Effects --> Providers
     Providers -->|readback| Effects
     Effects --> D1
-    D1 -. rebuildable projection .-> Frappe
 ```
 
 The primary executable modules are:
@@ -77,7 +75,6 @@ The primary executable modules are:
 |---|---|
 | [`workers-bus/`](../workers-bus/) | Worker routes, domain transitions, D1/R2 persistence, queues, effects, provider readback, and reconciliation |
 | [`app/`](../app/) | Same-origin role and customer surfaces, offline field capture, and approval experiences |
-| [`frappe-apps/ironwrap_roofing/`](../frappe-apps/ironwrap_roofing/) | Temporary compatibility projection and legacy command adapters; no new operating authority |
 | [`mcp/`](../mcp/) | Bounded read, preview, and recovery adapters; not a second policy or state layer |
 | Facet repository | Separate design bounded context, signed evidence producer, and canonical owner of the accepted configurator lineage |
 
@@ -127,7 +124,7 @@ The machine-checked snapshot is intentionally conservative:
   "authority": {
     "operating_state": "d1_worker",
     "raw_evidence": "r2",
-    "frappe": "compatibility_projection",
+    "frappe": "decommissioned",
     "facet": "design_evidence_producer",
     "quickbooks": "posted_accounting_facts",
     "ai": "non_authoritative_proposal"
@@ -444,9 +441,9 @@ not a runtime marketplace for arbitrary hooks or plugins.
   pricing, catalog, and computer-vision lineage. An idea found in the separate, read-only
   Home Config 3D product is triaged as a Facet backlog input; it never creates a parallel porting
   obligation or a second product authority.
-- Frappe is compatibility only. While its wheel ships, its required tests and exact
-  stage/promote/readback/rollback receipts must be release-blocking; remove the wheel and that
-  release gate together after the last consumer and rollback proof are gone.
+- Frappe is decommissioned, not migrated. The compatibility app and its wheel are gone from the
+  tree; releases run with `RELEASE_FRAPPE_SCOPE: out-of-scope` and bind no wheel. The Worker's
+  default-off Frappe projection rail is removed separately.
 - Retire old Frappe approval/scheduling broker paths after native equivalents have parity and live
   rollback evidence.
 - Do not renumber historical D1 migrations. Record reserved gaps and authority cutovers in a
@@ -473,7 +470,8 @@ not a runtime marketplace for arbitrary hooks or plugins.
    supplier-catalog snapshots, and provider readback/reconciliation.
 6. **Reference proof:** exact-source journey plus the required edge, email, version-skew, offline,
    catalog, provider, and recovery drills and EvidencePack.
-7. **Retirement:** Frappe brokers/wheel and duplicate predecessor paths after parity proof.
+7. **Retirement:** Frappe brokers and duplicate predecessor paths after parity proof (the Frappe
+   app and wheel are already gone).
 8. **Customer validation:** only real users may change `customer_validated` from false.
 
 Machine gates must prove one writer per authority, contract hashes, effect/readback coverage,

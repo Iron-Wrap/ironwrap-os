@@ -42,7 +42,6 @@ type InventoryEntry =
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "accounting-dispatch-binding.ts": { kind: "runtime-routed" },
   "accounting-provider-read.ts": { kind: "read-only" },
-  "erpnext.ts": { kind: "runtime-routed" },
   "facet-design-frappe-projection.ts": { kind: "runtime-routed" },
   "google.ts": { kind: "runtime-routed" },
   "index.ts": { kind: "worker-entry" },

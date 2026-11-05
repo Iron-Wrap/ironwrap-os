@@ -46,7 +46,6 @@ margin, or customer promise can override a safety stop.
 |---|---|
 | `workers-bus/` | Cloudflare Worker integration bus and owned D1/R2 intake spine |
 | `app/` | React PWA for field, estimating, customer, sales, production, and owner surfaces |
-| `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection and legacy command policy; no new operating authority |
 | `mcp/` | Bounded read, preview, and recovery adapters |
 | `config/` | Tenant and integration release contracts; secret names only |
 | `deploy/` | Local and production deployment assets |
@@ -63,10 +62,8 @@ Run the cheapest relevant check first, then broaden:
 
 ```bash
 node tools/validate-documentation.mjs
-node tools/validate-erpnext-doctypes.mjs
 node tools/validate-tenant-config.mjs
 node tools/validate-newo-config.mjs
-node tools/validate-lead-triage-shadow-authority.mjs
 node tools/applicad-xml-proof.mjs --check
 node tools/production-readiness.mjs contract
 (cd workers-bus && npm test && npm run typecheck)

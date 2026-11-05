@@ -28,9 +28,10 @@ env:
   # tag-triggered release (IRO-264). The first Deploy run after this merge
   # fails closed at admission by design: the enforcer is the pre-merge tree,
   # which still rejects --environment qa (IRO-260).
-  # The leftover Frappe app is never promoted. admission-context and
-  # artifact-manifest read this scope: out of scope, a source tree without the
-  # Frappe app is admissible and its artifact carries no wheel.
+  # Frappe is decommissioned and the source tree no longer carries its app.
+  # admission-context and artifact-manifest read this scope: out of scope, a
+  # source tree without the Frappe app is admissible and its artifact carries
+  # no wheel.
   RELEASE_FRAPPE_SCOPE: out-of-scope
 
 jobs:
@@ -160,9 +161,6 @@ jobs:
           cache-dependency-path: |
             app/package-lock.json
             workers-bus/package-lock.json
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
 
       - name: Load generation N policy enforcement
         run: |
@@ -176,14 +174,12 @@ jobs:
           set -euo pipefail
           npm ci --prefix app
           npm ci --ignore-scripts --prefix workers-bus
-          python -m pip install --disable-pip-version-check build==1.4.0
           test "$(workers-bus/node_modules/.bin/wrangler --version)" = "$WORKER_VERSION"
 
       - name: Build PWA and one Worker bundle
         run: |
           set -euo pipefail
           npm run build --prefix app
-          python -m build --wheel --outdir "$RUNNER_TEMP/frappe-dist" frappe-apps/ironwrap_roofing
           npm run typegen --prefix workers-bus
           bundle_dir="$RUNNER_TEMP/worker-bundle"
           mkdir -p "$bundle_dir"
@@ -197,19 +193,12 @@ jobs:
         run: |
           set -euo pipefail
           artifact_root="$RUNNER_TEMP/release-artifact"
-          mkdir -p "$artifact_root/worker" "$artifact_root/app" "$artifact_root/frappe"
+          mkdir -p "$artifact_root/worker" "$artifact_root/app"
           cp "$RUNNER_TEMP/worker-bundle/index.js" "$artifact_root/worker/index.js"
           if [[ -f "$RUNNER_TEMP/worker-bundle/index.js.map" ]]; then cp "$RUNNER_TEMP/worker-bundle/index.js.map" "$artifact_root/worker/index.js.map"; fi
           cp -R app/dist "$artifact_root/app/dist"
-          shopt -s nullglob
-          wheels=("$RUNNER_TEMP"/frappe-dist/*.whl)
-          test "${#wheels[@]}" -eq 1
-          frappe_wheel="${wheels[0]}"
-          test -s "$frappe_wheel"
-          cp "$frappe_wheel" "$artifact_root/frappe/ironwrap_roofing.whl"
           node "$RELEASE_ENFORCER" artifact-manifest \
             --worker "$artifact_root/worker/index.js" --pwa "$artifact_root/app/dist" \
-            --frappe-wheel "$artifact_root/frappe/ironwrap_roofing.whl" \
             --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --output "$RUNNER_TEMP/artifact-components.json"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \

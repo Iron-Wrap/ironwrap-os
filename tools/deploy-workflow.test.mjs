@@ -46,10 +46,13 @@ function enforcerCommand(source, name) {
 }
 
 // Out of scope, the enforcer admits a source tree without the Frappe app and an artifact
-// without its wheel, but only when the workflow hands it the scope.
+// without its wheel, but only when the workflow hands it the scope. The tree no longer
+// carries the app, so no workflow builds or binds a wheel.
 function assertFrappeScopeBound(admission, build) {
   assert.match(enforcerCommand(admission, "admission-context"), /--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/);
-  assert.match(enforcerCommand(build, "artifact-manifest"), /--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/);
+  const manifest = enforcerCommand(build, "artifact-manifest");
+  assert.match(manifest, /--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/);
+  assert.doesNotMatch(manifest, /--frappe-wheel/);
 }
 
 function validateWorkflow(workflow) {
@@ -175,11 +178,11 @@ function validateWorkflow(workflow) {
 
   assert.match(build, /npm ci --prefix app/);
   assert.match(build, /npm ci --ignore-scripts --prefix workers-bus/);
-  assert.match(build, /python -m build --wheel/);
+  assert.doesNotMatch(workflow, /python -m build|frappe-dist|ironwrap_roofing\.whl|setup-python/);
   assert.match(build, /wrangler deploy[\s\S]*--dry-run --strict/);
   assert.match(
-    build,
-    /artifact-manifest[\s\S]*--worker[\s\S]*--pwa[\s\S]*--frappe-wheel/,
+    enforcerCommand(build, "artifact-manifest"),
+    /--worker "[^"\n]+" --pwa "[^"\n]+"/,
   );
   assert.match(build, /tar --sort=name --mtime='UTC 1970-01-01'/);
   assert.equal((build.match(/actions\/upload-artifact@/g) ?? []).length, 2);
@@ -364,7 +367,13 @@ test("workflow validation rejects candidate-policy self-approval and pre-merge a
 test("workflow validation rejects omitted component artifacts", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   assert.throws(() =>
-    validateWorkflow(workflow.replace("--frappe-wheel", "--unbound-wheel")),
+    validateWorkflow(workflow.replace('--pwa "$artifact_root/app/dist"', '--unbound-pwa "$artifact_root/app/dist"')),
+  );
+  assert.throws(() =>
+    validateWorkflow(workflow.replace(
+      '--frappe-scope "$RELEASE_FRAPPE_SCOPE" \\\n            --output "$RUNNER_TEMP/artifact-components.json"',
+      '--frappe-wheel "$artifact_root/frappe/ironwrap_roofing.whl" \\\n            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \\\n            --output "$RUNNER_TEMP/artifact-components.json"',
+    )),
   );
 });
 

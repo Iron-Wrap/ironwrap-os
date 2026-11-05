@@ -113,36 +113,3 @@ export function withTestEffectRuntime<T extends Record<string, unknown>>(env: T)
     EFFECT_RUNTIME_ENABLED: "true",
   };
 }
-
-export function withErpReadback(
-  handler: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
-) {
-  const records = new Map<string, Record<string, unknown>>();
-  return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = new URL(String(input));
-    const method = init?.method ?? "GET";
-    const resource = url.pathname.match(/^\/api\/resource\/([^/]+)(?:\/([^/]+))?$/);
-    if (method === "GET" && resource?.[2]) {
-      const stored = records.get(`${decodeURIComponent(resource[1]!)}:${decodeURIComponent(resource[2])}`);
-      if (stored) return testJson({ data: stored });
-    }
-
-    const response = await handler(input, init);
-    if ((method === "POST" || method === "PUT") && response.ok && resource) {
-      const responseBody = await response.clone().json() as { data?: Record<string, unknown> };
-      const name = typeof responseBody.data?.name === "string"
-        ? responseBody.data.name
-        : resource[2] ? decodeURIComponent(resource[2]) : null;
-      if (name) {
-        const key = `${decodeURIComponent(resource[1]!)}:${name}`;
-        const requestBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-        records.set(key, { ...records.get(key), ...requestBody, ...responseBody.data, name });
-      }
-    }
-    return response;
-  };
-}
-
-function testJson(body: unknown): Response {
-  return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-}

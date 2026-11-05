@@ -67,7 +67,6 @@ const architectureNavigationDocuments = new Set([
   "CLAUDE.md",
   "app/README.md",
   "workers-bus/README.md",
-  "frappe-apps/ironwrap_roofing/README.md",
 ]);
 const historicalDesignDocuments = new Set([
   "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",
@@ -159,17 +158,6 @@ function loadArchitectureContract(path) {
 }
 
 function repositoryCapabilityFacts() {
-  const doctypeRoot = resolve(
-    root,
-    "frappe-apps/ironwrap_roofing/ironwrap_roofing/ironwrap_roofing/doctype",
-  );
-  const doctypes = readdirSync(doctypeRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => resolve(doctypeRoot, entry.name, `${entry.name}.json`))
-    .filter(existsSync)
-    .map((path) => JSON.parse(readFileSync(path, "utf8")));
-  const child = doctypes.filter((doctype) => Boolean(doctype.istable)).length;
-
   const migrationRoot = resolve(
     options.get("--migration-root") ?? resolve(root, "workers-bus/migrations"),
   );
@@ -216,11 +204,6 @@ function repositoryCapabilityFacts() {
   }
 
   return {
-    frappe_doctypes: {
-      total: doctypes.length,
-      top_level: doctypes.length - child,
-      child,
-    },
     d1_migrations: {
       count: migrations.length,
       latest: migrations.at(-1) ?? null,
@@ -308,7 +291,7 @@ function repositoryArchitectureFacts() {
     authority: {
       operating_state: "d1_worker",
       raw_evidence: "r2",
-      frappe: "compatibility_projection",
+      frappe: "decommissioned",
       facet: "design_evidence_producer",
       quickbooks: "posted_accounting_facts",
       ai: "non_authoritative_proposal",
@@ -403,14 +386,6 @@ const restatedCountDocuments = [
     option: "--clone-playbook",
     path: "docs/WHITE-LABEL-CLONE-PLAYBOOK.md",
     claims: [
-      {
-        label: "DocType pack size",
-        shape: "`<total>-DocType pack`",
-        // Prose wraps, so every pattern here spans whitespace rather than a
-        // literal space: the claims sit mid-paragraph in a hand-edited runbook.
-        pattern: /\b(\d+)-DocType\s+pack\b/g,
-        expected: (facts) => String(facts.frappe_doctypes.total),
-      },
       {
         label: "migration chain length",
         shape: "`All <count> D1 migrations`",
@@ -741,7 +716,7 @@ if (publicationHasNoWorkflows !== planSaysSnapshotHasNoWorkflows) {
 }
 const deployWorkflow = readFileSync(resolve(root, ".github/workflows/deploy.yml"), "utf8");
 // Frappe adapter receipts gate a release exactly when deploy.yml declares an
-// in-scope Frappe train; the wheel is digest-bound into the artifact either way.
+// in-scope Frappe train. The tree carries no Frappe app, so no artifact binds a wheel.
 const workflowPromotesFrappe = /^\s*RELEASE_FRAPPE_SCOPE: in-scope$/m.test(deployWorkflow);
 const planRequiresFrappeReceipts = capabilityMatrixContent.includes(
   "required release evidence while the Frappe wheel",
@@ -782,12 +757,10 @@ if (capabilityContract) {
     );
   }
   const expected = contract.expected ?? {};
-  for (const field of ["total", "top_level", "child"]) {
-    compareCapabilityFact(
-      `Frappe DocTypes ${field}`,
-      expected.frappe_doctypes?.[field],
-      capabilityFacts.frappe_doctypes[field],
-    );
+  // Frappe is decommissioned and the tree carries no DocTypes; a contract that still
+  // pins a DocType count describes a schema that no longer exists.
+  if (expected.frappe_doctypes !== undefined) {
+    fail("docs/CAPABILITY-MATRIX.md: capability contract pins Frappe DocTypes, but the tree carries no Frappe app");
   }
   for (const field of ["count", "latest"]) {
     compareCapabilityFact(
@@ -1729,6 +1702,6 @@ if (evidencePath) {
 
 console.log(
   `ok ${trackedDocuments.length} registered documents validated; ` +
-    `${capabilityFacts.frappe_doctypes.total} DocTypes and ${capabilityFacts.d1_migrations.count} migrations match the capability contract ` +
+    `${capabilityFacts.d1_migrations.count} migrations match the capability contract ` +
     `and AI-native authority/reachability/configuration claims match source`,
 );

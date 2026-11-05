@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the eight tenant-leakage checks of docs/WHITE-LABEL-CLONE-PLAYBOOK.md against two
+# Run the seven tenant-leakage checks of docs/WHITE-LABEL-CLONE-PLAYBOOK.md against two
 # tenants standing side by side on the local stack.
 #
 # The checks were a prose list nobody could run, which is the same shape as a rail that ships
@@ -18,7 +18,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="$ROOT_DIR/deploy/local/docker-compose.yml"
 
 TENANT_A="ironwrap"
 TENANT_B=""
@@ -31,9 +30,6 @@ A_CONFIG_ENV="local"
 B_CONFIG=""
 A_PERSIST="$ROOT_DIR/workers-bus/.wrangler/state"
 B_PERSIST=""
-A_SITE="ironwrap.localhost"
-B_SITE=""
-FRAPPE_PORT="${IRONWRAP_LOCAL_FRAPPE_PORT:-8000}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,9 +37,6 @@ while [[ $# -gt 0 ]]; do
     --tenant-b) TENANT_B="$2"; shift 2 ;;
     --a-origin) A_ORIGIN="$2"; shift 2 ;;
     --b-origin) B_ORIGIN="$2"; shift 2 ;;
-    --a-site) A_SITE="$2"; shift 2 ;;
-    --b-site) B_SITE="$2"; shift 2 ;;
-    --frappe-port) FRAPPE_PORT="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,7 +45,6 @@ done
 B_DEV_VARS="${B_DEV_VARS:-$ROOT_DIR/workers-bus/.dev.vars.$TENANT_B}"
 B_CONFIG="${B_CONFIG:-$ROOT_DIR/workers-bus/wrangler.$TENANT_B.jsonc}"
 B_PERSIST="${B_PERSIST:-$ROOT_DIR/workers-bus/.wrangler/state-$TENANT_B}"
-B_SITE="${B_SITE:-$TENANT_B.localhost}"
 
 PASSES=0
 FAILURES=0
@@ -69,12 +61,8 @@ var_of() { awk -F= -v k="$2" '$1 == k { sub("^" k "=", ""); print; exit }' "$1";
 A_ADMIN="$(var_of "$A_DEV_VARS" ADMIN_TOKEN)"
 B_ADMIN="$(var_of "$B_DEV_VARS" ADMIN_TOKEN)"
 B_INGEST="$(var_of "$B_DEV_VARS" INGEST_TOKEN)"
-A_FRAPPE_KEY="$(var_of "$A_DEV_VARS" ERPNEXT_API_KEY)"
-A_FRAPPE_SECRET="$(var_of "$A_DEV_VARS" ERPNEXT_API_SECRET)"
-B_FRAPPE_KEY="$(var_of "$B_DEV_VARS" ERPNEXT_API_KEY)"
-B_FRAPPE_SECRET="$(var_of "$B_DEV_VARS" ERPNEXT_API_SECRET)"
 
-for name in A_ADMIN B_ADMIN B_INGEST A_FRAPPE_KEY B_FRAPPE_KEY; do
+for name in A_ADMIN B_ADMIN B_INGEST; do
   [[ -n "${!name}" ]] || { echo "ERROR: $name is empty; is $TENANT_B cloned and are both .dev.vars present?" >&2; exit 2; }
 done
 
@@ -184,51 +172,7 @@ else
 fi
 
 # --------------------------------------------------------------------------- 5
-check 5 "Frappe: B's lead is on B's site and its marker appears in no doctype on A's"
-# This asked ONE doctype - `Lead Envelope` - until ELEC-143 finding 1. The ingest fan-out
-# (`workers-bus/src/erpnext.ts`, pushToErpNext) writes the same contact across several doctypes,
-# `Roofing Customer.email` (erpnext.ts:665) among them, so a leak confined to the customer-dedup
-# path answered "0 rows" here and was counted as isolation. The sweep asks every doctype the app
-# ships - the enumeration comes from the doctype JSONs, not from a list anyone maintains - and
-# tools/validate-ingest-doctype-coverage.mjs fails CI if a doctype erpnext.ts names ever falls
-# outside it.
-marker_sweep() { # site key secret out-file
-  node "$ROOT_DIR/deploy/local/frappe-marker-sweep.mjs" \
-    --site "$1" --port "$FRAPPE_PORT" --key "$2" --secret "$3" --marker "$MARKER" >"$4"
-}
-sweep_field() { # file key
-  node -e '
-const doc = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-const value = doc[process.argv[2]];
-process.stdout.write(
-  Array.isArray(value)
-    ? value.map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry))).join(" | ")
-    : String(value ?? ""),
-);' "$1" "$2"
-}
-b_swept=1; marker_sweep "$B_SITE" "$B_FRAPPE_KEY" "$B_FRAPPE_SECRET" "$SCRATCH/sweep-b.json" || b_swept=0
-a_swept=1; marker_sweep "$A_SITE" "$A_FRAPPE_KEY" "$A_FRAPPE_SECRET" "$SCRATCH/sweep-a.json" || a_swept=0
-b_hits="$(sweep_field "$SCRATCH/sweep-b.json" totalHits)"
-a_hits="$(sweep_field "$SCRATCH/sweep-a.json" totalHits)"
-b_where="$(sweep_field "$SCRATCH/sweep-b.json" hitDoctypes)"
-a_where="$(sweep_field "$SCRATCH/sweep-a.json" hitDoctypes)"
-queried="$(sweep_field "$SCRATCH/sweep-b.json" queried)"
-doctypes="$(sweep_field "$SCRATCH/sweep-b.json" doctypes)"
-note "swept $doctypes doctypes ($queried queries per site) for marker $MARKER"
-note "marker rows on B: $b_hits in [${b_where:-none}]"
-note "marker rows on A: $a_hits in [${a_where:-none}]"
-[[ "$b_swept" == "1" ]] || note "B sweep errors: $(sweep_field "$SCRATCH/sweep-b.json" errors)"
-[[ "$a_swept" == "1" ]] || note "A sweep errors: $(sweep_field "$SCRATCH/sweep-a.json" errors)"
-# Both sweeps must have RUN: a query that errored found nothing for the same reason an empty
-# table does, and only one of those is isolation.
-if [[ "$b_swept" == "1" && "$a_swept" == "1" && "$a_hits" == "0" ]] && [[ "$b_hits" -ge 1 ]]; then
-  pass "B's marker is present on B's site (in $b_where) and absent from all $doctypes doctypes on A's"
-else
-  fail "sweep ran B=$b_swept A=$a_swept; marker rows B=$b_hits ([$b_where]) A=$a_hits ([$a_where]), expected A=0 and B>=1"
-fi
-
-# --------------------------------------------------------------------------- 6
-check 6 "Drive: the evidence namespace is the tenant's own"
+check 5 "Drive: the evidence namespace is the tenant's own"
 b_bucket="$(node -e 'const c=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(c.r2_buckets[0].bucket_name)' "$B_CONFIG")"
 b_drive="$(node "$ROOT_DIR/tools/read-wrangler-var.mjs" --config "$B_CONFIG" --separator '|' \
   SHARED_DRIVE_ID_JOBS SHARED_DRIVE_ID_RESTRICTED SHARED_DRIVE_ID_ARCHIVE)"
@@ -239,8 +183,8 @@ else
   fail "B's evidence namespace is not its own (bucket $b_bucket, drives '$b_drive')"
 fi
 
-# --------------------------------------------------------------------------- 7
-check 7 "MCP: a tenant profile reads only its own tenant, and cross-tenant Frappe keys fail"
+# --------------------------------------------------------------------------- 6
+check 6 "MCP: a tenant profile reads only its own tenant"
 mcp_envelopes() { # base-url admin-token
   IRONWRAP_BUS_BASE_URL="$1" IRONWRAP_ADMIN_TOKEN="$2" IRONWRAP_BUS_ALLOW_INSECURE_LOCAL=true \
     MCP_ALLOWED_TOOLS=list_recent_envelopes \
@@ -250,17 +194,15 @@ mcp_b="$(mcp_envelopes "$B_ORIGIN" "$B_ADMIN" || echo "MCP_ERROR")"
 mcp_a="$(mcp_envelopes "$A_ORIGIN" "$A_ADMIN" || echo "MCP_ERROR")"
 mcp_b_marker=0; grep -q "$MARKER_EMAIL" <<<"$mcp_b" && mcp_b_marker=1
 mcp_a_marker=0; grep -q "$MARKER_EMAIL" <<<"$mcp_a" && mcp_a_marker=1
-cross_frappe="$(status_of -H "authorization: token $A_FRAPPE_KEY:$A_FRAPPE_SECRET" \
-  "http://$B_SITE:$FRAPPE_PORT/api/method/frappe.auth.get_logged_user")"
-note "list_recent_envelopes marker seen: B profile=$mcp_b_marker A profile=$mcp_a_marker | A's Frappe key on B's site: HTTP $cross_frappe"
-if [[ "$mcp_b_marker" == "1" && "$mcp_a_marker" == "0" && ( "$cross_frappe" == "401" || "$cross_frappe" == "403" ) ]]; then
-  pass "the tenant MCP profile returns only its own tenant's envelopes and A's Frappe credentials are refused by B's site"
+note "list_recent_envelopes marker seen: B profile=$mcp_b_marker A profile=$mcp_a_marker"
+if [[ "$mcp_b_marker" == "1" && "$mcp_a_marker" == "0" ]]; then
+  pass "the tenant MCP profile returns only its own tenant's envelopes"
 else
-  fail "MCP marker B=$mcp_b_marker A=$mcp_a_marker, cross-tenant Frappe auth HTTP $cross_frappe"
+  fail "MCP marker B=$mcp_b_marker A=$mcp_a_marker"
 fi
 
-# --------------------------------------------------------------------------- 8
-check 8 "Email: B sends as B, never from an IronWrap mailbox"
+# --------------------------------------------------------------------------- 7
+check 7 "Email: B sends as B, never from an IronWrap mailbox"
 b_from="$(node "$ROOT_DIR/tools/read-wrangler-var.mjs" --config "$B_CONFIG" --separator ' ' \
   FROM_EMAIL OWNER_ALERT_EMAIL BACKUP_ALERT_EMAIL)"
 b_declared="$(node -e 'const d=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.brand.brands.flatMap(b=>[b.sender_mailbox,...(b.sender_aliases??[])]).join(" "))' "$ROOT_DIR/config/tenants/$TENANT_B.json")"
@@ -299,5 +241,5 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-printf '\n\033[1m Result: %s pass, %s hand-off, %s fail (of 8)\033[0m\n' "$PASSES" "$HANDOFFS" "$FAILURES"
+printf '\n\033[1m Result: %s pass, %s hand-off, %s fail (of 7)\033[0m\n' "$PASSES" "$HANDOFFS" "$FAILURES"
 [[ "$FAILURES" -eq 0 ]] || exit 1

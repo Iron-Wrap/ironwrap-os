@@ -3,7 +3,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { deriveMeasurementIntakeIdentity, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
-import { pushMeasurementToErpNext } from "../src/erpnext.ts";
 import { ROOF_GRAPH_SCHEMA_VERSION, type RoofGraphV1 } from "../src/roof-graph.ts";
 import {
   handleQuickbooksWebhook,
@@ -14,11 +13,8 @@ import {
 import type { QuickBooksWebhookProjectionPort } from "../src/quickbooks-native-webhook.ts";
 import * as store from "../src/store.ts";
 import {
-  withErpReadback,
   withTestEffectRuntime,
 } from "./effect-runtime-fixture.ts";
-
-const effectEnv = (values: Record<string, unknown>) => withTestEffectRuntime(values) as never;
 
 test("parseMeasurementSubmission: job + report + numeric measurements", () => {
   const m = parseMeasurementSubmission({
@@ -79,107 +75,6 @@ test("deriveMeasurementIntakeIdentity: provider identity wins over retry headers
   assert.equal(providerAttachment.idempotencyKeyHash, providerAttachmentRetry.idempotencyKeyHash);
   assert.doesNotMatch(JSON.stringify(providerAttachment), /provider-private-id/);
   assert.match(providerAttachment.rawKey, /^raw\/measurements\/[0-9a-f]{64}\.json$/);
-});
-
-test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly needs review", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    fetches.push({ url, init: init ?? {} });
-    if (url.includes("/api/resource/Roof%20Job?")) throw new Error("unmatched intake must not search with an empty job number");
-    if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-UNMATCHED" } });
-    if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-UNMATCHED" } });
-    throw new Error(`unexpected fetch ${url}`);
-  }));
-
-  const rawSha256 = "b".repeat(64);
-  const roofGraph: RoofGraphV1 = {
-    schema_version: ROOF_GRAPH_SCHEMA_VERSION,
-    revision: rawSha256,
-    source: {
-      raw_key: `raw/measurements/${rawSha256}.json`,
-      raw_sha256: rawSha256,
-      provider: "AppliCad",
-      ingested_at: "2026-07-16T10:00:00.000Z",
-      capture: { captured_at: null, provenance: "not_supplied" },
-    },
-    coordinate_system: { kind: "local_3d", crs: null, transform: null, provenance: "not_declared_by_source" },
-    points: [{ id: "P1", x: 0, y: 0, z: 0 }],
-    edges: [],
-    facets: [],
-    checks: [],
-    needs_review: false,
-    measurements: { squares: 24 },
-    source_refs: { squares: "raw" },
-  };
-  const result = await pushMeasurementToErpNext(effectEnv({
-    ERPNEXT_ENABLED: "true",
-    ERPNEXT_BASE_URL: "https://erp.example.com",
-    ERPNEXT_API_KEY: "erp-key",
-    ERPNEXT_API_SECRET: "erp-secret",
-  }), {
-    measurementId: `measurement:${"a".repeat(64)}`,
-    jobNumber: null,
-    reportUrl: null,
-    rawKey: `raw/measurements/${rawSha256}.json`,
-    parsedAt: "2026-07-16T10:00:00.000Z",
-    measurements: { squares: 24 },
-    roofGraph,
-  });
-
-  assert.equal(result?.name, "MR-UNMATCHED");
-  assert.equal(result?.evidenceItemName, "EV-UNMATCHED");
-  assert.equal(result?.roofJobMatched, false);
-  const report = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Measurement%20Report"))?.init.body));
-  assert.equal(report.review_status, "Needs Review");
-  assert.equal(report.roof_graph_revision, rawSha256);
-  assert.deepEqual(JSON.parse(report.roof_graph_json), roofGraph);
-  assert.equal("roof_job" in report, false);
-  const evidence = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
-  assert.equal("roof_job" in evidence, false);
-  assert.equal(evidence.evidence_type, "Measurement Report");
-});
-
-test("pushMeasurementToErpNext: cited OCR remains parsed and review-required", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    fetches.push({ url, init: init ?? {} });
-    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0009" }] });
-    if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-OCR" } });
-    if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-OCR" } });
-    throw new Error(`unexpected fetch ${url}`);
-  }));
-
-  await pushMeasurementToErpNext(effectEnv({
-    ERPNEXT_ENABLED: "true",
-    ERPNEXT_BASE_URL: "https://erp.example.com",
-    ERPNEXT_API_KEY: "erp-key",
-    ERPNEXT_API_SECRET: "erp-secret",
-  }), {
-    measurementId: `measurement:${"c".repeat(64)}`,
-    jobNumber: "26-0009",
-    reportUrl: "https://reports.example.invalid/report.pdf",
-    reportFileUrl: "https://drive.google.com/open?id=report",
-    rawKey: `raw/measurement-reports/${"d".repeat(64)}.bin`,
-    parsedAt: "2026-08-13T10:00:00.000Z",
-    measurements: { squares: 21.4 },
-    needsReview: true,
-    sourceRefs: { squares: "page:1; region:Roof summary; label:Total squares" },
-    sourceConfidences: { squares: "parsed" },
-  });
-
-  const report = JSON.parse(String(
-    fetches.find((call) => call.url.endsWith("/api/resource/Measurement%20Report"))?.init.body,
-  ));
-  assert.equal(report.review_status, "Needs Review");
-  assert.equal(report.measurements[0].confidence, "parsed");
-  assert.equal(report.measurements[0].needs_review, 1);
-  assert.match(report.measurements[0].source_ref, /^page:1;/);
 });
 
 test("parseQbEvents: keeps only supported QuickBooks finance identities", () => {

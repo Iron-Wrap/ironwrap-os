@@ -253,8 +253,8 @@
       //
       // ERPNEXT_BASE_URL is empty: the Frappe host it pointed at, on ironwrap-prod, is
       // decommissioned (IRO-280). While ERPNEXT_ENABLED and
-      // FACET_DESIGN_FRAPPE_PROJECTION_ENABLED are "false", the guards in erpnext.ts,
-      // operations.ts and facet-design-frappe-projection.ts return before they read the URL.
+      // FACET_DESIGN_FRAPPE_PROJECTION_ENABLED are "false", the guards in operations.ts and
+      // facet-design-frappe-projection.ts return before they read the URL.
       // The one reader that ignores the flags is the projection verdict: /ready?scope=projection
       // (projection_rails_ok) needs a non-empty URL and the API key pair, so it answers 503
       // until a Frappe host exists. The default, core, office and ops scopes do not use it.
@@ -314,8 +314,8 @@
   // `npm run dev` + deploy/local/predev.mjs). Bindings are inherited shape-only; wrangler
   // dev serves D1/R2/queues from local Miniflare state. Wrangler envs REPLACE top-level
   // vars wholesale, so every production var is repeated here with local-safe values:
-  // bridge rails (JobNimbus/Drive) are OFF, the BFF + public estimator are ON against the
-  // throwaway deploy/local Frappe stack, and Turnstile uses Cloudflare's published
+  // bridge rails (JobNimbus/Drive) and the Frappe projection are OFF, the BFF + public
+  // estimator are ON against local D1, and Turnstile uses Cloudflare's published
   // always-pass test keys. Never points at production data.
   "env": {
     "local": {
@@ -471,7 +471,8 @@
           "JN_JOB_STATUS": "Lead"
         },
         "CFG_ERPNEXT": {
-          "ERPNEXT_ENABLED": "true",
+          // Off: Frappe is decommissioned and deploy/local no longer runs a Frappe stack.
+          "ERPNEXT_ENABLED": "false",
           // Default single-stack ports only. This file is static JSON and cannot read the
           // environment, so predev.mjs re-declares every port-bearing local value into
           // .dev.vars from IRONWRAP_LOCAL_FRAPPE_PORT / IRONWRAP_LOCAL_WORKER_PORT, and

@@ -30,6 +30,99 @@ const [headers, indexHtml, manifestText, robots, bootstrapPreload] = await Promi
 ]);
 const manifest = JSON.parse(manifestText);
 
+// BEGIN RUM GUARD
+function verifyCloudflareRUM(headers, indexHtml, serviceWorker, fixture) {
+  const policies = new Map();
+  let route;
+  for (const line of headers.split(/\r?\n/)) {
+    if (line.startsWith("/")) route = line.trim();
+    const match = line.match(/^\s+Content-Security-Policy:\s*(.+)$/i);
+    if (match) policies.set(route, match[1]);
+  }
+  const fixtureSources = [...fixture.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/g)];
+  if (fixtureSources.length !== 1)
+    throw new Error("RUM fixture must have one sanitized script src");
+  const bare = "https://static.cloudflareinsights.com/beacon.min.js";
+  const allowed = [bare, fixtureSources[0][1], `${bare}/v-another-version`];
+  const denied = [
+    "https://static.cloudflareinsights.com/other.js",
+    `${bare}.evil`,
+    "https://static.cloudflareinsights.com.example.invalid/beacon.min.js",
+    "http://static.cloudflareinsights.com/beacon.min.js",
+  ];
+  // CSP3: a file source matches exactly; a trailing slash matches descendants.
+  const matches = (source, candidate) => {
+    if (!source.startsWith("https://")) return false;
+    const rule = new URL(source);
+    const url = new URL(candidate);
+    return (
+      rule.origin === url.origin &&
+      (rule.pathname.endsWith("/")
+        ? url.pathname.startsWith(rule.pathname)
+        : url.pathname === rule.pathname)
+    );
+  };
+  for (const path of ["/*", "/estimate"]) {
+    const policy = policies.get(path);
+    if (!policy) throw new Error(`Missing effective CSP for ${path}`);
+    const directives = new Map(
+      policy
+        .split(";")
+        .filter((s) => s.trim())
+        .map((s) => {
+          const [key, ...values] = s.trim().split(/\s+/);
+          return [key, values];
+        }),
+    );
+    const scripts = directives.get("script-src") ?? [];
+    const expectedScripts = [
+      "'self'",
+      ...(path === "/estimate" ? ["https://challenges.cloudflare.com"] : []),
+      bare,
+      `${bare}/`,
+    ];
+    if (
+      scripts.length !== expectedScripts.length ||
+      expectedScripts.some((s) => !scripts.includes(s))
+    ) {
+      throw new Error(`CSP ${path} must allow only existing scripts and the two narrow RUM paths`);
+    }
+    for (const url of allowed) {
+      if (!scripts.some((s) => matches(s, url)))
+        throw new Error(`CSP ${path} rejects the automatic RUM beacon`);
+    }
+    for (const url of denied) {
+      if (scripts.some((s) => matches(s, url)))
+        throw new Error(`CSP ${path} permits an unrelated RUM script source`);
+    }
+    const expectedConnect =
+      path === "/estimate" ? "'self' https://challenges.cloudflare.com" : "'self'";
+    if ((directives.get("connect-src") ?? []).join(" ") !== expectedConnect) {
+      throw new Error(`CSP ${path} must preserve the existing connect-src policy`);
+    }
+  }
+  if (!indexHtml.includes('<meta name="ironwrap-rum-shell" content="1"')) {
+    throw new Error(
+      "The RUM release must advance the precached HTML shell with ironwrap-rum-shell=1",
+    );
+  }
+  if (/<script\b[^>]*cloudflareinsights\.com/i.test(indexHtml)) {
+    throw new Error("The build must not embed a second Cloudflare beacon; use automatic injection");
+  }
+  const indexEntry = serviceWorker.match(/\{[^{}]*\burl\s*:\s*["']\/?index\.html["'][^{}]*\}/)?.[0];
+  if (!indexEntry || !/\brevision\s*:\s*["'][0-9a-f]{32}["']/.test(indexEntry)) {
+    throw new Error("Generated service worker must precache index.html with a content revision");
+  }
+}
+// END RUM GUARD
+
+verifyCloudflareRUM(
+  headers,
+  indexHtml,
+  await readFile(resolve("dist/sw.js"), "utf8"),
+  await readFile(new URL("./fixtures/cloudflare-auto-beacon.html", import.meta.url), "utf8"),
+);
+
 const requiredDirectives = [
   "Content-Security-Policy:",
   "frame-ancestors 'none'",

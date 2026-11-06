@@ -525,6 +525,11 @@
       ]
     },
     {
+      "path": "docs/PRODUCT-EVENTS.md",
+      "class": "canonical",
+      "authority": []
+    },
+    {
       "path": "docs/RECORD-DOCUMENTS-READ-CONTRACT.md",
       "class": "component",
       "authority": [

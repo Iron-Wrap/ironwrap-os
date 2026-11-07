@@ -757,6 +757,43 @@ why `/admin/*` stays the operator's.
 | PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`, also when a concurrent write landed first: the batch is conditioned on the version and nothing of the loser's lands), a host owned by another tenant is refused (`409 host_taken`), an omitted `settings`, `hosts` or `secrets` keeps what the row holds, `secrets: {}` empties the envelope; the Worker's own tenant may take hosts here and nothing else |
 
 The registry is administered from the Worker's own env, before tenant resolution.
+
+**Proxy contract.** One Worker answers on one `workers.dev` name; a tenant's custom domain is a
+proxy in front of it (today the hosting operator's `ironwrap-qa-proxy` for `qa-iwrap.mindburn.org`),
+and the Worker sees the proxy's upstream hostname in the URL, not the domain the user typed. The
+proxy therefore states the hostname it served in `x-ironwrap-forwarded-host` and proves it is the
+proxy with `x-ironwrap-proxy-token`, compared constant-time against the Worker secret
+`TENANT_PROXY_TOKEN`. A forwarded host with a valid proof must name a registered tenant: an
+unregistered or malformed one is refused (`404 tenant_unknown`), a forwarded host without a valid
+proof is refused (`403 tenant_proxy_untrusted`), never read and never silently defaulted; a request
+without the header is keyed by its URL hostname, and an unregistered URL hostname is the Worker's
+own tenant so the deployed hostnames keep working. The Worker tenant's own proxied domains are
+registered against it like any other host (the registry takes hosts for the Worker tenant), and
+before any proxy starts sending the header, else its domain answers `404`:
+
+```bash
+curl -X PUT "$QA_BASE_URL/admin/tenants/ironwrap" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"display_name":"IronWrap OS — QA","status":"active","data_class":"synthetic","hosts":["qa-iwrap.mindburn.org"]}'
+```
+
+The proxy must overwrite any client-supplied `x-ironwrap-*` header, never pass it through. One token
+for every proxy of a deployment; rotating it is a new secret value on the Worker and on each
+proxy, with a short window in which old proxies are refused.
+
+Every secret declared for the Worker is required on every deployed Worker by the release
+preflight, so `TENANT_SECRETS_KEK`, `TENANT_PROXY_TOKEN` and `HELM_GATEWAY_TOKEN` must be set on
+the production Worker (random values where the feature is off) before the next production release,
+and on qa before each lands.
+
+**qa: two synthetic tenants side by side.** `env.qa` runs with the flag on. The Worker tenant
+answers on `qa-iwrap.mindburn.org` and the `workers.dev` name as before. A second synthetic tenant
+is registered from its committed config with `tools/qa-tenant-register.mjs` (idempotent; the GitHub
+workflow `qa tenant registration` runs it with the qa admin bearer and names the hostnames the proxy
+serves for it; a tenant's own tokens are sealed by naming the `qa` environment secret that holds
+each one). It is reachable once the operator adds a proxy for its hostname that sends the two
+headers above; until then its registry row, its cron passes and its API are provable through the
+registry only.
 The magic-link request body is `{ "email": "…" }`; the Worker infers its configured tenant. A
 legacy caller may also send `tenant_id`, but a mismatch still receives the same generic `202` and
 never selects another tenant.

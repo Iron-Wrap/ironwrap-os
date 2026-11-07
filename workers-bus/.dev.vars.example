@@ -70,6 +70,11 @@ AGENT_HOST_TOKEN="dev-agent-host-token-change-me"
 # `openssl rand -hex 32`. Rotating it re-seals every registry row; the Worker never logs it.
 TENANT_SECRETS_KEK=""
 
+# What the hosting operator's proxy sends in x-ironwrap-proxy-token beside the hostname it served
+# (x-ironwrap-forwarded-host), so one Worker behind one workers.dev name can tell its tenants'
+# custom domains apart (src/tenancy.ts requestHost). A forwarded host without it is refused.
+TENANT_PROXY_TOKEN=""
+
 # Independent, false-by-default stage-change automation feature flag.
 # PIPELINE_AUTOMATION_ENABLED="false"
 

@@ -82,6 +82,17 @@ test("a routine run goes to Codex on the configured model and returns validated 
   );
 });
 
+test("a run's tenant is recorded on both of its ledger records, beside the specialist key", async (t) => {
+  const h = harness(t);
+  h.codex.steps.push(outcome());
+  assert.equal((await h.gateway.run(request({ tenant: "tenant-a" }))).status, "ok");
+  const ledger = readFileSync(join(h.stateDir, "gateway-usage.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(ledger.map((record) => [record.specialist, record.tenantId, record.outcome]), [
+    ["lead_concierge", "tenant-a", "reserved"],
+    ["lead_concierge", "tenant-a", "ok"],
+  ]);
+});
+
 test("hard reasoning goes to Astra and the auditor goes to Claude", async (t) => {
   const h = harness(t);
   h.codex.steps.push(outcome());

@@ -68,6 +68,7 @@ export const CATASTROPHE_IDS = [
   "posts_or_publishes",
   "creates_purchase_commitment",
   "posts_accounting_truth",
+  "cross_tenant_disclosure",
 ] as const;
 
 /** Tenant policy defaults for proposing more delegation (owner confirms; contract "Delegation"). */

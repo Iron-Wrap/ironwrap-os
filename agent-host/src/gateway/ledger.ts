@@ -34,6 +34,8 @@ export interface Booking {
   runClass: RunClass;
   complianceRef: string | null;
   riskAcceptance: RiskAcceptance | null;
+  /** The run's tenant, beside the specialist key; ceilings stay per specialist and namespace. */
+  tenantId?: string;
 }
 
 export interface UsageRecord extends Partial<Omit<Booking, "provider" | "model" | "usd">> {

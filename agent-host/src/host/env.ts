@@ -6,6 +6,7 @@ import { homedir, hostname } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DataClass } from "../gateway/compliance.ts";
+import { TENANT_ID } from "./tenant.ts";
 import { parseWorkerUrl } from "./worker.ts";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -62,6 +63,12 @@ export interface HostEnv {
    * on seed data, runs every Worker run as a synthetic run. Any other value refuses to start.
    */
   dataClass: DataClass;
+  /**
+   * `AGENT_HOST_TENANT_ID`: the one tenant this host works for. Unset, the host adopts the tenant
+   * the Worker names first and keeps it in the state directory; either way a run of another tenant
+   * is refused (host/tenant.ts).
+   */
+  tenantId: string | null;
 }
 
 export function hostEnv(env: Record<string, string | undefined>): HostEnv {
@@ -92,12 +99,19 @@ export function hostEnv(env: Record<string, string | undefined>): HostEnv {
     actionServerPath: path(env.AGENT_HOST_ACTION_SERVER, "../mcp/ironwrap-bus-mcp/src/agent-server.mjs"),
     hostId: env.AGENT_HOST_ID?.trim() || hostname(),
     dataClass: dataClass(env.AGENT_HOST_DATA_CLASS),
+    tenantId: tenantId(env.AGENT_HOST_TENANT_ID),
   };
 }
 
 function dataClass(raw: string | undefined): DataClass {
   const value = raw?.trim() || "business";
   if (value !== "business" && value !== "synthetic") throw new Error(`AGENT_HOST_DATA_CLASS must be business or synthetic, got ${value.slice(0, 40)}`);
+  return value;
+}
+
+function tenantId(raw: string | undefined): string | null {
+  const value = raw?.trim() || null;
+  if (value !== null && !TENANT_ID.test(value)) throw new Error(`AGENT_HOST_TENANT_ID must be a tenant id, got ${value.slice(0, 40)}`);
   return value;
 }
 

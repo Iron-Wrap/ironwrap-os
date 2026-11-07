@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ import { specialistRelease } from "../src/host/release.ts";
 import { HostStopping, closeBacklog, retryPendingCloses, retryable, runSignal, type RunnerOptions } from "../src/host/runner.ts";
 import { AgentHostService } from "../src/host/service.ts";
 import { SpecialistLoadError, loadSpecialist } from "../src/host/specialists.ts";
+import { TenantBinding, TenantMismatch } from "../src/host/tenant.ts";
 import { WorkerClient, WorkerError, parseWorkerUrl } from "../src/host/worker.ts";
 import { tempDir } from "./helpers.ts";
 import { RUN_OUTPUT, fakeWorker, okResult, openedRun, playbook, signal, specialistsRoot, type FakeWorker } from "./host-helpers.ts";
@@ -418,8 +419,10 @@ test("a run interrupted by the host stopping stays open for re-delivery", async 
   assert.equal(closeBacklog(options.stateDir, Date.now()).pending, 0);
 });
 
-function service(t: test.TestContext, worker: FakeWorker, gatewayRun: (request: GatewayRequest) => Promise<GatewayResult>, extra: { now?: () => number; pollMs?: number; stateDir?: string } = {}) {
+function service(t: test.TestContext, worker: FakeWorker, gatewayRun: (request: GatewayRequest) => Promise<GatewayResult>, extra: { now?: () => number; pollMs?: number; stateDir?: string; tenant?: TenantBinding; log?: (event: Record<string, unknown>) => void } = {}) {
   const { options } = runner(t, worker, gatewayRun);
+  if (extra.tenant) options.tenant = extra.tenant;
+  if (extra.log) options.log = extra.log;
   const stateDir = extra.stateDir ?? options.stateDir;
   return {
     stateDir,
@@ -702,4 +705,175 @@ test("a slow Worker call names its route, and opening a run gets its own, longer
     assert.equal(retryable(error), true);
     return true;
   });
+});
+
+test("a host pinned to a tenant refuses a run the Worker opens for another, before any provider call", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-b", data_class: "business" }));
+  const { options, requests, events } = runner(t, worker, async (request) => okResult(request));
+  options.tenant = new TenantBinding("tenant-a", options.stateDir, options.log);
+  await assert.rejects(runSignal(options, signal()), TenantMismatch);
+  assert.equal(requests.length, 0);
+  assert.equal(worker.closed.length, 0);
+  assert.equal(closeBacklog(options.stateDir, Date.now()).pending, 0);
+  assert.deepEqual(events.at(-1), { event: "tenant_mismatch", expected: "tenant-a", reported: "tenant-b", where: "run_open" });
+  // Once bound, an answer that names no tenant is refused too.
+  const silent = runner(t, fakeWorker(openedRun()), async (request) => okResult(request));
+  silent.options.tenant = new TenantBinding("tenant-a", silent.options.stateDir, silent.options.log);
+  await assert.rejects(runSignal(silent.options, signal()), TenantMismatch);
+  assert.equal(silent.requests.length, 0);
+});
+
+test("a run of the host's own tenant records the tenant on its request, pending close and log", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "business" }));
+  const { options, requests, events } = runner(t, worker, async (request) => okResult(request));
+  options.tenant = new TenantBinding("tenant-a", options.stateDir, options.log);
+  worker.failClose = 2;
+  const outcome = await runSignal(options, signal());
+  assert.equal(outcome.status, "ok");
+  assert.equal(requests[0].tenant, "tenant-a");
+  assert.equal(events.find((event) => event.event === "run_closed")?.tenant_id, "tenant-a");
+  // The close the Worker did not take yet is kept with its tenant, and a host bound to another
+  // tenant never sends it.
+  const pendingDir = join(options.stateDir, "pending-closes");
+  const [pending] = readdirSync(pendingDir);
+  assert.equal(JSON.parse(readFileSync(join(pendingDir, pending), "utf8")).tenant_id, "tenant-a");
+  const other = { ...options, tenant: new TenantBinding("tenant-b", tempDir(t), options.log) };
+  assert.equal(await retryPendingCloses(other), 0);
+  assert.equal(worker.closed.length, 0);
+  assert.equal(await retryPendingCloses(options), 1);
+  assert.equal(worker.closed.length, 1);
+});
+
+test("an unpinned host adopts the tenant of its first heartbeat, keeps it across restarts and refuses another", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a" }));
+  worker.heartbeatReply = { tenant_id: "tenant-a", data_class: "business" };
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const events: Array<Record<string, unknown>> = [];
+  const log = (event: Record<string, unknown>) => events.push(event);
+  const tenant = new TenantBinding(null, options.stateDir, log);
+  assert.equal(tenant.current(), null);
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant, log });
+  await host.heartbeat();
+  assert.equal(tenant.current(), "tenant-a");
+  assert.deepEqual(events.at(-1), { event: "tenant_adopted", tenant_id: "tenant-a", where: "heartbeat" });
+  assert.equal(new TenantBinding(null, options.stateDir, log).current(), "tenant-a");
+  assert.throws(() => new TenantBinding("tenant-b", options.stateDir, log), /state directory belongs to tenant tenant-a/);
+
+  // A batch the Worker answers for another tenant is not dispatched and the cursor stays put.
+  worker.batches.push({ signals: [signal()], next_cursor: "c9", tenant_id: "tenant-b" });
+  await host.tick();
+  assert.equal(worker.opened.length, 0);
+  assert.equal(existsSync(join(options.stateDir, "signal-cursor")), false);
+  assert.match((await host.status()).lastPollError ?? "", /^tenant_mismatch/);
+  worker.batches.push({ signals: [signal()], next_cursor: "c9", tenant_id: "tenant-a" });
+  await host.tick();
+  assert.equal(worker.closed.length, 1);
+  assert.equal(readFileSync(join(options.stateDir, "signal-cursor"), "utf8"), "c9");
+});
+
+test("AGENT_HOST_TENANT_ID is optional and must be a tenant id", () => {
+  const base = {
+    AGENT_HOST_STATE_DIR: "/var/lib/agent-host",
+    AGENT_HOST_WORKER_URL: "https://bus.example.invalid",
+    AGENT_HOST_WORKER_TOKEN: "token",
+  };
+  assert.equal(hostEnv(base).tenantId, null);
+  assert.equal(hostEnv({ ...base, AGENT_HOST_TENANT_ID: " tenant-a " }).tenantId, "tenant-a");
+  for (const value of ["Tenant A", "a", "-x"]) assert.throws(() => hostEnv({ ...base, AGENT_HOST_TENANT_ID: value }), /AGENT_HOST_TENANT_ID/, value);
+});
+
+test("a host whose Worker answers for another tenant sends it no saved close and no heartbeat", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "business" }));
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const events: Array<Record<string, unknown>> = [];
+  const log = (event: Record<string, unknown>) => events.push(event);
+  const tenant = new TenantBinding("tenant-a", options.stateDir, log);
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant, log });
+  // A close of this host's own tenant waits in the state directory (both send attempts fail; the
+  // Worker would take the next one, so a close that stays here was held, not refused).
+  worker.failClose = 2;
+  await runSignal({ ...options, tenant, log }, signal());
+  assert.equal(closeBacklog(options.stateDir, Date.now()).pending, 1);
+  // The Worker now answers for tenant-b: the batch, the saved close and the heartbeat all stay here.
+  worker.batches.push({ signals: [signal({ signal_id: "sig_0002" })], next_cursor: "c1", tenant_id: "tenant-b" });
+  await host.tick();
+  assert.equal(worker.closed.length, 0, "the saved close never left");
+  assert.equal(worker.opened.length, 1, "only the run before the re-point opened");
+  assert.ok((await host.status()).alerts.includes("tenant_mismatch"));
+  await host.heartbeat();
+  assert.equal(worker.heartbeats.length, 0);
+  assert.deepEqual(events.at(-1), { event: "heartbeat_skipped", reason: "tenant_mismatch" });
+  // Back on this host's tenant, the close goes out and the heartbeat resumes.
+  worker.batches.push({ signals: [], next_cursor: "c1", tenant_id: "tenant-a" });
+  await host.tick();
+  assert.equal(worker.closed.length, 1);
+  assert.ok(!(await host.status()).alerts.includes("tenant_mismatch"));
+  await host.heartbeat();
+  assert.equal(worker.heartbeats.length, 1);
+});
+
+test("an unbound host keeps a saved close until the Worker names its tenant", async (t) => {
+  const worker = fakeWorker();
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const tenant = new TenantBinding(null, options.stateDir, options.log);
+  mkdirSync(join(options.stateDir, "pending-closes"), { recursive: true });
+  writeFileSync(join(options.stateDir, "pending-closes", "saved.json"), JSON.stringify({ run_id: "run_0000000009", tenant_id: "tenant-a", body: { status: "ok" } }), { flag: "wx" });
+  assert.equal(await retryPendingCloses({ ...options, tenant }), 0, "a saved file does not name the host's tenant");
+  assert.equal(tenant.current(), null);
+  tenant.check("tenant-a", "heartbeat");
+  assert.equal(await retryPendingCloses({ ...options, tenant }), 1);
+});
+
+test("the data class the Worker names must be the host's own", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "synthetic" }));
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const tenant = new TenantBinding("tenant-a", options.stateDir, options.log, "synthetic");
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant });
+  worker.batches.push({ signals: [signal()], next_cursor: "c1", tenant_id: "tenant-a", data_class: "business" });
+  await host.tick();
+  assert.equal(worker.opened.length, 0);
+  assert.match((await host.status()).lastPollError ?? "", /^data_class_mismatch/);
+  // The same stop as another tenant: its own alert, and no heartbeat to that Worker either.
+  assert.ok((await host.status()).alerts.includes("data_class_mismatch"));
+  await host.heartbeat();
+  assert.equal(worker.heartbeats.length, 0);
+  worker.batches.push({ signals: [signal()], next_cursor: "c1", tenant_id: "tenant-a", data_class: "synthetic" });
+  await host.tick();
+  assert.ok(!(await host.status()).alerts.includes("data_class_mismatch"));
+  // A run opened for the other data class stops before any provider call too.
+  const business = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "business" }));
+  await assert.rejects(runSignal({ ...options, worker: business, tenant }, signal({ signal_id: "sig_0003" })), /data_class_mismatch/);
+});
+
+test("saved closes still go out while the signals route fails, once the tenant was confirmed", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a" }));
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const tenant = new TenantBinding("tenant-a", options.stateDir, options.log);
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant });
+  worker.failClose = 2;
+  await runSignal({ ...options, tenant }, signal());
+  assert.equal(closeBacklog(options.stateDir, Date.now()).pending, 1);
+  // Nothing in this process has confirmed the tenant yet: a failing signals route holds the close.
+  worker.batches.push(new WorkerError(400, "invalid_query", "bad cursor"));
+  await host.tick();
+  assert.equal(worker.closed.length, 0);
+  // One confirming answer (here the heartbeat), then the close goes out even though signals keep failing.
+  worker.heartbeatReply = { tenant_id: "tenant-a" };
+  await host.heartbeat();
+  worker.batches.push(new WorkerError(400, "invalid_query", "bad cursor"));
+  await host.tick();
+  assert.equal(worker.closed.length, 1);
+  assert.match((await host.status()).lastPollError ?? "", /bad cursor/);
+});
+
+test("a run the Worker answers for another tenant outranks the batch's other failures", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-b" }));
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const tenant = new TenantBinding("tenant-a", options.stateDir, options.log);
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant });
+  worker.batches.push({ signals: [signal(), signal({ signal_id: "sig_0002" })], next_cursor: "c1", tenant_id: "tenant-a" });
+  await host.tick();
+  assert.ok((await host.status()).alerts.includes("tenant_mismatch"));
+  await host.heartbeat();
+  assert.equal(worker.heartbeats.length, 0);
 });

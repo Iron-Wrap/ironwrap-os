@@ -110,6 +110,8 @@ export interface McpStdioServer {
 
 export interface GatewayRequest {
   specialist: string;
+  /** The tenant the run belongs to (host/tenant.ts); recorded on its ledger records. */
+  tenant?: string;
   tier: Tier;
   /** The run's single expected action; it selects the specialist's per-action route, if any. */
   action?: string;

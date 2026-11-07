@@ -46,7 +46,16 @@ export interface RunTool {
   args_schema: JsonSchema;
 }
 
-export interface OpenedRun {
+/**
+ * The tenant and data class the host token answers for, on the signals list, a run open and a
+ * heartbeat. A Worker that predates the fields omits them (host/tenant.ts).
+ */
+export interface WorkerTenant {
+  tenant_id?: string;
+  data_class?: string;
+}
+
+export interface OpenedRun extends WorkerTenant {
   run_id: string;
   goal: string;
   /**
@@ -204,7 +213,7 @@ export class WorkerClient {
     this.fetchImpl = options.fetch ?? fetch;
   }
 
-  signals(after: string | null, limit: number): Promise<{ signals: Signal[]; next_cursor: string | null }> {
+  signals(after: string | null, limit: number): Promise<{ signals: Signal[]; next_cursor: string | null } & WorkerTenant> {
     const query = new URLSearchParams({ limit: String(limit) });
     if (after) query.set("after", after);
     return this.request("GET", `/api/v1/agents/signals?${query}`);
@@ -218,7 +227,7 @@ export class WorkerClient {
     return this.request("POST", `/api/v1/agents/runs/${encodeURIComponent(runId)}/close`, body);
   }
 
-  heartbeat(body: Heartbeat): Promise<unknown> {
+  heartbeat(body: Heartbeat): Promise<WorkerTenant | null> {
     return this.request("POST", "/api/v1/agents/host/heartbeat", body);
   }
 

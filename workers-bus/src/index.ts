@@ -28,6 +28,7 @@ import * as store from "./store.ts";
 import { flattenEnv } from "./env-bindings.ts";
 import { cronTenantEnvs, queueMessageEnv, queueTenantId, resolveRequestTenant } from "./tenancy.ts";
 import { handleTenantAdmin, isTenantAdminPath } from "./tenant-admin.ts";
+import { WEB_MANIFEST_PATH, webManifestResponse } from "./web-manifest.ts";
 import {
   BULK_REPLAY_CONFIRMATION,
   executeReplayRequest,
@@ -745,6 +746,8 @@ async function routeRequest(
       verdict ? 200 : 503,
     );
   }
+  if (url.pathname === WEB_MANIFEST_PATH)
+    return webManifestResponse(req, env as import("./app-types.ts").AppEnv);
   if (url.pathname.startsWith("/internal/v1/authority-records/")) {
     const authorityResponse = await handleAuthorityRecordExecutorRoute(
       req,

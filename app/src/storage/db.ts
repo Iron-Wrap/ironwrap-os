@@ -2,6 +2,11 @@ import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from "idb";
 
 import type { OutboxAction, OutboxBlobRecord, OutboxState } from "./outbox-types";
 
+// One name for every tenant, unlike the session marker in auth/session.ts: the database is opened
+// before the session is known (offline sign-in recovery reads its snapshot from here, and the
+// outbox drains at boot), so it cannot be named after a tenant id that only the session carries.
+// Browser storage is per origin and a host names exactly one tenant, and outbox rows carry their
+// tenant and user (`by_principal_state`), so a shared Worker does not mix tenants in one database.
 const DATABASE_NAME = "ironwrap-os";
 const DATABASE_VERSION = 3;
 

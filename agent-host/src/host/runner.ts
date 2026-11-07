@@ -23,6 +23,7 @@ import type { Effort, GatewayRequest, GatewayResult, McpStdioServer, QualifiedRo
 import { buildRunInput } from "./prompt.ts";
 import { specialistRelease } from "./release.ts";
 import { loadSpecialist, type Specialist } from "./specialists.ts";
+import type { TenantBinding } from "./tenant.ts";
 import { WorkerError, type OpenedRun, type RunClose, type Signal, type WorkerClient } from "./worker.ts";
 
 /** The newest close model this host sends (the v3 model block). */
@@ -43,6 +44,8 @@ export interface RunnerOptions {
   log: (event: Record<string, unknown>) => void;
   closeAttempts?: number;
   closeBackoffMs?: number;
+  /** The tenant this host works for; a run the Worker opens for another is refused before the model runs. */
+  tenant?: TenantBinding;
 }
 
 export type RunOutcome =
@@ -88,6 +91,10 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
     throw error;
   }
 
+  // Throws `tenant_mismatch` before anything is read or sent, so no provider sees another tenant's
+  // run; the run stays open and the batch is retried, which stalls the feed for the owner to see.
+  const tenantId = options.tenant ? options.tenant.check(run.tenant_id, "run_open", run.data_class) : (run.tenant_id ?? null);
+
   if (existsSync(pendingPath(options.stateDir, run.run_id))) {
     // The model already answered for this run; only its close is outstanding.
     await sendPendingClose(options, pendingPath(options.stateDir, run.run_id));
@@ -116,6 +123,7 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
       const input = buildRunInput(specialist, run, signal, tools);
       const result = await options.gateway.run({
         specialist: specialist.id,
+        ...(tenantId ? { tenant: tenantId } : {}),
         tier: specialist.tier,
         scope: mode === "shadow" ? "shadow" : "production",
         ...(reviewOf ? { reviewOf } : {}),
@@ -148,13 +156,14 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
 
   const file = pendingPath(options.stateDir, run.run_id);
   mkdirSync(join(options.stateDir, PENDING), { recursive: true });
-  writeAtomic(file, JSON.stringify({ run_id: run.run_id, body }));
+  writeAtomic(file, JSON.stringify({ run_id: run.run_id, ...(tenantId ? { tenant_id: tenantId } : {}), body }));
   const closed = await sendPendingClose(options, file);
   options.log({
     event: "run_closed",
     run_id: run.run_id,
     signal_id: signal.signal_id,
     specialist_id: signal.specialist_id,
+    tenant_id: tenantId,
     status: body.status,
     reason: body.reason,
     closed,
@@ -199,11 +208,21 @@ export function closeBacklog(stateDir: string, now: number): CloseBacklog {
 }
 
 async function sendPendingClose(options: RunnerOptions, file: string): Promise<boolean> {
-  let entry: { run_id: string; body: RunClose };
+  let entry: { run_id: string; tenant_id?: string; body: RunClose };
   try {
     entry = JSON.parse(readFileSync(file, "utf8"));
   } catch {
     return false;
+  }
+  // A close recorded for another tenant is kept, never sent; one from before tenants carries none.
+  // The Worker, not a saved file, names the host's tenant: an unbound host waits for that answer.
+  if (entry.tenant_id !== undefined && options.tenant) {
+    if (options.tenant.current() === null) return false;
+    try {
+      options.tenant.check(entry.tenant_id, "pending_close");
+    } catch {
+      return false;
+    }
   }
   const attempts = options.closeAttempts ?? 3;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {

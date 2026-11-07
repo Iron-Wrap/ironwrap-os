@@ -41,7 +41,7 @@ const fail = (msg) => {
 };
 
 // 1. PWA assets ---------------------------------------------------------------
-if (!existsSync(path.join(repoRoot, "app/dist/manifest.webmanifest"))) {
+if (!existsSync(path.join(repoRoot, "app/dist/api/v1/manifest.webmanifest"))) {
   log("app/dist missing - building the PWA (one time per source change)");
   execSync("npm run build", { cwd: path.join(repoRoot, "app"), stdio: "inherit" });
 }

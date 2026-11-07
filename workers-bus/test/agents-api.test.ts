@@ -364,7 +364,7 @@ test("heartbeats are stored for the owner's view; people other than owner and op
     in_flight: 1,
     backlog: { pending_closes: 0, oldest_pending_ms: null, rejected_closes: 0, rejected_signals: 0 },
   };
-  assert.equal((await call("POST", "/api/v1/agents/host/heartbeat", beat)).status, 204);
+  assert.deepEqual(await call("POST", "/api/v1/agents/host/heartbeat", beat), { status: 200, body: { tenant_id: TENANT, data_class: "business" } });
   assert.equal((await call("POST", "/api/v1/agents/host/heartbeat", { ...beat, alerts: ["Not An Alert"] })).status, 422);
   const hosts = await handleAgentTeamAppRoute(new Request("https://bus.example.invalid/api/v1/agent-team/hosts"), { DB: db, APP_TENANT_ID: TENANT }, owner());
   const body = (await hosts.json()) as { hosts: Array<{ host_id: string; alerts: string[]; ready: boolean }> };
@@ -1054,4 +1054,23 @@ test("replacement inserts cannot rewrite any coordination identity or uniqueness
       );
     }
   }
+});
+
+test("every host read names the tenant and data class the host token answers for", async () => {
+  const { db, env, call } = setup();
+  const id = await signal(db);
+  const listed = await call("GET", "/api/v1/agents/signals");
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.tenant_id, TENANT);
+  assert.equal(listed.body.data_class, "business");
+  assert.deepEqual(listed.body.signals.map((row: { signal_id: string }) => row.signal_id), [id]);
+  const opened = await call("POST", "/api/v1/agents/runs", { signal_id: id, specialist_id: "lead_concierge", host_run_key: "t".repeat(40) });
+  assert.equal(opened.status, 201);
+  assert.equal(opened.body.tenant_id, TENANT);
+  assert.equal(opened.body.data_class, "business");
+  const resumed = await call("POST", "/api/v1/agents/runs", { signal_id: id, specialist_id: "lead_concierge", host_run_key: "t".repeat(40) });
+  assert.equal(resumed.status, 200);
+  assert.equal(resumed.body.tenant_id, TENANT);
+  env.AGENT_DATA_CLASS = "synthetic";
+  assert.equal((await call("GET", "/api/v1/agents/signals")).body.data_class, "synthetic");
 });

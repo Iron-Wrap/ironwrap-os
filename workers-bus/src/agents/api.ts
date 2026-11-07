@@ -79,6 +79,9 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
   const url = new URL(req.url);
   const path = url.pathname;
   const iso = () => new Date(now()).toISOString();
+  // The tenant this host token answers for, on every read the host makes: a host binds its runs to
+  // it and refuses a run of another tenant (agent-host src/host/tenant.ts). Additive fields only.
+  const scope = { tenant_id: tenantId, data_class: dataClass };
 
   if (req.method === "GET" && path === "/api/v1/agents/signals") {
     const after = url.searchParams.get("after");
@@ -86,7 +89,7 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     if ((after !== null && !/^\d{1,15}$/.test(after)) || !Number.isInteger(limit) || limit < 1 || limit > 200) {
       return reply({ error: "invalid_query" }, 400);
     }
-    return reply(await listSignals(db, tenantId, Number(after ?? "0"), limit));
+    return reply({ ...(await listSignals(db, tenantId, Number(after ?? "0"), limit)), ...scope });
   }
 
   if (req.method === "POST" && path === "/api/v1/agents/runs") {
@@ -101,7 +104,7 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     if ("error" in opened) return reply({ error: opened.error }, opened.status);
     const { run, resumed, context, hints } = opened;
     return reply(
-      { run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run), people_only: peopleOnlyFor(run.specialist_id), ...hints },
+      { run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run), people_only: peopleOnlyFor(run.specialist_id), ...hints, ...scope },
       resumed ? 200 : 201,
     );
   }
@@ -168,7 +171,8 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     if ("error" in recorded) return reply({ error: recorded.error }, recorded.status);
     const heartbeat = body as {host_id: string; alerts: string[]};
     await escalateHostAlerts(db, tenantId, heartbeat.host_id, heartbeat.alerts, iso(), null);
-    return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+    // 200 with the tenant rather than an empty 204, so a host learns its tenant before any signal.
+    return reply(scope);
   }
   return reply({ error: "not_found" }, 404);
 }

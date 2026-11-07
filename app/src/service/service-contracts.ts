@@ -180,7 +180,8 @@ export const costRecoveryClaimSchema = z
     counterparty_ref: identifier,
     claim_basis_code: identifier,
     claimed_amount_cents: cents,
-    currency: z.literal("CAD"),
+    // ISO 4217: a tenant reports in its own currency, not one baked into the app.
+    currency: z.string().regex(/^[A-Z]{3}$/),
     evidence_digest: digest,
     effect_kind: z.literal("cost_recovery_claim_submission"),
     actor_user_id: identifier,

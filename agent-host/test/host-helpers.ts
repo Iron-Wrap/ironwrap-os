@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { PLAYBOOK_HEADINGS } from "../src/host/specialists.ts";
-import type { OpenedRun, RunClose, RunTool, Signal } from "../src/host/worker.ts";
+import type { OpenedRun, RunClose, RunTool, Signal, WorkerTenant } from "../src/host/worker.ts";
 import { WorkerError } from "../src/host/worker.ts";
 import type { GatewayRequest, GatewayResult } from "../src/gateway/types.ts";
 import { tempDir } from "./helpers.ts";
@@ -124,11 +124,13 @@ export interface FakeWorker {
   openRun(body: { signal_id: string; specialist_id: string; host_run_key: string }): Promise<OpenedRun>;
   closeRun(runId: string, body: RunClose): Promise<{ run_id: string; terminal: string }>;
   signals(after: string | null, limit: number): Promise<{ signals: Signal[]; next_cursor: string | null }>;
-  heartbeat(body: unknown): Promise<unknown>;
+  heartbeat(body: unknown): Promise<WorkerTenant | null>;
+  /** What a heartbeat answers; null like a Worker before the tenant fields. */
+  heartbeatReply: WorkerTenant | null;
   failClose: number;
   closeError: WorkerError;
   openError: WorkerError | null;
-  batches: Array<{ signals: Signal[]; next_cursor: string | null } | Error>;
+  batches: Array<({ signals: Signal[]; next_cursor: string | null } & WorkerTenant) | Error>;
 }
 
 export function fakeWorker(run: OpenedRun = openedRun()): FakeWorker {
@@ -137,6 +139,7 @@ export function fakeWorker(run: OpenedRun = openedRun()): FakeWorker {
     closed: [],
     heartbeats: [],
     signalCalls: [],
+    heartbeatReply: null,
     failClose: 0,
     closeError: new WorkerError(503, "unavailable", "close failed"),
     openError: null,
@@ -162,7 +165,7 @@ export function fakeWorker(run: OpenedRun = openedRun()): FakeWorker {
     },
     async heartbeat(body) {
       worker.heartbeats.push(body);
-      return null;
+      return worker.heartbeatReply;
     },
   };
   return worker;

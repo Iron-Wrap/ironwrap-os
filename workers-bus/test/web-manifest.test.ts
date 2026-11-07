@@ -52,9 +52,14 @@ test("an unconfigured tenant gets no manifest", async () => {
 });
 
 test("the Worker answers the manifest path ahead of the static assets", () => {
+  // The manifest lives under /api/v1, which the Worker already answers first, so no release-policy
+  // path list moves for it; the vite build must publish it at the same path.
+  assert.ok(WEB_MANIFEST_PATH.startsWith("/api/v1/"));
   const config = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const assets = config.slice(config.indexOf('"run_worker_first"'), config.indexOf("]", config.indexOf('"run_worker_first"')));
-  assert.ok(assets.includes(`"${WEB_MANIFEST_PATH}"`));
+  assert.ok(assets.includes('"/api/*"'));
+  const vite = readFileSync(new URL("../../app/vite.config.ts", import.meta.url), "utf8");
+  assert.ok(vite.includes(`manifestFilename: "${WEB_MANIFEST_PATH.slice(1)}"`));
 });
 
 test("the Worker manifest keeps the vite manifest's shape", () => {

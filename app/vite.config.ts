@@ -272,6 +272,9 @@ export default defineConfig({
     pruneUnreadTokensFromStyles(),
     VitePWA({
       registerType: "prompt",
+      // Published under /api/v1, which the Worker answers before the static assets, so each tenant
+      // host gets its own name (workers-bus/src/web-manifest.ts); vite preview serves this copy.
+      manifestFilename: "api/v1/manifest.webmanifest",
       injectRegister: false,
       includeAssets: [
         "favicon.svg",
@@ -323,7 +326,7 @@ export default defineConfig({
         // precached copy would hand every host this build's name. The built file serves vite preview.
         beforeBuildServiceWorker(options) {
           options.workbox.additionalManifestEntries = options.workbox.additionalManifestEntries?.filter(
-            (entry) => typeof entry === "string" ? entry !== "manifest.webmanifest" : entry.url !== "manifest.webmanifest",
+            (entry) => typeof entry === "string" ? entry !== "api/v1/manifest.webmanifest" : entry.url !== "api/v1/manifest.webmanifest",
           );
         },
       },

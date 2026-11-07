@@ -1,15 +1,16 @@
 // web-manifest.ts — the PWA web manifest, answered per tenant.
 //
 // The built app carries one manifest with one name, which a shared multi-tenant Worker would
-// hand to every tenant's host. `/manifest.webmanifest` is therefore in `run_worker_first`, and
-// this builds the same manifest as app/vite.config.ts with the request tenant's name and brand.
+// hand to every tenant's host. The manifest is therefore published under `/api/v1/`, which the
+// Worker already answers before the static assets (no release-policy change), and this builds the
+// same manifest as app/vite.config.ts with the request tenant's name and brand.
 // The vite-built file stays the fallback for local static serving (vite preview); keep the
 // fields below in step with the `manifest` block there.
 
 import { publicTenant } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
 
-export const WEB_MANIFEST_PATH = "/manifest.webmanifest";
+export const WEB_MANIFEST_PATH = "/api/v1/manifest.webmanifest";
 
 export function webManifestResponse(req: Request, env: AppEnv): Response {
   if (req.method !== "GET" && req.method !== "HEAD") {

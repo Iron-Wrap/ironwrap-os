@@ -4,7 +4,8 @@ import { resolve } from "node:path";
 
 const headersPath = resolve("dist/_headers");
 const indexPath = resolve("dist/index.html");
-const manifestPath = resolve("dist/manifest.webmanifest");
+// The manifest is published under /api/v1, which the Worker answers per tenant (web-manifest.ts).
+const manifestPath = resolve("dist/api/v1/manifest.webmanifest");
 const robotsPath = resolve("dist/robots.txt");
 const bootstrapPreloadPath = resolve("dist/field-bootstrap-preload.js");
 const iconPaths = [

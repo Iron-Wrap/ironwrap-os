@@ -19,7 +19,6 @@
           "/api/*",
           "/health",
           "/ingest/*",
-          "/manifest.webmanifest",
           "/public/*",
           "/ready",
           "/webhook/*"
@@ -113,7 +112,6 @@
           "/api/*",
           "/health",
           "/ingest/*",
-          "/manifest.webmanifest",
           "/public/*",
           "/ready",
           "/webhook/*"

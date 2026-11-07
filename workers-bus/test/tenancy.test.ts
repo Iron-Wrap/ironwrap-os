@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 import worker from "../src/index.ts";
 import { sessionHashFor } from "../src/app-auth.ts";
 import {
+  CLONE_ONLY_VARS,
+  TENANT_MISS_TTL_MS,
   TENANT_SECRET_NAMES,
   TENANT_SETTING_KEYS,
   TENANT_CACHE_TTL_MS,
@@ -61,8 +63,8 @@ async function registerTenantB(
   const ciphertext = secrets ? await sealTenantSecrets(options.kek ?? KEK, TENANT_B, 1, secrets) : null;
   db.raw.prepare(
     `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, secrets_ciphertext,
-                          secrets_key_version, version, created_at, updated_at)
-     VALUES (?, 'Northline Metal', ?, 'synthetic', ?, ?, ?, 1, ?, ?)`,
+                          secrets_key_version, version, write_id, created_at, updated_at)
+     VALUES (?, 'Northline Metal', ?, 'synthetic', ?, ?, ?, 1, 'seed-write-b', ?, ?)`,
   ).run(TENANT_B, options.status ?? "active", JSON.stringify(settings), ciphertext, ciphertext ? 1 : null, NOW, NOW);
   db.raw.prepare("INSERT INTO tenant_hosts (host, tenant_id, created_at) VALUES (?, ?, ?)").run(HOST_B, TENANT_B, NOW);
 }
@@ -73,11 +75,20 @@ function request(host: string, path = "/api/v1/session", init: RequestInit = {})
 
 test.beforeEach(() => resetTenantCache());
 
-test("every var a white-label clone rewrites is a setting a registry tenant may hold", () => {
+test("every var a white-label clone rewrites is either a registry setting or a named clone-only var", () => {
   const cloneVars = Object.keys(TENANT_SCOPED_VARS).filter((name) => name !== "APP_TENANT_ID");
   for (const name of cloneVars) {
-    assert.ok(TENANT_SETTING_KEYS.includes(name), `${name} is derived for a clone but not allowed in the shared Worker`);
+    assert.ok(
+      TENANT_SETTING_KEYS.includes(name) || CLONE_ONLY_VARS.includes(name),
+      `${name} is derived for a clone but neither allowed nor refused by name in the shared Worker`,
+    );
   }
+  for (const name of CLONE_ONLY_VARS) assert.ok(!TENANT_SETTING_KEYS.includes(name), `${name} cannot be both`);
+  // A destination a tenant may set must not be reached with a Worker-wide credential: every
+  // URL-shaped setting's credentials are sealable per tenant.
+  assert.ok(TENANT_SECRET_NAMES.includes("GOOGLE_SERVICE_ACCOUNT_JSON"), "Shared Drive ids need the tenant's own Google account");
+  assert.ok(TENANT_SECRET_NAMES.includes("QB_CLIENT_ID") && TENANT_SECRET_NAMES.includes("QB_CLIENT_SECRET"), "a QuickBooks realm needs the tenant's own app");
+  for (const name of ["ERPNEXT_BASE_URL", "FACET_V2_ROUTES_JSON"]) assert.ok(CLONE_ONLY_VARS.includes(name), `${name} reaches a Worker-wide credential`);
   // Product configuration is not a tenant fact: one Worker runs one product.
   for (const name of ["APP_MULTI_TENANT_ENABLED", "APP_BFF_ENABLED", "EFFECT_RUNTIME_ENABLED", "NEWO_ENABLED"]) {
     assert.ok(!TENANT_SETTING_KEYS.includes(name), `${name} must not be overridable per tenant`);
@@ -88,7 +99,7 @@ test("tenant secrets are declared Worker secrets, never the Worker-wide keys", (
   const source = readFileSync(new URL("../src/secret-bindings.d.ts", import.meta.url), "utf8");
   const declared = new Set([...source.matchAll(/^\s{2,4}([A-Z][A-Z0-9_]+): string;$/gm)].map((match) => match[1]));
   for (const name of TENANT_SECRET_NAMES) assert.ok(declared.has(name), `${name} is not a declared secret binding`);
-  for (const name of ["TENANT_SECRETS_KEK", "QB_TOKEN_ENCRYPTION_KEY", "APP_AUTH_PEPPER", "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER", "PUBLIC_ESTIMATE_TURNSTILE_SECRET"]) {
+  for (const name of ["TENANT_SECRETS_KEK", "QB_TOKEN_ENCRYPTION_KEY", "APP_AUTH_PEPPER", "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER", "PUBLIC_ESTIMATE_TURNSTILE_SECRET", "ADMIN_TOKEN"]) {
     assert.ok(!TENANT_SECRET_NAMES.includes(name), `${name} is Worker-wide and must not be sealed per tenant`);
   }
 });
@@ -102,6 +113,18 @@ test("with the flag off the env is returned as bound and the registry is never r
   assert.ok(resolution.kind === "legacy" && resolution.env === env);
   const byId = await tenantEnvFor(env as never, TENANT_B);
   assert.equal(byId.kind, "legacy");
+  // Through the Worker too: a registered host and row are ignored, and the registry surface is dark.
+  const seeded = new SqliteD1();
+  await registerTenantB(seeded);
+  const off = multiTenantEnv(seeded, { APP_MULTI_TENANT_ENABLED: "false" });
+  const session = await worker.fetch(request(HOST_B), off as never, ctx() as never);
+  assert.equal(((await session.json()) as { tenant: { id: string } }).tenant.id, TENANT);
+  const registry = await worker.fetch(
+    request(HOST_A, "/admin/tenants", { headers: { authorization: "Bearer root-admin-token" } }),
+    off as never,
+    ctx() as never,
+  );
+  assert.equal(registry.status, 404);
 });
 
 test("an unregistered host and the Worker's own id resolve to the Worker tenant unchanged", async () => {
@@ -114,7 +137,7 @@ test("an unregistered host and the Worker's own id resolve to the Worker tenant 
   assert.equal(byId.kind, "default");
 });
 
-test("a registered host lays the tenant's identity, settings and secrets over env", async () => {
+test("a registered host lays the tenant's identity, settings and secrets over env, and nothing of the Worker tenant's", async () => {
   const db = new SqliteD1();
   await registerTenantB(db, {
     settings: {
@@ -126,7 +149,7 @@ test("a registered host lays the tenant's identity, settings and secrets over en
       __secret_names: ["AGENT_HOST_TOKEN"],
     },
   });
-  const env = multiTenantEnv(db, { EFFECT_RUNTIME_ENABLED: "false" });
+  const env = multiTenantEnv(db, { EFFECT_RUNTIME_ENABLED: "false", INGEST_TOKEN: "worker-ingest", FROM_EMAIL: "ops@a.example.invalid", ERPNEXT_BASE_URL: "https://frappe.a.example.invalid" });
   const resolution = await resolveRequestTenant(request(HOST_B), env as never);
   assert.equal(resolution.kind, "tenant");
   if (resolution.kind !== "tenant") return;
@@ -136,9 +159,13 @@ test("a registered host lays the tenant's identity, settings and secrets over en
   assert.equal(overlay.APP_TENANT_BRAND, "Northline Metal");
   assert.equal(overlay.APP_PUBLIC_ORIGIN, `https://${HOST_B}`);
   assert.equal(overlay.APP_TIME_ZONE, "America/Vancouver");
-  assert.equal(overlay.APP_LOCALE, "en-CA", "a setting the tenant did not set keeps the Worker value");
+  assert.equal(overlay.APP_LOCALE, undefined, "a setting the tenant did not set is unset, never the Worker tenant's");
+  assert.equal(overlay.FROM_EMAIL, undefined, "the Worker tenant's mailbox never sends for another tenant");
+  assert.equal(overlay.ERPNEXT_BASE_URL, undefined, "a clone-only bridge var is cleared for a registry tenant");
   assert.equal(overlay.AGENT_HOST_TOKEN, "tenant-b-agent-token");
-  assert.equal(overlay.ADMIN_TOKEN, "root-admin-token", "a secret the tenant did not seal keeps the Worker value");
+  assert.equal(overlay.INGEST_TOKEN, undefined, "a secret the tenant did not seal is unset, so the Worker tenant's token opens nothing here");
+  assert.equal(overlay.ADMIN_TOKEN, "root-admin-token", "ADMIN_TOKEN is the hosting operator's on every host");
+  assert.equal(overlay.APP_AUTH_PEPPER, PEPPER, "Worker-wide keys stay");
   assert.equal(overlay.AGENT_DATA_CLASS, "synthetic", "the row's data class wins");
   assert.equal(overlay.EFFECT_RUNTIME_ENABLED, "false", "a product flag in settings_json is not applied");
   assert.equal(overlay.DB, db, "bindings pass through the overlay");
@@ -201,18 +228,38 @@ test("one isolate trusts a registry read for the cache window, then asks D1 agai
   assert.ok(reads > afterExpiry, "a reset forgets the read");
 });
 
+test("a trailing-dot host is the same host; a host nobody registered yet is forgotten within seconds", async () => {
+  const db = new SqliteD1();
+  const env = multiTenantEnv(db);
+  let clock = 5_000_000;
+  const now = () => clock;
+  // Not yet registered: the default tenant answers and the miss is remembered briefly.
+  assert.equal((await resolveRequestTenant(request(HOST_B), env as never, now)).kind, "default");
+  await registerTenantB(db);
+  assert.equal((await resolveRequestTenant(request(HOST_B), env as never, now)).kind, "default", "inside the miss window");
+  clock += TENANT_MISS_TTL_MS + 1;
+  assert.equal((await resolveRequestTenant(request(HOST_B), env as never, now)).kind, "tenant", "past it the new row is seen");
+  const dotted = await resolveRequestTenant(new Request(`https://${HOST_B}./api/v1/session`), env as never, now);
+  assert.equal(dotted.kind, "tenant", "b.example.invalid. is b.example.invalid, not the default tenant");
+  const upper = await resolveRequestTenant(new Request(`https://${HOST_B.toUpperCase()}:8443/api/v1/session`), env as never, now);
+  assert.equal(upper.kind, "tenant");
+});
+
 test("the secrets envelope opens only under its key, for its tenant and key version, untouched", async () => {
-  const sealed = await sealTenantSecrets(KEK, TENANT_B, 1, { INGEST_TOKEN: "ingest-b", ADMIN_TOKEN: "admin-b" });
-  assert.deepEqual(await openTenantSecrets(KEK, TENANT_B, 1, sealed), { ADMIN_TOKEN: "admin-b", INGEST_TOKEN: "ingest-b" });
+  const sealed = await sealTenantSecrets(KEK, TENANT_B, 1, { INGEST_TOKEN: "ingest-b", EFFECT_RUNTIME_TOKEN: "effects-b" });
+  assert.deepEqual(await openTenantSecrets(KEK, TENANT_B, 1, sealed), { EFFECT_RUNTIME_TOKEN: "effects-b", INGEST_TOKEN: "ingest-b" });
   await assert.rejects(openTenantSecrets(OTHER_KEK, TENANT_B, 1, sealed));
   await assert.rejects(openTenantSecrets(KEK, "another-tenant", 1, sealed), "an envelope moved onto another row does not open");
   await assert.rejects(openTenantSecrets(KEK, TENANT_B, 2, sealed));
   const bytes = Uint8Array.from(atob(sealed), (char) => char.charCodeAt(0));
   bytes[bytes.length - 1] ^= 1;
   await assert.rejects(openTenantSecrets(KEK, TENANT_B, 1, btoa(String.fromCharCode(...bytes))));
-  // A sealed name outside the allowlist is refused on open, so a row cannot smuggle the KEK itself.
-  const smuggled = await sealTenantSecrets(KEK, TENANT_B, 1, { TENANT_SECRETS_KEK: "x" });
-  await assert.rejects(openTenantSecrets(KEK, TENANT_B, 1, smuggled));
+  // A sealed name outside the allowlist is refused on open, so a row cannot smuggle the KEK itself
+  // or an admin token.
+  for (const name of ["TENANT_SECRETS_KEK", "ADMIN_TOKEN"]) {
+    const smuggled = await sealTenantSecrets(KEK, TENANT_B, 1, { [name]: "x" });
+    await assert.rejects(openTenantSecrets(KEK, TENANT_B, 1, smuggled));
+  }
   await assert.rejects(sealTenantSecrets("short", TENANT_B, 1, {}), /tenant_secrets_kek_invalid/);
   const base64Key = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)));
   assert.deepEqual(await openTenantSecrets(base64Key, "t", 1, await sealTenantSecrets(base64Key, "t", 1, {})), {});
@@ -222,12 +269,12 @@ test("a cron pass serves the Worker tenant first, then every active registry ten
   const db = new SqliteD1();
   await registerTenantB(db);
   db.raw.prepare(
-    `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, version, created_at, updated_at)
-     VALUES ('paused-co', 'Paused', 'suspended', 'synthetic', '{}', 1, ?, ?)`,
+    `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, version, write_id, created_at, updated_at)
+     VALUES ('paused-co', 'Paused', 'suspended', 'synthetic', '{}', 1, 'seed-write-p', ?, ?)`,
   ).run(NOW, NOW);
   db.raw.prepare(
-    `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, version, created_at, updated_at)
-     VALUES (?, 'Worker tenant hosts', 'active', 'business', '{}', 1, ?, ?)`,
+    `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, version, write_id, created_at, updated_at)
+     VALUES (?, 'Worker tenant hosts', 'active', 'business', '{}', 1, 'seed-write-a', ?, ?)`,
   ).run(TENANT, NOW, NOW);
   assert.deepEqual(await listActiveTenantIds(multiTenantEnv(db) as never), [TENANT, TENANT_B]);
   assert.deepEqual(await listActiveTenantIds(baseEnv(db) as never), [TENANT]);
@@ -298,6 +345,13 @@ test("through the Worker: the agent host token of one tenant is refused on the o
   assert.equal((await signals(HOST_B, "worker-agent-token")).status, 401);
   assert.equal((await signals(HOST_A, "worker-agent-token")).status, 200);
   assert.equal((await signals(HOST_A, "tenant-b-agent-token")).status, 401);
+
+  // A tenant that sealed no token of its own has no agent surface at all; the Worker's token does
+  // not stand in for it.
+  resetTenantCache();
+  db.raw.prepare("UPDATE tenants SET secrets_ciphertext = NULL, secrets_key_version = NULL WHERE tenant_id = ?").run(TENANT_B);
+  assert.equal((await signals(HOST_B, "worker-agent-token")).status, 404);
+  assert.equal((await signals(HOST_B, "tenant-b-agent-token")).status, 404);
 });
 
 test("through the Worker: a suspended tenant's host answers 503 and liveness never waits on the registry", async () => {

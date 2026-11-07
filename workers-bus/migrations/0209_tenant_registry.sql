@@ -8,7 +8,8 @@
 -- readers below the entry point stay as they are.
 --
 -- The Worker's own vars remain the default tenant. With `APP_MULTI_TENANT_ENABLED` off, or on
--- with no rows here, behaviour is exactly today's. Rows only ever ADD tenants and hosts.
+-- with no rows here, behaviour is exactly today's. A row adds a tenant; a host row moves that
+-- hostname from the default tenant to the row's tenant, which is the operator's deliberate act.
 --
 -- `settings_json` holds the tenant-scoped var names only (tenancy.ts TENANT_SETTING_KEYS, the
 -- same list tools/generate-tenant-worker-config.mjs derives for a clone). `secrets_ciphertext`
@@ -22,6 +23,7 @@
 CREATE TABLE IF NOT EXISTS tenants (
   tenant_id TEXT PRIMARY KEY CHECK (
     length(tenant_id) BETWEEN 2 AND 64
+    AND tenant_id GLOB '[a-z0-9]*'
     AND tenant_id NOT GLOB '*[^a-z0-9-]*'
   ),
   display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 120),
@@ -41,6 +43,9 @@ CREATE TABLE IF NOT EXISTS tenants (
   -- Monotonic per tenant. An admin writer states the version it read; a mismatch is a
   -- conflict, never a silent overwrite of another operator's edit.
   version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 1000000),
+  -- The id of the write that produced this row version. The host statements of one admin write
+  -- run only while the row carries that write's id, so a write that lost the race lands nothing.
+  write_id TEXT NOT NULL CHECK (length(write_id) BETWEEN 8 AND 64),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -50,6 +55,9 @@ CREATE TABLE IF NOT EXISTS tenant_hosts (
   host TEXT PRIMARY KEY CHECK (
     length(host) BETWEEN 1 AND 253
     AND host = lower(host)
+    AND host GLOB '[a-z0-9]*'
+    AND host GLOB '*[a-z0-9]'
+    AND host NOT GLOB '*..*'
     AND host NOT GLOB '*[^a-z0-9.-]*'
   ),
   tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),

@@ -22,6 +22,7 @@ import {
   TENANT_SETTING_KEYS,
   constantTimeEqual,
   defaultTenantId,
+  multiTenantEnabled,
   resetTenantCache,
   sealTenantSecrets,
   type TenantDataClass,
@@ -49,6 +50,7 @@ interface TenantAdminEnv {
   DB?: unknown;
   ADMIN_TOKEN?: string;
   APP_TENANT_ID?: string;
+  APP_MULTI_TENANT_ENABLED?: string;
   TENANT_SECRETS_KEK?: string;
 }
 
@@ -61,6 +63,9 @@ export async function handleTenantAdmin(
   env: TenantAdminEnv,
   now: () => string = () => new Date().toISOString(),
 ): Promise<Response> {
+  // With the flag off the registry is not consulted, so it is not administered either: the
+  // surface stays dark and the flag-off Worker gains no write path.
+  if (!multiTenantEnabled(env)) return json({ error: "not_found" }, 404);
   if (!env.ADMIN_TOKEN || !constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -106,14 +111,8 @@ async function readTenant(db: AdminDb, tenantId: string): Promise<TenantRecord |
 }
 
 function toRecord(row: TenantRow, hosts: string[]): TenantRecord {
-  let settings: Record<string, string> = {};
-  try {
-    settings = JSON.parse(row.settings_json) as Record<string, string>;
-  } catch {
-    settings = {};
-  }
   // The sealed names ride in settings_json beside the envelope; they are not a setting.
-  delete (settings as Record<string, unknown>).__secret_names;
+  const settings = storedSettings(row.settings_json);
   return {
     tenant_id: row.tenant_id,
     display_name: row.display_name,
@@ -140,12 +139,13 @@ function secretNamesOf(row: TenantRow): string[] {
   }
 }
 
+/** `null` for settings, hosts and secrets means "not in the body": keep what the row holds. */
 interface UpsertBody {
   display_name: string;
   status: TenantStatus;
   data_class: TenantDataClass;
-  settings: Record<string, string>;
-  hosts: string[];
+  settings: Record<string, string> | null;
+  hosts: string[] | null;
   secrets: Record<string, string> | null;
   expected_version: number | null;
 }
@@ -164,9 +164,10 @@ function parseUpsert(raw: unknown): Parsed {
   const dataClass = body.data_class;
   if (dataClass !== "business" && dataClass !== "synthetic") return { ok: false, error: "invalid_data_class" };
 
-  const settings: Record<string, string> = {};
+  let settings: Record<string, string> | null = null;
   if (body.settings !== undefined) {
     if (!body.settings || typeof body.settings !== "object" || Array.isArray(body.settings)) return { ok: false, error: "invalid_settings" };
+    settings = {};
     for (const [name, value] of Object.entries(body.settings as Record<string, unknown>)) {
       if (!TENANT_SETTING_KEYS.includes(name)) return { ok: false, error: "setting_not_tenant_scoped", detail: { name } };
       if (typeof value !== "string" || value.length > MAX_SETTING_VALUE_CHARS) return { ok: false, error: "invalid_setting_value", detail: { name } };
@@ -175,9 +176,10 @@ function parseUpsert(raw: unknown): Parsed {
     if (new TextEncoder().encode(JSON.stringify(settings)).byteLength > MAX_SETTINGS_JSON_BYTES) return { ok: false, error: "settings_too_large" };
   }
 
-  const hosts: string[] = [];
+  let hosts: string[] | null = null;
   if (body.hosts !== undefined) {
     if (!Array.isArray(body.hosts) || body.hosts.length > MAX_TENANT_HOSTS) return { ok: false, error: "invalid_hosts" };
+    hosts = [];
     for (const host of body.hosts) {
       if (typeof host !== "string" || !TENANT_HOST_RE.test(host)) return { ok: false, error: "invalid_host", detail: { host } };
       if (!hosts.includes(host)) hosts.push(host);
@@ -214,7 +216,7 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
   // else: a setting or secret here would silently change the deployed tenant's behaviour, and a
   // suspension would refuse every request the deployment was made for.
   if (tenantId === defaultTenantId(env)) {
-    if (Object.keys(body.settings).length > 0 || (body.secrets && Object.keys(body.secrets).length > 0)) {
+    if ((body.settings && Object.keys(body.settings).length > 0) || (body.secrets && Object.keys(body.secrets).length > 0)) {
       return json({ error: "default_tenant_uses_worker_vars" }, 400);
     }
     if (body.status !== "active") return json({ error: "default_tenant_always_active" }, 400);
@@ -229,11 +231,13 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
     return json({ error: "version_conflict", version: null }, 409);
   }
 
-  for (const host of body.hosts) {
+  for (const host of body.hosts ?? []) {
     const owner = await db.prepare("SELECT tenant_id FROM tenant_hosts WHERE host = ?").bind(host).first<{ tenant_id: string }>();
     if (owner && owner.tenant_id !== tenantId) return json({ error: "host_taken", host, tenant_id: owner.tenant_id }, 409);
   }
 
+  const existingSettings = existing ? storedSettings(existing.settings_json) : {};
+  const settings = body.settings ?? existingSettings;
   let secretsCiphertext = existing?.secrets_ciphertext ?? null;
   let secretsKeyVersion = existing?.secrets_key_version ?? null;
   let secretNames = existing ? secretNamesOf({ settings_json: existing.settings_json, secrets_ciphertext: existing.secrets_ciphertext } as TenantRow) : [];
@@ -254,40 +258,80 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
     }
   }
   const settingsJson = JSON.stringify(
-    secretNames.length > 0 ? { ...body.settings, __secret_names: secretNames } : body.settings,
+    secretNames.length > 0 ? { ...settings, __secret_names: secretNames } : settings,
   );
   const version = existing ? existing.version + 1 : 1;
+  const writeId = crypto.randomUUID();
 
+  // One batch, every statement conditioned on the row this write produces: the row update matches
+  // only the version that was read, and each host statement runs only while the row carries this
+  // write's own id (a concurrent writer that reached the same version number stamped its own). A
+  // lost race therefore leaves this batch with no row change and no host change, which the
+  // row-change count below turns into a conflict instead of a mixed row.
+  const thisWrite = `EXISTS (SELECT 1 FROM tenants WHERE tenant_id = ? AND write_id = ?)`;
   const statements: AdminStatement[] = [
     existing
       ? db.prepare(
         `UPDATE tenants SET display_name = ?, status = ?, data_class = ?, settings_json = ?,
-                secrets_ciphertext = ?, secrets_key_version = ?, version = ?, updated_at = ?
+                secrets_ciphertext = ?, secrets_key_version = ?, version = ?, write_id = ?, updated_at = ?
          WHERE tenant_id = ? AND version = ?`,
-      ).bind(body.display_name, body.status, body.data_class, settingsJson, secretsCiphertext, secretsKeyVersion, version, now, tenantId, existing.version)
+      ).bind(body.display_name, body.status, body.data_class, settingsJson, secretsCiphertext, secretsKeyVersion, version, writeId, now, tenantId, existing.version)
       : db.prepare(
         `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json,
-                              secrets_ciphertext, secrets_key_version, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-      ).bind(tenantId, body.display_name, body.status, body.data_class, settingsJson, secretsCiphertext, secretsKeyVersion, now, now),
-    db.prepare("DELETE FROM tenant_hosts WHERE tenant_id = ?").bind(tenantId),
-    ...body.hosts.map((host) =>
-      db.prepare("INSERT INTO tenant_hosts (host, tenant_id, created_at) VALUES (?, ?, ?)").bind(host, tenantId, now),
-    ),
+                              secrets_ciphertext, secrets_key_version, version, write_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+      ).bind(tenantId, body.display_name, body.status, body.data_class, settingsJson, secretsCiphertext, secretsKeyVersion, writeId, now, now),
+    ...(body.hosts === null ? [] : [
+      db.prepare(`DELETE FROM tenant_hosts WHERE tenant_id = ? AND ${thisWrite}`).bind(tenantId, tenantId, writeId),
+      ...body.hosts.map((host) =>
+        db.prepare(`INSERT INTO tenant_hosts (host, tenant_id, created_at) SELECT ?, ?, ? WHERE ${thisWrite}`)
+          .bind(host, tenantId, now, tenantId, writeId),
+      ),
+    ]),
   ];
+  let results: unknown;
   try {
-    await db.batch(statements);
-  } catch (error) {
-    return json({ error: "tenant_write_failed", detail: String((error as Error)?.message ?? error).slice(0, 200) }, 409);
+    results = await db.batch(statements);
+  } catch {
+    // A primary-key clash on a concurrent create, or a CHECK the row failed: nothing was written.
+    return json({ error: "tenant_write_conflict" }, 409);
   }
+  const rowChanges = changesOf(Array.isArray(results) ? results[0] : undefined);
   resetTenantCache();
+  if (rowChanges !== 1) {
+    const current = await db.prepare("SELECT version FROM tenants WHERE tenant_id = ?").bind(tenantId).first<{ version: number }>();
+    return json({ error: "version_conflict", version: current?.version ?? null }, 409);
+  }
   const record = await readTenant(db, tenantId);
   return json({ tenant: record }, existing ? 200 : 201);
+}
+
+/** The row-change count of one batched statement, as D1 and the test fixture report it. */
+function changesOf(result: unknown): number | null {
+  if (!result || typeof result !== "object") return null;
+  const meta = (result as { meta?: { changes?: unknown } }).meta;
+  const changes = meta?.changes ?? (result as { changes?: unknown }).changes;
+  return typeof changes === "number" ? changes : typeof changes === "bigint" ? Number(changes) : null;
+}
+
+function storedSettings(settingsJson: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(settingsJson) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(parsed)) {
+      if (TENANT_SETTING_KEYS.includes(name) && typeof value === "string") out[name] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 const TOO_LARGE = Symbol("too_large");
 
 async function readJson(req: Request): Promise<unknown | typeof TOO_LARGE> {
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return TOO_LARGE;
   const text = await req.text();
   if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return TOO_LARGE;
   try {

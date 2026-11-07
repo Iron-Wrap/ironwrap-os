@@ -2247,7 +2247,6 @@ async function assemblePermit(args) {
     aggregate_digest: configDigest,
     tenant_digest: requireHash(context.component_digests?.tenant_config, "tenant_source_digest_invalid"),
     mcp_digest: requireHash(context.component_digests?.mcp, "mcp_source_digest_invalid"),
-    hermes_digest: requireHash(context.component_digests?.hermes, "hermes_source_digest_invalid"),
     bindings_digest: sha256(canonicalJson({ production: context.production_binding_manifest_digest, qa: context.qa_binding_manifest_digest })),
     queues_digest: sha256(canonicalJson({ production: context.production_queues_digest, qa: context.qa_queues_digest })),
     buckets_digest: sha256(canonicalJson({ production: context.production_buckets_digest, qa: context.qa_buckets_digest })),
@@ -2271,7 +2270,6 @@ async function assemblePermit(args) {
       ...artifactManifestFields,
       frappe_site_schema_digest: requireHash(context.frappe_schema_digest, "frappe_schema_digest_invalid"),
       mcp_digest: context.component_digests.mcp,
-      hermes_digest: context.component_digests.hermes,
     },
     configuration,
     migrations: {

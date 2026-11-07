@@ -59,7 +59,6 @@ const PREVIOUS_POLICY = sha("previous-policy");
 const ARTIFACT = sha("worker-artifact");
 const VERSION_DIGEST = sha("worker-version");
 const UPLOAD = sha("upload-receipt");
-const FINDINGS = sha("review-findings");
 const EVIDENCE = sha("evidence");
 const QA_VERSION = "11111111-1111-4111-8111-111111111111";
 const WORKER_VERSION = "22222222-2222-4222-8222-222222222222";
@@ -78,18 +77,6 @@ const DOMAIN_PROVIDER_RESULT = [{
   environment: "production",
 }];
 const DOMAIN_PROVIDER_READBACK_DIGEST = sha(canonicalJson(DOMAIN_PROVIDER_RESULT));
-
-function affectedScopes() {
-  return ["agent", "customer", "facet", "field", "finance", "production", "provider", "reception", "sales", "shop"].map((scope) => ({
-    scope,
-    status: "passed",
-    authenticated: true,
-    evidence_ref: `evidence:${scope}:synthetic`,
-    evidence_digest: sha(`scope:${scope}`),
-    non_applicability_policy_digest: null,
-    reason_digest: null,
-  }));
-}
 
 async function loadCapabilityContract(repoRoot) {
   const matrixPath = path.join(repoRoot, "docs", "CAPABILITY-MATRIX.md");

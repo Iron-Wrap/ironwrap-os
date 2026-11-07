@@ -674,7 +674,7 @@ test("native Newo projection survives a lost status response and reuses exact D1
     ctx as never,
   );
   assert.equal(accepted.status, 200);
-  assert.deepEqual(state.newoQueue, [{ newo_event_id: "event-001" }]);
+  assert.deepEqual(state.newoQueue, [{ newo_event_id: "event-001", tenant_id: "ironwrap" }]);
   assert.deepEqual(state.jnQueue.length, 1);
 
   state.db.failNextSyncUpdate = true;

@@ -1,5 +1,6 @@
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
+import { operatingTenantId } from "./core.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const EXTERNAL_EFFECT_STATES = [
@@ -712,6 +713,13 @@ export async function recoverExpiredExternalEffect(
   return recovered;
 }
 
+/** The tenant a sweep runs for: the env's, with the deployment default when unset. */
+function sweepTenantId(env: AppEnv): string {
+  const tenantId = operatingTenantId(env.APP_TENANT_ID);
+  if (!tenantId) throw new EffectRuntimeError("effect_tenant_invalid");
+  return tenantId;
+}
+
 /** Sweep abandoned remote/local leases into unknown reconciliation work. */
 export async function recoverExpiredExternalEffects(
   env: AppEnv,
@@ -720,12 +728,14 @@ export async function recoverExpiredExternalEffects(
 ): Promise<{ scanned: number; recovered: number; failed: number; failures: Array<{ effect_id: string; error: string }> }> {
   if (!Number.isFinite(Date.parse(now))) throw new EffectRuntimeError("effect_recovery_time_invalid");
   const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 100;
+  // This tenant's leases only: on a shared D1 another tenant's effect is recovered under its own
+  // env by its own cron pass, with its own credentials and alert addresses.
   const rows = await env.DB.prepare(
     `SELECT effect_id FROM external_effects
-      WHERE state IN ('executing', 'reconciling')
+      WHERE tenant_id = ? AND state IN ('executing', 'reconciling')
         AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
       ORDER BY lease_expires_at ASC LIMIT ?`,
-  ).bind(now, boundedLimit).all<{ effect_id: string }>();
+  ).bind(sweepTenantId(env), now, boundedLimit).all<{ effect_id: string }>();
   let recovered = 0;
   let failed = 0;
   const failures: Array<{ effect_id: string; error: string }> = [];

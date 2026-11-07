@@ -998,13 +998,17 @@ function normalizeSchemaSql(sql: string | null | undefined): string {
   return (sql ?? "").toLowerCase().replace(/\s+/g, "").replaceAll("ifnotexists", "");
 }
 
-/** Envelopes still pending past the threshold — the retry sweep re-drives these. */
+/**
+ * Envelopes still pending past the threshold — the retry sweep re-drives these. This tenant's
+ * only: a shared D1 holds every tenant's envelopes, and a re-drive of another tenant's row under
+ * this env would run `handlePush` against a tenant that cannot see it (`envelope_missing`).
+ */
 export async function listStuck(env: Env, thresholdMin: number, limit: number): Promise<EnvelopeRecord[]> {
   const cutoff = new Date(Date.now() - thresholdMin * 60_000).toISOString();
   const res = await env.DB.prepare(
-    `SELECT * FROM envelopes WHERE status = 'pending_jn_push' AND updated_at < ?
+    `SELECT * FROM envelopes WHERE tenant_id = ? AND status = 'pending_jn_push' AND updated_at < ?
      ORDER BY updated_at ASC LIMIT ?`,
-  ).bind(cutoff, limit).all<EnvelopeRecord>();
+  ).bind(requireEnvTenantId(env), cutoff, limit).all<EnvelopeRecord>();
   return res.results ?? [];
 }
 
@@ -1018,11 +1022,12 @@ export async function listRetryableEstimateOperatingCoreMaterializations(
   const res = await env.DB.prepare(
     `SELECT * FROM envelopes INDEXED BY idx_env_status
      WHERE status = 'received'
+       AND tenant_id = ?
        AND estimate_submission_key IS NOT NULL
        AND last_error LIKE 'native_operating_core:retry:%'
        AND updated_at < ?
      ORDER BY updated_at ASC LIMIT ?`,
-  ).bind(cutoff, limit).all<EnvelopeRecord>();
+  ).bind(requireEnvTenantId(env), cutoff, limit).all<EnvelopeRecord>();
   return res.results ?? [];
 }
 
@@ -1030,8 +1035,8 @@ export async function listRetryableEstimateOperatingCoreMaterializations(
 export async function countLandedByChannel(env: Env, day: string): Promise<Record<string, number>> {
   const res = await env.DB.prepare(
     `SELECT source AS channel, COUNT(*) AS n FROM envelopes
-     WHERE substr(created_at, 1, 10) = ? GROUP BY source`,
-  ).bind(day).all<{ channel: string; n: number }>();
+     WHERE tenant_id = ? AND substr(created_at, 1, 10) = ? GROUP BY source`,
+  ).bind(requireEnvTenantId(env), day).all<{ channel: string; n: number }>();
   const out: Record<string, number> = {};
   for (const r of res.results ?? []) out[r.channel] = r.n;
   return out;
@@ -1229,12 +1234,12 @@ export async function listReplayableDeadEnvelopeIds(
   const res = await env.DB.prepare(
     `SELECT d.envelope_id
      FROM dead_letter d
-     INNER JOIN envelopes e ON e.envelope_id = d.envelope_id
+     INNER JOIN envelopes e ON e.envelope_id = d.envelope_id AND e.tenant_id = ?
      WHERE d.recovered = 0 AND e.status = 'dead' AND d.envelope_id IS NOT NULL
        AND (? IS NULL OR d.envelope_id = ?)
      GROUP BY d.envelope_id
      ORDER BY MIN(d.ts) ASC`,
-  ).bind(selected, selected).all<{ envelope_id: string }>();
+  ).bind(requireEnvTenantId(env), selected, selected).all<{ envelope_id: string }>();
   return (res.results ?? []).map((row) => row.envelope_id);
 }
 
@@ -1302,7 +1307,7 @@ export async function listAutoReplayCandidates(
        WHERE d.recovered = 0 AND d.envelope_id IS NOT NULL
        GROUP BY d.envelope_id
      ) ep
-     INNER JOIN envelopes e ON e.envelope_id = ep.envelope_id
+     INNER JOIN envelopes e ON e.envelope_id = ep.envelope_id AND e.tenant_id = ?
      LEFT JOIN replay_requests r
             ON r.envelope_id = ep.envelope_id
            AND r.approved_by = ?
@@ -1312,7 +1317,7 @@ export async function listAutoReplayCandidates(
      GROUP BY ep.envelope_id, ep.dead_since
      ORDER BY ep.dead_since ASC
      LIMIT ?`,
-  ).bind(
+  ).bind(requireEnvTenantId(env), 
     DEAD_LETTER_SWEEP_APPROVER,
     REPLAY_NOOP_ERRORS[0],
     REPLAY_NOOP_ERRORS[1],

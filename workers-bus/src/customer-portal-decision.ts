@@ -1,3 +1,4 @@
+import { operatingTenantId } from "./core.ts";
 import {
   appPublicOrigin,
   authRequestContext,
@@ -183,11 +184,14 @@ export async function reconcileCustomerPortalDecisionAttempts(
   confirmationDeps: import("./portal-decision-confirmation.ts").PortalDecisionConfirmationDeps = {},
 ): Promise<void> {
   const nowValue = now.toISOString();
+  // This tenant's intents only: a confirmation sent under another tenant's env would carry that
+  // tenant's brand and sender.
+  const sweepTenant = operatingTenantId(env.APP_TENANT_ID) ?? "";
   const expired = await env.DB.prepare(
     `${decisionIntentSelect}
-     WHERE state = 'receipt_stored' AND frappe_attempted_at IS NOT NULL
+     WHERE tenant_id = ? AND state = 'receipt_stored' AND frappe_attempted_at IS NOT NULL
        AND frappe_attempt_lease_expires_at <= ?`,
-  ).bind(nowValue).all<DecisionIntent>();
+  ).bind(sweepTenant, nowValue).all<DecisionIntent>();
   await Promise.all((expired.results ?? []).map((intent) =>
     finalizeDecisionIntent(env, intent, {
       state: "uncertain",
@@ -200,7 +204,7 @@ export async function reconcileCustomerPortalDecisionAttempts(
 
   const pendingConfirmations = await env.DB.prepare(
     `${decisionIntentSelect}
-     WHERE state = 'recorded'
+     WHERE tenant_id = ? AND state = 'recorded'
        AND NOT EXISTS (
          SELECT 1 FROM portal_decision_confirmations confirmation
           WHERE confirmation.tenant_id = customer_portal_decision_intents.tenant_id
@@ -209,7 +213,7 @@ export async function reconcileCustomerPortalDecisionAttempts(
      )
      ORDER BY updated_at ASC, decision_id ASC
      LIMIT ?`,
-  ).bind(PORTAL_CONFIRMATION_RECONCILE_BATCH_SIZE).all<DecisionIntent>();
+  ).bind(sweepTenant, PORTAL_CONFIRMATION_RECONCILE_BATCH_SIZE).all<DecisionIntent>();
   for (const intent of pendingConfirmations.results ?? []) {
     try {
       await recordPortalDecisionConfirmation(env, {

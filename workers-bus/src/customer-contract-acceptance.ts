@@ -1,3 +1,4 @@
+import { operatingTenantId } from "./core.ts";
 import {
   appPublicOrigin,
   authRequestContext,
@@ -385,14 +386,24 @@ export async function handleCustomerPortalAcceptancePreview(
 export async function reconcileCustomerContractAcceptanceAttempts(
   env: AppEnv,
   now = new Date(),
+  options: {
+    /**
+     * The deposit-gate derivation walks the accepted contracts behind one cursor row whose name
+     * the schema pins to `scheduled-v1`, so one Worker has one such cursor. On a shared Worker
+     * only the default tenant's pass walks it; a registry tenant's accepted contracts wait for
+     * per-tenant cursors (a schema change), and its pass does the two expiry sweeps above only.
+     */
+    deriveDeposits?: boolean;
+  } = {},
 ): Promise<void> {
   const nowValue = now.toISOString();
+  const sweepTenant = operatingTenantId(env.APP_TENANT_ID) ?? "";
   const expired = await env.DB.prepare(
     `${acceptanceIntentSelect}
-     WHERE state = 'receipt_stored' AND frappe_attempted_at IS NOT NULL
+     WHERE tenant_id = ? AND state = 'receipt_stored' AND frappe_attempted_at IS NOT NULL
        AND frappe_attempt_lease_expires_at <= ?`,
   )
-    .bind(nowValue)
+    .bind(sweepTenant, nowValue)
     .all<AcceptanceIntent>();
   await Promise.all(
     (expired.results ?? []).map((intent) =>
@@ -408,22 +419,23 @@ export async function reconcileCustomerContractAcceptanceAttempts(
   await env.DB.prepare(
     `UPDATE customer_portal_acceptance_challenges
      SET state = 'invalidated', invalidated_at = ?
-     WHERE state IN ('pending_delivery', 'sent') AND expires_at <= ?`,
+     WHERE tenant_id = ? AND state IN ('pending_delivery', 'sent') AND expires_at <= ?`,
   )
-    .bind(nowValue, nowValue)
+    .bind(nowValue, sweepTenant, nowValue)
     .run();
+  if (options.deriveDeposits === false) return;
   const cursor = await env.DB.prepare(
     `SELECT last_tenant_id, last_acceptance_id
        FROM commercial_deposit_derivation_cursors WHERE cursor_name = 'scheduled-v1'`,
   ).first<{ last_tenant_id: string; last_acceptance_id: string }>();
-  const tenantCursor = cursor?.last_tenant_id === env.APP_TENANT_ID
+  const tenantCursor = cursor?.last_tenant_id === sweepTenant
     ? cursor.last_acceptance_id
     : "";
   const after = await env.DB.prepare(
     `SELECT acceptance_id, tenant_id FROM customer_portal_acceptance_intents
       WHERE tenant_id = ? AND state = 'accepted' AND acceptance_id > ?
       ORDER BY acceptance_id LIMIT ?`,
-  ).bind(env.APP_TENANT_ID, tenantCursor, ACCEPTANCE_RECOVERY_WINDOW)
+  ).bind(sweepTenant, tenantCursor, ACCEPTANCE_RECOVERY_WINDOW)
     .all<{ acceptance_id: string; tenant_id: string }>();
   const acceptedRows = [...(after.results ?? [])];
   if (tenantCursor && acceptedRows.length < ACCEPTANCE_RECOVERY_WINDOW) {
@@ -432,7 +444,7 @@ export async function reconcileCustomerContractAcceptanceAttempts(
         WHERE tenant_id = ? AND state = 'accepted' AND acceptance_id <= ?
         ORDER BY acceptance_id LIMIT ?`,
     ).bind(
-      env.APP_TENANT_ID,
+      sweepTenant,
       tenantCursor,
       ACCEPTANCE_RECOVERY_WINDOW - acceptedRows.length,
     ).all<{ acceptance_id: string; tenant_id: string }>();

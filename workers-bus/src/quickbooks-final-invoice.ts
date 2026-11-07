@@ -1,7 +1,7 @@
 import { sha256Hex } from "./app-auth.ts";
 import { assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
 import { canonicalJson as canonicalEffectJson } from "./canonical.ts";
-import { normalizeEmail, normalizePhone } from "./core.ts";
+import { normalizeEmail, normalizePhone, operatingTenantId } from "./core.ts";
 import { currentTaxPolicySnapshot } from "./accounting-tax-snapshots.ts";
 import {
   QuickBooksAuthError,
@@ -1606,9 +1606,9 @@ export async function recoverQuickBooksFinalInvoices(
   await repairSuccessorEffects(env, now);
   const due = await env.DB.prepare(
     `SELECT * FROM quickbooks_final_invoice_outbox
-      WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      WHERE tenant_id = ? AND state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
       ORDER BY created_at ASC LIMIT ?`,
-  ).bind(now.toISOString(), RECOVERY_LIMIT).all<OutboxRow>();
+  ).bind(operatingTenantId(env.APP_TENANT_ID) ?? "", now.toISOString(), RECOVERY_LIMIT).all<OutboxRow>();
   let effectsProcessed = 0;
   for (const effect of due.results ?? []) {
     if (await processEffect(env, effect, fetcher, now)) effectsProcessed += 1;
@@ -2423,22 +2423,23 @@ async function completeResolveEffect(
 }
 
 async function repairSuccessorEffects(env: AppEnv, now: Date): Promise<void> {
+  const sweepTenant = operatingTenantId(env.APP_TENANT_ID) ?? "";
   const submitted = await env.DB.prepare(
     `SELECT i.* FROM quickbooks_final_invoice_intents i
-      WHERE i.state IN ('submitted','reconciliation_required')
+      WHERE i.tenant_id = ? AND i.state IN ('submitted','reconciliation_required')
         AND i.provider_invoice_id IS NOT NULL AND i.provider_submitted_at IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM quickbooks_final_invoice_outbox o
            WHERE o.tenant_id = i.tenant_id AND o.intent_id = i.intent_id AND o.operation = 'bind'
         )
       ORDER BY i.updated_at ASC LIMIT ?`,
-  ).bind(RECOVERY_LIMIT).all<FinalInvoiceRow>();
+  ).bind(sweepTenant, RECOVERY_LIMIT).all<FinalInvoiceRow>();
   for (const row of submitted.results ?? [])
     await enqueueSystemEffect(env, row, "bind", `bind:${row.provider_invoice_id}`, now);
 
   const bound = await env.DB.prepare(
     `SELECT i.* FROM quickbooks_final_invoice_intents i
-      WHERE i.provider_invoice_id IS NOT NULL
+      WHERE i.tenant_id = ? AND i.provider_invoice_id IS NOT NULL
         AND EXISTS (
           SELECT 1 FROM quickbooks_final_invoice_outbox o
            WHERE o.tenant_id = i.tenant_id AND o.intent_id = i.intent_id
@@ -2449,7 +2450,7 @@ async function repairSuccessorEffects(env: AppEnv, now: Date): Promise<void> {
            WHERE o.tenant_id = i.tenant_id AND o.intent_id = i.intent_id AND o.operation = 'readback'
         )
       ORDER BY i.updated_at ASC LIMIT ?`,
-  ).bind(RECOVERY_LIMIT).all<FinalInvoiceRow>();
+  ).bind(sweepTenant, RECOVERY_LIMIT).all<FinalInvoiceRow>();
   for (const row of bound.results ?? [])
     await enqueueSystemEffect(env, row, "readback", `readback:${row.provider_invoice_id}`, now);
 
@@ -2477,9 +2478,9 @@ async function recoverStaleEffects(env: AppEnv, now: Date): Promise<void> {
   const cutoff = new Date(now.getTime() - STALE_EFFECT_LEASE_MS).toISOString();
   const stale = await env.DB.prepare(
     `SELECT * FROM quickbooks_final_invoice_outbox
-      WHERE state = 'attempting' AND updated_at <= ?
+      WHERE tenant_id = ? AND state = 'attempting' AND updated_at <= ?
       ORDER BY updated_at ASC LIMIT ?`,
-  ).bind(cutoff, RECOVERY_LIMIT).all<OutboxRow>();
+  ).bind(operatingTenantId(env.APP_TENANT_ID) ?? "", cutoff, RECOVERY_LIMIT).all<OutboxRow>();
   for (const effect of stale.results ?? []) {
     const retry = effect.attempt_count < 3;
     const terminalState = effect.operation === "submit" ? "unknown" : "failed";

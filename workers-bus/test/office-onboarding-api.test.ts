@@ -110,7 +110,7 @@ test("a fresh tenant takes its first lead from the app, not from a bearer-token 
   // the native operating core (and therefore the sales desk) materialize.
   assert.equal(db.envelopes.length, 1);
   assert.equal(db.envelopes[0]!.source, "manual");
-  assert.deepEqual(queued, [{ envelope_id: body.lead.envelope_id }]);
+  assert.deepEqual(queued, [{ envelope_id: body.lead.envelope_id, tenant_id: "freshco" }]);
 });
 
 test("the same person entered twice returns the original lead instead of a second one", async () => {

@@ -825,7 +825,7 @@ test("an unbound host keeps a saved close until the Worker names its tenant", as
 });
 
 test("the data class the Worker names must be the host's own", async (t) => {
-  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "business" }));
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "synthetic" }));
   const { options } = runner(t, worker, async (request) => okResult(request));
   const tenant = new TenantBinding("tenant-a", options.stateDir, options.log, "synthetic");
   const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant });
@@ -833,7 +833,47 @@ test("the data class the Worker names must be the host's own", async (t) => {
   await host.tick();
   assert.equal(worker.opened.length, 0);
   assert.match((await host.status()).lastPollError ?? "", /^data_class_mismatch/);
+  // The same stop as another tenant: its own alert, and no heartbeat to that Worker either.
+  assert.ok((await host.status()).alerts.includes("data_class_mismatch"));
+  await host.heartbeat();
+  assert.equal(worker.heartbeats.length, 0);
   worker.batches.push({ signals: [signal()], next_cursor: "c1", tenant_id: "tenant-a", data_class: "synthetic" });
   await host.tick();
-  await assert.rejects(runSignal({ ...options, tenant }, signal({ signal_id: "sig_0003" })), /data_class_mismatch/);
+  assert.ok(!(await host.status()).alerts.includes("data_class_mismatch"));
+  // A run opened for the other data class stops before any provider call too.
+  const business = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "business" }));
+  await assert.rejects(runSignal({ ...options, worker: business, tenant }, signal({ signal_id: "sig_0003" })), /data_class_mismatch/);
+});
+
+test("saved closes still go out while the signals route fails, once the tenant was confirmed", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a" }));
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const tenant = new TenantBinding("tenant-a", options.stateDir, options.log);
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant });
+  worker.failClose = 2;
+  await runSignal({ ...options, tenant }, signal());
+  assert.equal(closeBacklog(options.stateDir, Date.now()).pending, 1);
+  // Nothing in this process has confirmed the tenant yet: a failing signals route holds the close.
+  worker.batches.push(new WorkerError(400, "invalid_query", "bad cursor"));
+  await host.tick();
+  assert.equal(worker.closed.length, 0);
+  // One confirming answer (here the heartbeat), then the close goes out even though signals keep failing.
+  worker.heartbeatReply = { tenant_id: "tenant-a" };
+  await host.heartbeat();
+  worker.batches.push(new WorkerError(400, "invalid_query", "bad cursor"));
+  await host.tick();
+  assert.equal(worker.closed.length, 1);
+  assert.match((await host.status()).lastPollError ?? "", /bad cursor/);
+});
+
+test("a run the Worker answers for another tenant outranks the batch's other failures", async (t) => {
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-b" }));
+  const { options } = runner(t, worker, async (request) => okResult(request));
+  const tenant = new TenantBinding("tenant-a", options.stateDir, options.log);
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir: options.stateDir, tenant });
+  worker.batches.push({ signals: [signal(), signal({ signal_id: "sig_0002" })], next_cursor: "c1", tenant_id: "tenant-a" });
+  await host.tick();
+  assert.ok((await host.status()).alerts.includes("tenant_mismatch"));
+  await host.heartbeat();
+  assert.equal(worker.heartbeats.length, 0);
 });

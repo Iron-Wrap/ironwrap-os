@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { GatewayHealth } from "../gateway/gateway.ts";
 import { closeBacklog, retryPendingCloses, runSignal, type CloseBacklog, type RunnerOptions } from "./runner.ts";
-import { TenantMismatch } from "./tenant.ts";
+import { DataClassMismatch, TenantMismatch } from "./tenant.ts";
 import type { Signal, WorkerClient } from "./worker.ts";
 
 type ServiceWorker = RunnerOptions["worker"] & Pick<WorkerClient, "signals" | "heartbeat">;
@@ -50,8 +50,10 @@ export class AgentHostService {
   private cursor: string | null;
   private lastWorkerContactAt: number | null = null;
   private lastPollError: string | null = null;
-  /** Set while the Worker's last answer was for another tenant; cleared by the next matching batch. */
-  private tenantMismatch = false;
+  /** The Worker's last checked answer was for another tenant (or data class); the next matching batch clears it. */
+  private tenantMismatch: TenantMismatch | null = null;
+  /** A Worker answer in this process passed the tenant check, so saved closes may go to it. */
+  private tenantConfirmed = false;
   private inFlight = 0;
   private loops: Promise<void>[] = [];
 
@@ -94,7 +96,7 @@ export class AgentHostService {
       // Another tenant's batch is not dispatched, the cursor stays put and no saved close goes out
       // (`tenant_mismatch`); the closes wait here so they only ever reach this host's own tenant.
       this.options.tenant?.check(tenant_id, "signals", data_class);
-      this.tenantMismatch = false;
+      this.confirmTenant();
       await retryPendingCloses(this.runnerOptions);
       await this.dispatch(signals);
       if (next_cursor && next_cursor !== this.cursor) this.saveCursor(next_cursor);
@@ -102,17 +104,31 @@ export class AgentHostService {
       // flip readiness back and forth.
       this.lastPollError = null;
     } catch (error) {
-      if (error instanceof TenantMismatch) this.tenantMismatch = true;
+      if (error instanceof TenantMismatch) this.noteMismatch(error);
       this.lastPollError = error instanceof Error ? error.message : String(error);
       this.options.log({ event: "batch_failed", error: this.lastPollError });
+      // The signals route failing (a bad cursor, a D1 error in the list) must not strand closes the
+      // close route would take: they still go out once an answer in this process confirmed the tenant.
+      if (!(error instanceof TenantMismatch) && this.tenantConfirmed) await retryPendingCloses(this.runnerOptions);
     }
+  }
+
+  private confirmTenant(): void {
+    this.tenantMismatch = null;
+    this.tenantConfirmed = true;
+  }
+
+  private noteMismatch(error: TenantMismatch): void {
+    this.tenantMismatch = error;
+    this.tenantConfirmed = false;
   }
 
   /** One heartbeat, with health sampled just before it is sent. Never throws. */
   async heartbeat(): Promise<void> {
     try {
       // A Worker that answers for another tenant gets no health report either; the work loop clears
-      // this once a batch names this host's tenant again.
+      // this once a batch names this host's tenant again. (The very first heartbeat after a start can
+      // reach a re-pointed Worker before any check: health counters only, and its reply stops the next.)
       if (this.tenantMismatch) {
         this.options.log({ event: "heartbeat_skipped", reason: "tenant_mismatch" });
         return;
@@ -137,8 +153,9 @@ export class AgentHostService {
       this.lastWorkerContactAt = this.now();
       // The first heartbeat is normally where an unpinned host learns its tenant.
       this.options.tenant?.check(reply?.tenant_id, "heartbeat", reply?.data_class);
+      this.confirmTenant();
     } catch (error) {
-      if (error instanceof TenantMismatch) this.tenantMismatch = true;
+      if (error instanceof TenantMismatch) this.noteMismatch(error);
       this.options.log({ event: "heartbeat_failed", error: error instanceof Error ? error.message : String(error) });
     }
   }
@@ -152,7 +169,7 @@ export class AgentHostService {
     if (!workerReachable) alerts.push("worker_unreachable");
     // A batch that keeps failing stalls the feed even while heartbeats get through.
     if (this.lastPollError !== null) alerts.push("batch_failing");
-    if (this.tenantMismatch) alerts.push("tenant_mismatch");
+    if (this.tenantMismatch) alerts.push(this.tenantMismatch instanceof DataClassMismatch ? "data_class_mismatch" : "tenant_mismatch");
     if (backlog.oldestPendingMs !== null && backlog.oldestPendingMs > window) alerts.push("closes_pending");
     if (backlog.rejectedCloses > 0) alerts.push("closes_rejected");
     if (backlog.rejectedSignals > 0) alerts.push("signals_rejected");
@@ -194,8 +211,11 @@ export class AgentHostService {
     });
     // Let every in-flight run finish; any failure (including a stop) leaves the cursor where it
     // was, so the batch is re-delivered and already-closed runs are skipped by their host_run_key.
-    const failed = (await Promise.allSettled(workers)).find((result) => result.status === "rejected");
-    if (failed) throw (failed as PromiseRejectedResult).reason;
+    const failed = (await Promise.allSettled(workers)).filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    // A run the Worker answered for another tenant outranks any other failure of the batch.
+    const mismatch = failed.find((result) => result.reason instanceof TenantMismatch);
+    if (mismatch) throw mismatch.reason;
+    if (failed.length > 0) throw failed[0].reason;
   }
 
   private saveCursor(cursor: string): void {

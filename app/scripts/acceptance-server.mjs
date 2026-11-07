@@ -3367,10 +3367,12 @@ const requestListener = async (request, response) => {
   // The Worker answers the manifest per tenant under /api/v1 (workers-bus/src/web-manifest.ts),
   // so the fixture serves the vite-built copy there with the Worker's headers.
   if (requestUrl.pathname === "/api/v1/manifest.webmanifest") {
-    if (method !== "GET" && method !== "HEAD") {
-      return sendJson(response, method, 405, { error: "method_not_allowed" });
+    let manifest;
+    try {
+      manifest = await readFile(resolve(DIST_DIR, "api/v1/manifest.webmanifest"));
+    } catch {
+      return sendJson(response, method, 404, { error: "not_found" });
     }
-    const manifest = await readFile(resolve(DIST_DIR, "api/v1/manifest.webmanifest"));
     response.writeHead(200, {
       "Cache-Control": "no-store",
       "Content-Type": contentTypes[".webmanifest"],

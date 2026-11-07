@@ -26,6 +26,15 @@ export class TenantMismatch extends Error {
   }
 }
 
+/** The Worker's data class is not this host's: the same stop as another tenant, named apart. */
+export class DataClassMismatch extends TenantMismatch {
+  constructor(expected: string, reported: string, where: string) {
+    super(expected, reported, where);
+    this.name = "DataClassMismatch";
+    this.message = `data_class_mismatch: the Worker answered ${where} for ${reported} data, this host is ${expected}`;
+  }
+}
+
 export class TenantBinding {
   private tenant: string | null;
   private readonly stateDir: string;
@@ -59,7 +68,7 @@ export class TenantBinding {
   check(reported: unknown, where: string, dataClass?: unknown): string | null {
     if (this.dataClass !== null && typeof dataClass === "string" && dataClass !== this.dataClass) {
       this.log({ event: "data_class_mismatch", expected: this.dataClass, reported: dataClass, where });
-      throw new Error(`data_class_mismatch: the Worker answered ${where} for ${dataClass} data, this host is ${this.dataClass}`);
+      throw new DataClassMismatch(this.dataClass, dataClass, where);
     }
     const named = typeof reported === "string" && TENANT_ID.test(reported) ? reported : null;
     if (this.tenant === null) {

@@ -7,6 +7,7 @@ import worker from "../src/index.ts";
 import { sessionHashFor } from "../src/app-auth.ts";
 import {
   CLONE_ONLY_VARS,
+  WORKER_WIDE_NAMES,
   TENANT_MISS_TTL_MS,
   TENANT_SECRET_NAMES,
   TENANT_SETTING_KEYS,
@@ -95,6 +96,30 @@ test("every var a white-label clone rewrites is either a registry setting or a n
   }
 });
 
+test("every declared var and secret is classified exactly once: tenant setting, clone-only, tenant secret or Worker-wide", () => {
+  const declared = new Set<string>();
+  for (const file of ["../src/var-bindings.d.ts", "../src/secret-bindings.d.ts"]) {
+    const source = readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const match of source.matchAll(/^\s{2,4}([A-Z][A-Z0-9_]+): string;$/gm)) declared.add(match[1]);
+  }
+  const lists: Array<[string, readonly string[]]> = [
+    ["TENANT_SETTING_KEYS", TENANT_SETTING_KEYS],
+    ["CLONE_ONLY_VARS", CLONE_ONLY_VARS],
+    ["TENANT_SECRET_NAMES", TENANT_SECRET_NAMES],
+    ["WORKER_WIDE_NAMES", WORKER_WIDE_NAMES],
+  ];
+  for (const name of declared) {
+    const homes = lists.filter(([, list]) => list.includes(name)).map(([label]) => label);
+    assert.equal(homes.length, 1, `${name} is classified ${homes.length === 0 ? "nowhere" : `twice: ${homes.join(", ")}`}; a tenant-bearing var the overlay does not clear is inherited from the Worker tenant`);
+  }
+  for (const [label, list] of lists) {
+    for (const name of list) {
+      // A clone-derived var the generator still rewrites may outlive its binding; nothing else may.
+      assert.ok(declared.has(name) || name in TENANT_SCOPED_VARS, `${label} names ${name}, which no binding declares`);
+    }
+  }
+});
+
 test("tenant secrets are declared Worker secrets, never the Worker-wide keys", () => {
   const source = readFileSync(new URL("../src/secret-bindings.d.ts", import.meta.url), "utf8");
   const declared = new Set([...source.matchAll(/^\s{2,4}([A-Z][A-Z0-9_]+): string;$/gm)].map((match) => match[1]));
@@ -149,7 +174,15 @@ test("a registered host lays the tenant's identity, settings and secrets over en
       __secret_names: ["AGENT_HOST_TOKEN"],
     },
   });
-  const env = multiTenantEnv(db, { EFFECT_RUNTIME_ENABLED: "false", INGEST_TOKEN: "worker-ingest", FROM_EMAIL: "ops@a.example.invalid", ERPNEXT_BASE_URL: "https://frappe.a.example.invalid" });
+  const env = multiTenantEnv(db, {
+    EFFECT_RUNTIME_ENABLED: "false",
+    INGEST_TOKEN: "worker-ingest",
+    FROM_EMAIL: "ops@a.example.invalid",
+    ERPNEXT_BASE_URL: "https://frappe.a.example.invalid",
+    NEWO_OWNER_TRANSFER_NUMBER: "+15875550199",
+    PROPOSAL_TEMPLATE_DOC_ID: "doc-a",
+    NEWO_ENABLED: "true",
+  });
   const resolution = await resolveRequestTenant(request(HOST_B), env as never);
   assert.equal(resolution.kind, "tenant");
   if (resolution.kind !== "tenant") return;
@@ -162,6 +195,9 @@ test("a registered host lays the tenant's identity, settings and secrets over en
   assert.equal(overlay.APP_LOCALE, undefined, "a setting the tenant did not set is unset, never the Worker tenant's");
   assert.equal(overlay.FROM_EMAIL, undefined, "the Worker tenant's mailbox never sends for another tenant");
   assert.equal(overlay.ERPNEXT_BASE_URL, undefined, "a clone-only bridge var is cleared for a registry tenant");
+  assert.equal(overlay.NEWO_OWNER_TRANSFER_NUMBER, undefined, "the Worker tenant's owner phone never takes another tenant's transfers");
+  assert.equal(overlay.PROPOSAL_TEMPLATE_DOC_ID, undefined, "the Worker tenant's proposal template is not another tenant's");
+  assert.equal(overlay.NEWO_ENABLED, "true", "a product flag stays the Worker's");
   assert.equal(overlay.AGENT_HOST_TOKEN, "tenant-b-agent-token");
   assert.equal(overlay.INGEST_TOKEN, undefined, "a secret the tenant did not seal is unset, so the Worker tenant's token opens nothing here");
   assert.equal(overlay.ADMIN_TOKEN, "root-admin-token", "ADMIN_TOKEN is the hosting operator's on every host");

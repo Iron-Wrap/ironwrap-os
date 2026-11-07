@@ -701,15 +701,20 @@ envelope that does not open under `TENANT_SECRETS_KEK` answers `503` (`tenant_su
 tenant. `/health` never waits on the registry. One isolate trusts a registry read for 60 s and a
 miss for 5 s, so a suspension or a rotated token reaches every isolate within a minute.
 
-A tenant row may set only tenant-scoped vars (`TENANT_SETTING_KEYS`: name, brand, locale, time
-zone, currency, sender mailboxes, public origin and allowed origins, public-estimate origins and
-brands, Shared Drive ids, the QuickBooks realm, `AGENT_DATA_CLASS` and
-`COMMERCIAL_AUTHORITY_POLICY_JSON`) and only tenant-scoped secrets (`TENANT_SECRET_NAMES`: the
-ingest, effect-runtime and agent-host tokens, webhook tokens and provider keys). The retired
-Frappe and Facet bridge vars a clone still derives (`CLONE_ONLY_VARS`) are cleared for a registry
-tenant, because the Worker reaches those destinations with credentials that are not sealable per
-tenant. Product flags, timeouts and the Worker-wide keys (`TENANT_SECRETS_KEK`,
-`QB_TOKEN_ENCRYPTION_KEY`, `APP_AUTH_PEPPER`) are never per tenant, and neither is `ADMIN_TOKEN`:
+Every declared var and secret belongs to exactly one of four lists in `src/tenancy.ts`, pinned
+by a test so a new name cannot ship unclassified. A tenant row may set the tenant settings
+(`TENANT_SETTING_KEYS`: name, brand, locale, time zone, currency, sender mailboxes, public origin
+and allowed origins, public-estimate origins, brands, jurisdiction and range rules, Shared Drive
+ids, the QuickBooks realm, the tenant's own Newo project, agent, numbers, people and knowledge
+base, its JobNimbus record shape, Postiz providers, price list, proposal template, automation
+user, `AGENT_DATA_CLASS` and `COMMERCIAL_AUTHORITY_POLICY_JSON`) and seal the tenant secrets
+(`TENANT_SECRET_NAMES`: the ingest, effect-runtime and agent-host tokens, webhook tokens and
+provider keys). The retired Frappe and Facet bridge vars and credentials a clone still derives
+(`CLONE_ONLY_VARS`) are cleared for a registry tenant, because the Worker reaches those
+destinations with credentials that are not sealable per tenant. Product flags, provider URLs,
+timeouts, schema hashes and the Worker-wide keys (`WORKER_WIDE_NAMES`: `TENANT_SECRETS_KEK`,
+`QB_TOKEN_ENCRYPTION_KEY`, `APP_AUTH_PEPPER`, the Turnstile and rate-limit secrets) are never per
+tenant, and neither is `ADMIN_TOKEN`:
 `/admin/*` reads tables that carry no tenant column (the audit log, dead letters, webhook
 receipts, Newo sessions), so it is the hosting operator's surface on every host, and those tables
 are shared between tenants until a follow-up migration scopes them. Secrets are sealed with

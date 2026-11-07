@@ -35,6 +35,8 @@ interface Env {
   APP_FIRST_OWNER_BOOTSTRAP_ENABLED: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS: string;
   APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: string;
+  /** One shared Worker resolves the tenant per request from the registry (tenancy.ts); false keeps the build-time tenant. */
+  APP_MULTI_TENANT_ENABLED: string;
   NEWO_PRODUCTION_REQUIRED: string;
   NEWO_ENABLED: string;
   NEWO_CONTROL_WRITE_ENABLED: string;
@@ -160,6 +162,7 @@ declare namespace Cloudflare {
     APP_FIRST_OWNER_BOOTSTRAP_ENABLED: string;
     APP_FRAPPE_REQUEST_TIMEOUT_MS: string;
     APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: string;
+    APP_MULTI_TENANT_ENABLED: string;
     NEWO_PRODUCTION_REQUIRED: string;
     NEWO_ENABLED: string;
     NEWO_CONTROL_WRITE_ENABLED: string;

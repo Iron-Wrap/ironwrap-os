@@ -65,6 +65,11 @@ EFFECT_RUNTIME_TOKEN=""
 # keeps the agent API dark (404).
 AGENT_HOST_TOKEN="dev-agent-host-token-change-me"
 
+# 32-byte key (64 hex characters) that seals the secrets of each tenant registered through
+# /admin/tenants when APP_MULTI_TENANT_ENABLED is true (src/tenancy.ts). Generate one with
+# `openssl rand -hex 32`. Rotating it re-seals every registry row; the Worker never logs it.
+TENANT_SECRETS_KEK=""
+
 # Independent, false-by-default stage-change automation feature flag.
 # PIPELINE_AUTOMATION_ENABLED="false"
 

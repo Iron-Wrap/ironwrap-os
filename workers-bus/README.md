@@ -676,11 +676,45 @@ path and UI integration are accepted.
 
 ## PWA auth and tenant boundary
 
-This slice is intentionally **one tenant + one Worker deployment**. `APP_TENANT_ID` is the
+By default this is **one tenant + one Worker deployment**. `APP_TENANT_ID` is the
 deployment/session isolation boundary: provisioning rejects any other tenant, every session joins
 back to an active user on that tenant, and the BFF rejects a session whose tenant differs. If a
 Frappe compatibility site is enabled, it is dedicated to that same tenant. A reseller tenant gets a
-separate deployment and credential set until record-level tenant isolation is proven.
+separate deployment and credential set until record-level tenant isolation is proven, or, behind
+`APP_MULTI_TENANT_ENABLED`, a row in the tenant registry (below).
+
+### Shared multi-tenant runtime (`APP_MULTI_TENANT_ENABLED`, default `false`)
+
+With the flag on, one Worker serves several tenants and resolves the tenant per request
+(`src/tenancy.ts`, migration 0209): the request hostname is looked up in `tenant_hosts`, and the
+matching `tenants` row's settings and secrets are laid over `env` before any handler runs, so
+every `env.APP_TENANT_ID` reader below the entry point sees the request's tenant. A hostname
+nobody registered resolves to the Worker's own tenant, so turning the flag on with an empty
+registry changes nothing. Tokens then bind to the resolved tenant: a session, capability link or
+bearer token of tenant B presented on tenant A's host is not found or does not match, exactly as
+between two separate Workers. A suspended tenant, a registry read that fails or a secrets envelope
+that does not open under `TENANT_SECRETS_KEK` answers `503` (`tenant_suspended`,
+`tenant_unavailable`, `tenant_secrets_unavailable`) rather than falling back to the Worker tenant.
+`/health` never waits on the registry. One isolate trusts a registry read for 60 s.
+
+A tenant row may set only tenant-scoped vars (`TENANT_SETTING_KEYS`: name, brand, locale, time
+zone, currency, sender mailboxes, public origin and allowed origins, public-estimate origins and
+brands, Facet route and launch vars, Shared Drive ids, the QuickBooks realm, `AGENT_DATA_CLASS`
+and `COMMERCIAL_AUTHORITY_POLICY_JSON`) and only tenant-scoped secrets (`TENANT_SECRET_NAMES`:
+the ingest, admin, effect-runtime and agent-host tokens, webhook tokens and provider keys).
+Product flags, timeouts and the Worker-wide keys (`TENANT_SECRETS_KEK`, `QB_TOKEN_ENCRYPTION_KEY`,
+`APP_AUTH_PEPPER`) are never per tenant. Secrets are sealed with AES-GCM under
+`TENANT_SECRETS_KEK` (a 32-byte key, 64 hex characters; `openssl rand -hex 32`), bound to the
+tenant id and key version, and never read back.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/admin/tenants` | `Bearer ADMIN_TOKEN` (the Worker's own) | every registry tenant with its hosts, settings and secret names; never secret values |
+| GET | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` (the Worker's own) | one registry tenant |
+| PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` (the Worker's own) | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`), a host owned by another tenant is refused (`409 host_taken`), `secrets` replaces the whole envelope and `{}` empties it; the Worker's own tenant may take hosts here and nothing else |
+
+The registry is administered from the Worker's own env, before tenant resolution, so a tenant's
+sealed `ADMIN_TOKEN` administers that tenant's records and never the registry.
 The magic-link request body is `{ "email": "…" }`; the Worker infers its configured tenant. A
 legacy caller may also send `tenant_id`, but a mismatch still receives the same generic `202` and
 never selects another tenant.

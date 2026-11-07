@@ -159,7 +159,11 @@
       "APP_ALLOW_INSECURE_LOCAL": "false",
       "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
       "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-      "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": ""
+      "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
+      // One shared Worker serving several tenants, resolved per request from the host through the
+      // tenant registry (migration 0209, tenancy.ts). Off keeps the build-time tenant; on with no
+      // registered tenant changes nothing. Turning it on needs the TENANT_SECRETS_KEK secret.
+      "APP_MULTI_TENANT_ENABLED": "false"
     },
     "CFG_NEWO": {
       "NEWO_PRODUCTION_REQUIRED": "false",
@@ -387,7 +391,8 @@
           "APP_ALLOW_INSECURE_LOCAL": "true",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": ""
+          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
+          "APP_MULTI_TENANT_ENABLED": "false"
         },
         "CFG_NEWO": {
           "NEWO_PRODUCTION_REQUIRED": "false",
@@ -603,7 +608,8 @@
           "APP_ALLOW_INSECURE_LOCAL": "false",
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
-          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": ""
+          "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
+          "APP_MULTI_TENANT_ENABLED": "false"
         },
         "CFG_NEWO": {
           // Newo is not required in qa until it is enabled there separately (owner

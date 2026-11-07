@@ -26,6 +26,8 @@ import {
 } from "./core.ts";
 import * as store from "./store.ts";
 import { flattenEnv } from "./env-bindings.ts";
+import { resolveRequestTenant } from "./tenancy.ts";
+import { handleTenantAdmin, isTenantAdminPath } from "./tenant-admin.ts";
 import {
   BULK_REPLAY_CONFIRMATION,
   executeReplayRequest,
@@ -242,13 +244,33 @@ export default {
     boundEnv: Env,
     ctx: ExecutionContext,
   ): Promise<Response> {
-    const env = flattenEnv(boundEnv);
+    const rootEnv = flattenEnv(boundEnv);
+    let env = rootEnv;
     const requestId = requestIdFor(req);
     const startedAt = Date.now();
     let response: Response;
     let errorCode: string | null = null;
     try {
-      response = await routeRequest(withRequestId(req, requestId), env, ctx);
+      const pathname = new URL(req.url).pathname;
+      if (isTenantAdminPath(pathname)) {
+        // The registry is administered from the Worker's own env and its own ADMIN_TOKEN,
+        // never through a tenant overlay (tenant-admin.ts).
+        response = await handleTenantAdmin(withRequestId(req, requestId), rootEnv);
+      } else if (pathname === "/health") {
+        // Liveness never waits on the registry.
+        response = await routeRequest(withRequestId(req, requestId), rootEnv, ctx);
+      } else {
+        // One shared Worker, many tenants: the host names the tenant, and its settings and
+        // secrets are laid over env before any handler runs (tenancy.ts). With the flag off
+        // this returns env as bound.
+        const resolution = await resolveRequestTenant(req, rootEnv);
+        if (resolution.kind === "refused") {
+          response = json({ error: resolution.refusal.error }, resolution.refusal.status);
+        } else {
+          env = resolution.env;
+          response = await routeRequest(withRequestId(req, requestId), env, ctx);
+        }
+      }
     } catch {
       errorCode = "unhandled_exception";
       response = json({ error: "internal" }, 500);

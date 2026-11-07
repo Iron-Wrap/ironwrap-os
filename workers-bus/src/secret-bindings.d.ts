@@ -11,6 +11,8 @@ interface Env {
   EFFECT_RUNTIME_TOKEN: string;
   /** The AI team host's bearer for /api/v1/agents/*; unset keeps that surface dark. */
   AGENT_HOST_TOKEN: string;
+  /** 32-byte key (64 hex or base64) that seals each registry tenant's secrets (tenancy.ts). */
+  TENANT_SECRETS_KEK: string;
   NEWO_WEBHOOK_TOKEN: string;
   NEWO_API_KEY: string;
   NEWO_BOOKING_TOKEN: string;
@@ -79,6 +81,7 @@ declare namespace Cloudflare {
     ADMIN_TOKEN: string;
     EFFECT_RUNTIME_TOKEN: string;
     AGENT_HOST_TOKEN: string;
+    TENANT_SECRETS_KEK: string;
     NEWO_WEBHOOK_TOKEN: string;
     NEWO_API_KEY: string;
     NEWO_BOOKING_TOKEN: string;

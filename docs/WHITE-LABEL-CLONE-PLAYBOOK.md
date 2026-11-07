@@ -10,8 +10,11 @@ Authority: `docs/AUTONOMOUS-OPERATING-SYSTEM.md`,
 
 ## Isolation Model
 
-One of each, per contractor. Nothing is shared. Multi-tenant consolidation remains deferred until
-the cloneable shape is proven with isolation, export, restore, and negative cross-tenant tests.
+One of each, per contractor. Nothing is shared. This is the proven shape. The shared
+multi-tenant runtime (`APP_MULTI_TENANT_ENABLED`, off by default; `workers-bus/README.md`
+"Shared multi-tenant runtime") lets one Worker serve several tenants from a tenant registry
+instead, resolved per request from the hostname; it is the path for a hosted vertical product
+and stays off until its negative cross-tenant tests cover the data layer, queues and crons.
 
 | Layer | Per-tenant unit | Repo artifact |
 | --- | --- | --- |
@@ -111,7 +114,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0206_agent_draft_closing.sql`; `node tools/validate-documentation.mjs`
+   `0209_tenant_registry.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -220,7 +223,7 @@ recovery boundaries.
   and the tenant owner has added at least one recipient on the Recipients screen
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
-- [ ] All 149 D1 migrations through `0206_agent_draft_closing.sql` applied to the tenant database.
+- [ ] All 150 D1 migrations through `0209_tenant_registry.sql` applied to the tenant database.
 - [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
   unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
   an older snapshot, elapsed time or empty RAW read does not authorize clearing them.

@@ -291,9 +291,12 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
   ];
   try {
     await db.batch(statements);
-  } catch {
-    // A primary-key clash on a concurrent create, or a CHECK the row failed: nothing was written.
-    return json({ error: "tenant_write_conflict" }, 409);
+  } catch (error) {
+    // Nothing was written either way. A primary-key clash on a concurrent create, or a CHECK the
+    // row failed, is this write's conflict; anything else (a D1 outage, the account's D1 quota, a
+    // network failure) is the registry being unavailable, which the operator must not mistake for
+    // another writer.
+    return json({ error: isConstraintFailure(error) ? "tenant_write_conflict" : "tenant_registry_unavailable" }, isConstraintFailure(error) ? 409 : 503);
   }
   resetTenantCache();
   // The row says whose write it carries, independent of how the batch reports row changes.
@@ -343,4 +346,10 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
+}
+
+/** D1 names a failed CHECK, UNIQUE or FOREIGN KEY as `... constraint failed ...: SQLITE_CONSTRAINT`. */
+function isConstraintFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /constraint failed|SQLITE_CONSTRAINT/i.test(message);
 }

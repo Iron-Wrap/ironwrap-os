@@ -768,8 +768,16 @@ unregistered or malformed one is refused (`404 tenant_unknown`), a forwarded hos
 proof is refused (`403 tenant_proxy_untrusted`), never read and never silently defaulted; a request
 without the header is keyed by its URL hostname, and an unregistered URL hostname is the Worker's
 own tenant so the deployed hostnames keep working. The Worker tenant's own proxied domains are
-registered against it like any other host (the registry takes hosts for the Worker tenant). The
-proxy must overwrite any client-supplied `x-ironwrap-*` header, never pass it through. One token
+registered against it like any other host (the registry takes hosts for the Worker tenant), and
+before any proxy starts sending the header, else its domain answers `404`:
+
+```bash
+curl -X PUT "$QA_BASE_URL/admin/tenants/ironwrap" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"display_name":"IronWrap OS — QA","status":"active","data_class":"synthetic","hosts":["qa-iwrap.mindburn.org"]}'
+```
+
+The proxy must overwrite any client-supplied `x-ironwrap-*` header, never pass it through. One token
 for every proxy of a deployment; rotating it is a new secret value on the Worker and on each
 proxy, with a short window in which old proxies are refused.
 

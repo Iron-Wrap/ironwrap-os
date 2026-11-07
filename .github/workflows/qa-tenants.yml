@@ -44,19 +44,26 @@ concurrency:
 
 jobs:
   register:
-    # The qa admin bearer runs only the tool main ships, never a branch's copy of it.
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: qa
     timeout-minutes: 5
     steps:
+      # The qa admin bearer runs only the tool main ships, never a branch's copy of it: a dispatch
+      # from another ref fails here, visibly, instead of being skipped green.
+      - name: Refuse a dispatch from any ref but main
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" || { echo "ref_not_main: dispatch this workflow from main ($GITHUB_REF was given)" >&2; exit 1; }
       - name: Refuse to interleave with a qa release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          running="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow Deploy --status in_progress --json databaseId --jq 'length')"
-          test "$running" = "0" || { echo "deploy_in_progress: $running Deploy run(s) running; dispatch again after they finish" >&2; exit 1; }
+          active=0
+          for status in in_progress queued waiting requested pending; do
+            count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow Deploy --status "$status" --json databaseId --jq 'length')"
+            active=$((active + count))
+          done
+          test "$active" = "0" || { echo "deploy_active: $active Deploy run(s) running or queued; dispatch again after they finish" >&2; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

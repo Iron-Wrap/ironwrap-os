@@ -85,8 +85,10 @@ export class AgentHostService {
   async tick(): Promise<void> {
     try {
       await retryPendingCloses(this.runnerOptions);
-      const { signals, next_cursor } = await this.options.worker.signals(this.cursor, this.options.batchSize);
+      const { signals, next_cursor, tenant_id } = await this.options.worker.signals(this.cursor, this.options.batchSize);
       this.lastWorkerContactAt = this.now();
+      // Another tenant's batch is not dispatched and the cursor stays put (`tenant_mismatch`).
+      this.options.tenant?.check(tenant_id, "signals");
       await this.dispatch(signals);
       if (next_cursor && next_cursor !== this.cursor) this.saveCursor(next_cursor);
       // Cleared only once a whole batch got through, so a batch that keeps failing slowly does not
@@ -102,7 +104,7 @@ export class AgentHostService {
   async heartbeat(): Promise<void> {
     try {
       const status = await this.status();
-      await this.options.worker.heartbeat({
+      const reply = await this.options.worker.heartbeat({
         host_id: this.options.hostId,
         version: this.options.version,
         ready: status.ready,
@@ -119,6 +121,8 @@ export class AgentHostService {
         },
       });
       this.lastWorkerContactAt = this.now();
+      // The first heartbeat is normally where an unpinned host learns its tenant.
+      this.options.tenant?.check(reply?.tenant_id, "heartbeat");
     } catch (error) {
       this.options.log({ event: "heartbeat_failed", error: error instanceof Error ? error.message : String(error) });
     }

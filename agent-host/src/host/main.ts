@@ -9,6 +9,7 @@ import { actionServerSpec } from "./action-server.ts";
 import { applyLocalEnv, hostEnv } from "./env.ts";
 import { createHealthServer } from "./http.ts";
 import { AgentHostService } from "./service.ts";
+import { TenantBinding } from "./tenant.ts";
 import { WorkerClient } from "./worker.ts";
 
 const VERSION = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
@@ -21,6 +22,7 @@ for (const dir of [process.env.HOME, process.env.CODEX_HOME]) if (dir) await mkd
 const gateway = new ProviderGateway({ config: loadGatewayConfig(env.gatewayConfigPath), stateDir: env.stateDir, env: process.env, dataClass: env.dataClass });
 const worker = new WorkerClient({ baseUrl: env.workerUrl, token: env.workerToken, timeoutMs: 15_000, openTimeoutMs: 90_000 });
 const log = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
+const tenant = new TenantBinding(env.tenantId, env.stateDir, log);
 
 const service = new AgentHostService({
   gateway,
@@ -34,12 +36,13 @@ const service = new AgentHostService({
   batchSize: env.batchSize,
   concurrency: env.concurrency,
   log,
+  tenant,
   actionServer: (runId, actionIds) => actionServerSpec(env, runId, actionIds),
 });
 
 const server = createHealthServer(() => service.status());
 server.listen(env.port, env.bind, () =>
-  log({ event: "host_started", version: VERSION, bind: env.bind, port: env.port, data_class: env.dataClass, local_env_names: localNames }),
+  log({ event: "host_started", version: VERSION, bind: env.bind, port: env.port, data_class: env.dataClass, tenant_id: tenant.current(), local_env_names: localNames }),
 );
 service.start();
 

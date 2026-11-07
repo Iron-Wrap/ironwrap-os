@@ -289,6 +289,7 @@ export class ProviderGateway {
           runClass,
           complianceRef: account.complianceRef,
           riskAcceptance,
+          ...(request.tenant ? { tenantId: request.tenant } : {}),
         });
         if ("refusal" in reserved) {
           const detail =

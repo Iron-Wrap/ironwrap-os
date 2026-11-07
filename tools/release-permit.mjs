@@ -32,19 +32,8 @@ export const MAX_PERMIT_LIFETIME_MS = 15 * 60_000;
 export const MAX_FUTURE_ISSUED_MS = 60_000;
 export const RELEASE_REPLAY_PREFIX = "release-permit:";
 export const DEFAULT_D1_API_BASE = "https://api.cloudflare.com/client/v4";
-export const REVIEW_RECEIPT_SCHEMA = "ironwrap_release_review_v1";
-export const REVIEW_RECEIPT_TYPE = "ironwrap-release-review";
-export const REVIEW_FINDINGS_SCHEMA = "ironwrap_release_review_findings_v1";
-export const MAX_REVIEW_RECEIPT_LIFETIME_MS = 2 * 60 * 60_000;
 export const VERSION_MESSAGE_SCHEMA = "ironwrap-release-version-v1";
 export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
-export const REVIEW_RECEIPT_PATH_PREFIX = ".release/reviews/";
-export const REVIEW_RECEIPT_REF_PREFIX = "release-review/";
-export const RELEASE_EVIDENCE_SCHEMA = "ironwrap_release_external_evidence_v1";
-export const RELEASE_EVIDENCE_TYPE = "ironwrap-release-external-evidence";
-export const RELEASE_EVIDENCE_PATH_PREFIX = ".release/evidence/";
-export const RELEASE_EVIDENCE_REF_PREFIX = "release-evidence/";
-export const MAX_RELEASE_EVIDENCE_LIFETIME_MS = 6 * 60 * 60_000;
 export const RELEASE_MANIFEST_SCHEMA = "ironwrap_release_manifest_v2";
 export const SOURCE_MERGE_SCHEMA = "ironwrap_source_admission_merge_v1";
 export const RELEASE_OUTCOME_SCHEMA = "ironwrap_release_outcome_v1";
@@ -72,18 +61,6 @@ export const LAUNCH_PROOF_STEP_NAMES = Object.freeze([
   "ingest_website",
   "ingest_website_replay",
   "ready",
-]);
-export const RELEASE_SCOPE_NAMES = Object.freeze([
-  "agent",
-  "customer",
-  "facet",
-  "field",
-  "finance",
-  "production",
-  "provider",
-  "reception",
-  "sales",
-  "shop",
 ]);
 export const RELEASE_LICENSE_POLICY = Object.freeze({
   schema: "ironwrap_release_license_policy_v1",
@@ -459,95 +436,6 @@ function validateRollback(rollback, permit) {
   iso(rollback.observed_at, "rollback_observed_at_invalid");
 }
 
-function validateAffectedScopes(scopes, codePrefix = "release_manifest") {
-  if (!Array.isArray(scopes) || scopes.length !== RELEASE_SCOPE_NAMES.length) fail(`${codePrefix}_scopes_invalid`);
-  const names = [];
-  for (const scope of scopes) {
-    exactKeys(scope, [
-      "scope",
-      "status",
-      "authenticated",
-      "evidence_ref",
-      "evidence_digest",
-      "non_applicability_policy_digest",
-      "reason_digest",
-    ], `${codePrefix}_scope_shape_invalid`);
-    const name = text(scope.scope, `${codePrefix}_scope_name_invalid`, /^[a-z][a-z0-9_-]{1,63}$/);
-    names.push(name);
-    text(scope.evidence_ref, `${codePrefix}_scope_evidence_ref_invalid`);
-    hash(scope.evidence_digest, `${codePrefix}_scope_evidence_digest_invalid`);
-    if (scope.status === "passed") {
-      equal(true, scope.authenticated, `${codePrefix}_scope_not_authenticated`);
-      equal(null, scope.non_applicability_policy_digest, `${codePrefix}_scope_non_applicability_invalid`);
-      equal(null, scope.reason_digest, `${codePrefix}_scope_reason_invalid`);
-    } else if (scope.status === "not_applicable") {
-      equal(false, scope.authenticated, `${codePrefix}_scope_authentication_invalid`);
-      hash(scope.non_applicability_policy_digest, `${codePrefix}_scope_non_applicability_invalid`);
-      hash(scope.reason_digest, `${codePrefix}_scope_reason_invalid`);
-    } else {
-      fail(`${codePrefix}_scope_status_invalid`);
-    }
-  }
-  names.sort();
-  if (JSON.stringify(names) !== JSON.stringify([...RELEASE_SCOPE_NAMES])) fail(`${codePrefix}_scope_set_invalid`);
-  const provider = scopes.find((scope) => scope.scope === "provider");
-  if (provider?.status !== "passed" || provider.authenticated !== true) fail(`${codePrefix}_provider_scope_not_proven`);
-  return scopes;
-}
-
-function validateServiceIdentities(services, codePrefix) {
-  exactKeys(services, ["pwa", "frappe", "facet"], `${codePrefix}_services_shape_invalid`);
-  exactKeys(
-    services.pwa,
-    [
-      "artifact_digest",
-      "qa_revision",
-      "qa_readback_digest",
-      "production_candidate_revision",
-      "production_candidate_readback_digest",
-    ],
-    `${codePrefix}_pwa_shape_invalid`,
-  );
-  hash(services.pwa.artifact_digest, `${codePrefix}_pwa_artifact_invalid`);
-  text(services.pwa.qa_revision, `${codePrefix}_pwa_revision_invalid`);
-  hash(services.pwa.qa_readback_digest, `${codePrefix}_pwa_readback_invalid`);
-  text(
-    services.pwa.production_candidate_revision,
-    `${codePrefix}_pwa_production_candidate_invalid`,
-  );
-  hash(
-    services.pwa.production_candidate_readback_digest,
-    `${codePrefix}_pwa_production_readback_invalid`,
-  );
-  exactKeys(
-    services.frappe,
-    [
-      "artifact_digest",
-      "site_schema_digest",
-      "qa_revision",
-      "qa_readback_digest",
-      "production_candidate_revision",
-      "production_candidate_readback_digest",
-    ],
-    `${codePrefix}_frappe_shape_invalid`,
-  );
-  hash(services.frappe.artifact_digest, `${codePrefix}_frappe_artifact_invalid`);
-  hash(services.frappe.site_schema_digest, `${codePrefix}_frappe_schema_invalid`);
-  text(services.frappe.qa_revision, `${codePrefix}_frappe_revision_invalid`);
-  hash(services.frappe.qa_readback_digest, `${codePrefix}_frappe_readback_invalid`);
-  text(
-    services.frappe.production_candidate_revision,
-    `${codePrefix}_frappe_production_candidate_invalid`,
-  );
-  hash(
-    services.frappe.production_candidate_readback_digest,
-    `${codePrefix}_frappe_production_readback_invalid`,
-  );
-  exactKeys(services.facet, ["artifact_digest", "integration_receipt_digest"], `${codePrefix}_facet_shape_invalid`);
-  hash(services.facet.artifact_digest, `${codePrefix}_facet_artifact_invalid`);
-  hash(services.facet.integration_receipt_digest, `${codePrefix}_facet_receipt_invalid`);
-}
-
 function validateProviderReconciliation(provider, codePrefix) {
   exactKeys(provider, ["receipt_ref", "receipt_digest", "provider_identity_digest", "status"], `${codePrefix}_provider_shape_invalid`);
   text(provider.receipt_ref, `${codePrefix}_provider_ref_invalid`);
@@ -556,123 +444,10 @@ function validateProviderReconciliation(provider, codePrefix) {
   equal("matched", provider.status, `${codePrefix}_provider_not_matched`);
 }
 
-function validateBusinessEvidence(business, codePrefix) {
-  exactKeys(business, ["issue_id", "actor_receipt_ref", "actor_receipt_digest", "business_receipt_ref", "business_receipt_digest", "result"], `${codePrefix}_business_shape_invalid`);
-  equal("IRO-7", business.issue_id, `${codePrefix}_business_issue_invalid`);
-  text(business.actor_receipt_ref, `${codePrefix}_actor_receipt_ref_invalid`);
-  hash(business.actor_receipt_digest, `${codePrefix}_actor_receipt_digest_invalid`);
-  text(business.business_receipt_ref, `${codePrefix}_business_receipt_ref_invalid`);
-  hash(business.business_receipt_digest, `${codePrefix}_business_receipt_digest_invalid`);
-  equal("passed", business.result, `${codePrefix}_business_not_passed`);
-}
-
-function validateReleaseRecords(records, codePrefix) {
-  exactKeys(records, ["authority_issue", "implementation_issue", "business_issue", "release_record_ref", "release_record_digest"], `${codePrefix}_records_shape_invalid`);
-  equal("IRO-12", records.authority_issue, `${codePrefix}_authority_issue_invalid`);
-  equal("IRO-41", records.implementation_issue, `${codePrefix}_implementation_issue_invalid`);
-  equal("IRO-7", records.business_issue, `${codePrefix}_business_issue_invalid`);
-  text(records.release_record_ref, `${codePrefix}_release_record_ref_invalid`);
-  hash(records.release_record_digest, `${codePrefix}_release_record_digest_invalid`);
-}
-
-function validateExternalRecovery(recovery, codePrefix) {
-  exactKeys(recovery, [
-    "prior_worker_readback_digest",
-    "prior_pwa_revision",
-    "prior_pwa_readback_digest",
-    "prior_frappe_revision",
-    "prior_frappe_readback_digest",
-    "prior_frappe_backup_digest",
-  ], `${codePrefix}_recovery_shape_invalid`);
-  hash(recovery.prior_worker_readback_digest, `${codePrefix}_prior_worker_readback_invalid`);
-  text(recovery.prior_pwa_revision, `${codePrefix}_prior_pwa_invalid`);
-  hash(recovery.prior_pwa_readback_digest, `${codePrefix}_prior_pwa_readback_invalid`);
-  text(recovery.prior_frappe_revision, `${codePrefix}_prior_frappe_invalid`);
-  hash(recovery.prior_frappe_readback_digest, `${codePrefix}_prior_frappe_readback_invalid`);
-  hash(recovery.prior_frappe_backup_digest, `${codePrefix}_prior_frappe_backup_invalid`);
-}
-
 function validateSupplyChainEvidence(supplyChain, codePrefix) {
   exactKeys(supplyChain, ["lockfiles_digest", "sbom_digest", "license_manifest_digest", "license_policy_digest", "audit_receipt_digest", "result"], `${codePrefix}_supply_chain_shape_invalid`);
   for (const key of ["lockfiles_digest", "sbom_digest", "license_manifest_digest", "license_policy_digest", "audit_receipt_digest"]) hash(supplyChain[key], `${codePrefix}_${key}_invalid`);
   equal("passed", supplyChain.result, `${codePrefix}_supply_chain_not_passed`);
-}
-
-function validateExternalReleaseEvidencePayload(payload, { now = Date.now() } = {}) {
-  exactKeys(payload, [
-    "schema",
-    "type",
-    "repository",
-    "pr_number",
-    "source_commit",
-    "source_git_tree",
-    "artifact_digest",
-    "supply_chain",
-    "service_identities",
-    "affected_scopes",
-    "recovery",
-    "provider_reconciliation",
-    "business_evidence",
-    "records",
-    "issuer_principal",
-    "issuer_task_id",
-    "issuer_run_id",
-    "key_version",
-    "issued_at",
-    "expires_at",
-    "nonce",
-  ], "release_evidence_shape_invalid");
-  equal(RELEASE_EVIDENCE_SCHEMA, payload.schema, "release_evidence_schema_invalid");
-  equal(RELEASE_EVIDENCE_TYPE, payload.type, "release_evidence_type_invalid");
-  text(payload.repository, "release_evidence_repository_invalid", /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
-  positiveInteger(payload.pr_number, "release_evidence_pr_invalid");
-  commit(payload.source_commit, "release_evidence_source_invalid");
-  commit(payload.source_git_tree, "release_evidence_tree_invalid");
-  hash(payload.artifact_digest, "release_evidence_artifact_invalid");
-  validateSupplyChainEvidence(payload.supply_chain, "release_evidence");
-  validateServiceIdentities(payload.service_identities, "release_evidence");
-  validateAffectedScopes(payload.affected_scopes, "release_evidence");
-  validateExternalRecovery(payload.recovery, "release_evidence");
-  validateProviderReconciliation(payload.provider_reconciliation, "release_evidence");
-  validateBusinessEvidence(payload.business_evidence, "release_evidence");
-  validateReleaseRecords(payload.records, "release_evidence");
-  text(payload.issuer_principal, "release_evidence_issuer_invalid", IDENTITY_RE);
-  text(payload.issuer_task_id, "release_evidence_task_invalid");
-  text(payload.issuer_run_id, "release_evidence_run_invalid");
-  text(payload.key_version, "release_evidence_key_version_invalid");
-  iso(payload.issued_at, "release_evidence_issued_invalid");
-  iso(payload.expires_at, "release_evidence_expires_invalid");
-  const issuedMs = Date.parse(payload.issued_at);
-  const expiresMs = Date.parse(payload.expires_at);
-  if (issuedMs > now + MAX_FUTURE_ISSUED_MS) fail("release_evidence_issued_in_future");
-  if (expiresMs <= now || expiresMs <= issuedMs || expiresMs - issuedMs > MAX_RELEASE_EVIDENCE_LIFETIME_MS) fail("release_evidence_window_invalid");
-  text(payload.nonce, "release_evidence_nonce_invalid", NONCE_RE);
-  return payload;
-}
-
-export function signExternalReleaseEvidence(privateKey, payload, options = {}) {
-  if (!privateKey) fail("release_evidence_private_key_required");
-  const normalized = validateExternalReleaseEvidencePayload(payload, options);
-  const encodedPayload = encode(canonicalJson(normalized));
-  const signature = signSignature(null, Buffer.from(encodedPayload), privateKey).toString("base64url");
-  return `${encodedPayload}.${signature}`;
-}
-
-export function verifyExternalReleaseEvidence(publicKey, receipt, expected = {}, options = {}) {
-  if (!publicKey) fail("release_evidence_public_key_required");
-  const parts = String(receipt ?? "").split(".");
-  if (parts.length !== 2) fail("release_evidence_receipt_invalid");
-  const [encodedPayload, encodedSignature] = parts;
-  const payloadBytes = decode(encodedPayload, "release_evidence_receipt_invalid");
-  const signature = decode(encodedSignature, "release_evidence_receipt_invalid");
-  if (!verifySignature(null, Buffer.from(encodedPayload), publicKey, signature)) fail("release_evidence_signature_invalid");
-  let payload;
-  try { payload = JSON.parse(payloadBytes.toString("utf8")); } catch { fail("release_evidence_receipt_invalid"); }
-  validateExternalReleaseEvidencePayload(payload, options);
-  for (const field of ["repository", "pr_number", "source_commit", "source_git_tree", "artifact_digest"]) {
-    if (expected[field] !== undefined) equal(expected[field], payload[field], `release_evidence_${field}_drift`);
-  }
-  return payload;
 }
 
 function validateServiceAdapterReceiptPayload(
@@ -2107,59 +1882,6 @@ export async function validateReleaseEnvironmentPreflight({ repoRoot, environmen
     status: "matched",
   };
   return { ...fields, evidence_digest: sha256(canonicalJson(fields)) };
-}
-
-/** Sign an independent reviewer GO receipt. */
-export function signReviewGoReceipt(privateKey, payload, options = {}) {
-  if (!privateKey) fail("review_private_key_required");
-  const normalized = validateReviewGoReceipt(payload, options);
-  const encodedPayload = encode(canonicalJson(normalized));
-  const signature = signSignature(null, Buffer.from(encodedPayload), privateKey).toString("base64url");
-  return `${encodedPayload}.${signature}`;
-}
-
-/** Verify the independent reviewer receipt and its source/finding bindings. */
-export function verifyReviewGoReceipt(publicKey, receipt, expected = {}, options = {}) {
-  if (!publicKey) fail("review_public_key_required");
-  const parts = String(receipt ?? "").split(".");
-  if (parts.length !== 2) fail("review_receipt_invalid");
-  const [encodedPayload, encodedSignature] = parts;
-  const payloadBytes = decode(encodedPayload, "review_receipt_invalid");
-  const signature = decode(encodedSignature, "review_receipt_invalid");
-  if (!verifySignature(null, Buffer.from(encodedPayload), publicKey, signature)) fail("review_signature_invalid");
-  let payload;
-  try { payload = JSON.parse(payloadBytes.toString("utf8")); } catch { fail("review_receipt_invalid"); }
-  validateReviewGoReceipt(payload, options);
-  for (const field of ["repository", "source_commit", "source_tree_sha256", "diff_sha256"]) {
-    if (expected[field] !== undefined) equal(expected[field], payload[field], `review_${field}_drift`);
-  }
-  return payload;
-}
-
-function validateReviewGoReceipt(payload, { now = Date.now() } = {}) {
-  exactKeys(payload, ["schema", "type", "repository", "source_commit", "source_tree_sha256", "diff_sha256", "reviewer_principal", "reviewer_task_id", "reviewer_run_id", "review_key_version", "decision", "findings_digest", "unresolved_p0", "unresolved_p1", "issued_at", "expires_at", "nonce"], "review_receipt_shape_invalid");
-  equal(REVIEW_RECEIPT_SCHEMA, payload.schema, "review_schema_invalid");
-  equal(REVIEW_RECEIPT_TYPE, payload.type, "review_type_invalid");
-  text(payload.repository, "review_repository_invalid", /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
-  commit(payload.source_commit, "review_source_commit_invalid");
-  hash(payload.source_tree_sha256, "review_source_tree_invalid");
-  hash(payload.diff_sha256, "review_diff_invalid");
-  text(payload.reviewer_principal, "review_identity_invalid", IDENTITY_RE);
-  text(payload.reviewer_task_id, "review_task_id_invalid");
-  text(payload.reviewer_run_id, "review_run_id_invalid");
-  text(payload.review_key_version, "review_key_version_invalid");
-  equal("GO", payload.decision, "review_not_go");
-  hash(payload.findings_digest, "review_findings_digest_invalid");
-  equal(0, payload.unresolved_p0, "review_p0_unresolved");
-  equal(0, payload.unresolved_p1, "review_p1_unresolved");
-  iso(payload.issued_at, "review_issued_invalid");
-  iso(payload.expires_at, "review_expires_invalid");
-  const issuedMs = Date.parse(payload.issued_at);
-  const expiresMs = Date.parse(payload.expires_at);
-  if (issuedMs > now + MAX_FUTURE_ISSUED_MS) fail("review_issued_in_future");
-  if (expiresMs <= now || expiresMs <= issuedMs || expiresMs - issuedMs > MAX_REVIEW_RECEIPT_LIFETIME_MS) fail("review_window_invalid");
-  text(payload.nonce, "review_nonce_invalid", NONCE_RE);
-  return payload;
 }
 
 export function releasePermitDigest(permit) {

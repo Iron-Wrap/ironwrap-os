@@ -148,7 +148,7 @@ test("Newo reconciliation requeues stale syncs and detects a missing report only
 
   const first = await reconcileNewoSessions(env, new Date("2026-07-18T18:35:00.000Z"));
   assert.deepEqual(first, { retryable_syncs_requeued: 1, newly_missing_reports: 1 });
-  assert.deepEqual(queued, [{ body: { newo_event_id: "event-1" } }]);
+  assert.deepEqual(queued, [{ body: { newo_event_id: "event-1", tenant_id: "ironwrap" } }]);
   const stored = db.raw.prepare(
     "SELECT missing_report_detected_at FROM newo_sessions WHERE session_id = ?",
   ).get("session-reconcile-1") as { missing_report_detected_at: string };

@@ -1,3 +1,4 @@
+import { queueTenantId } from "./tenancy.ts";
 import {
   classifyIntent,
   newEnvelopeId,
@@ -142,7 +143,8 @@ export interface NewoToolReceipt {
   message: string;
 }
 
-export type NewoQueueMessage = { newo_event_id: string };
+/** The tenant is the one that received the event; the consumer handles it under that tenant's env. */
+export type NewoQueueMessage = { newo_event_id: string; tenant_id?: string };
 
 type ParseResult<T> =
   | { ok: true; value: T }
@@ -357,7 +359,7 @@ export async function reconcileNewoSessions(
   const retryEventIds = await listRetryableNewoEventIds(env, retryCutoff, 100);
   if (retryEventIds.length > 0) {
     await runtime.NEWO_QUEUE.sendBatch(
-      retryEventIds.map((eventId) => ({ body: { newo_event_id: eventId } })),
+      retryEventIds.map((eventId) => ({ body: { newo_event_id: eventId, tenant_id: queueTenantId(env) } })),
     );
   }
 
@@ -627,14 +629,14 @@ async function acceptEvent(
       result: "ok",
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
-    await env.NEWO_QUEUE.send({ newo_event_id: event.event_id });
+    await env.NEWO_QUEUE.send({ newo_event_id: event.event_id, tenant_id: queueTenantId(env) });
     if (
       response.envelope_id
       && existingSession?.verification_status !== "verified"
       && existingSession?.verification_status !== "ambiguous"
       && existingSession?.verification_status !== "verification_failed"
     ) {
-      await env.JN_QUEUE.send({ envelope_id: response.envelope_id });
+      await env.JN_QUEUE.send({ envelope_id: response.envelope_id, tenant_id: queueTenantId(env) });
     }
     scheduleNotifications(env, ctx, event, envelope);
     await completeNewoReceipt(env, event.event_id, response.envelope_id, response, new Date().toISOString());

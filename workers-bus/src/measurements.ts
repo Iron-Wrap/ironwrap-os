@@ -4,6 +4,7 @@
 // geometry remains authoritative.  Ordinary PDFs are archived immutably and frontier OCR produces
 // review-only candidates with page/region references; OCR never selects a job or clears review.
 
+import { queueTenantId } from "./tenancy.ts";
 import { parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
@@ -187,6 +188,8 @@ type MeasurementOcrConfig = {
 export type MeasurementQueueMessage = {
   measurement_receipt_id: string;
   lease_token: string;
+  /** The tenant that enqueued the receipt; the consumer handles it under that tenant's env. */
+  tenant_id?: string;
 };
 
 const MEASUREMENT_OCR_TOOL_SCHEMA = {
@@ -517,6 +520,7 @@ export async function handleMeasurementIngest(
     await env.MEASUREMENT_QUEUE.send({
       measurement_receipt_id: claim.receipt.receipt_id,
       lease_token: claim.receipt.lease_token!,
+      tenant_id: queueTenantId(env),
     } satisfies MeasurementQueueMessage);
   } catch {
     return await markClaimedMeasurementRetryable(

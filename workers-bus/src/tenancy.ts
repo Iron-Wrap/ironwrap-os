@@ -383,6 +383,49 @@ export async function listActiveTenantIds(env: Env): Promise<string[]> {
   return ids;
 }
 
+/** The envs one cron tick runs its tenant jobs under, and the registry tenants it had to skip. */
+export async function cronTenantEnvs(
+  env: Env,
+  now: () => number = () => Date.now(),
+): Promise<{ envs: Env[]; skipped: Array<{ tenant_id: string; error: string }> }> {
+  const tenancy = env as unknown as TenancyEnv;
+  if (!multiTenantEnabled(tenancy)) return { envs: [env], skipped: [] };
+  let ids: string[];
+  try {
+    ids = await listActiveTenantIds(env);
+  } catch {
+    // The registry could not be read: the Worker's own tenant still gets its pass, and nothing
+    // runs for a registry tenant under the wrong env.
+    return { envs: [env], skipped: [{ tenant_id: "*", error: "tenant_registry_unavailable" }] };
+  }
+  const envs: Env[] = [];
+  const skipped: Array<{ tenant_id: string; error: string }> = [];
+  for (const tenantId of ids) {
+    const resolution = await tenantEnvFor(env, tenantId, now);
+    if (resolution.kind === "refused") skipped.push({ tenant_id: tenantId, error: resolution.refusal.error });
+    else envs.push(resolution.env);
+  }
+  return { envs, skipped };
+}
+
+/**
+ * The env a queue message is handled under. A message carries the tenant that enqueued it; a
+ * message without one (sent before this field existed) is the Worker's own tenant's. A tenant
+ * that cannot be served throws, so the message is retried and dead-lettered rather than handled
+ * under another tenant's env.
+ */
+export async function queueMessageEnv(env: Env, tenantId: string | undefined): Promise<Env> {
+  if (tenantId === undefined) return env;
+  const resolution = await tenantEnvFor(env, tenantId);
+  if (resolution.kind === "refused") throw new Error(`queue_${resolution.refusal.error}`);
+  return resolution.env;
+}
+
+/** The tenant a producer stamps on a queue message: the env's, with the deployment default when unset. */
+export function queueTenantId(env: { APP_TENANT_ID?: string }): string | undefined {
+  return operatingTenantId(env.APP_TENANT_ID) ?? undefined;
+}
+
 // --- secrets envelope ----------------------------------------------------------------------
 
 const SECRETS_AAD_PREFIX = "ironwrap.tenant-secrets.v1";

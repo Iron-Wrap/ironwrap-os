@@ -469,7 +469,8 @@ function fiveMinuteGlobalJobs(env: Env): Promise<unknown>[] {
 }
 
 /** Five-minute jobs on this tenant's rows: run once per active tenant, under that tenant's env. */
-function fiveMinuteTenantJobs(env: Env, isDefaultTenant = true): Promise<unknown>[] {
+/** `isDefaultTenant` is true only for the Worker's own env: the shared-cursor derivations run in that pass alone. */
+function fiveMinuteTenantJobs(env: Env, isDefaultTenant: boolean): Promise<unknown>[] {
   // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
   // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
   const accountingDispatchBinding = resolveAccountingDispatchBinding(

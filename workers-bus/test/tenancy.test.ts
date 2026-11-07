@@ -124,7 +124,7 @@ test("tenant secrets are declared Worker secrets, never the Worker-wide keys", (
   const source = readFileSync(new URL("../src/secret-bindings.d.ts", import.meta.url), "utf8");
   const declared = new Set([...source.matchAll(/^\s{2,4}([A-Z][A-Z0-9_]+): string;$/gm)].map((match) => match[1]));
   for (const name of TENANT_SECRET_NAMES) assert.ok(declared.has(name), `${name} is not a declared secret binding`);
-  for (const name of ["TENANT_SECRETS_KEK", "QB_TOKEN_ENCRYPTION_KEY", "APP_AUTH_PEPPER", "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER", "PUBLIC_ESTIMATE_TURNSTILE_SECRET", "ADMIN_TOKEN"]) {
+  for (const name of ["TENANT_SECRETS_KEK", "TENANT_PROXY_TOKEN", "QB_TOKEN_ENCRYPTION_KEY", "APP_AUTH_PEPPER", "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER", "PUBLIC_ESTIMATE_TURNSTILE_SECRET", "ADMIN_TOKEN"]) {
     assert.ok(!TENANT_SECRET_NAMES.includes(name), `${name} is Worker-wide and must not be sealed per tenant`);
   }
 });
@@ -279,6 +279,42 @@ test("a trailing-dot host is the same host; a host nobody registered yet is forg
   assert.equal(dotted.kind, "tenant", "b.example.invalid. is b.example.invalid, not the default tenant");
   const upper = await resolveRequestTenant(new Request(`https://${HOST_B.toUpperCase()}:8443/api/v1/session`), env as never, now);
   assert.equal(upper.kind, "tenant");
+});
+
+test("a proxy's forwarded host is read only with the proxy's proof; without it the request is refused, not defaulted", async () => {
+  const db = new SqliteD1();
+  await registerTenantB(db);
+  const env = multiTenantEnv(db, { TENANT_PROXY_TOKEN: "proxy-proof-token" });
+  const viaProxy = (headers: Record<string, string>) =>
+    new Request("https://ironwrap-bus-qa.workers.example.invalid/api/v1/session", { headers });
+
+  const trusted = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": HOST_B, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
+  assert.equal(trusted.kind, "tenant");
+  assert.equal(trusted.tenantId, TENANT_B);
+  const withPort = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": `${HOST_B.toUpperCase()}:443`, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
+  assert.equal(withPort.kind, "tenant", "the forwarded host is normalised like the URL host");
+  const defaultHost = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": HOST_A, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
+  assert.equal(defaultHost.kind, "default");
+
+  for (const headers of [
+    { "x-ironwrap-forwarded-host": HOST_B },
+    { "x-ironwrap-forwarded-host": HOST_B, "x-ironwrap-proxy-token": "wrong" },
+  ]) {
+    const refused = await resolveRequestTenant(viaProxy(headers), env as never);
+    assert.deepEqual(refused, { kind: "refused", tenantId: null, refusal: { status: 403, error: "tenant_proxy_untrusted" } });
+  }
+  // No proof configured on the Worker: no forwarded host is ever trusted.
+  const unconfigured = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": HOST_B, "x-ironwrap-proxy-token": "proxy-proof-token" }), multiTenantEnv(db) as never);
+  assert.equal(unconfigured.kind, "refused");
+  // The URL host still decides when no forwarded host is present.
+  assert.equal((await resolveRequestTenant(request(HOST_B), env as never)).kind, "tenant");
+
+  // Through the Worker: the refusal is a 403, the trusted forward answers as tenant B.
+  const forbidden = await worker.fetch(viaProxy({ "x-ironwrap-forwarded-host": HOST_B }), env as never, ctx() as never);
+  assert.equal(forbidden.status, 403);
+  assert.deepEqual(await forbidden.json(), { error: "tenant_proxy_untrusted" });
+  const served = await worker.fetch(viaProxy({ "x-ironwrap-forwarded-host": HOST_B, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never, ctx() as never);
+  assert.equal(((await served.json()) as { tenant: { id: string } }).tenant.id, TENANT_B);
 });
 
 test("the secrets envelope opens only under its key, for its tenant and key version, untouched", async () => {

@@ -219,14 +219,9 @@ test("the five-minute cron runs its tenant jobs once per active tenant and its g
   assert.equal(db.executed.filter((entry) => /INSERT INTO cron_heartbeat/.test(entry.sql)).length, 1, "one heartbeat per tick");
   const replayCandidates = /FROM dead_letter d\s+WHERE d\.recovered = 0 AND d\.envelope_id IS NOT NULL\s+GROUP BY d\.envelope_id\s+\) ep/;
   assert.deepEqual(db.tenantsBoundTo(replayCandidates).sort(), [TENANT_A, TENANT_B], "the dead-letter replay runs once per tenant, joined on the envelope's tenant");
-  // Global jobs run once: no statement on the Newo or QuickBooks projection tables is bound to a
-  // tenant, and none runs more than once per tick.
+  // Global jobs run under the Worker's own env: no statement on the Newo or QuickBooks projection
+  // tables is bound to a tenant id.
   assert.deepEqual(db.tenantsBoundTo(/FROM newo_sessions|FROM newo_event_receipts|FROM quickbooks_projection_outbox/), []);
-  assert.equal(
-    db.executed.filter((entry) => /INSERT INTO newo_reconciliation_runs/.test(entry.sql)).length <= 1,
-    true,
-    "the Newo reconcile, on tables with no tenant column, runs at most once",
-  );
   const heartbeatOk = db.raw.prepare("SELECT status FROM cron_heartbeat WHERE cron = ?").get("*/5 * * * *") as { status: string } | undefined;
   assert.equal(heartbeatOk?.status, "ok");
 

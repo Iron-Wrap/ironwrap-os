@@ -738,7 +738,9 @@ intents; the latter walks every tenant's jobs by each job's own tenant). Newo se
 and QuickBooks projection recovery stay global because their tables carry no tenant column; a
 registry tenant's Newo events and QuickBooks webhooks are not served until that changes. On the
 dead-letter queue a message whose tenant cannot be served becomes a `dead_letter` row (stage
-`tenant_unresolved`) under the Worker's own env instead of being dropped.
+`tenant_unresolved`) under the Worker's own env instead of being dropped. Dead-letter replay
+(`POST /admin/replay`) replays the tenant the request resolved to: with the flag on, an operator
+replays a registry tenant's dead letters from that tenant's hostname.
 `workers-bus/test/tenant-scoping-inventory.test.ts` holds every table to one of three classes:
 tenant-scoped (a `tenant_id` or `destination_tenant_id` column), global infrastructure, or legacy
 unscoped. The legacy list (the audit log, dead letters, source counts, the daily heartbeat, the
@@ -755,6 +757,25 @@ why `/admin/*` stays the operator's.
 | PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`, also when a concurrent write landed first: the batch is conditioned on the version and nothing of the loser's lands), a host owned by another tenant is refused (`409 host_taken`), an omitted `settings`, `hosts` or `secrets` keeps what the row holds, `secrets: {}` empties the envelope; the Worker's own tenant may take hosts here and nothing else |
 
 The registry is administered from the Worker's own env, before tenant resolution.
+
+**Proxy contract.** One Worker answers on one `workers.dev` name; a tenant's custom domain is a
+proxy in front of it (today the hosting operator's `ironwrap-qa-proxy` for `qa-iwrap.mindburn.org`),
+and the Worker sees the proxy's upstream hostname in the URL, not the domain the user typed. The
+proxy therefore states the hostname it served in `x-ironwrap-forwarded-host` and proves it is the
+proxy with `x-ironwrap-proxy-token`, compared constant-time against the Worker secret
+`TENANT_PROXY_TOKEN`. A forwarded host with a valid proof decides the tenant; a forwarded host
+without one is refused (`403 tenant_proxy_untrusted`), never read and never silently defaulted; a
+request without the header is keyed by its URL hostname. One proxy per tenant domain, all with the
+same token, is enough.
+
+**qa: two synthetic tenants side by side.** `env.qa` runs with the flag on. The Worker tenant
+answers on `qa-iwrap.mindburn.org` and the `workers.dev` name as before. A second synthetic tenant
+is registered from its committed config with `tools/qa-tenant-register.mjs` (idempotent; the GitHub
+workflow `qa tenant registration` runs it with the qa admin bearer and names the hostnames the proxy
+serves for it; a tenant's own tokens are sealed by naming the `qa` environment secret that holds
+each one). It is reachable once the operator adds a proxy for its hostname that sends the two
+headers above; until then its registry row, its cron passes and its API are provable through the
+registry only.
 The magic-link request body is `{ "email": "…" }`; the Worker infers its configured tenant. A
 legacy caller may also send `tenant_id`, but a mismatch still receives the same generic `202` and
 never selects another tenant.

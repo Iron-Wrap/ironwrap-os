@@ -88,6 +88,10 @@ export const TENANT_SETTING_KEYS: readonly string[] = Object.freeze([
   "JN_JOB_RECORD_TYPE",
   "JN_JOB_STATUS",
   "POSTIZ_ALLOWED_PROVIDERS",
+  // A tenant's Postiz key and the Postiz host it opens travel together, as do its QuickBooks app
+  // keys and the API environment (sandbox or production) they were issued for.
+  "POSTIZ_API_BASE_URL",
+  "QB_API_ENVIRONMENT",
   "ESTIMATOR_PRICE_LIST_JSON",
   "PROPOSAL_TEMPLATE_DOC_ID",
   "OPERATING_AUTOMATION_USER",
@@ -188,11 +192,9 @@ export const WORKER_WIDE_NAMES: readonly string[] = Object.freeze([
   "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
   "POSTIZ_ENABLED",
   "POSTIZ_EXPECTED_VERSION",
-  "POSTIZ_API_BASE_URL",
   "POSTIZ_API_TIMEOUT_MS",
   "QB_OAUTH_ENABLED",
   "QB_FINAL_INVOICE_ENABLED",
-  "QB_API_ENVIRONMENT",
   "QB_API_MINOR_VERSION",
   "QB_API_TIMEOUT_MS",
   "QB_TOKEN_ENCRYPTION_KEY_VERSION",

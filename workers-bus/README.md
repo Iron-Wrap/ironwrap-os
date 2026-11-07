@@ -714,7 +714,8 @@ provider keys). The retired Frappe and Facet bridge vars and credentials a clone
 destinations with credentials that are not sealable per tenant. Product flags, provider URLs,
 timeouts, schema hashes and the Worker-wide keys (`WORKER_WIDE_NAMES`: `TENANT_SECRETS_KEK`,
 `QB_TOKEN_ENCRYPTION_KEY`, `APP_AUTH_PEPPER`, the Turnstile and rate-limit secrets) are never per
-tenant, and neither is `ADMIN_TOKEN`:
+tenant; the one Turnstile widget must therefore list every tenant hostname that serves the public
+estimate form, which is an onboarding step for each tenant. Neither is `ADMIN_TOKEN` per tenant:
 `/admin/*` reads tables that carry no tenant column (the audit log, dead letters, webhook
 receipts, Newo sessions), so it is the hosting operator's surface on every host, and those tables
 are shared between tenants until a follow-up migration scopes them. Secrets are sealed with

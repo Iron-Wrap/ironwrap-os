@@ -236,7 +236,7 @@ The deployment target is one Cloudflare Worker with static assets configured for
 `run_worker_first = ["/api/*"]`. Those Worker deployment settings live with the server/deploy
 slice, not in this standalone frontend package.
 
-`public/_headers` is copied into the Cloudflare static-asset output. It enforces a self-only CSP,
+`public/_headers` is copied into the Cloudflare static-asset output. It enforces a CSP with two narrow Cloudflare Web Analytics script exceptions,
 blocks framing and MIME sniffing, sends HSTS and no-referrer policy, and limits camera, microphone,
 and geolocation to this origin. Blob/data allowances are narrowly retained for captured media and
 the service worker. The production build fails unless `_headers`, the web manifest, and every
@@ -249,3 +249,38 @@ camera/voice before keyboard, physical gate locks, exception-first owner work, o
 progressive disclosure, undoable interaction design, trade-language errors, visible authority and
 sync truth, and an accessible human handoff. New routes must preserve these laws and may not add fake
 production data to make an unfinished screen look populated.
+
+### Cloudflare browser analytics rollout
+
+The owner enables automatic Web Analytics injection for both
+`qa-iwrap.mindburn.org` and `ironwrap.mindburn.org` before merging this shell:
+a main push deploys QA. Confirm the versioned script appears in network HTML
+before release; execution may still be blocked by the previous CSP at that point.
+The two allowed sources are the exact HTTPS `beacon.min.js` file and its
+slash-delimited version descendants on `static.cloudflareinsights.com`.
+The estimator retains its Turnstile exception. Automatic injection sends a
+same-origin `/cdn-cgi/rum` POST; it needs no extra `connect-src` origin.
+The source HTML intentionally contains no beacon tag or public site identifier.
+
+The stable `ironwrap-rum-shell=1` meta marker changes the HTML content revision
+so Workbox fetches a new precached shell after injection is enabled. Retain the
+existing prompted update and offline/outbox behavior. Installed clients need
+normal activation through **Update now** or closing/reopening app windows;
+a deployment does not upgrade an old active shell immediately. Never clear site
+data, unregister the worker, or discard offline work to demonstrate analytics.
+
+Owner acceptance requires a fresh phone network navigation and a second online
+navigation served by the candidate active worker's precache. Inspect the active
+cached `/index.html` for the new revision, the marker and exactly one injected
+beacon; capture booleans/counts and public src only, never the cached HTML or
+beacon configuration. Each navigation needs a successful same-origin RUM POST
+and corresponding host/time-scoped page-view evidence. A merely non-null
+controller does not prove the navigation came from precache. If injection is
+absent from the precache response, stop rollout for a plan revision. Users on
+the old shell remain unverified. Promote the tested QA bytes only with production
+injection enabled and repeat the controlled-navigation readback there.
+
+RUM is a browser-based human-traffic proxy with JavaScript, adblock, sampling and
+headless-browser limitations; it is not unique people. Offline navigation still
+works and is not expected to send RUM. Settings rollback does not rewrite cached
+HTML: normal worker update/activation is still required, without clearing data.

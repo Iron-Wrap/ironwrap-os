@@ -29,6 +29,8 @@ import { readFile, readdir } from "node:fs/promises";
  *   This list may only shrink; growing it is a deliberate, reviewed decision.
  * - worker-entry: the Worker's own inbound `async fetch(` handler, not an
  *   outbound call.
+ * - admission-gateway: the one call that asks the HELM gateway whether an effect may run,
+ *   made by the runtime itself before it claims an attempt; it mutates no provider state.
  */
 type InventoryEntry =
   | { kind: "runtime-routed" }
@@ -37,13 +39,19 @@ type InventoryEntry =
   | { kind: "read-only-post-rpc"; rpcMethods: string[] }
   | { kind: "transport-library"; mutationAuthorityCallers: string[] }
   | { kind: "governed-unrouted"; discipline: string }
-  | { kind: "worker-entry" };
+  | { kind: "worker-entry" }
+  | { kind: "admission-gateway"; discipline: string };
 
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "accounting-dispatch-binding.ts": { kind: "runtime-routed" },
   "accounting-provider-read.ts": { kind: "read-only" },
   "facet-design-frappe-projection.ts": { kind: "runtime-routed" },
   "google.ts": { kind: "runtime-routed" },
+  "helm-gateway.ts": {
+    kind: "admission-gateway",
+    discipline:
+      "one Connect JSON POST per attempt to HELM_GATEWAY_URL with the per-tenant bearer, bounded by HELM_GATEWAY_TIMEOUT_MS, carrying the effect's identity and never its payload; in enforce mode every answer but ADMITTED stops the attempt",
+  },
   "index.ts": { kind: "worker-entry" },
   "jobnimbus.ts": { kind: "runtime-routed" },
   "measurements.ts": {
@@ -189,6 +197,19 @@ test("remote-processing files stay outside the effect runtime because they do no
       `${file} now references the canonical effect runtime: reclassify it as runtime-routed if it starts owning provider mutations`,
     );
   }
+});
+
+test("the admission gateway is one file, and its one outbound call is the gateway's Propose", async () => {
+  const admission = Object.entries(OUTBOUND_FETCH_INVENTORY).filter(
+    (pair): pair is [string, Extract<InventoryEntry, { kind: "admission-gateway" }>] =>
+      pair[1].kind === "admission-gateway",
+  );
+  assert.deepEqual(admission.map(([file]) => file), ["helm-gateway.ts"], "admission is the runtime's own step, not an adapter's");
+  const source = await readFile(new URL("helm-gateway.ts", SRC_DIR), "utf8");
+  assert.ok(admission[0][1].discipline.length >= 40);
+  assert.match(source, /PROPOSE_PATH = "\/helm\.gateway\.v1\.EffectGatewayService\/Propose"/);
+  assert.equal(outboundFetchSites(source).length, 1, "one outbound call site: the proposal");
+  assert.ok(!referencesEffectRuntime(source) || source.includes("import type"), "the gateway client never drives the runtime; the runtime calls it");
 });
 
 test("governed-unrouted mutation adapters are exactly the recorded debt, each with its own discipline, and none quietly adopts half the runtime", async () => {

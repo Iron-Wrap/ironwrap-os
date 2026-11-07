@@ -1229,6 +1229,63 @@ returns `409 replay_run_id_conflict`; a concurrent exact request returns
 `409 replay_run_in_progress`. A queue-publication failure rolls the envelope claim back and marks
 the ledger attempt failed, so the same exact request can CAS the ledger into a new safe attempt.
 
+## HELM gateway admission of consequential effects
+
+Every provider mutation claims an attempt through the effect runtime (`src/effect-runtime.ts`),
+in the Worker (`executeExternalEffect`) or from the MCP host (`claimExternalEffect` behind
+`/admin/effects/claim`). Behind `HELM_GATEWAY_BINDING` the Worker proposes the attempt to the HELM
+gateway first (`src/helm-gateway.ts`: Connect unary JSON
+`POST /helm.gateway.v1.EffectGatewayService/Propose` on `HELM_GATEWAY_URL`, bearer
+`HELM_GATEWAY_TOKEN`, bounded by `HELM_GATEWAY_TIMEOUT_MS` for the request and the body) and acts
+on the decision before either claims:
+
+| Mode | Gateway said | What the Worker does |
+|---|---|---|
+| `off` (default) | never asked | the effect runs as before; nothing is recorded |
+| `shadow` | anything | the decision is recorded; the effect runs |
+| `enforce` | `ADMITTED` / `APPROVED` | the attempt is claimed and the provider called |
+| `enforce` | `DENIED` (any reason) | an authorized effect fails with `gateway_denied:<REASON_CODE>`; an effect in `retry` stays retryable (the ledger forbids retry → failed) and the attempt is refused (`effect_gateway_denied`); the provider is never called |
+| `enforce` | `ESCALATED` | the effect stays authorized; a person approves in HELM and the next attempt, proposed under the same idempotency key (no attempt was claimed), finds the approval; a stored admission whose permit has expired is a denial (`PERMIT_EXPIRED`) |
+| `enforce` | no decision (no token or URL, timeout, non-2xx, a body the client does not understand, a state it does not know, or the admission could not be recorded) | the effect stays authorized and the attempt is refused (`effect_gateway_unreachable`): an unreachable gateway stops new effects |
+
+A mode value nobody declared reads as `enforce`; unset or empty is `off`. One proposal per
+attempt: the idempotency key is `ironwrap:<tenant>:<effect_id>:<attempt_number>`, so a retry
+after a real provider attempt is a fresh admission with fresh mandate, limit and stop checks; a
+denial claims no attempt, so the key also carries the number of denials recorded for that attempt
+(`:d<n>`) and the proposal after a denial is a new one. On the MCP host's claim route a denial is
+`422 effect_gateway_denied`, never a lease. The
+Worker performs the effect itself after admission and never calls the gateway's Dispatch, so the
+gateway's dispatch-time re-checks do not apply to an admission already stored; the permit's own
+expiry is honoured. Every live-mode decision is appended to
+`external_effect_gateway_admissions` (migration 0210: effect, attempt number, mode, decision,
+reason code, the gateway's effect type and attempt id, the digest of the exact argument bytes sent,
+and the gateway's signed receipt references once it returns them, helm-tracker#276). The
+proposal carries the effect's identity (tenant, effect id, action, provider, actor, aggregate,
+intent, request hash, idempotency key, attempt number) as one canonical JSON object and never the
+request payload; a person's actor id travels as a digest. Effect types are `ironwrap.<action_id>`;
+they must be provisioned on the HELM tenant (`helm.authority.provision.v1`, human-approved) before
+`enforce` can admit anything.
+
+Tenant, workspace and principal are claims of the bearer token, sealed per tenant in the tenant
+registry (`TENANT_SECRET_NAMES`), so one Worker proposes each tenant's effects as that tenant's
+own service principal. Earned autonomy maps onto that principal's mandates
+(`gatewayMandateFor`): `off` leaves the effect type out of scope (`EFFECT_OUT_OF_SCOPE`),
+`asks_first` puts it in scope with approval threshold 0 (every call escalates), `within_limits`
+sets the approval threshold one above the amount ceiling (a call above it escalates, as the
+Worker asks first above its ceiling; no `per_call_limit`, which would deny it) and a `count` limit
+per the ceiling's window, which the gateway denies (`BUDGET_EXCEEDED`) where the Worker asks
+first; a demotion is a narrowing back to threshold 0. The Worker quotes `count=1` until money
+effects carry their amount into the proposal, so today the amount ceiling is enforced by the
+Worker's own authority check and recipients are not mapped. One principal per tenant until the
+identity issuer mints one per specialist; the acting specialist is named in the proposal
+arguments and audited there.
+
+What this binding does not do yet: on qa the gateway's Connect API has no public hostname and
+requires mTLS with cnf-bound tokens behind a network policy that admits only control-plane pods,
+so `enforce` on qa waits on an edge route, a Workers client certificate and token issuance
+(devops). Agent steps (`src/agents/control.ts`) reach only D1 today and are not proposed;
+the first registered consequential agent binding must call the same admission.
+
 ## External prerequisites and evidence seams
 
 1. **JobNimbus API** (`src/jobnimbus.ts`) — record types and statuses come from the `JN_*`

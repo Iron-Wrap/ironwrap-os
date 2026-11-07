@@ -13,6 +13,8 @@ interface Env {
   AGENT_HOST_TOKEN: string;
   /** 32-byte key (64 hex or base64) that seals each registry tenant's secrets (tenancy.ts). */
   TENANT_SECRETS_KEK: string;
+  /** The tenant's bearer for the HELM gateway (its tenant, workspace and principal are its claims). */
+  HELM_GATEWAY_TOKEN: string;
   /** What the hosting operator's proxy presents with the hostname it served (tenancy.ts requestHost). */
   TENANT_PROXY_TOKEN: string;
   NEWO_WEBHOOK_TOKEN: string;
@@ -84,6 +86,7 @@ declare namespace Cloudflare {
     EFFECT_RUNTIME_TOKEN: string;
     AGENT_HOST_TOKEN: string;
     TENANT_SECRETS_KEK: string;
+    HELM_GATEWAY_TOKEN: string;
     TENANT_PROXY_TOKEN: string;
     NEWO_WEBHOOK_TOKEN: string;
     NEWO_API_KEY: string;

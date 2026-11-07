@@ -125,6 +125,10 @@ interface Env {
   OPERATING_AUTOMATION_USER: string;
   ESTIMATOR_PRICE_LIST_JSON: string;
   PROPOSAL_TEMPLATE_DOC_ID: string;
+  /** HELM gateway admission of consequential effects: off, shadow or enforce (helm-gateway.ts). */
+  HELM_GATEWAY_BINDING: string;
+  HELM_GATEWAY_URL: string;
+  HELM_GATEWAY_TIMEOUT_MS: string;
   DEDUP_WINDOW_HOURS: string;
   STUCK_THRESHOLD_MIN: string;
   COMMERCIAL_AUTHORITY_POLICY_JSON: string;
@@ -251,6 +255,9 @@ declare namespace Cloudflare {
     OPERATING_AUTOMATION_USER: string;
     ESTIMATOR_PRICE_LIST_JSON: string;
     PROPOSAL_TEMPLATE_DOC_ID: string;
+    HELM_GATEWAY_BINDING: string;
+    HELM_GATEWAY_URL: string;
+    HELM_GATEWAY_TIMEOUT_MS: string;
     DEDUP_WINDOW_HOURS: string;
     STUCK_THRESHOLD_MIN: string;
     COMMERCIAL_AUTHORITY_POLICY_JSON: string;

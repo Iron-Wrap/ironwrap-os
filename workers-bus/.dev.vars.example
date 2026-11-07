@@ -70,6 +70,9 @@ AGENT_HOST_TOKEN="dev-agent-host-token-change-me"
 # `openssl rand -hex 32`. Rotating it re-seals every registry row; the Worker never logs it.
 TENANT_SECRETS_KEK=""
 
+# Bearer for the HELM gateway (src/helm-gateway.ts); its tenant, workspace and principal are the
+# token's claims. Unused while HELM_GATEWAY_BINDING is off; required (fail closed) in enforce.
+HELM_GATEWAY_TOKEN=""
 # What the hosting operator's proxy sends in x-ironwrap-proxy-token beside the hostname it served
 # (x-ironwrap-forwarded-host), so one Worker behind one workers.dev name can tell its tenants'
 # custom domains apart (src/tenancy.ts requestHost). A forwarded host without it is refused.

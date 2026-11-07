@@ -2323,11 +2323,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
     // 0209 adds the tenant registry (tenants, tenant_hosts): two tables, no named index, no trigger.
-    assert.equal(migrations.length, 150);
+    // 0210 adds the HELM gateway admissions ledger: one table, one named index, two append-only guards.
+    assert.equal(migrations.length, 151);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0209_tenant_registry.sql",
+      "0210_external_effect_gateway_admissions.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2493,8 +2494,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0169 re-creates 0067's AP invoice line readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      // 0209 adds the two tenant registry tables and nothing else.
-      { tables: 289, indexes: 383, triggers: 816 },
+      // 0209 adds the two tenant registry tables and nothing else. 0210 adds the gateway
+      // admissions table, its one named index and two append-only guards.
+      { tables: 290, indexes: 384, triggers: 818 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

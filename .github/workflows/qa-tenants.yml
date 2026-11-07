@@ -21,12 +21,11 @@ on:
         description: Comma-separated hostnames the proxy serves for this tenant
         required: true
         default: qa-iwrap-northline.mindburn.org
-      data_class:
-        description: What data the tenant holds
-        required: true
-        default: synthetic
-        type: choice
-        options: [synthetic]
+      activate:
+        description: Reactivate the tenant if an operator suspended it
+        required: false
+        default: false
+        type: boolean
       seal_ingest_token:
         description: Seal the qa environment secret QA_TENANT_INGEST_TOKEN as the tenant's INGEST_TOKEN
         required: false
@@ -35,18 +34,29 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
-# Shares Deploy's qa group, so a registration never interleaves with a qa release or its drill.
+# Its own group: joining Deploy's would let a dispatch cancel a pending qa release (GitHub keeps one
+# pending run per group). The step below refuses to run while a Deploy is in progress instead.
 concurrency:
-  group: deploy-qa
+  group: qa-tenants
   cancel-in-progress: false
 
 jobs:
   register:
+    # The qa admin bearer runs only the tool main ships, never a branch's copy of it.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: qa
     timeout-minutes: 5
     steps:
+      - name: Refuse to interleave with a qa release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          running="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow Deploy --status in_progress --json databaseId --jq 'length')"
+          test "$running" = "0" || { echo "deploy_in_progress: $running Deploy run(s) running; dispatch again after they finish" >&2; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -54,16 +64,17 @@ jobs:
       - name: Register the tenant
         env:
           ADMIN_TOKEN: ${{ secrets.RELEASE_QA_ADMIN_TOKEN }}
-          QA_TENANT_INGEST_TOKEN: ${{ secrets.QA_TENANT_INGEST_TOKEN }}
+          QA_TENANT_INGEST_TOKEN: ${{ inputs.seal_ingest_token && secrets.QA_TENANT_INGEST_TOKEN || '' }}
           TENANT: ${{ inputs.tenant }}
           HOSTS: ${{ inputs.hosts }}
-          DATA_CLASS: ${{ inputs.data_class }}
+          ACTIVATE: ${{ inputs.activate }}
           SEAL_INGEST_TOKEN: ${{ inputs.seal_ingest_token }}
         run: |
           set -euo pipefail
           test -n "$ADMIN_TOKEN" || { echo "release_qa_admin_token_missing" >&2; exit 1; }
           [[ "$TENANT" =~ ^[a-z0-9][a-z0-9-]{1,63}$ ]] || { echo "unexpected tenant id shape" >&2; exit 2; }
-          args=(--env qa --tenant "$TENANT" --data-class "$DATA_CLASS" --json)
+          args=(--env qa --tenant "$TENANT" --json)
+          [[ "$ACTIVATE" == "true" ]] && args+=(--activate)
           IFS=',' read -ra hosts <<<"$HOSTS"
           for host in "${hosts[@]}"; do
             host="$(echo "$host" | tr -d '[:space:]')"
@@ -77,5 +88,5 @@ jobs:
           node tools/qa-tenant-register.mjs "${args[@]}" >report.json
           {
             echo "## qa tenant registration"
-            jq -r '"- outcome: \(.outcome)\n- tenant: \(.tenant_id)\n- version: \(.version)\n- hosts: \(.hosts | join(", "))\n- data class: \(.data_class)\n- sealed secret names: \(.secret_names | join(", "))"' report.json
+            jq -r '"- outcome: \(.outcome)\n- tenant: \(.tenant_id)\n- version: \(.version)\n- status: \(.status)\n- hosts: \(.hosts | join(", "))\n- data class: \(.data_class)\n- sealed secret names: \(.secret_names | join(", "))"' report.json
           } >>"$GITHUB_STEP_SUMMARY"

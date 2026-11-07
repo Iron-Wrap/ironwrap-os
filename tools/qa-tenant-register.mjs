@@ -16,12 +16,14 @@
 //   3. the tenant id names a committed config whose status is not `live`, and is not the Worker's
 //      own tenant (that one is configured by vars);
 //   4. secret values come from named environment variables (`--secret NAME=ENV_VAR`), so no value
-//      is ever an argument; only tenant-scoped names are accepted, by the Worker.
+//      is ever an argument; only tenant-scoped names are accepted, by the Worker;
+//   5. the row keeps what an operator set by hand: settings the config does not derive stay, a
+//      suspension stays unless `--activate` is passed, and sealed secrets stay unless replaced.
 //
 // Usage:
 //   ADMIN_TOKEN=... node tools/qa-tenant-register.mjs --env qa --tenant northline-metal \
 //     --host qa-iwrap-northline.mindburn.org [--secret INGEST_TOKEN=QA_NORTHLINE_INGEST_TOKEN] \
-//     [--data-class synthetic] [--dry-run] [--json]
+//     [--activate] [--dry-run] [--json]
 //
 // Exit codes: 0 registered or unchanged, 1 refused before any write, 2 usage, 3 the write failed.
 import { readFileSync } from "node:fs";
@@ -37,7 +39,7 @@ const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9]
 export class RegisterGuardError extends Error {}
 
 export function parseArgs(argv) {
-  const args = { env: undefined, baseUrl: undefined, tenant: undefined, hosts: [], secrets: [], dataClass: "synthetic", dryRun: false, json: false };
+  const args = { env: undefined, baseUrl: undefined, tenant: undefined, hosts: [], secrets: [], activate: false, dryRun: false, json: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const next = () => {
@@ -51,7 +53,7 @@ export function parseArgs(argv) {
     else if (arg === "--tenant") args.tenant = next();
     else if (arg === "--host") args.hosts.push(next());
     else if (arg === "--secret") args.secrets.push(next());
-    else if (arg === "--data-class") args.dataClass = next();
+    else if (arg === "--activate") args.activate = true;
     else if (arg === "--dry-run") args.dryRun = true;
     else if (arg === "--json") args.json = true;
     else throw new RegisterGuardError(`unknown argument ${JSON.stringify(arg)}`);
@@ -77,13 +79,17 @@ export function loadTenantConfig(tenantId, configRoot = root) {
   return parsed;
 }
 
-/** The registry row body: tenant settings derived from the config, hosts, and the data class. */
-export function registrationBody(tenant, { hosts, dataClass, expectedVersion = null, secrets = null }) {
+/**
+ * The registry row body: the settings this tool derives from the config laid over the settings
+ * the row already holds (an operator's hand-set keys stay), the hosts, the synthetic data class,
+ * and the row's current status unless `activate` is asked for.
+ */
+export function registrationBody(tenant, { hosts, expectedVersion = null, secrets = null, current = null, activate = false }) {
   if (!Array.isArray(hosts) || hosts.length === 0) throw new RegisterGuardError("at least one --host is required: a tenant with no hostname is unreachable");
   for (const host of hosts) {
     if (!HOST_RE.test(host)) throw new RegisterGuardError(`--host ${JSON.stringify(host)} is not a lowercase hostname`);
   }
-  if (dataClass !== "synthetic" && dataClass !== "business") throw new RegisterGuardError(`--data-class must be synthetic or business`);
+  const dataClass = "synthetic";
   const brand = tenant.brand?.brands?.[0];
   const origins = hosts.map((host) => `https://${host}`);
   const settings = {
@@ -106,9 +112,9 @@ export function registrationBody(tenant, { hosts, dataClass, expectedVersion = n
   }
   const body = {
     display_name: tenant.tenant.display_name ?? tenant.runtime?.app_tenant_name,
-    status: "active",
+    status: current && !activate ? current.status : "active",
     data_class: dataClass,
-    settings,
+    settings: { ...(current?.settings ?? {}), ...settings },
     hosts,
   };
   if (expectedVersion !== null) body.expected_version = expectedVersion;
@@ -167,9 +173,10 @@ export async function register({ argv, environment, fetcher = fetch, configPath 
   const current = existing.status === 200 ? existing.body?.tenant : null;
   const body = registrationBody(tenant, {
     hosts: args.hosts,
-    dataClass: args.dataClass,
     expectedVersion: current ? current.version : null,
     secrets,
+    current,
+    activate: args.activate,
   });
   const unchanged = current
     && current.display_name === body.display_name
@@ -183,6 +190,7 @@ export async function register({ argv, environment, fetcher = fetch, configPath 
     tenant_id: tenant.tenant.id,
     hosts: body.hosts,
     settings: body.settings,
+    status: body.status,
     data_class: body.data_class,
     secret_names: secrets ? Object.keys(secrets).sort() : [],
     existing_version: current?.version ?? null,

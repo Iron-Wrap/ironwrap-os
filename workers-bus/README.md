@@ -763,10 +763,20 @@ proxy in front of it (today the hosting operator's `ironwrap-qa-proxy` for `qa-i
 and the Worker sees the proxy's upstream hostname in the URL, not the domain the user typed. The
 proxy therefore states the hostname it served in `x-ironwrap-forwarded-host` and proves it is the
 proxy with `x-ironwrap-proxy-token`, compared constant-time against the Worker secret
-`TENANT_PROXY_TOKEN`. A forwarded host with a valid proof decides the tenant; a forwarded host
-without one is refused (`403 tenant_proxy_untrusted`), never read and never silently defaulted; a
-request without the header is keyed by its URL hostname. One proxy per tenant domain, all with the
-same token, is enough.
+`TENANT_PROXY_TOKEN`. A forwarded host with a valid proof must name a registered tenant: an
+unregistered or malformed one is refused (`404 tenant_unknown`), a forwarded host without a valid
+proof is refused (`403 tenant_proxy_untrusted`), never read and never silently defaulted; a request
+without the header is keyed by its URL hostname, and an unregistered URL hostname is the Worker's
+own tenant so the deployed hostnames keep working. The Worker tenant's own proxied domains are
+registered against it like any other host (the registry takes hosts for the Worker tenant). The
+proxy must overwrite any client-supplied `x-ironwrap-*` header, never pass it through. One token
+for every proxy of a deployment; rotating it is a new secret value on the Worker and on each
+proxy, with a short window in which old proxies are refused.
+
+Every secret declared for the Worker is required on every deployed Worker by the release
+preflight, so `TENANT_SECRETS_KEK`, `TENANT_PROXY_TOKEN` and `HELM_GATEWAY_TOKEN` must be set on
+the production Worker (random values where the feature is off) before the next production release,
+and on qa before each lands.
 
 **qa: two synthetic tenants side by side.** `env.qa` runs with the flag on. The Worker tenant
 answers on `qa-iwrap.mindburn.org` and the `workers.dev` name as before. A second synthetic tenant

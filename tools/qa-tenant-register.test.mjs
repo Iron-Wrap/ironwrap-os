@@ -66,7 +66,7 @@ function fakeWorker(initial = null) {
 
 test("arguments: env or loopback base url, one or more hosts, secrets by environment variable name", () => {
   const args = parseArgs(["--env", "qa", "--tenant", "northline-metal", "--host", "a.example.invalid", "--host", "b.example.invalid", "--secret", "INGEST_TOKEN=QA_T", "--dry-run", "--json"]);
-  assert.deepEqual(args, { env: "qa", baseUrl: undefined, tenant: "northline-metal", hosts: ["a.example.invalid", "b.example.invalid"], secrets: ["INGEST_TOKEN=QA_T"], dataClass: "synthetic", dryRun: true, json: true });
+  assert.deepEqual(args, { env: "qa", baseUrl: undefined, tenant: "northline-metal", hosts: ["a.example.invalid", "b.example.invalid"], secrets: ["INGEST_TOKEN=QA_T"], activate: false, dryRun: true, json: true });
   assert.throws(() => parseArgs(["--tenant"]), /needs a value/);
   assert.throws(() => parseArgs(["--token", "x"]), /unknown argument/);
   assert.deepEqual(resolveSecrets(["INGEST_TOKEN=QA_T"], { QA_T: "sealed-value" }), { INGEST_TOKEN: "sealed-value" });
@@ -85,7 +85,7 @@ test("the live tenant's config, an unknown id and a malformed id are refused", (
 
 test("the registry row is derived from the tenant config and the hosts, with tenant-scoped names only", () => {
   const tenant = loadTenantConfig("northline-metal", configRoot());
-  const body = registrationBody(tenant, { hosts: ["qa-iwrap-northline.mindburn.org"], dataClass: "synthetic", expectedVersion: 2, secrets: { INGEST_TOKEN: "x" } });
+  const body = registrationBody(tenant, { hosts: ["qa-iwrap-northline.mindburn.org"], expectedVersion: 2, secrets: { INGEST_TOKEN: "x" } });
   assert.equal(body.display_name, "Northline Metal Roofing (synthetic)");
   assert.equal(body.status, "active");
   assert.equal(body.data_class, "synthetic");
@@ -106,9 +106,17 @@ test("the registry row is derived from the tenant config and the hosts, with ten
     PUBLIC_ESTIMATE_ALLOWED_BRANDS: "northline",
     AGENT_DATA_CLASS: "synthetic",
   });
-  assert.throws(() => registrationBody(tenant, { hosts: [], dataClass: "synthetic" }), /at least one --host/);
-  assert.throws(() => registrationBody(tenant, { hosts: ["Has.Upper"], dataClass: "synthetic" }), /not a lowercase hostname/);
-  assert.throws(() => registrationBody(tenant, { hosts: ["a.example.invalid"], dataClass: "real" }), /synthetic or business/);
+  assert.throws(() => registrationBody(tenant, { hosts: [] }), /at least one --host/);
+  assert.throws(() => registrationBody(tenant, { hosts: ["Has.Upper"] }), /not a lowercase hostname/);
+
+  // What an operator set by hand on the row stays: settings the config does not derive, and a
+  // suspension unless activation is asked for.
+  const current = { status: "suspended", settings: { NEWO_PROJECT_ID: "np-synthetic", APP_LOCALE: "fr-CA" }, version: 3 };
+  const merged = registrationBody(tenant, { hosts: ["qa-iwrap-northline.mindburn.org"], expectedVersion: 3, current });
+  assert.equal(merged.settings.NEWO_PROJECT_ID, "np-synthetic", "a hand-set key stays");
+  assert.equal(merged.settings.APP_LOCALE, "en-CA", "a derived key wins over a hand-set one");
+  assert.equal(merged.status, "suspended");
+  assert.equal(registrationBody(tenant, { hosts: ["qa-iwrap-northline.mindburn.org"], expectedVersion: 3, current, activate: true }).status, "active");
 });
 
 test("registration creates, re-runs as a no-op, updates with the version it read, and never prints a secret", async () => {
@@ -151,6 +159,15 @@ test("refusals happen before any write: production, the live tenant, the Worker'
   const host = ["--host", "qa-iwrap-northline.mindburn.org"];
   await assert.rejects(register({ argv: ["--env", "production", "--tenant", "northline-metal", ...host], environment: { ADMIN_TOKEN: "x" }, ...base }), /production/);
   await assert.rejects(register({ argv: ["--env", "qa", "--tenant", "ironwrap", ...host], environment: { ADMIN_TOKEN: "x" }, ...base }), /live tenant/);
+  // The Worker's own tenant with a non-live config is still refused: its vars configure it.
+  const ownRoot = configRoot();
+  writeFileSync(join(ownRoot, "config", "tenants", "ironwrap.json"), JSON.stringify({
+    tenant: { id: "ironwrap", display_name: "IronWrap OS (demo copy)", status: "demo" },
+    runtime: { app_tenant_name: "IronWrap OS" },
+    brand: { name: "IronWrap", brands: [{ key: "ironwrap", sender_mailbox: "sales@example.invalid", sender_domain: "example.invalid" }] },
+    locale: { language_tag: "en-CA", timezone: "America/Edmonton", currency: "CAD" },
+  }));
+  await assert.rejects(register({ argv: ["--env", "qa", "--tenant", "ironwrap", ...host], environment: { ADMIN_TOKEN: "x" }, fetcher: worker.fetcher, configPath: WRANGLER, configRoot: ownRoot }), /own tenant/);
   await assert.rejects(register({ argv: ["--env", "qa", "--tenant", "northline-metal", ...host], environment: {}, ...base }), /ADMIN_TOKEN must be set/);
   await assert.rejects(register({ argv: ["--env", "qa", "--tenant", "northline-metal", ...host], environment: { ADMIN_TOKEN: "wrong" }, ...base }), /refused by the Worker/);
   assert.equal(worker.calls.filter((call) => call.method === "PUT").length, 0, "nothing was written");

@@ -285,10 +285,11 @@ export type TenantRefusalCode =
   | "tenant_suspended"
   | "tenant_unavailable"
   | "tenant_secrets_unavailable"
-  | "tenant_proxy_untrusted";
+  | "tenant_proxy_untrusted"
+  | "tenant_unknown";
 
 export interface TenantRefusal {
-  status: 403 | 503;
+  status: 403 | 404 | 503;
   error: TenantRefusalCode;
 }
 
@@ -366,14 +367,24 @@ async function tenantIdForHost(db: TenantDb, host: string, now: number): Promise
   return tenantId;
 }
 
-/** A hostname as the registry keys it: lowercase, no port, no trailing dot. */
-export function normalizeHost(raw: string): string {
-  let host = raw.trim().toLowerCase();
-  // `host:port` and `[v6]:port` as a Host header carries them; the registry keys hostnames.
-  const bracket = host.match(/^\[([^\]]+)\](?::\d+)?$/);
-  if (bracket) host = bracket[1];
-  else if (/^[^:]+:\d+$/.test(host)) host = host.slice(0, host.lastIndexOf(":"));
-  return host.endsWith(".") ? host.slice(0, -1) : host;
+/**
+ * A hostname as the registry keys it: lowercase, punycode, no port, no trailing dot, or null when
+ * the value is not one hostname (a list, a path, an address with brackets left over, anything the
+ * URL parser refuses).
+ */
+export function normalizeHost(raw: string): string | null {
+  const value = raw.trim();
+  if (value === "" || /[\s,/\\@?#]/.test(value)) return null;
+  let host: string;
+  try {
+    // The URL parser lowercases, converts IDN to punycode and separates a port and brackets.
+    host = new URL(`https://${value}`).hostname;
+  } catch {
+    return null;
+  }
+  if (host.startsWith("[")) return null;
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  return host === "" ? null : host;
 }
 
 /**
@@ -388,14 +399,14 @@ export function normalizeHost(raw: string): string {
 export function requestHost(
   req: Request,
   env: TenancyEnv,
-): { ok: true; host: string } | { ok: false; refusal: TenantRefusal } {
+): { ok: true; host: string | null; forwarded: boolean } | { ok: false; refusal: TenantRefusal } {
   const forwarded = req.headers.get(FORWARDED_HOST_HEADER);
-  if (forwarded === null) return { ok: true, host: normalizeHost(new URL(req.url).hostname) };
+  if (forwarded === null) return { ok: true, host: normalizeHost(new URL(req.url).hostname), forwarded: false };
   const proof = req.headers.get(PROXY_TOKEN_HEADER) ?? "";
   if (!env.TENANT_PROXY_TOKEN || !constantTimeEqual(proof, env.TENANT_PROXY_TOKEN)) {
     return { ok: false, refusal: { status: 403, error: "tenant_proxy_untrusted" } };
   }
-  return { ok: true, host: normalizeHost(forwarded) };
+  return { ok: true, host: normalizeHost(forwarded), forwarded: true };
 }
 
 async function loadTenant(env: TenancyEnv, tenantId: string, now: number): Promise<CachedTenant> {
@@ -512,10 +523,16 @@ export async function resolveRequestTenant(
   const host = resolvedHost.host;
   let tenantId: string | null;
   try {
-    tenantId = TENANT_HOST_RE.test(host) ? await tenantIdForHost(tenancy.DB as TenantDb, host, now()) : null;
+    tenantId = host !== null && TENANT_HOST_RE.test(host) ? await tenantIdForHost(tenancy.DB as TenantDb, host, now()) : null;
   } catch {
     return { kind: "refused", tenantId: null, refusal: { status: 503, error: "tenant_unavailable" } };
   }
+  // A host the proxy vouched for names a tenant or nothing: a domain nobody registered (or one
+  // whose registration was dropped) is refused, never the default tenant's data under another
+  // tenant's domain. The Worker tenant's own proxied domains are registered against it like any
+  // other host. A URL host nobody registered is the Worker's own: the deployed hostnames keep
+  // working the day the flag turns on.
+  if (!tenantId && resolvedHost.forwarded) return { kind: "refused", tenantId: null, refusal: { status: 404, error: "tenant_unknown" } };
   if (!tenantId || tenantId === fallback) return { kind: "default", tenantId: fallback, env };
   return await tenantEnvFor(env, tenantId, now);
 }
@@ -681,13 +698,20 @@ export async function openTenantSecrets(
   return out;
 }
 
-/** Constant-time string equality; `b` absent is never equal. */
+/** Constant-time string equality; `b` absent is never equal. Lengths are compared too, in constant time. */
 export function constantTimeEqual(a: string, b: string | undefined): boolean {
   if (!b) return false;
   const enc = new TextEncoder();
   const ab = enc.encode(a);
   const bb = enc.encode(b);
-  if (ab.byteLength !== bb.byteLength) return false;
+  // Unequal lengths still run the full comparison over the longer input, so the time taken does
+  // not tell a caller how long the expected value is.
+  if (ab.byteLength !== bb.byteLength) {
+    const longer = ab.byteLength > bb.byteLength ? ab : bb;
+    let sink = 1;
+    for (let index = 0; index < longer.length; index += 1) sink |= longer[index];
+    return sink === -1;
+  }
   const tse = (crypto.subtle as unknown as {
     timingSafeEqual?: (x: ArrayBufferView, y: ArrayBufferView) => boolean;
   }).timingSafeEqual;

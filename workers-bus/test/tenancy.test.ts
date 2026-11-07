@@ -293,8 +293,27 @@ test("a proxy's forwarded host is read only with the proxy's proof; without it t
   assert.equal(trusted.tenantId, TENANT_B);
   const withPort = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": `${HOST_B.toUpperCase()}:443`, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
   assert.equal(withPort.kind, "tenant", "the forwarded host is normalised like the URL host");
+  // A forwarded host nobody registered is refused, never the default tenant under another domain;
+  // the Worker tenant's own proxied domain is registered against it like any other host.
+  const unregistered = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": "nobody.example.invalid", "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
+  assert.deepEqual(unregistered, { kind: "refused", tenantId: null, refusal: { status: 404, error: "tenant_unknown" } });
+  for (const malformed of ["a.example.invalid, b.example.invalid", "[::1]:8080", "b.example.invalid/path", "", "user@b.example.invalid"]) {
+    const refused = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": malformed, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
+    assert.equal(refused.kind, "refused", JSON.stringify(malformed));
+  }
+  db.raw.prepare(
+    `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, version, write_id, created_at, updated_at)
+     VALUES (?, 'Worker tenant hosts', 'active', 'business', '{}', 1, 'seed-write-a', ?, ?)`,
+  ).run(TENANT, NOW, NOW);
+  db.raw.prepare("INSERT INTO tenant_hosts (host, tenant_id, created_at) VALUES (?, ?, ?)").run(HOST_A, TENANT, NOW);
+  resetTenantCache();
   const defaultHost = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": HOST_A, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
   assert.equal(defaultHost.kind, "default");
+  // IDN arrives as its punycode form, which is how the registry keys it.
+  db.raw.prepare("INSERT INTO tenant_hosts (host, tenant_id, created_at) VALUES (?, ?, ?)").run("xn--bcher-kva.example.invalid", TENANT_B, NOW);
+  resetTenantCache();
+  const idn = await resolveRequestTenant(viaProxy({ "x-ironwrap-forwarded-host": "Bücher.example.invalid", "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never);
+  assert.equal(idn.kind, "tenant");
 
   for (const headers of [
     { "x-ironwrap-forwarded-host": HOST_B },
@@ -309,10 +328,13 @@ test("a proxy's forwarded host is read only with the proxy's proof; without it t
   // The URL host still decides when no forwarded host is present.
   assert.equal((await resolveRequestTenant(request(HOST_B), env as never)).kind, "tenant");
 
-  // Through the Worker: the refusal is a 403, the trusted forward answers as tenant B.
+  // Through the Worker: the refusals are a 403 and a 404, the trusted forward answers as tenant B.
   const forbidden = await worker.fetch(viaProxy({ "x-ironwrap-forwarded-host": HOST_B }), env as never, ctx() as never);
   assert.equal(forbidden.status, 403);
   assert.deepEqual(await forbidden.json(), { error: "tenant_proxy_untrusted" });
+  const unknown = await worker.fetch(viaProxy({ "x-ironwrap-forwarded-host": "nobody.example.invalid", "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never, ctx() as never);
+  assert.equal(unknown.status, 404);
+  assert.deepEqual(await unknown.json(), { error: "tenant_unknown" });
   const served = await worker.fetch(viaProxy({ "x-ironwrap-forwarded-host": HOST_B, "x-ironwrap-proxy-token": "proxy-proof-token" }), env as never, ctx() as never);
   assert.equal(((await served.json()) as { tenant: { id: string } }).tenant.id, TENANT_B);
 });

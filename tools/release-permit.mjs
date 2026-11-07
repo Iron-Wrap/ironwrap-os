@@ -34,7 +34,7 @@ export const RELEASE_REPLAY_PREFIX = "release-permit:";
 export const DEFAULT_D1_API_BASE = "https://api.cloudflare.com/client/v4";
 export const VERSION_MESSAGE_SCHEMA = "ironwrap-release-version-v1";
 export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
-export const RELEASE_MANIFEST_SCHEMA = "ironwrap_release_manifest_v2";
+export const RELEASE_MANIFEST_SCHEMA = "ironwrap_release_manifest_v3";
 export const SOURCE_MERGE_SCHEMA = "ironwrap_source_admission_merge_v1";
 export const RELEASE_OUTCOME_SCHEMA = "ironwrap_release_outcome_v1";
 export const RELEASE_OUTCOME_PREFIX = "release-outcome:";
@@ -683,13 +683,13 @@ function validateReleaseManifest(manifest, permit) {
   equal(permit.source_git_tree, manifest.source.git_tree, "release_manifest_source_tree_drift");
   equal(permit.source_tree_sha256, manifest.source.tree_manifest_sha256, "release_manifest_source_manifest_drift");
   equal(permit.diff_sha256, manifest.source.diff_sha256, "release_manifest_source_diff_drift");
-  exactKeys(manifest.source.component_digests, ["worker", "pwa", "frappe", "mcp", "hermes", "tenant_config"], "release_manifest_component_shape_invalid");
+  exactKeys(manifest.source.component_digests, ["worker", "pwa", "frappe", "mcp", "tenant_config"], "release_manifest_component_shape_invalid");
   for (const value of Object.values(manifest.source.component_digests)) hash(value, "release_manifest_component_digest_invalid");
   validateSupplyChainEvidence(manifest.supply_chain, "release_manifest");
-  exactKeys(manifest.artifacts, ["aggregate_digest", "worker_digest", "pwa_digest", "frappe_wheel_digest", "frappe_site_schema_digest", "mcp_digest", "hermes_digest"], "release_manifest_artifacts_shape_invalid");
+  exactKeys(manifest.artifacts, ["aggregate_digest", "worker_digest", "pwa_digest", "frappe_wheel_digest", "frappe_site_schema_digest", "mcp_digest"], "release_manifest_artifacts_shape_invalid");
   for (const value of Object.values(manifest.artifacts)) hash(value, "release_manifest_artifact_digest_invalid");
   equal(permit.worker.artifact_digest, manifest.artifacts.aggregate_digest, "release_manifest_aggregate_artifact_drift");
-  exactKeys(manifest.configuration, ["aggregate_digest", "tenant_digest", "mcp_digest", "hermes_digest", "bindings_digest", "queues_digest", "buckets_digest", "routes_digest", "secret_names_digest"], "release_manifest_configuration_shape_invalid");
+  exactKeys(manifest.configuration, ["aggregate_digest", "tenant_digest", "mcp_digest", "bindings_digest", "queues_digest", "buckets_digest", "routes_digest", "secret_names_digest"], "release_manifest_configuration_shape_invalid");
   for (const value of Object.values(manifest.configuration)) hash(value, "release_manifest_configuration_digest_invalid");
   equal(permit.config_digest, manifest.configuration.aggregate_digest, "release_manifest_config_drift");
   exactKeys(manifest.migrations, ["d1_set_digest", "frappe_schema_digest", "frappe_migration_digest", "compatibility"], "release_manifest_migrations_shape_invalid");
@@ -1913,7 +1913,6 @@ export async function computeSourceEvidence({ repoRoot, sourceCommit = "HEAD", b
     pwa: "app",
     frappe: "frappe-apps/ironwrap_roofing",
     mcp: "mcp",
-    hermes: "hermes",
     tenant_config: "config/tenants",
   }).map(async ([name, prefix]) => {
     const listing = await git(root, ["ls-tree", "-r", "--full-tree", source, "--", prefix]);

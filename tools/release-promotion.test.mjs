@@ -1478,7 +1478,7 @@ const FRAPPE_WHEEL_ABSENT = sha("frappe-wheel-absent");
 
 function sourceDigests({ frappe = sha("frappe-source"), schema = sha("frappe-schema"), migration = sha("frappe-migrations"), routes = sha("routes") } = {}) {
   return {
-    component_digests: { worker: sha("worker"), pwa: sha("pwa"), frappe, mcp: sha("mcp"), hermes: sha("hermes"), tenant_config: sha("tenant") },
+    component_digests: { worker: sha("worker"), pwa: sha("pwa"), frappe, mcp: sha("mcp"), tenant_config: sha("tenant") },
     frappe_schema_digest: schema,
     frappe_migration_digest: migration,
     routes_source_digest: routes,

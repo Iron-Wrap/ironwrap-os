@@ -112,7 +112,7 @@ function releaseManifest() {
     ruleset: { id: 20652124, target: "branch", enforcement: "active", allowed_merge_methods: ["rebase", "squash"] },
   };
   const fields = {
-    schema: "ironwrap_release_manifest_v2",
+    schema: "ironwrap_release_manifest_v3",
     frappe_scope: "in-scope",
     pr: {
       number: 43,
@@ -138,7 +138,6 @@ function releaseManifest() {
         pwa: sha("pwa-source"),
         frappe: sha("frappe-source"),
         mcp: sha("mcp-source"),
-        hermes: sha("hermes-source"),
         tenant_config: sha("tenant-source"),
       },
     },
@@ -157,13 +156,11 @@ function releaseManifest() {
       frappe_wheel_digest: sha("frappe-wheel"),
       frappe_site_schema_digest: sha("frappe-site-schema"),
       mcp_digest: sha("mcp-source"),
-      hermes_digest: sha("hermes-source"),
     },
     configuration: {
       aggregate_digest: CONFIG,
       tenant_digest: sha("tenant-source"),
       mcp_digest: sha("mcp-source"),
-      hermes_digest: sha("hermes-source"),
       bindings_digest: sha("bindings"),
       queues_digest: sha("queues"),
       buckets_digest: sha("buckets"),
@@ -480,6 +477,21 @@ test("the signed manifest owns the exact Frappe release scope", () => {
         }),
       /release_permit_release_manifest_frappe_scope_invalid/,
     );
+  }
+});
+
+test("release manifest v3 carries no Hermes component or digests", () => {
+  const { evidence_digest: _replaced, ...fields } = releaseManifest();
+  const resealed = (changed) => ({ ...changed, evidence_digest: sha(canonicalJson(changed)) });
+  assert.equal(validateReleasePermitPayload(payload({ release_manifest: resealed(fields) }), { now: NOW }).release_manifest.schema, "ironwrap_release_manifest_v3");
+  const cases = [
+    [{ ...fields, schema: "ironwrap_release_manifest_v2" }, /release_permit_release_manifest_schema_invalid/],
+    [{ ...fields, source: { ...fields.source, component_digests: { ...fields.source.component_digests, hermes: sha("hermes-source") } } }, /release_permit_release_manifest_component_shape_invalid/],
+    [{ ...fields, artifacts: { ...fields.artifacts, hermes_digest: sha("hermes-source") } }, /release_permit_release_manifest_artifacts_shape_invalid/],
+    [{ ...fields, configuration: { ...fields.configuration, hermes_digest: sha("hermes-source") } }, /release_permit_release_manifest_configuration_shape_invalid/],
+  ];
+  for (const [changed, code] of cases) {
+    assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: resealed(changed) }), { now: NOW }), code);
   }
 });
 
@@ -1549,7 +1561,7 @@ test("source evidence binds a pristine checkout's commit, tree, and binary diff"
   assert.match(evidence.source_git_tree, /^[0-9a-f]{40}$/);
   assert.match(evidence.source_tree_sha256, /^[0-9a-f]{64}$/);
   assert.match(evidence.diff_sha256, /^[0-9a-f]{64}$/);
-  assert.deepEqual(Object.keys(evidence.component_digests).sort(), ["frappe", "hermes", "mcp", "pwa", "tenant_config", "worker"]);
+  assert.deepEqual(Object.keys(evidence.component_digests).sort(), ["frappe", "mcp", "pwa", "tenant_config", "worker"]);
   assert.equal(evidence.worktree_clean, true);
   // A tree without the Frappe app lists nothing under it, so every Frappe digest is the
   // digest of an empty listing: the enforcer's marker for an absent app.

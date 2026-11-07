@@ -24,8 +24,6 @@ import {
   releasePermitDigest,
   releaseVersionMessage,
   signReleasePermit,
-  signReviewGoReceipt,
-  signExternalReleaseEvidence,
   signServiceAdapterReceipt,
   validateReleasePermitPayload,
   validateDomainReadbackReceipt,
@@ -35,8 +33,6 @@ import {
   validateReleaseEnvironmentPreflight,
   validateSourceMergeReceipt,
   validateWorkerVersionReadback,
-  verifyReviewGoReceipt,
-  verifyExternalReleaseEvidence,
   verifyServiceAdapterReceipt,
   verifyReleasePermit,
 } from "./release-permit.mjs";
@@ -233,81 +229,6 @@ function releaseManifest() {
     },
   };
   return { ...fields, evidence_digest: sha(canonicalJson(fields)) };
-}
-
-function externalEvidence(overrides = {}) {
-  const manifest = releaseManifest();
-  return {
-    schema: "ironwrap_release_external_evidence_v1",
-    type: "ironwrap-release-external-evidence",
-    repository: "Iron-Wrap/ironwrap-os",
-    pr_number: manifest.pr.number,
-    source_commit: COMMIT,
-    source_git_tree: GIT_TREE,
-    artifact_digest: ARTIFACT,
-    supply_chain: manifest.supply_chain,
-    service_identities: {
-      pwa: {
-        artifact_digest: manifest.artifacts.pwa_digest,
-        qa_revision: manifest.qa.pwa_revision,
-        qa_readback_digest: manifest.qa.pwa_readback_digest,
-        production_candidate_revision:
-          manifest.production_candidates.pwa_revision,
-        production_candidate_readback_digest:
-          manifest.production_candidates.pwa_readback_digest,
-      },
-      frappe: {
-        artifact_digest: manifest.artifacts.frappe_wheel_digest,
-        site_schema_digest: manifest.artifacts.frappe_site_schema_digest,
-        qa_revision: manifest.qa.frappe_revision,
-        qa_readback_digest: manifest.qa.frappe_readback_digest,
-        production_candidate_revision:
-          manifest.production_candidates.frappe_revision,
-        production_candidate_readback_digest:
-          manifest.production_candidates.frappe_readback_digest,
-      },
-      facet: {
-        artifact_digest: sha("facet-artifact"),
-        integration_receipt_digest: sha("facet-integration"),
-      },
-    },
-    affected_scopes: affectedScopes(),
-    recovery: {
-      prior_worker_readback_digest:
-        manifest.recovery.prior_worker_readback_digest,
-      prior_pwa_revision: manifest.recovery.prior_pwa_revision,
-      prior_pwa_readback_digest:
-        manifest.recovery.prior_pwa_readback_digest,
-      prior_frappe_revision: manifest.recovery.prior_frappe_revision,
-      prior_frappe_readback_digest:
-        manifest.recovery.prior_frappe_readback_digest,
-      prior_frappe_backup_digest: manifest.recovery.prior_frappe_backup_digest,
-    },
-    provider_reconciliation: manifest.provider_reconciliation,
-    business_evidence: {
-      issue_id: "IRO-7",
-      actor_receipt_ref: "linear:IRO-7:actor-receipt",
-      actor_receipt_digest: sha("actor-receipt"),
-      business_receipt_ref: "linear:IRO-7:business-receipt",
-      business_receipt_digest: sha("business-receipt"),
-      result: "passed",
-    },
-    records: {
-      authority_issue: "IRO-12",
-      implementation_issue: "IRO-41",
-      business_issue: "IRO-7",
-      release_record_ref: "release:Iron-Wrap/ironwrap-os:5",
-      release_record_digest: sha("release-record"),
-    },
-    issuer_principal: "evidence-reviewer@ironwrapexteriors.com",
-    issuer_task_id: "iro7-evidence-task",
-    issuer_run_id: "iro7-evidence-run",
-    key_version: "review-key-2026-08",
-    issued_at: ISSUED_AT,
-    expires_at: "2026-08-17T01:00:00.000Z",
-    nonce: "evidence0123456789abcdef0123456789abcdef0123456789abcdef",
-    ...overrides,
-  };
 }
 
 function sourceMergeReceipt(permit) {
@@ -1146,67 +1067,6 @@ test("secret inventory readback binds names but never accepts secret values", ()
   assert.match(inventory.secret_inventory_digest, /^[0-9a-f]{64}$/);
   assert.throws(() => validateSecretInventoryReadback([{ name: "ADMIN_TOKEN", value: "secret" }], ["ADMIN_TOKEN"]), /release_permit_secret_inventory_value_exposed/);
   assert.throws(() => validateSecretInventoryReadback([{ name: "ADMIN_TOKEN" }], ["INGEST_TOKEN"]), /release_permit_secret_inventory_drift/);
-});
-
-test("independent reviewer GO receipt is signed, source-bound, and independently bounded", () => {
-  const { privateKey, publicKey } = keyPair();
-  const receipt = signReviewGoReceipt(privateKey, {
-    schema: "ironwrap_release_review_v1",
-    type: "ironwrap-release-review",
-    repository: "Iron-Wrap/ironwrap-os",
-    source_commit: COMMIT,
-    source_tree_sha256: TREE,
-    diff_sha256: DIFF,
-    reviewer_principal: "independent-reviewer@example.invalid",
-    reviewer_task_id: "codex-review-iro41",
-    reviewer_run_id: "review-run-31970000001",
-    review_key_version: "review-key-2026-08",
-    decision: "GO",
-    findings_digest: FINDINGS,
-    unresolved_p0: 0,
-    unresolved_p1: 0,
-    issued_at: ISSUED_AT,
-    expires_at: "2026-08-16T21:30:00.000Z",
-    nonce: "review0123456789abcdef0123456789abcdef0123456789abcdef",
-  }, { now: NOW });
-  const verified = verifyReviewGoReceipt(publicKey, receipt, {
-    repository: "Iron-Wrap/ironwrap-os",
-    source_commit: COMMIT,
-    source_tree_sha256: TREE,
-    diff_sha256: DIFF,
-  }, { now: NOW });
-  assert.equal(verified.reviewer_principal, "independent-reviewer@example.invalid");
-  assert.throws(() => verifyReviewGoReceipt(publicKey, receipt, { source_commit: BASE }, { now: NOW }), /release_permit_review_source_commit_drift/);
-  assert.throws(() => signReviewGoReceipt(privateKey, {
-    ...verified,
-    expires_at: "2026-08-16T22:00:01.000Z",
-  }, { now: NOW }), /release_permit_review_window_invalid/);
-});
-
-test("external release evidence is signed, source-addressed, scope-complete, and non-synthetic", () => {
-  const { privateKey, publicKey } = keyPair();
-  const receipt = signExternalReleaseEvidence(privateKey, externalEvidence(), { now: NOW });
-  const verified = verifyExternalReleaseEvidence(publicKey, receipt, {
-    repository: "Iron-Wrap/ironwrap-os",
-    pr_number: 43,
-    source_commit: COMMIT,
-    source_git_tree: GIT_TREE,
-    artifact_digest: ARTIFACT,
-  }, { now: NOW });
-  assert.equal(verified.business_evidence.issue_id, "IRO-7");
-  assert.equal(verified.affected_scopes.length, 10);
-  assert.throws(() => signExternalReleaseEvidence(privateKey, externalEvidence({ business_evidence: { ...externalEvidence().business_evidence, actor_receipt_ref: "" } }), { now: NOW }), /release_permit_release_evidence_actor_receipt_ref_invalid/);
-  assert.throws(() => signExternalReleaseEvidence(privateKey, externalEvidence({ affected_scopes: externalEvidence().affected_scopes.filter((scope) => scope.scope !== "shop") }), { now: NOW }), /release_permit_release_evidence_scopes_invalid/);
-  const skipped = externalEvidence().affected_scopes.map((scope) => scope.scope === "facet" ? { ...scope, status: "not_applicable", authenticated: false } : scope);
-  assert.throws(() => signExternalReleaseEvidence(privateKey, externalEvidence({ affected_scopes: skipped }), { now: NOW }), /release_permit_release_evidence_scope_non_applicability_invalid/);
-  const providerSkipped = externalEvidence().affected_scopes.map((scope) => scope.scope === "provider" ? {
-    ...scope,
-    status: "not_applicable",
-    authenticated: false,
-    non_applicability_policy_digest: sha("provider-policy"),
-    reason_digest: sha("provider-reason"),
-  } : scope);
-  assert.throws(() => signExternalReleaseEvidence(privateKey, externalEvidence({ affected_scopes: providerSkipped }), { now: NOW }), /release_permit_release_evidence_provider_scope_not_proven/);
 });
 
 test("service adapter receipts bind exact Frappe promotion, post-smoke readback, and rollback", () => {

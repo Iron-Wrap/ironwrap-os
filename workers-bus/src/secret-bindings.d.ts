@@ -56,8 +56,6 @@ interface Env {
   FACET_DESIGN_INGEST_TENANT_MAP_JSON: string;
   /** Rotating Facet v2 verification keys. Secret JSON; never a Wrangler var. */
   FACET_V2_KEYS_JSON: string;
-  /** Shared only with the Facet launch verifier; never reused for v2 event delivery. */
-  FACET_LAUNCH_HMAC_KEY: string;
   FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: string;
   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: string;
   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: string;
@@ -112,7 +110,6 @@ declare namespace Cloudflare {
     FACET_DESIGN_INGEST_HMAC_KEY: string;
     FACET_DESIGN_INGEST_TENANT_MAP_JSON: string;
     FACET_V2_KEYS_JSON: string;
-    FACET_LAUNCH_HMAC_KEY: string;
     FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: string;
     FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: string;
     FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: string;

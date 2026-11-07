@@ -325,9 +325,12 @@ export default defineConfig({
         // The Worker answers the manifest per tenant host (workers-bus/src/web-manifest.ts); a
         // precached copy would hand every host this build's name. The built file serves vite preview.
         beforeBuildServiceWorker(options) {
-          options.workbox.additionalManifestEntries = options.workbox.additionalManifestEntries?.filter(
-            (entry) => typeof entry === "string" ? entry !== "api/v1/manifest.webmanifest" : entry.url !== "api/v1/manifest.webmanifest",
-          );
+          options.workbox.additionalManifestEntries =
+            options.workbox.additionalManifestEntries?.filter((entry) =>
+              typeof entry === "string"
+                ? entry !== "api/v1/manifest.webmanifest"
+                : entry.url !== "api/v1/manifest.webmanifest",
+            );
         },
       },
       workbox: {

@@ -70,10 +70,12 @@ const SNAPSHOT_KEY = "authenticated-session-v1";
 const OFFICE_SESSION_MARKER = "ironwrap.office-session-expires-at";
 
 /**
- * The marker is named after the signed-in tenant, so a host that serves a different tenant later
- * (one shared Worker, hosts re-pointed in its registry) never takes another tenant's sign-in for
- * its own. The bare legacy name is still read and cleared, so a device signed in before keeps it
- * until its next session read rewrites the marker under the tenant's name.
+ * The marker is named after the signed-in tenant, so a read that knows its tenant (pass it to
+ * officeSessionIsLive) never takes another tenant's sign-in for its own when a host serves a
+ * different tenant later (one shared Worker, hosts re-pointed in its registry). A read without a
+ * tenant, the customer portal's, still matches any marker on this origin. The bare legacy name is
+ * still read and cleared, so a device signed in before keeps it until its next session read
+ * rewrites the marker under the tenant's name.
  */
 function officeSessionMarkerKey(tenantId: string): string {
   return `${OFFICE_SESSION_MARKER}:${tenantId}`;
@@ -168,9 +170,7 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
 export function officeSessionIsLive(tenantId?: string): boolean {
   try {
     const storage = window.localStorage;
-    const keys = tenantId
-      ? [officeSessionMarkerKey(tenantId)]
-      : officeSessionMarkerKeys(storage);
+    const keys = tenantId ? [officeSessionMarkerKey(tenantId)] : officeSessionMarkerKeys(storage);
     return keys.some((key) => Number(storage.getItem(key)) > Date.now());
   } catch {
     return false;

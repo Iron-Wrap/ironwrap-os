@@ -93,7 +93,7 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
 
   // Throws `tenant_mismatch` before anything is read or sent, so no provider sees another tenant's
   // run; the run stays open and the batch is retried, which stalls the feed for the owner to see.
-  const tenantId = options.tenant ? options.tenant.check(run.tenant_id, "run_open") : (run.tenant_id ?? null);
+  const tenantId = options.tenant ? options.tenant.check(run.tenant_id, "run_open", run.data_class) : (run.tenant_id ?? null);
 
   if (existsSync(pendingPath(options.stateDir, run.run_id))) {
     // The model already answered for this run; only its close is outstanding.
@@ -215,7 +215,9 @@ async function sendPendingClose(options: RunnerOptions, file: string): Promise<b
     return false;
   }
   // A close recorded for another tenant is kept, never sent; one from before tenants carries none.
+  // The Worker, not a saved file, names the host's tenant: an unbound host waits for that answer.
   if (entry.tenant_id !== undefined && options.tenant) {
+    if (options.tenant.current() === null) return false;
     try {
       options.tenant.check(entry.tenant_id, "pending_close");
     } catch {

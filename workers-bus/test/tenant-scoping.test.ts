@@ -312,3 +312,53 @@ test("on the dead-letter queue a message whose tenant cannot be served becomes a
   // The envelope itself was not touched under another tenant's env.
   assert.equal((db.raw.prepare("SELECT status FROM envelopes WHERE envelope_id = ?").get("ow_b_dead") as { status: string }).status, "pending_jn_push");
 });
+
+test("the web manifest a host gets names that host's tenant, through the whole fetch path", async () => {
+  const db = new RecordingD1();
+  const publicEnv = env(db, {
+    APP_TENANT_NAME: "IronWrap OS",
+    APP_TENANT_BRAND: "IronWrap",
+    APP_LOCALE: "en-CA",
+    APP_TIME_ZONE: "America/Edmonton",
+    APP_CURRENCY: "CAD",
+  });
+  const sealed = await sealTenantSecrets(KEK, TENANT_B, 1, { INGEST_TOKEN: "ingest-b" });
+  db.raw.prepare(
+    `INSERT INTO tenants (tenant_id, display_name, status, data_class, settings_json, secrets_ciphertext,
+                          secrets_key_version, version, write_id, created_at, updated_at)
+     VALUES (?, 'Northline Metal', 'active', 'synthetic', ?, ?, 1, 1, 'seed-write-b', ?, ?)`,
+  ).run(
+    TENANT_B,
+    JSON.stringify({
+      APP_TENANT_NAME: "Northline Metal OS",
+      APP_TENANT_BRAND: "Northline Metal",
+      APP_LOCALE: "en-CA",
+      APP_TIME_ZONE: "America/Edmonton",
+      APP_CURRENCY: "CAD",
+    }),
+    sealed,
+    NOW,
+    NOW,
+  );
+  db.raw.prepare("INSERT INTO tenant_hosts (host, tenant_id, created_at) VALUES (?, ?, ?)").run("b.example.invalid", TENANT_B, NOW);
+  const manifest = async (host: string) => {
+    const response = await worker.fetch(new Request(`https://${host}/api/v1/manifest.webmanifest`), publicEnv as never, ctx() as never);
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  };
+
+  // A host nobody registered is the Worker's own tenant; the registered one is tenant B's.
+  const own = await manifest("a.example.invalid");
+  assert.equal(own.status, 200);
+  assert.equal(own.body.name, "IronWrap OS");
+  const other = await manifest("b.example.invalid");
+  assert.equal(other.status, 200);
+  assert.equal(other.body.name, "Northline Metal OS");
+  assert.equal(other.body.short_name, "Northline Metal");
+
+  // A suspended tenant's host gets no manifest at all, never the Worker's own.
+  db.raw.prepare("UPDATE tenants SET status = 'suspended' WHERE tenant_id = ?").run(TENANT_B);
+  resetTenantCache();
+  const suspended = await manifest("b.example.invalid");
+  assert.equal(suspended.status, 503);
+  assert.equal(suspended.body.error, "tenant_suspended");
+});

@@ -22,7 +22,7 @@ for (const dir of [process.env.HOME, process.env.CODEX_HOME]) if (dir) await mkd
 const gateway = new ProviderGateway({ config: loadGatewayConfig(env.gatewayConfigPath), stateDir: env.stateDir, env: process.env, dataClass: env.dataClass });
 const worker = new WorkerClient({ baseUrl: env.workerUrl, token: env.workerToken, timeoutMs: 15_000, openTimeoutMs: 90_000 });
 const log = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
-const tenant = new TenantBinding(env.tenantId, env.stateDir, log);
+const tenant = new TenantBinding(env.tenantId, env.stateDir, log, env.dataClass);
 
 const service = new AgentHostService({
   gateway,

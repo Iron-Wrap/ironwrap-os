@@ -117,12 +117,26 @@ function verifyCloudflareRUM(headers, indexHtml, serviceWorker, fixture) {
 }
 // END RUM GUARD
 
+const serviceWorker = await readFile(resolve("dist/sw.js"), "utf8");
 verifyCloudflareRUM(
   headers,
   indexHtml,
-  await readFile(resolve("dist/sw.js"), "utf8"),
+  serviceWorker,
   await readFile(new URL("./fixtures/cloudflare-auto-beacon.html", import.meta.url), "utf8"),
 );
+
+// The shell must ask the Worker for the manifest, and the service worker must never precache it:
+// a cached copy would carry one tenant's name to every host the shared Worker serves.
+if (
+  !/<link\b[^>]*\brel=["']manifest["'][^>]*\bhref=["']\/api\/v1\/manifest\.webmanifest["']/.test(
+    indexHtml,
+  )
+) {
+  throw new Error("index.html must link the manifest at /api/v1/manifest.webmanifest");
+}
+if (/manifest\.webmanifest/.test(serviceWorker)) {
+  throw new Error("Generated service worker must not precache the web manifest");
+}
 
 const requiredDirectives = [
   "Content-Security-Policy:",

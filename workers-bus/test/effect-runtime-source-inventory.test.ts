@@ -29,6 +29,8 @@ import { readFile, readdir } from "node:fs/promises";
  *   This list may only shrink; growing it is a deliberate, reviewed decision.
  * - worker-entry: the Worker's own inbound `async fetch(` handler, not an
  *   outbound call.
+ * - admission-gateway: the one call that asks the HELM gateway whether an effect may run,
+ *   made by the runtime itself before it claims an attempt; it mutates no provider state.
  */
 type InventoryEntry =
   | { kind: "runtime-routed" }
@@ -37,13 +39,19 @@ type InventoryEntry =
   | { kind: "read-only-post-rpc"; rpcMethods: string[] }
   | { kind: "transport-library"; mutationAuthorityCallers: string[] }
   | { kind: "governed-unrouted"; discipline: string }
-  | { kind: "worker-entry" };
+  | { kind: "worker-entry" }
+  | { kind: "admission-gateway"; discipline: string };
 
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "accounting-dispatch-binding.ts": { kind: "runtime-routed" },
   "accounting-provider-read.ts": { kind: "read-only" },
   "facet-design-frappe-projection.ts": { kind: "runtime-routed" },
   "google.ts": { kind: "runtime-routed" },
+  "helm-gateway.ts": {
+    kind: "admission-gateway",
+    discipline:
+      "one Connect JSON POST per attempt to HELM_GATEWAY_URL with the per-tenant bearer, bounded by HELM_GATEWAY_TIMEOUT_MS, carrying the effect's identity and never its payload; in enforce mode every answer but ADMITTED stops the attempt",
+  },
   "index.ts": { kind: "worker-entry" },
   "jobnimbus.ts": { kind: "runtime-routed" },
   "measurements.ts": {

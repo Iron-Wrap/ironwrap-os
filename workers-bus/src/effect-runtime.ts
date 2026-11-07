@@ -2,6 +2,7 @@ import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { operatingTenantId } from "./core.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
+import { admitExternalEffect, type GatewayAdmission } from "./helm-gateway.ts";
 
 export const EXTERNAL_EFFECT_STATES = [
   "proposed", "authorized", "executing", "reconciling", "succeeded",
@@ -143,6 +144,8 @@ export interface EffectExecutor<T = unknown> {
     providerExternalId: string | null;
   }): Promise<EffectReadback>;
   replay?(input: { effect: ExternalEffectRecord }): Promise<T>;
+  /** Transport for the HELM gateway proposal; tests inject it, production uses fetch. */
+  gatewayFetcher?: typeof fetch;
 }
 
 export interface ReplayableEffectExecutor<T = unknown> extends EffectExecutor<T> {
@@ -154,6 +157,8 @@ export interface EffectExecutionResult<T = unknown> {
   effect: ExternalEffectRecord;
   attempt: ExternalEffectAttempt;
   value?: T;
+  /** What the HELM gateway said before the attempt, when the binding is on (helm-gateway.ts). */
+  admission?: GatewayAdmission;
 }
 
 export interface ExternalEffectSettlement<T = unknown> {
@@ -498,6 +503,27 @@ export async function executeExternalEffect<T = unknown>(
       return { effect: failed, attempt: syntheticAttempt(failed, "failed") };
     }
   }
+  // HELM gateway admission (helm-gateway.ts), before any attempt is claimed. In enforce mode only
+  // an admitted proposal proceeds: a denial fails the effect with the gateway's reason, an
+  // escalation or an unreachable gateway leaves it where it is for a later attempt, and the
+  // provider is not called. Shadow records the decision and proceeds; off never calls out.
+  const admission = await admitExternalEffect(env, effect, attemptNumber, now.toISOString(), executor.gatewayFetcher);
+  if (admission.mode === "enforce" && admission.decision !== "admitted") {
+    if (admission.decision === "denied" && effect.state === "authorized") {
+      await transitionEffect(env, effect, "failed", now.toISOString(), {
+        resultCode: `gateway_denied:${admission.reason_code ?? "unknown"}`.slice(0, 120),
+      });
+      const denied = (await getExternalEffect(env, effectId))!;
+      return { effect: denied, attempt: syntheticAttempt(denied, "failed"), admission };
+    }
+    throw new EffectRuntimeError(
+      admission.decision === "denied"
+        ? "effect_gateway_denied"
+        : admission.decision === "escalated"
+        ? "effect_gateway_escalated"
+        : "effect_gateway_unreachable",
+    );
+  }
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
   const leaseExpiresAt = new Date(now.getTime() + EFFECT_ATTEMPT_LEASE_MS).toISOString();
   await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
@@ -516,7 +542,7 @@ export async function executeExternalEffect<T = unknown>(
     : await sha256Hex(canonicalJson(dispatched.providerResponse));
   if (dispatched.outcome === "rejected") {
     await settleAttempt(env, effect, attempt, "failed", dispatched.detailCode ?? "provider_rejected", now.toISOString(), dispatched.providerExternalId ?? null, providerResponseHash);
-    return { effect: (await getExternalEffect(env, effectId))!, attempt: (await getExternalEffectAttempt(env, attemptId))!, value: dispatched.value };
+    return { effect: (await getExternalEffect(env, effectId))!, attempt: (await getExternalEffectAttempt(env, attemptId))!, value: dispatched.value, admission };
   }
   await updateAttemptAndEffect(env, effect, attempt, "reconciling", "reconciling", now.toISOString(), dispatched.providerExternalId ?? null, providerResponseHash);
   effect = (await getExternalEffect(env, effectId))!;
@@ -551,7 +577,7 @@ export async function executeExternalEffect<T = unknown>(
       value = await executor.replay({ effect: (await getExternalEffect(env, effectId))! });
     }
   }
-  return { effect: (await getExternalEffect(env, effectId))!, attempt: (await getExternalEffectAttempt(env, attemptId))!, value };
+  return { effect: (await getExternalEffect(env, effectId))!, attempt: (await getExternalEffectAttempt(env, attemptId))!, value, admission };
 }
 
 /** Claim one leased attempt for an executor that runs outside the Worker isolate.

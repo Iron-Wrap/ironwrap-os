@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { openTenantSecrets, resetTenantCache, resolveRequestTenant } from "../src/tenancy.ts";
 import { NOW, SqliteD1, TENANT, env as baseEnv } from "./company-setup-fixture.ts";
+import { loadTenantConfig, registrationBody } from "../../tools/qa-tenant-register.mjs";
 
 const KEK = "c".repeat(64);
 const ROOT_ADMIN = "root-admin-token";
@@ -252,4 +253,21 @@ test("a write that lost the race is refused whole: no mixed row, no host change"
   assert.deepEqual({ ...row }, { display_name: "Other operator", version: 2 });
   const hosts = (db.raw.prepare("SELECT host FROM tenant_hosts WHERE tenant_id = ? ORDER BY host").all(TENANT_B) as Array<{ host: string }>).map((h) => h.host);
   assert.deepEqual(hosts, [HOST_B], "the loser's hosts never landed");
+});
+
+test("the row tools/qa-tenant-register.mjs derives from a committed tenant config is accepted by the registry", async () => {
+  const db = new SqliteD1();
+  const env = rootEnv(db);
+  const tenant = loadTenantConfig("northline-metal");
+  const body = registrationBody(tenant, { hosts: ["qa-iwrap-northline.mindburn.org"] });
+  const created = await admin(env, "PUT", `/admin/tenants/${tenant.tenant.id}`, body);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const record = created.body.tenant as Record<string, unknown>;
+  assert.deepEqual(record.hosts, ["qa-iwrap-northline.mindburn.org"]);
+  assert.equal(record.data_class, "synthetic");
+  assert.deepEqual(Object.keys(record.settings as Record<string, string>).sort(), Object.keys(body.settings).sort(), "every derived setting is a tenant-scoped name");
+  // The host then answers as that tenant.
+  const resolution = await resolveRequestTenant(new Request("https://qa-iwrap-northline.mindburn.org/api/v1/session"), env as never);
+  assert.equal(resolution.kind, "tenant");
+  assert.equal((resolution as { env: Record<string, unknown> }).env.APP_TENANT_NAME, "Northline Metal OS");
 });

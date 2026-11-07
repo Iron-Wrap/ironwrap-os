@@ -1,0 +1,99 @@
+# Register a synthetic tenant on the qa Worker's tenant registry (workers-bus/src/tenant-admin.ts,
+# tools/qa-tenant-register.mjs). The qa admin bearer exists only in the `qa` environment, so the
+# registration runs there: it derives the tenant's settings from config/tenants/<tenant>.json,
+# states the hostnames the operator's proxy serves for it, and PUTs the row with the version it
+# read. A re-run with the same inputs is a no-op. No secret value is an input: a tenant's own
+# tokens are sealed by naming the `qa` environment secret that holds each one.
+#
+# What this does not do: create the hostnames. A tenant's custom domain is a proxy Worker in the
+# Mindburn Labs account forwarding to the qa Worker's workers.dev name with the two headers the
+# Worker trusts (workers-bus/README.md "Shared multi-tenant runtime", proxy contract).
+name: qa tenant registration
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: Tenant id (config/tenants/<id>.json, not the live tenant)
+        required: true
+        default: northline-metal
+      hosts:
+        description: Comma-separated hostnames the proxy serves for this tenant
+        required: true
+        default: qa-iwrap-northline.mindburn.org
+      activate:
+        description: Reactivate the tenant if an operator suspended it
+        required: false
+        default: false
+        type: boolean
+      seal_ingest_token:
+        description: Seal the qa environment secret QA_TENANT_INGEST_TOKEN as the tenant's INGEST_TOKEN
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+# Its own group: joining Deploy's would let a dispatch cancel a pending qa release (GitHub keeps one
+# pending run per group). The step below refuses to run while a Deploy is in progress instead.
+concurrency:
+  group: qa-tenants
+  cancel-in-progress: false
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    environment: qa
+    timeout-minutes: 5
+    steps:
+      # The qa admin bearer runs only the tool main ships, never a branch's copy of it: a dispatch
+      # from another ref fails here, visibly, instead of being skipped green.
+      - name: Refuse a dispatch from any ref but main
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" || { echo "ref_not_main: dispatch this workflow from main ($GITHUB_REF was given)" >&2; exit 1; }
+      - name: Refuse to interleave with a qa release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          active=0
+          for status in in_progress queued waiting requested pending; do
+            count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow Deploy --status "$status" --json databaseId --jq 'length')"
+            active=$((active + count))
+          done
+          test "$active" = "0" || { echo "deploy_active: $active Deploy run(s) running or queued; dispatch again after they finish" >&2; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Register the tenant
+        env:
+          ADMIN_TOKEN: ${{ secrets.RELEASE_QA_ADMIN_TOKEN }}
+          QA_TENANT_INGEST_TOKEN: ${{ inputs.seal_ingest_token && secrets.QA_TENANT_INGEST_TOKEN || '' }}
+          TENANT: ${{ inputs.tenant }}
+          HOSTS: ${{ inputs.hosts }}
+          ACTIVATE: ${{ inputs.activate }}
+          SEAL_INGEST_TOKEN: ${{ inputs.seal_ingest_token }}
+        run: |
+          set -euo pipefail
+          test -n "$ADMIN_TOKEN" || { echo "release_qa_admin_token_missing" >&2; exit 1; }
+          [[ "$TENANT" =~ ^[a-z0-9][a-z0-9-]{1,63}$ ]] || { echo "unexpected tenant id shape" >&2; exit 2; }
+          args=(--env qa --tenant "$TENANT" --json)
+          [[ "$ACTIVATE" == "true" ]] && args+=(--activate)
+          IFS=',' read -ra hosts <<<"$HOSTS"
+          for host in "${hosts[@]}"; do
+            host="$(echo "$host" | tr -d '[:space:]')"
+            [[ "$host" =~ ^[a-z0-9.-]{1,253}$ ]] || { echo "unexpected host shape" >&2; exit 2; }
+            args+=(--host "$host")
+          done
+          if [[ "$SEAL_INGEST_TOKEN" == "true" ]]; then
+            test -n "$QA_TENANT_INGEST_TOKEN" || { echo "qa_tenant_ingest_token_missing" >&2; exit 1; }
+            args+=(--secret INGEST_TOKEN=QA_TENANT_INGEST_TOKEN)
+          fi
+          node tools/qa-tenant-register.mjs "${args[@]}" >report.json
+          {
+            echo "## qa tenant registration"
+            jq -r '"- outcome: \(.outcome)\n- tenant: \(.tenant_id)\n- version: \(.version)\n- status: \(.status)\n- hosts: \(.hosts | join(", "))\n- data class: \(.data_class)\n- sealed secret names: \(.secret_names | join(", "))"' report.json
+          } >>"$GITHUB_STEP_SUMMARY"

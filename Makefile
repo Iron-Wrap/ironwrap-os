@@ -75,6 +75,7 @@ test-tools:
 	  tools/validate-tenant-runtime.test.mjs \
 	  tools/seed-pipeline.test.mjs \
 	  tools/seed-env.test.mjs \
+	  tools/qa-tenant-register.test.mjs \
 	  tools/qa-seed-owner.test.mjs \
 	  tools/generate-tenant-config.test.mjs \
 	  tools/generate-tenant-worker-config.test.mjs \

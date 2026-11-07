@@ -21,18 +21,23 @@ import { operatingTenantId } from "./core.ts";
 
 export const MULTI_TENANT_FLAG = "APP_MULTI_TENANT_ENABLED";
 export const TENANT_SECRETS_KEK_NAME = "TENANT_SECRETS_KEK";
+/** The one key version so far; a rotation adds a second KEK secret and re-seals rows under version 2. */
 export const TENANT_SECRETS_KEY_VERSION = 1;
 /** How long one isolate trusts a registry read before asking D1 again. */
 export const TENANT_CACHE_TTL_MS = 60_000;
+/** A host or id with no row is remembered only briefly, so a newly registered host takes effect fast. */
+export const TENANT_MISS_TTL_MS = 5_000;
+/** Hosts an isolate remembers at most; past it the map is cleared rather than grown without bound. */
+export const TENANT_HOST_CACHE_MAX = 1_000;
 
 /**
- * The vars a tenant row may set. This is the list a white-label clone rewrites
- * (`TENANT_SCOPED_VARS` in tools/generate-tenant-worker-config.mjs) plus the two values that
- * are tenant facts rather than deployment facts: the data class and the commercial authority
- * policy. A test pins that every name the clone generator rewrites is also allowed here, so a
- * new tenant-bearing var cannot be derived for a clone and silently shared in the shared Worker.
- * Feature flags and deployment facts (`EFFECT_RUNTIME_ENABLED`, `APP_BFF_ENABLED`, timeouts,
- * schema hashes) are deliberately absent: one Worker runs one product configuration.
+ * The vars a tenant row may set: the tenant facts a white-label clone rewrites
+ * (`TENANT_SCOPED_VARS` in tools/generate-tenant-worker-config.mjs) plus the two that are tenant
+ * facts rather than deployment facts, the data class and the commercial authority policy. A test
+ * pins that every name the clone generator rewrites is either allowed here or named in
+ * `CLONE_ONLY_VARS`, so a new tenant-bearing var cannot be derived for a clone and silently shared
+ * in the shared Worker. Feature flags and deployment facts (`EFFECT_RUNTIME_ENABLED`,
+ * `APP_BFF_ENABLED`, timeouts, schema hashes) are absent: one Worker runs one product configuration.
  */
 export const TENANT_SETTING_KEYS: readonly string[] = Object.freeze([
   "APP_TENANT_NAME",
@@ -43,18 +48,10 @@ export const TENANT_SETTING_KEYS: readonly string[] = Object.freeze([
   "FROM_EMAIL",
   "OWNER_ALERT_EMAIL",
   "BACKUP_ALERT_EMAIL",
-  "ERPNEXT_BASE_URL",
-  "ERPNEXT_INTEGRATION_USER",
-  "QB_RECONCILIATION_ISSUER_USER",
   "APP_PUBLIC_ORIGIN",
   "APP_ALLOWED_ORIGINS",
   "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
   "PUBLIC_ESTIMATE_ALLOWED_BRANDS",
-  "FACET_V2_ROUTES_JSON",
-  "FACET_V2_INGEST_ENABLED",
-  "FACET_V2_FRAPPE_PROJECTION_ENABLED",
-  "APP_FACET_LAUNCH_ENABLED",
-  "APP_FACET_LAUNCH_SOURCE_TENANT_ID",
   "SHARED_DRIVE_ID_JOBS",
   "SHARED_DRIVE_ID_RESTRICTED",
   "SHARED_DRIVE_ID_ARCHIVE",
@@ -64,15 +61,33 @@ export const TENANT_SETTING_KEYS: readonly string[] = Object.freeze([
 ]);
 
 /**
+ * Clone-derived vars a registry tenant may NOT set. Each names a destination the Worker reaches
+ * with a Worker-wide credential that is not sealable per tenant (the retired Frappe and Facet
+ * bridges: `ERPNEXT_API_KEY`, the Frappe projection keys, the Facet HMAC keys, the issuer keys), so
+ * a tenant-set URL would receive another tenant's credential. The overlay clears them for a
+ * registry tenant, which leaves those bridges off for it.
+ */
+export const CLONE_ONLY_VARS: readonly string[] = Object.freeze([
+  "ERPNEXT_BASE_URL",
+  "ERPNEXT_INTEGRATION_USER",
+  "QB_RECONCILIATION_ISSUER_USER",
+  "FACET_V2_ROUTES_JSON",
+  "FACET_V2_INGEST_ENABLED",
+  "FACET_V2_FRAPPE_PROJECTION_ENABLED",
+  "APP_FACET_LAUNCH_ENABLED",
+  "APP_FACET_LAUNCH_SOURCE_TENANT_ID",
+]);
+
+/**
  * The secrets a tenant row may hold. Each is a credential one tenant presents or one provider
  * account one tenant owns. Worker-wide keys stay out: `TENANT_SECRETS_KEK` (this envelope's own
  * key), `QB_TOKEN_ENCRYPTION_KEY` and `APP_AUTH_PEPPER` (hash and encryption domains shared by
  * every row the Worker already holds), the rate-limit pepper and the Turnstile secret (one
- * deployment, one widget).
+ * deployment, one widget), and `ADMIN_TOKEN`: `/admin/*` reads tables that carry no tenant column
+ * (the audit log, dead letters, webhook receipts), so it stays the hosting operator's surface.
  */
 export const TENANT_SECRET_NAMES: readonly string[] = Object.freeze([
   "INGEST_TOKEN",
-  "ADMIN_TOKEN",
   "EFFECT_RUNTIME_TOKEN",
   "AGENT_HOST_TOKEN",
   "NEWO_WEBHOOK_TOKEN",
@@ -199,8 +214,15 @@ async function tenantIdForHost(db: TenantDb, host: string, now: number): Promise
   const row = await db.prepare("SELECT tenant_id FROM tenant_hosts WHERE host = ?").bind(host)
     .first<{ tenant_id: string }>();
   const tenantId = row?.tenant_id ?? null;
-  hostCache.set(host, { tenantId, expiresAt: now + TENANT_CACHE_TTL_MS });
+  if (hostCache.size >= TENANT_HOST_CACHE_MAX) hostCache.clear();
+  hostCache.set(host, { tenantId, expiresAt: now + (tenantId ? TENANT_CACHE_TTL_MS : TENANT_MISS_TTL_MS) });
   return tenantId;
+}
+
+/** The request hostname as the registry keys it: lowercase, no port, no trailing dot. */
+export function requestHost(url: URL): string {
+  const host = url.hostname.toLowerCase();
+  return host.endsWith(".") ? host.slice(0, -1) : host;
 }
 
 async function loadTenant(env: TenancyEnv, tenantId: string, now: number): Promise<CachedTenant> {
@@ -228,14 +250,26 @@ async function loadTenant(env: TenancyEnv, tenantId: string, now: number): Promi
       secretsError = true;
     }
   }
-  const entry: CachedTenant = { row, secrets, secretsError, expiresAt: now + TENANT_CACHE_TTL_MS };
+  const entry: CachedTenant = {
+    row,
+    secrets,
+    secretsError,
+    expiresAt: now + (row ? TENANT_CACHE_TTL_MS : TENANT_MISS_TTL_MS),
+  };
   tenantCache.set(tenantId, entry);
   return entry;
 }
 
-/** `env` with the tenant's identity, settings and secrets laid over the Worker's own values. */
+/**
+ * `env` for one registry tenant. Every tenant-scoped var and secret is cleared first, then the
+ * row's own values are applied: a value the row leaves out is unset, never the Worker tenant's.
+ * An unset sender mailbox, ingest token or provider key then makes the handler that needs it
+ * fail closed (`not configured`), where inheritance would have sent one tenant's mail, accepted
+ * one tenant's token or spent one tenant's provider account on another's behalf.
+ */
 export function withTenantEnv(env: Env, row: TenantRow, secrets: Record<string, string> | null): Env {
   const overlay: Record<string, unknown> = { ...(env as unknown as Record<string, unknown>) };
+  for (const name of [...TENANT_SETTING_KEYS, ...CLONE_ONLY_VARS, ...TENANT_SECRET_NAMES]) overlay[name] = undefined;
   // A tenant without its own name or brand must not inherit the Worker tenant's.
   overlay.APP_TENANT_NAME = row.display_name;
   overlay.APP_TENANT_BRAND = row.display_name;
@@ -300,7 +334,7 @@ export async function resolveRequestTenant(
   if (!fallback || !tenancy.DB) {
     return { kind: "refused", tenantId: fallback, refusal: { status: 503, error: "tenant_unavailable" } };
   }
-  const host = new URL(req.url).hostname.toLowerCase();
+  const host = requestHost(new URL(req.url));
   let tenantId: string | null;
   try {
     tenantId = TENANT_HOST_RE.test(host) ? await tenantIdForHost(tenancy.DB as TenantDb, host, now()) : null;

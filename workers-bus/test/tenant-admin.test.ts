@@ -55,7 +55,7 @@ const tenantB = {
   data_class: "synthetic",
   settings: { APP_PUBLIC_ORIGIN: `https://${HOST_B}`, APP_ALLOWED_ORIGINS: `https://${HOST_B}` },
   hosts: [HOST_B],
-  secrets: { AGENT_HOST_TOKEN: "tenant-b-agent-token", ADMIN_TOKEN: "tenant-b-admin-token" },
+  secrets: { AGENT_HOST_TOKEN: "tenant-b-agent-token", INGEST_TOKEN: "tenant-b-ingest-token" },
 };
 
 test.beforeEach(() => resetTenantCache());
@@ -81,7 +81,7 @@ test("a tenant is created with its hosts, settings and sealed secrets, and read 
   assert.equal(record.version, 1);
   assert.deepEqual(record.hosts, [HOST_B]);
   assert.deepEqual(record.settings, tenantB.settings);
-  assert.deepEqual(record.secret_names, ["ADMIN_TOKEN", "AGENT_HOST_TOKEN"]);
+  assert.deepEqual(record.secret_names, ["AGENT_HOST_TOKEN", "INGEST_TOKEN"]);
   assert.ok(!JSON.stringify(created.body).includes("tenant-b-agent-token"), "secret values never leave the Worker");
 
   const row = db.raw.prepare("SELECT settings_json, secrets_ciphertext, secrets_key_version FROM tenants WHERE tenant_id = ?")
@@ -95,7 +95,7 @@ test("a tenant is created with its hosts, settings and sealed secrets, and read 
   assert.equal((listed.body.tenants as unknown[]).length, 1);
   const one = await admin(env, "GET", `/admin/tenants/${TENANT_B}`);
   assert.equal(one.status, 200);
-  assert.deepEqual((one.body.tenant as Record<string, unknown>).secret_names, ["ADMIN_TOKEN", "AGENT_HOST_TOKEN"]);
+  assert.deepEqual((one.body.tenant as Record<string, unknown>).secret_names, ["AGENT_HOST_TOKEN", "INGEST_TOKEN"]);
   assert.equal((await admin(env, "GET", "/admin/tenants/no-such-tenant")).status, 404);
 
   // The write is live in this isolate at once: the host now resolves to the new tenant.
@@ -120,7 +120,9 @@ test("an update states the version it read; secrets are kept unless replaced, an
   const record = fresh.body.tenant as Record<string, unknown>;
   assert.equal(record.version, 2);
   assert.equal(record.display_name, "Northline Metal Ltd");
-  assert.deepEqual(record.secret_names, ["ADMIN_TOKEN", "AGENT_HOST_TOKEN"], "an update without `secrets` keeps the envelope");
+  assert.deepEqual(record.secret_names, ["AGENT_HOST_TOKEN", "INGEST_TOKEN"], "an update without `secrets` keeps the envelope");
+  assert.deepEqual(record.hosts, [HOST_B], "an update without `hosts` keeps the hosts");
+  assert.deepEqual(record.settings, tenantB.settings, "an update without `settings` keeps the settings");
 
   const emptied = await admin(env, "PUT", `/admin/tenants/${TENANT_B}`, { ...withoutSecrets, secrets: {}, expected_version: 2 });
   assert.deepEqual((emptied.body.tenant as Record<string, unknown>).secret_names, []);
@@ -144,7 +146,8 @@ test("writes are validated: tenant-scoped names only, well-formed hosts, one own
     [`/admin/tenants/${TENANT_B}`, { ...base, settings: { EFFECT_RUNTIME_ENABLED: "true" } }, "setting_not_tenant_scoped"],
     [`/admin/tenants/${TENANT_B}`, { ...base, settings: { APP_LOCALE: 5 } }, "invalid_setting_value"],
     [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { TENANT_SECRETS_KEK: "x" } }, "secret_not_tenant_scoped"],
-    [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { ADMIN_TOKEN: "" } }, "invalid_secret_value"],
+    [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { ADMIN_TOKEN: "x" } }, "secret_not_tenant_scoped"],
+    [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { INGEST_TOKEN: "" } }, "invalid_secret_value"],
     [`/admin/tenants/${TENANT_B}`, { ...base, hosts: ["Has.Upper.Case"] }, "invalid_host"],
     [`/admin/tenants/${TENANT_B}`, { ...base, hosts: ["b.example.invalid:8443"] }, "invalid_host"],
     [`/admin/tenants/${TENANT_B}`, { ...base, hosts: "b.example.invalid" }, "invalid_hosts"],
@@ -176,7 +179,7 @@ test("the Worker's own tenant takes hosts from the registry and nothing else", a
   const base = { display_name: "IronWrap OS", status: "active", data_class: "business" };
   const settings = await admin(env, "PUT", `/admin/tenants/${TENANT}`, { ...base, settings: { APP_LOCALE: "fr-CA" } });
   assert.deepEqual([settings.status, settings.body.error], [400, "default_tenant_uses_worker_vars"]);
-  const secrets = await admin(env, "PUT", `/admin/tenants/${TENANT}`, { ...base, secrets: { ADMIN_TOKEN: "other" } });
+  const secrets = await admin(env, "PUT", `/admin/tenants/${TENANT}`, { ...base, secrets: { INGEST_TOKEN: "other" } });
   assert.deepEqual([secrets.status, secrets.body.error], [400, "default_tenant_uses_worker_vars"]);
   const suspended = await admin(env, "PUT", `/admin/tenants/${TENANT}`, { ...base, status: "suspended" });
   assert.deepEqual([suspended.status, suspended.body.error], [400, "default_tenant_always_active"]);
@@ -198,26 +201,53 @@ test("sealing secrets needs the Worker key; the registry itself does not", async
   assert.deepEqual([sealed.status, sealed.body], [503, { error: "tenant_secrets_kek_invalid" }]);
 });
 
-test("a tenant's own ADMIN_TOKEN administers that tenant, never the registry", async () => {
+test("ADMIN_TOKEN is the hosting operator's on every host; the registry is dark with the flag off", async () => {
   const db = new SqliteD1();
   const env = rootEnv(db);
   assert.equal((await admin(env, "PUT", `/admin/tenants/${TENANT_B}`, tenantB)).status, 201);
-  // On tenant B's host, B's sealed ADMIN_TOKEN is the admin token for B's own records...
-  const status = await worker.fetch(
-    new Request(`https://${HOST_B}/admin/status`, { headers: { authorization: "Bearer tenant-b-admin-token" } }),
+  // On tenant B's host the Worker's own ADMIN_TOKEN still opens /admin/*: those routes read
+  // tables that carry no tenant column, so they belong to the operator, never to a tenant.
+  const envelopes = await worker.fetch(
+    new Request(`https://${HOST_B}/admin/envelopes?limit=1`, { headers: { authorization: `Bearer ${ROOT_ADMIN}` } }),
     env as never,
     ctx() as never,
   );
-  assert.notEqual(status.status, 401);
-  const rootOnB = await worker.fetch(
-    new Request(`https://${HOST_B}/admin/status`, { headers: { authorization: `Bearer ${ROOT_ADMIN}` } }),
-    env as never,
-    ctx() as never,
-  );
-  assert.equal(rootOnB.status, 401, "the Worker's root token is not tenant B's admin token");
-  // ...but the registry answers only to the Worker's own token, whatever host it is asked on.
-  assert.equal((await admin(env, "GET", "/admin/tenants", undefined, "tenant-b-admin-token", HOST_B)).status, 401);
+  assert.equal(envelopes.status, 200);
   assert.equal((await admin(env, "GET", "/admin/tenants", undefined, ROOT_ADMIN, HOST_B)).status, 200);
-  db.raw.prepare("SELECT 1").get();
-  assert.equal(NOW.length > 0, true);
+  assert.equal((await admin(env, "GET", "/admin/tenants", undefined, "tenant-b-ingest-token", HOST_B)).status, 401);
+
+  const off = rootEnv(db, { APP_MULTI_TENANT_ENABLED: "false" });
+  assert.equal((await admin(off, "GET", "/admin/tenants")).status, 404);
+  assert.equal((await admin(off, "PUT", "/admin/tenants/other-co", { display_name: "X", status: "active", data_class: "synthetic" })).status, 404);
+  assert.equal(db.raw.prepare("SELECT count(*) AS n FROM tenants").get()!.n, 1);
+});
+
+test("a write that lost the race is refused whole: no mixed row, no host change", async () => {
+  const db = new SqliteD1();
+  // Another operator commits version 2 between this handler's read and its batch.
+  let raced = false;
+  const racing = {
+    prepare: (sql: string) => db.prepare(sql),
+    async batch(statements: unknown[]) {
+      if (!raced) {
+        raced = true;
+        db.raw.prepare("UPDATE tenants SET display_name = 'Other operator', version = 2, write_id = 'other-operator-write' WHERE tenant_id = ?").run(TENANT_B);
+      }
+      return await db.batch(statements as never);
+    },
+  };
+  const env = rootEnv(racing as never);
+  assert.equal((await admin(rootEnv(db), "PUT", `/admin/tenants/${TENANT_B}`, { ...tenantB, secrets: undefined })).status, 201);
+  const lost = await admin(env, "PUT", `/admin/tenants/${TENANT_B}`, {
+    display_name: "Mine",
+    status: "active",
+    data_class: "synthetic",
+    hosts: ["evil.example.invalid"],
+    expected_version: 1,
+  });
+  assert.deepEqual([lost.status, lost.body], [409, { error: "version_conflict", version: 2 }]);
+  const row = db.raw.prepare("SELECT display_name, version FROM tenants WHERE tenant_id = ?").get(TENANT_B) as { display_name: string; version: number };
+  assert.deepEqual({ ...row }, { display_name: "Other operator", version: 2 });
+  const hosts = (db.raw.prepare("SELECT host FROM tenant_hosts WHERE tenant_id = ? ORDER BY host").all(TENANT_B) as Array<{ host: string }>).map((h) => h.host);
+  assert.deepEqual(hosts, [HOST_B], "the loser's hosts never landed");
 });

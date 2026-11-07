@@ -1234,12 +1234,12 @@ export async function listReplayableDeadEnvelopeIds(
   const res = await env.DB.prepare(
     `SELECT d.envelope_id
      FROM dead_letter d
-     INNER JOIN envelopes e ON e.envelope_id = d.envelope_id
+     INNER JOIN envelopes e ON e.envelope_id = d.envelope_id AND e.tenant_id = ?
      WHERE d.recovered = 0 AND e.status = 'dead' AND d.envelope_id IS NOT NULL
        AND (? IS NULL OR d.envelope_id = ?)
      GROUP BY d.envelope_id
      ORDER BY MIN(d.ts) ASC`,
-  ).bind(selected, selected).all<{ envelope_id: string }>();
+  ).bind(requireEnvTenantId(env), selected, selected).all<{ envelope_id: string }>();
   return (res.results ?? []).map((row) => row.envelope_id);
 }
 
@@ -1307,7 +1307,7 @@ export async function listAutoReplayCandidates(
        WHERE d.recovered = 0 AND d.envelope_id IS NOT NULL
        GROUP BY d.envelope_id
      ) ep
-     INNER JOIN envelopes e ON e.envelope_id = ep.envelope_id
+     INNER JOIN envelopes e ON e.envelope_id = ep.envelope_id AND e.tenant_id = ?
      LEFT JOIN replay_requests r
             ON r.envelope_id = ep.envelope_id
            AND r.approved_by = ?
@@ -1317,7 +1317,7 @@ export async function listAutoReplayCandidates(
      GROUP BY ep.envelope_id, ep.dead_since
      ORDER BY ep.dead_since ASC
      LIMIT ?`,
-  ).bind(
+  ).bind(requireEnvTenantId(env), 
     DEAD_LETTER_SWEEP_APPROVER,
     REPLAY_NOOP_ERRORS[0],
     REPLAY_NOOP_ERRORS[1],

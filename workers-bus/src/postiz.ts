@@ -1,3 +1,4 @@
+import { operatingTenantId } from "./core.ts";
 import { sha256Hex } from "./app-auth.ts";
 import { canonicalJson } from "./canonical.ts";
 import { assertEffectLedgerReady, EffectRuntimeError, runExternalEffect } from "./effect-runtime.ts";
@@ -685,7 +686,7 @@ export async function recoverPostizControlPlane(
     `SELECT effect_id FROM postiz_effect_outbox
      WHERE tenant_id = ? AND state = 'pending' AND operation IN ('submit', 'stop')
      ORDER BY created_at ASC LIMIT ?`,
-  ).bind(String(env.APP_TENANT_ID ?? "ironwrap").trim(), RECONCILIATION_LIMIT).all<{ effect_id: string }>();
+  ).bind((operatingTenantId(env.APP_TENANT_ID) ?? ""), RECONCILIATION_LIMIT).all<{ effect_id: string }>();
   let effectsProcessed = 0;
   for (const effect of effects.results ?? []) {
     if (await processPostizEffect(env, effect.effect_id, fetcher, now)) effectsProcessed += 1;
@@ -703,7 +704,7 @@ export async function recoverPostizControlPlane(
          OR (published_observed_at IS NULL AND scheduled_at >= ?)
        )
      ORDER BY COALESCE(last_reconciled_at, created_at) ASC LIMIT ?`,
-  ).bind(String(env.APP_TENANT_ID ?? "ironwrap").trim(), cutoff, publicationCutoff, publicationCutoff, RECONCILIATION_LIMIT)
+  ).bind((operatingTenantId(env.APP_TENANT_ID) ?? ""), cutoff, publicationCutoff, publicationCutoff, RECONCILIATION_LIMIT)
     .all<{ tenant_id: string; intent_id: string }>();
   let intentsReconciled = 0;
   for (const intent of intents.results ?? []) {

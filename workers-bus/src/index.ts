@@ -191,8 +191,13 @@ async function reconcileFacetDesignSurfaces(env: Env): Promise<void> {
   }
 }
 
-async function deriveThenRecoverQuickBooksFinalInvoices(env: Env): Promise<void> {
-  try {
+/**
+ * Final-invoice derivation walks every tenant's jobs behind one cursor row whose name the schema
+ * pins, so on a shared Worker only the default tenant's pass derives (the walk itself is keyed by
+ * each job's own tenant); every tenant's pass recovers its own outbox.
+ */
+async function deriveThenRecoverQuickBooksFinalInvoices(env: Env, derive = true): Promise<void> {
+  if (derive) try {
     const derivation = await deriveNativeFinalInvoiceIntents(
       env as import("./app-types.ts").AppEnv,
     );
@@ -291,8 +296,23 @@ export default {
     for (const msg of batch.messages) {
       try {
         // The message's tenant decides the env it is handled under (tenancy.ts); a tenant that
-        // cannot be served throws here and the message is retried, never handled as another.
-        const env = await queueMessageEnv(rootEnv, msg.body.tenant_id);
+        // cannot be served throws here and the message is retried, never handled as another. On
+        // the dead-letter queue there is no further retry, so the refusal itself becomes the
+        // dead-letter row, written under the Worker's own env with no tenant data in it.
+        let env: Env;
+        try {
+          env = await queueMessageEnv(rootEnv, msg.body.tenant_id);
+        } catch (refusal) {
+          if (!isDlq) throw refusal;
+          await store.recordDeadLetter(rootEnv, {
+            envelope_id: "envelope_id" in msg.body ? msg.body.envelope_id : null,
+            stage: "tenant_unresolved",
+            error: String(refusal instanceof Error ? refusal.message : refusal).slice(0, 200),
+            payload_json: JSON.stringify(msg.body),
+          });
+          msg.ack();
+          continue;
+        }
         if ("measurement_receipt_id" in msg.body) {
           const receiptId = msg.body.measurement_receipt_id;
           if (isDlq) {
@@ -356,16 +376,21 @@ export default {
     // With the flag off this is one pass under the Worker's own env, exactly as before.
     const tenants = await cronTenantEnvs(rootEnv);
     for (const skipped of tenants.skipped) log({ at: "cron_tenant_skipped", cron: controller.cron, ...skipped });
+    // A tenant that could not be served is a tick that did not do its work: the heartbeat
+    // settles `error` and /ready?scope=ops says so, rather than a green tick with a silent gap.
+    const skipped = () => {
+      if (tenants.skipped.length > 0) throw new Error(`cron_tenant_skipped:${tenants.skipped.map((entry) => entry.tenant_id).join(",")}`);
+    };
     if (controller.cron === "0 14 * * *") {
       ctx.waitUntil(cronTick(rootEnv, controller.cron, () => Promise.all([
         ...dailyGlobalJobs(rootEnv),
         ...tenants.envs.flatMap((env) => dailyTenantJobs(env)),
-      ]).then(() => {})));
+      ]).then(skipped)));
     } else if (controller.cron === "*/5 * * * *") {
       ctx.waitUntil(cronTick(rootEnv, controller.cron, () => Promise.all([
         ...fiveMinuteGlobalJobs(rootEnv),
-        ...tenants.envs.flatMap((env) => fiveMinuteTenantJobs(env)),
-      ]).then(() => {})));
+        ...tenants.envs.flatMap((env) => fiveMinuteTenantJobs(env, env === rootEnv)),
+      ]).then(skipped)));
     }
   },
 } satisfies ExportedHandler<Env, BusQueueMessage>;
@@ -392,9 +417,14 @@ function cronTick(env: Env, cron: string, work: () => Promise<void>): Promise<vo
   );
 }
 
-/** Daily jobs on tables that carry no tenant (Newo, the auth, portal, receipt and rate-limit prunes): run once. */
+/**
+ * Daily jobs on tables that carry no tenant (the reconcile's heartbeat, source counts and dead
+ * letters; Newo; the auth, portal, receipt and rate-limit prunes): run once, under the Worker's
+ * own env, so the reconcile digest is the default tenant's until those tables carry a tenant.
+ */
 function dailyGlobalJobs(env: Env): Promise<unknown>[] {
   return [
+    runReconcile(env),
     runNewoDailyReconcile(env).catch((error) =>
       log({ at: "newo_daily_reconcile", error: String(error) })
     ),
@@ -418,7 +448,6 @@ function dailyGlobalJobs(env: Env): Promise<unknown>[] {
 /** Daily jobs on this tenant's rows: run once per active tenant, under that tenant's env. */
 function dailyTenantJobs(env: Env): Promise<unknown>[] {
   return [
-    runReconcile(env),
     runOwnerWatchdog(env).catch((error) =>
       log({ at: "owner_watchdog", error: String(error) })
     ),
@@ -436,18 +465,11 @@ function fiveMinuteGlobalJobs(env: Env): Promise<unknown>[] {
     }).catch((error) =>
       log({ at: "quickbooks_projection_recovery", error: String(error) }),
     ),
-    // ELEC-52 / IRO-194: the dual-surface pipeline heals itself instead of waiting for an
-    // admin to notice a dead letter. Silent when there is no dead-letter backlog at all.
-    sweepDeadLetterAutoReplay(env).then((result) => {
-      if (result.scanned > 0) log({ at: "dead_letter_auto_replay", ...result });
-    }).catch((error) =>
-      log({ at: "dead_letter_auto_replay", error: String(error) }),
-    ),
   ];
 }
 
 /** Five-minute jobs on this tenant's rows: run once per active tenant, under that tenant's env. */
-function fiveMinuteTenantJobs(env: Env): Promise<unknown>[] {
+function fiveMinuteTenantJobs(env: Env, isDefaultTenant = true): Promise<unknown>[] {
   // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
   // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
   const accountingDispatchBinding = resolveAccountingDispatchBinding(
@@ -468,6 +490,13 @@ function fiveMinuteTenantJobs(env: Env): Promise<unknown>[] {
     return null;
   });
   return [
+    // ELEC-52 / IRO-194: the dual-surface pipeline heals itself instead of waiting for an
+    // admin to notice a dead letter. Silent when there is no dead-letter backlog at all.
+    sweepDeadLetterAutoReplay(env).then((result) => {
+      if (result.scanned > 0) log({ at: "dead_letter_auto_replay", ...result });
+    }).catch((error) =>
+      log({ at: "dead_letter_auto_replay", error: String(error) }),
+    ),
     retrySweep(env),
     retryMeasurementIntakeReceipts(env).catch((error) =>
       log({ at: "measurement_intake_retry", error: String(error) }),
@@ -529,10 +558,10 @@ function fiveMinuteTenantJobs(env: Env): Promise<unknown>[] {
     }).catch((error) =>
       log({ at: "agent_report_retry", error: String(error) }),
     ),
-    deriveThenRecoverQuickBooksFinalInvoices(env).catch(() =>
+    deriveThenRecoverQuickBooksFinalInvoices(env, isDefaultTenant).catch(() =>
       log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
     ),
-    reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
+    reconcileCustomerContractAcceptanceAttempts(env, undefined, { deriveDeposits: isDefaultTenant }).catch((error) =>
       log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
     ),
     // OD-01 (0155): the Deposit gate entry a signed contract calls for, wherever the

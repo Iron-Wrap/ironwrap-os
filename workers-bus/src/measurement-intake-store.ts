@@ -1,3 +1,4 @@
+import { operatingTenantId } from "./core.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 
 export type MeasurementIntakeStatus =
@@ -861,13 +862,18 @@ export async function listMeasurementIntakeExceptions(
   const rows = await env.DB.prepare(
     `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
-     WHERE status IN ('unmatched', 'retryable_error')
+     WHERE tenant_id = ? AND status IN ('unmatched', 'retryable_error')
      ORDER BY updated_at DESC, receipt_id DESC
      LIMIT ?`,
   )
-    .bind(limit)
+    .bind(sweepTenantId(env), limit)
     .all<MeasurementIntakeReceipt>();
   return rows.results ?? [];
+}
+
+/** The tenant a sweep runs for: the env's, with the deployment default when unset. */
+function sweepTenantId(env: Env): string {
+  return operatingTenantId((env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID) ?? "";
 }
 
 /** Bounded retry candidates, including abandoned processing leases. Callers claim before effects. */
@@ -876,16 +882,19 @@ export async function listRetryableMeasurementIntakeReceipts(
   now: string,
   limit: number,
 ): Promise<MeasurementIntakeReceipt[]> {
+  // This tenant's receipts only: on a shared D1 a retry claimed under another tenant's env fails
+  // its tenant check and burns that tenant's attempt.
   const rows = await env.DB.prepare(
     `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
-     WHERE (status = 'retryable_error' AND attempts < CASE
+     WHERE tenant_id = ?
+       AND ((status = 'retryable_error' AND attempts < CASE
               WHEN last_error GLOB 'measurement_ocr_*' THEN ? ELSE ? END)
-        OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+        OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))
      ORDER BY updated_at ASC, receipt_id ASC
      LIMIT ?`,
   )
-    .bind(
+    .bind(sweepTenantId(env), 
       MAX_MEASUREMENT_OCR_ATTEMPTS,
       MAX_MEASUREMENT_INTAKE_ATTEMPTS,
       now,

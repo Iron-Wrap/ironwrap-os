@@ -217,11 +217,18 @@ test("the five-minute cron runs its tenant jobs once per active tenant and its g
   await both.settle();
   assert.deepEqual(db.tenantsBoundTo(stuckSweep).sort(), [TENANT_A, TENANT_B], "the stuck sweep ran once for each tenant");
   assert.equal(db.executed.filter((entry) => /INSERT INTO cron_heartbeat/.test(entry.sql)).length, 1, "one heartbeat per tick");
+  const replayCandidates = /FROM dead_letter d\s+WHERE d\.recovered = 0 AND d\.envelope_id IS NOT NULL\s+GROUP BY d\.envelope_id\s+\) ep/;
+  assert.deepEqual(db.tenantsBoundTo(replayCandidates).sort(), [TENANT_A, TENANT_B], "the dead-letter replay runs once per tenant, joined on the envelope's tenant");
+  // Global jobs run once: no statement on the Newo or QuickBooks projection tables is bound to a
+  // tenant, and none runs more than once per tick.
+  assert.deepEqual(db.tenantsBoundTo(/FROM newo_sessions|FROM newo_event_receipts|FROM quickbooks_projection_outbox/), []);
   assert.equal(
-    db.executed.filter((entry) => /FROM dead_letter/.test(entry.sql) && /recovered = 0/.test(entry.sql)).length <= 2,
+    db.executed.filter((entry) => /INSERT INTO newo_reconciliation_runs/.test(entry.sql)).length <= 1,
     true,
-    "the dead-letter sweep, on a table with no tenant column, does not run once per tenant",
+    "the Newo reconcile, on tables with no tenant column, runs at most once",
   );
+  const heartbeatOk = db.raw.prepare("SELECT status FROM cron_heartbeat WHERE cron = ?").get("*/5 * * * *") as { status: string } | undefined;
+  assert.equal(heartbeatOk?.status, "ok");
 
   // A tenant whose secrets do not open under the Worker's key is skipped and named, never run
   // with the Worker tenant's credentials.
@@ -233,6 +240,8 @@ test("the five-minute cron runs its tenant jobs once per active tenant and its g
   await wrongKey.settle();
   assert.deepEqual(db.tenantsBoundTo(stuckSweep), [TENANT_A], "a tenant that cannot be served gets no pass");
   assert.ok(logged.some((line) => line.includes("cron_tenant_skipped") && line.includes(TENANT_B) && line.includes("tenant_secrets_unavailable")));
+  const heartbeatSkipped = db.raw.prepare("SELECT status FROM cron_heartbeat WHERE cron = ?").get("*/5 * * * *") as { status: string } | undefined;
+  assert.equal(heartbeatSkipped?.status, "error", "a skipped tenant is a tick that did not do its work");
 
   resetTenantCache();
   db.executed.length = 0;
@@ -249,7 +258,7 @@ test("the five-minute cron runs its tenant jobs once per active tenant and its g
   assert.deepEqual(db.tenantsBoundTo(stuckSweep), [TENANT_A], "with the flag off there is exactly one pass, the Worker tenant's");
 });
 
-test("the daily cron runs reconcile per tenant and the prunes once", async () => {
+test("the daily cron runs the owner watchdog per tenant, and the reconcile and prunes once", async () => {
   const db = new RecordingD1();
   await registerTenantB(db);
   const tick = { cron: "0 14 * * *", scheduledTime: Date.now(), noRetry() {} };
@@ -257,6 +266,54 @@ test("the daily cron runs reconcile per tenant and the prunes once", async () =>
   await worker.scheduled(tick as never, env(db) as never, run as never);
   await run.settle();
   const landed = /FROM envelopes\s+WHERE tenant_id = \? AND substr\(created_at, 1, 10\) = \?/;
-  assert.deepEqual(db.tenantsBoundTo(landed).sort(), [TENANT_A, TENANT_B], "the landed-count reconcile ran once per tenant");
+  assert.deepEqual(db.tenantsBoundTo(landed), [TENANT_A], "the reconcile, whose heartbeat and source counts carry no tenant, is the default tenant's");
+  const exceptions = /FROM measurement_intake_receipts\s+WHERE tenant_id = \? AND status IN \('unmatched', 'retryable_error'\)/;
+  assert.deepEqual(db.tenantsBoundTo(exceptions).sort(), [TENANT_A, TENANT_B], "each tenant's owner watchdog counts its own exceptions");
   assert.equal(db.executed.filter((entry) => /DELETE FROM app_magic_links/.test(entry.sql)).length, 1, "the auth prune ran once");
+});
+
+test("the stuck-envelope re-drive stamps each message with the tenant whose pass found it", async () => {
+  const db = new RecordingD1();
+  await registerTenantB(db);
+  seedEnvelope(db, TENANT_A, "ow_a_redrive");
+  seedEnvelope(db, TENANT_B, "ow_b_redrive");
+  const sent: Array<{ envelope_id: string; tenant_id?: string }> = [];
+  const queue = {
+    send: async (message: { envelope_id: string; tenant_id?: string }) => { sent.push(message); },
+    sendBatch: async (messages: Array<{ body: { envelope_id: string; tenant_id?: string } }>) => { for (const message of messages) sent.push(message.body); },
+  };
+  const run = ctx();
+  await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: Date.now(), noRetry() {} } as never, env(db, { JN_QUEUE: queue }) as never, run as never);
+  await run.settle();
+  assert.deepEqual(
+    sent.filter((message) => message.envelope_id.startsWith("ow_")).sort((a, b) => a.envelope_id.localeCompare(b.envelope_id)),
+    [{ envelope_id: "ow_a_redrive", tenant_id: TENANT_A }, { envelope_id: "ow_b_redrive", tenant_id: TENANT_B }],
+  );
+});
+
+test("on the dead-letter queue a message whose tenant cannot be served becomes a dead-letter row, not a dropped message", async () => {
+  const db = new RecordingD1();
+  await registerTenantB(db, "suspended");
+  seedEnvelope(db, TENANT_B, "ow_b_dead");
+  const outcomes: string[] = [];
+  await worker.queue(
+    {
+      queue: "ironwrap-jn-dlq",
+      messages: [{ body: { envelope_id: "ow_b_dead", tenant_id: TENANT_B }, attempts: 1, ack: () => { outcomes.push("ack"); }, retry: () => { outcomes.push("retry"); } }],
+    } as never,
+    env(db) as never,
+    ctx() as never,
+  );
+  assert.deepEqual(outcomes, ["ack"]);
+  const rows = db.raw.prepare("SELECT envelope_id, stage, error, payload_json FROM dead_letter").all() as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].envelope_id, "ow_b_dead");
+  assert.equal(rows[0].stage, "tenant_unresolved");
+  assert.match(String(rows[0].error), /tenant_suspended/);
+  // The ledger keeps the message's keys and redacts its values, as it does for every dead letter.
+  const payload = JSON.parse(String(rows[0].payload_json)) as { payload_keys: string[]; redacted: boolean };
+  assert.deepEqual(payload.payload_keys.sort(), ["envelope_id", "tenant_id"]);
+  assert.equal(payload.redacted, true);
+  // The envelope itself was not touched under another tenant's env.
+  assert.equal((db.raw.prepare("SELECT status FROM envelopes WHERE envelope_id = ?").get("ow_b_dead") as { status: string }).status, "pending_jn_push");
 });

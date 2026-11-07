@@ -149,9 +149,10 @@ function fakeEnv(options: FakeOptions = {}) {
     // The sweep's own candidate query. Checked before the shared replayable-dead query below,
     // which it would otherwise match on "FROM dead_letter d".
     if (sql.includes("AS dead_since")) {
-      const approver = String(args[0]);
-      const noop = new Set([String(args[1]), String(args[2])]);
-      const limit = Number(args[3]);
+      // args[0] is the tenant the sweep is scoped to (store.listAutoReplayCandidates).
+      const approver = String(args[1]);
+      const noop = new Set([String(args[2]), String(args[3])]);
+      const limit = Number(args[4]);
       const deadSince = new Map<string, string>();
       for (const row of deadLetters) {
         if (row.recovered !== 0 || statuses.get(row.envelope_id) !== "dead") continue;
@@ -180,7 +181,8 @@ function fakeEnv(options: FakeOptions = {}) {
       return { results: rows.slice(0, limit) };
     }
     if (sql.includes("FROM dead_letter d")) {
-      const selected = args[0] == null ? null : String(args[0]);
+      // args[0] is the tenant the replay is scoped to (store.listReplayableDeadEnvelopeIds).
+      const selected = args[1] == null ? null : String(args[1]);
       const ids = deadLetters
         .filter((row) => row.recovered === 0 && statuses.get(row.envelope_id) === "dead")
         .filter((row) => selected === null || row.envelope_id === selected)

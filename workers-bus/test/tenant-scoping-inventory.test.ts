@@ -8,21 +8,17 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-/** Tables that hold no tenant's data: guards, throttles, heartbeats, replay registries, cursors. */
+/** Tables that hold no tenant's data: guards, throttles, the cron heartbeat, replay registries. */
 export const GLOBAL_INFRASTRUCTURE_TABLES: readonly string[] = Object.freeze([
   "agent_control_guard",
   "app_auth_throttles",
-  "commercial_deposit_derivation_cursors",
   "cron_heartbeat",
   // Keyed `t:<tenant>:<key>` in code (store.ts dedupClaimKey), so the tenant is in the key.
   "dedup_claims",
-  "dev_outbox",
   "facet_design_event_identity_registry",
   "facet_design_ingest_nonce_registry",
   "facet_design_ingest_nonces",
   "facet_v2_estimator_ready_nonces",
-  "heartbeat",
-  "native_final_invoice_derivation_cursors",
   "proposal_delivery_late_answer_windows",
   "public_estimate_rate_limits",
   "service_case_batch_guard",
@@ -36,15 +32,23 @@ export const GLOBAL_INFRASTRUCTURE_TABLES: readonly string[] = Object.freeze([
  */
 export const LEGACY_UNSCOPED_TABLES: readonly string[] = Object.freeze([
   "audit_log",
+  // One cursor row per Worker (its name is pinned by a CHECK), so the two derivations behind
+  // them run in the default tenant's pass only until per-tenant cursors land.
+  "commercial_deposit_derivation_cursors",
+  "native_final_invoice_derivation_cursors",
   "customer_portal_acceptance_events",
   "customer_portal_decision_events",
   "dead_letter",
+  // Captured local mail: recipients and links are one tenant's.
+  "dev_outbox",
   "external_effect_attempts",
   "facet_v2_consumer_receipts",
   "facet_v2_estimator_ready_receipts",
   "facet_v2_native_projection_attempts",
   "facet_v2_projection_attempts",
   "field_action_media",
+  // The daily reconcile verdict, one row per day for the Worker: the default tenant's.
+  "heartbeat",
   "lead_ack_receipts",
   "newo_control_actions",
   "newo_event_receipts",
@@ -115,6 +119,16 @@ test("the sweeps a cron runs per tenant bind the tenant on every tenant table th
     ["quickbooks-final-invoice.ts", /FROM quickbooks_final_invoice_outbox\s+WHERE tenant_id = \? AND state = 'pending'/],
     ["postiz.ts", /FROM postiz_effect_outbox\s+WHERE tenant_id = \? AND state = 'pending'/],
     ["postiz.ts", /FROM postiz_intents\s+WHERE tenant_id = \?/],
+    ["measurement-intake-store.ts", /FROM measurement_intake_receipts\s+WHERE tenant_id = \? AND status IN \('unmatched', 'retryable_error'\)/],
+    ["measurement-intake-store.ts", /FROM measurement_intake_receipts\s+WHERE tenant_id = \?\s+AND \(\(status = 'retryable_error'/],
+    ["customer-portal-decision.ts", /WHERE tenant_id = \? AND state = 'receipt_stored'/],
+    ["customer-portal-decision.ts", /WHERE tenant_id = \? AND state = 'recorded'/],
+    ["customer-contract-acceptance.ts", /WHERE tenant_id = \? AND state = 'receipt_stored'/],
+    ["quickbooks-final-invoice.ts", /WHERE i\.tenant_id = \? AND i\.state IN \('submitted','reconciliation_required'\)/],
+    ["quickbooks-final-invoice.ts", /WHERE i\.tenant_id = \? AND i\.provider_invoice_id IS NOT NULL/],
+    ["quickbooks-final-invoice.ts", /FROM quickbooks_final_invoice_outbox\s+WHERE tenant_id = \? AND state = 'attempting'/],
+    ["store.ts", /INNER JOIN envelopes e ON e\.envelope_id = ep\.envelope_id AND e\.tenant_id = \?/],
+    ["store.ts", /INNER JOIN envelopes e ON e\.envelope_id = d\.envelope_id AND e\.tenant_id = \?/],
   ];
   for (const [file, pattern] of sources) {
     const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");

@@ -204,11 +204,12 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
   }
   assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
-  // The shared multi-tenant runtime (0209, tenancy.ts) ships off everywhere: each environment
-  // keeps its build-time tenant until an operator registers a second tenant and turns it on.
-  for (const vars of [config.vars, config.env.local.vars, config.env.qa.vars]) {
-    assert.equal(vars.APP_MULTI_TENANT_ENABLED, "false");
-  }
+  // The shared multi-tenant runtime (0209, tenancy.ts) ships off in production and local, where
+  // each keeps its build-time tenant; qa runs it on, with a second synthetic tenant registered
+  // through /admin/tenants beside the Worker tenant.
+  assert.equal(config.vars.APP_MULTI_TENANT_ENABLED, "false");
+  assert.equal(config.env.local.vars.APP_MULTI_TENANT_ENABLED, "false");
+  assert.equal(config.env.qa.vars.APP_MULTI_TENANT_ENABLED, "true");
   // qa creates its first owner through `POST /admin/app-users/bootstrap` (ADMIN_TOKEN, once).
   assert.equal(
     config.env.qa.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED,

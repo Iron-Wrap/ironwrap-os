@@ -609,7 +609,9 @@
           "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
           "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
-          "APP_MULTI_TENANT_ENABLED": "false"
+          // qa serves two synthetic tenants side by side: the Worker tenant on its own hostnames
+          // and a registry tenant registered through /admin/tenants (tools/qa-tenant-register.mjs).
+          "APP_MULTI_TENANT_ENABLED": "true"
         },
         "CFG_NEWO": {
           // Newo is not required in qa until it is enabled there separately (owner

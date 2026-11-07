@@ -209,6 +209,7 @@ export const WORKER_WIDE_NAMES: readonly string[] = Object.freeze([
   // Worker-wide keys and the operator's token.
   "ADMIN_TOKEN",
   "TENANT_SECRETS_KEK",
+  "TENANT_PROXY_TOKEN",
   "QB_TOKEN_ENCRYPTION_KEY",
   "APP_AUTH_PEPPER",
   "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
@@ -280,12 +281,20 @@ export interface TenantRecord {
   updated_at: string;
 }
 
-export type TenantRefusalCode = "tenant_suspended" | "tenant_unavailable" | "tenant_secrets_unavailable";
+export type TenantRefusalCode =
+  | "tenant_suspended"
+  | "tenant_unavailable"
+  | "tenant_secrets_unavailable"
+  | "tenant_proxy_untrusted";
 
 export interface TenantRefusal {
-  status: 503;
+  status: 403 | 503;
   error: TenantRefusalCode;
 }
+
+/** The hostname a trusted proxy serves, and the token that proves it is that proxy. */
+export const FORWARDED_HOST_HEADER = "x-ironwrap-forwarded-host";
+export const PROXY_TOKEN_HEADER = "x-ironwrap-proxy-token";
 
 export type TenantResolution =
   /** The flag is off: `env` as bound, the tenant whatever `APP_TENANT_ID` says. */
@@ -310,6 +319,7 @@ interface TenancyEnv {
   APP_TENANT_ID?: string;
   APP_MULTI_TENANT_ENABLED?: string;
   TENANT_SECRETS_KEK?: string;
+  TENANT_PROXY_TOKEN?: string;
 }
 
 export function multiTenantEnabled(env: TenancyEnv): boolean {
@@ -356,10 +366,36 @@ async function tenantIdForHost(db: TenantDb, host: string, now: number): Promise
   return tenantId;
 }
 
-/** The request hostname as the registry keys it: lowercase, no port, no trailing dot. */
-export function requestHost(url: URL): string {
-  const host = url.hostname.toLowerCase();
+/** A hostname as the registry keys it: lowercase, no port, no trailing dot. */
+export function normalizeHost(raw: string): string {
+  let host = raw.trim().toLowerCase();
+  // `host:port` and `[v6]:port` as a Host header carries them; the registry keys hostnames.
+  const bracket = host.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracket) host = bracket[1];
+  else if (/^[^:]+:\d+$/.test(host)) host = host.slice(0, host.lastIndexOf(":"));
   return host.endsWith(".") ? host.slice(0, -1) : host;
+}
+
+/**
+ * The hostname a request is for. Behind the hosting operator's proxy (one custom domain per
+ * tenant forwarding to the Worker's one `workers.dev` name) the URL carries the proxy's upstream
+ * hostname, so the proxy states the hostname it served in `x-ironwrap-forwarded-host` and proves
+ * it is the proxy with `x-ironwrap-proxy-token`, compared constant-time against the Worker
+ * secret TENANT_PROXY_TOKEN. A forwarded host without a valid proof is refused, never read and
+ * never ignored: an unauthenticated caller must not pick a tenant, and must not silently land on
+ * the default one either.
+ */
+export function requestHost(
+  req: Request,
+  env: TenancyEnv,
+): { ok: true; host: string } | { ok: false; refusal: TenantRefusal } {
+  const forwarded = req.headers.get(FORWARDED_HOST_HEADER);
+  if (forwarded === null) return { ok: true, host: normalizeHost(new URL(req.url).hostname) };
+  const proof = req.headers.get(PROXY_TOKEN_HEADER) ?? "";
+  if (!env.TENANT_PROXY_TOKEN || !constantTimeEqual(proof, env.TENANT_PROXY_TOKEN)) {
+    return { ok: false, refusal: { status: 403, error: "tenant_proxy_untrusted" } };
+  }
+  return { ok: true, host: normalizeHost(forwarded) };
 }
 
 async function loadTenant(env: TenancyEnv, tenantId: string, now: number): Promise<CachedTenant> {
@@ -471,7 +507,9 @@ export async function resolveRequestTenant(
   if (!fallback || !tenancy.DB) {
     return { kind: "refused", tenantId: fallback, refusal: { status: 503, error: "tenant_unavailable" } };
   }
-  const host = requestHost(new URL(req.url));
+  const resolvedHost = requestHost(req, tenancy);
+  if (!resolvedHost.ok) return { kind: "refused", tenantId: null, refusal: resolvedHost.refusal };
+  const host = resolvedHost.host;
   let tenantId: string | null;
   try {
     tenantId = TENANT_HOST_RE.test(host) ? await tenantIdForHost(tenancy.DB as TenantDb, host, now()) : null;

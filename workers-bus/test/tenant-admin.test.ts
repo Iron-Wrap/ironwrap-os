@@ -147,6 +147,8 @@ test("writes are validated: tenant-scoped names only, well-formed hosts, one own
     [`/admin/tenants/${TENANT_B}`, { ...base, settings: { APP_LOCALE: 5 } }, "invalid_setting_value"],
     [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { TENANT_SECRETS_KEK: "x" } }, "secret_not_tenant_scoped"],
     [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { ADMIN_TOKEN: "x" } }, "secret_not_tenant_scoped"],
+    [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { QB_RECONCILIATION_ISSUER_API_KEY: "x" } }, "secret_not_tenant_scoped"],
+    [`/admin/tenants/${TENANT_B}`, { ...base, settings: { NEWO_ENABLED: "true" } }, "setting_not_tenant_scoped"],
     [`/admin/tenants/${TENANT_B}`, { ...base, secrets: { INGEST_TOKEN: "" } }, "invalid_secret_value"],
     [`/admin/tenants/${TENANT_B}`, { ...base, hosts: ["Has.Upper.Case"] }, "invalid_host"],
     [`/admin/tenants/${TENANT_B}`, { ...base, hosts: ["b.example.invalid:8443"] }, "invalid_host"],

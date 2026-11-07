@@ -289,29 +289,21 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
       ),
     ]),
   ];
-  let results: unknown;
   try {
-    results = await db.batch(statements);
+    await db.batch(statements);
   } catch {
     // A primary-key clash on a concurrent create, or a CHECK the row failed: nothing was written.
     return json({ error: "tenant_write_conflict" }, 409);
   }
-  const rowChanges = changesOf(Array.isArray(results) ? results[0] : undefined);
   resetTenantCache();
-  if (rowChanges !== 1) {
-    const current = await db.prepare("SELECT version FROM tenants WHERE tenant_id = ?").bind(tenantId).first<{ version: number }>();
+  // The row says whose write it carries, independent of how the batch reports row changes.
+  const current = await db.prepare("SELECT version, write_id FROM tenants WHERE tenant_id = ?").bind(tenantId)
+    .first<{ version: number; write_id: string }>();
+  if (current?.write_id !== writeId) {
     return json({ error: "version_conflict", version: current?.version ?? null }, 409);
   }
   const record = await readTenant(db, tenantId);
   return json({ tenant: record }, existing ? 200 : 201);
-}
-
-/** The row-change count of one batched statement, as D1 and the test fixture report it. */
-function changesOf(result: unknown): number | null {
-  if (!result || typeof result !== "object") return null;
-  const meta = (result as { meta?: { changes?: unknown } }).meta;
-  const changes = meta?.changes ?? (result as { changes?: unknown }).changes;
-  return typeof changes === "number" ? changes : typeof changes === "bigint" ? Number(changes) : null;
 }
 
 function storedSettings(settingsJson: string): Record<string, string> {

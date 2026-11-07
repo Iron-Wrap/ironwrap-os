@@ -16,8 +16,11 @@
 // One proposal per attempt: the idempotency key carries the attempt number, so a retry after a
 // real provider attempt is a fresh admission (fresh mandate, limit and stop checks), while an
 // escalation, which claims no attempt, is found again under the same key once a person approved
-// it. The gateway digests the exact argument bytes it receives, so the same bytes are digested
-// here and recorded.
+// it. A denial claims no attempt either, and the gateway answers the same key with the stored
+// denial, so the key also carries the number of denials already recorded for that attempt: the
+// next proposal after a denial is a fresh one (the budget may have rolled, the stop lifted), and a
+// denial that stands is simply denied again. The gateway digests the exact argument bytes it
+// receives, so the same bytes are digested here and recorded.
 //
 // What the gateway sees: the effect's identity (tenant, effect id, action, provider, actor,
 // aggregate, intent, request hash, idempotency key, attempt number) as one canonical JSON object.
@@ -112,9 +115,11 @@ export function gatewayEffectType(action: string): string {
 
 /** The argument object the gateway digests: the effect's identity, never its payload. */
 export async function gatewayArguments(effect: ExternalEffectRecord, attemptNumber: number): Promise<Record<string, unknown>> {
+  // A person's id is digested with the effect id as salt, so the same person is not linkable
+  // across effects from the digest alone and an email-shaped id cannot be guessed back.
   const actor = SYSTEM_ACTOR_TYPES.has(effect.actor_type)
     ? { type: effect.actor_type, id: effect.actor_id }
-    : { type: effect.actor_type, id_sha256: await sha256Hex(effect.actor_id) };
+    : { type: effect.actor_type, id_sha256: await sha256Hex(`${effect.effect_id}:${effect.actor_id}`) };
   return {
     schema: "ironwrap.gateway-effect.v1",
     tenant_id: effect.tenant_id,
@@ -130,9 +135,13 @@ export async function gatewayArguments(effect: ExternalEffectRecord, attemptNumb
   };
 }
 
-/** One key per attempt: a retry is a fresh admission; an escalation (no attempt claimed) is found again. */
-export function gatewayIdempotencyKey(effect: ExternalEffectRecord, attemptNumber: number): string {
-  return `ironwrap:${effect.tenant_id}:${effect.effect_id}:${attemptNumber}`.slice(0, 255);
+/**
+ * One key per attempt and per denial already recorded for it: a retry is a fresh admission, an
+ * escalation (no attempt claimed, no denial) is found again, and the proposal after a denial is new.
+ */
+export function gatewayIdempotencyKey(effect: ExternalEffectRecord, attemptNumber: number, priorDenials = 0): string {
+  const suffix = priorDenials > 0 ? `:d${priorDenials}` : "";
+  return `ironwrap:${effect.tenant_id}:${effect.effect_id}:${attemptNumber}${suffix}`.slice(0, 255);
 }
 
 function timeoutMs(env: HelmGatewayEnv): number {
@@ -189,11 +198,17 @@ async function readBounded(response: Response, signal: AbortSignal): Promise<str
   const chunks: Uint8Array[] = [];
   let total = 0;
   const abort = new Promise<never>((_, reject) => {
-    if (signal.aborted) reject(new Error("aborted"));
-    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    const stop = () => {
+      reader.cancel().catch(() => {});
+      reject(new Error("aborted"));
+    };
+    if (signal.aborted) stop();
+    signal.addEventListener("abort", stop, { once: true });
   });
   for (;;) {
     const { done, value } = await Promise.race([reader.read(), abort]);
+    // A cancelled reader reports `done` too; an aborted read is a timeout, never an empty body.
+    if (signal.aborted) throw new Error("aborted");
     if (done) break;
     total += value.byteLength;
     if (total > MAX_RESPONSE_BYTES) {
@@ -219,9 +234,13 @@ export async function proposeToGateway(
   env: HelmGatewayEnv,
   effect: ExternalEffectRecord,
   attemptNumber: number,
-  transport: typeof fetch = gatewayTransport,
+  options: { priorDenials?: number; nowMs?: number; transport?: typeof fetch } = {},
 ): Promise<Omit<GatewayAdmission, "mode">> {
-  const base = { effect_type: "", argument_digest: "", gateway_attempt_id: null, gateway_state: null, receipts: null };
+  const transport = options.transport ?? gatewayTransport;
+  const nowMs = options.nowMs ?? Date.now();
+  const argumentBytes = new TextEncoder().encode(canonicalJson(await gatewayArguments(effect, attemptNumber)));
+  const argumentDigest = await sha256Hex(new TextDecoder().decode(argumentBytes));
+  const base = { effect_type: "", argument_digest: argumentDigest, gateway_attempt_id: null, gateway_state: null, receipts: null };
   const unreachable = (reason: string, extra: Partial<Omit<GatewayAdmission, "mode">> = {}): Omit<GatewayAdmission, "mode"> =>
     ({ ...base, ...extra, decision: "unreachable", reason_code: reason.slice(0, 120) });
 
@@ -231,8 +250,6 @@ export async function proposeToGateway(
   } catch {
     return unreachable("gateway_effect_type_invalid");
   }
-  const argumentBytes = new TextEncoder().encode(canonicalJson(await gatewayArguments(effect, attemptNumber)));
-  const argumentDigest = await sha256Hex(new TextDecoder().decode(argumentBytes));
   const identity = { effect_type: effectType, argument_digest: argumentDigest };
 
   const url = gatewayUrl(env);
@@ -241,7 +258,7 @@ export async function proposeToGateway(
   if (!token) return unreachable("gateway_token_missing", identity);
 
   const body = {
-    idempotency_key: gatewayIdempotencyKey(effect, attemptNumber),
+    idempotency_key: gatewayIdempotencyKey(effect, attemptNumber, options.priorDenials ?? 0),
     case_id: effect.correlation_id.slice(0, 255),
     effect: {
       effect_type: effectType,
@@ -309,7 +326,7 @@ export async function proposeToGateway(
       const existing = (parsed as { existing?: unknown }).existing === true;
       const permit = record.permit && typeof record.permit === "object" ? record.permit as Record<string, unknown> : null;
       const permitExpiry = permit ? field(permit, "expiresAt", "expires_at") : undefined;
-      if (existing && typeof permitExpiry === "string" && Number.isFinite(Date.parse(permitExpiry)) && Date.parse(permitExpiry) <= Date.now()) {
+      if (existing && typeof permitExpiry === "string" && Number.isFinite(Date.parse(permitExpiry)) && Date.parse(permitExpiry) <= nowMs) {
         return { ...common, decision: "denied", reason_code: "PERMIT_EXPIRED" };
       }
       return { ...common, decision: "admitted", reason_code: reason };
@@ -337,7 +354,23 @@ export async function admitExternalEffect(
   if (mode === "off") {
     return { mode, decision: "admitted", reason_code: null, effect_type: "", gateway_attempt_id: null, gateway_state: null, argument_digest: "", receipts: null };
   }
-  const proposed = await proposeToGateway(env, effect, attemptNumber);
+  // Denials already recorded for this attempt make the next proposal a new key (see the header).
+  let priorDenials = 0;
+  try {
+    const counted = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM external_effect_gateway_admissions
+        WHERE effect_id = ? AND attempt_number = ? AND decision = 'denied'`,
+    ).bind(effect.effect_id, attemptNumber).first<{ n: number }>();
+    priorDenials = Number(counted?.n ?? 0);
+  } catch (error) {
+    // The ledger could not be read. In enforce mode that is no admission; shadow proceeds on a
+    // first-proposal key and logs.
+    if (mode === "enforce") {
+      return { mode, decision: "unreachable", reason_code: "gateway_admission_unrecorded", effect_type: "", gateway_attempt_id: null, gateway_state: null, argument_digest: "", receipts: null };
+    }
+    console.log(JSON.stringify({ at: "helm_gateway_admissions_unreadable", effect_id: effect.effect_id, error: String(error) }));
+  }
+  const proposed = await proposeToGateway(env, effect, attemptNumber, { priorDenials, nowMs: Date.parse(now) });
   const admission: GatewayAdmission = { mode, ...proposed };
   try {
     await env.DB.prepare(
@@ -356,7 +389,7 @@ export async function admitExternalEffect(
       admission.effect_type || "unresolved",
       admission.gateway_attempt_id,
       admission.gateway_state,
-      admission.argument_digest || "0".repeat(64),
+      admission.argument_digest,
       admission.receipts ? JSON.stringify(admission.receipts) : null,
       now,
     ).run();

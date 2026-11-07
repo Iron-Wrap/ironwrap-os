@@ -576,8 +576,10 @@ export async function claimExternalEffect(
   const attemptNumber = effect.attempt_count + 1;
   if (attemptNumber > effect.retry_limit + 1) throw new EffectRuntimeError("effect_retry_exhausted");
   // The remote claim (the MCP host's effects) is admitted exactly as the Worker's own execution.
+  // A denial is an error here, never a 200 with a failed effect: the host must not read a claim
+  // response as a lease and perform the write.
   const gate = await admitBeforeClaim(env, effect, attemptNumber, now);
-  if (gate.refused) return { ...gate.refused, admission: gate.admission };
+  if (gate.refused) throw new EffectRuntimeError("effect_gateway_denied");
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
   const leaseExpiresAt = new Date(now.getTime() + EFFECT_ATTEMPT_LEASE_MS).toISOString();
   await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());

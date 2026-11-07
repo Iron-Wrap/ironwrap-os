@@ -1213,7 +1213,10 @@ on the decision before either claims:
 
 A mode value nobody declared reads as `enforce`; unset or empty is `off`. One proposal per
 attempt: the idempotency key is `ironwrap:<tenant>:<effect_id>:<attempt_number>`, so a retry
-after a real provider attempt is a fresh admission with fresh mandate, limit and stop checks. The
+after a real provider attempt is a fresh admission with fresh mandate, limit and stop checks; a
+denial claims no attempt, so the key also carries the number of denials recorded for that attempt
+(`:d<n>`) and the proposal after a denial is a new one. On the MCP host's claim route a denial is
+`422 effect_gateway_denied`, never a lease. The
 Worker performs the effect itself after admission and never calls the gateway's Dispatch, so the
 gateway's dispatch-time re-checks do not apply to an admission already stored; the permit's own
 expiry is honoured. Every live-mode decision is appended to

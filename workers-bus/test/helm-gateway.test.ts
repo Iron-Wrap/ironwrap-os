@@ -9,6 +9,7 @@ import { test } from "node:test";
 
 import type { AppEnv } from "../src/app-types.ts";
 import { canonicalJson, sha256Hex } from "../src/canonical.ts";
+import { handleExternalEffectClaim } from "../src/effect-runtime-admin.ts";
 import {
   EffectRuntimeError,
   authorizeExternalEffect,
@@ -230,7 +231,7 @@ test("the proposal carries the effect's identity, never its payload, under a per
   // A person's actor id travels as a digest; a system actor's as itself.
   const owner = await authorizedEffect(appEnv, "gw-owner", { type: "owner", id: "owner@example.invalid" });
   const ownerArguments = await gatewayArguments(owner, 1);
-  assert.deepEqual(ownerArguments.actor, { type: "owner", id_sha256: await sha256Hex("owner@example.invalid") });
+  assert.deepEqual(ownerArguments.actor, { type: "owner", id_sha256: await sha256Hex(`${owner.effect_id}:owner@example.invalid`) });
   assert.ok(!canonicalJson(ownerArguments).includes("owner@example.invalid"));
 });
 
@@ -319,11 +320,62 @@ test("enforce: the MCP host's remote claim is admitted the same way, and refused
   assert.equal(after.state, "authorized");
   assert.equal(after.attempt_count, 0, "nothing was claimed");
 
+  // A denial is an error on the remote path: the host must never read a claim response as a lease.
   const denied = await authorizedEffect(appEnv, "claim-denied");
   gateway([attemptResponse("DENIED", { reasonCode: "EFFECT_OUT_OF_SCOPE" })]);
-  const deniedResult = await claimExternalEffect(appEnv, denied.effect_id, CLOCK);
-  assert.equal(deniedResult.effect.state, "failed");
-  assert.equal(deniedResult.effect.result_code, "gateway_denied:EFFECT_OUT_OF_SCOPE");
+  await assert.rejects(
+    claimExternalEffect(appEnv, denied.effect_id, CLOCK),
+    (error: unknown) => error instanceof EffectRuntimeError && error.code === "effect_gateway_denied",
+  );
+  const deniedRow = (await getExternalEffect(appEnv, denied.effect_id))!;
+  assert.equal(deniedRow.state, "failed");
+  assert.equal(deniedRow.result_code, "gateway_denied:EFFECT_OUT_OF_SCOPE");
+
+  // Through the admin claim route: 422 with the code, no lease in the body.
+  const routeEnv = env(db, { AGENT_DATA_CLASS: "business" });
+  gateway([attemptResponse("DENIED", { reasonCode: "EFFECT_OUT_OF_SCOPE" })]);
+  const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
+  const response = await handleExternalEffectClaim(
+    new Request("https://bus.example.invalid/admin/effects/claim", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        effect: {
+          tenantId: TENANT,
+          actor: { type: "agent", id: "mcp-agent" },
+          taskId: "run:gateway-claim-1",
+          authority: { permitRef: "mcp:permit:gateway-claim-1", policyRef: "mcp.test_write", policyVersion: "v1" },
+          aggregate: { type: "Production Gate State", id: "gate-0001", version: 0 },
+          intentId: "run:gateway-claim-1",
+          action: "mcp.test_write",
+          request: { method: "POST", path: "/api/resource/x", body: { state: "Ready" } },
+          provider: "frappe",
+          idempotencyKey: "mcp:gateway-claim-1",
+          deadlineAt: deadline,
+          expectedReadback: { name: "gate-0001" },
+          retryLimit: 0,
+          compensationPlan: {},
+          correlationId: "corr:gateway-claim-1",
+        },
+        authority: {
+          permitRef: "mcp:permit:gateway-claim-1",
+          policyRef: "mcp.test_write",
+          policyVersion: "v1",
+          tenantId: TENANT,
+          actorType: "agent",
+          actorId: "mcp-agent",
+          expiresAt: deadline,
+          allowedActions: ["mcp.test_write"],
+          maxAttempts: 1,
+        },
+      }),
+    }),
+    routeEnv,
+  );
+  assert.equal(response.status, 422);
+  const payload = await response.json() as Record<string, unknown>;
+  assert.equal(payload.error, "effect_gateway_denied");
+  assert.equal(payload.attempt, undefined, "no lease is returned");
 });
 
 test("enforce: a denied proposal fails the effect with the gateway's reason and the provider is never called", async () => {
@@ -339,7 +391,7 @@ test("enforce: a denied proposal fails the effect with the gateway's reason and 
   assert.equal(db.admissions()[0].decision, "denied");
 });
 
-test("enforce: a retry after a real attempt is a fresh proposal; a denial in retry state is thrown and the effect stays retryable", async () => {
+test("enforce: a retry after a real attempt is a fresh proposal; a denial in retry state is thrown, and the proposal after it carries the denial count", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
   const effect = await authorizedEffect(appEnv);
@@ -363,8 +415,8 @@ test("enforce: a retry after a real attempt is a fresh proposal; a denial in ret
   assert.equal(JSON.parse(atob(String((calls[1].body.effect as Record<string, string>).arguments))).attempt_number, 2);
 
   const second = await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
-  assert.equal(second.effect.state, "succeeded", "the budget rolled; the same attempt number is proposed again and admitted");
-  assert.equal(calls[2].body.idempotency_key, calls[1].body.idempotency_key, "no attempt was claimed in between, so the key is the same");
+  assert.equal(second.effect.state, "succeeded", "the budget rolled; attempt 2 is proposed again under a new key and admitted");
+  assert.equal(calls[2].body.idempotency_key, `ironwrap:${TENANT}:${effect.effect_id}:2:d1`, "one denial recorded for attempt 2 makes the next proposal a new key");
   assert.deepEqual(db.admissions().map((row) => [row.attempt_number, row.decision]), [[1, "admitted"], [2, "denied"], [2, "admitted"]]);
 });
 
@@ -384,7 +436,7 @@ test("enforce: an escalated proposal leaves the effect authorized; the approval 
   assert.equal((await getExternalEffect(appEnv, effect.effect_id))!.state, "authorized");
   const result = await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
   assert.equal(result.effect.state, "succeeded");
-  assert.equal(calls[1].body.idempotency_key, calls[0].body.idempotency_key, "no attempt was claimed by the escalation, so the approval is found again");
+  assert.equal(calls[1].body.idempotency_key, calls[0].body.idempotency_key, "no attempt was claimed and nothing was denied, so the approval is found under the same key");
 
   const stale = await authorizedEffect(appEnv, "stale-permit");
   gateway([attemptResponse("ADMITTED", { permit: { expiresAt: "2000-01-01T00:00:00Z" } }, 200, true)]);
@@ -476,6 +528,7 @@ test("an action the gateway cannot name is never proposed: off ignores it, a liv
   assert.equal(decision.decision, "unreachable");
   assert.equal(decision.reason_code, "gateway_effect_type_invalid");
   assert.equal(calls.length, 0);
+  assert.match(decision.argument_digest, /^[0-9a-f]{64}$/, "the digest of what would have been sent is still recorded");
 });
 
 test("earned autonomy maps onto mandates: off is out of scope, asks-first escalates every call, within-limits escalates above its ceiling", () => {

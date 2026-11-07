@@ -738,7 +738,9 @@ intents; the latter walks every tenant's jobs by each job's own tenant). Newo se
 and QuickBooks projection recovery stay global because their tables carry no tenant column; a
 registry tenant's Newo events and QuickBooks webhooks are not served until that changes. On the
 dead-letter queue a message whose tenant cannot be served becomes a `dead_letter` row (stage
-`tenant_unresolved`) under the Worker's own env instead of being dropped.
+`tenant_unresolved`) under the Worker's own env instead of being dropped. Dead-letter replay
+(`POST /admin/replay`) replays the tenant the request resolved to: with the flag on, an operator
+replays a registry tenant's dead letters from that tenant's hostname.
 `workers-bus/test/tenant-scoping-inventory.test.ts` holds every table to one of three classes:
 tenant-scoped (a `tenant_id` or `destination_tenant_id` column), global infrastructure, or legacy
 unscoped. The legacy list (the audit log, dead letters, source counts, the daily heartbeat, the

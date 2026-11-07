@@ -26,7 +26,7 @@ import {
 } from "./core.ts";
 import * as store from "./store.ts";
 import { flattenEnv } from "./env-bindings.ts";
-import { resolveRequestTenant } from "./tenancy.ts";
+import { cronTenantEnvs, queueMessageEnv, queueTenantId, resolveRequestTenant } from "./tenancy.ts";
 import { handleTenantAdmin, isTenantAdminPath } from "./tenant-admin.ts";
 import {
   BULK_REPLAY_CONFIRMATION,
@@ -166,9 +166,10 @@ function reportHtml(text: string): string {
     .join("");
 }
 
+/** Every message names the tenant that enqueued it; one sent before the field existed is the Worker tenant's. */
 type BusQueueMessage =
-  | { envelope_id: string }
-  | { measurement_receipt_id: string; lease_token: string }
+  | { envelope_id: string; tenant_id?: string }
+  | ({ measurement_receipt_id: string; lease_token: string } & { tenant_id?: string })
   | NewoQueueMessage;
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -190,8 +191,13 @@ async function reconcileFacetDesignSurfaces(env: Env): Promise<void> {
   }
 }
 
-async function deriveThenRecoverQuickBooksFinalInvoices(env: Env): Promise<void> {
-  try {
+/**
+ * Final-invoice derivation walks every tenant's jobs behind one cursor row whose name the schema
+ * pins, so on a shared Worker only the default tenant's pass derives (the walk itself is keyed by
+ * each job's own tenant); every tenant's pass recovers its own outbox.
+ */
+async function deriveThenRecoverQuickBooksFinalInvoices(env: Env, derive = true): Promise<void> {
+  if (derive) try {
     const derivation = await deriveNativeFinalInvoiceIntents(
       env as import("./app-types.ts").AppEnv,
     );
@@ -285,10 +291,28 @@ export default {
     boundEnv: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
-    const env = flattenEnv(boundEnv);
+    const rootEnv = flattenEnv(boundEnv);
     const isDlq = batch.queue.endsWith("-dlq");
     for (const msg of batch.messages) {
       try {
+        // The message's tenant decides the env it is handled under (tenancy.ts); a tenant that
+        // cannot be served throws here and the message is retried, never handled as another. On
+        // the dead-letter queue there is no further retry, so the refusal itself becomes the
+        // dead-letter row, written under the Worker's own env with no tenant data in it.
+        let env: Env;
+        try {
+          env = await queueMessageEnv(rootEnv, msg.body.tenant_id);
+        } catch (refusal) {
+          if (!isDlq) throw refusal;
+          await store.recordDeadLetter(rootEnv, {
+            envelope_id: "envelope_id" in msg.body ? msg.body.envelope_id : null,
+            stage: "tenant_unresolved",
+            error: String(refusal instanceof Error ? refusal.message : refusal).slice(0, 200),
+            payload_json: JSON.stringify(msg.body),
+          });
+          msg.ack();
+          continue;
+        }
         if ("measurement_receipt_id" in msg.body) {
           const receiptId = msg.body.measurement_receipt_id;
           if (isDlq) {
@@ -346,318 +370,345 @@ export default {
     boundEnv: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    const env = flattenEnv(boundEnv);
+    const rootEnv = flattenEnv(boundEnv);
+    // One shared Worker, many tenants: a tenant job runs once per active tenant under that
+    // tenant's env (tenancy.ts); a global job, on a table with no tenant column, runs once.
+    // With the flag off this is one pass under the Worker's own env, exactly as before.
+    const tenants = await cronTenantEnvs(rootEnv);
+    for (const skipped of tenants.skipped) log({ at: "cron_tenant_skipped", cron: controller.cron, ...skipped });
+    // A tenant that could not be served is a tick that did not do its work: the heartbeat
+    // settles `error` and /ready?scope=ops says so, rather than a green tick with a silent gap.
+    const skipped = () => {
+      if (tenants.skipped.length > 0) throw new Error(`cron_tenant_skipped:${tenants.skipped.map((entry) => entry.tenant_id).join(",")}`);
+    };
     if (controller.cron === "0 14 * * *") {
-      ctx.waitUntil(
-        store.markCronTickStarted(env, controller.cron).catch((error) =>
-          log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
-        ).then(() => Promise.all([
-          runReconcile(env),
-          runOwnerWatchdog(env).catch((error) =>
-            log({ at: "owner_watchdog", error: String(error) })
-          ),
-          runNewoDailyReconcile(env).catch((error) =>
-            log({ at: "newo_daily_reconcile", error: String(error) })
-          ),
-          pruneAuthRecords(env).catch((error) =>
-            log({ at: "auth_prune", error: String(error) }),
-          ),
-          // First opens older than 3 years go first, so a link they held is pruned in the same run.
-          pruneCustomerPortalProposalViews(env)
-            .catch((error) => log({ at: "customer_portal_proposal_view_prune", error: String(error) }))
-            .then(() => pruneCustomerPortalRecords(env))
-            .catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
-          pruneMeasurementIntakeReceipts(env).catch((error) =>
-            log({ at: "measurement_receipt_prune", error: String(error) }),
-          ),
-          prunePublicEstimateRateLimits(env as PublicEstimatorEnv).catch((error) =>
-            log({ at: "public_estimate_rate_limit_prune", error: String(error) }),
-          ),
-        ]).then(() => {})).then(
-          () =>
-            store.markCronTickSettled(env, controller.cron, "ok").catch((error) =>
-              log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
-            ),
-          async (error) => {
-            log({ at: "cron_tick", cron: controller.cron, error: String(error) });
-            await store.markCronTickSettled(env, controller.cron, "error").catch((writeError) =>
-              log({ at: "cron_heartbeat", cron: controller.cron, error: String(writeError) })
-            );
-            // Re-raise so Cloudflare still records the invocation as an exception, as it did before
-            // the heartbeat wrapped the composed work. `status='error'` is evidence, not a
-            // replacement for that signal.
-            throw error;
-          },
-        ),
-      );
+      ctx.waitUntil(cronTick(rootEnv, controller.cron, () => Promise.all([
+        ...dailyGlobalJobs(rootEnv),
+        ...tenants.envs.flatMap((env) => dailyTenantJobs(env)),
+      ]).then(skipped)));
     } else if (controller.cron === "*/5 * * * *") {
-      // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
-      // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
-      const accountingDispatchBinding = resolveAccountingDispatchBinding(
-        env as import("./app-types.ts").AppEnv,
-        { tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv) },
-      ).catch((error) => {
-        log({ at: "accounting_money_dispatch_binding", error: String(error) });
-        return null;
-      });
-      // Resolved separately from the dispatch binding, and deliberately so: re-observing needs a
-      // QuickBooks connection and nothing else, while dispatching also needs the effect ledger. A
-      // Worker with the ledger switched off must still be able to re-read what it already posted.
-      const accountingObservationBinding = resolveAccountingObservationBinding(
-        env as import("./app-types.ts").AppEnv,
-        { tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv) },
-      ).catch((error) => {
-        log({ at: "accounting_money_observation_binding", error: String(error) });
-        return null;
-      });
-      ctx.waitUntil(
-        store.markCronTickStarted(env, controller.cron).catch((error) =>
-          log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
-        ).then(() => Promise.all([
-          retrySweep(env),
-          reconcileNewoSessions(env).catch((error) =>
-            log({ at: "newo_five_minute_reconcile", error: String(error) })
-          ),
-          retryMeasurementIntakeReceipts(env).catch((error) =>
-            log({ at: "measurement_intake_retry", error: String(error) }),
-          ),
-          retryEstimateOperatingCoreMaterializations(env).catch((error) =>
-            log({ at: "estimate_operating_core_retry", error: String(error) }),
-          ),
-          recoverDueQuickBooksProjections(env).then((result) => {
-            if (result.due > 0) log({ at: "quickbooks_projection_recovery", ...result });
-          }).catch((error) =>
-            log({ at: "quickbooks_projection_recovery", error: String(error) }),
-          ),
-          // ELEC-52 / IRO-194: the dual-surface pipeline heals itself instead of waiting for an
-          // admin to notice a dead letter. Silent when there is no dead-letter backlog at all.
-          sweepDeadLetterAutoReplay(env).then((result) => {
-            if (result.scanned > 0) log({ at: "dead_letter_auto_replay", ...result });
-          }).catch((error) =>
-            log({ at: "dead_letter_auto_replay", error: String(error) }),
-          ),
-          // Earned autonomy: shadow proposals are compared or, after their window, recorded unscored.
-          (async () => {
-            const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            if (!tenantId) return { compared: 0, unscored: 0 };
-            return await sweepShadow(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), (subject, text) =>
-              sendOwnerAlert(env, subject, `<p>${escapeHtml(text)}</p>`).then(() => undefined),
-            );
-          })().then((result) => {
-            if (result.compared + result.unscored > 0) log({ at: "agent_shadow_sweep", ...result });
-          }).catch((error) =>
-            log({ at: "agent_shadow_sweep", error: String(error) }),
-          ),
-          // Standing watches: each due condition runs once per period, then fires a signal or records an empty run.
-          (async () => {
-            const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            if (!tenantId) return { fired: [], empty: [], failed: [] };
-            const profile = await getCompanyProfile(env as import("./app-types.ts").AppEnv, tenantId);
-            return await runWatches(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), profile.time_zone);
-          })().then((result) => {
-            if (result.fired.length + result.failed.length > 0) log({ at: "agent_watches", ...result });
-          }).catch((error) =>
-            log({ at: "agent_watches", error: String(error) }),
-          ),
-          // An inbound envelope whose signal its insert did not append gets it here, once.
-          (async () => {
-            const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            const from = inboundFrom(env.AGENT_INBOUND_FROM);
-            if (!tenantId || from === null) return { produced: 0, failed: 0 };
-            return await sweepInbound(env.DB as unknown as AgentDb, tenantId, from, new Date().toISOString());
-          })().then((result) => {
-            if (result.produced + result.failed > 0) log({ at: "agent_inbound_sweep", ...result });
-          }).catch((error) =>
-            log({ at: "agent_inbound_sweep", error: String(error) }),
-          ),
-          // A run whose host never closed it closes past its wall-time ceiling, so none stays open.
-          (async () => {
-            const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            if (!tenantId) return { expired: 0, failed: 0 };
-            return await expireRuns(env.DB as unknown as AgentDb, tenantId, new Date().toISOString());
-          })().then((result) => {
-            if (result.expired + result.failed > 0) log({ at: "agent_runs_expired", ...result });
-          }).catch((error) =>
-            log({ at: "agent_runs_expired", error: String(error) }),
-          ),
-          // Owner reports whose delivery failed are retried after a pause, a bounded number of times.
-          (async () => {
-            const tenantId = operatingTenantId(env.APP_TENANT_ID);
-            if (!tenantId) return { sent: 0, failed: 0 };
-            return await retryReportDeliveries(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), reportNotify(env));
-          })().then((result) => {
-            if (result.sent + result.failed > 0) log({ at: "agent_report_retry", ...result });
-          }).catch((error) =>
-            log({ at: "agent_report_retry", error: String(error) }),
-          ),
-          deriveThenRecoverQuickBooksFinalInvoices(env).catch(() =>
-            log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
-          ),
-          reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
-            log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
-          ),
-          // OD-01 (0155): the Deposit gate entry a signed contract calls for, wherever the
-          // acceptance's own append after commit did not land. Idempotent by binding id.
-          sweepContractDepositGates(env as import("./app-types.ts").AppEnv).then((result) => {
-            if (result.candidates > 0) log({ at: "contract_deposit_gate_sweep", ...result });
-          }).catch((error) =>
-            log({ at: "contract_deposit_gate_sweep", error: String(error) }),
-          ),
-          reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
-            log({ at: "customer_portal_decision_reconcile", error: String(error) }),
-          ),
-          reconcileFacetDesignSurfaces(env),
-          recoverPostizControlPlane(env as import("./app-types.ts").AppEnv).then((result) => {
-            if (result.effects_processed > 0 || result.intents_reconciled > 0)
-              log({ at: "postiz_control_plane_recovery", ...result });
-          }).catch((error) =>
-            log({ at: "postiz_control_plane_recovery", error: String(error) })
-          ),
-          // IRO-52. The money-plane dispatcher: it is what turns an accountant's approve into a
-          // provider mutation and an authorized compensation into a reversal. `submission_pending`
-          // is its queue, the same way the final-invoice outbox is drained here rather than by a
-          // Cloudflare Queue (contract section 8.1).
-          //
-          // The binding is resolved once per tick and shared by both dispatchers, so one tick
-          // performs one connection lookup rather than two. It resolves to `null` - and both
-          // dispatchers fall back to reporting what is waiting and dispatching nothing - whenever
-          // the effect ledger is disabled, QuickBooks OAuth is unconfigured, or the tenant has
-          // never connected a realm. ELEC-74 proved that unbound path was *all* there was: no
-          // production code constructed a binding at all, so an approved intent sat in
-          // `submission_pending` forever.
-          accountingDispatchBinding.then((binding) =>
-            runAccountingDispatch(env as import("./app-types.ts").AppEnv, {
-              tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
-              ...(binding ? { binding } : {}),
-            })
-          ).then((report) => {
-            if (report.pending.length > 0 || report.dispatched.length > 0) {
-              log({
-                at: "accounting_money_dispatch",
-                tenant_id: report.tenant_id,
-                pending: report.pending.length,
-                dispatched: report.dispatched.length,
-                expectation_unbound: report.expectation_unbound.length,
-                // Per intent, with the code that stopped each one: an aggregate count is what
-                // made ELEC-73's head-of-line block invisible in the first place.
-                failed: report.failed,
-                dispatcher_unbound: report.dispatcher_unbound,
-              });
-            }
-          }).catch((error) =>
-            log({ at: "accounting_money_dispatch", error: String(error) }),
-          ),
-          accountingDispatchBinding.then((binding) =>
-            runAccountingCompensationDispatch(env as import("./app-types.ts").AppEnv, {
-              tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
-              ...(binding ? { binding } : {}),
-            })
-          ).then((report) => {
-            if (report.authorized.length > 0 || report.refused.length > 0) {
-              log({
-                at: "accounting_money_compensation_dispatch",
-                tenant_id: report.tenant_id,
-                authorized: report.authorized.length,
-                dispatched: report.dispatched.length,
-                refused: report.refused.length,
-                dispatcher_unbound: report.dispatcher_unbound,
-              });
-            }
-          }).catch((error) =>
-            log({ at: "accounting_money_compensation_dispatch", error: String(error) }),
-          ),
-          // IRO-52 slices S8 and S11. Four money-plane sweeps: due observations, the `unknown`
-          // dispatch deadline, exception ageing, and dispatches that have stopped moving.
-          //
-          // The due-observation sweep is the half S11 finished. Until this binding existed it ran
-          // with no reader at all (ELEC-77), so a dispatched invoice sat at `partially_settled`
-          // forever and `reconciled` was unreachable in the shipped product no matter what the
-          // customer paid. It now re-observes through the same connection the dispatcher uses:
-          // read the entity by its exact id, observe the Payments that entity declares, judge once.
-          // Unbound stays exactly what it was - the sweep reports what is due and re-reads nothing,
-          // because a timer is not evidence (contract section 5.1).
-          accountingObservationBinding.then((binding) =>
-            runAccountingSweeps(env as import("./app-types.ts").AppEnv, {
-              tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
-              ...(binding
-                ? {
-                  reobserve: accountingIntentReobserver(
-                    env as import("./app-types.ts").AppEnv,
-                    binding,
-                  ),
-                }
-                : {}),
-            })
-          ).then((report) => {
-            if (accountingSweepIsNoteworthy(report)) {
-              log({
-                at: "accounting_money_sweep",
-                tenant_id: report.tenant_id,
-                due_observations: report.due_observations.due.length,
-                reader_unbound: report.due_observations.reader_unbound,
-                reread: report.due_observations.reread,
-                reconciled: report.due_observations.reconciled,
-                partially_settled: report.due_observations.partially_settled,
-                mismatched: report.due_observations.mismatched,
-                uncertain_expired: report.uncertain.expired.length,
-                exceptions_ageing: report.exceptions.ageing.length,
-                stuck_dispatches: report.stuck_dispatches.stuck.length,
-              });
-            }
-          }).catch((error) =>
-            log({ at: "accounting_money_sweep", error: String(error) }),
-          ),
-          recoverExpiredExternalEffects(
-            env as import("./app-types.ts").AppEnv,
-          ).then((result) => {
-            if (result.recovered > 0 || result.failed > 0) log({ at: "external_effect_lease_sweep", ...result });
-          }).catch((error) =>
-            log({ at: "external_effect_lease_sweep", error: String(error) }),
-          ),
-          // A proposal send left unknown past T opens one owner-visible effect exception (#15b-1b).
-          escalateStaleProposalDeliveries(env as import("./app-types.ts").AppEnv).then((result) => {
-            if (result.opened > 0) log({ at: "proposal_delivery_escalation", ...result });
-          }).catch((error) =>
-            log({ at: "proposal_delivery_escalation", error: String(error) }),
-          ),
-          drainPipelineStageAutomation(env as import("./app-types.ts").AppEnv).then((result) => {
-            log({
-              at: "pipeline_stage_automation_drain",
-              enabled: result.enabled,
-              available: result.available,
-              scanned: result.scanned,
-              claimed: result.claimed,
-              sent: result.sent,
-              retried: result.retried,
-              failed: result.failed,
-              unknown: result.unknown,
-              no_rule: result.no_rule,
-              recovered: result.recovered,
-              unavailable: result.unavailable,
-            });
-          }).catch((error) =>
-            log({ at: "pipeline_stage_automation_drain", error: String(error) }),
-          ),
-        ]).then(() => {})).then(
-          () =>
-            store.markCronTickSettled(env, controller.cron, "ok").catch((error) =>
-              log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
-            ),
-          async (error) => {
-            log({ at: "cron_tick", cron: controller.cron, error: String(error) });
-            await store.markCronTickSettled(env, controller.cron, "error").catch((writeError) =>
-              log({ at: "cron_heartbeat", cron: controller.cron, error: String(writeError) })
-            );
-            // Re-raise so Cloudflare still records the invocation as an exception, as it did before
-            // the heartbeat wrapped the composed work. `status='error'` is evidence, not a
-            // replacement for that signal.
-            throw error;
-          },
-        ),
-      ); // the frequent cron
+      ctx.waitUntil(cronTick(rootEnv, controller.cron, () => Promise.all([
+        ...fiveMinuteGlobalJobs(rootEnv),
+        ...tenants.envs.flatMap((env) => fiveMinuteTenantJobs(env, env === rootEnv)),
+      ]).then(skipped)));
     }
   },
 } satisfies ExportedHandler<Env, BusQueueMessage>;
+
+/** The heartbeat around one cron tick: started, the work, then settled ok or error (re-raised). */
+function cronTick(env: Env, cron: string, work: () => Promise<void>): Promise<void> {
+  return store.markCronTickStarted(env, cron).catch((error) =>
+    log({ at: "cron_heartbeat", cron, error: String(error) })
+  ).then(work).then(
+    () =>
+      store.markCronTickSettled(env, cron, "ok").catch((error) =>
+        log({ at: "cron_heartbeat", cron, error: String(error) })
+      ),
+    async (error) => {
+      log({ at: "cron_tick", cron, error: String(error) });
+      await store.markCronTickSettled(env, cron, "error").catch((writeError) =>
+        log({ at: "cron_heartbeat", cron, error: String(writeError) })
+      );
+      // Re-raise so Cloudflare still records the invocation as an exception, as it did before
+      // the heartbeat wrapped the composed work. `status='error'` is evidence, not a
+      // replacement for that signal.
+      throw error;
+    },
+  );
+}
+
+/**
+ * Daily jobs on tables that carry no tenant (the reconcile's heartbeat, source counts and dead
+ * letters; Newo; the auth, portal, receipt and rate-limit prunes): run once, under the Worker's
+ * own env, so the reconcile digest is the default tenant's until those tables carry a tenant.
+ */
+function dailyGlobalJobs(env: Env): Promise<unknown>[] {
+  return [
+    runReconcile(env),
+    runNewoDailyReconcile(env).catch((error) =>
+      log({ at: "newo_daily_reconcile", error: String(error) })
+    ),
+    pruneAuthRecords(env).catch((error) =>
+      log({ at: "auth_prune", error: String(error) }),
+    ),
+    // First opens older than 3 years go first, so a link they held is pruned in the same run.
+    pruneCustomerPortalProposalViews(env)
+      .catch((error) => log({ at: "customer_portal_proposal_view_prune", error: String(error) }))
+      .then(() => pruneCustomerPortalRecords(env))
+      .catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
+    pruneMeasurementIntakeReceipts(env).catch((error) =>
+      log({ at: "measurement_receipt_prune", error: String(error) }),
+    ),
+    prunePublicEstimateRateLimits(env as PublicEstimatorEnv).catch((error) =>
+      log({ at: "public_estimate_rate_limit_prune", error: String(error) }),
+    ),
+  ];
+}
+
+/** Daily jobs on this tenant's rows: run once per active tenant, under that tenant's env. */
+function dailyTenantJobs(env: Env): Promise<unknown>[] {
+  return [
+    runOwnerWatchdog(env).catch((error) =>
+      log({ at: "owner_watchdog", error: String(error) })
+    ),
+  ];
+}
+
+/** Five-minute jobs on tables that carry no tenant (Newo sessions, the QuickBooks projection outbox, dead letters): run once. */
+function fiveMinuteGlobalJobs(env: Env): Promise<unknown>[] {
+  return [
+    reconcileNewoSessions(env).catch((error) =>
+      log({ at: "newo_five_minute_reconcile", error: String(error) })
+    ),
+    recoverDueQuickBooksProjections(env).then((result) => {
+      if (result.due > 0) log({ at: "quickbooks_projection_recovery", ...result });
+    }).catch((error) =>
+      log({ at: "quickbooks_projection_recovery", error: String(error) }),
+    ),
+  ];
+}
+
+/** Five-minute jobs on this tenant's rows: run once per active tenant, under that tenant's env. */
+/** `isDefaultTenant` is true only for the Worker's own env: the shared-cursor derivations run in that pass alone. */
+function fiveMinuteTenantJobs(env: Env, isDefaultTenant: boolean): Promise<unknown>[] {
+  // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
+  // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
+  const accountingDispatchBinding = resolveAccountingDispatchBinding(
+    env as import("./app-types.ts").AppEnv,
+    { tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv) },
+  ).catch((error) => {
+    log({ at: "accounting_money_dispatch_binding", error: String(error) });
+    return null;
+  });
+  // Resolved separately from the dispatch binding, and deliberately so: re-observing needs a
+  // QuickBooks connection and nothing else, while dispatching also needs the effect ledger. A
+  // Worker with the ledger switched off must still be able to re-read what it already posted.
+  const accountingObservationBinding = resolveAccountingObservationBinding(
+    env as import("./app-types.ts").AppEnv,
+    { tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv) },
+  ).catch((error) => {
+    log({ at: "accounting_money_observation_binding", error: String(error) });
+    return null;
+  });
+  return [
+    // ELEC-52 / IRO-194: the dual-surface pipeline heals itself instead of waiting for an
+    // admin to notice a dead letter. Silent when there is no dead-letter backlog at all.
+    sweepDeadLetterAutoReplay(env).then((result) => {
+      if (result.scanned > 0) log({ at: "dead_letter_auto_replay", ...result });
+    }).catch((error) =>
+      log({ at: "dead_letter_auto_replay", error: String(error) }),
+    ),
+    retrySweep(env),
+    retryMeasurementIntakeReceipts(env).catch((error) =>
+      log({ at: "measurement_intake_retry", error: String(error) }),
+    ),
+    retryEstimateOperatingCoreMaterializations(env).catch((error) =>
+      log({ at: "estimate_operating_core_retry", error: String(error) }),
+    ),
+    // Earned autonomy: shadow proposals are compared or, after their window, recorded unscored.
+    (async () => {
+      const tenantId = operatingTenantId(env.APP_TENANT_ID);
+      if (!tenantId) return { compared: 0, unscored: 0 };
+      return await sweepShadow(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), (subject, text) =>
+        sendOwnerAlert(env, subject, `<p>${escapeHtml(text)}</p>`).then(() => undefined),
+      );
+    })().then((result) => {
+      if (result.compared + result.unscored > 0) log({ at: "agent_shadow_sweep", ...result });
+    }).catch((error) =>
+      log({ at: "agent_shadow_sweep", error: String(error) }),
+    ),
+    // Standing watches: each due condition runs once per period, then fires a signal or records an empty run.
+    (async () => {
+      const tenantId = operatingTenantId(env.APP_TENANT_ID);
+      if (!tenantId) return { fired: [], empty: [], failed: [] };
+      const profile = await getCompanyProfile(env as import("./app-types.ts").AppEnv, tenantId);
+      return await runWatches(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), profile.time_zone);
+    })().then((result) => {
+      if (result.fired.length + result.failed.length > 0) log({ at: "agent_watches", ...result });
+    }).catch((error) =>
+      log({ at: "agent_watches", error: String(error) }),
+    ),
+    // An inbound envelope whose signal its insert did not append gets it here, once.
+    (async () => {
+      const tenantId = operatingTenantId(env.APP_TENANT_ID);
+      const from = inboundFrom(env.AGENT_INBOUND_FROM);
+      if (!tenantId || from === null) return { produced: 0, failed: 0 };
+      return await sweepInbound(env.DB as unknown as AgentDb, tenantId, from, new Date().toISOString());
+    })().then((result) => {
+      if (result.produced + result.failed > 0) log({ at: "agent_inbound_sweep", ...result });
+    }).catch((error) =>
+      log({ at: "agent_inbound_sweep", error: String(error) }),
+    ),
+    // A run whose host never closed it closes past its wall-time ceiling, so none stays open.
+    (async () => {
+      const tenantId = operatingTenantId(env.APP_TENANT_ID);
+      if (!tenantId) return { expired: 0, failed: 0 };
+      return await expireRuns(env.DB as unknown as AgentDb, tenantId, new Date().toISOString());
+    })().then((result) => {
+      if (result.expired + result.failed > 0) log({ at: "agent_runs_expired", ...result });
+    }).catch((error) =>
+      log({ at: "agent_runs_expired", error: String(error) }),
+    ),
+    // Owner reports whose delivery failed are retried after a pause, a bounded number of times.
+    (async () => {
+      const tenantId = operatingTenantId(env.APP_TENANT_ID);
+      if (!tenantId) return { sent: 0, failed: 0 };
+      return await retryReportDeliveries(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), reportNotify(env));
+    })().then((result) => {
+      if (result.sent + result.failed > 0) log({ at: "agent_report_retry", ...result });
+    }).catch((error) =>
+      log({ at: "agent_report_retry", error: String(error) }),
+    ),
+    deriveThenRecoverQuickBooksFinalInvoices(env, isDefaultTenant).catch(() =>
+      log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
+    ),
+    reconcileCustomerContractAcceptanceAttempts(env, undefined, { deriveDeposits: isDefaultTenant }).catch((error) =>
+      log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
+    ),
+    // OD-01 (0155): the Deposit gate entry a signed contract calls for, wherever the
+    // acceptance's own append after commit did not land. Idempotent by binding id.
+    sweepContractDepositGates(env as import("./app-types.ts").AppEnv).then((result) => {
+      if (result.candidates > 0) log({ at: "contract_deposit_gate_sweep", ...result });
+    }).catch((error) =>
+      log({ at: "contract_deposit_gate_sweep", error: String(error) }),
+    ),
+    reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
+      log({ at: "customer_portal_decision_reconcile", error: String(error) }),
+    ),
+    reconcileFacetDesignSurfaces(env),
+    recoverPostizControlPlane(env as import("./app-types.ts").AppEnv).then((result) => {
+      if (result.effects_processed > 0 || result.intents_reconciled > 0)
+        log({ at: "postiz_control_plane_recovery", ...result });
+    }).catch((error) =>
+      log({ at: "postiz_control_plane_recovery", error: String(error) })
+    ),
+    // IRO-52. The money-plane dispatcher: it is what turns an accountant's approve into a
+    // provider mutation and an authorized compensation into a reversal. `submission_pending`
+    // is its queue, the same way the final-invoice outbox is drained here rather than by a
+    // Cloudflare Queue (contract section 8.1).
+    //
+    // The binding is resolved once per tick and shared by both dispatchers, so one tick
+    // performs one connection lookup rather than two. It resolves to `null` - and both
+    // dispatchers fall back to reporting what is waiting and dispatching nothing - whenever
+    // the effect ledger is disabled, QuickBooks OAuth is unconfigured, or the tenant has
+    // never connected a realm. ELEC-74 proved that unbound path was *all* there was: no
+    // production code constructed a binding at all, so an approved intent sat in
+    // `submission_pending` forever.
+    accountingDispatchBinding.then((binding) =>
+      runAccountingDispatch(env as import("./app-types.ts").AppEnv, {
+        tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+        ...(binding ? { binding } : {}),
+      })
+    ).then((report) => {
+      if (report.pending.length > 0 || report.dispatched.length > 0) {
+        log({
+          at: "accounting_money_dispatch",
+          tenant_id: report.tenant_id,
+          pending: report.pending.length,
+          dispatched: report.dispatched.length,
+          expectation_unbound: report.expectation_unbound.length,
+          // Per intent, with the code that stopped each one: an aggregate count is what
+          // made ELEC-73's head-of-line block invisible in the first place.
+          failed: report.failed,
+          dispatcher_unbound: report.dispatcher_unbound,
+        });
+      }
+    }).catch((error) =>
+      log({ at: "accounting_money_dispatch", error: String(error) }),
+    ),
+    accountingDispatchBinding.then((binding) =>
+      runAccountingCompensationDispatch(env as import("./app-types.ts").AppEnv, {
+        tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+        ...(binding ? { binding } : {}),
+      })
+    ).then((report) => {
+      if (report.authorized.length > 0 || report.refused.length > 0) {
+        log({
+          at: "accounting_money_compensation_dispatch",
+          tenant_id: report.tenant_id,
+          authorized: report.authorized.length,
+          dispatched: report.dispatched.length,
+          refused: report.refused.length,
+          dispatcher_unbound: report.dispatcher_unbound,
+        });
+      }
+    }).catch((error) =>
+      log({ at: "accounting_money_compensation_dispatch", error: String(error) }),
+    ),
+    // IRO-52 slices S8 and S11. Four money-plane sweeps: due observations, the `unknown`
+    // dispatch deadline, exception ageing, and dispatches that have stopped moving.
+    //
+    // The due-observation sweep is the half S11 finished. Until this binding existed it ran
+    // with no reader at all (ELEC-77), so a dispatched invoice sat at `partially_settled`
+    // forever and `reconciled` was unreachable in the shipped product no matter what the
+    // customer paid. It now re-observes through the same connection the dispatcher uses:
+    // read the entity by its exact id, observe the Payments that entity declares, judge once.
+    // Unbound stays exactly what it was - the sweep reports what is due and re-reads nothing,
+    // because a timer is not evidence (contract section 5.1).
+    accountingObservationBinding.then((binding) =>
+      runAccountingSweeps(env as import("./app-types.ts").AppEnv, {
+        tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+        ...(binding
+          ? {
+            reobserve: accountingIntentReobserver(
+              env as import("./app-types.ts").AppEnv,
+              binding,
+            ),
+          }
+          : {}),
+      })
+    ).then((report) => {
+      if (accountingSweepIsNoteworthy(report)) {
+        log({
+          at: "accounting_money_sweep",
+          tenant_id: report.tenant_id,
+          due_observations: report.due_observations.due.length,
+          reader_unbound: report.due_observations.reader_unbound,
+          reread: report.due_observations.reread,
+          reconciled: report.due_observations.reconciled,
+          partially_settled: report.due_observations.partially_settled,
+          mismatched: report.due_observations.mismatched,
+          uncertain_expired: report.uncertain.expired.length,
+          exceptions_ageing: report.exceptions.ageing.length,
+          stuck_dispatches: report.stuck_dispatches.stuck.length,
+        });
+      }
+    }).catch((error) =>
+      log({ at: "accounting_money_sweep", error: String(error) }),
+    ),
+    recoverExpiredExternalEffects(
+      env as import("./app-types.ts").AppEnv,
+    ).then((result) => {
+      if (result.recovered > 0 || result.failed > 0) log({ at: "external_effect_lease_sweep", ...result });
+    }).catch((error) =>
+      log({ at: "external_effect_lease_sweep", error: String(error) }),
+    ),
+    // A proposal send left unknown past T opens one owner-visible effect exception (#15b-1b).
+    escalateStaleProposalDeliveries(env as import("./app-types.ts").AppEnv).then((result) => {
+      if (result.opened > 0) log({ at: "proposal_delivery_escalation", ...result });
+    }).catch((error) =>
+      log({ at: "proposal_delivery_escalation", error: String(error) }),
+    ),
+    drainPipelineStageAutomation(env as import("./app-types.ts").AppEnv).then((result) => {
+      log({
+        at: "pipeline_stage_automation_drain",
+        enabled: result.enabled,
+        available: result.available,
+        scanned: result.scanned,
+        claimed: result.claimed,
+        sent: result.sent,
+        retried: result.retried,
+        failed: result.failed,
+        unknown: result.unknown,
+        no_rule: result.no_rule,
+        recovered: result.recovered,
+        unavailable: result.unavailable,
+      });
+    }).catch((error) =>
+      log({ at: "pipeline_stage_automation_drain", error: String(error) }),
+    ),
+  ];
+}
 
 async function routeRequest(
   req: Request,
@@ -1173,7 +1224,7 @@ async function retrySweep(env: Env): Promise<void> {
   const stuck = await store.listStuck(env, thresholdMin, 100);
   if (stuck.length === 0) return;
   await env.JN_QUEUE.sendBatch(
-    stuck.map((r) => ({ body: { envelope_id: r.envelope_id } })),
+    stuck.map((r) => ({ body: { envelope_id: r.envelope_id, tenant_id: queueTenantId(env) } })),
   );
   log({ at: "retry_sweep", redriven: stuck.length });
 }

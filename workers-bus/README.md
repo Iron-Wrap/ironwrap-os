@@ -722,9 +722,33 @@ are shared between tenants until a follow-up migration scopes them. Secrets are 
 AES-GCM under `TENANT_SECRETS_KEK` (a 32-byte key, 64 hex characters; `openssl rand -hex 32`),
 bound to the tenant id and key version, and never read back.
 
-Queue consumers and the two crons still run as the Worker's own tenant in this slice, so the flag
-stays off until the data-layer slice gives queue messages a tenant and runs each cron pass per
-active tenant.
+Every queue message names the tenant that enqueued it (`tenant_id`), and the consumer handles
+it under that tenant's env; a message for a tenant that cannot be served is retried and
+dead-lettered, never handled as another tenant, and a message without the field (sent before it
+existed) is the Worker tenant's. Each cron tick runs its tenant jobs once per active tenant under
+that tenant's env and its global jobs (Newo sessions, the QuickBooks projection outbox, dead
+letters, the prunes) once; a registry tenant that cannot be served is skipped, logged
+(`cron_tenant_skipped`) and the tick's heartbeat settles `error`. The envelope, dead-letter
+replay, measurement receipt, portal decision, acceptance, external-effect, proposal-delivery,
+QuickBooks intent and outbox and Postiz sweeps bind the tenant they run for. Three things run
+for the default tenant only until their tables carry a tenant: the daily reconcile (its
+heartbeat, source counts and dead-letter count are Worker-wide), and the two derivations behind
+the single `scheduled-v1` cursor rows (deposit gates from accepted contracts, final-invoice
+intents; the latter walks every tenant's jobs by each job's own tenant). Newo session reconcile
+and QuickBooks projection recovery stay global because their tables carry no tenant column; a
+registry tenant's Newo events and QuickBooks webhooks are not served until that changes. On the
+dead-letter queue a message whose tenant cannot be served becomes a `dead_letter` row (stage
+`tenant_unresolved`) under the Worker's own env instead of being dropped. Dead-letter replay
+(`POST /admin/replay`) replays the tenant the request resolved to: with the flag on, an operator
+replays a registry tenant's dead letters from that tenant's hostname.
+`workers-bus/test/tenant-scoping-inventory.test.ts` holds every table to one of three classes:
+tenant-scoped (a `tenant_id` or `destination_tenant_id` column), global infrastructure, or legacy
+unscoped. The legacy list (the audit log, dead letters, source counts, the daily heartbeat, the
+two derivation cursors, captured local mail, lead acknowledgements, replay requests, QuickBooks
+webhook receipts and projection outbox, the five Newo tables, the portal acceptance and decision
+event tables, external effect attempts, field action media, five Facet receipt tables) may only
+shrink; those rows are shared between tenants until a migration gives them the column, which is
+why `/admin/*` stays the operator's.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|

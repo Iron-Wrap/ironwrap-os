@@ -96,7 +96,7 @@ export async function ingestLead(
       // Append a resumable intake audit; duplicate audit observations confer no extra authority.
       await store.recordAudit(env, { automation: "ingest", trigger: input.source, envelope_id: envelopeId,
         action: "resume", result: "ok", recovery_owner: env.OWNER_ALERT_EMAIL });
-      if (existing.status === "pending_jn_push") await env.JN_QUEUE.send({ envelope_id: envelopeId });
+      if (existing.status === "pending_jn_push") await env.JN_QUEUE.send({ envelope_id: envelopeId, tenant_id: tenantId });
       return { ok: true, body: { envelope_id: envelopeId, canonical_envelope_id: envelopeId,
         tenant_id: tenantId, status: existing.status, duplicate: false, queue: existing.intent_queue } };
     }
@@ -220,7 +220,7 @@ export async function ingestLead(
       error: "release_smoke",
     });
   } else if (valid.ok) {
-    await env.JN_QUEUE.send({ envelope_id: envelopeId });
+    await env.JN_QUEUE.send({ envelope_id: envelopeId, tenant_id: tenantId });
   }
 
   return {

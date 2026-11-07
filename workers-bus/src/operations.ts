@@ -1,5 +1,6 @@
 // operations.ts — production-facing readiness, status, and dead-letter recovery orchestration.
 
+import { queueTenantId } from "./tenancy.ts";
 import * as store from "./store.ts";
 import { appBffConfigured } from "./app-auth.ts";
 import { customerPortalConfigured } from "./customer-portal.ts";
@@ -995,7 +996,7 @@ export async function replayDeadLetters(
         }
         if (claimedBatch.length === 0) continue;
         await env.JN_QUEUE.sendBatch(
-          claimedBatch.map((envelopeId) => ({ body: { envelope_id: envelopeId } })),
+          claimedBatch.map((envelopeId) => ({ body: { envelope_id: envelopeId, tenant_id: queueTenantId(env) } })),
         );
         requeued.push(...claimedBatch);
       } catch (err) {

@@ -1606,9 +1606,9 @@ export async function recoverQuickBooksFinalInvoices(
   await repairSuccessorEffects(env, now);
   const due = await env.DB.prepare(
     `SELECT * FROM quickbooks_final_invoice_outbox
-      WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      WHERE tenant_id = ? AND state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
       ORDER BY created_at ASC LIMIT ?`,
-  ).bind(now.toISOString(), RECOVERY_LIMIT).all<OutboxRow>();
+  ).bind(text(env.APP_TENANT_ID, 2, 64) ?? "", now.toISOString(), RECOVERY_LIMIT).all<OutboxRow>();
   let effectsProcessed = 0;
   for (const effect of due.results ?? []) {
     if (await processEffect(env, effect, fetcher, now)) effectsProcessed += 1;

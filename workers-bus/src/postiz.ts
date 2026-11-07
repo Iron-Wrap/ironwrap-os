@@ -683,9 +683,9 @@ export async function recoverPostizControlPlane(
   if (!postizConfig(env)) return { effects_processed: 0, intents_reconciled: 0 };
   const effects = await env.DB.prepare(
     `SELECT effect_id FROM postiz_effect_outbox
-     WHERE state = 'pending' AND operation IN ('submit', 'stop')
+     WHERE tenant_id = ? AND state = 'pending' AND operation IN ('submit', 'stop')
      ORDER BY created_at ASC LIMIT ?`,
-  ).bind(RECONCILIATION_LIMIT).all<{ effect_id: string }>();
+  ).bind(String(env.APP_TENANT_ID ?? "ironwrap").trim(), RECONCILIATION_LIMIT).all<{ effect_id: string }>();
   let effectsProcessed = 0;
   for (const effect of effects.results ?? []) {
     if (await processPostizEffect(env, effect.effect_id, fetcher, now)) effectsProcessed += 1;
@@ -694,7 +694,8 @@ export async function recoverPostizControlPlane(
   const publicationCutoff = new Date(now.getTime() - PUBLICATION_READBACK_WINDOW_MS).toISOString();
   const intents = await env.DB.prepare(
     `SELECT tenant_id, intent_id FROM postiz_intents
-     WHERE state IN ('submission_pending', 'submitted', 'reconciliation_required',
+     WHERE tenant_id = ?
+       AND state IN ('submission_pending', 'submitted', 'reconciliation_required',
                      'stop_submitted', 'stop_reconciliation_required', 'published')
        AND (last_reconciled_at IS NULL OR last_reconciled_at <= ?)
        AND (
@@ -702,7 +703,7 @@ export async function recoverPostizControlPlane(
          OR (published_observed_at IS NULL AND scheduled_at >= ?)
        )
      ORDER BY COALESCE(last_reconciled_at, created_at) ASC LIMIT ?`,
-  ).bind(cutoff, publicationCutoff, publicationCutoff, RECONCILIATION_LIMIT)
+  ).bind(String(env.APP_TENANT_ID ?? "ironwrap").trim(), cutoff, publicationCutoff, publicationCutoff, RECONCILIATION_LIMIT)
     .all<{ tenant_id: string; intent_id: string }>();
   let intentsReconciled = 0;
   for (const intent of intents.results ?? []) {

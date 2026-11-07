@@ -408,9 +408,9 @@ export async function reconcileCustomerContractAcceptanceAttempts(
   await env.DB.prepare(
     `UPDATE customer_portal_acceptance_challenges
      SET state = 'invalidated', invalidated_at = ?
-     WHERE state IN ('pending_delivery', 'sent') AND expires_at <= ?`,
+     WHERE tenant_id = ? AND state IN ('pending_delivery', 'sent') AND expires_at <= ?`,
   )
-    .bind(nowValue, nowValue)
+    .bind(nowValue, env.APP_TENANT_ID, nowValue)
     .run();
   const cursor = await env.DB.prepare(
     `SELECT last_tenant_id, last_acceptance_id

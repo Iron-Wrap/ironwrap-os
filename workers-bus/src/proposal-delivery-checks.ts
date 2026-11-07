@@ -20,6 +20,7 @@ import {
 } from "./commercial-store.ts";
 import { getExternalEffect, type ExternalEffectRecord } from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
+import { operatingTenantId } from "./core.ts";
 
 /** One check reads back within about 25 s; each provider call has its own, shorter bound. */
 export const PROPOSAL_DELIVERY_CHECK_TIMEOUT_MS = 25_000;
@@ -706,7 +707,7 @@ export async function escalateStaleProposalDeliveries(
        FROM external_effects effect
        LEFT JOIN external_effect_attempts attempt
          ON attempt.effect_id = effect.effect_id AND attempt.attempt_number = effect.attempt_count
-      WHERE effect.state = 'unknown' AND effect.action = 'proposal.publish'
+      WHERE effect.tenant_id = ? AND effect.state = 'unknown' AND effect.action = 'proposal.publish'
         AND julianday(COALESCE(attempt.ended_at, effect.updated_at)) <= julianday(?)
         AND NOT EXISTS (
           SELECT 1 FROM external_effect_exceptions escalated
@@ -715,6 +716,8 @@ export async function escalateStaleProposalDeliveries(
       ORDER BY effect.updated_at ASC LIMIT ?`,
   ).bind(
     PROPOSAL_DELIVERY_STALE_REASON, now.toISOString(),
+    // This tenant's sends only; another tenant's are escalated by its own cron pass.
+    operatingTenantId(env.APP_TENANT_ID) ?? "",
     // Due once its attempt ended T ago or more: compared as one instant, so the bound is exact.
     new Date(now.getTime() - PROPOSAL_DELIVERY_ESCALATION_MS).toISOString(),
     PROPOSAL_DELIVERY_STALE_REASON, limit,

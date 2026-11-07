@@ -199,6 +199,19 @@ test("remote-processing files stay outside the effect runtime because they do no
   }
 });
 
+test("the admission gateway is one file, and its one outbound call is the gateway's Propose", async () => {
+  const admission = Object.entries(OUTBOUND_FETCH_INVENTORY).filter(
+    (pair): pair is [string, Extract<InventoryEntry, { kind: "admission-gateway" }>] =>
+      pair[1].kind === "admission-gateway",
+  );
+  assert.deepEqual(admission.map(([file]) => file), ["helm-gateway.ts"], "admission is the runtime's own step, not an adapter's");
+  const source = await readFile(new URL("helm-gateway.ts", SRC_DIR), "utf8");
+  assert.ok(admission[0][1].discipline.length >= 40);
+  assert.match(source, /PROPOSE_PATH = "\/helm\.gateway\.v1\.EffectGatewayService\/Propose"/);
+  assert.equal(outboundFetchSites(source).length, 1, "one outbound call site: the proposal");
+  assert.ok(!referencesEffectRuntime(source) || source.includes("import type"), "the gateway client never drives the runtime; the runtime calls it");
+});
+
 test("governed-unrouted mutation adapters are exactly the recorded debt, each with its own discipline, and none quietly adopts half the runtime", async () => {
   const unrouted = Object.entries(OUTBOUND_FETCH_INVENTORY).filter(
     (pair): pair is [string, Extract<InventoryEntry, { kind: "governed-unrouted" }>] =>

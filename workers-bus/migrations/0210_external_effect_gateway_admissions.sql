@@ -17,7 +17,7 @@
 -- and 818 triggers.
 
 CREATE TABLE IF NOT EXISTS external_effect_gateway_admissions (
-  admission_id TEXT PRIMARY KEY CHECK (length(admission_id) BETWEEN 8 AND 200),
+  admission_id TEXT PRIMARY KEY CHECK (length(admission_id) BETWEEN 8 AND 260),
   effect_id TEXT NOT NULL CHECK (length(effect_id) BETWEEN 1 AND 200),
   tenant_id TEXT NOT NULL CHECK (
     length(tenant_id) BETWEEN 2 AND 64
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS external_effect_gateway_admissions (
   -- sha256 of the exact argument bytes sent, so the gateway's argument_digest can be matched.
   argument_digest TEXT NOT NULL CHECK (length(argument_digest) = 64 AND argument_digest NOT GLOB '*[^0-9a-f]*'),
   receipt_ref_json TEXT CHECK (receipt_ref_json IS NULL OR (json_valid(receipt_ref_json) AND json_type(receipt_ref_json) = 'array')),
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 40)
 );
 
 CREATE INDEX IF NOT EXISTS idx_external_effect_gateway_admissions_effect

@@ -144,8 +144,6 @@ export interface EffectExecutor<T = unknown> {
     providerExternalId: string | null;
   }): Promise<EffectReadback>;
   replay?(input: { effect: ExternalEffectRecord }): Promise<T>;
-  /** Transport for the HELM gateway proposal; tests inject it, production uses fetch. */
-  gatewayFetcher?: typeof fetch;
 }
 
 export interface ReplayableEffectExecutor<T = unknown> extends EffectExecutor<T> {
@@ -503,27 +501,9 @@ export async function executeExternalEffect<T = unknown>(
       return { effect: failed, attempt: syntheticAttempt(failed, "failed") };
     }
   }
-  // HELM gateway admission (helm-gateway.ts), before any attempt is claimed. In enforce mode only
-  // an admitted proposal proceeds: a denial fails the effect with the gateway's reason, an
-  // escalation or an unreachable gateway leaves it where it is for a later attempt, and the
-  // provider is not called. Shadow records the decision and proceeds; off never calls out.
-  const admission = await admitExternalEffect(env, effect, attemptNumber, now.toISOString(), executor.gatewayFetcher);
-  if (admission.mode === "enforce" && admission.decision !== "admitted") {
-    if (admission.decision === "denied" && effect.state === "authorized") {
-      await transitionEffect(env, effect, "failed", now.toISOString(), {
-        resultCode: `gateway_denied:${admission.reason_code ?? "unknown"}`.slice(0, 120),
-      });
-      const denied = (await getExternalEffect(env, effectId))!;
-      return { effect: denied, attempt: syntheticAttempt(denied, "failed"), admission };
-    }
-    throw new EffectRuntimeError(
-      admission.decision === "denied"
-        ? "effect_gateway_denied"
-        : admission.decision === "escalated"
-        ? "effect_gateway_escalated"
-        : "effect_gateway_unreachable",
-    );
-  }
+  const gate = await admitBeforeClaim(env, effect, attemptNumber, now);
+  if (gate.refused) return { ...gate.refused, admission: gate.admission };
+  const admission = gate.admission;
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
   const leaseExpiresAt = new Date(now.getTime() + EFFECT_ATTEMPT_LEASE_MS).toISOString();
   await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
@@ -595,13 +575,48 @@ export async function claimExternalEffect(
   if (Date.parse(effect.deadline_at) <= now.getTime()) throw new EffectRuntimeError("effect_deadline_expired");
   const attemptNumber = effect.attempt_count + 1;
   if (attemptNumber > effect.retry_limit + 1) throw new EffectRuntimeError("effect_retry_exhausted");
+  // The remote claim (the MCP host's effects) is admitted exactly as the Worker's own execution.
+  const gate = await admitBeforeClaim(env, effect, attemptNumber, now);
+  if (gate.refused) return { ...gate.refused, admission: gate.admission };
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
   const leaseExpiresAt = new Date(now.getTime() + EFFECT_ATTEMPT_LEASE_MS).toISOString();
   await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
   const claimed = await getExternalEffect(env, effectId);
   const attempt = await getExternalEffectAttempt(env, attemptId);
   if (!claimed || !attempt) throw new EffectRuntimeError("effect_attempt_missing");
-  return { effect: claimed, attempt };
+  return { effect: claimed, attempt, admission: gate.admission };
+}
+
+/**
+ * HELM gateway admission (helm-gateway.ts) before any attempt is claimed, in the Worker or from the
+ * MCP host. In enforce mode only an admitted proposal proceeds: a denial of an authorized effect
+ * fails it with the gateway's reason (a denial in `retry` is thrown, since the ledger forbids
+ * retry → failed, and the effect stays retryable for a fresh proposal), an escalation or an
+ * unreachable gateway leaves the effect where it is for a later attempt, and the provider is not
+ * called. Shadow records the decision and proceeds; off never calls out.
+ */
+async function admitBeforeClaim(
+  env: AppEnv,
+  effect: ExternalEffectRecord,
+  attemptNumber: number,
+  now: Date,
+): Promise<{ admission: GatewayAdmission; refused: EffectExecutionResult<never> | null }> {
+  const admission = await admitExternalEffect(env, effect, attemptNumber, now.toISOString());
+  if (admission.mode !== "enforce" || admission.decision === "admitted") return { admission, refused: null };
+  if (admission.decision === "denied" && effect.state === "authorized") {
+    await transitionEffect(env, effect, "failed", now.toISOString(), {
+      resultCode: `gateway_denied:${admission.reason_code ?? "unknown"}`.slice(0, 120),
+    });
+    const denied = (await getExternalEffect(env, effect.effect_id))!;
+    return { admission, refused: { effect: denied, attempt: syntheticAttempt(denied, "failed") } };
+  }
+  throw new EffectRuntimeError(
+    admission.decision === "denied"
+      ? "effect_gateway_denied"
+      : admission.decision === "escalated"
+      ? "effect_gateway_escalated"
+      : "effect_gateway_unreachable",
+  );
 }
 
 /** Settle a remotely claimed attempt using the same readback/conflict rules as local execution. */

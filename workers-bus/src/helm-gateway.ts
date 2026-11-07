@@ -1,8 +1,9 @@
 // helm-gateway.ts — the thin, fail-closed client that binds consequential effects to the HELM
 // gateway's admission.
 //
-// Every provider mutation passes `executeExternalEffect` (effect-runtime.ts). Before the Worker
-// claims an attempt it proposes the effect to the HELM gateway (`helm.gateway.v1.EffectGatewayService/Propose`,
+// Every provider mutation claims an attempt through the effect runtime (effect-runtime.ts), in the
+// Worker (`executeExternalEffect`) or from the MCP host (`claimExternalEffect`). Before either
+// claims, the Worker proposes the attempt to the HELM gateway (`helm.gateway.v1.EffectGatewayService/Propose`,
 // Connect unary JSON over fetch) and reads the decision: ADMITTED lets the attempt proceed,
 // DENIED fails the effect with the gateway's reason code, ESCALATED means a person must approve in
 // HELM first, and anything the client could not evaluate (no token, timeout, non-2xx, a body it
@@ -12,18 +13,25 @@
 // external_effect_gateway_admissions (0210) in either live mode, with the receipt references the
 // gateway returns (helm-tracker#276) once it returns them.
 //
-// What the gateway sees: the effect's identity (tenant, effect id, action, provider, aggregate,
-// intent, request hash, idempotency key, attempt number) as one canonical JSON object. Never the
-// request payload: a customer's address or a mail body is evidence the Worker holds, not a thing
-// the admission needs. The gateway digests the exact bytes it receives, so the same bytes are
-// digested here and recorded, and `idempotency_key` is stable across attempts of one effect: an
-// escalation a person approves in HELM is found again by the next attempt's proposal.
+// One proposal per attempt: the idempotency key carries the attempt number, so a retry after a
+// real provider attempt is a fresh admission (fresh mandate, limit and stop checks), while an
+// escalation, which claims no attempt, is found again under the same key once a person approved
+// it. The gateway digests the exact argument bytes it receives, so the same bytes are digested
+// here and recorded.
+//
+// What the gateway sees: the effect's identity (tenant, effect id, action, provider, actor,
+// aggregate, intent, request hash, idempotency key, attempt number) as one canonical JSON object.
+// Never the request payload: a customer's address or a mail body is evidence the Worker holds,
+// not a thing the admission needs. A person's actor id is sent as a digest.
 //
 // Tenant, workspace and principal are claims of the bearer token (HELM_GATEWAY_TOKEN, sealed per
 // tenant in the registry), never fields of the request. The token's principal is the Worker's
 // service principal for that tenant; the acting specialist is named in the arguments for the
 // receipt and audited there, while its mandate is the tenant service principal's (one principal
-// per tenant until the identity issuer mints one per specialist).
+// per tenant until the identity issuer mints one per specialist). The Worker performs the effect
+// itself after admission and never calls the gateway's Dispatch, so the gateway's dispatch-time
+// re-checks (a stop or a narrowing landing between admission and execution) do not apply; a
+// stored admission is used only while its permit has not expired.
 
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
@@ -60,11 +68,14 @@ const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const EFFECT_TYPE_RE = /^[a-z][a-z0-9_.-]{0,127}$/;
+const STATE_PREFIX = /^EFFECT_ATTEMPT_STATE_/;
 
 /** The gateway's attempt states that end a proposal, grouped as the Worker acts on them. */
 const ADMITTED_STATES = new Set(["ADMITTED", "APPROVED"]);
 const DENIED_STATES = new Set(["DENIED", "REJECTED", "EXPIRED", "CANCELLED"]);
-const ESCALATED_STATES = new Set(["ESCALATED", "PROPOSED", "ESCALATED_TO_HUMAN"]);
+const ESCALATED_STATES = new Set(["ESCALATED", "PROPOSED"]);
+/** Actors whose id is a stable system identity; any other actor's id is a person's and is sent as a digest. */
+const SYSTEM_ACTOR_TYPES = new Set(["agent", "worker", "device"]);
 
 interface HelmGatewayEnv {
   HELM_GATEWAY_BINDING?: string;
@@ -73,10 +84,22 @@ interface HelmGatewayEnv {
   HELM_GATEWAY_TOKEN?: string;
 }
 
+/**
+ * The transport the proposal travels on. It belongs to the runtime, not to the executor being
+ * admitted: a provider adapter must not be able to answer its own admission. Tests swap it.
+ */
+const defaultTransport: typeof fetch = (input, init) => fetch(input, init);
+let gatewayTransport: typeof fetch = defaultTransport;
+
+export function setGatewayTransportForTests(transport: typeof fetch | null): void {
+  gatewayTransport = transport ?? defaultTransport;
+}
+
 export function helmGatewayMode(env: HelmGatewayEnv): HelmGatewayMode {
-  const raw = String(env.HELM_GATEWAY_BINDING ?? "off").trim();
-  // A mode nobody declared is the strict one: an operator who misspelt `shadow` has not asked
-  // for effects to run unobserved.
+  const raw = String(env.HELM_GATEWAY_BINDING ?? "").trim();
+  // Unset and empty both mean the binding is not configured: off. A value nobody declared is the
+  // strict one: an operator who misspelt `shadow` has not asked for effects to run unobserved.
+  if (raw === "") return "off";
   return (HELM_GATEWAY_MODES as readonly string[]).includes(raw) ? (raw as HelmGatewayMode) : "enforce";
 }
 
@@ -88,14 +111,17 @@ export function gatewayEffectType(action: string): string {
 }
 
 /** The argument object the gateway digests: the effect's identity, never its payload. */
-export function gatewayArguments(effect: ExternalEffectRecord, attemptNumber: number): Record<string, unknown> {
+export async function gatewayArguments(effect: ExternalEffectRecord, attemptNumber: number): Promise<Record<string, unknown>> {
+  const actor = SYSTEM_ACTOR_TYPES.has(effect.actor_type)
+    ? { type: effect.actor_type, id: effect.actor_id }
+    : { type: effect.actor_type, id_sha256: await sha256Hex(effect.actor_id) };
   return {
     schema: "ironwrap.gateway-effect.v1",
     tenant_id: effect.tenant_id,
     effect_id: effect.effect_id,
     action: effect.action,
     provider: effect.provider,
-    actor: { type: effect.actor_type, id: effect.actor_id },
+    actor,
     aggregate: { type: effect.aggregate_type, id: effect.aggregate_id, version: effect.aggregate_version },
     intent_id: effect.intent_id,
     request_hash: effect.request_hash,
@@ -104,8 +130,9 @@ export function gatewayArguments(effect: ExternalEffectRecord, attemptNumber: nu
   };
 }
 
-export function gatewayIdempotencyKey(effect: ExternalEffectRecord): string {
-  return `ironwrap:${effect.tenant_id}:${effect.effect_id}`.slice(0, 255);
+/** One key per attempt: a retry is a fresh admission; an escalation (no attempt claimed) is found again. */
+export function gatewayIdempotencyKey(effect: ExternalEffectRecord, attemptNumber: number): string {
+  return `ironwrap:${effect.tenant_id}:${effect.effect_id}:${attemptNumber}`.slice(0, 255);
 }
 
 function timeoutMs(env: HelmGatewayEnv): number {
@@ -132,17 +159,56 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** protojson writes lowerCamelCase; a server configured otherwise writes the proto names. Read both. */
+function field(record: Record<string, unknown>, camel: string, snake: string): unknown {
+  return record[camel] !== undefined ? record[camel] : record[snake];
+}
+
 function receiptRefs(raw: unknown): GatewayReceiptRef[] | null {
   if (!Array.isArray(raw)) return null;
   const refs: GatewayReceiptRef[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") return null;
     const ref = entry as Record<string, unknown>;
-    const seq = typeof ref.seq === "number" ? ref.seq : typeof ref.seq === "string" ? Number(ref.seq) : NaN;
-    if (typeof ref.chain_id !== "string" || typeof ref.receipt_hash !== "string" || typeof ref.kid !== "string" || !Number.isInteger(seq)) return null;
-    refs.push({ chain_id: ref.chain_id, seq, receipt_hash: ref.receipt_hash, kid: ref.kid });
+    const chainId = field(ref, "chainId", "chain_id");
+    const receiptHash = field(ref, "receiptHash", "receipt_hash");
+    const rawSeq = ref.seq;
+    const seq = typeof rawSeq === "number" ? rawSeq : typeof rawSeq === "string" ? Number(rawSeq) : NaN;
+    if (typeof chainId !== "string" || typeof receiptHash !== "string" || typeof ref.kid !== "string" || !Number.isInteger(seq)) return null;
+    refs.push({ chain_id: chainId, seq, receipt_hash: receiptHash, kid: ref.kid });
   }
   return refs;
+}
+
+/** The body, read within the same timeout as the request and never past the size cap. */
+async function readBounded(response: Response, signal: AbortSignal): Promise<string | null> {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) return null;
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const abort = new Promise<never>((_, reject) => {
+    if (signal.aborted) reject(new Error("aborted"));
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  for (;;) {
+    const { done, value } = await Promise.race([reader.read(), abort]);
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
 }
 
 /**
@@ -153,27 +219,29 @@ export async function proposeToGateway(
   env: HelmGatewayEnv,
   effect: ExternalEffectRecord,
   attemptNumber: number,
-  fetcher: typeof fetch = fetch,
+  transport: typeof fetch = gatewayTransport,
 ): Promise<Omit<GatewayAdmission, "mode">> {
-  const effectType = gatewayEffectType(effect.action);
-  const argumentBytes = new TextEncoder().encode(canonicalJson(gatewayArguments(effect, attemptNumber)));
+  const base = { effect_type: "", argument_digest: "", gateway_attempt_id: null, gateway_state: null, receipts: null };
+  const unreachable = (reason: string, extra: Partial<Omit<GatewayAdmission, "mode">> = {}): Omit<GatewayAdmission, "mode"> =>
+    ({ ...base, ...extra, decision: "unreachable", reason_code: reason.slice(0, 120) });
+
+  let effectType: string;
+  try {
+    effectType = gatewayEffectType(effect.action);
+  } catch {
+    return unreachable("gateway_effect_type_invalid");
+  }
+  const argumentBytes = new TextEncoder().encode(canonicalJson(await gatewayArguments(effect, attemptNumber)));
   const argumentDigest = await sha256Hex(new TextDecoder().decode(argumentBytes));
-  const base = {
-    effect_type: effectType,
-    argument_digest: argumentDigest,
-    gateway_attempt_id: null,
-    gateway_state: null,
-    receipts: null,
-  };
-  const unreachable = (reason: string): Omit<GatewayAdmission, "mode"> => ({ ...base, decision: "unreachable", reason_code: reason });
+  const identity = { effect_type: effectType, argument_digest: argumentDigest };
 
   const url = gatewayUrl(env);
-  if (!url) return unreachable("gateway_url_missing");
+  if (!url) return unreachable("gateway_url_missing", identity);
   const token = String(env.HELM_GATEWAY_TOKEN ?? "").trim();
-  if (!token) return unreachable("gateway_token_missing");
+  if (!token) return unreachable("gateway_token_missing", identity);
 
   const body = {
-    idempotency_key: gatewayIdempotencyKey(effect),
+    idempotency_key: gatewayIdempotencyKey(effect, attemptNumber),
     case_id: effect.correlation_id.slice(0, 255),
     effect: {
       effect_type: effectType,
@@ -185,89 +253,91 @@ export async function proposeToGateway(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs(env));
-  let response: Response;
   try {
-    response = await fetcher(new URL(PROPOSE_PATH, url).toString(), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "connect-protocol-version": "1",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      redirect: "manual",
-      signal: controller.signal,
-    });
-  } catch (error) {
+    let response: Response;
+    try {
+      response = await transport(new URL(PROPOSE_PATH, url).toString(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "connect-protocol-version": "1",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        redirect: "manual",
+        signal: controller.signal,
+      });
+    } catch {
+      return unreachable(controller.signal.aborted ? "gateway_timeout" : "gateway_network_error", identity);
+    }
+    let text: string | null;
+    try {
+      text = await readBounded(response, controller.signal);
+    } catch {
+      return unreachable(controller.signal.aborted ? "gateway_timeout" : "gateway_response_unreadable", identity);
+    }
+    if (text === null) return unreachable("gateway_response_too_large", identity);
+    let parsed: unknown = null;
+    let malformed = false;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      malformed = true;
+    }
+    if (!response.ok) {
+      // A Connect error carries `code` and the kernel's reason code in its details; the gateway
+      // could not evaluate the request, which is not a decision and must not pass.
+      const code = parsed && typeof parsed === "object" && typeof (parsed as { code?: unknown }).code === "string"
+        ? (parsed as { code: string }).code.replace(/[^a-z_]/g, "")
+        : null;
+      return unreachable(code ? `gateway_http_${response.status}_${code}` : `gateway_http_${response.status}`, identity);
+    }
+    if (malformed) return unreachable("gateway_response_malformed", identity);
+    const attempt = parsed && typeof parsed === "object" ? (parsed as { attempt?: unknown }).attempt : undefined;
+    if (!attempt || typeof attempt !== "object") return unreachable("gateway_response_shape", identity);
+    const record = attempt as Record<string, unknown>;
+    const rawState = record.state;
+    const state = typeof rawState === "string" ? rawState.replace(STATE_PREFIX, "").slice(0, 64) : null;
+    const rawReason = field(record, "reasonCode", "reason_code");
+    const reason = typeof rawReason === "string" && rawReason ? rawReason.slice(0, 120) : null;
+    const rawAttemptId = field(record, "attemptId", "attempt_id");
+    const attemptId = typeof rawAttemptId === "string" ? rawAttemptId.slice(0, 200) : null;
+    const common = { ...identity, gateway_attempt_id: attemptId, gateway_state: state, receipts: receiptRefs(record.receipts) };
+    if (state && ADMITTED_STATES.has(state)) {
+      // A stored admission (an escalation a person approved) is used only while its permit lives:
+      // the Worker never calls Dispatch, so the gateway's own expiry is the one re-check left.
+      const existing = (parsed as { existing?: unknown }).existing === true;
+      const permit = record.permit && typeof record.permit === "object" ? record.permit as Record<string, unknown> : null;
+      const permitExpiry = permit ? field(permit, "expiresAt", "expires_at") : undefined;
+      if (existing && typeof permitExpiry === "string" && Number.isFinite(Date.parse(permitExpiry)) && Date.parse(permitExpiry) <= Date.now()) {
+        return { ...common, decision: "denied", reason_code: "PERMIT_EXPIRED" };
+      }
+      return { ...common, decision: "admitted", reason_code: reason };
+    }
+    if (state && DENIED_STATES.has(state)) return { ...common, decision: "denied", reason_code: reason ?? state };
+    if (state && ESCALATED_STATES.has(state)) return { ...common, decision: "escalated", reason_code: reason ?? "APPROVAL_REQUIRED" };
+    return { ...common, decision: "unreachable", reason_code: state ? `gateway_state_${state}`.slice(0, 120) : "gateway_response_shape" };
+  } finally {
     clearTimeout(timer);
-    return unreachable(controller.signal.aborted ? "gateway_timeout" : "gateway_network_error");
   }
-  clearTimeout(timer);
-
-  let text: string;
-  try {
-    const length = Number(response.headers.get("content-length") ?? "0");
-    if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) return unreachable("gateway_response_too_large");
-    text = await response.text();
-    if (text.length > MAX_RESPONSE_BYTES) return unreachable("gateway_response_too_large");
-  } catch {
-    return unreachable("gateway_response_unreadable");
-  }
-  let parsed: unknown = null;
-  let malformed = false;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    malformed = true;
-  }
-  if (!response.ok) {
-    // A Connect error carries `code` and the kernel's reason code in its details; the gateway
-    // could not evaluate the request, which is not a decision and must not pass.
-    const code = parsed && typeof parsed === "object" && typeof (parsed as { code?: unknown }).code === "string"
-      ? (parsed as { code: string }).code.replace(/[^a-z_]/g, "")
-      : null;
-    return unreachable(code ? `gateway_http_${response.status}_${code}`.slice(0, 120) : `gateway_http_${response.status}`);
-  }
-  if (malformed) return unreachable("gateway_response_malformed");
-  const attempt = parsed && typeof parsed === "object" ? (parsed as { attempt?: unknown }).attempt : undefined;
-  if (!attempt || typeof attempt !== "object") return unreachable("gateway_response_shape");
-  const record = attempt as Record<string, unknown>;
-  const state = typeof record.state === "string" ? record.state.replace(/^EFFECT_ATTEMPT_STATE_/, "") : null;
-  const reason = typeof record.reason_code === "string" && record.reason_code ? record.reason_code.slice(0, 120) : null;
-  const attemptId = typeof record.attempt_id === "string" ? record.attempt_id.slice(0, 200) : null;
-  const common = { ...base, gateway_attempt_id: attemptId, gateway_state: state, receipts: receiptRefs(record.receipts) };
-  if (state && ADMITTED_STATES.has(state)) return { ...common, decision: "admitted", reason_code: reason };
-  if (state && DENIED_STATES.has(state)) return { ...common, decision: "denied", reason_code: reason ?? state };
-  if (state && ESCALATED_STATES.has(state)) return { ...common, decision: "escalated", reason_code: reason ?? "APPROVAL_REQUIRED" };
-  return { ...common, decision: "unreachable", reason_code: state ? `gateway_state_${state}`.slice(0, 120) : "gateway_response_shape" };
 }
 
 /**
- * The admission step of `executeExternalEffect`: propose, record, and say whether the attempt may
- * proceed. `off` records nothing and always proceeds. In `shadow` the decision is recorded and the
- * attempt always proceeds. In `enforce` only `admitted` proceeds.
+ * The admission step before an attempt is claimed: propose, record, and say whether the attempt
+ * may proceed. `off` records nothing and always proceeds. In `shadow` the decision is recorded
+ * and the attempt always proceeds. In `enforce` only `admitted` proceeds.
  */
 export async function admitExternalEffect(
   env: AppEnv & HelmGatewayEnv,
   effect: ExternalEffectRecord,
   attemptNumber: number,
   now: string,
-  fetcher: typeof fetch = fetch,
 ): Promise<GatewayAdmission> {
   const mode = helmGatewayMode(env);
   if (mode === "off") {
-    return {
-      mode,
-      decision: "admitted",
-      reason_code: null,
-      effect_type: gatewayEffectType(effect.action),
-      gateway_attempt_id: null,
-      gateway_state: null,
-      argument_digest: "",
-      receipts: null,
-    };
+    return { mode, decision: "admitted", reason_code: null, effect_type: "", gateway_attempt_id: null, gateway_state: null, argument_digest: "", receipts: null };
   }
-  const proposed = await proposeToGateway(env, effect, attemptNumber, fetcher);
+  const proposed = await proposeToGateway(env, effect, attemptNumber);
   const admission: GatewayAdmission = { mode, ...proposed };
   try {
     await env.DB.prepare(
@@ -283,10 +353,10 @@ export async function admitExternalEffect(
       mode,
       admission.decision,
       admission.reason_code,
-      admission.effect_type,
+      admission.effect_type || "unresolved",
       admission.gateway_attempt_id,
       admission.gateway_state,
-      admission.argument_digest,
+      admission.argument_digest || "0".repeat(64),
       admission.receipts ? JSON.stringify(admission.receipts) : null,
       now,
     ).run();
@@ -308,13 +378,19 @@ export type DelegationSetting = "asks_first" | "within_limits" | "off";
  * from one IronWrap delegation setting. The HELM side provisions mandates for the tenant's service
  * principal; this is the shape the Worker's own delegation rules take there:
  *
- * | IronWrap delegation        | mandate                                                        |
- * |----------------------------|----------------------------------------------------------------|
- * | `off`                      | no mandate names the effect type (`EFFECT_OUT_OF_SCOPE`)       |
+ * | IronWrap delegation        | mandate                                                          |
+ * |----------------------------|------------------------------------------------------------------|
+ * | `off`                      | no mandate names the effect type (`EFFECT_OUT_OF_SCOPE`)         |
  * | `asks_first`               | the effect type with `approval_threshold` 0: every call escalates |
- * | `within_limits` + ceiling  | `per_call_limit` = the amount ceiling, `approval_threshold` one |
- * |                            | above it, a `count` limit per the ceiling's window               |
+ * | `within_limits` + ceiling  | `approval_threshold` one above the amount ceiling, so a call above |
+ * |                            | it escalates (asks first) as it does in the Worker, never a      |
+ * |                            | `per_call_limit`, which would deny it; a `count` limit per the    |
+ * |                            | ceiling's window, which the gateway denies (`BUDGET_EXCEEDED`)    |
+ * |                            | where the Worker asks first: a difference to keep in mind         |
  *
+ * The amount is compared against the proposal's quote, and the Worker quotes `count=1` only until
+ * money effects carry their amount into the proposal, so today the amount threshold is enforced by
+ * the Worker's own authority ceiling and the gateway sees the count. Recipients are not mapped.
  * A demotion (`afterCatastrophe`, agents/shadow.ts) moves a setting back to `asks_first`, which
  * here is a narrowing (`helm.authority.narrow.v1`) to threshold 0.
  */
@@ -353,7 +429,7 @@ export function gatewayMandateFor(input: {
     return { ...base, in_scope: true, approval_threshold: 0 };
   }
   const amount = input.ceiling.amount?.max_minor ?? null;
-  // The gateway counts a week as seven day windows; its window kinds stop at `day` and `month`.
+  // The gateway's window kinds stop at hour, day and month; a week is seven day windows.
   const window: { window_kind: "hour" | "day"; span: number } = input.ceiling.count.per === "hour"
     ? { window_kind: "hour", span: 1 }
     : input.ceiling.count.per === "day"
@@ -362,7 +438,7 @@ export function gatewayMandateFor(input: {
   return {
     ...base,
     in_scope: true,
-    per_call_limit: amount,
+    per_call_limit: null,
     approval_threshold: amount === null ? null : amount + 1,
     limits: [{ unit: "count", measure: "count", ...window, limit_value: input.ceiling.count.max }],
   };

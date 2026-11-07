@@ -164,6 +164,32 @@ describe("officeSessionIsLive", () => {
     expect(officeSessionIsLive()).toBe(false);
   });
 
+  it("names the marker after the signed-in tenant and still clears the legacy name", async () => {
+    const expiresAt = Date.now() + 60 * 60_000;
+    window.localStorage.setItem("ironwrap.office-session-expires-at", String(expiresAt));
+    expect(officeSessionIsLive()).toBe(true);
+
+    await persistAuthenticatedSession({
+      ...authenticatedSession,
+      tenant: { ...authenticatedSession.tenant, id: "tenant-b" },
+      permissions: [...authenticatedSession.permissions],
+      allowed_actions: [...authenticatedSession.allowed_actions],
+      stale_fields: [],
+      session_expires_at: new Date(expiresAt).toISOString(),
+    });
+    expect(window.localStorage.getItem("ironwrap.office-session-expires-at")).toBeNull();
+    expect(window.localStorage.getItem("ironwrap.office-session-expires-at:tenant-b")).toBe(
+      String(expiresAt),
+    );
+    expect(officeSessionIsLive("tenant-b")).toBe(true);
+    expect(officeSessionIsLive("tenant-a")).toBe(false);
+    expect(officeSessionIsLive()).toBe(true);
+
+    await clearSessionSnapshot();
+    expect(officeSessionIsLive()).toBe(false);
+    expect(window.localStorage.length).toBe(0);
+  });
+
   it("answers false when storage cannot be read", () => {
     const getItem = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
       throw new Error("SecurityError: storage disabled");

@@ -69,6 +69,25 @@ const SNAPSHOT_KEY = "authenticated-session-v1";
  */
 const OFFICE_SESSION_MARKER = "ironwrap.office-session-expires-at";
 
+/**
+ * The marker is named after the signed-in tenant, so a host that serves a different tenant later
+ * (one shared Worker, hosts re-pointed in its registry) never takes another tenant's sign-in for
+ * its own. The bare legacy name is still read and cleared, so a device signed in before keeps it
+ * until its next session read rewrites the marker under the tenant's name.
+ */
+function officeSessionMarkerKey(tenantId: string): string {
+  return `${OFFICE_SESSION_MARKER}:${tenantId}`;
+}
+
+function officeSessionMarkerKeys(storage: Storage): string[] {
+  const keys = [OFFICE_SESSION_MARKER];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key?.startsWith(`${OFFICE_SESSION_MARKER}:`)) keys.push(key);
+  }
+  return keys;
+}
+
 interface OfflineSessionSnapshot {
   session: AuthenticatedSession;
   expiresAt: number;
@@ -109,7 +128,7 @@ export async function persistOrInvalidateSession(
 export async function persistAuthenticatedSession(session: AuthenticatedSession): Promise<void> {
   const expiresAt = Date.parse(session.session_expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
-  writeOfficeSessionMarker(expiresAt);
+  writeOfficeSessionMarker(session.tenant.id, expiresAt);
   await setMeta(SNAPSHOT_KEY, {
     session: { ...session, csrf_token: "offline-session-no-csrf" },
     expiresAt,
@@ -143,26 +162,38 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
 /**
  * True while this browser holds an unexpired sign-in, read from its localStorage marker without
  * touching the local database or sending the office cookie anywhere. Unreadable storage is false.
+ * The customer portal asks before it knows any tenant; storage is per origin and a host names one
+ * tenant, so a marker on this origin is this host's tenant's. Pass a tenant id to ask about it alone.
  */
-export function officeSessionIsLive(): boolean {
+export function officeSessionIsLive(tenantId?: string): boolean {
   try {
-    return Number(window.localStorage.getItem(OFFICE_SESSION_MARKER)) > Date.now();
+    const storage = window.localStorage;
+    const keys = tenantId
+      ? [officeSessionMarkerKey(tenantId)]
+      : officeSessionMarkerKeys(storage);
+    return keys.some((key) => Number(storage.getItem(key)) > Date.now());
   } catch {
     return false;
   }
 }
 
-function writeOfficeSessionMarker(expiresAt: number | null): void {
+function writeOfficeSessionMarker(tenantId: string | null, expiresAt: number | null): void {
   try {
-    if (expiresAt === null) window.localStorage.removeItem(OFFICE_SESSION_MARKER);
-    else window.localStorage.setItem(OFFICE_SESSION_MARKER, String(expiresAt));
+    const storage = window.localStorage;
+    // Sign-out and a signed-out session read clear every tenant's marker on this origin.
+    if (expiresAt === null || tenantId === null) {
+      for (const key of officeSessionMarkerKeys(storage)) storage.removeItem(key);
+      return;
+    }
+    storage.removeItem(OFFICE_SESSION_MARKER);
+    storage.setItem(officeSessionMarkerKey(tenantId), String(expiresAt));
   } catch {
     // Storage can be unavailable (private browsing, a worker); the portal then records the open.
   }
 }
 
 export async function clearSessionSnapshot(): Promise<void> {
-  writeOfficeSessionMarker(null);
+  writeOfficeSessionMarker(null, null);
   await deleteMeta(SNAPSHOT_KEY);
 }
 

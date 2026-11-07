@@ -27,7 +27,9 @@
       "/ingest/*",
       "/public/*",
       "/webhook/*",
-      "/__scheduled"
+      "/__scheduled",
+      // The web manifest names the tenant, so the Worker answers it per host (web-manifest.ts).
+      "/manifest.webmanifest"
     ]
   },
 

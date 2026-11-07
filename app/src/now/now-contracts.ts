@@ -163,7 +163,8 @@ const quickBooksNowCardSchema = z
     title: nonEmptyTextSchema,
     detail: nonEmptyTextSchema,
     job_id: z.string().regex(/^[A-Za-z0-9:_-]{1,160}$/),
-    currency: z.literal("CAD"),
+    // ISO 4217: a tenant reports in its own currency, not one baked into the app.
+    currency: z.string().regex(/^[A-Z]{3}$/),
     final_balance: z.string().regex(/^(?:0|[1-9]\d{0,8})\.\d{2}$/),
     invoice_state: z.enum(quickBooksIntentStates),
     blocker_code: z.enum(quickBooksBlockerCodes).nullable(),

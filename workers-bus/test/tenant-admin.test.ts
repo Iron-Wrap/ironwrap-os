@@ -271,3 +271,38 @@ test("the row tools/qa-tenant-register.mjs derives from a committed tenant confi
   assert.equal(resolution.kind, "tenant");
   assert.equal((resolution as { env: Record<string, unknown> }).env.APP_TENANT_NAME, "Northline Metal OS");
 });
+
+test("a D1 failure during the write is the registry being unavailable, not another writer's conflict", async () => {
+  const db = new SqliteD1();
+  const failing = (error: Error) => ({
+    prepare: (sql: string) => db.prepare(sql),
+    async batch(): Promise<never> {
+      throw error;
+    },
+  });
+  const body = { ...tenantB, secrets: undefined };
+  // The reads before the write fail the same way (the quota counts rows read): still the
+  // registry's 503, on the GET the operator tool starts with and on the PUT.
+  const readFailing = {
+    prepare: () => ({
+      bind: () => ({
+        async first(): Promise<never> { throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row read limit. [code: 7500]"); },
+        async all(): Promise<never> { throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row read limit. [code: 7500]"); },
+      }),
+    }),
+    async batch(): Promise<never> { throw new Error("unreachable"); },
+  };
+  assert.deepEqual((await admin(rootEnv(readFailing as never), "GET", `/admin/tenants/${TENANT_B}`)).status, 503);
+  assert.deepEqual((await admin(rootEnv(readFailing as never), "GET", "/admin/tenants")).status, 503);
+  const readQuota = await admin(rootEnv(readFailing as never), "PUT", `/admin/tenants/${TENANT_B}`, body);
+  assert.deepEqual([readQuota.status, readQuota.body], [503, { error: "tenant_registry_unavailable" }]);
+  // The account's D1 quota, an outage or a network failure under the write: 503, so the operator retries later.
+  const quota = await admin(rootEnv(failing(new Error("D1_ERROR: Your account has exceeded D1's free tier daily row read limit. [code: 7500]")) as never), "PUT", `/admin/tenants/${TENANT_B}`, body);
+  assert.deepEqual([quota.status, quota.body], [503, { error: "tenant_registry_unavailable" }]);
+  const network = await admin(rootEnv(failing(new TypeError("fetch failed")) as never), "PUT", `/admin/tenants/${TENANT_B}`, body);
+  assert.equal(network.status, 503);
+  // A constraint the row failed, or a concurrent create's primary-key clash: this write's conflict.
+  const clash = await admin(rootEnv(failing(new Error("D1_ERROR: UNIQUE constraint failed: tenants.tenant_id: SQLITE_CONSTRAINT")) as never), "PUT", `/admin/tenants/${TENANT_B}`, body);
+  assert.deepEqual([clash.status, clash.body], [409, { error: "tenant_write_conflict" }]);
+  assert.equal(db.raw.prepare("SELECT count(*) AS n FROM tenants WHERE tenant_id = ?").get(TENANT_B)!.n, 0, "nothing was written");
+});

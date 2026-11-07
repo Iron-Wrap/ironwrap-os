@@ -63,6 +63,19 @@ export async function handleTenantAdmin(
   env: TenantAdminEnv,
   now: () => string = () => new Date().toISOString(),
 ): Promise<Response> {
+  try {
+    return await routeTenantAdmin(req, env, now);
+  } catch (error) {
+    // D1 failed under a read or the write: an outage, the account's D1 quota, a network failure.
+    // The operator gets the registry's own 503, never a bare 500 and never another writer's
+    // conflict; a constraint the write's row failed is that write's conflict (nothing landed).
+    return isConstraintFailure(error)
+      ? json({ error: "tenant_write_conflict" }, 409)
+      : json({ error: "tenant_registry_unavailable" }, 503);
+  }
+}
+
+async function routeTenantAdmin(req: Request, env: TenantAdminEnv, now: () => string): Promise<Response> {
   // With the flag off the registry is not consulted, so it is not administered either: the
   // surface stays dark and the flag-off Worker gains no write path.
   if (!multiTenantEnabled(env)) return json({ error: "not_found" }, 404);
@@ -289,12 +302,10 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
       ),
     ]),
   ];
-  try {
-    await db.batch(statements);
-  } catch {
-    // A primary-key clash on a concurrent create, or a CHECK the row failed: nothing was written.
-    return json({ error: "tenant_write_conflict" }, 409);
-  }
+  // A primary-key clash on a concurrent create, or a CHECK the row failed, surfaces from here as
+  // `409 tenant_write_conflict`; any other D1 failure as `503 tenant_registry_unavailable`
+  // (handleTenantAdmin). Nothing was written either way.
+  await db.batch(statements);
   resetTenantCache();
   // The row says whose write it carries, independent of how the batch reports row changes.
   const current = await db.prepare("SELECT version, write_id FROM tenants WHERE tenant_id = ?").bind(tenantId)
@@ -343,4 +354,10 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
+}
+
+/** D1 names a failed CHECK, UNIQUE or FOREIGN KEY as `... constraint failed ...: SQLITE_CONSTRAINT`. */
+function isConstraintFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /constraint failed|SQLITE_CONSTRAINT/i.test(message);
 }

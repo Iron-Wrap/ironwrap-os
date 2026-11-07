@@ -116,7 +116,8 @@ export function gatewayEffectType(action: string): string {
 /** The argument object the gateway digests: the effect's identity, never its payload. */
 export async function gatewayArguments(effect: ExternalEffectRecord, attemptNumber: number): Promise<Record<string, unknown>> {
   // A person's id is digested with the effect id as salt, so the same person is not linkable
-  // across effects from the digest alone and an email-shaped id cannot be guessed back.
+  // across effects from the digest alone (the id itself is still guessable from a dictionary;
+  // the gateway sees who acted only through HELM's own approval records).
   const actor = SYSTEM_ACTOR_TYPES.has(effect.actor_type)
     ? { type: effect.actor_type, id: effect.actor_id }
     : { type: effect.actor_type, id_sha256: await sha256Hex(`${effect.effect_id}:${effect.actor_id}`) };
@@ -354,12 +355,15 @@ export async function admitExternalEffect(
   if (mode === "off") {
     return { mode, decision: "admitted", reason_code: null, effect_type: "", gateway_attempt_id: null, gateway_state: null, argument_digest: "", receipts: null };
   }
-  // Denials already recorded for this attempt make the next proposal a new key (see the header).
+  // Denials already recorded for this attempt make the next proposal a new key (see the header),
+  // except a person's rejection: that answer is final for the attempt, so the stored REJECTED is
+  // what the same key finds again, and nobody is asked twice for the same thing.
   let priorDenials = 0;
   try {
     const counted = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM external_effect_gateway_admissions
-        WHERE effect_id = ? AND attempt_number = ? AND decision = 'denied'`,
+        WHERE effect_id = ? AND attempt_number = ? AND decision = 'denied'
+          AND COALESCE(gateway_state, '') <> 'REJECTED' AND COALESCE(reason_code, '') <> 'APPROVAL_REJECTED'`,
     ).bind(effect.effect_id, attemptNumber).first<{ n: number }>();
     priorDenials = Number(counted?.n ?? 0);
   } catch (error) {

@@ -237,7 +237,7 @@ function effectError(error: unknown): string {
   return /^effect_[a-z0-9_]+$/.test(value) ? value : "effect_runtime_error";
 }
 
-function effectErrorStatus(error: unknown): 400 | 403 | 409 | 422 | 500 {
+function effectErrorStatus(error: unknown): 400 | 403 | 409 | 422 | 500 | 503 {
   const code = effectError(error);
   if (code === "proposal_delivery_unconfirmed" || code === "proposal_delivery_answer_may_be_late") return 409;
   if (code === "effect_runtime_error") return 500;
@@ -250,6 +250,10 @@ function effectErrorStatus(error: unknown): 400 | 403 | 409 | 422 | 500 {
   if (code === "effect_reconciliation_evidence_missing") return 409;
   if (code.includes("conflict") || code.includes("in_flight") || code.includes("lease_lost")) return 409;
   if (code.includes("missing") || code.includes("invalid") || code.includes("expired") || code.includes("denied")) return 422;
+  // The gateway has not admitted the attempt yet or could not be asked: not the caller's error,
+  // and worth asking again later.
+  if (code === "effect_gateway_escalated") return 409;
+  if (code === "effect_gateway_unreachable") return 503;
   return 400;
 }
 

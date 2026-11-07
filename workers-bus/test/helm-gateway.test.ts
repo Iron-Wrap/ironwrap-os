@@ -418,6 +418,19 @@ test("enforce: a retry after a real attempt is a fresh proposal; a denial in ret
   assert.equal(second.effect.state, "succeeded", "the budget rolled; attempt 2 is proposed again under a new key and admitted");
   assert.equal(calls[2].body.idempotency_key, `ironwrap:${TENANT}:${effect.effect_id}:2:d1`, "one denial recorded for attempt 2 makes the next proposal a new key");
   assert.deepEqual(db.admissions().map((row) => [row.attempt_number, row.decision]), [[1, "admitted"], [2, "denied"], [2, "admitted"]]);
+
+  // A person's rejection is final for the attempt: it earns no new key, so the stored REJECTED is
+  // found again and nobody is asked twice.
+  const rejected = await authorizedEffect(appEnv, "rejected");
+  const rejectedCalls = gateway([
+    attemptResponse("REJECTED", { reasonCode: "APPROVAL_REJECTED" }),
+    attemptResponse("REJECTED", { reasonCode: "APPROVAL_REJECTED" }, 200, true),
+  ]).calls;
+  const firstRejection = await executeExternalEffect(appEnv, rejected.effect_id, executor, CLOCK);
+  assert.equal(firstRejection.effect.result_code, "gateway_denied:APPROVAL_REJECTED");
+  await retryExternalEffect(appEnv, rejected.effect_id, NOW);
+  await assert.rejects(executeExternalEffect(appEnv, rejected.effect_id, executor, CLOCK), (error: unknown) => error instanceof EffectRuntimeError && error.code === "effect_gateway_denied");
+  assert.equal(rejectedCalls[1].body.idempotency_key, rejectedCalls[0].body.idempotency_key, "a rejection does not bump the key");
 });
 
 test("enforce: an escalated proposal leaves the effect authorized; the approval is found under the same key; an expired stored permit is a denial", async () => {

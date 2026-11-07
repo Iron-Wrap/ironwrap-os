@@ -281,7 +281,22 @@ test("a D1 failure during the write is the registry being unavailable, not anoth
     },
   });
   const body = { ...tenantB, secrets: undefined };
-  // The account's D1 quota, an outage or a network failure: 503, so the operator retries later.
+  // The reads before the write fail the same way (the quota counts rows read): still the
+  // registry's 503, on the GET the operator tool starts with and on the PUT.
+  const readFailing = {
+    prepare: () => ({
+      bind: () => ({
+        async first(): Promise<never> { throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row read limit. [code: 7500]"); },
+        async all(): Promise<never> { throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row read limit. [code: 7500]"); },
+      }),
+    }),
+    async batch(): Promise<never> { throw new Error("unreachable"); },
+  };
+  assert.deepEqual((await admin(rootEnv(readFailing as never), "GET", `/admin/tenants/${TENANT_B}`)).status, 503);
+  assert.deepEqual((await admin(rootEnv(readFailing as never), "GET", "/admin/tenants")).status, 503);
+  const readQuota = await admin(rootEnv(readFailing as never), "PUT", `/admin/tenants/${TENANT_B}`, body);
+  assert.deepEqual([readQuota.status, readQuota.body], [503, { error: "tenant_registry_unavailable" }]);
+  // The account's D1 quota, an outage or a network failure under the write: 503, so the operator retries later.
   const quota = await admin(rootEnv(failing(new Error("D1_ERROR: Your account has exceeded D1's free tier daily row read limit. [code: 7500]")) as never), "PUT", `/admin/tenants/${TENANT_B}`, body);
   assert.deepEqual([quota.status, quota.body], [503, { error: "tenant_registry_unavailable" }]);
   const network = await admin(rootEnv(failing(new TypeError("fetch failed")) as never), "PUT", `/admin/tenants/${TENANT_B}`, body);

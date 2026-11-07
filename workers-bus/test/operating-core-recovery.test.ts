@@ -129,7 +129,7 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
     // exceptions, the fact-version ledger and the shadow/agreement records and watch firings are included in both D1 inventories.
     // So is the 0153 gate clearance ledger with the two state guards it adds to the gate row,
     // the 0155 tenant deposit policy with its four guards, and the 0205 step pair index.
-    ["REQUIRED_TABLE_COUNT", 287],
+    ["REQUIRED_TABLE_COUNT", 289],
     ["REQUIRED_INDEX_COUNT", 396],
     ["REQUIRED_TRIGGER_COUNT", 816],
   ] as const) {

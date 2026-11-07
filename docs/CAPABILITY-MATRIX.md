@@ -70,8 +70,8 @@ implication.
   "schema": "ironwrap_capability_contract_v1",
   "expected": {
     "d1_migrations": {
-      "count": 149,
-      "latest": "0206_agent_draft_closing.sql"
+      "count": 150,
+      "latest": "0209_tenant_registry.sql"
     }
   },
   "test_observation_policy": {

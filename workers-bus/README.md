@@ -676,11 +676,63 @@ path and UI integration are accepted.
 
 ## PWA auth and tenant boundary
 
-This slice is intentionally **one tenant + one Worker deployment**. `APP_TENANT_ID` is the
+By default this is **one tenant + one Worker deployment**. `APP_TENANT_ID` is the
 deployment/session isolation boundary: provisioning rejects any other tenant, every session joins
 back to an active user on that tenant, and the BFF rejects a session whose tenant differs. If a
 Frappe compatibility site is enabled, it is dedicated to that same tenant. A reseller tenant gets a
-separate deployment and credential set until record-level tenant isolation is proven.
+separate deployment and credential set until record-level tenant isolation is proven, or, behind
+`APP_MULTI_TENANT_ENABLED`, a row in the tenant registry (below).
+
+### Shared multi-tenant runtime (`APP_MULTI_TENANT_ENABLED`, default `false`)
+
+With the flag on, one Worker serves several tenants and resolves the tenant per request
+(`src/tenancy.ts`, migration 0209): the request hostname (lowercase, no port, no trailing dot) is
+looked up in `tenant_hosts`, and the matching `tenants` row's settings and secrets are laid over
+`env` before any handler runs, so every `env.APP_TENANT_ID` reader below the entry point sees the
+request's tenant. A hostname nobody registered resolves to the Worker's own tenant, so turning
+the flag on with an empty registry changes nothing. The overlay clears every tenant-scoped var
+and secret first and then applies the row's own values: a value the row leaves out is unset,
+never the Worker tenant's, so a tenant without its own ingest token, sender mailbox or provider
+key has that path fail closed instead of borrowing another tenant's. Tokens then bind to the
+resolved tenant: a session, capability link or bearer token of tenant B presented on tenant A's
+host is not found or does not match. A suspended tenant, a registry read that fails or a secrets
+envelope that does not open under `TENANT_SECRETS_KEK` answers `503` (`tenant_suspended`,
+`tenant_unavailable`, `tenant_secrets_unavailable`) rather than falling back to the Worker
+tenant. `/health` never waits on the registry. One isolate trusts a registry read for 60 s and a
+miss for 5 s, so a suspension or a rotated token reaches every isolate within a minute.
+
+Every declared var and secret belongs to exactly one of four lists in `src/tenancy.ts`, pinned
+by a test so a new name cannot ship unclassified. A tenant row may set the tenant settings
+(`TENANT_SETTING_KEYS`: name, brand, locale, time zone, currency, sender mailboxes, public origin
+and allowed origins, public-estimate origins, brands, jurisdiction and range rules, Shared Drive
+ids, the QuickBooks realm, the tenant's own Newo project, agent, numbers, people and knowledge
+base, its JobNimbus record shape, Postiz providers, price list, proposal template, automation
+user, `AGENT_DATA_CLASS` and `COMMERCIAL_AUTHORITY_POLICY_JSON`) and seal the tenant secrets
+(`TENANT_SECRET_NAMES`: the ingest, effect-runtime and agent-host tokens, webhook tokens and
+provider keys). The retired Frappe and Facet bridge vars and credentials a clone still derives
+(`CLONE_ONLY_VARS`) are cleared for a registry tenant, because the Worker reaches those
+destinations with credentials that are not sealable per tenant. Product flags, provider URLs,
+timeouts, schema hashes and the Worker-wide keys (`WORKER_WIDE_NAMES`: `TENANT_SECRETS_KEK`,
+`QB_TOKEN_ENCRYPTION_KEY`, `APP_AUTH_PEPPER`, the Turnstile and rate-limit secrets) are never per
+tenant; the one Turnstile widget must therefore list every tenant hostname that serves the public
+estimate form, which is an onboarding step for each tenant. Neither is `ADMIN_TOKEN` per tenant:
+`/admin/*` reads tables that carry no tenant column (the audit log, dead letters, webhook
+receipts, Newo sessions), so it is the hosting operator's surface on every host, and those tables
+are shared between tenants until a follow-up migration scopes them. Secrets are sealed with
+AES-GCM under `TENANT_SECRETS_KEK` (a 32-byte key, 64 hex characters; `openssl rand -hex 32`),
+bound to the tenant id and key version, and never read back.
+
+Queue consumers and the two crons still run as the Worker's own tenant in this slice, so the flag
+stays off until the data-layer slice gives queue messages a tenant and runs each cron pass per
+active tenant.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/admin/tenants` | `Bearer ADMIN_TOKEN` + flag on | every registry tenant with its hosts, settings and secret names; never secret values; `404` while the flag is off |
+| GET | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | one registry tenant |
+| PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`, also when a concurrent write landed first: the batch is conditioned on the version and nothing of the loser's lands), a host owned by another tenant is refused (`409 host_taken`), an omitted `settings`, `hosts` or `secrets` keeps what the row holds, `secrets: {}` empties the envelope; the Worker's own tenant may take hosts here and nothing else |
+
+The registry is administered from the Worker's own env, before tenant resolution.
 The magic-link request body is `{ "email": "…" }`; the Worker infers its configured tenant. A
 legacy caller may also send `tenant_id`, but a mismatch still receives the same generic `202` and
 never selects another tenant.

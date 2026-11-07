@@ -204,6 +204,11 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
   }
   assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
+  // The shared multi-tenant runtime (0209, tenancy.ts) ships off everywhere: each environment
+  // keeps its build-time tenant until an operator registers a second tenant and turns it on.
+  for (const vars of [config.vars, config.env.local.vars, config.env.qa.vars]) {
+    assert.equal(vars.APP_MULTI_TENANT_ENABLED, "false");
+  }
   // qa creates its first owner through `POST /admin/app-users/bootstrap` (ADMIN_TOKEN, once).
   assert.equal(
     config.env.qa.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED,
@@ -2316,11 +2321,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // cancellation window is unknown or open, and records receipt of the signed copy.
     // 0169 lets an AP invoice line cite only a QuickBooks bill read through its own provider.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 149);
+    // 0209 adds the tenant registry (tenants, tenant_hosts): two tables, no named index, no trigger.
+    assert.equal(migrations.length, 150);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0206_agent_draft_closing.sql",
+      "0209_tenant_registry.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2486,7 +2492,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0169 re-creates 0067's AP invoice line readback guard under its name, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 287, indexes: 383, triggers: 816 },
+      // 0209 adds the two tenant registry tables and nothing else.
+      { tables: 289, indexes: 383, triggers: 816 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

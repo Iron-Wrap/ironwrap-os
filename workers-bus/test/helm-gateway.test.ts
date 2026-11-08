@@ -247,8 +247,10 @@ test("the admissions ledger rejects replacement without recursive delete trigger
 const admissionColumns = "admission_id,effect_id,tenant_id,attempt_number,mode,decision,effect_type,argument_digest,created_at";
 function appendSyntheticAdmission(db: DatabaseSync, id: string, physical?: string | null): void {
   const args = [id, "synthetic-effect", TENANT, 1, "enforce", "admitted", "ironwrap.customer.email.send", "a".repeat(64), NOW];
-  db.prepare(`INSERT INTO external_effect_gateway_admissions (${physical === undefined ? "" : "rowid,"}${admissionColumns}) VALUES (${physical === undefined ? "" : "?,"}?,?,?,?,?,?,?,?,?)`)
-    .run(...(physical === undefined ? args : [physical, ...args]));
+  const insert = db.prepare(`INSERT INTO external_effect_gateway_admissions (${physical === undefined ? "" : "rowid,"}${admissionColumns}) VALUES (${physical === undefined ? "" : "?,"}?,?,?,?,?,?,?,?,?)`);
+  // A row ID at the signed 64-bit edge overflows the JS number Node 26 would report it as.
+  insert.setReadBigInts(true);
+  insert.run(...(physical === undefined ? args : [physical, ...args]));
 }
 function physicalAdmissions(db: DatabaseSync): Array<Record<string, unknown>> {
   return db.prepare("SELECT CAST(rowid AS TEXT) AS physical_rowid,* FROM external_effect_gateway_admissions ORDER BY rowid").all() as Array<Record<string, unknown>>;

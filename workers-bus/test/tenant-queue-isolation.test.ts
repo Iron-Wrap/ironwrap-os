@@ -60,6 +60,10 @@ function read(db: SqliteD1) {
   return { ...db.raw.prepare("SELECT * FROM measurement_intake_receipts WHERE receipt_id = ?").get(receiptId) };
 }
 
+function deadLetters(db: SqliteD1) {
+  return db.raw.prepare("SELECT stage, error FROM dead_letter ORDER BY rowid").all().map((row) => ({ ...row }));
+}
+
 async function dispatch(env: Env, body: object, dlq = false) {
   let acks = 0;
   let retries = 0;
@@ -108,8 +112,10 @@ for (const dlq of [false, true]) {
   });
   test(`registry Newo ${dlq ? "DLQ" : "main"} refuses before legacy reads or writes`, async () => {
     const f = fixture();
-    assert.deepEqual(await dispatch(f.env, { tenant_id: B, newo_event_id: "foreign-event" }, dlq), { acks: 0, retries: 1 });
-    assert.equal(f.calls.some((sql) => /newo_|dead_letter|audit_log/.test(sql)), false);
+    assert.deepEqual(await dispatch(f.env, { tenant_id: B, newo_event_id: "foreign-event" }, dlq), dlq ? { acks: 1, retries: 0 } : { acks: 0, retries: 1 });
+    assert.equal(f.calls.some((sql) => /newo_|audit_log/.test(sql)), false);
+    // The DLQ has no further retry, so the refusal itself is the durable incident.
+    assert.deepEqual(deadLetters(f.db), dlq ? [{ stage: "tenant_unresolved", error: "newo_tenant_not_supported" }] : []);
     assert.equal(f.sends(), 0);
     f.db.raw.close();
   });
@@ -177,10 +183,13 @@ for (const dlq of [false, true]) {
     const before = read(f.db);
     f.calls.length = 0;
     for (const body of [{ measurement_receipt_id: receiptId, lease_token: lease }, { newo_event_id: "foreign-event" }]) {
-      assert.deepEqual(await dispatch(f.env, { ...body, tenant_id: B }, dlq), { acks: 0, retries: 1 });
+      assert.deepEqual(await dispatch(f.env, { ...body, tenant_id: B }, dlq), dlq ? { acks: 1, retries: 0 } : { acks: 0, retries: 1 });
     }
     assert.deepEqual(read(f.db), before);
-    assert.deepEqual(f.calls, []);
+    assert.equal(f.calls.length, dlq ? 2 : 0);
+    assert.ok(f.calls.every((sql) => /INSERT INTO dead_letter/.test(sql)));
+    const refusal = { stage: "tenant_unresolved", error: "queue_receipt_tenant_mismatch" };
+    assert.deepEqual(deadLetters(f.db), dlq ? [refusal, refusal] : []);
     assert.equal(f.rawReads(), 0);
     f.db.raw.close();
   });

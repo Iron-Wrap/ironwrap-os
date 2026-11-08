@@ -760,6 +760,7 @@ why `/admin/*` stays the operator's.
 |---|---|---|---|
 | GET | `/admin/tenants` | `Bearer ADMIN_TOKEN` + flag on | every registry tenant with its hosts, settings and secret names; never secret values; `404` while the flag is off |
 | GET | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | one registry tenant |
+| GET | `/admin/tenants/:tenant_id/authority-plan` | `Bearer ADMIN_TOKEN` + flag on | the tenant's `helm.authority.provision.v1` plan and its digest; `worker_principal` (the `sub` of the tenant's `HELM_GATEWAY_TOKEN`), `valid_from` and `valid_until` (`YYYY-MM-DDTHH:MM:SSZ`) are required, `org_ref` (default `org:<tenant_id>`), `stage` (default `draft`) and `base_plan_digest` are optional; reads only, applies nothing |
 | PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`, also when a concurrent write landed first: the batch is conditioned on the version and nothing of the loser's lands), a host owned by another tenant is refused (`409 host_taken`), an omitted `settings`, `hosts` or `secrets` keeps what the row holds, `secrets: {}` empties the envelope; the Worker's own tenant may take hosts here and nothing else. A constraint the row failed or a concurrent create is `409 tenant_write_conflict`; any other D1 failure under a read or the write (an outage, the account's D1 quota) is `503 tenant_registry_unavailable` on every `/admin/tenants` route. A `503` may follow a committed write if confirmation or readback fails; read the current tenant and its version before deciding whether to retry |
 
 The registry is administered from the Worker's own env, before tenant resolution.
@@ -1285,6 +1286,17 @@ effects carry their amount into the proposal, so today the amount ceiling is enf
 Worker's own authority check and recipients are not mapped. One principal per tenant until the
 identity issuer mints one per specialist; the acting specialist is named in the proposal
 arguments and audited there.
+
+`GET /admin/tenants/:tenant_id/authority-plan` compiles the plan a person approves in HELM
+(`src/helm-authority-plan.ts`); it reads and applies nothing. The plan lists what the effect
+runtime can actually propose (a source-scan test keeps the list whole), in one mandate held by the
+Worker's principal under an organization root the Worker must not hold, because the gateway
+resolves a caller's shallowest mandate. It adds no approval or limit of its own and does not yet
+apply the delegation mapping above: delegation settings govern agents, agent steps reach no
+provider yet, and with one principal per tenant an agent's `off` would deny the person behind a
+permit and `asks_first` would ask again for what a person just approved. Every action registers as
+risk class `medium`: `high` and `irreversible` escalate every call and a registered class can only
+ever be raised. `mcp.*` tools are not listed, so the gateway denies them.
 
 What this binding does not do yet: on qa the gateway's Connect API has no public hostname and
 requires mTLS with cnf-bound tokens behind a network policy that admits only control-plane pods,

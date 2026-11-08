@@ -30,6 +30,7 @@ import {
   type TenantRow,
   type TenantStatus,
 } from "./tenancy.ts";
+import { compileAuthorityPlan, parseAuthorityPlanQuery } from "./helm-authority-plan.ts";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -88,10 +89,17 @@ async function routeTenantAdmin(req: Request, env: TenantAdminEnv, now: () => st
   if (req.method === "GET" && url.pathname === "/admin/tenants") {
     return json({ tenants: await listTenants(db) });
   }
-  const match = url.pathname.match(/^\/admin\/tenants\/([^/]+)$/);
+  const match = url.pathname.match(/^\/admin\/tenants\/([^/]+?)(\/authority-plan)?$/);
   if (!match) return json({ error: "not_found" }, 404);
   const tenantId = match[1];
   if (!TENANT_ID_RE.test(tenantId)) return json({ error: "invalid_tenant_id" }, 400);
+  if (match[2]) {
+    if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+    if (tenantId !== defaultTenantId(env) && !(await readTenant(db, tenantId))) return json({ error: "not_found" }, 404);
+    const parsed = parseAuthorityPlanQuery(tenantId, url.searchParams);
+    if ("error" in parsed) return json({ error: parsed.error }, 400);
+    return json(await compileAuthorityPlan(parsed.input));
+  }
   if (req.method === "GET") {
     const record = await readTenant(db, tenantId);
     return record ? json({ tenant: record }) : json({ error: "not_found" }, 404);

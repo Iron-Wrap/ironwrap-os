@@ -731,11 +731,11 @@ that tenant's env and its global jobs (Newo sessions, the QuickBooks projection 
 letters, the prunes) once; a registry tenant that cannot be served is skipped, logged
 (`cron_tenant_skipped`) and the tick's heartbeat settles `error`. The envelope, dead-letter
 replay, measurement receipt, portal decision, acceptance, external-effect, proposal-delivery,
-QuickBooks intent and outbox and Postiz sweeps bind the tenant they run for. Three things run
-for the default tenant only until their tables carry a tenant: the daily reconcile (its
-heartbeat, source counts and dead-letter count are Worker-wide), and the two derivations behind
-the single `scheduled-v1` cursor rows (deposit gates from accepted contracts, final-invoice
-intents; the latter walks every tenant's jobs by each job's own tenant). Newo session reconcile
+QuickBooks intent and outbox and Postiz sweeps bind the tenant they run for. The two derivations
+(deposit gates from accepted contracts, final-invoice intents) walk each tenant's own rows behind
+that tenant's `scheduled-v1:<tenant>` cursor (0212); the bare `scheduled-v1` row stays only for a
+rolled-back Worker. The daily reconcile runs for the default tenant only until its tables carry a
+tenant (its heartbeat, source counts and dead-letter count are Worker-wide). Newo session reconcile
 and QuickBooks projection recovery stay global because their tables carry no tenant column; a
 registry tenant's Newo events and QuickBooks webhooks are not served until that changes. On the
 Newo queue, registry tenants are refused before any shared legacy session/receipt read or write,

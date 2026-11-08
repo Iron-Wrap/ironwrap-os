@@ -197,8 +197,8 @@ async function reconcileFacetDesignSurfaces(env: Env): Promise<void> {
  * pins, so on a shared Worker only the default tenant's pass derives (the walk itself is keyed by
  * each job's own tenant); every tenant's pass recovers its own outbox.
  */
-async function deriveThenRecoverQuickBooksFinalInvoices(env: Env, derive = true): Promise<void> {
-  if (derive) try {
+async function deriveThenRecoverQuickBooksFinalInvoices(env: Env): Promise<void> {
+  try {
     const derivation = await deriveNativeFinalInvoiceIntents(
       env as import("./app-types.ts").AppEnv,
     );
@@ -400,7 +400,7 @@ export default {
     } else if (controller.cron === "*/5 * * * *") {
       ctx.waitUntil(cronTick(rootEnv, controller.cron, () => Promise.all([
         ...fiveMinuteGlobalJobs(rootEnv),
-        ...tenants.envs.flatMap((env) => fiveMinuteTenantJobs(env, env === rootEnv)),
+        ...tenants.envs.flatMap((env) => fiveMinuteTenantJobs(env)),
       ]).then(skipped)));
     }
   },
@@ -480,8 +480,7 @@ function fiveMinuteGlobalJobs(env: Env): Promise<unknown>[] {
 }
 
 /** Five-minute jobs on this tenant's rows: run once per active tenant, under that tenant's env. */
-/** `isDefaultTenant` is true only for the Worker's own env: the shared-cursor derivations run in that pass alone. */
-function fiveMinuteTenantJobs(env: Env, isDefaultTenant: boolean): Promise<unknown>[] {
+function fiveMinuteTenantJobs(env: Env): Promise<unknown>[] {
   // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
   // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
   const accountingDispatchBinding = resolveAccountingDispatchBinding(
@@ -570,10 +569,10 @@ function fiveMinuteTenantJobs(env: Env, isDefaultTenant: boolean): Promise<unkno
     }).catch((error) =>
       log({ at: "agent_report_retry", error: String(error) }),
     ),
-    deriveThenRecoverQuickBooksFinalInvoices(env, isDefaultTenant).catch(() =>
+    deriveThenRecoverQuickBooksFinalInvoices(env).catch(() =>
       log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
     ),
-    reconcileCustomerContractAcceptanceAttempts(env, undefined, { deriveDeposits: isDefaultTenant }).catch((error) =>
+    reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
       log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
     ),
     // OD-01 (0155): the Deposit gate entry a signed contract calls for, wherever the

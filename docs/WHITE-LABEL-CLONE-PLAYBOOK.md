@@ -114,7 +114,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0211_external_effect_gateway_admission_replace_guard.sql`; `node tools/validate-documentation.mjs`
+   `0212_tenant_derivation_cursors.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -223,7 +223,7 @@ recovery boundaries.
   and the tenant owner has added at least one recipient on the Recipients screen
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
-- [ ] All 152 D1 migrations through `0211_external_effect_gateway_admission_replace_guard.sql` applied to the tenant database.
+- [ ] All 153 D1 migrations through `0212_tenant_derivation_cursors.sql` applied to the tenant database.
 - [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
   unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
   an older snapshot, elapsed time or empty RAW read does not authorize clearing them.

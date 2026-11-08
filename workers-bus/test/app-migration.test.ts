@@ -2325,11 +2325,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0209 adds the tenant registry (tenants, tenant_hosts): two tables, no named index, no trigger.
     // 0210 adds the HELM gateway admissions ledger: one table, one named index, two append-only guards.
     // 0211 adds its logical collision guard and a protected cardinality witness for physical replacement.
-    assert.equal(migrations.length, 152);
+    // 0212 rebuilds the two derivation cursor tables under the same names and object counts.
+    assert.equal(migrations.length, 153);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0211_external_effect_gateway_admission_replace_guard.sql",
+      "0212_tenant_derivation_cursors.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {

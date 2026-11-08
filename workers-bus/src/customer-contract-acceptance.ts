@@ -386,15 +386,6 @@ export async function handleCustomerPortalAcceptancePreview(
 export async function reconcileCustomerContractAcceptanceAttempts(
   env: AppEnv,
   now = new Date(),
-  options: {
-    /**
-     * The deposit-gate derivation walks the accepted contracts behind one cursor row whose name
-     * the schema pins to `scheduled-v1`, so one Worker has one such cursor. On a shared Worker
-     * only the default tenant's pass walks it; a registry tenant's accepted contracts wait for
-     * per-tenant cursors (a schema change), and its pass does the two expiry sweeps above only.
-     */
-    deriveDeposits?: boolean;
-  } = {},
 ): Promise<void> {
   const nowValue = now.toISOString();
   const sweepTenant = operatingTenantId(env.APP_TENANT_ID) ?? "";
@@ -423,14 +414,12 @@ export async function reconcileCustomerContractAcceptanceAttempts(
   )
     .bind(nowValue, sweepTenant, nowValue)
     .run();
-  if (options.deriveDeposits === false) return;
+  // Each tenant walks its accepted contracts behind its own cursor row (0212).
+  const cursorName = `scheduled-v1:${sweepTenant}`;
   const cursor = await env.DB.prepare(
-    `SELECT last_tenant_id, last_acceptance_id
-       FROM commercial_deposit_derivation_cursors WHERE cursor_name = 'scheduled-v1'`,
-  ).first<{ last_tenant_id: string; last_acceptance_id: string }>();
-  const tenantCursor = cursor?.last_tenant_id === sweepTenant
-    ? cursor.last_acceptance_id
-    : "";
+    `SELECT last_acceptance_id FROM commercial_deposit_derivation_cursors WHERE cursor_name = ?`,
+  ).bind(cursorName).first<{ last_acceptance_id: string }>();
+  const tenantCursor = cursor?.last_acceptance_id ?? "";
   const after = await env.DB.prepare(
     `SELECT acceptance_id, tenant_id FROM customer_portal_acceptance_intents
       WHERE tenant_id = ? AND state = 'accepted' AND acceptance_id > ?
@@ -463,12 +452,12 @@ export async function reconcileCustomerContractAcceptanceAttempts(
     await env.DB.prepare(
       `INSERT INTO commercial_deposit_derivation_cursors (
          cursor_name, last_tenant_id, last_acceptance_id, updated_at
-       ) VALUES ('scheduled-v1', ?, ?, ?)
+       ) VALUES (?, ?, ?, ?)
        ON CONFLICT(cursor_name) DO UPDATE SET
          last_tenant_id = excluded.last_tenant_id,
          last_acceptance_id = excluded.last_acceptance_id,
          updated_at = excluded.updated_at`,
-    ).bind(lastAcceptance.tenant_id, lastAcceptance.acceptance_id, nowValue).run();
+    ).bind(cursorName, lastAcceptance.tenant_id, lastAcceptance.acceptance_id, nowValue).run();
   }
 }
 

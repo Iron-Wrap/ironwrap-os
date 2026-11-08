@@ -2324,7 +2324,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
     // 0209 adds the tenant registry (tenants, tenant_hosts): two tables, no named index, no trigger.
     // 0210 adds the HELM gateway admissions ledger: one table, one named index, two append-only guards.
-    // 0211 adds its insert-collision guard without changing any existing object.
+    // 0211 adds its logical collision guard and a protected cardinality witness for physical replacement.
     assert.equal(migrations.length, 152);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
@@ -2496,8 +2496,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     assert.deepEqual(
       { ...counts },
       // 0209 adds the two tenant registry tables and nothing else. 0210 adds the gateway
-      // admissions table, its one named index and two append-only guards; 0211 adds its no-replace guard.
-      { tables: 290, indexes: 384, triggers: 819 },
+      // admissions table, its one named index and two append-only guards. 0211 adds one count table
+      // and five guards, preserving all prior objects.
+      { tables: 291, indexes: 384, triggers: 823 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

@@ -54,7 +54,7 @@ class SqliteD1 {
   afterAdmissionWrite?: () => void;
   afterBatch?: () => void;
 
-  constructor() {
+  constructor(beforeGatewayGuard?: (db: DatabaseSync) => void) {
     this.raw.exec("PRAGMA foreign_keys = ON");
     for (const file of [
       "0042_external_effect_runtime.sql",
@@ -63,6 +63,7 @@ class SqliteD1 {
       "0210_external_effect_gateway_admissions.sql",
       "0211_external_effect_gateway_admission_replace_guard.sql",
     ]) {
+      if (file === "0211_external_effect_gateway_admission_replace_guard.sql") beforeGatewayGuard?.(this.raw);
       this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
   }
@@ -240,6 +241,69 @@ test("the admissions ledger rejects replacement without recursive delete trigger
     assert.deepEqual(db.admissions(), before, "collision aborts the whole multi-row statement");
     db.raw.exec("INSERT INTO external_effect_gateway_admissions SELECT admission_id || ':fresh',effect_id,tenant_id,attempt_number,mode,decision,reason_code,effect_type,gateway_attempt_id,gateway_state,argument_digest,receipt_ref_json,created_at FROM external_effect_gateway_admissions");
     assert.equal(db.admissions().length, 2, "a distinct proposal can still append");
+  } finally { db.raw.close(); }
+});
+
+const admissionColumns = "admission_id,effect_id,tenant_id,attempt_number,mode,decision,effect_type,argument_digest,created_at";
+function appendSyntheticAdmission(db: DatabaseSync, id: string, physical?: string | null): void {
+  const args = [id, "synthetic-effect", TENANT, 1, "enforce", "admitted", "ironwrap.customer.email.send", "a".repeat(64), NOW];
+  db.prepare(`INSERT INTO external_effect_gateway_admissions (${physical === undefined ? "" : "rowid,"}${admissionColumns}) VALUES (${physical === undefined ? "" : "?,"}?,?,?,?,?,?,?,?,?)`)
+    .run(...(physical === undefined ? args : [physical, ...args]));
+}
+function physicalAdmissions(db: DatabaseSync): Array<Record<string, unknown>> {
+  return db.prepare("SELECT CAST(rowid AS TEXT) AS physical_rowid,* FROM external_effect_gateway_admissions ORDER BY rowid").all() as Array<Record<string, unknown>>;
+}
+function assertAdmissionCount(db: DatabaseSync, expected: number): void {
+  assert.equal(db.prepare("SELECT row_count FROM external_effect_gateway_admission_count WHERE singleton=1").get()!.row_count, expected);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM external_effect_gateway_admissions").get()!.n, expected);
+}
+
+test("physical aliases cannot replace evidence at any signed row-ID boundary with recursive triggers off", () => {
+  const boundaries = ["-9223372036854775808", "-2", "-1", "0", "7", "9223372036854775807"];
+  const db = new SqliteD1(raw => boundaries.forEach((value, i) => appendSyntheticAdmission(raw, `original-admission-${i}`, value)));
+  try {
+    assert.equal(db.raw.prepare("PRAGMA recursive_triggers").get()!.recursive_triggers, 0);
+    const before = physicalAdmissions(db.raw);
+    for (const alias of ["rowid", "_rowid_", "oid"]) for (const row of before) {
+      assert.throws(() => db.raw.prepare(`INSERT OR REPLACE INTO external_effect_gateway_admissions (${alias},${admissionColumns}) VALUES (?,?,?, ?,1,'enforce','denied','ironwrap.customer.email.send',?,?)`)
+        .run(row.physical_rowid as string, `fresh-${alias}-${row.admission_id}`, "synthetic-effect", TENANT, "b".repeat(64), NOW), /append_only/);
+      assert.deepEqual(physicalAdmissions(db.raw), before);
+      assertAdmissionCount(db.raw, boundaries.length);
+    }
+  } finally { db.raw.close(); }
+});
+
+test("ordinary automatic, explicit NULL and fresh negative identities append over negative-only and maximum historical IDs", () => {
+  for (const seed of ["-9223372036854775808", "-2", "-1", "0", "9223372036854775807"]) {
+    const db = new SqliteD1(raw => appendSyntheticAdmission(raw, "historical-admission", seed));
+    try {
+      appendSyntheticAdmission(db.raw, "automatic-admission");
+      appendSyntheticAdmission(db.raw, "null-id-admission", null);
+      appendSyntheticAdmission(db.raw, "fresh-negative-admission", "-17");
+      assert.equal(physicalAdmissions(db.raw).find(row => row.admission_id === "historical-admission")!.physical_rowid, seed);
+      assertAdmissionCount(db.raw, 4);
+    } finally { db.raw.close(); }
+  }
+});
+
+test("the derived count rejects direct tampering and physical collision aborts the entire multi-row statement", () => {
+  const db = new SqliteD1(raw => appendSyntheticAdmission(raw, "historical-admission", "-1"));
+  try {
+    for (const sql of [
+      "INSERT OR REPLACE INTO external_effect_gateway_admission_count VALUES(1,0)",
+      "INSERT OR IGNORE INTO external_effect_gateway_admission_count VALUES(1,0)",
+      "UPDATE external_effect_gateway_admission_count SET row_count=row_count-1",
+      "UPDATE external_effect_gateway_admission_count SET row_count=row_count+1",
+      "UPDATE external_effect_gateway_admission_count SET rowid=2",
+      "DELETE FROM external_effect_gateway_admission_count",
+    ]) assert.throws(() => db.raw.exec(sql), /append_only/);
+    const before = physicalAdmissions(db.raw);
+    assert.throws(() => db.raw.prepare(`INSERT OR REPLACE INTO external_effect_gateway_admissions(rowid,${admissionColumns})
+      SELECT 1,'first-new-admission','synthetic-effect',?,1,'enforce','admitted','ironwrap.customer.email.send',?,?
+      UNION ALL SELECT -1,'physical-collision-admission','synthetic-effect',?,1,'enforce','denied','ironwrap.customer.email.send',?,?`)
+      .run(TENANT, "a".repeat(64), NOW, TENANT, "b".repeat(64), NOW), /append_only/);
+    assert.deepEqual(physicalAdmissions(db.raw), before);
+    assertAdmissionCount(db.raw, 1);
   } finally { db.raw.close(); }
 });
 

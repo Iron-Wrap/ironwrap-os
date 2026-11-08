@@ -314,6 +314,12 @@ export default {
           msg.ack();
           continue;
         }
+        // Typed receipt messages retain their producer's tenant even if shared tenancy is
+        // subsequently switched off. A registry backlog must not become default-tenant work.
+        if (("measurement_receipt_id" in msg.body || "newo_event_id" in msg.body) &&
+            msg.body.tenant_id !== undefined && msg.body.tenant_id !== queueTenantId(env)) {
+          throw new Error("queue_receipt_tenant_mismatch");
+        }
         if ("measurement_receipt_id" in msg.body) {
           const receiptId = msg.body.measurement_receipt_id;
           if (isDlq) {

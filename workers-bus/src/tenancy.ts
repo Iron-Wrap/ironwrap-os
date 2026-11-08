@@ -455,6 +455,13 @@ async function loadTenant(env: TenancyEnv, tenantId: string, now: number): Promi
  * fail closed (`not configured`), where inheritance would have sent one tenant's mail, accepted
  * one tenant's token or spent one tenant's provider account on another's behalf.
  */
+const registryTenantEnvs = new WeakSet<Env>();
+
+/** Runtime provenance, not an overridable tenant setting or a queue-supplied claim. */
+export function isRegistryTenantEnv(env: Env): boolean {
+  return registryTenantEnvs.has(env);
+}
+
 export function withTenantEnv(env: Env, row: TenantRow, secrets: Record<string, string> | null): Env {
   const overlay: Record<string, unknown> = { ...(env as unknown as Record<string, unknown>) };
   for (const name of [...TENANT_SETTING_KEYS, ...CLONE_ONLY_VARS, ...TENANT_SECRET_NAMES]) overlay[name] = undefined;
@@ -468,7 +475,9 @@ export function withTenantEnv(env: Env, row: TenantRow, secrets: Record<string, 
   }
   overlay.APP_TENANT_ID = row.tenant_id;
   overlay.AGENT_DATA_CLASS = row.data_class;
-  return overlay as unknown as Env;
+  const resolved = overlay as unknown as Env;
+  registryTenantEnvs.add(resolved);
+  return resolved;
 }
 
 function parseStoredSettings(raw: string): Record<string, string> {

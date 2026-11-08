@@ -2460,14 +2460,14 @@ async function repairSuccessorEffects(env: AppEnv, now: Date): Promise<void> {
        JOIN quickbooks_final_invoice_observations ob
          ON ob.tenant_id = i.tenant_id AND ob.intent_id = i.intent_id
         AND ob.provider_invoice_id = i.provider_invoice_id AND ob.outcome_code = 'exact_match'
-      WHERE NOT EXISTS (
+      WHERE i.tenant_id = ? AND NOT EXISTS (
         SELECT 1 FROM quickbooks_final_invoice_outbox o
          WHERE o.tenant_id = i.tenant_id AND o.intent_id = i.intent_id
            AND o.operation = 'resolve'
            AND o.request_fingerprint_sha256 = ob.provider_readback_sha256
       )
       ORDER BY ob.checked_at ASC LIMIT ?`,
-  ).bind(RECOVERY_LIMIT).all<FinalInvoiceRow & { provider_readback_sha256: string }>();
+  ).bind(sweepTenant, RECOVERY_LIMIT).all<FinalInvoiceRow & { provider_readback_sha256: string }>();
   for (const row of observations.results ?? [])
     await enqueueSystemEffect(env, row, "resolve",
       `resolve:${row.provider_invoice_id}:${row.provider_readback_sha256}`,

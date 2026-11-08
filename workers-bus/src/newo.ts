@@ -1,4 +1,4 @@
-import { queueTenantId } from "./tenancy.ts";
+import { isRegistryTenantEnv, queueTenantId } from "./tenancy.ts";
 import {
   classifyIntent,
   newEnvelopeId,
@@ -143,7 +143,7 @@ export interface NewoToolReceipt {
   message: string;
 }
 
-/** The tenant is the one that received the event; the consumer handles it under that tenant's env. */
+/** Legacy sessions are unscoped; only the Worker's default tenant may produce or consume them. */
 export type NewoQueueMessage = { newo_event_id: string; tenant_id?: string };
 
 type ParseResult<T> =
@@ -169,6 +169,7 @@ export async function handleNewoWebhook(
 ): Promise<Response> {
   const runtime = env as NewoRuntimeEnv;
   if (String(runtime.NEWO_ENABLED) !== "true") return json({ error: "newo_disabled" }, 503);
+  if (isRegistryTenantEnv(env)) return json({ error: "newo_tenant_not_supported" }, 503);
 
   if (url.pathname === "/webhook/newo/availability") {
     const denied = authenticate(req, runtime.NEWO_BOOKING_TOKEN, "booking_not_configured");
@@ -216,6 +217,9 @@ export async function handleNewoQueueMessage(
   eventId: string,
   deadLetter: boolean,
 ): Promise<void> {
+  // An active registry tenant does not own the shared legacy receipt/session tables. Refuse
+  // before even reading them, including on the DLQ; default-tenant backlog remains replayable.
+  if (isRegistryTenantEnv(env)) throw new Error("newo_tenant_not_supported");
   const receipt = await getNewoReceipt(env, eventId);
   if (!receipt) throw new Error("newo_receipt_missing");
   const session = await getNewoSession(env, receipt.session_id);
@@ -346,6 +350,7 @@ export async function reconcileNewoSessions(
   retryable_syncs_requeued: number;
   newly_missing_reports: number;
 }> {
+  if (isRegistryTenantEnv(env)) throw new Error("newo_tenant_not_supported");
   const runtime = env as NewoRuntimeEnv;
   if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") {
     return { retryable_syncs_requeued: 0, newly_missing_reports: 0 };

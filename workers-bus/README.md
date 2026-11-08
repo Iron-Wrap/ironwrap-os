@@ -738,6 +738,11 @@ the single `scheduled-v1` cursor rows (deposit gates from accepted contracts, fi
 intents; the latter walks every tenant's jobs by each job's own tenant). Newo session reconcile
 and QuickBooks projection recovery stay global because their tables carry no tenant column; a
 registry tenant's Newo events and QuickBooks webhooks are not served until that changes. On the
+Newo queue, registry tenants are refused before any shared legacy session/receipt read or write,
+including DLQ processing. Typed Newo and measurement backlog stamped for another tenant is also
+refused when shared tenancy is switched off; unstamped default-tenant backlog keeps its legacy
+meaning. Measurement reads and lease writes bind the resolved tenant, and a DLQ incident requires
+the same receipt tenant and current lease at insertion. On the
 dead-letter queue a message whose tenant cannot be served becomes a `dead_letter` row (stage
 `tenant_unresolved`) under the Worker's own env instead of being dropped. Dead-letter replay
 (`POST /admin/replay`) replays the tenant the request resolved to: with the flag on, an operator

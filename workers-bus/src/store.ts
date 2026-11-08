@@ -450,6 +450,7 @@ export async function recordMeasurementDeadLetter(
   env: Env,
   receiptId: string,
   error: string,
+  leaseToken: string,
 ): Promise<boolean> {
   const entry: DeadLetterEntry = {
     envelope_id: receiptId,
@@ -459,13 +460,20 @@ export async function recordMeasurementDeadLetter(
   };
   const result = await env.DB.prepare(
     `INSERT OR IGNORE INTO dead_letter (ts, envelope_id, stage, error, payload_json, recovered)
-     VALUES (?,?,?,?,?,0)`,
+     SELECT ?,?,?,?,?,0
+      WHERE EXISTS (
+        SELECT 1 FROM measurement_intake_receipts
+         WHERE receipt_id = ? AND tenant_id = ? AND status = 'processing' AND lease_token = ?
+      )`,
   ).bind(
     nowIso(),
     entry.envelope_id,
     entry.stage,
     entry.error,
     redactedDeadLetterPayload(entry),
+    receiptId,
+    operatingTenantId(env.APP_TENANT_ID) ?? "",
+    leaseToken,
   ).run();
   return d1Changes(result) === 1;
 }

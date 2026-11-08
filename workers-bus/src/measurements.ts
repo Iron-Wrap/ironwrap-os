@@ -557,8 +557,8 @@ export async function handleMeasurementDeadLetter(
 ): Promise<boolean> {
   const receipt = await getMeasurementIntakeReceiptById(env, receiptId);
   if (
-    receipt &&
-    (receipt.status !== "processing" || receipt.lease_token !== leaseToken)
+    !receipt ||
+    receipt.status !== "processing" || receipt.lease_token !== leaseToken
   )
     return false;
 
@@ -567,8 +567,8 @@ export async function handleMeasurementDeadLetter(
     env,
     receiptId,
     error,
+    leaseToken,
   );
-  if (!receipt) return created;
   try {
     await markMeasurementIntakeRetryable(env, {
       receiptId,

@@ -29,6 +29,7 @@ import {
   gatewayMandateFor,
   helmGatewayMode,
   proposeToGateway,
+  setGatewayClockForTests,
   setGatewayTransportForTests,
 } from "../src/helm-gateway.ts";
 
@@ -50,15 +51,19 @@ const AUTHORITY: EffectAuthority = {
 /** The effect ledger plus the admissions ledger, with D1's trigger-inclusive change counting. */
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
+  afterAdmissionWrite?: () => void;
+  afterBatch?: () => void;
 
-  constructor() {
+  constructor(beforeGatewayGuard?: (db: DatabaseSync) => void) {
     this.raw.exec("PRAGMA foreign_keys = ON");
     for (const file of [
       "0042_external_effect_runtime.sql",
       "0062_external_effect_insert_replace_guards.sql",
       "0142_gmail_effect_key_rollover_guard.sql",
       "0210_external_effect_gateway_admissions.sql",
+      "0211_external_effect_gateway_admission_replace_guard.sql",
     ]) {
+      if (file === "0211_external_effect_gateway_admission_replace_guard.sql") beforeGatewayGuard?.(this.raw);
       this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
   }
@@ -84,6 +89,7 @@ class SqliteD1 {
       async run() {
         const before = db.totalChanges();
         db.raw.prepare(sql).run(...(args as never[]));
+        if (/INSERT INTO external_effect_gateway_admissions/.test(sql)) db.afterAdmissionWrite?.();
         return { success: true as const, meta: { changes: db.totalChanges() - before } };
       },
       execute() {
@@ -100,6 +106,7 @@ class SqliteD1 {
     try {
       const results = statements.map((statement) => statement.execute());
       this.raw.exec("COMMIT");
+      this.afterBatch?.();
       return results;
     } catch (error) {
       this.raw.exec("ROLLBACK");
@@ -164,7 +171,7 @@ function gateway(answers: Array<Response | Error | (() => Promise<Response>)>): 
 /** A protojson body as connect-go writes it: lowerCamelCase names, prefixed enum values. */
 function attemptResponse(state: string, extra: Record<string, unknown> = {}, status = 200, existing = false): Response {
   return new Response(JSON.stringify({
-    attempt: { attemptId: "0192f0c4-7a1e-7c3b-9d2a-5b8e4f1a2c3d", state: `EFFECT_ATTEMPT_STATE_${state}`, ...extra },
+    attempt: { attemptId: "0192f0c4-7a1e-7c3b-9d2a-5b8e4f1a2c3d", state: `EFFECT_ATTEMPT_STATE_${state}`, ...(["ADMITTED", "APPROVED"].includes(state) ? { permit: { expiresAt: "2999-01-01T00:00:00Z" } } : {}), ...extra },
     existing,
   }), { status, headers: { "content-type": "application/json" } });
 }
@@ -186,8 +193,209 @@ const rejectingExecutor = {
 test.beforeEach(() => {
   dispatchCalls.length = 0;
   setGatewayTransportForTests(null);
+  setGatewayClockForTests(null);
 });
-test.after(() => setGatewayTransportForTests(null));
+test.after(() => { setGatewayTransportForTests(null); setGatewayClockForTests(null); });
+
+test("enforce requires a proven live permit for both new and stored local and remote admissions", async () => {
+  for (const remote of [false, true]) {
+    for (const existing of [false, true]) {
+      for (const permit of [undefined, null, [], "permit", {}, { expiresAt: null }, { expiresAt: "not-a-timestamp" }, { expiresAt: "2999-01-01" }, { expiresAt: "2999-02-30T00:00:00Z" }, { expiresAt: "2999-01-01T00:00:00Z", expires_at: "2000-01-01T00:00:00Z" }, { expiresAt: "2000-01-01T00:00:00Z" }]) {
+        const db = new SqliteD1();
+        try {
+          const appEnv = env(db);
+          const effect = await authorizedEffect(appEnv, `permit-${remote}-${existing}-${JSON.stringify(permit)}`);
+          gateway([attemptResponse("ADMITTED", { permit }, 200, existing)]);
+          if (remote) await assert.rejects(claimExternalEffect(appEnv, effect.effect_id, CLOCK), /effect_gateway_(denied|unreachable)/);
+          else {
+            try { await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK); }
+            catch (error) { assert.match(String(error), /effect_gateway_unreachable/); }
+          }
+          const after = (await getExternalEffect(appEnv, effect.effect_id))!;
+          assert.equal(after.attempt_count, 0, `unproven permit: remote=${remote}, existing=${existing}, permit=${JSON.stringify(permit)}`);
+          assert.deepEqual(dispatchCalls, []);
+          assert.notEqual(db.admissions()[0].decision, "admitted");
+        } finally { db.raw.close(); }
+      }
+    }
+  }
+});
+
+test("the admissions ledger rejects replacement without recursive delete triggers", async () => {
+  const db = new SqliteD1();
+  try {
+    assert.equal((db.raw.prepare("PRAGMA recursive_triggers").get() as { recursive_triggers: number }).recursive_triggers, 0);
+    const appEnv = env(db), effect = await authorizedEffect(appEnv, "replace-guard");
+    gateway([attemptResponse("ADMITTED", { permit: { expiresAt: "2999-01-01T00:00:00Z" } })]);
+    await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
+    const before = db.admissions();
+    for (const insert of ["INSERT OR REPLACE", "REPLACE", "INSERT OR IGNORE", "INSERT"]) {
+      assert.throws(() => db.raw.exec(`${insert} INTO external_effect_gateway_admissions SELECT admission_id,effect_id,tenant_id,attempt_number,mode,'denied','changed',effect_type,gateway_attempt_id,gateway_state,argument_digest,receipt_ref_json,created_at FROM external_effect_gateway_admissions`), /append_only/);
+      assert.deepEqual(db.admissions(), before);
+    }
+    for (const conflict of ["DO NOTHING", "DO UPDATE SET decision = 'denied'"]) {
+      assert.throws(() => db.raw.exec(`INSERT INTO external_effect_gateway_admissions SELECT * FROM external_effect_gateway_admissions WHERE true ON CONFLICT(admission_id) ${conflict}`), /append_only/);
+      assert.deepEqual(db.admissions(), before);
+    }
+    assert.throws(() => db.raw.exec("INSERT OR REPLACE INTO external_effect_gateway_admissions SELECT admission_id || ':fresh',effect_id,tenant_id,attempt_number,mode,decision,reason_code,effect_type,gateway_attempt_id,gateway_state,argument_digest,receipt_ref_json,created_at FROM external_effect_gateway_admissions UNION ALL SELECT * FROM external_effect_gateway_admissions"), /append_only/);
+    assert.deepEqual(db.admissions(), before, "collision aborts the whole multi-row statement");
+    db.raw.exec("INSERT INTO external_effect_gateway_admissions SELECT admission_id || ':fresh',effect_id,tenant_id,attempt_number,mode,decision,reason_code,effect_type,gateway_attempt_id,gateway_state,argument_digest,receipt_ref_json,created_at FROM external_effect_gateway_admissions");
+    assert.equal(db.admissions().length, 2, "a distinct proposal can still append");
+  } finally { db.raw.close(); }
+});
+
+const admissionColumns = "admission_id,effect_id,tenant_id,attempt_number,mode,decision,effect_type,argument_digest,created_at";
+function appendSyntheticAdmission(db: DatabaseSync, id: string, physical?: string | null): void {
+  const args = [id, "synthetic-effect", TENANT, 1, "enforce", "admitted", "ironwrap.customer.email.send", "a".repeat(64), NOW];
+  db.prepare(`INSERT INTO external_effect_gateway_admissions (${physical === undefined ? "" : "rowid,"}${admissionColumns}) VALUES (${physical === undefined ? "" : "?,"}?,?,?,?,?,?,?,?,?)`)
+    .run(...(physical === undefined ? args : [physical, ...args]));
+}
+function physicalAdmissions(db: DatabaseSync): Array<Record<string, unknown>> {
+  return db.prepare("SELECT CAST(rowid AS TEXT) AS physical_rowid,* FROM external_effect_gateway_admissions ORDER BY rowid").all() as Array<Record<string, unknown>>;
+}
+function assertAdmissionCount(db: DatabaseSync, expected: number): void {
+  assert.equal(db.prepare("SELECT row_count FROM external_effect_gateway_admission_count WHERE singleton=1").get()!.row_count, expected);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM external_effect_gateway_admissions").get()!.n, expected);
+}
+
+test("physical aliases cannot replace evidence at any signed row-ID boundary with recursive triggers off", () => {
+  const boundaries = ["-9223372036854775808", "-2", "-1", "0", "7", "9223372036854775807"];
+  const db = new SqliteD1(raw => boundaries.forEach((value, i) => appendSyntheticAdmission(raw, `original-admission-${i}`, value)));
+  try {
+    assert.equal(db.raw.prepare("PRAGMA recursive_triggers").get()!.recursive_triggers, 0);
+    const before = physicalAdmissions(db.raw);
+    for (const alias of ["rowid", "_rowid_", "oid"]) for (const row of before) {
+      assert.throws(() => db.raw.prepare(`INSERT OR REPLACE INTO external_effect_gateway_admissions (${alias},${admissionColumns}) VALUES (?,?,?, ?,1,'enforce','denied','ironwrap.customer.email.send',?,?)`)
+        .run(row.physical_rowid as string, `fresh-${alias}-${row.admission_id}`, "synthetic-effect", TENANT, "b".repeat(64), NOW), /append_only/);
+      assert.deepEqual(physicalAdmissions(db.raw), before);
+      assertAdmissionCount(db.raw, boundaries.length);
+    }
+  } finally { db.raw.close(); }
+});
+
+test("ordinary automatic, explicit NULL and fresh negative identities append over negative-only and maximum historical IDs", () => {
+  for (const seed of ["-9223372036854775808", "-2", "-1", "0", "9223372036854775807"]) {
+    const db = new SqliteD1(raw => appendSyntheticAdmission(raw, "historical-admission", seed));
+    try {
+      appendSyntheticAdmission(db.raw, "automatic-admission");
+      appendSyntheticAdmission(db.raw, "null-id-admission", null);
+      appendSyntheticAdmission(db.raw, "fresh-negative-admission", "-17");
+      assert.equal(physicalAdmissions(db.raw).find(row => row.admission_id === "historical-admission")!.physical_rowid, seed);
+      assertAdmissionCount(db.raw, 4);
+    } finally { db.raw.close(); }
+  }
+});
+
+test("the derived count rejects direct tampering and physical collision aborts the entire multi-row statement", () => {
+  const db = new SqliteD1(raw => appendSyntheticAdmission(raw, "historical-admission", "-1"));
+  try {
+    for (const sql of [
+      "INSERT OR REPLACE INTO external_effect_gateway_admission_count VALUES(1,0)",
+      "INSERT OR IGNORE INTO external_effect_gateway_admission_count VALUES(1,0)",
+      "UPDATE external_effect_gateway_admission_count SET row_count=row_count-1",
+      "UPDATE external_effect_gateway_admission_count SET row_count=row_count+1",
+      "UPDATE external_effect_gateway_admission_count SET rowid=2",
+      "DELETE FROM external_effect_gateway_admission_count",
+    ]) assert.throws(() => db.raw.exec(sql), /append_only/);
+    const before = physicalAdmissions(db.raw);
+    assert.throws(() => db.raw.prepare(`INSERT OR REPLACE INTO external_effect_gateway_admissions(rowid,${admissionColumns})
+      SELECT 1,'first-new-admission','synthetic-effect',?,1,'enforce','admitted','ironwrap.customer.email.send',?,?
+      UNION ALL SELECT -1,'physical-collision-admission','synthetic-effect',?,1,'enforce','denied','ironwrap.customer.email.send',?,?`)
+      .run(TENANT, "a".repeat(64), NOW, TENANT, "b".repeat(64), NOW), /append_only/);
+    assert.deepEqual(physicalAdmissions(db.raw), before);
+    assertAdmissionCount(db.raw, 1);
+  } finally { db.raw.close(); }
+});
+
+test("new and stored ADMITTED and APPROVED permits accept either timestamp wire spelling while live", async () => {
+  for (const remote of [false, true]) for (const existing of [false, true]) for (const state of ["ADMITTED", "APPROVED"]) for (const expiry of ["expiresAt", "expires_at"]) {
+    const db = new SqliteD1();
+    try {
+      dispatchCalls.length = 0;
+      const appEnv = env(db), effect = await authorizedEffect(appEnv, `live-${remote}-${existing}-${state}-${expiry}`);
+      gateway([attemptResponse(state, { permit: { [expiry]: "2999-01-01T01:00:00.123456789+01:00" } }, 200, existing)]);
+      const result = remote ? await claimExternalEffect(appEnv, effect.effect_id, CLOCK) : await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
+      assert.equal(result.effect.attempt_count, 1);
+      assert.equal(dispatchCalls.length, remote ? 0 : 1);
+    } finally { db.raw.close(); }
+  }
+});
+
+test("permit expiry is checked after the entire bounded body, not the pre-request effect timestamp", async () => {
+  for (const remote of [false, true]) {
+    const db = new SqliteD1();
+    try {
+      let tick = CLOCK.getTime();
+      const expiry = tick + 100;
+      setGatewayClockForTests(() => tick);
+      const appEnv = env(db), effect = await authorizedEffect(appEnv, `body-clock-${remote}`);
+      const body = new TextEncoder().encode(JSON.stringify({ attempt: { state: "ADMITTED", permit: { expiresAt: new Date(expiry).toISOString() } }, existing: false }));
+      gateway([async () => new Response(new ReadableStream({ pull(controller) { tick = expiry; controller.enqueue(body); controller.close(); } }))]);
+      if (remote) await assert.rejects(claimExternalEffect(appEnv, effect.effect_id, CLOCK), /effect_gateway_denied/);
+      else await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
+      assert.equal((await getExternalEffect(appEnv, effect.effect_id))!.attempt_count, 0);
+      assert.deepEqual(dispatchCalls, []);
+      assert.equal(db.admissions()[0].reason_code, "PERMIT_EXPIRED");
+    } finally { db.raw.close(); }
+  }
+});
+
+test("expiry during admission persistence prevents local and remote claims and appends its refusal", async () => {
+  for (const remote of [false, true]) {
+    const db = new SqliteD1();
+    try {
+      let tick = CLOCK.getTime();
+      const expiry = tick + 100;
+      setGatewayClockForTests(() => tick);
+      const appEnv = env(db), effect = await authorizedEffect(appEnv, `ledger-clock-${remote}`);
+      gateway([attemptResponse("ADMITTED", { permit: { expiresAt: new Date(expiry).toISOString() } })]);
+      db.afterAdmissionWrite = () => { tick = expiry; };
+      if (remote) await assert.rejects(claimExternalEffect(appEnv, effect.effect_id, CLOCK), /effect_gateway_denied/);
+      else await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
+      assert.equal((await getExternalEffect(appEnv, effect.effect_id))!.attempt_count, 0);
+      assert.deepEqual(dispatchCalls, []);
+      assert.deepEqual(db.admissions().map(row => [row.decision, row.reason_code]), [["admitted", null], ["denied", "PERMIT_EXPIRED"]]);
+    } finally { db.raw.close(); }
+  }
+});
+
+test("expiry during claim readback never dispatches or returns a remote lease; its claimed attempt remains recorded", async () => {
+  for (const remote of [false, true]) {
+    const db = new SqliteD1();
+    try {
+      let tick = CLOCK.getTime();
+      const expiry = tick + 100;
+      setGatewayClockForTests(() => tick);
+      const appEnv = env(db), effect = await authorizedEffect(appEnv, `claim-clock-${remote}`);
+      gateway([attemptResponse("ADMITTED", { permit: { expiresAt: new Date(expiry).toISOString() } })]);
+      db.afterBatch = () => { tick = expiry; };
+      if (remote) await assert.rejects(claimExternalEffect(appEnv, effect.effect_id, CLOCK), /effect_gateway_denied/);
+      else await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
+      const after = (await getExternalEffect(appEnv, effect.effect_id))!;
+      assert.equal(after.attempt_count, 1, "a committed claim is not undone");
+      assert.equal(after.state, "failed");
+      assert.equal(after.result_code, "gateway_denied:PERMIT_EXPIRED");
+      assert.deepEqual(dispatchCalls, []);
+    } finally { db.raw.close(); }
+  }
+});
+
+test("an unavailable runtime clock fails closed in enforce while off and shadow retain their declared behavior", async () => {
+  for (const mode of ["enforce", "shadow", "off"]) {
+    const db = new SqliteD1();
+    try {
+      dispatchCalls.length = 0;
+      setGatewayClockForTests(() => NaN);
+      const appEnv = env(db, { HELM_GATEWAY_BINDING: mode }), effect = await authorizedEffect(appEnv, `clock-invalid-${mode}`);
+      const { calls } = gateway([attemptResponse("ADMITTED")]);
+      if (mode === "enforce") await assert.rejects(executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK), /effect_gateway_unreachable/);
+      else await executeExternalEffect(appEnv, effect.effect_id, executor, CLOCK);
+      assert.equal((await getExternalEffect(appEnv, effect.effect_id))!.attempt_count, mode === "enforce" ? 0 : 1);
+      assert.equal(dispatchCalls.length, mode === "enforce" ? 0 : 1);
+      assert.equal(calls.length, mode === "off" ? 0 : 1);
+    } finally { db.raw.close(); }
+  }
+});
 
 test("the mode is off, shadow or enforce; unset and empty are off; anything else reads as enforce", () => {
   assert.equal(helmGatewayMode({}), "off");

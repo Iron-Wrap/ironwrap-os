@@ -15,6 +15,8 @@ export const GLOBAL_INFRASTRUCTURE_TABLES: readonly string[] = Object.freeze([
   "cron_heartbeat",
   // Keyed `t:<tenant>:<key>` in code (store.ts dedupClaimKey), so the tenant is in the key.
   "dedup_claims",
+  // Derived global cardinality witness for append-only admission integrity; no tenant rows.
+  "external_effect_gateway_admission_count",
   "facet_design_event_identity_registry",
   "facet_design_ingest_nonce_registry",
   "facet_design_ingest_nonces",

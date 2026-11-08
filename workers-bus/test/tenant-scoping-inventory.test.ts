@@ -15,6 +15,9 @@ export const GLOBAL_INFRASTRUCTURE_TABLES: readonly string[] = Object.freeze([
   "cron_heartbeat",
   // Keyed `t:<tenant>:<key>` in code (store.ts dedupClaimKey), so the tenant is in the key.
   "dedup_claims",
+  // Keyed `scheduled-v1:<tenant>`; a CHECK (0212) ties the key to the row's tenant.
+  "commercial_deposit_derivation_cursors",
+  "native_final_invoice_derivation_cursors",
   // Derived global cardinality witness for append-only admission integrity; no tenant rows.
   "external_effect_gateway_admission_count",
   "facet_design_event_identity_registry",
@@ -34,10 +37,6 @@ export const GLOBAL_INFRASTRUCTURE_TABLES: readonly string[] = Object.freeze([
  */
 export const LEGACY_UNSCOPED_TABLES: readonly string[] = Object.freeze([
   "audit_log",
-  // One cursor row per Worker (its name is pinned by a CHECK), so the two derivations behind
-  // them run in the default tenant's pass only until per-tenant cursors land.
-  "commercial_deposit_derivation_cursors",
-  "native_final_invoice_derivation_cursors",
   "customer_portal_acceptance_events",
   "customer_portal_decision_events",
   "dead_letter",

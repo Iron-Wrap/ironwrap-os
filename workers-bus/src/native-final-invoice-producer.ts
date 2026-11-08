@@ -5,6 +5,7 @@
 // ambiguous, stale, or provider-unreconciled truth is retained as a durable blocker instead of
 // being filled from Frappe, display names, or an agent's guess.
 
+import { operatingTenantId } from "./core.ts";
 import { readAccountingAuthorityCeiling } from "./accounting-authority-policy.ts";
 import { deriveAccountingIntent, type AccountingIntentRecord } from "./accounting-intents.ts";
 import {
@@ -887,46 +888,6 @@ export async function deriveNativeFinalInvoiceIntents(
   requestedLimit = 25,
 ): Promise<NativeFinalInvoiceDerivationCounts> {
   const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(MAX_JOBS, Math.trunc(requestedLimit))) : 25;
-  const cursor = await env.DB.prepare(
-    `SELECT last_tenant_id, last_roof_job_id
-       FROM native_final_invoice_derivation_cursors WHERE cursor_name = 'scheduled-v1'`,
-  ).first<{ last_tenant_id: string; last_roof_job_id: string }>();
-  const after = await env.DB.prepare(
-    `SELECT job.tenant_id, job.roof_job_id
-       FROM operating_roof_jobs job
-      WHERE EXISTS (
-        SELECT 1 FROM work_packages package
-         WHERE package.tenant_id = job.tenant_id AND package.job_id = job.roof_job_id
-           AND package.status != 'Superseded'
-      )
-        AND (
-          job.tenant_id > ?
-          OR (job.tenant_id = ? AND job.roof_job_id > ?)
-        )
-      ORDER BY job.tenant_id, job.roof_job_id LIMIT ?`,
-  )
-    .bind(cursor?.last_tenant_id ?? "", cursor?.last_tenant_id ?? "", cursor?.last_roof_job_id ?? "", limit)
-    .all<{ tenant_id: string; roof_job_id: string }>();
-  const jobs = [...(after.results ?? [])];
-  if (cursor && jobs.length < limit) {
-    const wrapped = await env.DB.prepare(
-      `SELECT job.tenant_id, job.roof_job_id
-         FROM operating_roof_jobs job
-        WHERE EXISTS (
-          SELECT 1 FROM work_packages package
-           WHERE package.tenant_id = job.tenant_id AND package.job_id = job.roof_job_id
-             AND package.status != 'Superseded'
-        )
-          AND (
-            job.tenant_id < ?
-            OR (job.tenant_id = ? AND job.roof_job_id <= ?)
-          )
-        ORDER BY job.tenant_id, job.roof_job_id LIMIT ?`,
-    )
-      .bind(cursor.last_tenant_id, cursor.last_tenant_id, cursor.last_roof_job_id, limit - jobs.length)
-      .all<{ tenant_id: string; roof_job_id: string }>();
-    jobs.push(...(wrapped.results ?? []));
-  }
   const counts: NativeFinalInvoiceDerivationCounts = {
     scanned: 0,
     blocked: 0,
@@ -934,6 +895,45 @@ export async function deriveNativeFinalInvoiceIntents(
     intents_derived: 0,
     intents_replayed: 0,
   };
+  const tenantId = operatingTenantId(env.APP_TENANT_ID);
+  if (!tenantId) return counts;
+  // Each tenant walks its own jobs behind its own cursor row (0212), under its own env.
+  const cursorName = `scheduled-v1:${tenantId}`;
+  const cursor = await env.DB.prepare(
+    `SELECT last_roof_job_id FROM native_final_invoice_derivation_cursors WHERE cursor_name = ?`,
+  ).bind(cursorName).first<{ last_roof_job_id: string }>();
+  const after = await env.DB.prepare(
+    `SELECT job.tenant_id, job.roof_job_id
+       FROM operating_roof_jobs job
+      WHERE job.tenant_id = ?
+        AND EXISTS (
+        SELECT 1 FROM work_packages package
+         WHERE package.tenant_id = job.tenant_id AND package.job_id = job.roof_job_id
+           AND package.status != 'Superseded'
+      )
+        AND job.roof_job_id > ?
+      ORDER BY job.roof_job_id LIMIT ?`,
+  )
+    .bind(tenantId, cursor?.last_roof_job_id ?? "", limit)
+    .all<{ tenant_id: string; roof_job_id: string }>();
+  const jobs = [...(after.results ?? [])];
+  if (cursor && jobs.length < limit) {
+    const wrapped = await env.DB.prepare(
+      `SELECT job.tenant_id, job.roof_job_id
+         FROM operating_roof_jobs job
+        WHERE job.tenant_id = ?
+          AND EXISTS (
+          SELECT 1 FROM work_packages package
+           WHERE package.tenant_id = job.tenant_id AND package.job_id = job.roof_job_id
+             AND package.status != 'Superseded'
+        )
+          AND job.roof_job_id <= ?
+        ORDER BY job.roof_job_id LIMIT ?`,
+    )
+      .bind(tenantId, cursor.last_roof_job_id, limit - jobs.length)
+      .all<{ tenant_id: string; roof_job_id: string }>();
+    jobs.push(...(wrapped.results ?? []));
+  }
   for (const job of jobs) {
     counts.scanned += 1;
     try {
@@ -974,13 +974,13 @@ export async function deriveNativeFinalInvoiceIntents(
     await env.DB.prepare(
       `INSERT INTO native_final_invoice_derivation_cursors (
          cursor_name, last_tenant_id, last_roof_job_id, updated_at
-       ) VALUES ('scheduled-v1', ?, ?, ?)
+       ) VALUES (?, ?, ?, ?)
        ON CONFLICT(cursor_name) DO UPDATE SET
          last_tenant_id = excluded.last_tenant_id,
          last_roof_job_id = excluded.last_roof_job_id,
          updated_at = excluded.updated_at`,
     )
-      .bind(lastJob.tenant_id, lastJob.roof_job_id, now.toISOString())
+      .bind(cursorName, lastJob.tenant_id, lastJob.roof_job_id, now.toISOString())
       .run();
   }
   return counts;

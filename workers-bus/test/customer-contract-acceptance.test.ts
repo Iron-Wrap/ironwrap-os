@@ -268,7 +268,7 @@ test("scheduled acceptance recovery advances beyond its first bounded window", a
     tenant_id: TENANT,
   }));
   const attempted: string[] = [];
-  let cursor: { last_tenant_id: string; last_acceptance_id: string } | null = null;
+  let cursor: { last_acceptance_id: string } | null = null;
   const db = {
     prepare(sql: string) {
       let args: unknown[] = [];
@@ -300,10 +300,8 @@ test("scheduled acceptance recovery advances beyond its first bounded window", a
         },
         async run(): Promise<{ success: true }> {
           if (sql.includes("INSERT INTO commercial_deposit_derivation_cursors")) {
-            cursor = {
-              last_tenant_id: String(args[0]),
-              last_acceptance_id: String(args[1]),
-            };
+            assert.equal(args[0], `scheduled-v1:${TENANT}`);
+            cursor = { last_acceptance_id: String(args[2]) };
           }
           return { success: true };
         },

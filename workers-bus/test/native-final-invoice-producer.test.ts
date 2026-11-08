@@ -192,6 +192,9 @@ function nativeTestEnv(): { env: AppEnv; db: AccountingTestD1 } {
   `);
   db.raw.exec(readAccountingMigration("0100_native_final_invoice_derivation.sql"));
   db.raw.exec(readAccountingMigration("0102_native_final_invoice_provider_binding_authority.sql"));
+  // 0212 rebuilds both derivation cursor tables; this fixture has no deposit tables of its own.
+  db.raw.exec("CREATE TABLE commercial_deposit_derivation_cursors (cursor_name TEXT, last_tenant_id TEXT, last_acceptance_id TEXT, updated_at TEXT)");
+  db.raw.exec(readAccountingMigration("0212_tenant_derivation_cursors.sql"));
   return { env: { DB: db } as unknown as AppEnv, db };
 }
 
@@ -1191,9 +1194,9 @@ test("bounded scheduled derivation rotates past stable blockers and wraps withou
         db.raw
           .prepare(
             `SELECT last_roof_job_id FROM native_final_invoice_derivation_cursors
-        WHERE cursor_name = 'scheduled-v1'`,
+        WHERE cursor_name = ?`,
           )
-          .get() as { last_roof_job_id: string }
+          .get(`scheduled-v1:${TENANT}`) as { last_roof_job_id: string }
       ).last_roof_job_id,
     );
   }
@@ -1203,6 +1206,46 @@ test("bounded scheduled derivation rotates past stable blockers and wraps withou
     "job-native-cursor-0003",
     "job-native-cursor-0001",
   ]);
+});
+
+test("each tenant's scheduled derivation walks only its own jobs behind its own cursor", async () => {
+  const { env, db } = nativeTestEnv();
+  const OTHER = "northline-metal";
+  const addJob = (tenantId: string, jobId: string) => {
+    db.raw
+      .prepare(
+        `INSERT INTO operating_roof_jobs
+         (roof_job_id, tenant_id, customer_id, version, job_status, updated_at)
+       VALUES (?, ?, ?, 1, 'in_progress', ?)`,
+      )
+      .run(jobId, tenantId, `customer-${jobId}`, COMPLETE_AT);
+    db.raw
+      .prepare(
+        `INSERT INTO work_packages (
+         work_package_id, tenant_id, version, job_id, assignment_id, work_object_type,
+         work_object_id, physical_context_type, physical_context_id, status, definition_json,
+         completed_at, updated_at
+       ) VALUES (?, ?, 1, ?, 'missing-assignment', 'Roof Job', ?, 'Roof Site', ?,
+         'In Progress', '{}', NULL, ?)`,
+      )
+      .run(`package-${jobId}`, tenantId, jobId, jobId, jobId, COMPLETE_AT);
+  };
+  addJob(TENANT, "job-tenant-a-0001");
+  addJob(OTHER, "job-tenant-b-0001");
+  addJob(OTHER, "job-tenant-b-0002");
+
+  assert.equal((await deriveNativeFinalInvoiceIntents(env, DERIVE_AT, 10)).scanned, 1);
+  assert.equal((await deriveNativeFinalInvoiceIntents({ ...env, APP_TENANT_ID: OTHER } as typeof env, DERIVE_AT, 10)).scanned, 2);
+  assert.deepEqual(
+    db.raw
+      .prepare("SELECT cursor_name, last_tenant_id, last_roof_job_id FROM native_final_invoice_derivation_cursors ORDER BY cursor_name")
+      .all()
+      .map((row) => ({ ...row })),
+    [
+      { cursor_name: `scheduled-v1:${TENANT}`, last_tenant_id: TENANT, last_roof_job_id: "job-tenant-a-0001" },
+      { cursor_name: `scheduled-v1:${OTHER}`, last_tenant_id: OTHER, last_roof_job_id: "job-tenant-b-0002" },
+    ],
+  );
 });
 
 // ------------------------------------------------------------------ OD-01: payment on completion

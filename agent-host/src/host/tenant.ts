@@ -73,8 +73,8 @@ export class TenantBinding {
     const named = typeof reported === "string" && TENANT_ID.test(reported) ? reported : null;
     if (this.tenant === null) {
       if (named !== null) {
-        this.tenant = named;
         this.save(named);
+        this.tenant = named;
         this.log({ event: "tenant_adopted", tenant_id: named, where });
       }
       return named;

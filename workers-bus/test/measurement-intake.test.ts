@@ -1002,11 +1002,10 @@ test("measurement native authority: tenant drift and raw hash mismatch create no
     .all(
       driftMessage.measurement_receipt_id,
       hashMessage.measurement_receipt_id,
-    ) as Array<{ receipt_id: string; last_error: string }>;
-  assert.deepEqual(failures.map((row) => row.last_error).sort(), [
-    "measurement_receipt_tenant_mismatch",
-    "raw_payload_hash_mismatch",
-  ]);
+    ) as Array<{ receipt_id: string; last_error: string | null }>;
+  // The foreign receipt is outside this consumer's authority, including its error/lease state.
+  assert.equal(failures.find((row) => row.receipt_id === driftMessage.measurement_receipt_id)?.last_error, null);
+  assert.equal(failures.find((row) => row.receipt_id === hashMessage.measurement_receipt_id)?.last_error, "raw_payload_hash_mismatch");
   const revisions = db.raw
     .prepare(
       "SELECT COUNT(*) AS count FROM native_measurement_revisions WHERE receipt_id IN (?, ?)",

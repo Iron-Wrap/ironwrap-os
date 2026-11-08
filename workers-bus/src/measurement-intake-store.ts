@@ -660,7 +660,7 @@ export async function recordMeasurementDriveFiling(
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
      SET drive_report_url = ?, drive_folder_url = ?, updated_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?`,
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ? AND tenant_id = ?`,
   )
     .bind(
       input.reportUrl,
@@ -668,6 +668,7 @@ export async function recordMeasurementDriveFiling(
       input.now,
       input.receiptId,
       input.leaseToken,
+      sweepTenantId(env),
     )
     .run();
   if (d1Changes(result) !== 1)
@@ -688,7 +689,7 @@ export async function recordMeasurementReportEvidence(
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
      SET report_raw_key = ?, report_sha256 = ?, report_content_type = ?, updated_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ? AND tenant_id = ?
        AND (report_raw_key IS NULL OR (report_raw_key = ? AND report_sha256 = ?))`,
   )
     .bind(
@@ -698,6 +699,7 @@ export async function recordMeasurementReportEvidence(
       input.now,
       input.receiptId,
       input.leaseToken,
+      sweepTenantId(env),
       input.rawKey,
       input.sha256,
     )
@@ -713,10 +715,10 @@ export async function recordMeasurementOcrStarted(
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
      SET ocr_status = 'processing', ocr_model = ?, ocr_error = NULL, updated_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ? AND tenant_id = ?
        AND ocr_status IN ('not_requested', 'processing', 'failed')`,
   )
-    .bind(input.model, input.now, input.receiptId, input.leaseToken)
+    .bind(input.model, input.now, input.receiptId, input.leaseToken, sweepTenantId(env))
     .run();
   if (d1Changes(result) !== 1)
     throw new Error("measurement_ocr_start_update_lost");
@@ -740,7 +742,7 @@ export async function recordMeasurementOcrResult(
      SET ocr_status = 'completed', ocr_model = ?, ocr_result_key = ?, ocr_result_sha256 = ?,
          ocr_job_number_candidate = ?, ocr_job_number_source_ref = ?, ocr_review_required = 1,
          ocr_error = NULL, ocr_completed_at = ?, updated_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ? AND tenant_id = ?
        AND ocr_status = 'processing'`,
   )
     .bind(
@@ -753,6 +755,7 @@ export async function recordMeasurementOcrResult(
       input.now,
       input.receiptId,
       input.leaseToken,
+      sweepTenantId(env),
     )
     .run();
   if (d1Changes(result) !== 1)
@@ -773,7 +776,7 @@ export async function recordMeasurementOcrFailure(
     `UPDATE measurement_intake_receipts
      SET ocr_status = 'failed', ocr_model = ?, ocr_review_required = 1, ocr_error = ?,
          updated_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?`,
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ? AND tenant_id = ?`,
   )
     .bind(
       input.model,
@@ -781,6 +784,7 @@ export async function recordMeasurementOcrFailure(
       input.now,
       input.receiptId,
       input.leaseToken,
+      sweepTenantId(env),
     )
     .run();
   if (d1Changes(result) !== 1)
@@ -801,6 +805,8 @@ export async function completeMeasurementIntakeReceipt(
     now: string;
   },
 ): Promise<MeasurementIntakeReceipt> {
+  if (input.tenantId !== sweepTenantId(env))
+    throw new Error("measurement_receipt_lease_lost");
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
      SET status = ?, lease_token = NULL, lease_expires_at = NULL,
@@ -842,13 +848,14 @@ export async function markMeasurementIntakeRetryable(
     `UPDATE measurement_intake_receipts
      SET status = 'retryable_error', lease_token = NULL, lease_expires_at = NULL,
          last_error = ?, updated_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?`,
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ? AND tenant_id = ?`,
   )
     .bind(
       input.error.slice(0, 500),
       input.now,
       input.receiptId,
       input.leaseToken,
+      sweepTenantId(env),
     )
     .run();
   if (d1Changes(result) !== 1)
@@ -1058,10 +1065,10 @@ async function getMeasurementReceiptById(
   return await env.DB.prepare(
     `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
-     WHERE receipt_id = ?
+     WHERE receipt_id = ? AND tenant_id = ?
      LIMIT 1`,
   )
-    .bind(receiptId)
+    .bind(receiptId, sweepTenantId(env))
     .first<MeasurementIntakeReceipt>();
 }
 

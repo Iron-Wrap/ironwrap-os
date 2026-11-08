@@ -312,7 +312,8 @@ async function upsertTenant(req: Request, env: TenantAdminEnv, db: AdminDb, tena
   ];
   // A primary-key clash on a concurrent create, or a CHECK the row failed, surfaces from here as
   // `409 tenant_write_conflict`; any other D1 failure as `503 tenant_registry_unavailable`
-  // (handleTenantAdmin). Nothing was written either way.
+  // (handleTenantAdmin). A later confirmation/readback failure can follow a committed batch,
+  // so a 503 response does not by itself establish whether this write landed.
   await db.batch(statements);
   resetTenantCache();
   // The row says whose write it carries, independent of how the batch reports row changes.

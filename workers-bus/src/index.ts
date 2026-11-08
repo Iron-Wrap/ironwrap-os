@@ -26,7 +26,7 @@ import {
 } from "./core.ts";
 import * as store from "./store.ts";
 import { flattenEnv } from "./env-bindings.ts";
-import { cronTenantEnvs, queueMessageEnv, queueTenantId, resolveRequestTenant } from "./tenancy.ts";
+import { cronTenantEnvs, isRegistryTenantEnv, queueMessageEnv, queueTenantId, resolveRequestTenant } from "./tenancy.ts";
 import { handleTenantAdmin, isTenantAdminPath } from "./tenant-admin.ts";
 import { WEB_MANIFEST_PATH, webManifestResponse } from "./web-manifest.ts";
 import {
@@ -303,6 +303,16 @@ export default {
         let env: Env;
         try {
           env = await queueMessageEnv(rootEnv, msg.body.tenant_id);
+          // Typed receipt messages retain their producer's tenant even if shared tenancy is
+          // subsequently switched off. A registry backlog must not become default-tenant work.
+          if (("measurement_receipt_id" in msg.body || "newo_event_id" in msg.body) &&
+              msg.body.tenant_id !== undefined && msg.body.tenant_id !== queueTenantId(env)) {
+            throw new Error("queue_receipt_tenant_mismatch");
+          }
+          // A registry tenant does not own the shared Newo tables, on either queue.
+          if ("newo_event_id" in msg.body && isRegistryTenantEnv(env)) {
+            throw new Error("newo_tenant_not_supported");
+          }
         } catch (refusal) {
           if (!isDlq) throw refusal;
           await store.recordDeadLetter(rootEnv, {

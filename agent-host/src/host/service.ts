@@ -153,7 +153,9 @@ export class AgentHostService {
       this.lastWorkerContactAt = this.now();
       // The first heartbeat is normally where an unpinned host learns its tenant.
       this.options.tenant?.check(reply?.tenant_id, "heartbeat", reply?.data_class);
-      this.confirmTenant();
+      // A heartbeat started before a run refusal cannot clear that newer refusal.
+      // Only a matching work batch confirms recovery from a known mismatch.
+      if (!this.tenantMismatch) this.confirmTenant();
     } catch (error) {
       if (error instanceof TenantMismatch) this.noteMismatch(error);
       this.options.log({ event: "heartbeat_failed", error: error instanceof Error ? error.message : String(error) });
@@ -174,7 +176,8 @@ export class AgentHostService {
     if (backlog.rejectedCloses > 0) alerts.push("closes_rejected");
     if (backlog.rejectedSignals > 0) alerts.push("signals_rejected");
     return {
-      ready: gateway.ready && workerReachable && this.lastPollError === null,
+      // Reachability alone does not prove the tenant check (including its durable write) passed.
+      ready: gateway.ready && workerReachable && this.tenantConfirmed && this.lastPollError === null,
       alerts,
       workerReachable,
       lastWorkerContactAt: this.lastWorkerContactAt,
@@ -204,6 +207,10 @@ export class AgentHostService {
         this.inFlight += 1;
         try {
           await runSignal(this.runnerOptions, signal, this.abort.signal);
+        } catch (error) {
+          // Revoke readiness while other correctly scoped runs are still in flight.
+          if (error instanceof TenantMismatch) this.noteMismatch(error);
+          throw error;
         } finally {
           this.inFlight -= 1;
         }

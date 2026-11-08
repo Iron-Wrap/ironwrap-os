@@ -738,6 +738,11 @@ the single `scheduled-v1` cursor rows (deposit gates from accepted contracts, fi
 intents; the latter walks every tenant's jobs by each job's own tenant). Newo session reconcile
 and QuickBooks projection recovery stay global because their tables carry no tenant column; a
 registry tenant's Newo events and QuickBooks webhooks are not served until that changes. On the
+Newo queue, registry tenants are refused before any shared legacy session/receipt read or write,
+including DLQ processing. Typed Newo and measurement backlog stamped for another tenant is also
+refused when shared tenancy is switched off; unstamped default-tenant backlog keeps its legacy
+meaning. Measurement reads and lease writes bind the resolved tenant, and a DLQ incident requires
+the same receipt tenant and current lease at insertion. On the
 dead-letter queue a message whose tenant cannot be served becomes a `dead_letter` row (stage
 `tenant_unresolved`) under the Worker's own env instead of being dropped. Dead-letter replay
 (`POST /admin/replay`) replays the tenant the request resolved to: with the flag on, an operator
@@ -756,7 +761,7 @@ why `/admin/*` stays the operator's.
 | GET | `/admin/tenants` | `Bearer ADMIN_TOKEN` + flag on | every registry tenant with its hosts, settings and secret names; never secret values; `404` while the flag is off |
 | GET | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | one registry tenant |
 | GET | `/admin/tenants/:tenant_id/authority-plan` | `Bearer ADMIN_TOKEN` + flag on | the tenant's `helm.authority.provision.v1` plan and its digest; `worker_principal` (the `sub` of the tenant's `HELM_GATEWAY_TOKEN`), `valid_from` and `valid_until` (`YYYY-MM-DDTHH:MM:SSZ`) are required, `org_ref` (default `org:<tenant_id>`), `stage` (default `draft`) and `base_plan_digest` are optional; reads only, applies nothing |
-| PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`, also when a concurrent write landed first: the batch is conditioned on the version and nothing of the loser's lands), a host owned by another tenant is refused (`409 host_taken`), an omitted `settings`, `hosts` or `secrets` keeps what the row holds, `secrets: {}` empties the envelope; the Worker's own tenant may take hosts here and nothing else. A constraint the row failed or a concurrent create is `409 tenant_write_conflict`; any other D1 failure under a read or the write (an outage, the account's D1 quota) is `503 tenant_registry_unavailable` on every `/admin/tenants` route, and nothing was written in either case |
+| PUT | `/admin/tenants/:tenant_id` | `Bearer ADMIN_TOKEN` + flag on | create or update `{display_name, status, data_class, settings?, hosts?, secrets?, expected_version?}`; an update states the version it read (`409 version_conflict`, also when a concurrent write landed first: the batch is conditioned on the version and nothing of the loser's lands), a host owned by another tenant is refused (`409 host_taken`), an omitted `settings`, `hosts` or `secrets` keeps what the row holds, `secrets: {}` empties the envelope; the Worker's own tenant may take hosts here and nothing else. A constraint the row failed or a concurrent create is `409 tenant_write_conflict`; any other D1 failure under a read or the write (an outage, the account's D1 quota) is `503 tenant_registry_unavailable` on every `/admin/tenants` route. A `503` may follow a committed write if confirmation or readback fails; read the current tenant and its version before deciding whether to retry |
 
 The registry is administered from the Worker's own env, before tenant resolution.
 

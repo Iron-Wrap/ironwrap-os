@@ -174,7 +174,8 @@ export class AgentHostService {
     if (backlog.rejectedCloses > 0) alerts.push("closes_rejected");
     if (backlog.rejectedSignals > 0) alerts.push("signals_rejected");
     return {
-      ready: gateway.ready && workerReachable && this.lastPollError === null,
+      // Reachability alone does not prove the tenant check (including its durable write) passed.
+      ready: gateway.ready && workerReachable && this.tenantConfirmed && this.lastPollError === null,
       alerts,
       workerReachable,
       lastWorkerContactAt: this.lastWorkerContactAt,

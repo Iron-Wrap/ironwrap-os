@@ -269,7 +269,9 @@ stay out of facts; names and references typed at intake are kept as identity fie
 
 `GET /health` always answers with the full state and alerts; `GET /ready` answers 503 until every
 routed provider is usable, the Worker answered a recent request, and the last work batch has no
-error. Both bind to loopback by default.
+error. The tenant check must also have passed, including saving a newly learned binding. A tenant
+or data-class mismatch makes the host unready until a matching batch confirms recovery. Both
+endpoints bind to loopback by default.
 
 | Variable | Default | Meaning |
 |---|---|---|

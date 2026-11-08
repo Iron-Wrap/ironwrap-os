@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
@@ -877,3 +877,96 @@ test("a run the Worker answers for another tenant outranks the batch's other fai
   await host.heartbeat();
   assert.equal(worker.heartbeats.length, 0);
 });
+
+async function readinessResponse(t: test.TestContext, host: AgentHostService) {
+  const server = createHealthServer(() => host.status());
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return fetch(`${base}/ready`);
+}
+
+test("a failed first tenant write keeps work and saved closes stopped until durable recovery", async (t) => {
+  const stateDir = tempDir(t);
+  const tenant = new TenantBinding(null, stateDir, () => {}, "synthetic");
+  const worker = fakeWorker(openedRun({ tenant_id: "tenant-a", data_class: "synthetic" }));
+  mkdirSync(join(stateDir, "tenant-id.tmp"));
+  mkdirSync(join(stateDir, "pending-closes"));
+  writeFileSync(join(stateDir, "pending-closes", "saved.json"), JSON.stringify({ run_id: "run_0000000009", tenant_id: "tenant-a", body: { status: "ok" } }));
+  const batch = { signals: [signal()], next_cursor: "c1", tenant_id: "tenant-a", data_class: "synthetic" };
+  worker.batches.push(batch, batch, batch);
+  let calls = 0;
+  const { service: host } = service(t, worker, async (request) => {
+    calls += 1;
+    assert.equal(readFileSync(join(stateDir, "tenant-id"), "utf8"), "tenant-a");
+    return okResult(request);
+  }, { stateDir, tenant });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await host.tick();
+    assert.equal(calls, 0);
+    assert.equal(worker.closed.length, 0);
+    assert.equal(tenant.current(), null);
+    assert.equal(existsSync(join(stateDir, "tenant-id")), false);
+    assert.equal(existsSync(join(stateDir, "signal-cursor")), false);
+    assert.equal((await host.status()).ready, false);
+    assert.equal(new TenantBinding(null, stateDir, () => {}).current(), null);
+  }
+  rmdirSync(join(stateDir, "tenant-id.tmp"));
+  await host.tick();
+  assert.equal(calls, 1);
+  assert.equal(worker.closed.length, 2);
+  assert.equal(tenant.current(), "tenant-a");
+  assert.equal(new TenantBinding(null, stateDir, () => {}).current(), "tenant-a");
+  assert.equal(readFileSync(join(stateDir, "signal-cursor"), "utf8"), "c1");
+  assert.equal((await readinessResponse(t, host)).status, 200);
+});
+
+test("a first heartbeat is not ready until its tenant binding is durable", async (t) => {
+  const stateDir = tempDir(t);
+  const tenant = new TenantBinding(null, stateDir, () => {}, "synthetic");
+  const worker = fakeWorker();
+  worker.heartbeatReply = { tenant_id: "tenant-a", data_class: "synthetic" };
+  mkdirSync(join(stateDir, "tenant-id.tmp"));
+  const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir, tenant });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await host.heartbeat();
+    assert.equal((await readinessResponse(t, host)).status, 503);
+    assert.equal(tenant.current(), null);
+    assert.equal(existsSync(join(stateDir, "tenant-id")), false);
+  }
+  rmdirSync(join(stateDir, "tenant-id.tmp"));
+  await host.heartbeat();
+  assert.equal(readFileSync(join(stateDir, "tenant-id"), "utf8"), "tenant-a");
+  assert.equal(new TenantBinding(null, stateDir, () => {}).current(), "tenant-a");
+  assert.equal((await readinessResponse(t, host)).status, 200);
+  assert.equal(worker.opened.length, 0);
+});
+
+for (const mismatch of ["tenant", "data_class"] as const) {
+  test(`heartbeat ${mismatch} mismatch stays unready until a matching batch confirms recovery`, async (t) => {
+    const stateDir = tempDir(t);
+    const tenant = new TenantBinding("tenant-a", stateDir, () => {}, "synthetic");
+    const worker = fakeWorker();
+    const matching = { signals: [], next_cursor: null, tenant_id: "tenant-a", data_class: "synthetic" };
+    worker.batches.push(matching);
+    const { service: host } = service(t, worker, async (request) => okResult(request), { stateDir, tenant });
+    await host.tick();
+    assert.equal((await readinessResponse(t, host)).status, 200);
+    worker.heartbeatReply = mismatch === "tenant"
+      ? { tenant_id: "tenant-b", data_class: "synthetic" }
+      : { tenant_id: "tenant-a", data_class: "business" };
+    await host.heartbeat();
+    assert.equal((await readinessResponse(t, host)).status, 503);
+    assert.ok((await host.status()).alerts.includes(`${mismatch}_mismatch`));
+    // A skipped heartbeat cannot clear the refusal; a newly matching batch can.
+    await host.heartbeat();
+    assert.equal(worker.heartbeats.length, 1);
+    assert.equal((await readinessResponse(t, host)).status, 503);
+    worker.batches.push(matching);
+    await host.tick();
+    assert.equal((await readinessResponse(t, host)).status, 200);
+    assert.ok(!(await host.status()).alerts.includes(`${mismatch}_mismatch`));
+    assert.equal(readFileSync(join(stateDir, "tenant-id"), "utf8"), "tenant-a");
+    assert.equal(worker.opened.length, 0);
+  });
+}

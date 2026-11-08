@@ -30,7 +30,6 @@ import {
   type TenantRow,
   type TenantStatus,
 } from "./tenancy.ts";
-import type { AgentDb } from "./agents/store.ts";
 import { compileAuthorityPlan, parseAuthorityPlanQuery } from "./helm-authority-plan.ts";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -99,7 +98,7 @@ async function routeTenantAdmin(req: Request, env: TenantAdminEnv, now: () => st
     if (tenantId !== defaultTenantId(env) && !(await readTenant(db, tenantId))) return json({ error: "not_found" }, 404);
     const parsed = parseAuthorityPlanQuery(tenantId, url.searchParams);
     if ("error" in parsed) return json({ error: parsed.error }, 400);
-    return json(await compileAuthorityPlan(env.DB as AgentDb, parsed.input));
+    return json(await compileAuthorityPlan(parsed.input));
   }
   if (req.method === "GET") {
     const record = await readTenant(db, tenantId);

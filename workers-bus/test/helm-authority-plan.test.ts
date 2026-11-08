@@ -6,13 +6,8 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import worker from "../src/index.ts";
-import {
-  GATEWAY_EFFECT_ACTIONS,
-  authorityPlanDigest,
-  mostCautiousTerms,
-} from "../src/helm-authority-plan.ts";
-import { gatewayMandateFor, type DelegationSetting } from "../src/helm-gateway.ts";
-import type { Ceiling } from "../src/agents/control.ts";
+import { GATEWAY_EFFECT_ACTIONS, authorityPlanDigest } from "../src/helm-authority-plan.ts";
+import type { DelegationSetting } from "../src/helm-gateway.ts";
 import { NOW, SqliteD1, TENANT, env as baseEnv } from "./company-setup-fixture.ts";
 
 const ADMIN = "root-admin-token";
@@ -60,38 +55,27 @@ test("the digest matches HELM's published vector, the plan a naive encoder gets 
   );
 });
 
-test("a plan with no delegation settings keeps every live effect and asks first where the catalog says so", async () => {
+test("the plan puts every live effect in scope for the Worker under a root it does not hold", async () => {
   const db = new SqliteD1({ seedUsers: [] });
   try {
     const { status, body } = await get(rootEnv(db), `/admin/tenants/${TENANT}/authority-plan?${QUERY}`);
     assert.equal(status, 200);
-    const { plan, plan_digest, out_of_scope } = body;
+    const { plan, plan_digest } = body;
     assert.match(plan_digest, /^[0-9a-f]{64}$/);
-    assert.deepEqual(out_of_scope, []);
     assert.equal(plan.schema, "helm.authority.provision.v1");
     assert.equal(plan.org_ref, `org:${TENANT}`);
     assert.equal(plan.stage, "draft");
     assert.equal(plan.base_plan_digest, "");
     assert.deepEqual(plan.principals, [{ id: `org:${TENANT}`, kind: "service" }, { id: WORKER, kind: "service" }]);
 
-    const effectTypes = plan.effect_types.map((row: { effect_type: string }) => row.effect_type);
-    assert.deepEqual(effectTypes, GATEWAY_EFFECT_ACTIONS.map((action) => `ironwrap.${action}`));
-    const risk = Object.fromEntries(plan.effect_types.map((row: { effect_type: string; risk_class: string }) => [row.effect_type, row.risk_class]));
-    assert.equal(risk["ironwrap.proposal.publish"], "high");
-    assert.equal(risk["ironwrap.customer.email.send"], "medium", "a higher class would escalate every send and could not be lowered");
-
-    const [root, ...children] = plan.mandates;
-    assert.deepEqual(root, { node: `org:${TENANT}`, holder: `org:${TENANT}`, parent: null, terms: { effect_types: effectTypes, targets: null } });
-    assert.equal(children.length, effectTypes.length);
-    for (const child of children) {
-      assert.equal(child.holder, WORKER);
-      assert.equal(child.parent, root.node);
-      assert.equal(child.terms.effect_types.length, 1, "one mandate per effect type keeps limits per effect");
-    }
-    const child = (effectType: string) => children.find((row: { terms: { effect_types: string[] } }) => row.terms.effect_types[0] === effectType);
-    assert.equal(child("ironwrap.proposal.publish").terms.approval_threshold, 0);
-    assert.equal(child("ironwrap.customer.email.send").terms.approval_threshold, undefined);
-    assert.deepEqual(plan.limits, []);
+    const effectTypes = GATEWAY_EFFECT_ACTIONS.map((action) => `ironwrap.${action}`);
+    assert.deepEqual(plan.effect_types.map((row: { effect_type: string }) => row.effect_type), effectTypes);
+    assert.ok(plan.effect_types.every((row: { risk_class: string }) => row.risk_class === "medium"), "a higher class would escalate every call and could not be lowered");
+    assert.deepEqual(plan.mandates, [
+      { node: `org:${TENANT}`, holder: `org:${TENANT}`, parent: null, terms: { effect_types: effectTypes, targets: null } },
+      { node: "seat:ironwrap-bus#g1", holder: WORKER, parent: `org:${TENANT}`, terms: { effect_types: effectTypes, targets: null } },
+    ]);
+    assert.equal(plan.limits, undefined);
   } finally { db.raw.close(); }
 });
 
@@ -107,44 +91,17 @@ test("the same inputs compile to the same digest, so re-applying changes nothing
   } finally { db.raw.close(); }
 });
 
-test("an action off for every owner leaves the plan, while the other effects stay", async () => {
+test("an agent's delegation setting cannot deny or re-ask a person's permit-bound effect", async () => {
   const db = new SqliteD1();
   try {
-    setDelegation(db, "proposal_contract", "proposal.publish", "off");
-    const { body } = await get(rootEnv(db), `/admin/tenants/${TENANT}/authority-plan?${QUERY}`);
-    assert.deepEqual(body.out_of_scope, ["ironwrap.proposal.publish"]);
-    const effectTypes = body.plan.effect_types.map((row: { effect_type: string }) => row.effect_type);
-    assert.equal(effectTypes.includes("ironwrap.proposal.publish"), false);
-    assert.equal(effectTypes.includes("ironwrap.proposal.withdraw"), true);
-    assert.equal(JSON.stringify(body.plan.mandates).includes("ironwrap.proposal.publish"), false);
+    const before = await get(rootEnv(db), `/admin/tenants/${TENANT}/authority-plan?${QUERY}`);
+    setDelegation(db, "proposal_contract", "proposal.withdraw", "off");
+    const after = await get(rootEnv(db), `/admin/tenants/${TENANT}/authority-plan?${QUERY}`);
+    assert.equal(after.body.plan_digest, before.body.plan_digest);
+    const types = after.body.plan.mandates[1].terms.effect_types;
+    assert.ok(types.includes("ironwrap.proposal.withdraw") && types.includes("ironwrap.proposal.publish"));
+    assert.equal(after.body.plan.mandates[1].terms.approval_threshold, undefined);
   } finally { db.raw.close(); }
-});
-
-test("one principal takes the most cautious setting among the specialists that may act", () => {
-  const fragment = (delegation: DelegationSetting, ceiling: Ceiling | null = null) => gatewayMandateFor({
-    tenantId: TENANT,
-    specialistId: "s",
-    actionId: "customer.email.send",
-    delegation,
-    ceiling,
-  });
-  const within = (max: number, per: Ceiling["count"]["per"], amount: number | null) =>
-    fragment("within_limits", { count: { max, per }, amount: amount === null ? null : { max_minor: amount, currency: "CAD" }, recipients: null });
-
-  assert.equal(mostCautiousTerms([fragment("off"), fragment("off")]), null);
-  assert.deepEqual(mostCautiousTerms([fragment("off"), fragment("asks_first")]), { approval_threshold: 0, limits: [] });
-  assert.deepEqual(mostCautiousTerms([within(5, "day", 10_000), fragment("off")]), {
-    approval_threshold: 10_001,
-    limits: [{ unit: "count", measure: "count", window_kind: "day", span: 1, limit_value: 5 }],
-  });
-  assert.equal(mostCautiousTerms([within(5, "day", null), fragment("asks_first")])!.approval_threshold, 0);
-  assert.equal(mostCautiousTerms([within(5, "day", 10_000), within(5, "day", 500)])!.approval_threshold, 501);
-  assert.equal(mostCautiousTerms([within(5, "day", null), within(5, "day", null)])!.approval_threshold, null);
-  assert.deepEqual(mostCautiousTerms([within(9, "day", null), within(3, "day", null), within(40, "week", null), within(2, "hour", null)])!.limits, [
-    { unit: "count", measure: "count", window_kind: "day", span: 1, limit_value: 3 },
-    { unit: "count", measure: "count", window_kind: "day", span: 7, limit_value: 40 },
-    { unit: "count", measure: "count", window_kind: "hour", span: 1, limit_value: 2 },
-  ]);
 });
 
 test("the route answers only the operator, only for a known tenant, and refuses a bad plan input", async () => {

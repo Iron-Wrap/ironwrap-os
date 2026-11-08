@@ -2,7 +2,7 @@ import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { operatingTenantId } from "./core.ts";
 import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
-import { admitExternalEffect, type GatewayAdmission } from "./helm-gateway.ts";
+import { admitExternalEffect, recheckGatewayAdmission, type GatewayAdmission } from "./helm-gateway.ts";
 
 export const EXTERNAL_EFFECT_STATES = [
   "proposed", "authorized", "executing", "reconciling", "succeeded",
@@ -511,6 +511,14 @@ export async function executeExternalEffect<T = unknown>(
   let attempt = await getExternalEffectAttempt(env, attemptId);
   if (!attempt) throw new EffectRuntimeError("effect_attempt_missing");
 
+  // The claim/readback can itself wait. Never dispatch on a permit that died during that wait.
+  // The lease was claimed, so retain that attempt and settle it as a known non-dispatch failure.
+  const currentAdmission = admission.mode === "enforce" ? recheckGatewayAdmission(admission) : admission;
+  if (currentAdmission.decision !== "admitted" && admission.mode === "enforce") {
+    await settleAttempt(env, effect, attempt, "failed", `gateway_denied:${currentAdmission.reason_code}`.slice(0, 120), now.toISOString());
+    return { effect: (await getExternalEffect(env, effectId))!, attempt: (await getExternalEffectAttempt(env, attemptId))!, admission: currentAdmission };
+  }
+
   let dispatched: EffectDispatchResult<T>;
   try {
     dispatched = await executor.dispatch({ effect, attempt, attemptId, businessIdempotencyKey: effect.idempotency_key });
@@ -586,6 +594,11 @@ export async function claimExternalEffect(
   const claimed = await getExternalEffect(env, effectId);
   const attempt = await getExternalEffectAttempt(env, attemptId);
   if (!claimed || !attempt) throw new EffectRuntimeError("effect_attempt_missing");
+  const currentAdmission = gate.admission.mode === "enforce" ? recheckGatewayAdmission(gate.admission) : gate.admission;
+  if (currentAdmission.decision !== "admitted" && gate.admission.mode === "enforce") {
+    await settleAttempt(env, claimed, attempt, "failed", `gateway_denied:${currentAdmission.reason_code}`.slice(0, 120), now.toISOString());
+    throw new EffectRuntimeError(currentAdmission.decision === "denied" ? "effect_gateway_denied" : "effect_gateway_unreachable");
+  }
   return { effect: claimed, attempt, admission: gate.admission };
 }
 

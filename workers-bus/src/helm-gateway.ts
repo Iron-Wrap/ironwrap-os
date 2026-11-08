@@ -33,8 +33,9 @@
 // receipt and audited there, while its mandate is the tenant service principal's (one principal
 // per tenant until the identity issuer mints one per specialist). The Worker performs the effect
 // itself after admission and never calls the gateway's Dispatch, so the gateway's dispatch-time
-// re-checks (a stop or a narrowing landing between admission and execution) do not apply; a
-// stored admission is used only while its permit has not expired.
+// re-checks (a stop or a narrowing landing between admission and execution) do not apply;
+// every admission, new or stored, requires a parseable live permit. Its expiry is rechecked at
+// consumption using the runtime's current clock, independently of the effect's audit timestamp.
 
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
@@ -62,6 +63,8 @@ export interface GatewayAdmission {
   gateway_state: string | null;
   argument_digest: string;
   receipts: GatewayReceiptRef[] | null;
+  /** The gateway permit's expiry, retained for checks after asynchronous ledger/claim work. */
+  permit_expires_at?: string;
 }
 
 export const PROPOSE_PATH = "/helm.gateway.v1.EffectGatewayService/Propose";
@@ -93,6 +96,34 @@ interface HelmGatewayEnv {
  */
 const defaultTransport: typeof fetch = (input, init) => fetch(input, init);
 let gatewayTransport: typeof fetch = defaultTransport;
+let gatewayClock: () => number = () => Date.now();
+
+/** Runtime-owned authority clock. Effect/executor input timestamps cannot extend a permit. */
+export function setGatewayClockForTests(clock: (() => number) | null): void {
+  gatewayClock = clock ?? (() => Date.now());
+}
+
+function parsePermitExpiry(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  // Protobuf Timestamp JSON is RFC3339, not Date.parse's permissive date/number grammar.
+  const match = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const days = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const parsed = Date.parse(value);
+  return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1] && Number.isFinite(parsed) ? parsed : null;
+}
+
+/** A proposal can lose authority while its ledger write or claim readback is awaited. */
+export function recheckGatewayAdmission<T extends Omit<GatewayAdmission, "mode">>(admission: T): T {
+  if (admission.decision !== "admitted") return admission;
+  const expiry = parsePermitExpiry(admission.permit_expires_at);
+  if (expiry === null) return { ...admission, decision: "unreachable", reason_code: "gateway_permit_invalid" };
+  let nowMs: number;
+  try { nowMs = gatewayClock(); } catch { nowMs = NaN; }
+  if (!Number.isFinite(nowMs)) return { ...admission, decision: "unreachable", reason_code: "gateway_clock_invalid" };
+  return expiry <= nowMs ? { ...admission, decision: "denied", reason_code: "PERMIT_EXPIRED" } : admission;
+}
 
 export function setGatewayTransportForTests(transport: typeof fetch | null): void {
   gatewayTransport = transport ?? defaultTransport;
@@ -235,10 +266,9 @@ export async function proposeToGateway(
   env: HelmGatewayEnv,
   effect: ExternalEffectRecord,
   attemptNumber: number,
-  options: { priorDenials?: number; nowMs?: number; transport?: typeof fetch } = {},
+  options: { priorDenials?: number; transport?: typeof fetch } = {},
 ): Promise<Omit<GatewayAdmission, "mode">> {
   const transport = options.transport ?? gatewayTransport;
-  const nowMs = options.nowMs ?? Date.now();
   const argumentBytes = new TextEncoder().encode(canonicalJson(await gatewayArguments(effect, attemptNumber)));
   const argumentDigest = await sha256Hex(new TextDecoder().decode(argumentBytes));
   const base = { effect_type: "", argument_digest: argumentDigest, gateway_attempt_id: null, gateway_state: null, receipts: null };
@@ -322,15 +352,14 @@ export async function proposeToGateway(
     const attemptId = typeof rawAttemptId === "string" ? rawAttemptId.slice(0, 200) : null;
     const common = { ...identity, gateway_attempt_id: attemptId, gateway_state: state, receipts: receiptRefs(record.receipts) };
     if (state && ADMITTED_STATES.has(state)) {
-      // A stored admission (an escalation a person approved) is used only while its permit lives:
-      // the Worker never calls Dispatch, so the gateway's own expiry is the one re-check left.
-      const existing = (parsed as { existing?: unknown }).existing === true;
-      const permit = record.permit && typeof record.permit === "object" ? record.permit as Record<string, unknown> : null;
+      // ADMITTED/APPROVED is a state, not authority without a live permit. `existing` only says
+      // whether the answer was stored; it cannot exempt a newly returned permit from expiry.
+      const permit = record.permit && typeof record.permit === "object" && !Array.isArray(record.permit) ? record.permit as Record<string, unknown> : null;
       const permitExpiry = permit ? field(permit, "expiresAt", "expires_at") : undefined;
-      if (existing && typeof permitExpiry === "string" && Number.isFinite(Date.parse(permitExpiry)) && Date.parse(permitExpiry) <= nowMs) {
-        return { ...common, decision: "denied", reason_code: "PERMIT_EXPIRED" };
+      if (parsePermitExpiry(permitExpiry) === null || (permit?.expiresAt !== undefined && permit.expires_at !== undefined && permit.expiresAt !== permit.expires_at)) {
+        return { ...common, decision: "unreachable", reason_code: "gateway_permit_invalid" };
       }
-      return { ...common, decision: "admitted", reason_code: reason };
+      return recheckGatewayAdmission({ ...common, decision: "admitted", reason_code: reason, permit_expires_at: permitExpiry as string });
     }
     if (state && DENIED_STATES.has(state)) return { ...common, decision: "denied", reason_code: reason ?? state };
     if (state && ESCALATED_STATES.has(state)) return { ...common, decision: "escalated", reason_code: reason ?? "APPROVAL_REQUIRED" };
@@ -374,29 +403,14 @@ export async function admitExternalEffect(
     }
     console.log(JSON.stringify({ at: "helm_gateway_admissions_unreadable", effect_id: effect.effect_id, error: String(error) }));
   }
-  const proposed = await proposeToGateway(env, effect, attemptNumber, { priorDenials, nowMs: Date.parse(now) });
+  const proposed = await proposeToGateway(env, effect, attemptNumber, { priorDenials });
   const admission: GatewayAdmission = { mode, ...proposed };
   try {
-    await env.DB.prepare(
-      `INSERT INTO external_effect_gateway_admissions
-         (admission_id, effect_id, tenant_id, attempt_number, mode, decision, reason_code, effect_type,
-          gateway_attempt_id, gateway_state, argument_digest, receipt_ref_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
-      `${effect.effect_id}:gateway:${crypto.randomUUID()}`,
-      effect.effect_id,
-      effect.tenant_id,
-      attemptNumber,
-      mode,
-      admission.decision,
-      admission.reason_code,
-      admission.effect_type || "unresolved",
-      admission.gateway_attempt_id,
-      admission.gateway_state,
-      admission.argument_digest,
-      admission.receipts ? JSON.stringify(admission.receipts) : null,
-      now,
-    ).run();
+    await recordAdmission(env, effect, attemptNumber, admission, now);
+    const current = recheckGatewayAdmission(admission);
+    // Keep the proposal fact and append its loss of authority; never revise the first row.
+    if (current !== admission) await recordAdmission(env, effect, attemptNumber, current, now);
+    return current;
   } catch (error) {
     // The decision could not be recorded. In enforce mode an unrecorded admission is no
     // admission: the attempt does not proceed on evidence that does not exist.
@@ -404,6 +418,29 @@ export async function admitExternalEffect(
     console.log(JSON.stringify({ at: "helm_gateway_admission_unrecorded", effect_id: effect.effect_id, error: String(error) }));
   }
   return admission;
+}
+
+async function recordAdmission(env: AppEnv, effect: ExternalEffectRecord, attemptNumber: number, admission: GatewayAdmission, now: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO external_effect_gateway_admissions
+       (admission_id, effect_id, tenant_id, attempt_number, mode, decision, reason_code, effect_type,
+        gateway_attempt_id, gateway_state, argument_digest, receipt_ref_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+    `${effect.effect_id}:gateway:${crypto.randomUUID()}`,
+    effect.effect_id,
+    effect.tenant_id,
+    attemptNumber,
+    admission.mode,
+    admission.decision,
+    admission.reason_code,
+    admission.effect_type || "unresolved",
+    admission.gateway_attempt_id,
+    admission.gateway_state,
+    admission.argument_digest,
+    admission.receipts ? JSON.stringify(admission.receipts) : null,
+    now,
+    ).run();
 }
 
 // --- earned autonomy as mandates ---------------------------------------------------------------

@@ -423,6 +423,7 @@ test("each reviewer role gets exactly the view its screens show", async () => {
     "job/job_mem_0001#/facts/commercial/publication",
     "job/job_mem_0001#/facts/commercial/acceptance",
     "job/job_mem_0001#/facts/commercial/acceptance_under_withdrawn_publication",
+    "deposit_policy/ironwrap",
     "customer/cus_mem_0001",
     "property/prp_mem_0001",
     "lead/lead_mem_0001",
@@ -455,7 +456,7 @@ test("each reviewer role gets exactly the view its screens show", async () => {
 
   // Accounting: the money item in minor units, and the job's identity and money part only.
   const money = (await open(db, "billing_reconciliation", { aggregate: "money_item", id: "acct_mem_intent_00000001" }, "mem-money")).context;
-  assert.deepEqual(ids(money), ["money_item/acct_mem_intent_00000001", "job/job_mem_0001#/job", "job/job_mem_0001#/facts/accounting"]);
+  assert.deepEqual(ids(money), ["money_item/acct_mem_intent_00000001", "deposit_policy/ironwrap", "job/job_mem_0001#/job", "job/job_mem_0001#/facts/accounting"]);
   const item = money.facts[1].data as Record<string, unknown>;
   assert.deepEqual([item.subtotal_minor, item.tax_minor, item.total_minor, item.settled_minor, item.currency], [939048, 46952, 986000, null, "CAD"]);
   const moneyText = JSON.stringify(money);

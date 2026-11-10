@@ -200,27 +200,40 @@ test("a busy day's brief opens and resumes in few D1 round trips, with the same 
   assert.equal(content.digest.receipts_by_outcome.reduce((sum, row) => sum + Number(row.n), 0), 70);
 
   const ledgerLines = () => Number(db.raw.prepare("SELECT COUNT(*) AS n FROM agent_fact_versions").get()!.n);
+  const policyLines = () => Number(db.raw.prepare("SELECT COUNT(*) AS n FROM agent_fact_versions WHERE tenant_id = ? AND fact_id = ?").get(TENANT, `deposit_policy/${TENANT}`)!.n);
+  assert.equal(policyLines(), 1, "the seed's earlier lead runs already recorded the shared tenant policy");
   const linesBefore = ledgerLines();
   const open = await openBrief(db, signal_id, "2026-03-02T16:11:00.000Z");
   assert.ok(!("error" in open.opened), JSON.stringify(open.opened));
   const context = open.opened.context;
   // The snapshot fills with the newest jobs and what they link to; the rest are named, not dropped.
-  assert.deepEqual([context.facts.length, context.omitted.length], [21, 20]);
+  assert.deepEqual([context.facts.length, context.omitted.length], [22, 20]);
+  assert.deepEqual(context.facts.filter((fact) => fact.fact_id === `deposit_policy/${TENANT}`).map((fact) => fact.data), [{
+    policy: "od01_payment_on_completion", version: 0, revision_id: null, set_at: null,
+  }]);
   assert.ok(context.omitted.every((entry) => entry.reason === "limit_reached"));
   // Before: 844 statements, one ledger read and one first-version write per fact read (120 each),
   // for every job whether or not it fitted. Now one ledger read per group of six subjects, and one
   // batch that records only the facts the run is given.
   // Each lead also reads its open proposals (one statement among its concurrent reads, no extra wait).
-  assert.ok(open.statements <= 665, String(open.statements));
+  // The tenant policy adds at most one canonical read per examined job. Keep the earlier
+  // objects' budget unchanged and bound the added reads by the watch's subject count.
+  const policyReads = db.statements.filter((sql) => sql.includes("FROM tenant_deposit_policy_revisions")).length;
+  assert.ok(policyReads <= content.objects.length, String(policyReads));
+  assert.ok(open.statements - policyReads <= 665, `${open.statements} statements including ${policyReads} policy reads`);
   assert.ok(open.ledgerReads <= 4, String(open.ledgerReads));
-  assert.equal(open.ledgerWrites, context.facts.length - 1);
+  // The signal has no ledger row; the tenant policy already has its unchanged row.
+  assert.equal(open.ledgerWrites, context.facts.length - 2);
   assert.equal(open.batches, 1);
-  assert.equal(ledgerLines() - linesBefore, context.facts.length - 1, "no line for a fact the run is not given");
+  assert.equal(ledgerLines() - linesBefore, context.facts.length - 2, "no line for an omitted or already-recorded fact");
+  assert.equal(policyLines(), 1, "the shared policy is not recorded again for another job");
 
   // Before: 125 statements, 20 of them ledger reads. Now one ledger read and no ledger write.
   const resume = await openBrief(db, signal_id, "2026-03-02T16:12:00.000Z");
   assert.ok(!("error" in resume.opened) && resume.opened.resumed, JSON.stringify(resume.opened));
-  assert.ok(resume.statements <= 110, String(resume.statements));
+  const resumePolicyReads = db.statements.filter((sql) => sql.includes("FROM tenant_deposit_policy_revisions")).length;
+  assert.ok(resumePolicyReads <= 1, String(resumePolicyReads));
+  assert.ok(resume.statements - resumePolicyReads <= 110, `${resume.statements} statements including ${resumePolicyReads} policy reads`);
   assert.deepEqual([resume.ledgerReads, resume.ledgerWrites, resume.batches], [1, 0, 0]);
   // The resume reads every fact again and finds each where the open left it, value included.
   assert.deepEqual(shape(resume.opened.context), shape(context));

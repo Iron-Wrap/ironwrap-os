@@ -409,11 +409,15 @@ test("a sales asker's face run reads as sales: no owner-only fact on open, resum
     `job/${JOB}#/facts/commercial/publication`,
     `job/${JOB}#/facts/commercial/acceptance`,
     `job/${JOB}#/facts/commercial/acceptance_under_withdrawn_publication`,
+    `deposit_policy/${TENANT}`,
     "customer/cus_mem_0001",
     "property/prp_mem_0001",
     "lead/lead_mem_0001",
     `roof/${JOB}`,
   ]);
+  assert.deepEqual(run.context.facts.find((fact: Source) => fact.fact_id === `deposit_policy/${TENANT}`).data, {
+    policy: "od01_payment_on_completion", version: 0, revision_id: null, set_at: null,
+  });
   const text = JSON.stringify(run.context);
   for (const ownerOnly of [`"job/${JOB}"`, "facts/accounting", "deposit_intents", "gates", "Waiting on deposit", "9860"]) assert.equal(text.includes(ownerOnly), false, ownerOnly);
   const stored = JSON.parse((t.db.raw.prepare("SELECT context_json FROM agent_runs WHERE run_id = ?").get(run.run_id) as { context_json: string }).context_json);

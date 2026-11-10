@@ -11,6 +11,7 @@
 
 import type { AppEnv } from "../app-types.ts";
 import { readCommercialJobPhase } from "../commercial-job-phase.ts";
+import { readTenantDepositPolicy } from "../deposit-policy.ts";
 import { readEstimatorEvidenceHead } from "../estimator-native-store.ts";
 import { getInventoryPosition } from "../inventory-control.ts";
 import { listCurrentJobMeasurements } from "../measurement-intake-store.ts";
@@ -58,6 +59,28 @@ async function consents(db: AgentDb, tenantId: string, column: "customer_id" | "
     id,
   );
 }
+
+/** The admitted owner policy, without its reason or actor/contact identity. */
+const depositPolicy: ObjectModel = {
+  views: [
+    { permission: "sales:read", pointers: null },
+    { permission: "accounting:read", pointers: null },
+  ],
+  async read(db, tenantId, id) {
+    // The canonical getter defaults an absent local policy; a different id is not that default.
+    if (id !== tenantId) return null;
+    const current = await readTenantDepositPolicy(envOf(db), tenantId);
+    return {
+      data: {
+        policy: current.policy,
+        version: current.version,
+        revision_id: current.revision_id,
+        set_at: current.set_at,
+      },
+      links: [],
+    };
+  },
+};
 
 const job: ObjectModel = {
   // `GET /jobs/{job}/phase` is jobs:read:any. Sales reads the offer chain its commercial-context
@@ -110,6 +133,7 @@ const job: ObjectModel = {
       { kind: "roof", id: phase.job.roof_job_id },
     ];
     if (phase.job.property_id) links.splice(1, 0, { kind: "property", id: phase.job.property_id });
+    links.unshift({ kind: "deposit_policy", id: tenantId });
     return { data, links };
   },
 };
@@ -148,7 +172,7 @@ const customer: ObjectModel = {
         contact: { has_phone: has_phone === 1, has_email: has_email === 1, consents: consented },
         jobs: jobs.map((entry) => entry.roof_job_id),
       },
-      links: jobLinks(jobs),
+      links: [{ kind: "deposit_policy", id: tenantId }, ...jobLinks(jobs)],
     };
   },
 };
@@ -185,7 +209,7 @@ const lead: ObjectModel = {
         consents: consented,
         jobs: jobs.map((entry) => entry.roof_job_id),
       },
-      links: [...jobLinks(jobs), ...proposals.map((stepId) => ({ kind: "lead_proposal", id: stepId }))],
+      links: [{ kind: "deposit_policy", id: tenantId }, ...jobLinks(jobs), ...proposals.map((stepId) => ({ kind: "lead_proposal", id: stepId }))],
     };
   },
 };
@@ -426,7 +450,7 @@ const moneyItem: ObjectModel = {
       tenantId,
       id,
     );
-    return { data: { ...rest, ...amounts, observations }, links: [{ kind: "job", id: row.roof_job_id }] };
+    return { data: { ...rest, ...amounts, observations }, links: [{ kind: "deposit_policy", id: tenantId }, { kind: "job", id: row.roof_job_id }] };
   },
 };
 
@@ -441,6 +465,7 @@ const delegation: ObjectModel = {
 };
 
 export const OBJECT_MODELS: Record<string, ObjectModel> = {
+  deposit_policy: depositPolicy,
   job,
   customer,
   lead,

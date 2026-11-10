@@ -558,9 +558,7 @@ function NowScreen({
               )}
             </aside>
           ) : null}
-          {!showDecisions ? (
-            <NowEvidenceSummary model={model} locale={locale} timeZone={timeZone} />
-          ) : null}
+          {!showDecisions ? <NowEvidenceSummary model={model} locale={locale} /> : null}
           <aside
             className={cn("now-list-status", model.ui.state === "limited" && "now-list-limited")}
             aria-labelledby={`${instanceId}-status`}
@@ -596,7 +594,9 @@ function NowScreen({
                         </div>
                         <p className="mt-1 text-muted">
                           {source.state === "retired"
-                            ? "Scheduling is handled in the production workspace."
+                            ? source.kind === "production_schedule"
+                              ? "Scheduling is handled in the production workspace."
+                              : "This approval flow is retired. Stored requests are not current tasks."
                             : source.state === "unavailable"
                               ? "The request count is unknown."
                               : `${source.loaded_count} loaded${source.has_more ? "; the full source has more requests" : ""}.`}
@@ -854,15 +854,7 @@ function NowCardDetails({
   );
 }
 
-function NowEvidenceSummary({
-  model,
-  locale,
-  timeZone,
-}: {
-  model: NowResponse;
-  locale: string;
-  timeZone: string;
-}) {
+function NowEvidenceSummary({ model, locale }: { model: NowResponse; locale: string }) {
   const invoices = [
     ...new Map(
       model.ui.sections
@@ -876,18 +868,6 @@ function NowEvidenceSummary({
     const [whole, fraction] = card.final_balance.split(".");
     return sum + Number(whole) * 100 + Number(fraction);
   }, 0);
-  const proposalSources = model.decisions?.sources.filter(
-    (source) => source.kind === "quote_revision" || source.kind === "proposal_publication",
-  );
-  const proposals =
-    model.decisions?.items.filter(
-      (item) => item.kind === "quote_revision" || item.kind === "proposal_publication",
-    ) ?? [];
-  const proposalsUnknown =
-    new Set(proposalSources?.map((source) => source.kind)).size < 2 ||
-    proposalSources?.some(
-      (source) => source.state === "unavailable" || source.state === "limited" || source.has_more,
-    );
   const moneySource = model.sources.find((source) => source.id === "quickbooks_final_invoices");
 
   return (
@@ -935,42 +915,12 @@ function NowEvidenceSummary({
         ) : null}
       </section>
       <section aria-labelledby="now-verdicts-heading">
-        <h2 id="now-verdicts-heading">Proposal verdicts</h2>
+        <h2 id="now-verdicts-heading">Legacy proposal reviews</h2>
         <p className="mt-1 text-sm text-muted">
-          Open review and result-check requests. Job records show matching approvals from the loaded
-          records; older receipts may be absent. Agent authorship is not recorded in this list.
+          Quote-change and proposal-publication approval flows are retired. Stored requests are not
+          current review tasks. Historical approval receipts and agent authorship are not shown
+          here.
         </p>
-        {proposals.length ? (
-          <ul className="mt-3 grid gap-3" aria-label="Loaded proposal verdicts">
-            {proposals.slice(0, 3).map((item) => (
-              <li key={item.key} className="grid gap-1">
-                <a
-                  className="inline-flex min-h-11 items-center text-sm font-semibold underline underline-offset-4"
-                  href={item.review_href}
-                >
-                  {item.title}
-                </a>
-                <Status kind={decisionStatus(item).kind}>{decisionStatus(item).label}</Status>
-                {formatDateTime(item.updated_at, locale, timeZone) ? (
-                  <p className="text-xs text-muted">
-                    Updated {formatDateTime(item.updated_at, locale, timeZone)}
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-2 text-sm text-muted">
-            {proposalsUnknown
-              ? "Proposal verdicts are unavailable or incomplete."
-              : "No open proposals in the loaded list."}
-          </p>
-        )}
-        {proposals.length > 3 || proposalsUnknown ? (
-          <p className="mt-2 text-sm text-muted">
-            Check Decisions for the available sources and remaining requests.
-          </p>
-        ) : null}
       </section>
     </aside>
   );

@@ -1,0 +1,45 @@
+{
+  "format": "ironwrap-auth-v2-codec-vectors",
+  "domain": "New v2 encoding only; historical Worker and release-tool canonical forms are unchanged.",
+  "valid": [
+    {
+      "value": {
+        "Z": null,
+        "a": [0, true, "é", "🧱"],
+        "Ä": 7
+      },
+      "canonical": "{\"Z\":null,\"a\":[0,true,\"é\",\"🧱\"],\"Ä\":7}",
+      "header": "eyJaIjpudWxsLCJhIjpbMCx0cnVlLCLDqSIsIvCfp7EiXSwiw4QiOjd9",
+      "sha256": "fd8d6ca845f14ad7b98ed7b3b8ad0d81584d54597ffd9a99e1f9b49048b9b393"
+    },
+    {
+      "value": {
+        "a": "quote\" slash/ newline\n",
+        "z": 9007199254740991
+      },
+      "canonical": "{\"a\":\"quote\\\" slash/ newline\\n\",\"z\":9007199254740991}",
+      "header": "eyJhIjoicXVvdGVcIiBzbGFzaC8gbmV3bGluZVxuIiwieiI6OTAwNzE5OTI1NDc0MDk5MX0",
+      "sha256": "b46b408ef7ab931083a2c7c9d329ef4af09324a2b7d68346f998bd43602f7f65"
+    },
+    {
+      "value": {
+        "😀": 0,
+        "�": 1
+      },
+      "canonical": "{\"😀\":0,\"�\":1}",
+      "header": "eyLwn5iAIjowLCLvv70iOjF9",
+      "sha256": "0d74b575b2142b4e2a87548a0983060634ec399668af53b1f9aa4cac0e833876"
+    }
+  ],
+  "rejectCanonicalInputs": [
+    "{\"a\":1,\"a\":2}",
+    "{\"a\":1,\"\\u0061\":1}",
+    "{\"a\":-1}",
+    "{\"a\":1.5}",
+    "{\"a\":9007199254740992}",
+    "{\"a\":-0}",
+    " {\"a\":1}",
+    "{\"a\":\"\\ud800\"}",
+    "{\"a\":null}\n"
+  ]
+}

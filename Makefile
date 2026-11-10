@@ -98,6 +98,8 @@ test-tools:
 	  tools/qa-artifact-flow.test.mjs \
 	  tools/qa-dead-letter-workflow.test.mjs \
 	  tools/canonical-json.test.mjs \
+	  tools/auth-protocol-codec.test.mjs \
+	  tools/auth-protocol-control.test.mjs \
 	  tools/release-permit.test.mjs \
 	  tools/release-promotion.test.mjs
 

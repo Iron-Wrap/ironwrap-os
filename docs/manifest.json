@@ -358,6 +358,14 @@
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
     },
     {
+      "path": "docs/AUTH-CONTROL-WRITER.md",
+      "class": "developer",
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/DOCUMENTATION-CONTRACT.md"
+      ]
+    },
+    {
       "path": "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
       "class": "canonical",
       "authority": []

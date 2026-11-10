@@ -72,13 +72,13 @@ function validPayload() {
 }
 
 function validDecisions(): DecisionsReadModel {
-  const id = "approval:0000000000000001";
+  const id = "11111111-1111-4111-8111-000000000001";
   return {
     version: 1,
     state: "ready",
     sources: [
       {
-        kind: "lead_triage",
+        kind: "postiz",
         state: "current",
         loaded_count: 1,
         has_more: false,
@@ -88,17 +88,17 @@ function validDecisions(): DecisionsReadModel {
     ],
     items: [
       {
-        key: `lead_triage:${id}`,
-        kind: "lead_triage",
+        key: `postiz:${id}`,
+        kind: "postiz",
         id,
         version: 1,
-        native_state: "pending",
-        title: "Review lead note",
-        summary: "Review the captured lead note.",
+        native_state: "pending_review",
+        title: "Review marketing publication",
+        summary: "Review the captured marketing draft.",
         job_id: null,
         updated_at: "2026-09-29T12:00:00.000Z",
         expires_at: "2026-09-30T12:00:00.000Z",
-        review_href: `/approvals?review=${encodeURIComponent(id)}`,
+        review_href: `/marketing/postiz/${encodeURIComponent(id)}`,
       },
     ],
   };
@@ -187,7 +187,7 @@ describe("decisionsReadModelSchema", () => {
       items: [],
       sources: [
         {
-          kind: "lead_triage",
+          kind: "postiz",
           state: "unavailable",
           loaded_count: 0,
           has_more: null,
@@ -417,5 +417,75 @@ describe("nowResponseSchema", () => {
     payload.ui.primary_action.citation_ids = ["missing-record"];
 
     expect(nowResponseSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("retired Decisions families", () => {
+  it("accepts explicit retirement but rejects stale actionable broker rows and sources", () => {
+    for (const [kind, id, href] of [
+      ["lead_triage", "approval:0000000000000001", "/approvals?review=approval%3A0000000000000001"],
+      [
+        "quote_revision",
+        "quote-revision-approval:0000000000000001",
+        "/quote-revision-approvals/quote-revision-approval%3A0000000000000001",
+      ],
+      [
+        "proposal_publication",
+        "proposal-publication-approval:0000000000000001",
+        "/estimator/jobs/job-fixture",
+      ],
+      ["production_schedule", "schedule-approval:0000000000000001", "/production"],
+    ]) {
+      const retired = {
+        version: 1,
+        state: "empty",
+        items: [],
+        sources: [
+          {
+            kind,
+            state: "retired",
+            loaded_count: 0,
+            has_more: null,
+            next_cursor: null,
+            read_model_generated_at: null,
+          },
+        ],
+      };
+      expect(decisionsReadModelSchema.safeParse(retired).success).toBe(true);
+      expect(
+        decisionsReadModelSchema.safeParse({
+          ...retired,
+          state: "ready",
+          items: [
+            {
+              ...validDecisions().items[0],
+              key: `${kind}:${id}`,
+              kind,
+              id,
+              job_id: "job-fixture",
+              native_state: "pending",
+              review_href: href,
+            },
+          ],
+          sources: [
+            {
+              ...retired.sources[0],
+              state: "current",
+              loaded_count: 1,
+              has_more: false,
+              read_model_generated_at: "fixture-time",
+            },
+          ],
+        }).success,
+      ).toBe(false);
+      for (const state of ["current", "limited", "unavailable"]) {
+        expect(
+          decisionsReadModelSchema.safeParse({
+            ...retired,
+            sources: [{ ...retired.sources[0], state }],
+          }).success,
+        ).toBe(false);
+      }
+    }
   });
 });

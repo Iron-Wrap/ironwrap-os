@@ -1,4 +1,6 @@
 import { mkdir } from "node:fs/promises";
+import { buildDecisionsReadModel } from "../../workers-bus/src/decision-read-model.ts";
+import { actor, fixture, NOW } from "../../workers-bus/test/decision-read-model-fixture.ts";
 
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test as base, type Page } from "@playwright/test";
@@ -23,34 +25,6 @@ const shared = {
 const items: DecisionItem[] = [
   {
     ...shared,
-    kind: "lead_triage",
-    id: "approval:synthetic-lead-0001",
-    key: "lead_triage:approval:synthetic-lead-0001",
-    title: "Review synthetic lead note",
-    native_state: "pending",
-    job_id: null,
-    review_href: "/approvals?review=approval%3Asynthetic-lead-0001",
-  },
-  {
-    ...shared,
-    kind: "quote_revision",
-    id: "quote-revision-approval:synthetic-quote-0001",
-    key: "quote_revision:quote-revision-approval:synthetic-quote-0001",
-    title: "Check synthetic quote result",
-    native_state: "execution_uncertain",
-    review_href: "/quote-revision-approvals/quote-revision-approval%3Asynthetic-quote-0001",
-  },
-  {
-    ...shared,
-    kind: "proposal_publication",
-    id: "proposal-publication-approval:synthetic-proposal-0001",
-    key: "proposal_publication:proposal-publication-approval:synthetic-proposal-0001",
-    title: "Review synthetic proposal",
-    native_state: "pending",
-    review_href: `/estimator/jobs/${jobId}`,
-  },
-  {
-    ...shared,
     kind: "postiz",
     id: "2c7bbc97-4062-4d76-8656-2f11cf19eb0e",
     key: "postiz:2c7bbc97-4062-4d76-8656-2f11cf19eb0e",
@@ -66,7 +40,7 @@ const items: DecisionItem[] = [
     id: "c72eb1ac-7166-4c64-857d-3c64206fa7fb",
     key: "quickbooks_final_invoice:c72eb1ac-7166-4c64-857d-3c64206fa7fb",
     title: "Check synthetic final invoice",
-    native_state: "blocked",
+    native_state: "reconciliation_required",
     expires_at: null,
     review_href: "/accounting/quickbooks/final-invoices/c72eb1ac-7166-4c64-857d-3c64206fa7fb",
   },
@@ -93,14 +67,16 @@ function inboxModel(): NowResponse {
           next_cursor: null,
           read_model_generated_at: generatedAt,
         })),
-        {
-          kind: "production_schedule",
-          state: "retired",
+        ...(
+          ["lead_triage", "quote_revision", "proposal_publication", "production_schedule"] as const
+        ).map((kind) => ({
+          kind,
+          state: "retired" as const,
           loaded_count: 0,
           has_more: null,
           next_cursor: null,
           read_model_generated_at: null,
-        },
+        })),
       ],
     },
     ui: {
@@ -122,14 +98,14 @@ function limitedModel(): NowResponse {
     state: "limited",
     items: Array.from({ length: 25 }, (_, index): DecisionItem => ({
       ...items[0],
-      id: pageLeadId(index),
-      key: `lead_triage:${pageLeadId(index)}`,
-      title: `Synthetic lead review ${index + 1}`,
-      review_href: `/approvals?review=${encodeURIComponent(pageLeadId(index))}`,
+      id: pageMarketingId(index),
+      key: `postiz:${pageMarketingId(index)}`,
+      title: `Synthetic marketing review ${index + 1}`,
+      review_href: `/marketing/postiz/${encodeURIComponent(pageMarketingId(index))}`,
     })),
     sources: [
       {
-        kind: "lead_triage",
+        kind: "postiz",
         state: "limited",
         loaded_count: 25,
         has_more: true,
@@ -141,25 +117,25 @@ function limitedModel(): NowResponse {
   return model;
 }
 
-function pageLeadId(index: number) {
-  return `approval:synthetic-page-${String(index).padStart(4, "0")}`;
+function pageMarketingId(index: number) {
+  return `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`;
 }
 
-function secondLeadPage(): NowResponse {
+function secondMarketingPage(): NowResponse {
   const model = inboxModel();
   model.decisions = {
     version: 1,
     state: "ready",
     items: [24, 25, 26].map((index) => ({
       ...items[0],
-      id: pageLeadId(index),
-      key: `lead_triage:${pageLeadId(index)}`,
-      title: `Synthetic lead review ${index + 1}`,
-      review_href: `/approvals?review=${encodeURIComponent(pageLeadId(index))}`,
+      id: pageMarketingId(index),
+      key: `postiz:${pageMarketingId(index)}`,
+      title: `Synthetic marketing review ${index + 1}`,
+      review_href: `/marketing/postiz/${encodeURIComponent(pageMarketingId(index))}`,
     })),
     sources: [
       {
-        kind: "lead_triage",
+        kind: "postiz",
         state: "current",
         loaded_count: 3,
         has_more: false,
@@ -257,13 +233,13 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     await mkdir(shotDir, { recursive: true });
   });
 
-  test("shows five live kinds with native links and no retired schedule action", async ({
+  test("shows only live kinds with native links and all broker sources explicitly retired", async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await serveNow(page);
-    await expect(page.getByRole("button", { name: "All requests 5", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open review", exact: true })).toHaveCount(5);
+    await expect(page.getByRole("button", { name: "All requests 2", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open review", exact: true })).toHaveCount(2);
     for (const item of items) {
       const row = page
         .locator(".now-row")
@@ -275,12 +251,20 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     }
     await expect(page.getByRole("button", { name: /Schedule approvals/ })).toHaveCount(0);
     await page.getByText("System details", { exact: true }).click();
-    const retired = page
-      .getByRole("list", { name: "Work list status" })
-      .getByRole("listitem")
-      .filter({ hasText: "Schedule approvals" });
-    await expect(retired).toContainText("Retired");
-    await expect(retired.getByRole("link")).toHaveCount(0);
+    for (const label of ["Lead reviews", "Quote changes", "Proposals", "Schedule approvals"]) {
+      const retired = page
+        .getByRole("list", { name: "Work list status" })
+        .getByRole("listitem")
+        .filter({ hasText: label });
+      await expect(retired).toContainText("Retired");
+      if (label === "Schedule approvals") {
+        await expect(retired).toContainText("Scheduling is handled in the production workspace.");
+      } else {
+        await expect(retired).toContainText("Stored requests are not current tasks.");
+        await expect(retired).not.toContainText("production workspace");
+      }
+      await expect(retired.getByRole("link")).toHaveCount(0);
+    }
     await expect(
       page.getByRole("button", { name: /^(Approve|Reject|Publish|Send|Execute)$/ }),
     ).toHaveCount(0);
@@ -289,6 +273,104 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       path: `${shotDir}/decisions-desktop-${testInfo.project.name}.png`,
       fullPage: true,
     });
+  });
+
+  test("renders the actual persisted-row Worker projection without retired review invitations", async ({
+    page,
+  }, testInfo) => {
+    const f = fixture();
+    try {
+      for (const index of [0, 1, 2]) {
+        f.seed(index, "1", "pending");
+        f.seed(index, "2", "execution_uncertain");
+        f.seed(index, "3", "pending", "another-tenant");
+      }
+      const id = f.seed(3, "1", "pending_review");
+      f.seed(3, "2", "pending_review", "another-tenant");
+      const before = f.db.prepare("SELECT total_changes() AS count").get()!.count;
+      const model = inboxModel();
+      model.decisions = await buildDecisionsReadModel(f.env, actor("owner"), NOW);
+      expect(model.decisions.items.map((item) => item.id)).toEqual([id]);
+      if (testInfo.project.name === "mobile-chromium")
+        await page.setViewportSize({ width: 320, height: 844 });
+      await serveNow(page, model);
+      await expect(page.locator(".now-row")).toHaveCount(1);
+      const review = page.getByRole("link", { name: "Open review", exact: true });
+      await expect(review).toHaveAttribute("href", `/marketing/postiz/${id}`);
+      await expect(
+        page
+          .locator(".now-row")
+          .locator(
+            'a[href^="/approvals"], a[href^="/quote-revision-approvals"], a[href^="/estimator/jobs/"]',
+          ),
+      ).toHaveCount(0);
+      await page.screenshot({
+        path: `${shotDir}/persisted-retirement-${testInfo.project.name}.png`,
+        fullPage: true,
+      });
+      await page
+        .getByRole("navigation", { name: "Main navigation" })
+        .getByRole("link", { name: "Now", exact: true })
+        .click();
+      await expect(page.getByRole("heading", { name: "Legacy proposal reviews" })).toBeVisible();
+      await expect(page.getByText(/Stored requests are not current review tasks/)).toBeVisible();
+      await expect(page.getByRole("list", { name: "Loaded proposal verdicts" })).toHaveCount(0);
+      await page.screenshot({
+        path: `${shotDir}/now-retired-summary-${testInfo.project.name}.png`,
+        fullPage: true,
+      });
+      await page.goto("/now?show=decide");
+      await expect(page.getByRole("heading", { level: 1, name: "Decisions" })).toBeVisible();
+      await page.route("**/api/v1/postiz/**", (route) =>
+        route.fulfill({ status: 503, json: { error: "synthetic_read_unavailable" } }),
+      );
+      await review.click();
+      await expect(page).toHaveURL(new RegExp(`/marketing/postiz/${id}$`));
+      expect(f.db.prepare("SELECT total_changes() AS count").get()!.count).toBe(before);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test("refuses a stale broker invitation instead of rendering a dead review link", async ({
+    page,
+  }) => {
+    const model = inboxModel();
+    const id = "approval:synthetic-lead-0001";
+    const stale = {
+      ...model,
+      decisions: {
+        version: 1,
+        state: "ready",
+        sources: [
+          {
+            kind: "lead_triage",
+            state: "current",
+            loaded_count: 1,
+            has_more: false,
+            next_cursor: null,
+            read_model_generated_at: generatedAt,
+          },
+        ],
+        items: [
+          {
+            ...shared,
+            id,
+            key: `lead_triage:${id}`,
+            kind: "lead_triage",
+            native_state: "pending",
+            title: "Retired lead invitation",
+            job_id: null,
+            review_href: `/approvals?review=${encodeURIComponent(id)}`,
+          },
+        ],
+      },
+    };
+    await page.route(nowRoute, (route) => route.fulfill({ json: stale }));
+    await page.goto("/now?show=decide");
+    await expect(page.getByRole("link", { name: "Open review" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Retired lead invitation" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
   });
 
   test("supports keyboard selection, filtering and closing the desktop inspector", async ({
@@ -315,9 +397,9 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     await expect(first).toBeFocused();
     await page.getByRole("button", { name: "Marketing 1", exact: true }).click();
     await expect(page.locator(".now-row")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: items[3].title })).toBeVisible();
-    await page.getByRole("button", { name: "All requests 5", exact: true }).click();
-    await expect(page.locator(".now-row")).toHaveCount(5);
+    await expect(page.getByRole("button", { name: items[0].title })).toBeVisible();
+    await page.getByRole("button", { name: "All requests 2", exact: true }).click();
+    await expect(page.locator(".now-row")).toHaveCount(2);
   });
 
   test("opens a modal phone drawer and restores focus after Escape", async ({ page }, testInfo) => {
@@ -381,7 +463,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       items: [],
       sources: [
         {
-          kind: "lead_triage",
+          kind: "postiz",
           state: "unavailable",
           loaded_count: 0,
           has_more: null,
@@ -389,7 +471,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
           read_model_generated_at: null,
         },
         {
-          kind: "quote_revision",
+          kind: "quickbooks_final_invoice",
           state: "current",
           loaded_count: 0,
           has_more: false,
@@ -404,10 +486,10 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     ).toBeVisible();
     await page.getByText("System details", { exact: true }).click();
     const status = page.getByRole("list", { name: "Work list status" });
-    await expect(status.getByRole("listitem").filter({ hasText: "Lead reviews" })).toContainText(
+    await expect(status.getByRole("listitem").filter({ hasText: "Marketing" })).toContainText(
       "The request count is unknown.",
     );
-    await expect(status.getByRole("listitem").filter({ hasText: "Quote changes" })).toContainText(
+    await expect(status.getByRole("listitem").filter({ hasText: "Final invoices" })).toContainText(
       "0 loaded.",
     );
     await expect(
@@ -423,7 +505,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       items: [],
       sources: [
         {
-          kind: "lead_triage",
+          kind: "postiz",
           state: "current",
           loaded_count: 0,
           has_more: false,
@@ -440,7 +522,8 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       0,
     );
     await expect(page.getByRole("button", { name: "All requests 0", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Marketing|Final invoices/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Marketing 0", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Final invoices/ })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Open review" })).toHaveCount(0);
   });
 
@@ -453,7 +536,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     await expect(
       page.getByText("25 requests loaded; more are available in this source.", { exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Lead reviews 25", exact: true }).click();
+    await page.getByRole("button", { name: "Marketing 25", exact: true }).click();
     await expect(page.locator(".now-row")).toHaveCount(25);
     await expect(page.getByText("The decisions list is incomplete", { exact: true })).toBeVisible();
     await page.getByText("System details", { exact: true }).click();
@@ -470,10 +553,10 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     const second = inboxModel();
     const additional: DecisionItem[] = [25, 26].map((index) => ({
       ...items[0],
-      id: pageLeadId(index),
-      key: `lead_triage:${pageLeadId(index)}`,
-      title: `Synthetic lead review ${index + 1}`,
-      review_href: `/approvals?review=${encodeURIComponent(pageLeadId(index))}`,
+      id: pageMarketingId(index),
+      key: `postiz:${pageMarketingId(index)}`,
+      title: `Synthetic marketing review ${index + 1}`,
+      review_href: `/marketing/postiz/${encodeURIComponent(pageMarketingId(index))}`,
     }));
     second.decisions = {
       version: 1,
@@ -481,7 +564,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       items: [model.decisions!.items[24], ...additional],
       sources: [
         {
-          kind: "lead_triage",
+          kind: "postiz",
           state: "current",
           loaded_count: 3,
           has_more: false,
@@ -497,13 +580,13 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       const url = new URL(route.request().url());
       if (!url.searchParams.has("decision_source")) return route.fulfill({ json: model });
       pageReads.push(url.search);
-      expect(url.searchParams.get("decision_source")).toBe("lead_triage");
+      expect(url.searchParams.get("decision_source")).toBe("postiz");
       expect(url.searchParams.get("decision_cursor")).toBe(nextCursor);
       return pageReads.length === 1
         ? route.fulfill({ status: 503, json: { error: "synthetic_next_page_unavailable" } })
         : route.fulfill({ json: second });
     });
-    const more = page.getByRole("button", { name: "Load more lead reviews", exact: true });
+    const more = page.getByRole("button", { name: "Load more marketing", exact: true });
     await more.click();
     await expect(page.getByRole("alert")).toContainText("The next requests did not load");
     await expect(page.locator(".now-row")).toHaveCount(25);
@@ -513,14 +596,14 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     expect(pageReads).toHaveLength(2);
     await expect(page.getByRole("button", { name: "All requests 27", exact: true })).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Synthetic lead review 25", exact: true }),
+      page.getByRole("button", { name: "Synthetic marketing review 25", exact: true }),
     ).toHaveCount(1);
     await expect(more).toHaveCount(0);
-    await page.getByRole("button", { name: "Synthetic lead review 26", exact: true }).click();
+    await page.getByRole("button", { name: "Synthetic marketing review 26", exact: true }).click();
     const inspector = page.getByRole("complementary", { name: "Selected item" });
     await expect(inspector.getByRole("link", { name: "Open review" })).toHaveAttribute(
       "href",
-      `/approvals?review=${encodeURIComponent(pageLeadId(25))}`,
+      `/marketing/postiz/${encodeURIComponent(pageMarketingId(25))}`,
     );
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(page.locator(".now-row")).toHaveCount(25);
@@ -535,14 +618,14 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     );
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("The new list did not load");
-    await expect(page.locator(".now-row")).toHaveCount(5);
+    await expect(page.locator(".now-row")).toHaveCount(2);
     await expect(page.getByRole("button", { name: items[1].title })).toBeVisible();
   });
 
   test("keeps keyboard focus on Refresh after a successful fresh read", async ({ page }) => {
     await serveNow(page);
     const fresh = inboxModel();
-    fresh.decisions!.items[0].title = "Synthetic lead refreshed successfully";
+    fresh.decisions!.items[0].title = "Synthetic marketing refreshed successfully";
     await page.route(nowRoute, (route) => route.fulfill({ json: fresh }));
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
     await refresh.focus();
@@ -590,19 +673,19 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     await page.route(nowRoute, (route) =>
       route.fulfill({
         json: new URL(route.request().url()).searchParams.has("decision_source")
-          ? secondLeadPage()
+          ? secondMarketingPage()
           : initial,
       }),
     );
-    await page.getByRole("button", { name: "Load more lead reviews", exact: true }).click();
-    await page.getByRole("button", { name: "Synthetic lead review 26", exact: true }).click();
-    const drawer = page.getByRole("dialog", { name: "Synthetic lead review 26" });
+    await page.getByRole("button", { name: "Load more marketing", exact: true }).click();
+    await page.getByRole("button", { name: "Synthetic marketing review 26", exact: true }).click();
+    const drawer = page.getByRole("dialog", { name: "Synthetic marketing review 26" });
     await expect(drawer).toBeVisible();
     await drawer.getByRole("link", { name: "Open review" }).focus();
     await backgroundRefresh(page);
     await expect(drawer).not.toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Synthetic lead review 26", exact: true }),
+      page.getByRole("button", { name: "Synthetic marketing review 26", exact: true }),
     ).toHaveCount(0);
     await expect(page.getByRole("button", { name: "All requests 25", exact: true })).toBeFocused();
   });
@@ -611,7 +694,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     const initial = limitedModel();
     await serveNow(page, initial);
     const fresh = limitedModel();
-    fresh.decisions!.items[0].title = "Synthetic current snapshot lead";
+    fresh.decisions!.items[0].title = "Synthetic current snapshot marketing";
     fresh.decisions!.state = "ready";
     Object.assign(fresh.decisions!.sources[0], {
       state: "current",
@@ -628,12 +711,12 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       if (new URL(route.request().url()).searchParams.has("decision_source")) {
         pageRequested = true;
         await pageGate;
-        return route.fulfill({ json: secondLeadPage() });
+        return route.fulfill({ json: secondMarketingPage() });
       }
       return route.fulfill({ json: fresh });
     });
     try {
-      await page.getByRole("button", { name: "Load more lead reviews", exact: true }).click();
+      await page.getByRole("button", { name: "Load more marketing", exact: true }).click();
       await expect.poll(() => pageRequested).toBe(true);
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
       await expect(
@@ -647,13 +730,13 @@ test.describe("HOME04 decision inbox browser evidence", () => {
       await settleTheme(page);
       await expect(page.locator(".now-row")).toHaveCount(25);
       await expect(
-        page.getByRole("button", { name: "Synthetic lead review 26", exact: true }),
+        page.getByRole("button", { name: "Synthetic marketing review 26", exact: true }),
       ).toHaveCount(0);
       await expect(
         page.getByRole("button", { name: "All requests 25", exact: true }),
       ).toBeVisible();
       await expect(
-        page.getByRole("button", { name: "Load more lead reviews", exact: true }),
+        page.getByRole("button", { name: "Load more marketing", exact: true }),
       ).toHaveCount(0);
     } finally {
       releasePage();
@@ -723,7 +806,7 @@ test.describe("HOME04 decision inbox browser evidence", () => {
     test.setTimeout(90_000);
     const model = inboxModel();
     const long = model.decisions!.items[1];
-    long.title = `Synthetic quote ${"LongReference".repeat(12)}`;
+    long.title = `Synthetic invoice ${"LongReference".repeat(12)}`;
     long.summary = `Check this synthetic evidence before deciding. ${"MeasurementReference".repeat(40)}`;
     long.job_id = `JOB-${"LONG-".repeat(25)}`;
     await serveNow(page, model);

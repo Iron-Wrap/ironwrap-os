@@ -30,6 +30,76 @@ test.describe("Field Companion PWA acceptance", () => {
     }
   });
 
+  test("shows the complete bound plan target unobscured at ordinary document ends", async ({
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      const packetRead = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/api/v1/jobs/JOB-ACCEPTANCE",
+      );
+      await page.goto("/jobs/JOB-ACCEPTANCE");
+      const model = await (await packetRead).json();
+      const plan = page.getByRole("region", { name: model.packet.work_package.title, exact: true });
+      const target = page.getByRole("region", { name: "Work plan target", exact: true });
+      await expect(target).toContainText(
+        `${model.packet.work_package.title} · Version ${model.packet.work_package.version}`,
+      );
+      await expect(
+        target.getByText("Applies to the job", { exact: true }).locator(".."),
+      ).toHaveText(
+        `Applies to the job${model.packet.contact.display_name} · ${model.job.address.split(",")[0].trim()} · Ref ${model.job.job_number}`,
+      );
+      await expect(target.getByRole("button")).toHaveCount(0);
+      await expect(target.getByRole("link")).toHaveCount(0);
+      await expect(plan.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
+      await expect(plan.getByText(/Waiting for Production manager/i)).toBeVisible();
+      await expect(plan.getByRole("button", { name: "Start work", exact: true })).toHaveCount(0);
+      await settleAnimations(page);
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await expect
+        .poll(() =>
+          target.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const header = document.querySelector(".crew-top")!.getBoundingClientRect();
+            const tabs = document.querySelector(".crew-tabs")!.getBoundingClientRect();
+            const atEnd =
+              Math.abs(document.documentElement.scrollHeight - innerHeight - scrollY) <= 1;
+            const inside = box.top >= header.bottom && box.bottom <= tabs.top;
+            const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            let lines = 0;
+            let unobscured = true;
+            while (text.nextNode()) {
+              if (!text.currentNode.textContent?.trim()) continue;
+              const range = document.createRange();
+              range.selectNodeContents(text.currentNode);
+              for (const line of range.getClientRects()) {
+                if (!line.width || !line.height) continue;
+                lines += 1;
+                const top = document.elementFromPoint(
+                  line.x + line.width / 2,
+                  line.y + line.height / 2,
+                );
+                unobscured &&= !!top && element.contains(top);
+              }
+            }
+            return (
+              atEnd &&
+              inside &&
+              lines > 0 &&
+              unobscured &&
+              element.parentElement?.lastElementChild === element
+            );
+          }),
+        )
+        .toBe(true);
+    }
+  });
+
   test("keeps the full crew name, the sun and night switch, and thumb actions usable on narrow phones", async ({
     page,
   }) => {

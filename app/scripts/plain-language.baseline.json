@@ -129,7 +129,6 @@
     "banned-term": 1
   },
   "src/production/production-runway-page.tsx": {
-    "unlabelled-code": 1,
     "machine-name": 1
   },
   "src/safety/corrective-action-page.tsx": {

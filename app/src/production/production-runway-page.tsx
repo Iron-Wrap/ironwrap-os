@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -12,7 +12,7 @@ import {
   Warehouse,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
@@ -20,9 +20,11 @@ import { useShopReading } from "../components/shop-reading";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Dialog } from "../components/ui/dialog";
 import { ErrorState } from "../components/ui/state-panel";
 import { SystemDetails } from "../components/ui/system-details";
 import { GateChip } from "../field/gate-chip";
+import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
 import { scopes } from "../lib/theme";
@@ -95,9 +97,50 @@ export function ProductionRunwayPage() {
 
 function ProductionRunwayContent() {
   const session = useSession();
-  const query = useQuery({
-    queryKey: ["production-runway", session.tenant.id, session.user.id],
-    queryFn: () => loadProductionRunway(),
+  const queryClient = useQueryClient();
+  const authority = JSON.stringify([
+    session.user.role,
+    [...session.permissions].sort(),
+    [...session.allowed_actions].sort(),
+  ]);
+  // The session has no public session ID. Keep its CSRF token out of query keys;
+  // a local opaque scope rotates when this mounted view's sign-in or grants change.
+  const sessionScope = useMemo(
+    () => ({
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      csrfToken: session.csrf_token,
+      expiresAt: session.session_expires_at,
+      authority,
+      cacheScope: crypto.randomUUID(),
+    }),
+    [session.tenant.id, session.user.id, session.csrf_token, session.session_expires_at, authority],
+  );
+  const queryKey = [
+    "production-runway",
+    session.tenant.id,
+    session.user.id,
+    sessionScope.cacheScope,
+    "job-identity-v1",
+  ];
+  const query = useQuery<ProductionRunwayResponse | null>({
+    queryKey,
+    queryFn: async ({ signal }) => {
+      try {
+        return await loadProductionRunway(fetch, signal);
+      } catch (error) {
+        if (
+          error instanceof ApiError &&
+          ([401, 403].includes(error.status) || error.code === "invalid_response")
+        ) {
+          // Retire only this session scope's payload after authority or schema loss.
+          // Unsuccessful retries cannot revive old identity or grants; only a fresh
+          // accepted read may replace it. Ordinary transport failures keep their warning.
+          queryClient.setQueryData(queryKey, null);
+        }
+        throw error;
+      }
+    },
   });
   const model = query.data;
 
@@ -157,6 +200,15 @@ function ProductionRunwayScreen({
         icon={<CalendarClock aria-hidden="true" />}
         title="Production plan"
         description="Check crews, start dates, safety steps, and material needs. This page does not change a job."
+        actions={
+          <ProductionJobFinder
+            model={model}
+            canOpenJob={canOpenJob}
+            canOpenHistory={canOpenHistory}
+            refreshFailed={refreshFailed}
+            onRetry={onRetry}
+          />
+        }
         aside={
           <>
             <p className="text-sm font-bold text-muted">Today</p>
@@ -202,6 +254,165 @@ function ProductionRunwayScreen({
           />
         ))}
       </div>
+    </section>
+  );
+}
+
+function ProductionJobFinder({
+  model,
+  canOpenJob,
+  canOpenHistory,
+  refreshFailed,
+  onRetry,
+}: {
+  model: ProductionRunwayResponse;
+  canOpenJob: boolean;
+  canOpenHistory: boolean;
+  refreshFailed: boolean;
+  onRetry: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Hold only the choice. Every field and link follows the current authorized model.
+  const selected = model.jobs.find((job) => job.id === selectedId);
+  const bounded =
+    model.source_updated_at === null ||
+    model.partial_sources.length > 0 ||
+    model.stale_fields.length > 0;
+  const close = () => {
+    setOpen(false);
+    setSelectedId(null);
+  };
+  const number = selected?.job_number?.trim();
+
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Find a job</Button>
+      <Dialog
+        open={open}
+        onClose={close}
+        side="end"
+        title={selected ? "Job information" : "Choose a job"}
+        description="Read only. This does not send a crew."
+        footer={
+          open && selected ? (
+            <>
+              {canOpenJob ? (
+                <Button asChild variant="outline" size="compact">
+                  <Link
+                    to="/jobs/$jobId"
+                    params={{ jobId: selected.id }}
+                    aria-label={number ? `Open ${number}` : "Open job with no recorded number"}
+                  >
+                    Open job <ChevronRight aria-hidden="true" />
+                  </Link>
+                </Button>
+              ) : null}
+              {canOpenHistory ? (
+                <Button asChild variant="quiet" size="compact">
+                  <Link
+                    to="/jobs/$jobId/history"
+                    params={{ jobId: selected.id }}
+                    aria-label={
+                      number ? `History of ${number}` : "History of job with no recorded number"
+                    }
+                  >
+                    Job record <ChevronRight aria-hidden="true" />
+                  </Link>
+                </Button>
+              ) : null}
+            </>
+          ) : undefined
+        }
+      >
+        {open ? (
+          <>
+            {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
+            {bounded ? <DataBoundary model={model} /> : null}
+            {selected ? (
+              <>
+                <Button variant="quiet" size="compact" onClick={() => setSelectedId(null)}>
+                  Choose another job
+                </Button>
+                <ProductionJobInformation key={selected.id} job={selected} />
+              </>
+            ) : (
+              <>
+                {selectedId ? (
+                  <p className="text-sm leading-6">
+                    That job is no longer in this list. Choose a current job.
+                  </p>
+                ) : null}
+                {model.jobs.length === 0 ? (
+                  <p className="text-sm leading-6">No active jobs are in this list.</p>
+                ) : (
+                  <ul className="grid gap-3" aria-label="Current production jobs">
+                    {model.jobs.map((job) => (
+                      <li key={job.id}>
+                        <Button
+                          variant="outline"
+                          className="h-auto w-full min-w-0 justify-between whitespace-normal text-left"
+                          onClick={() => setSelectedId(job.id)}
+                        >
+                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                            <span className="block font-bold">
+                              {job.job_number?.trim() || "Job number not recorded"}
+                            </span>
+                            <span className="mt-1 block text-sm font-normal">
+                              {job.customer_display_name ?? "Customer name not available"}
+                            </span>
+                          </span>
+                          <ChevronRight className="shrink-0" aria-hidden="true" />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </>
+        ) : null}
+      </Dialog>
+    </>
+  );
+}
+
+function ProductionJobInformation({ job }: { job: ProductionRunwayJob }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
+
+  return (
+    <section className="min-w-0 text-foreground [overflow-wrap:anywhere]" aria-label="Selected job">
+      <h3 ref={heading} tabIndex={-1} className="break-words text-lg font-bold">
+        <span className="block text-sm font-semibold text-muted">Job number</span>
+        <span>{job.job_number?.trim() || "Not recorded"}</span>
+      </h3>
+      <dl className="mt-4 grid gap-4 text-sm">
+        <div>
+          <dt className="font-semibold text-muted">Customer</dt>
+          <dd className="mt-1 break-words leading-6">
+            {job.customer_display_name ?? "Customer name not available"}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-semibold text-muted">Job site</dt>
+          <dd className="mt-1 break-words leading-6">
+            {job.address ?? "Site address not available"}
+          </dd>
+        </div>
+      </dl>
+      <SystemDetails className="mt-4 rounded-lg border border-border" summaryClassName="px-4">
+        <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted">
+          <MetadataLine label="Job ID" value={job.id} />
+          <MetadataLine label="Job state" value={job.status ?? "Not found"} />
+          <MetadataLine label="Crew record" value={job.assignment?.id ?? "Not found"} />
+          <MetadataLine label="Crew state" value={job.assignment?.status ?? "Not found"} />
+          <MetadataLine label="Step data" value={job.gate_coverage} />
+          <MetadataLine label="Saved next step" value={job.next_action} />
+        </dl>
+      </SystemDetails>
     </section>
   );
 }
@@ -382,6 +593,7 @@ function RunwayJobCard({
   canOpenHistory: boolean;
   canClearGates: boolean;
 }) {
+  const jobNumber = job.job_number?.trim() || null;
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
   const gateCoverage =
     job.gate_coverage === "complete"
@@ -392,24 +604,24 @@ function RunwayJobCard({
 
   return (
     <article className="rounded-lg border border-border bg-surface p-4 sm:p-5">
-      <div className="flex gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold text-muted">{job.brand ?? "Unbranded job"}</p>
-          <h3
-            className="mt-1 truncate text-lg font-bold tracking-[-0.02em]"
-            title={job.job_number ?? job.id}
-          >
-            {job.job_number ?? job.id}
+          <h3 className="mt-1 break-words text-lg font-bold tracking-[-0.02em] [overflow-wrap:anywhere]">
+            <span className="block text-xs font-semibold tracking-normal text-muted">
+              Job number
+            </span>
+            <span>{jobNumber ?? "Not recorded"}</span>
           </h3>
           <p className="mt-1 text-sm text-muted">{job.service_type ?? "Work type not found"}</p>
         </div>
-        <div className="flex shrink-0 flex-col gap-2">
+        <div className="flex flex-wrap gap-2 sm:shrink-0 sm:flex-col">
           {canOpenJob ? (
             <Button asChild variant="outline" size="compact">
               <Link
                 to="/jobs/$jobId"
                 params={{ jobId: job.id }}
-                aria-label={`Open ${job.job_number ?? job.id}`}
+                aria-label={jobNumber ? `Open ${jobNumber}` : "Open job with no recorded number"}
               >
                 Open job
                 <ChevronRight aria-hidden="true" />
@@ -421,7 +633,9 @@ function RunwayJobCard({
               <Link
                 to="/jobs/$jobId/history"
                 params={{ jobId: job.id }}
-                aria-label={`History of ${job.job_number ?? job.id}`}
+                aria-label={
+                  jobNumber ? `History of ${jobNumber}` : "History of job with no recorded number"
+                }
               >
                 Job record
                 <ChevronRight aria-hidden="true" />
@@ -430,6 +644,21 @@ function RunwayJobCard({
           ) : null}
         </div>
       </div>
+
+      <dl className="mt-3 space-y-2 text-sm">
+        <div className="min-w-0">
+          <dt className="font-semibold text-muted">Customer</dt>
+          <dd className="mt-0.5 break-words leading-5 [overflow-wrap:anywhere]">
+            {job.customer_display_name ?? "Customer name not available"}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="font-semibold text-muted">Job site</dt>
+          <dd className="mt-0.5 break-words leading-5 [overflow-wrap:anywhere]">
+            {job.address ?? "Site address not available"}
+          </dd>
+        </div>
+      </dl>
 
       <dl className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/80 py-3 text-sm sm:grid-cols-2">
         <div>

@@ -95,7 +95,7 @@ test.describe("Production plan acceptance", () => {
   });
 
   test("shows safe job work without changing server rules", async ({ page }, testInfo) => {
-    await page.route("**/api/v1/production", (route) =>
+    await page.route("**/api/v1/production?include_job_identity=1", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",

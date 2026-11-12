@@ -199,7 +199,7 @@ takes effect from the first push after the commit that introduces it.
 
 - **The gate train (A1–A5).** No release tag may carry the gate train (A1–A5, migrations
   0153/0155/0158/0159/0160) until (1) PR-C, the office UI for A1–A5, (2) the P33 stop
-  raise/release UI and (3) Sergey's production pre-flight have all landed. On QA, today's office
+  raise/release UI and (3) the owner's production pre-flight have all landed. On QA, today's office
   UI shows the gate refusals without explanation; that is acceptable on QA only. Once 0153 is on
   `main`, every later commit carries it, so the maintainer tags no commit that contains 0153
   (step 2 below) until all three have landed.

@@ -160,6 +160,10 @@ another language carries a faithful reviewer-language translation in the receipt
 
 ## Drafts
 
+- Customer reminders, including booking and payment reminders, always ask for human approval
+  of the exact message. A due watch, standing schedule, current consent or an earlier approved
+  reminder does not approve the next one. Draft for review; a separate proposal to send a saved
+  draft still waits for its own approval and never becomes an automatic send.
 - Write customer drafts in the language the customer asks for in their current message; otherwise
   in the preferred language on their contact record; otherwise in the language of their message;
   if that is unclear, in English with an offer of another language.

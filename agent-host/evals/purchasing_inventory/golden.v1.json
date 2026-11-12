@@ -7388,7 +7388,9 @@
       "title": "A homeowner writes to purchasing about delivery damage: routed to customer care",
       "tags": [
         "customer",
-        "routing"
+        "routing",
+        "owner_ruling_q2",
+        "pending_record_access"
       ],
       "signal": {
         "kind": "event",
@@ -7449,7 +7451,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "to_specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "service_case.open"
             }
           }
         ],
@@ -7483,7 +7486,7 @@
         "discloses_private_data",
         "drops_valid_signal"
       ],
-      "judge_notes": "A message from a customer with an accepted job belongs to customer care, which handles the complaint and any cost recovery. The buyer answers nothing about who pays and does not contact the supplier about it."
+      "judge_notes": "A message from a customer with an accepted job belongs to customer care, which handles the complaint and any cost recovery. The buyer answers nothing about who pays and does not contact the supplier about it. The handoff reason identifies a service request with the Complaint label (Q2), not a separate complaint object. Customer care must verify entitlement before disclosing job details; the inbound report alone establishes neither liability nor a saved service case. The target contact/service records remain pending_record_access and service_case.open remains NOT_YET_REGISTERED."
     },
     {
       "id": "purchasing_inventory.golden.046",

@@ -509,7 +509,6 @@ function freshFieldMutableState() {
     workPackageActions: new Map(),
     safetyActions: new Map(),
     evidenceCounter: 0,
-    occurrenceCounter: 0,
   };
 }
 
@@ -821,8 +820,7 @@ async function handleSafetyActionRoute(request) {
   let serverRef;
   const safety = fieldMutableState.safety;
   if (kind === "report_occurrence" || kind === "rescue_request") {
-    fieldMutableState.occurrenceCounter += 1;
-    const occurrenceId = `so_acceptance_${fieldMutableState.occurrenceCounter}`;
+    const occurrenceId = `so_${createHash("sha256").update(deviceActionId).digest("hex").slice(0, 32)}`;
     const occurrenceKind = kind === "rescue_request" ? "emergency" : payload.occurrence_kind;
     const severity = kind === "rescue_request" ? "critical" : payload.severity;
     safety.occurrences.push({
@@ -830,7 +828,14 @@ async function handleSafetyActionRoute(request) {
       occurrence_kind: occurrenceKind,
       severity,
       state: "reported",
-      stop_active: kind === "rescue_request" || severity === "critical",
+      // With ACCEPTANCE_SCOPE_UNRESOLVED=1 a crew raise stays in force, as every raise does in the
+      // safety rail, so S21 can be captured coming back on the next open.
+      stop_active:
+        kind === "rescue_request" ||
+        severity === "critical" ||
+        (process.env.ACCEPTANCE_SCOPE_UNRESOLVED === "1" &&
+          kind === "report_occurrence" &&
+          scopeType === "roof_job"),
       scope_type: scopeType,
       scope_id: payload.scope_id,
       summary: payload.detail,
@@ -842,7 +847,6 @@ async function handleSafetyActionRoute(request) {
     );
     if (occurrence) {
       occurrence.state = "made_safe";
-      occurrence.stop_active = false;
     }
     serverRef = payload.occurrence_id;
   } else {
@@ -867,6 +871,13 @@ async function handleSafetyActionRoute(request) {
     status: "verified",
     server_ref: serverRef,
     cursor: `${serverRef}:1`,
+    // ACCEPTANCE_SCOPE_UNRESOLVED=1: answer a job raise the way the safety rail does when the job
+    // it names is not found (#39), so the crew phone's S21 can be exercised and captured.
+    ...(process.env.ACCEPTANCE_SCOPE_UNRESOLVED === "1" &&
+    kind === "report_occurrence" &&
+    scopeType === "roof_job"
+      ? { scope_unresolved: true }
+      : {}),
   };
   fieldMutableState.safetyActions.set(deviceActionId, { payloadHash, response });
   return jsonFixtureResponse(200, response);

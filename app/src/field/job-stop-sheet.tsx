@@ -36,13 +36,14 @@ const SAVED_ON_DEVICE =
 const NOT_CONFIRMED =
   "This phone could not confirm it saved this report. Tell your supervisor directly.";
 
-type Delivery = "saved" | "sent" | "attention";
+/** `unresolved`: the office has it, but the job it names was not found, so it holds every job. */
+type Delivery = "saved" | "sent" | "unresolved" | "attention";
 
 /**
  * Stop work on one job from a crew phone (P33 S20), then say the area is safe (S23). Every action
  * goes to the durable outbox first, so a stop survives no signal; the stop is scoped to this job,
- * never the whole company. A stop whose job the office could not find (S21, `scope_unresolved`)
- * waits for the owner items and Track C's slice, in a follow-up.
+ * never the whole company. A stop whose job the office could not find holds every job, and says so
+ * (S21, `scope_unresolved`).
  *
  * `onStage` tells the host which view shows, so it can keep its own 911 call beside the made-safe
  * view (S20 carries its own).
@@ -61,6 +62,9 @@ export function JobStopSheet({
   const [raised, setRaised] = useState<RaisedStop>();
   // Until this phone has looked for a stop it already raised, offer nothing: never a second stop.
   const [loaded, setLoaded] = useState(false);
+  // S21 is read and closed with Done, which leads on to the made-safe step; S21 comes back on the
+  // next open while the stop holds.
+  const [acknowledged, setAcknowledged] = useState(false);
   const [delivery, setDelivery] = useState<Delivery>("saved");
   const [unsafe, setUnsafe] = useState("");
   const [done, setDone] = useState("");
@@ -93,7 +97,8 @@ export function JobStopSheet({
       setRaised(stop);
       setDelivery(answer);
       // A stop the office has lifted is over: the job offers a new stop again.
-      if (answer === "sent" && (await stopLifted(session, stop.occurrenceId, fetcher))) {
+      const delivered = answer === "sent" || answer === "unresolved";
+      if (delivered && (await stopLifted(session, stop.occurrenceId, fetcher))) {
         await forgetStop(session, job.id, stop);
         if (!cancelled) setRaised((current) => (current === stop ? undefined : current));
       }
@@ -168,6 +173,7 @@ export function JobStopSheet({
         return;
       }
       await saveRaisedStop(session, job.id, stop);
+      setAcknowledged(false);
       setRaised(stop);
       setDelivery(answer);
     } catch (caught) {
@@ -208,6 +214,34 @@ export function JobStopSheet({
 
   if (!loaded) return null;
 
+  if (raised && delivery === "unresolved" && !acknowledged) {
+    return (
+      <section className="space-y-3" aria-label="Stop work">
+        <Notice
+          tone="danger"
+          title="Work is stopped on every job. You reported a stop, and we couldn't tell which job it's for. The office is told."
+        />
+        <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
+          {[
+            "Stop",
+            stopTime(raised.raisedAt, timeZone),
+            session.user.display_name,
+            raised.unsafe ? `Reason: ${raised.unsafe}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+        {/* The office is told; the app cannot put the stop on its job yet, so neither line promises a fix. */}
+        <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
+          Job: couldn't tell which one
+        </p>
+        <Button type="button" size="field" onClick={() => setAcknowledged(true)}>
+          Done
+        </Button>
+      </section>
+    );
+  }
+
   if (raised) {
     return (
       <section className="space-y-3" aria-label="Work stopped">
@@ -215,11 +249,17 @@ export function JobStopSheet({
           <Notice tone="info" title="Stop sent. When the area is safe, say so here." />
         ) : delivery === "attention" ? (
           <Notice tone="danger" title={NOT_CONFIRMED} />
-        ) : (
+        ) : delivery === "saved" ? (
           <Notice tone="local" title={SAVED_ON_DEVICE} />
-        )}
+        ) : null}
+        {/* A stop whose job wasn't found holds every job; the line never names that job again. */}
         <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">
-          {["Stop", stopTime(raised.raisedAt, timeZone), raised.unsafe, jobLine]
+          {[
+            "Stop",
+            stopTime(raised.raisedAt, timeZone),
+            raised.unsafe,
+            delivery === "unresolved" ? "Every job" : jobLine,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </p>
@@ -236,19 +276,24 @@ export function JobStopSheet({
           </label>
         )}
         <p className="text-sm">This doesn't restart work. The office releases the stop.</p>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="secondary" size="field">
-            <a href={`/check-in/${encodeURIComponent(job.id)}`}>
-              <Camera aria-hidden="true" />
-              Take photo
-            </a>
-          </Button>
-          {raised.madeSafeAt ? null : (
-            <Button type="button" size="field" busy={busy} onClick={() => void madeSafe()}>
-              I've made the area safe
-            </Button>
-          )}
-        </div>
+        {/* A stop whose job wasn't found takes no job photos: the job it would file to is unknown. */}
+        {delivery === "unresolved" && raised.madeSafeAt ? null : (
+          <div className="flex flex-wrap gap-2">
+            {delivery === "unresolved" ? null : (
+              <Button asChild variant="secondary" size="field">
+                <a href={`/check-in/${encodeURIComponent(job.id)}`}>
+                  <Camera aria-hidden="true" />
+                  Take photo
+                </a>
+              </Button>
+            )}
+            {raised.madeSafeAt ? null : (
+              <Button type="button" size="field" busy={busy} onClick={() => void madeSafe()}>
+                I've made the area safe
+              </Button>
+            )}
+          </div>
+        )}
         {status ? (
           <p className="text-sm font-semibold text-ok" role="status">
             {status}
@@ -320,7 +365,8 @@ async function forgetStop(session: AuthenticatedSession, jobId: string, stop: Ra
 /** Whether the office has the stop yet, or it needs a person. */
 async function deliveryOf(deviceActionId: string): Promise<Delivery> {
   const action = await getOutboxAction(deviceActionId);
-  if (action?.state === "verified") return "sent";
+  if (action?.state === "verified")
+    return action.verification?.scopeUnresolved ? "unresolved" : "sent";
   if (action?.state === "needs_attention") return "attention";
   return "saved";
 }

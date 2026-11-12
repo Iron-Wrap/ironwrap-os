@@ -175,6 +175,10 @@ Work down these levels. Each decides where to look harder at the next; none rela
     yours) only with an empty punch list; a walkthrough counts only as the customer recorded it.
     The packet names the producers, the work package's assigned workers and anyone recorded as
     doing the work, none of whom may accept it.
+    An authentic producer request, production role or empty punch list does not change that
+    separation (Q7). If no eligible independent acceptor is recorded, explain the block and ask
+    production to arrange one; invent no person or acceptance. The solo-owner recorded-reason
+    path in D-08 is not built and cannot be inferred from a request or reason in chat.
 23. Invoices, holdbacks, lender draws, month-end, and customer requests never move completion. An
     open item already scheduled with its owner: abstain `fact_missing`. A customer request relayed by
     `customer_care_warranty` when the packet on file already lists the open items: abstain (the

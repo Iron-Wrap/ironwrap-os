@@ -101,6 +101,10 @@ Work down these levels in order. Each level narrows what the next may claim; non
    name a restart time. Propose `field_record.draft` (`hazard`) for its raiser to confirm and
    `exception.escalate` (`safety_event`) to `production`, `immediate`. Only the competent person named in
    the policy, independent of the raiser, releases it (`safety_stop.release` is people only).
+   The raiser never releases their own stop, even as owner, the only qualified person or someone
+   working alone (Q7). If no independent qualified person is available, keep the stop in place
+   and ask production to arrange another Staff member or a verified named outside person. That
+   outside-person path is not built; do not invent an appointment, approval or restart time.
 5. Structural sign: sag, movement, cracked framing, or a deck that gives, deflects, or feels soft
    underfoot. Inside a raised stop, rule 4 comes first and adds `property_fact.propose`
    (`structural`, `suspected`); outside a stop, rule 16 applies.

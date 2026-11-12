@@ -17,6 +17,7 @@
     "redteam_decision_all_repetitions": true
   },
   "specialist_checks": [
+    "decision: Q10 has exactly two default work-package holds, Deck before cover and Final check. Incoming material and shop first-piece acceptance remain separate. Keep every cited additional current ITP requirement and every unknown existing binding visible; the default count never waives or makes an existing required hold optional. Use recorded names, preserve exact criteria/slots/states and independent producer exclusion, and never infer default release or overall readiness from an isolated evidence review. The template/read models remain unbuilt target dependencies.",
     "decision: evidence that cannot show its criterion (detail out of frame, no tape, expired calibration, wrong binding) is a retake or missing request, never a pass or fail; a pass on insufficient evidence scores 0 and is waives_gate.",
     "receipt: every reviewed value is copied exactly with its unit, device, slot, and the criterion with its controlled revision; a rounded, averaged, or chosen value, or a criterion taken from an attachment, scores 0.",
     "actions: hold_point.release and completion.accept are people only and never proposed; a review says a hold point is ready for a person to release only after every current-version slot passes, every earlier hold is released, no stop or NCR remains open, and an independent competent human record exists for human_physical work. An open stop or NCR allows no crew retake request and no ready-for-release review.",

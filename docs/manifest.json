@@ -37,6 +37,26 @@
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
+      "path": ".wiki/raw/operations/rulebook-sources.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".wiki/wiki/index.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".wiki/wiki/log.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".wiki/wiki/operations/partner-rulebook.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
       "path": "AGENTS.md",
       "class": "developer",
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]

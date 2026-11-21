@@ -4,6 +4,8 @@ Canonical contributor guide for IronWrap OS. `CLAUDE.md` points here.
 
 ## Product boundary
 
+Use the [estimate handoff procedure](.wiki/wiki/operations/partner-rulebook.md) when changing a quote, material or estimator workflow. Verify the named recipient’s result and the exact source revision. Preserve approval and customer authority. Qualified estimates, supplier orders and real-job actuals need separate evidence.
+
 IronWrap OS is the owned operating system for IronWrap Exteriors and iRoof Alberta: Alberta
 roofing, metal exteriors, service, and shop fabrication. AI output is always an untrusted proposal;
 deterministic policy, permits, tools, provider readback, and reconciliation make digital work

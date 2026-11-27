@@ -1156,6 +1156,125 @@ test("approval fails closed when native completion truth changes after derivatio
   );
 });
 
+// Typed identity determines the Roof Job relationship. A legacy package may have no
+// frozen assignment-authority snapshot; the compatibility job_id still is not a type.
+function addTypedScopePackage(
+  db: AccountingTestD1,
+  overrides: Partial<{
+    tenantId: string;
+    jobId: string;
+    assignmentId: string;
+    objectType: string;
+    objectId: string;
+    contextType: string;
+    contextId: string;
+    status: string;
+  }> = {},
+): void {
+  const scope = {
+    tenantId: TENANT,
+    jobId: JOB,
+    assignmentId: "independent-shop-assignment",
+    objectType: "Shop Order",
+    objectId: JOB,
+    contextType: "Shop Floor",
+    contextId: "independent-shop-floor",
+    status: "Released",
+    ...overrides,
+  };
+  db.raw.prepare(
+    `INSERT INTO work_packages (
+       work_package_id, tenant_id, version, job_id, assignment_id, work_object_type,
+       work_object_id, physical_context_type, physical_context_id, status, definition_json,
+       completed_at, updated_at
+     ) VALUES ('independent-shop-package', ?, 1, ?, ?, ?, ?, ?, ?, ?, '{}', NULL, ?)`,
+  ).run(scope.tenantId, scope.jobId, scope.assignmentId, scope.objectType,
+    scope.objectId, scope.contextType, scope.contextId, scope.status, COMPLETE_AT);
+}
+
+for (const [name, scope] of [
+  ["independent Shop Floor", {}],
+  ["same-ID Roof Site without an explicit Roof Job parent", { contextType: "Roof Site", contextId: JOB }],
+  ["another Roof Job whose physical context names this job", {
+    objectType: "Roof Job", objectId: "job-independent-roof", contextType: "Roof Job", contextId: JOB,
+  }],
+  ["another tenant's explicit Roof Job parent", { tenantId: "northline-metal", contextType: "Roof Job", contextId: JOB }],
+  ["superseded explicit Roof Job parent", { contextType: "Roof Job", contextId: JOB, status: "Superseded" }],
+] as const) {
+  test(`completion ignores ${name} instead of joining its compatibility job ID`, async () => {
+    const { env, db } = nativeTestEnv();
+    try {
+      seedNativeSource(db);
+      await seedPriorInvoice(env);
+      addTypedScopePackage(db, scope);
+      const result = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
+      assert.equal(result.outcome, "intent_derived");
+    } finally {
+      db.raw.close();
+    }
+  });
+}
+
+for (const [name, assignmentId, code] of [
+  ["stale assignment", "independent-shop-assignment", "work_package_assignment_stale"],
+  ["incomplete package", ASSIGNMENT, "work_package_set_incomplete"],
+] as const) {
+  test(`an explicit Roof Job parent retains the ${name} refusal even with a distinct compatibility ID`, async () => {
+    const { env, db } = nativeTestEnv();
+    try {
+      seedNativeSource(db);
+      await seedPriorInvoice(env);
+      addTypedScopePackage(db, { jobId: "shop-child", objectId: "shop-child", contextType: "Roof Job", contextId: JOB, assignmentId });
+      const result = await deriveNativeFinalInvoiceForJob(env, { tenantId: TENANT, roofJobId: JOB }, DERIVE_AT);
+      assert.equal(result.outcome, "blocked");
+      if (result.outcome === "blocked") assert.equal(result.blocker_code, code);
+      assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM accounting_intents WHERE final_invoice_intent_id IS NOT NULL").get()!.n, 0);
+    } finally {
+      db.raw.close();
+    }
+  });
+}
+
+for (const wrapped of [false, true]) {
+  for (const related of [false, true]) {
+    test(`scheduled ${wrapped ? "wrapped" : "after"} selection ${related ? "includes an explicit Roof Job parent" : "ignores an independent same-ID Shop Order"}`, async () => {
+      const { env, db } = nativeTestEnv();
+      try {
+        seedNativeSource(db);
+        await seedPriorInvoice(env);
+        db.raw.prepare(
+          `UPDATE work_packages SET job_id = ?, work_object_type = 'Shop Order',
+             work_object_id = ?, physical_context_type = ?, physical_context_id = ?
+           WHERE work_package_id = ?`,
+        ).run(related ? "legacy-shop-child" : JOB, related ? "legacy-shop-child" : JOB,
+          related ? "Roof Job" : "Shop Floor", related ? JOB : "independent-shop-floor", PACKAGE);
+        if (wrapped) {
+          db.raw.prepare(
+            `INSERT INTO native_final_invoice_derivation_cursors
+             (cursor_name, last_tenant_id, last_roof_job_id, updated_at) VALUES (?, ?, ?, ?)`,
+          ).run(`scheduled-v1:${TENANT}`, TENANT, JOB, COMPLETE_AT);
+        }
+        // The existing completion/evidence/assignment facts are unchanged. These are
+        // historical fixture snapshots, not a new native issuance or provider call.
+        const result = await deriveNativeFinalInvoiceIntents(env, DERIVE_AT, 1);
+        assert.deepEqual(result, {
+          scanned: related ? 1 : 0,
+          blocked: 0,
+          no_balance: 0,
+          intents_derived: related ? 1 : 0,
+          intents_replayed: 0,
+        });
+        assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM accounting_intents WHERE final_invoice_intent_id IS NOT NULL").get()!.n, related ? 1 : 0);
+        if (!related && !wrapped) {
+          assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM native_final_invoice_derivation_cursors").get()!.n, 0);
+        }
+      } finally {
+        db.raw.close();
+      }
+    });
+  }
+}
+
 test("bounded scheduled derivation rotates past stable blockers and wraps without starvation", async () => {
   const { env, db } = nativeTestEnv();
   for (const suffix of ["0001", "0002", "0003"]) {

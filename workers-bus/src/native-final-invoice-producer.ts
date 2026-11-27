@@ -902,13 +902,18 @@ export async function deriveNativeFinalInvoiceIntents(
   const cursor = await env.DB.prepare(
     `SELECT last_roof_job_id FROM native_final_invoice_derivation_cursors WHERE cursor_name = ?`,
   ).bind(cursorName).first<{ last_roof_job_id: string }>();
+  // Typed work names its Roof Job directly or through an explicit Roof Job parent.
+  // A non-Roof object's compatibility job_id is not a relationship to a Roof Job.
   const after = await env.DB.prepare(
     `SELECT job.tenant_id, job.roof_job_id
        FROM operating_roof_jobs job
       WHERE job.tenant_id = ?
         AND EXISTS (
         SELECT 1 FROM work_packages package
-         WHERE package.tenant_id = job.tenant_id AND package.job_id = job.roof_job_id
+         WHERE package.tenant_id = job.tenant_id
+           AND (CASE WHEN package.work_object_type = 'Roof Job' THEN package.work_object_id
+                     WHEN package.physical_context_type = 'Roof Job' THEN package.physical_context_id
+                     ELSE NULL END) = job.roof_job_id
            AND package.status != 'Superseded'
       )
         AND job.roof_job_id > ?
@@ -924,7 +929,10 @@ export async function deriveNativeFinalInvoiceIntents(
         WHERE job.tenant_id = ?
           AND EXISTS (
           SELECT 1 FROM work_packages package
-           WHERE package.tenant_id = job.tenant_id AND package.job_id = job.roof_job_id
+           WHERE package.tenant_id = job.tenant_id
+             AND (CASE WHEN package.work_object_type = 'Roof Job' THEN package.work_object_id
+                       WHEN package.physical_context_type = 'Roof Job' THEN package.physical_context_id
+                       ELSE NULL END) = job.roof_job_id
              AND package.status != 'Superseded'
         )
           AND job.roof_job_id <= ?
@@ -1015,7 +1023,11 @@ async function readCompletionSnapshot(
             work_object_id, physical_context_type, physical_context_id, status, definition_json,
             completed_at, updated_at
        FROM work_packages
-      WHERE tenant_id = ? AND job_id = ? AND status != 'Superseded'
+      WHERE tenant_id = ?
+        AND (CASE WHEN work_object_type = 'Roof Job' THEN work_object_id
+                  WHEN physical_context_type = 'Roof Job' THEN physical_context_id
+                  ELSE NULL END) = ?
+        AND status != 'Superseded'
       ORDER BY work_package_id, version LIMIT ?`,
   )
     .bind(input.tenantId, input.roofJobId, MAX_PACKAGES + 1)

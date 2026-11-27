@@ -224,14 +224,6 @@ export const decisionKindSchema = z.enum([
   "quickbooks_final_invoice",
 ]);
 
-const approvalDecisionStateSchema = z.enum([
-  "pending",
-  "executing",
-  "failed",
-  "audit_failed",
-  "execution_uncertain",
-]);
-
 const decisionItemFields = {
   key: nonEmptyTextSchema,
   id: z.string().trim().min(1).max(180),
@@ -246,30 +238,6 @@ const decisionItemFields = {
 
 export const decisionItemSchema = z
   .discriminatedUnion("kind", [
-    z
-      .object({
-        ...decisionItemFields,
-        id: z.string().regex(/^approval:[A-Za-z0-9_-]{16,64}$/),
-        kind: z.literal("lead_triage"),
-        native_state: approvalDecisionStateSchema,
-      })
-      .strict(),
-    z
-      .object({
-        ...decisionItemFields,
-        id: z.string().regex(/^quote-revision-approval:[A-Za-z0-9_-]{16,64}$/),
-        kind: z.literal("quote_revision"),
-        native_state: approvalDecisionStateSchema,
-      })
-      .strict(),
-    z
-      .object({
-        ...decisionItemFields,
-        id: z.string().regex(/^proposal-publication-approval:[A-Za-z0-9_-]{16,64}$/),
-        kind: z.literal("proposal_publication"),
-        native_state: approvalDecisionStateSchema,
-      })
-      .strict(),
     z
       .object({
         ...decisionItemFields,
@@ -308,22 +276,15 @@ export const decisionItemSchema = z
   .superRefine((item, context) => {
     const encodedId = encodeURIComponent(item.id);
     const href =
-      item.kind === "lead_triage"
-        ? `/approvals?review=${encodedId}`
-        : item.kind === "quote_revision"
-          ? `/quote-revision-approvals/${encodedId}`
-          : item.kind === "proposal_publication"
-            ? `/estimator/jobs/${encodeURIComponent(item.job_id ?? "")}`
-            : item.kind === "postiz"
-              ? `/marketing/postiz/${encodedId}`
-              : `/accounting/quickbooks/final-invoices/${encodedId}`;
+      item.kind === "postiz"
+        ? `/marketing/postiz/${encodedId}`
+        : `/accounting/quickbooks/final-invoices/${encodedId}`;
     if (
       item.key !== `${item.kind}:${item.id}` ||
       item.review_href !== href ||
       item.job_id === "." ||
       item.job_id === ".." ||
-      (["quote_revision", "proposal_publication", "quickbooks_final_invoice"].includes(item.kind) &&
-        !item.job_id)
+      (item.kind === "quickbooks_final_invoice" && !item.job_id)
     ) {
       context.addIssue({
         code: "custom",
@@ -373,7 +334,10 @@ export const decisionsReadModelSchema = z
       if (
         source.loaded_count !== count ||
         (source.has_more === true) !== (source.next_cursor !== null) ||
-        (source.kind === "production_schedule") !== (source.state === "retired") ||
+        ["lead_triage", "quote_revision", "proposal_publication", "production_schedule"].includes(
+          source.kind,
+        ) !==
+          (source.state === "retired") ||
         (readable
           ? source.read_model_generated_at === null ||
             source.has_more !== (source.state === "limited")

@@ -303,79 +303,35 @@ describe("NowPage", () => {
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
   });
 
-  it("keeps missing proposal sources explicit and never claims agent authorship", async () => {
+  it("describes retired proposal reviews without promising historical receipts or review links", async () => {
     const model = nowModel();
     model.decisions = {
       version: 1,
       state: "empty",
-      sources: [
-        {
-          kind: "quote_revision",
-          state: "current",
-          loaded_count: 0,
-          has_more: false,
-          next_cursor: null,
-          read_model_generated_at: model.read_model_generated_at,
-        },
-      ],
       items: [],
-    };
-    vi.mocked(loadNow).mockResolvedValue(nowResponseSchema.parse(model));
-    renderNow();
-
-    expect(
-      await screen.findByText("Proposal verdicts are unavailable or incomplete."),
-    ).toBeVisible();
-    expect(screen.getByText(/Agent authorship is not recorded/)).toBeVisible();
-    expect(screen.getByText(/older receipts may be absent/)).toBeVisible();
-    expect(
-      screen.queryByText(/Completed approvals are on each job record/),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText("No open proposals in the loaded list.")).not.toBeInTheDocument();
-    expect(screen.getByText("Money amounts are not included in this work list.")).toBeVisible();
-  });
-
-  it("links an uncertain proposal result to the existing review route and current request version", async () => {
-    const model = nowModel();
-    const id = "proposal-publication-approval:test_approval_001";
-    model.decisions = {
-      version: 1,
-      state: "ready",
       sources: ["quote_revision", "proposal_publication"].map((kind) => ({
         kind: kind as "quote_revision" | "proposal_publication",
-        state: "current" as const,
-        loaded_count: kind === "proposal_publication" ? 1 : 0,
-        has_more: false,
+        state: "retired" as const,
+        loaded_count: 0,
+        has_more: null,
         next_cursor: null,
-        read_model_generated_at: model.read_model_generated_at,
+        read_model_generated_at: null,
       })),
-      items: [
-        {
-          kind: "proposal_publication",
-          key: `proposal_publication:${id}`,
-          id,
-          version: 9,
-          title: "Check the publication result",
-          summary: "The recorded run needs a result check.",
-          native_state: "execution_uncertain",
-          job_id: "JOB-0001",
-          updated_at: model.read_model_generated_at,
-          expires_at: null,
-          review_href: "/estimator/jobs/JOB-0001",
-        },
-      ],
     };
     vi.mocked(loadNow).mockResolvedValue(nowResponseSchema.parse(model));
     renderNow();
-
-    const verdicts = await screen.findByRole("list", { name: "Loaded proposal verdicts" });
+    expect(await screen.findByRole("heading", { name: "Legacy proposal reviews" })).toBeVisible();
     expect(
-      within(verdicts).getByRole("link", { name: "Check the publication result" }),
-    ).toHaveAttribute("href", "/estimator/jobs/JOB-0001");
-    // A version number never stands in a person's line (ruling); the receipt keeps it.
-    expect(verdicts).not.toHaveTextContent(/\b[vV]9\b|version 9/i);
-    expect(within(verdicts).getByText(/^Updated /)).toBeVisible();
-    expect(verdicts).not.toHaveTextContent("Approved");
+      screen.getByText(/Quote-change and proposal-publication approval flows are retired/),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Historical approval receipts and agent authorship are not shown here/),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("list", { name: "Loaded proposal verdicts" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/matching approvals|No open proposals/)).not.toBeInTheDocument();
+    expect(screen.getByText("Money amounts are not included in this work list.")).toBeVisible();
   });
 
   it("shows D1 website intake on the office work list without calling it a scheduled job", async () => {
